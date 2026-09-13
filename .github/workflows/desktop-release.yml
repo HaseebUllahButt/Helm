@@ -1,0 +1,47 @@
+name: desktop release
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install dependencies and build the shared app
+        run: |
+          npm ci
+          npm --workspace @helm/web run build
+
+      - name: Build and publish Helm Desktop
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Some newer Linux binaries contain sections that the AppImage
+          # packager's older strip command cannot read.
+          NO_STRIP: 1
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Helm Desktop __VERSION__'
+          releaseBody: 'Download the AppImage or Debian package, open it, and paste the private link from `helm link`.'
+          releaseDraft: false
+          prerelease: false
