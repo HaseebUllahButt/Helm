@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal } from './Terminal';
+import { Markdown } from './Markdown';
 import {
   Client, login,
   type Environment, type Profile, type Session, type DirEntry, type Message,
@@ -29,13 +30,6 @@ function pairingTarget(value: string): PairingTarget | null {
   }
 }
 
-/**
- * Read the stored sign-in.
- *
- * Earlier versions stored a single `relay` address, which tied a device to
- * one machine. Migrate those forward rather than signing people out: being
- * signed out by an upgrade is exactly the thing this release is fixing.
- */
 function loadAuth(): Auth | null {
   try {
     const raw = JSON.parse(localStorage.getItem(STORE) || 'null');
@@ -61,26 +55,60 @@ function useWide() {
   return wide;
 }
 
-type MainView =
-  | { kind: 'env' }
-  | { kind: 'browse'; path?: string }
-  | { kind: 'profiles'; cwd: string }
-  | { kind: 'session'; session: Session };
+// ------------------------------------------------------------------ engines
+
+const ENGINE: Record<string, { label: string; mark: string; cls: string }> = {
+  claude:   { label: 'Claude Code', mark: 'C', cls: 'claude' },
+  codex:    { label: 'Codex',       mark: 'X', cls: 'codex' },
+  opencode: { label: 'opencode',    mark: 'O', cls: 'opencode' },
+  shell:    { label: 'Terminal',    mark: '❯', cls: 'shell' },
+};
+const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', mark: '·', cls: 'other' };
+
+/**
+ * What a profile *is*, for a human: which CLI, on which account, with which
+ * flags. The alias name it came from is kept as a footnote - `claudeaa` means
+ * something to the person who typed it, and nothing to anyone else.
+ */
+function describeProfile(p: Profile) {
+  const engine = engineOf(p.engine);
+  const homes = Object.values(p.env ?? {}).filter((v) => /^[~/]/.test(v));
+  const home = homes[0];
+  let account = 'default account';
+  if (home) {
+    const leaf = home.split('/').pop() ?? '';
+    const suffix = leaf.replace(/^\.?(claude|codex|opencode|config)-?/, '');
+    account = suffix ? `${suffix} account` : 'default account';
+  }
+  const tokenVars = (p.envFrom ?? []).filter((k) => /TOKEN|KEY/i.test(k));
+  const flags = (p.args ?? []).join(' ');
+  return { engine, account, token: tokenVars.length > 0, flags, alias: p.id };
+}
+
+const shortPath = (p: string) => {
+  const parts = p.replace(/\/$/, '').split('/');
+  return parts.length > 3 ? '…/' + parts.slice(-2).join('/') : p;
+};
+
+// ---------------------------------------------------------------------- app
 
 export function App() {
   const [auth, setAuth] = useState<Auth | null>(loadAuth);
   const [client, setClient] = useState<Client | null>(null);
   const [online, setOnline] = useState(false);
+  const [notice, setNotice] = useState('');
 
   useEffect(() => {
     if (!auth) return;
     const c = new Client(auth.endpoints, auth.token);
     const off = c.on((_e, kind, payload) => {
       if (kind === 'connection') setOnline(payload.online);
-      // Addresses the network taught us about are worth keeping: they are
-      // what this device will try next time, after the machine it signed in
-      // through has gone away.
       if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints });
+      if (kind === 'unauthorized') {
+        localStorage.removeItem(STORE);
+        setNotice('This device is no longer in the network. Pair it again with a fresh link.');
+        setAuth(null); setClient(null);
+      }
     });
     c.connect().catch(() => {});
     setClient(c);
@@ -90,7 +118,7 @@ export function App() {
   const signOut = () => { localStorage.removeItem(STORE); setAuth(null); setClient(null); };
 
   if (!auth) {
-    return <Login onDone={(a) => { saveAuth(a); setAuth(a); }} />;
+    return <Login notice={notice} onDone={(a) => { setNotice(''); saveAuth(a); setAuth(a); }} />;
   }
   if (!client) return <div className="empty">connecting…</div>;
   return <Shell client={client} online={online} onSignOut={signOut} />;
@@ -98,42 +126,71 @@ export function App() {
 
 // ------------------------------------------------------------------- shell
 
+type MainView =
+  | { kind: 'env' }
+  | { kind: 'browse'; path?: string }
+  | { kind: 'profiles'; cwd: string }
+  | { kind: 'session'; session: Session };
+
 function Shell({ client, online, onSignOut }: {
   client: Client; online: boolean; onSignOut: () => void;
 }) {
   const wide = useWide();
   const [envs, setEnvs] = useState<Environment[]>([]);
+  const [sessions, setSessions] = useState<Record<string, Session[]>>({});
   const [selected, setSelected] = useState<string | null>(null);
   const [stack, setStack] = useState<MainView[]>([{ kind: 'env' }]);
   const [error, setError] = useState('');
 
-  const load = useCallback(() => {
+  const loadEnvs = useCallback(() => {
     client.environments()
       .then((r) => setEnvs(r.environments))
       .catch((e) => setError(e.message));
   }, [client]);
 
-  useEffect(() => {
-    load();
-    return client.on((_e, kind) => { if (kind === 'presence') load(); });
-  }, [load, client]);
+  const loadSessions = useCallback((envId: string) => {
+    client.rpc<{ sessions: Session[] }>(envId, 'session.list', {}, 15_000)
+      .then((r) => setSessions((s) => ({ ...s, [envId]: r.sessions })))
+      .catch(() => {});
+  }, [client]);
 
-  // On a wide screen there is always a pane to fill, so pick something.
+  useEffect(() => {
+    loadEnvs();
+    return client.on((e, kind) => {
+      if (kind === 'presence') loadEnvs();
+      if (kind === 'session.update' && e) loadSessions(e);
+    });
+  }, [loadEnvs, loadSessions, client]);
+
+  // Every machine's sessions, so "needs you" can be answered from the
+  // sidebar without visiting each machine. The push keeps it current; the
+  // timer is the safety net for a lost event.
+  useEffect(() => {
+    const live = envs.filter((e) => e.online);
+    for (const e of live) { client.subscribe(e.id); loadSessions(e.id); }
+    const timer = setInterval(() => { for (const e of live) loadSessions(e.id); }, 15_000);
+    return () => clearInterval(timer);
+  }, [envs, client, loadSessions]);
+
   useEffect(() => {
     if (wide && !selected && envs.length) setSelected(envs[0].id);
   }, [wide, selected, envs]);
 
   const env = envs.find((e) => e.id === selected) ?? null;
   const view = stack[stack.length - 1];
-  const open = (id: string) => { setSelected(id); setStack([{ kind: 'env' }]); };
+  const openEnv = (id: string) => { setSelected(id); setStack([{ kind: 'env' }]); };
+  const openSession = (envId: string, s: Session) => {
+    setSelected(envId);
+    setStack([{ kind: 'env' }, { kind: 'session', session: s }]);
+  };
   const push = (v: MainView) => setStack((s) => [...s, v]);
-  const pop = () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
-
   const back = () => {
-    if (stack.length > 1) pop();
-    else setSelected(null); // back out to the machine list on a phone
+    if (stack.length > 1) setStack((s) => s.slice(0, -1));
+    else setSelected(null);
   };
 
+  const blocked = envs.flatMap((e) =>
+    (sessions[e.id] ?? []).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
   const showMain = wide || !!selected;
 
   return (
@@ -145,7 +202,7 @@ function Shell({ client, online, onSignOut }: {
             <div>
               <b>helm</b>
               <div className="count">
-                {envs.filter((e) => e.online).length} of {envs.length} online
+                {online ? `${envs.filter((e) => e.online).length} of ${envs.length} online` : 'reconnecting…'}
               </div>
             </div>
           </div>
@@ -156,25 +213,52 @@ function Shell({ client, online, onSignOut }: {
           <div className="pad">
             {!online && <div className="banner offline">no machine reachable — retrying</div>}
 
+            {blocked.length > 0 && (
+              <>
+                <div className="section attention">needs you</div>
+                <div className="list">
+                  {blocked.map(({ env: e, s }) => (
+                    <button key={s.id} className="card blocked-card" onClick={() => openSession(e.id, s)}>
+                      <span className={`mark ${engineOf(s.engine).cls}`}>{engineOf(s.engine).mark}</span>
+                      <span className="grow">
+                        <div className="name">{s.title}</div>
+                        <div className="meta">{e.name} · {shortPath(s.cwd)}</div>
+                      </span>
+                      <span className="pill blocked">waiting</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <div className="section">machines</div>
             <div className="list">
-              {envs.map((e) => (
-                <button
-                  key={e.id}
-                  className={`card${e.id === selected && wide ? ' selected' : ''}`}
-                  onClick={() => open(e.id)}
-                >
-                  <span className={`dot ${e.online ? 'on' : 'off'}`} />
-                  <span className="grow">
-                    <div className="name">{e.name}</div>
-                    <div className="meta">
-                      {e.online
-                        ? [e.info.platform, e.info.arch].filter(Boolean).join('/') || 'online'
-                        : e.lastSeen ? `last seen ${ago(e.lastSeen)}` : 'never connected'}
-                    </div>
-                  </span>
-                  <span className="chev">›</span>
-                </button>
-              ))}
+              {envs.map((e) => {
+                const list = (sessions[e.id] ?? []).filter((s) => s.engine !== 'shell');
+                const working = list.filter((s) => s.status === 'working').length;
+                const waiting = list.filter((s) => s.status === 'blocked').length;
+                return (
+                  <button
+                    key={e.id}
+                    className={`card${e.id === selected && wide ? ' selected' : ''}`}
+                    onClick={() => openEnv(e.id)}
+                  >
+                    <span className={`dot ${e.online ? 'on' : 'off'}`} />
+                    <span className="grow">
+                      <div className="name">{e.name}</div>
+                      <div className="meta">
+                        {e.online
+                          ? (list.length
+                            ? `${list.length} session${list.length === 1 ? '' : 's'}${working ? ` · ${working} working` : ''}`
+                            : [e.info.platform, e.info.arch].filter(Boolean).join('/') || 'online')
+                          : e.lastSeen ? `last seen ${ago(e.lastSeen)}` : 'never connected'}
+                      </div>
+                    </span>
+                    {waiting > 0 && <span className="badge">{waiting}</span>}
+                    <span className="chev">›</span>
+                  </button>
+                );
+              })}
               {!envs.length && !error && <div className="empty">no machines yet</div>}
             </div>
 
@@ -193,6 +277,7 @@ function Shell({ client, online, onSignOut }: {
         ) : view.kind === 'env' ? (
           <EnvView
             client={client} env={env} wide={wide} onBack={back}
+            sessions={sessions[env.id] ?? []} reload={() => loadSessions(env.id)}
             onBrowse={() => push({ kind: 'browse' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
           />
@@ -205,10 +290,14 @@ function Shell({ client, online, onSignOut }: {
         ) : view.kind === 'profiles' ? (
           <Profiles
             client={client} env={env} cwd={view.cwd} onBack={back}
-            onStarted={(s) => setStack([{ kind: 'env' }, { kind: 'session', session: s }])}
+            onStarted={(s) => { loadSessions(env.id); setStack([{ kind: 'env' }, { kind: 'session', session: s }]); }}
           />
         ) : (
-          <SessionView client={client} env={env} session={view.session} onBack={back} />
+          <SessionView
+            key={view.session.id}
+            client={client} env={env} session={view.session} onBack={back}
+            onClosed={() => { loadSessions(env.id); back(); }}
+          />
         )}
       </section>
     </div>
@@ -217,7 +306,7 @@ function Shell({ client, online, onSignOut }: {
 
 // ------------------------------------------------------------------- login
 
-function Login({ onDone }: { onDone: (a: Auth) => void }) {
+function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void }) {
   const openedWith = useRef(pairingTarget(location.href));
   const autoStarted = useRef(false);
   const [link, setLink] = useState('');
@@ -225,9 +314,6 @@ function Login({ onDone }: { onDone: (a: Auth) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [selfHosted, setSelfHosted] = useState<boolean | null>(null);
-  // Once the secret carried in the link is rejected - typically because it
-  // expired - stop treating the link as a credential and let the person type
-  // a fresh code instead of leaving them stuck behind a hidden field.
   const [linkSecretFailed, setLinkSecretFailed] = useState(false);
 
   const finish = (auth: Auth) => {
@@ -241,8 +327,6 @@ function Login({ onDone }: { onDone: (a: Auth) => void }) {
       finish(await login(endpoint, secret));
     } catch (err: any) {
       setError(err.message);
-      // Reveal the code field and drop the spent secret, so a fresh code from
-      // `helm link` can be typed without hunting for a new link to open.
       setLinkSecretFailed(true);
       setPassword((p) => (p === secret ? '' : p));
     } finally { setBusy(false); }
@@ -257,9 +341,6 @@ function Login({ onDone }: { onDone: (a: Auth) => void }) {
     return () => { cancelled = true; };
   }, []);
 
-  // A pairing link opened on the VM-hosted PWA should complete in one tap.
-  // The ref prevents React StrictMode's development re-run from adding the
-  // same browser twice.
   useEffect(() => {
     const target = openedWith.current;
     if (selfHosted !== true || !target?.password || autoStarted.current) return;
@@ -271,7 +352,6 @@ function Login({ onDone }: { onDone: (a: Auth) => void }) {
   const secretFromLink = selfHosted ? openedWith.current?.password : pasted?.password;
   const secretInLink = linkSecretFailed ? '' : secretFromLink;
   const endpoint = selfHosted ? location.origin : pasted?.endpoint || '';
-  // A typed code wins over one carried in the link, which may have expired.
   const secret = password || secretInLink || '';
 
   const submit = async (e: React.FormEvent) => {
@@ -287,10 +367,11 @@ function Login({ onDone }: { onDone: (a: Auth) => void }) {
         <div className="auth-brand">
           <img src="/icon.svg" alt="" />
           <h1>helm</h1>
-          <p>one place for every coding agent</p>
+          <p>every coding agent, one place</p>
         </div>
 
         <form onSubmit={submit}>
+          {notice && <div className="banner">{notice}</div>}
           {selfHosted ? (
             <div className="pair-ticket">
               <span className="dot on" />
@@ -401,36 +482,23 @@ function InstallPwa() {
 
 // --------------------------------------------------------------- one machine
 
-function EnvView({ client, env, wide, onBack, onBrowse, onOpen }: {
-  client: Client; env: Environment; wide: boolean;
-  onBack: () => void; onBrowse: () => void; onOpen: (s: Session) => void;
+function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen }: {
+  client: Client; env: Environment; wide: boolean; sessions: Session[];
+  reload: () => void; onBack: () => void; onBrowse: () => void; onOpen: (s: Session) => void;
 }) {
-  const [sessions, setSessions] = useState<Session[]>([]);
   const [usage, setUsage] = useState<any[] | null>(null);
   const [direct, setDirect] = useState(false);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
 
-  const load = useCallback(() => {
-    client.rpc<{ sessions: Session[] }>(env.id, 'session.list')
-      .then((r) => setSessions(r.sessions))
-      .catch((e) => setError(e.message));
-  }, [client, env.id]);
-
-  // Keyed on the machine's id, not the `env` object: the environment list is
-  // rebuilt on every presence event, and keying on object identity made any
-  // machine coming or going clear this machine's visible sessions and redo
-  // the direct connection for no reason.
   useEffect(() => {
-    setSessions([]); setUsage(null); setError('');
+    setUsage(null); setError('');
     client.subscribe(env.id);
-    load();
+    reload();
     return client.on((e, kind, payload) => {
-      if (e !== env.id) return;
-      if (kind === 'session.update') load();
-      if (kind === 'transport') setDirect(payload.direct);
+      if (e === env.id && kind === 'transport') setDirect(payload.direct);
     });
-  }, [client, env.id, load]);
+  }, [client, env.id, reload]);
 
   useEffect(() => {
     if (env.online) client.openDirect(env.id).catch(() => {});
@@ -441,14 +509,6 @@ function EnvView({ client, env, wide, onBack, onBrowse, onOpen }: {
     client.rpc(env.id, 'usage.get').then((u: any) => setUsage(u.accounts)).catch(() => {});
   }, [client, env.id, env.online, env.info.usage]);
 
-  // A safety net under the event push: if a session.update is lost in
-  // transit, the list still corrects itself in seconds rather than never.
-  useEffect(() => {
-    if (!env.online) return;
-    const timer = setInterval(load, 15_000);
-    return () => clearInterval(timer);
-  }, [env.online, load]);
-
   const openTerminal = async () => {
     setOpening(true); setError('');
     try {
@@ -456,10 +516,19 @@ function EnvView({ client, env, wide, onBack, onBrowse, onOpen }: {
       if (existing) { onOpen(existing); return; }
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start',
         { cwd: '~', profileId: 'shell', title: 'Terminal' }, 45_000);
+      reload();
       onOpen(r.session);
     } catch (e: any) { setError(e.message); }
     finally { setOpening(false); }
   };
+
+  const agents = sessions.filter((s) => s.engine !== 'shell');
+  const groups: [string, Session[]][] = [
+    ['needs you', agents.filter((s) => s.status === 'blocked')],
+    ['working', agents.filter((s) => s.status === 'working')],
+    ['idle', agents.filter((s) => !['blocked', 'working', 'exited'].includes(s.status))],
+    ['finished', agents.filter((s) => s.status === 'exited')],
+  ];
 
   return (
     <>
@@ -469,43 +538,33 @@ function EnvView({ client, env, wide, onBack, onBrowse, onOpen }: {
           <h1>{env.name}</h1>
           <span className="sub">
             {env.info.host ?? ''}
-            {env.online ? (direct ? ' · direct' : ' · relayed') : ' · offline'}
+            {env.online ? (direct ? ' · direct' : ' · via home') : ' · offline'}
           </span>
         </div>
+        <button className="iconbtn" title="terminal" disabled={!env.online || opening} onClick={openTerminal}>❯_</button>
       </div>
 
       <div className="scroll"><div className="pad">
         {!env.online && <div className="banner offline">this machine is offline</div>}
 
-        <button className="card" disabled={!env.online || opening} onClick={openTerminal}>
-          <span className="glyph">❯_</span>
-          <span className="grow">
-            <div className="name">{opening ? 'opening…' : 'Terminal'}</div>
-            <div className="meta">a shell on {env.name}</div>
-          </span>
-          <span className="chev">›</span>
+        <button className="primary big" style={{ marginTop: 0, marginBottom: 6 }} disabled={!env.online} onClick={onBrowse}>
+          + new session
         </button>
 
-        <div className="section">
-          sessions<span className="spacer" />
-          <button className="linkish" onClick={onBrowse} disabled={!env.online}>+ new</button>
-        </div>
-
-        <div className="list">
-          {sessions.map((s) => (
-            <button key={s.id} className="card" onClick={() => onOpen(s)}>
-              <span className="grow">
-                <div className="name">
-                  {s.title}
-                  {(s as any).adopted && <span className="tag">external</span>}
-                </div>
-                <div className="meta">{s.engine} · {s.cwd}</div>
-              </span>
-              <span className={`pill ${s.status}`}>{s.status}</span>
-            </button>
-          ))}
-          {!sessions.length && <div className="empty">nothing running</div>}
-        </div>
+        {groups.map(([title, list]) => list.length > 0 && (
+          <div key={title}>
+            <div className={`section${title === 'needs you' ? ' attention' : ''}`}>{title}</div>
+            <div className="list">
+              {list.map((s) => <SessionCard key={s.id} s={s} onOpen={() => onOpen(s)} />)}
+            </div>
+          </div>
+        ))}
+        {!agents.length && (
+          <div className="empty">
+            nothing running on {env.name}
+            <div className="note" style={{ marginTop: 6 }}>start a session: pick a directory, then an agent</div>
+          </div>
+        )}
 
         {usage && usage.length > 0 && (
           <>
@@ -516,6 +575,23 @@ function EnvView({ client, env, wide, onBack, onBrowse, onOpen }: {
         {error && <div className="error">{error}</div>}
       </div></div>
     </>
+  );
+}
+
+function SessionCard({ s, onOpen }: { s: Session; onOpen: () => void }) {
+  const eng = engineOf(s.engine);
+  return (
+    <button className={`card${s.status === 'blocked' ? ' blocked-card' : ''}`} onClick={onOpen}>
+      <span className={`mark ${eng.cls}`}>{eng.mark}</span>
+      <span className="grow">
+        <div className="name">
+          {s.title}
+          {(s as any).adopted && <span className="tag">external</span>}
+        </div>
+        <div className="meta">{eng.label} · {shortPath(s.cwd)}{s.updatedAt ? ` · ${ago(s.updatedAt)}` : ''}</div>
+      </span>
+      <span className={`pill ${s.status}`}>{s.status === 'blocked' ? 'waiting' : s.status}</span>
+    </button>
   );
 }
 
@@ -571,22 +647,22 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
     <>
       <div className="bar">
         <button className="iconbtn back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>choose a directory</h1><span className="sub">{here}</span></div>
+        <div className="titles"><h1>where?</h1><span className="sub">{here}</span></div>
       </div>
       <div className="scroll"><div className="pad">
-        <button className="primary" style={{ marginTop: 0 }} onClick={() => onPick(here)}>
-          start here — {here}
+        <button className="primary big" style={{ marginTop: 0 }} onClick={() => onPick(here)}>
+          use {shortPath(here)}
         </button>
 
         <div className="section">
-          subdirectories<span className="spacer" />
+          folders<span className="spacer" />
           <button className="linkish" onClick={() => setCreating((v) => !v)}>
             {creating ? 'cancel' : '+ new folder'}
           </button>
         </div>
 
         {creating && (
-          <div className="composer" style={{ padding: 0, border: 0, background: 'none', marginBottom: 10 }}>
+          <div className="inline-form">
             <input
               autoFocus value={folder} placeholder="folder name"
               onChange={(e) => setFolder(e.target.value)}
@@ -596,15 +672,15 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
           </div>
         )}
 
-        <div className="list">
+        <div className="list tight">
           {entries.map((e) => (
             <button key={e.path} className="card" onClick={() => onInto(e.path)}>
-              <span className="glyph">{e.isRepo ? '◆' : '▸'}</span>
+              <span className={`glyph${e.isRepo ? ' repo' : ''}`}>{e.isRepo ? '◆' : '▸'}</span>
               <span className="grow"><div className="name">{e.name}</div></span>
               <span className="chev">›</span>
             </button>
           ))}
-          {!entries.length && !error && <div className="empty">no subdirectories</div>}
+          {!entries.length && !error && <div className="empty">no subfolders</div>}
         </div>
         {error && <div className="error">{error}</div>}
       </div></div>
@@ -622,7 +698,8 @@ function Profiles({ client, env, cwd, onBack, onStarted }: {
 
   useEffect(() => {
     client.rpc(env.id, 'profile.list')
-      .then((r: any) => setProfiles(r.profiles.filter((p: any) => !p.disabled)))
+      // A shell is not an agent; the terminal has its own button.
+      .then((r: any) => setProfiles(r.profiles.filter((p: any) => !p.disabled && p.engine !== 'shell')))
       .catch((e) => setError(e.message));
   }, [client, env.id]);
 
@@ -635,30 +712,51 @@ function Profiles({ client, env, cwd, onBack, onStarted }: {
     } catch (e: any) { setError(e.message); setBusy(''); }
   };
 
+  const grouped = useMemo(() => {
+    const by = new Map<string, Profile[]>();
+    for (const p of profiles) by.set(p.engine, [...(by.get(p.engine) ?? []), p]);
+    return [...by.entries()];
+  }, [profiles]);
+
   return (
     <>
       <div className="bar">
         <button className="iconbtn back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>choose an agent</h1><span className="sub">{cwd}</span></div>
+        <div className="titles"><h1>which agent?</h1><span className="sub">{cwd}</span></div>
       </div>
       <div className="scroll"><div className="pad">
-        <div className="list">
-          {profiles.map((p) => (
-            <button key={p.id} className="card" disabled={!!busy} onClick={() => start(p)}>
-              <span className="grow">
-                <div className="name">
-                  {p.label}{busy === p.id && ' — starting…'}
-                  {(p.envFrom ?? []).length > 0 && <span className="tag">key</span>}
-                </div>
-                <div className="meta">
-                  {[p.cmd, ...(p.args ?? [])].join(' ')}
-                  {Object.entries(p.env ?? {}).map(([k, v]) => ` · ${k}=${v}`)}
-                </div>
-              </span>
-            </button>
-          ))}
-          {!profiles.length && !error && <div className="empty">no profiles found</div>}
-        </div>
+        {grouped.map(([engine, list]) => (
+          <div key={engine}>
+            <div className="section">{engineOf(engine).label}</div>
+            <div className="list">
+              {list.map((p) => {
+                const d = describeProfile(p);
+                return (
+                  <button key={p.id} className="card" disabled={!!busy} onClick={() => start(p)}>
+                    <span className={`mark ${d.engine.cls}`}>{d.engine.mark}</span>
+                    <span className="grow">
+                      <div className="name">
+                        {d.account}
+                        {d.token && <span className="tag key">token</span>}
+                        {busy === p.id && <span className="tag">starting…</span>}
+                      </div>
+                      <div className="meta">
+                        <code>{d.alias}</code>{d.flags && <> · {d.flags}</>}
+                      </div>
+                    </span>
+                    <span className="chev">›</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        {!profiles.length && !error && (
+          <div className="empty">
+            no agents found on {env.name}
+            <div className="note" style={{ marginTop: 6 }}>install claude, codex or opencode there, then run <code>helm profiles --refresh</code></div>
+          </div>
+        )}
         {error && <div className="error">{error}</div>}
       </div></div>
     </>
@@ -667,133 +765,247 @@ function Profiles({ client, env, cwd, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-const KEYS: [string, string][] = [
-  ['esc', 'Escape'], ['↵', 'Enter'], ['tab', 'Tab'],
-  ['↑', 'Up'], ['↓', 'Down'], ['^C', 'C-c'], ['y', 'y'], ['n', 'n'],
+const QUICK: { label: string; key: string; hint?: string }[] = [
+  { label: 'yes', key: 'y' }, { label: 'no', key: 'n' },
+  { label: '↵ enter', key: 'Enter' }, { label: 'esc', key: 'Escape' },
+  { label: '↑', key: 'Up' }, { label: '↓', key: 'Down' },
+  { label: 'tab', key: 'Tab' }, { label: '^C', key: 'C-c' },
 ];
 
-function SessionView({ client, env, session, onBack }: {
-  client: Client; env: Environment; session: Session; onBack: () => void;
+function SessionView({ client, env, session, onBack, onClosed }: {
+  client: Client; env: Environment; session: Session;
+  onBack: () => void; onClosed: () => void;
 }) {
+  const isShell = session.engine === 'shell';
   const [messages, setMessages] = useState<Message[] | null>(null);
-  const [raw, setRaw] = useState(session.engine === 'shell');
+  const [raw, setRaw] = useState(isShell);
   const [status, setStatus] = useState(session.status);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
+  const [menu, setMenu] = useState(false);
+  const eng = engineOf(session.engine);
 
   const refresh = useCallback(async () => {
-    if (raw) return;
+    if (isShell) return;
     try {
-      const r = await client.rpc<{ messages: Message[] }>(env.id, 'session.messages', { id: session.id });
+      const r = await client.rpc<{ messages: Message[] }>(env.id, 'session.messages', { id: session.id }, 15_000);
       setMessages(r.messages);
     } catch (e: any) { setError(e.message); }
-  }, [client, env.id, session.id, raw]);
+  }, [client, env.id, session.id, isShell]);
 
   useEffect(() => {
     refresh();
-    const timer = setInterval(refresh, status === 'working' ? 1500 : 3000);
+    // The daemon pushes `session.transcript` as the agent writes; this poll
+    // is only the safety net, and what keeps the daemon's watch alive.
+    const timer = setInterval(refresh, 5_000);
     const off = client.on((e, kind, payload) => {
-      if (e !== env.id || kind !== 'session.update') return;
-      if (payload.session?.id === session.id) { setStatus(payload.session.status); refresh(); }
+      if (e !== env.id) return;
+      if (kind === 'session.transcript' && payload?.id === session.id) refresh();
+      if (kind === 'session.update' && payload.session?.id === session.id) {
+        setStatus(payload.session.status);
+        refresh();
+      }
     });
     return () => { clearInterval(timer); off(); };
-  }, [client, env.id, session.id, refresh, status]);
+  }, [client, env.id, session.id, refresh]);
 
   const send = async () => {
     const body = draft;
     if (!body.trim()) return;
     setDraft('');
+    setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now() }] : m);
     try { await client.rpc(env.id, 'session.input', { id: session.id, data: body + '\n' }); }
     catch (e: any) { setError(e.message); setDraft(body); }
-    setTimeout(refresh, 500);
+    setTimeout(refresh, 600);
   };
 
   const key = async (k: string) => {
     try { await client.rpc(env.id, 'session.keys', { id: session.id, keys: [k] }); }
     catch (e: any) { setError(e.message); }
-    setTimeout(refresh, 400);
   };
 
-  const isShell = session.engine === 'shell';
+  const kill = async () => {
+    if (!confirm(`End "${session.title}"? The agent process is closed.`)) return;
+    try { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); }
+    catch (e: any) { setError(e.message); }
+  };
 
   return (
     <>
       <div className="bar">
         <button className="iconbtn back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>{session.title}</h1><span className="sub">{session.cwd}</span></div>
+        <span className={`mark ${eng.cls}`}>{eng.mark}</span>
+        <div className="titles">
+          <h1>{session.title}</h1>
+          <span className="sub">{env.name} · {shortPath(session.cwd)}</span>
+        </div>
+        <span className={`pill ${status}`}>{status === 'blocked' ? 'waiting' : status}</span>
         {!isShell && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} onClick={() => setRaw((v) => !v)}>
             {raw ? '💬' : '❯_'}
           </button>
         )}
-        <span className={`pill ${status}`}>{status}</span>
+        <button className="iconbtn" title="more" onClick={() => setMenu((v) => !v)}>⋯</button>
+        {menu && (
+          <div className="menu" onClick={() => setMenu(false)}>
+            <button onClick={kill}>end session</button>
+          </div>
+        )}
       </div>
 
+      {raw
+        ? <Terminal client={client} env={env.id} sessionId={session.id} />
+        : <Chat messages={messages} status={status} engine={eng} />}
+
       {status === 'blocked' && (
-        <div style={{ padding: '12px 18px 0' }}>
-          <div className="banner">this agent is waiting on you</div>
+        <div className="attention-bar">
+          <span className="attention-text">{eng.label} is waiting on you</span>
+          <div className="quick">
+            {QUICK.slice(0, 4).map((q) => (
+              <button key={q.key} onClick={() => key(q.key)}>{q.label}</button>
+            ))}
+          </div>
         </div>
       )}
 
-      {raw
-        ? <Terminal client={client} env={env.id} sessionId={session.id} status={status} />
-        : <Chat messages={messages} />}
-
       {!raw && (
-        <>
-          <div className="keys">
-            {KEYS.map(([label, k]) => <button key={k} onClick={() => key(k)}>{label}</button>)}
-          </div>
-          <div className="composer">
-            <textarea
-              rows={1} value={draft} placeholder="message the agent…"
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-            />
-            <button className="send" onClick={send} disabled={!draft.trim()}>↑</button>
-          </div>
-        </>
+        <Composer
+          draft={draft} setDraft={setDraft} onSend={send} onKey={key}
+          placeholder={status === 'blocked' ? 'reply to the agent…' : `message ${eng.label}…`}
+        />
       )}
-      {error && <div style={{ padding: '0 18px 12px' }}><div className="error">{error}</div></div>}
+      {error && <div className="error floating">{error}</div>}
     </>
   );
 }
 
-function Chat({ messages }: { messages: Message[] | null }) {
-  const end = useRef<HTMLDivElement>(null);
-  useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [messages]);
+function Composer({ draft, setDraft, onSend, onKey, placeholder }: {
+  draft: string; setDraft: (v: string) => void; onSend: () => void;
+  onKey: (k: string) => void; placeholder: string;
+}) {
+  const [keys, setKeys] = useState(false);
+  const ref = useRef<HTMLTextAreaElement>(null);
 
-  if (messages === null) return <div className="chat"><div className="empty">loading…</div></div>;
-  if (!messages.length) {
-    return (
-      <div className="chat">
-        <div className="empty">
-          no messages yet
-          <div className="note" style={{ marginTop: 8 }}>
-            the agent writes its transcript as it works
-          </div>
+  // Grow with the text, up to a few lines, then scroll.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = '0px';
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+  }, [draft]);
+
+  return (
+    <div className="composer-wrap">
+      {keys && (
+        <div className="keys">
+          {QUICK.map((q) => <button key={q.key} onClick={() => onKey(q.key)}>{q.label}</button>)}
         </div>
+      )}
+      <div className="composer">
+        <button className={`iconbtn keys-toggle${keys ? ' on' : ''}`} title="keys" onClick={() => setKeys((v) => !v)}>⌨</button>
+        <textarea
+          ref={ref} rows={1} value={draft} placeholder={placeholder}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+        />
+        <button className="send" onClick={onSend} disabled={!draft.trim()} title="send">↑</button>
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------- chat
+
+const TOOL_GLYPH: Record<string, string> = {
+  Read: '⌕', Write: '✎', Edit: '✎', MultiEdit: '✎', Bash: '❯', Grep: '⌕', Glob: '⌕',
+  WebFetch: '⇣', WebSearch: '⌕', Task: '⚙', Agent: '⚙', shell: '❯', apply_patch: '✎',
+};
+const toolGlyph = (name: string) =>
+  TOOL_GLYPH[name] ?? (/read|search|grep|glob|list|find/i.test(name) ? '⌕'
+    : /write|edit|patch|create/i.test(name) ? '✎'
+    : /bash|shell|exec|run|command/i.test(name) ? '❯' : '⚙');
+
+function Chat({ messages, status, engine }: {
+  messages: Message[] | null; status: string; engine: { label: string; mark: string; cls: string };
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const stuck = useRef(true);
+  const [unread, setUnread] = useState(false);
+
+  // Follow the conversation unless the reader scrolled up to look at
+  // something, in which case offer a way back down rather than yanking them.
+  const onScroll = () => {
+    const el = box.current;
+    if (!el) return;
+    stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (stuck.current) setUnread(false);
+  };
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    if (stuck.current) el.scrollTop = el.scrollHeight;
+    else setUnread(true);
+  }, [messages, status]);
+
+  const jump = () => {
+    const el = box.current;
+    if (el) { el.scrollTop = el.scrollHeight; stuck.current = true; setUnread(false); }
+  };
+
+  return (
+    <div className="chat-wrap">
+      <div className="chat" ref={box} onScroll={onScroll}>
+        {messages === null && <div className="empty quiet">loading conversation…</div>}
+        {messages?.length === 0 && (
+          <div className="empty quiet">
+            nothing yet
+            <div className="note" style={{ marginTop: 6 }}>the conversation appears here as the agent works</div>
+          </div>
+        )}
+        {messages?.map((m, i) => <Turn key={i} m={m} engine={engine} />)}
+        {status === 'working' && (
+          <div className="turn assistant">
+            <span className={`mark ${engine.cls}`}>{engine.mark}</span>
+            <div className="body"><div className="working"><i /><i /><i /></div></div>
+          </div>
+        )}
+        <div style={{ height: 8 }} />
+      </div>
+      {unread && <button className="jump" onClick={jump}>↓ new</button>}
+    </div>
+  );
+}
+
+function Turn({ m, engine }: { m: Message; engine: { label: string; mark: string; cls: string } }) {
+  if (m.role === 'user') {
+    return (
+      <div className="turn user">
+        <div className="bubble">{m.text}</div>
       </div>
     );
   }
-
-  return (
-    <div className="chat">
-      {messages.map((m, i) => (
-        <div key={i} className={`msg ${m.role}`}>
-          {m.tools.length > 0 && (
-            <details className="tools">
-              <summary>{m.tools.length} tool{m.tools.length > 1 ? 's' : ''}</summary>
-              {m.tools.map((t, j) => (
-                <div key={j} className="tool"><b>{t.name}</b>{t.input && <span> {t.input}</span>}</div>
-              ))}
-            </details>
-          )}
-          {m.text && <div className="bubble">{m.text}</div>}
-          {!m.text && !m.tools.length && m.thinking && <div className="bubble faint">thinking…</div>}
+  const many = m.tools.length > 4;
+  const tools = (
+    <div className="tools">
+      {m.tools.map((t, j) => (
+        <div key={j} className="tool">
+          <span className="tglyph">{toolGlyph(t.name)}</span>
+          <b>{t.name}</b>
+          {t.input && <span className="tin">{t.input}</span>}
         </div>
       ))}
-      <div ref={end} />
+    </div>
+  );
+  return (
+    <div className="turn assistant">
+      <span className={`mark ${engine.cls}`}>{engine.mark}</span>
+      <div className="body">
+        {m.tools.length > 0 && (many
+          ? <details className="toolgroup"><summary>{m.tools.length} steps</summary>{tools}</details>
+          : tools)}
+        {m.text && <Markdown text={m.text} />}
+        {!m.text && !m.tools.length && m.thinking && <div className="faint">thinking…</div>}
+      </div>
     </div>
   );
 }
@@ -802,7 +1014,7 @@ function Chat({ messages }: { messages: Message[] | null }) {
 
 function ago(ts: number) {
   const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60) return `${s}s ago`;
+  if (s < 60) return 'just now';
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;

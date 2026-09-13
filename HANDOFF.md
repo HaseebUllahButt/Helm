@@ -289,8 +289,29 @@ survives a hub restart; a machine that has never seen a device accepts its
 token; a forged token is rejected; a revocation crosses the network; a
 revocation made on a machine that only dials *out* (a laptop) reaches the hub
 it dials (the VM) without a reconnect - that one needs a running herdr and
-skips otherwise. Run `npm run check` for TypeScript, the production web build,
-and all tests.
+skips otherwise; an attached terminal is pushed as deltas by the daemon
+rather than polled by the phone. Run `npm run check` for TypeScript, the
+production web build, and all tests.
+
+**Terminal and chat are push, not poll.** `session.attach` starts a
+daemon-side watch of the pane (`sessions.js`, 120ms cadence against herdr's
+~90ms read) and `session.data` carries only what changed; the viewer renews
+every 25s and detaches on unmount. `session.messages` likewise starts a
+transcript file watch and `session.transcript` tells the chat to re-read.
+Measured on loopback: echo-to-screen went from ~540ms (old 500ms poll) to
+~60ms; on a 200ms link the old path also paid two round trips per poll.
+herdr's `pane.output_matched` / `pane.scroll_changed` events do *not* fire on
+ordinary output (tested), which is why the daemon polls rather than subscribes.
+
+**UI.** The web app was rebuilt in the T3 Code idiom: sidebar with a
+"needs you" list across machines and per-machine waiting badges; sessions
+grouped by state; profile picker grouped by CLI, labelled by account (from
+the home-dir suffix) with a `token` tag when the alias carries a credential
+name, shells hidden; chat renders markdown (`marked` + DOMPurify) with tool
+calls as quiet monospace rows; a waiting agent gets an attention bar with
+yes / no / enter / esc one tap away. Screenshots were taken headlessly over
+CDP against a sandboxed `helm up` (see `test/` for the sandbox env vars) -
+worth repeating after any UI change, since nothing else looks at it.
 
 Two habits that saved time and one that cost it:
 

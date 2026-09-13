@@ -179,6 +179,8 @@ export class Daemon {
     this.sessions.resume();
     this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session }));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
+    this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
+    this.sessions.on('transcript', (ref) => this.#emit(E.SESSION_TRANSCRIPT, ref));
     this.sessions.on('status', ({ session, from, to }) =>
       this.#emit(E.SESSION_UPDATE, { session, transition: { from, to } })
     );
@@ -480,7 +482,10 @@ export class Daemon {
 
       case M.SESSION_LIST:    return { sessions: await this.sessions.list() };
       case M.SESSION_START:   return { session: await this.sessions.start(p) };
-      case M.SESSION_ATTACH:  return this.sessions.read(p.id, { lines: p.lines ?? 300, ansi: p.ansi });
+      // Attaching starts a push stream of the screen (E.SESSION_DATA); the
+      // reply carries the current screen so the viewer has something at once.
+      case M.SESSION_ATTACH:  return this.sessions.attach(p.id, { lines: p.lines ?? 400, ansi: p.ansi ?? true });
+      case M.SESSION_DETACH:  return this.sessions.detach(p.id);
       case M.SESSION_INPUT:   await this.sessions.input(p.id, p.data, { raw: p.raw }); return { ok: true };
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
       case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });

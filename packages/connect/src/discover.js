@@ -122,6 +122,32 @@ function tokenize(s) {
   return out;
 }
 
+/**
+ * The last command in a `a && b`, `a; b` or `a || b` chain, quotes respected.
+ * An alias like `clear && claude --permission-mode auto` is about claude; the
+ * clear is just tidying up first.
+ */
+function lastCommand(s) {
+  const segments = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      cur += c;
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') { quote = c; cur += c; continue; }
+    if ((c === '&' || c === '|') && s[i + 1] === c) { segments.push(cur); cur = ''; i++; continue; }
+    if (c === ';') { segments.push(cur); cur = ''; continue; }
+    cur += c;
+  }
+  segments.push(cur);
+  const real = segments.map((x) => x.trim()).filter(Boolean);
+  return real[real.length - 1] ?? s;
+}
+
 /** Peel leading `VAR=value` assignments off a token list. */
 function splitAssignments(tokens) {
   const env = {};
@@ -187,7 +213,7 @@ function resolve(name, symbols, depth = 0, seen = new Set()) {
   const parsed =
     sym.kind === 'function'
       ? parseFunction(sym.body)
-      : splitAssignments(tokenize(sym.body));
+      : splitAssignments(tokenize(lastCommand(sym.body)));
   if (!parsed.argv.length) return null;
 
   const [head, ...rest] = parsed.argv;

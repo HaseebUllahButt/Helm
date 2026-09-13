@@ -91,9 +91,14 @@ export const M = {
 // -------------------------------------------------------------- event kinds
 
 export const E = {
-  SESSION_DATA: 'session.data',     // { id, data }  raw terminal bytes (base64)
+  // Rendered terminal text, pushed while a viewer is attached. `reset` means
+  // the screen was redrawn and `text` replaces everything; otherwise `text`
+  // is appended to what the viewer already has.
+  SESSION_DATA: 'session.data',     // { id, text, reset }
   SESSION_EXIT: 'session.exit',     // { id, code }
   SESSION_UPDATE: 'session.update', // { session }
+  // The agent wrote to its transcript; a chat view should re-read it.
+  SESSION_TRANSCRIPT: 'session.transcript', // { id }
   DIGEST: 'digest',                 // { digest }   pushed as sessions progress
 };
 

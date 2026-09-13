@@ -6,37 +6,34 @@ import type { Client } from './client';
 /**
  * A real terminal in the browser.
  *
- * The runtime hands us rendered screens rather than a byte stream, so instead
- * of replaying a stream we poll and write whatever is new. Appending the delta
- * rather than repainting a fixed-size screen means xterm can wrap to the
+ * The daemon watches the pane and pushes what changed (`session.data`), so
+ * the phone never asks "anything new?" across the network. Attaching returns
+ * the current screen; every push after that is either an append or, when the
+ * program redrew, a replacement. The attach is renewed periodically so the
+ * daemon keeps watching, and re-done after a reconnect, when pushes may have
+ * been missed - the full screen that comes back is compared with what we have
+ * and replaces it only if they differ.
+ *
+ * Appending rather than repainting a fixed-size screen lets xterm wrap to the
  * phone's width, which matters far more on a 390px screen than matching the
  * pane's column count exactly.
  */
-export function Terminal({ client, env, sessionId, status }: {
-  client: Client; env: string; sessionId: string; status?: string;
+export function Terminal({ client, env, sessionId }: {
+  client: Client; env: string; sessionId: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const term = useRef<Xterm | null>(null);
-  const seen = useRef('');
-
-  // The poll reads the status through a ref so a working→blocked transition
-  // adjusts the cadence without appearing in the effect's dependencies -
-  // having it there tore down and rebuilt the whole terminal, wiping the
-  // screen and scrollback at exactly the moment worth looking at.
-  const statusRef = useRef(status);
-  statusRef.current = status;
 
   useEffect(() => {
     if (!host.current) return;
 
     const xterm = new Xterm({
-      fontSize: 12,
-      fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
+      fontSize: 12.5,
+      fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace',
       cursorBlink: true,
       convertEol: true,
       scrollback: 5000,
       theme: {
-        background: '#07090b', foreground: '#cfd6de', cursor: '#6ee7b7',
+        background: '#07090b', foreground: '#d5dbe3', cursor: '#7dd3fc',
         black: '#14181d', red: '#f87171', green: '#6ee7b7', yellow: '#fbbf24',
         blue: '#60a5fa', magenta: '#c084fc', cyan: '#67e8f9', white: '#e6eaef',
       },
@@ -45,47 +42,59 @@ export function Terminal({ client, env, sessionId, status }: {
     xterm.loadAddon(fit);
     xterm.open(host.current);
     try { fit.fit(); } catch { /* not laid out yet */ }
-    term.current = xterm;
-    seen.current = '';
+
+    let seen = '';
+    let stopped = false;
+
+    const show = (text: string, reset: boolean) => {
+      if (reset) {
+        xterm.clear();
+        xterm.write(text);
+        seen = text;
+      } else {
+        xterm.write(text);
+        seen += text;
+      }
+    };
+
+    const attach = async () => {
+      try {
+        const r = await client.rpc<{ text: string }>(env, 'session.attach', {
+          id: sessionId, lines: 400, ansi: true,
+        });
+        if (stopped) return;
+        const text = r.text ?? '';
+        if (text !== seen) show(text, true);
+      } catch { /* offline; the reconnect handler tries again */ }
+    };
 
     // Everything typed goes straight through, control characters included.
+    // Fire and forget: waiting for the round trip would only add latency.
     const typed = xterm.onData((data) => {
-      client.rpc(env, 'session.input', { id: sessionId, data, raw: true }).catch(() => {});
+      client.rpc(env, 'session.input', { id: sessionId, data, raw: true }, 10_000).catch(() => {});
+    });
+
+    const off = client.on((e, kind, payload) => {
+      if (e === env && kind === 'session.data' && payload?.id === sessionId) {
+        show(payload.text ?? '', !!payload.reset);
+      }
+      if (kind === 'connection' && payload?.online) attach();
     });
 
     const onResize = () => { try { fit.fit(); } catch { /* hidden */ } };
     window.addEventListener('resize', onResize);
 
-    let stopped = false;
-    const poll = async () => {
-      while (!stopped) {
-        try {
-          const r = await client.rpc<{ text: string }>(env, 'session.attach', {
-            id: sessionId, lines: 400, ansi: true,
-          });
-          const text = r.text ?? '';
-          if (text !== seen.current) {
-            if (text.startsWith(seen.current)) {
-              xterm.write(text.slice(seen.current.length));
-            } else {
-              // The screen was redrawn rather than appended to.
-              xterm.clear();
-              xterm.write(text);
-            }
-            seen.current = text;
-          }
-        } catch { /* a dropped call should not end the session */ }
-        await new Promise((r) => setTimeout(r, statusRef.current === 'working' ? 500 : 900));
-      }
-    };
-    poll();
+    attach();
+    const renew = setInterval(attach, 25_000);
 
     return () => {
       stopped = true;
+      clearInterval(renew);
+      off();
       typed.dispose();
       window.removeEventListener('resize', onResize);
+      client.rpc(env, 'session.detach', { id: sessionId }, 5_000).catch(() => {});
       xterm.dispose();
-      term.current = null;
     };
   }, [client, env, sessionId]);
 

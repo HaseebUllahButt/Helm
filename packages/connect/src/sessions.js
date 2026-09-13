@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -8,6 +9,13 @@ import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
+
+// A pane read costs the runtime ~90ms, so this is close to as fast as the
+// screen can be sampled without the reads piling up on each other.
+const WATCH_POLL_MS = 120;
+const TRANSCRIPT_POLL_MS = 400;
+// Viewers renew while they are open; this is how long a vanished one costs.
+const WATCH_TTL_MS = 60_000;
 
 /** herdr requires agent names to match [a-z][a-z0-9_-]{0,31} and be unique. */
 const agentName = (profileId) =>
@@ -296,6 +304,8 @@ export class Sessions extends EventEmitter {
       });
       if (s.transcript && this.#index.has(id)) this.#save();
     }
+    // Asking for messages is how a chat view says it is watching.
+    this.#watchTranscript(id, s.transcript);
     return {
       messages: await readMessages({
         engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit,
@@ -308,6 +318,107 @@ export class Sessions extends EventEmitter {
     const s = this.get(id);
     const res = await this.runtime.read(this.#handle(s), { lines, source, ansi });
     return { text: res.text, session: s };
+  }
+
+  // ------------------------------------------------------------- streaming
+
+  /** id -> { timer, last, expires, lines, ansi } for terminals being watched */
+  #watchers = new Map();
+  /** id -> { expires, path, poll } for transcripts being watched */
+  #transcripts = new Map();
+
+  /**
+   * Start pushing a session's screen to whoever is looking at it.
+   *
+   * The runtime hands back rendered text, not a byte stream, and it does not
+   * tell us when a pane's output changes - so somebody has to poll it. Doing
+   * that here, next to the runtime's own socket, costs one local read; doing
+   * it from the phone (which is what used to happen) cost the same read plus
+   * two trips through the hub every time, which on a distant VM is most of a
+   * second per redraw. Only the difference travels, and only when there is one.
+   *
+   * A watch lives as long as viewers keep renewing it; a phone that vanishes
+   * mid-session stops costing anything within a minute.
+   */
+  async attach(id, { lines = 400, ansi = true } = {}) {
+    const s = this.get(id);
+    const existing = this.#watchers.get(id);
+    if (existing) {
+      existing.expires = Date.now() + WATCH_TTL_MS;
+      const res = await this.runtime.read(this.#handle(s), { lines, source: 'recent', ansi });
+      existing.last = res.text ?? '';
+      return { text: existing.last, session: s };
+    }
+
+    const w = { last: '', expires: Date.now() + WATCH_TTL_MS, lines, ansi, busy: false, timer: null };
+    this.#watchers.set(id, w);
+    const res = await this.runtime.read(this.#handle(s), { lines, source: 'recent', ansi });
+    w.last = res.text ?? '';
+
+    const tick = async () => {
+      if (!this.#watchers.has(id)) return;
+      if (Date.now() > w.expires) { this.detach(id); return; }
+      if (!w.busy) {
+        w.busy = true;
+        try {
+          const r = await this.runtime.read(this.#handle(s), { lines, source: 'recent', ansi });
+          const text = r.text ?? '';
+          if (text !== w.last) {
+            const delta = text.startsWith(w.last)
+              ? { id, text: text.slice(w.last.length), reset: false }
+              : { id, text, reset: true };
+            w.last = text;
+            this.emit('data', delta);
+          }
+        } catch { /* pane may have gone away; the next tick or expiry handles it */ }
+        w.busy = false;
+      }
+      w.timer = setTimeout(tick, WATCH_POLL_MS);
+      w.timer.unref?.();
+    };
+    w.timer = setTimeout(tick, WATCH_POLL_MS);
+    w.timer.unref?.();
+    return { text: w.last, session: s };
+  }
+
+  detach(id) {
+    const w = this.#watchers.get(id);
+    if (!w) return { ok: true };
+    clearTimeout(w.timer);
+    this.#watchers.delete(id);
+    return { ok: true };
+  }
+
+  /**
+   * Tell chat views when the transcript grows, so they re-read it at once
+   * instead of on their next poll. Polls the file's size: cheap, and it works
+   * on every filesystem, which fs.watch does not.
+   */
+  #watchTranscript(id, path) {
+    if (!path) return;
+    const existing = this.#transcripts.get(id);
+    if (existing) {
+      existing.expires = Date.now() + WATCH_TTL_MS;
+      if (existing.path === path) return;
+      clearInterval(existing.poll);
+      this.#transcripts.delete(id);
+    }
+    const t = { path, expires: Date.now() + WATCH_TTL_MS, size: -1, poll: null };
+    t.poll = setInterval(async () => {
+      if (Date.now() > t.expires) {
+        clearInterval(t.poll);
+        this.#transcripts.delete(id);
+        return;
+      }
+      try {
+        const { size, mtimeMs } = await stat(path);
+        const stamp = `${size}:${mtimeMs}`;
+        if (t.size !== -1 && stamp !== t.size) this.emit('transcript', { id });
+        t.size = stamp;
+      } catch { /* transcript not written yet */ }
+    }, TRANSCRIPT_POLL_MS);
+    t.poll.unref?.();
+    this.#transcripts.set(id, t);
   }
 
   /**

@@ -112,6 +112,19 @@ const reachableFromHere = (base: string) =>
 export async function pickEndpoint(
   endpoints: string[], token: string
 ): Promise<string | null> {
+  return (await probeEndpoints(endpoints, token)).best;
+}
+
+/**
+ * Probe every address at once. Besides the winner, report whether the
+ * machines that did answer all refused the token: that is not "offline", it
+ * is "this device is no longer in the network" - after `helm remove`, or a
+ * network rebuilt from scratch - and retrying forever is the wrong response.
+ */
+export async function probeEndpoints(
+  endpoints: string[], token: string
+): Promise<{ best: string | null; unauthorized: boolean }> {
+  const statuses: number[] = [];
   const probes = endpoints.map(async (base) => {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), PROBE_MS);
@@ -121,6 +134,7 @@ export async function pickEndpoint(
         signal: ctl.signal,
         headers: { authorization: `Bearer ${token}` },
       });
+      statuses.push(res.status);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = await res.json();
       return {
@@ -138,10 +152,11 @@ export async function pickEndpoint(
     .filter((r): r is PromiseFulfilledResult<{ base: string; reach: number; elapsed: number }> =>
       r.status === 'fulfilled')
     .map((r) => r.value);
-  if (!up.length) return null;
+  const unauthorized = !up.length && statuses.length > 0 && statuses.every((s) => s === 401);
+  if (!up.length) return { best: null, unauthorized };
 
   up.sort((a, b) => b.reach - a.reach || a.elapsed - b.elapsed);
-  return up[0].base;
+  return { best: up[0].base, unauthorized };
 }
 
 export class Client {
@@ -187,13 +202,22 @@ export class Client {
     this.connecting = true;
 
     let hub: string | null = null;
+    let unauthorized = false;
     try {
-      hub = await pickEndpoint(this.endpoints.filter(reachableFromHere), this.token);
+      ({ best: hub, unauthorized } =
+        await probeEndpoints(this.endpoints.filter(reachableFromHere), this.token));
     } finally {
       if (!hub) {
         this.connecting = false;
-        this.emit('', 'connection', { online: false });
-        this.scheduleReconnect();
+        if (unauthorized) {
+          // Every machine that answered said no. The token is dead; say so
+          // instead of showing "retrying" until the end of time.
+          this.closed = true;
+          this.emit('', 'unauthorized', {});
+        } else {
+          this.emit('', 'connection', { online: false });
+          this.scheduleReconnect();
+        }
       }
     }
     if (!hub) throw new Error('no machine in this network is reachable right now');
