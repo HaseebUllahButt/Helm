@@ -313,7 +313,9 @@ async function setup() {
   }
   if (!ready) {
     console.log('not reachable');
-    die(`nothing answered at ${home}\n  check: journalctl --user -u helm-serve -n 50`);
+    die(`nothing answered at ${home}\n` +
+        '  helm:   journalctl --user -u helm-serve -n 50\n' +
+        '  https:  sudo journalctl -u caddy -n 50   (ports 80 and 443 must be open)');
   }
   console.log('ready');
 

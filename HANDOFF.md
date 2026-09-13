@@ -286,8 +286,11 @@ npm test
 
 It checks: a missing herdr binary is reported without crashing; a device
 survives a hub restart; a machine that has never seen a device accepts its
-token; a forged token is rejected; a revocation crosses the network. Run
-`npm run check` for TypeScript, the production web build, and all tests.
+token; a forged token is rejected; a revocation crosses the network; a
+revocation made on a machine that only dials *out* (a laptop) reaches the hub
+it dials (the VM) without a reconnect - that one needs a running herdr and
+skips otherwise. Run `npm run check` for TypeScript, the production web build,
+and all tests.
 
 Two habits that saved time and one that cost it:
 

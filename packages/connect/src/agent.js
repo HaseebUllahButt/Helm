@@ -239,6 +239,8 @@ export class Daemon {
     // 16-byte summary and let the hub ask for the rest if it differs.
     const net = loadNetwork();
     if (net) {
+      // A new tick, a new chance to push our roster to a hub that disagrees.
+      for (const link of this.#links.values()) link.offered = false;
       this.broadcastFrame(T.ROSTER, { hash: rosterHash(net) });
       // A direct WebRTC channel is authenticated once, when the hub makes the
       // introduction. Revocation has to reach it too, or a removed phone
@@ -384,6 +386,15 @@ export class Daemon {
           this.net = net;
           // We learned something; make sure they get our side of it too.
           link.send(T.ROSTER, { roster: rosterOf(loadNetwork()) });
+        } else if (!link.offered && rosterHash(msg.roster) !== rosterHash(net)) {
+          // Theirs taught us nothing, yet we still disagree - so we know
+          // something they do not, typically a revocation typed on this
+          // machine. The hub only sends its roster in reply to our hash, so
+          // without this a machine that dials out (a laptop) could never get
+          // a removal to the hub it dials (the VM) until it reconnected.
+          // Once per tick: two sides that can never agree must not ping-pong.
+          link.offered = true;
+          link.send(T.ROSTER, { roster: rosterOf(net) });
         }
         return;
       }
