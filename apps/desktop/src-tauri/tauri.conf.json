@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "helm",
+  "version": "0.1.0",
+  "identifier": "dev.helm.desktop",
+  "build": {
+    "frontendDist": "../../web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "helm",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 420,
+        "minHeight": 480,
+        "resizable": true,
+        "theme": "Dark",
+        "backgroundColor": "#0a0c0f"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' customprotocol: asset:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; connect-src ipc: http://ipc.localhost https: wss: http: ws:; frame-ancestors 'none'",
+      "capabilities": []
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Control your coding agents",
+    "longDescription": "Drive coding agents on every machine you own, from one window."
+  }
+}
