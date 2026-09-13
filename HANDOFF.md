@@ -303,15 +303,35 @@ Measured on loopback: echo-to-screen went from ~540ms (old 500ms poll) to
 herdr's `pane.output_matched` / `pane.scroll_changed` events do *not* fire on
 ordinary output (tested), which is why the daemon polls rather than subscribes.
 
-**UI.** The web app was rebuilt in the T3 Code idiom: sidebar with a
-"needs you" list across machines and per-machine waiting badges; sessions
-grouped by state; profile picker grouped by CLI, labelled by account (from
-the home-dir suffix) with a `token` tag when the alias carries a credential
-name, shells hidden; chat renders markdown (`marked` + DOMPurify) with tool
-calls as quiet monospace rows; a waiting agent gets an attention bar with
-yes / no / enter / esc one tap away. Screenshots were taken headlessly over
-CDP against a sandboxed `helm up` (see `test/` for the sandbox env vars) -
-worth repeating after any UI change, since nothing else looks at it.
+**UI.** The web app follows T3 Code's design (its source was read for the
+exact tokens: neutral-950 canvas, cards 3% lighter, 6% white borders, one
+indigo primary, user turns as a 4%-white bubble, assistant prose at 80%
+white with no bubble, tool calls as 24px lines, shimmer text instead of
+spinners, amber steady for "needs you", sky pulsing for "working", idle draws
+nothing). Sidebar has a "needs you" list across machines; sessions are
+grouped by state; shells are never sessions (the terminal is a header
+button). **Starting a session** is one screen: aliases are collapsed to
+accounts (engine + home dir + credential; flags are not an identity), then
+model (read from the CLI's own records: Codex `model_catalog.json`, Claude
+`.claude.json`, `opencode models`), reasoning effort for Codex, and an
+"act without asking" switch that maps to each CLI's own flag
+(`models.js`). Choices are remembered per account in localStorage. Chat
+renders markdown with `marked` + DOMPurify + highlight.js (code blocks get a
+language header and copy button). A dead token signs the device out with a
+message; pairing is stored in localStorage *and* IndexedDB (`store.ts`),
+and the durable read must never replace a pairing made while it was in
+flight - that race signed a fresh pairing straight back out once, caught
+only by the screenshot walkthrough. Connection state is worded honestly:
+a dropped socket with a hub still answering HTTP is "reconnecting" (and
+presence is polled over HTTP meanwhile), red only after 12s of nothing.
+
+Screenshots are taken headlessly over CDP against a sandboxed `helm up`
+(`HELM_DIR=<tmp> HELM_NO_SERVICE=1 ... up --port 8790 --host 127.0.0.1`,
+then `chromium --headless=new --remote-debugging-port=<random>`); the
+sandbox password expires in ten minutes, so rotate it with `helm login 15`
+before a run, and kill the chromium by PID afterwards - a stale one on the
+same debugging port serves you last hour's page. Worth repeating after any
+UI change, since nothing else looks at it.
 
 Two habits that saved time and one that cost it:
 

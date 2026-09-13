@@ -14,7 +14,7 @@ const INVITE_TTL_MS = 10 * 60 * 1000;
  * terminal that printed it to the phone that types it; after that the device
  * holds a durable token and never needs it again.
  */
-export const PASSWORD_TTL_MS = Number(process.env.HELM_PASSWORD_TTL_MS || 5 * 60 * 1000);
+export const PASSWORD_TTL_MS = Number(process.env.HELM_PASSWORD_TTL_MS || 10 * 60 * 1000);
 const MIN_PASSWORD_TTL_MS = 60 * 1000;
 const MAX_PASSWORD_TTL_MS = 15 * 60 * 1000;
 

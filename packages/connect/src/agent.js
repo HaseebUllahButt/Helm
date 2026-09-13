@@ -9,6 +9,8 @@ import {
 import { createRuntime } from './runtime/index.js';
 import { Sessions } from './sessions.js';
 import { getProfiles, refreshProfiles } from './profiles.js';
+import { listModels } from './models.js';
+import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import * as usageApi from './usage.js';
 import { inventory } from './inventory.js';
@@ -479,6 +481,13 @@ export class Daemon {
         return { profiles: p.refresh
           ? (await refreshProfiles()).profiles
           : await getProfiles() };
+
+      case M.MODEL_LIST: {
+        const profile = (await getProfiles()).find((x) => x.id === p.profileId);
+        if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
+        const engine = ENGINES[profile.engine];
+        return listModels(profile.engine, profile.env?.[engine?.homeEnv] ?? engine?.defaultHome);
+      }
 
       case M.SESSION_LIST:    return { sessions: await this.sessions.list() };
       case M.SESSION_START:   return { session: await this.sessions.start(p) };

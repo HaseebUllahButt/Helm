@@ -33,7 +33,7 @@ export function Terminal({ client, env, sessionId }: {
       convertEol: true,
       scrollback: 5000,
       theme: {
-        background: '#07090b', foreground: '#d5dbe3', cursor: '#7dd3fc',
+        background: '#0a0a0a', foreground: '#e5e5e5', cursor: '#b4cbff',
         black: '#14181d', red: '#f87171', green: '#6ee7b7', yellow: '#fbbf24',
         blue: '#60a5fa', magenta: '#c084fc', cyan: '#67e8f9', white: '#e6eaef',
       },

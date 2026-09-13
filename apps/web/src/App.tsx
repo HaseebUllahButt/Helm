@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Terminal } from './Terminal';
 import { Markdown } from './Markdown';
+import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import {
   Client, login,
   type Environment, type Profile, type Session, type DirEntry, type Message,
 } from './client';
 
-const STORE = 'helm.auth';
-
-type Auth = { endpoints: string[]; token: string; deviceId?: string };
+type Auth = StoredAuth;
 type PairingTarget = { endpoint: string; password: string };
 
 /**
@@ -29,19 +28,6 @@ function pairingTarget(value: string): PairingTarget | null {
     return null;
   }
 }
-
-function loadAuth(): Auth | null {
-  try {
-    const raw = JSON.parse(localStorage.getItem(STORE) || 'null');
-    if (!raw?.token) return null;
-    if (Array.isArray(raw.endpoints)) return raw;
-    return raw.relay ? { endpoints: [raw.relay], token: raw.token } : null;
-  } catch {
-    return null;
-  }
-}
-
-const saveAuth = (a: Auth) => localStorage.setItem(STORE, JSON.stringify(a));
 
 /** Desktop gets both panes at once; a phone shows one at a time. */
 function useWide() {
@@ -66,23 +52,49 @@ const ENGINE: Record<string, { label: string; mark: string; cls: string }> = {
 const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', mark: '·', cls: 'other' };
 
 /**
- * What a profile *is*, for a human: which CLI, on which account, with which
- * flags. The alias name it came from is kept as a footnote - `claudeaa` means
- * something to the person who typed it, and nothing to anyone else.
+ * An account is a CLI plus the home directory (or credential) it runs with.
+ * A shell full of aliases yields the same account many times over, each with
+ * different flags - `d`, `codexp`, `codexpx` are all "Codex, personal". The
+ * flags are choices to make when starting, not separate things to pick from,
+ * so collapse the aliases to accounts and keep the plainest alias of each as
+ * the one to launch.
  */
-function describeProfile(p: Profile) {
-  const engine = engineOf(p.engine);
-  const homes = Object.values(p.env ?? {}).filter((v) => /^[~/]/.test(v));
-  const home = homes[0];
-  let account = 'default account';
-  if (home) {
-    const leaf = home.split('/').pop() ?? '';
+interface Account {
+  key: string;
+  engine: string;
+  account: string;
+  token: boolean;
+  profile: Profile;
+  aliases: string[];
+}
+
+function accountsFrom(profiles: Profile[]): Account[] {
+  const by = new Map<string, Account>();
+  for (const p of profiles) {
+    if (p.engine === 'shell' || (p as any).disabled) continue;
+    const home = Object.values(p.env ?? {}).find((v) => /^[~/]/.test(v));
+    // Engine + home + credential is what makes an account; an alias that
+    // also unsets a variable is the same account with a different mood.
+    const key = [p.engine, home ?? '', [...(p.envFrom ?? [])].sort().join(',')].join('|');
+    const leaf = home?.split('/').pop() ?? '';
     const suffix = leaf.replace(/^\.?(claude|codex|opencode|config)-?/, '');
-    account = suffix ? `${suffix} account` : 'default account';
+    const existing = by.get(key);
+    if (existing) {
+      existing.aliases.push(p.id);
+      // Fewest arguments = the plainest way to launch this account.
+      if ((p.args ?? []).length < (existing.profile.args ?? []).length) existing.profile = p;
+      continue;
+    }
+    by.set(key, {
+      key, engine: p.engine,
+      account: suffix || 'default',
+      token: (p.envFrom ?? []).some((k) => /TOKEN|KEY/i.test(k)),
+      profile: p, aliases: [p.id],
+    });
   }
-  const tokenVars = (p.envFrom ?? []).filter((k) => /TOKEN|KEY/i.test(k));
-  const flags = (p.args ?? []).join(' ');
-  return { engine, account, token: tokenVars.length > 0, flags, alias: p.id };
+  const order = ['claude', 'codex', 'opencode'];
+  return [...by.values()].sort((a, b) =>
+    (order.indexOf(a.engine) - order.indexOf(b.engine)) || a.account.localeCompare(b.account));
 }
 
 const shortPath = (p: string) => {
@@ -93,20 +105,31 @@ const shortPath = (p: string) => {
 // ---------------------------------------------------------------------- app
 
 export function App() {
-  const [auth, setAuth] = useState<Auth | null>(loadAuth);
+  const [auth, setAuth] = useState<Auth | null | undefined>(loadAuthSync);
   const [client, setClient] = useState<Client | null>(null);
-  const [online, setOnline] = useState(false);
+  const [conn, setConn] = useState<{ online: boolean; reachable: boolean; error?: string }>({ online: false, reachable: true });
   const [notice, setNotice] = useState('');
+
+  // localStorage was empty: check the durable copy. It must never replace a
+  // pairing made while it was being read - that read can take long enough
+  // for a person to pair in the meantime, and then a stale "nothing stored"
+  // would sign them straight back out.
+  useEffect(() => {
+    if (auth) return;
+    let cancelled = false;
+    loadAuthDurable().then((a) => { if (!cancelled && a) setAuth((cur) => cur ?? a); });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!auth) return;
     const c = new Client(auth.endpoints, auth.token);
     const off = c.on((_e, kind, payload) => {
-      if (kind === 'connection') setOnline(payload.online);
+      if (kind === 'connection') setConn({ online: !!payload.online, reachable: payload.reachable ?? !!payload.online, error: payload.error });
       if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints });
       if (kind === 'unauthorized') {
-        localStorage.removeItem(STORE);
-        setNotice('This device is no longer in the network. Pair it again with a fresh link.');
+        clearAuth();
+        setNotice('This device is no longer in the network. Pair it again with a fresh link from `helm link`.');
         setAuth(null); setClient(null);
       }
     });
@@ -115,13 +138,14 @@ export function App() {
     return () => { off(); c.close?.(); };
   }, [auth]);
 
-  const signOut = () => { localStorage.removeItem(STORE); setAuth(null); setClient(null); };
+  const signOut = () => { clearAuth(); setAuth(null); setClient(null); };
 
+  if (auth === undefined) return null;
   if (!auth) {
     return <Login notice={notice} onDone={(a) => { setNotice(''); saveAuth(a); setAuth(a); }} />;
   }
-  if (!client) return <div className="empty">connecting…</div>;
-  return <Shell client={client} online={online} onSignOut={signOut} />;
+  if (!client) return null;
+  return <Shell client={client} conn={conn} onSignOut={signOut} />;
 }
 
 // ------------------------------------------------------------------- shell
@@ -129,11 +153,11 @@ export function App() {
 type MainView =
   | { kind: 'env' }
   | { kind: 'browse'; path?: string }
-  | { kind: 'profiles'; cwd: string }
+  | { kind: 'start'; cwd: string }
   | { kind: 'session'; session: Session };
 
-function Shell({ client, online, onSignOut }: {
-  client: Client; online: boolean; onSignOut: () => void;
+function Shell({ client, conn, onSignOut }: {
+  client: Client; conn: { online: boolean; reachable: boolean; error?: string }; onSignOut: () => void;
 }) {
   const wide = useWide();
   const [envs, setEnvs] = useState<Environment[]>([]);
@@ -141,10 +165,16 @@ function Shell({ client, online, onSignOut }: {
   const [selected, setSelected] = useState<string | null>(null);
   const [stack, setStack] = useState<MainView[]>([{ kind: 'env' }]);
   const [error, setError] = useState('');
+  const [downSince, setDownSince] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (conn.online) { setDownSince(null); return; }
+    setDownSince((t) => t ?? Date.now());
+  }, [conn.online]);
 
   const loadEnvs = useCallback(() => {
     client.environments()
-      .then((r) => setEnvs(r.environments))
+      .then((r) => { setEnvs(r.environments); setError(''); })
       .catch((e) => setError(e.message));
   }, [client]);
 
@@ -156,21 +186,24 @@ function Shell({ client, online, onSignOut }: {
 
   useEffect(() => {
     loadEnvs();
-    return client.on((e, kind) => {
-      if (kind === 'presence') loadEnvs();
+    return client.on((e, kind, payload) => {
+      if (kind === 'presence') {
+        if (e && payload?.env) {
+          setEnvs((list) => list.map((m) => (m.id === e ? { ...m, online: !!payload.online } : m)));
+        } else loadEnvs();
+      }
+      if (kind === 'connection' && payload.online) loadEnvs();
       if (kind === 'session.update' && e) loadSessions(e);
     });
   }, [loadEnvs, loadSessions, client]);
 
-  // Every machine's sessions, so "needs you" can be answered from the
-  // sidebar without visiting each machine. The push keeps it current; the
-  // timer is the safety net for a lost event.
+  const liveIds = envs.filter((e) => e.online).map((e) => e.id).join(',');
   useEffect(() => {
-    const live = envs.filter((e) => e.online);
-    for (const e of live) { client.subscribe(e.id); loadSessions(e.id); }
-    const timer = setInterval(() => { for (const e of live) loadSessions(e.id); }, 15_000);
+    const live = liveIds ? liveIds.split(',') : [];
+    for (const id of live) { client.subscribe(id); loadSessions(id); }
+    const timer = setInterval(() => { for (const id of live) loadSessions(id); }, 15_000);
     return () => clearInterval(timer);
-  }, [envs, client, loadSessions]);
+  }, [liveIds, client, loadSessions]);
 
   useEffect(() => {
     if (wide && !selected && envs.length) setSelected(envs[0].id);
@@ -189,42 +222,50 @@ function Shell({ client, online, onSignOut }: {
     else setSelected(null);
   };
 
-  const blocked = envs.flatMap((e) =>
-    (sessions[e.id] ?? []).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
+  const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => s.engine !== 'shell');
+  const blocked = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
   const showMain = wide || !!selected;
+
+  // Honest connection words. A dropped socket with a hub that still answers
+  // HTTP is "reconnecting", quietly; only a long silence from everything
+  // deserves red.
+  const downFor = downSince ? Date.now() - downSince : 0;
+  const status = conn.online ? 'live' : conn.reachable ? 'reconnecting' : downFor > 12_000 ? 'offline' : 'connecting';
+  const hubHost = (() => { try { return new URL(client.relay).host; } catch { return client.relay; } })();
 
   return (
     <div className="shell">
       <aside className={`sidebar${!showMain ? ' showing' : ''}`}>
-        <div className="bar">
+        <div className="bar side">
           <div className="brand">
             <img src="/icon.svg" alt="" />
-            <div>
-              <b>helm</b>
-              <div className="count">
-                {online ? `${envs.filter((e) => e.online).length} of ${envs.length} online` : 'reconnecting…'}
-              </div>
-            </div>
+            <b>helm</b>
           </div>
-          <button className="iconbtn" onClick={onSignOut} title="sign out">⏻</button>
+          <span className={`conn ${status}`} title={conn.error || status}>
+            <i />{status === 'live' ? `${envs.filter((e) => e.online).length}/${envs.length} online` : status}
+          </span>
+          <button className="iconbtn" onClick={onSignOut} title="unpair this device">⏻</button>
         </div>
 
         <div className="scroll">
-          <div className="pad">
-            {!online && <div className="banner offline">no machine reachable — retrying</div>}
+          <div className="side-pad">
+            {status === 'offline' && (
+              <div className="banner error">
+                No machine answered for a while. Check the VM, or that this phone has internet.
+              </div>
+            )}
 
             {blocked.length > 0 && (
               <>
                 <div className="section attention">needs you</div>
-                <div className="list">
+                <div className="rows">
                   {blocked.map(({ env: e, s }) => (
-                    <button key={s.id} className="card blocked-card" onClick={() => openSession(e.id, s)}>
-                      <span className={`mark ${engineOf(s.engine).cls}`}>{engineOf(s.engine).mark}</span>
+                    <button key={s.id} className="row" onClick={() => openSession(e.id, s)}>
+                      <span className="sdot blocked" />
                       <span className="grow">
-                        <div className="name">{s.title}</div>
-                        <div className="meta">{e.name} · {shortPath(s.cwd)}</div>
+                        <span className="rt">{s.title}</span>
+                        <span className="rm">{e.name} · {shortPath(s.cwd)}</span>
                       </span>
-                      <span className="pill blocked">waiting</span>
                     </button>
                   ))}
                 </div>
@@ -232,39 +273,40 @@ function Shell({ client, online, onSignOut }: {
             )}
 
             <div className="section">machines</div>
-            <div className="list">
+            <div className="rows">
               {envs.map((e) => {
-                const list = (sessions[e.id] ?? []).filter((s) => s.engine !== 'shell');
+                const list = agentsOf(e.id);
                 const working = list.filter((s) => s.status === 'working').length;
                 const waiting = list.filter((s) => s.status === 'blocked').length;
                 return (
                   <button
                     key={e.id}
-                    className={`card${e.id === selected && wide ? ' selected' : ''}`}
+                    className={`row${e.id === selected && wide ? ' active' : ''}`}
                     onClick={() => openEnv(e.id)}
                   >
-                    <span className={`dot ${e.online ? 'on' : 'off'}`} />
+                    <span className={`mdot ${e.online ? 'on' : 'off'}`} />
                     <span className="grow">
-                      <div className="name">{e.name}</div>
-                      <div className="meta">
+                      <span className="rt">{e.name}</span>
+                      <span className="rm">
                         {e.online
-                          ? (list.length
-                            ? `${list.length} session${list.length === 1 ? '' : 's'}${working ? ` · ${working} working` : ''}`
-                            : [e.info.platform, e.info.arch].filter(Boolean).join('/') || 'online')
-                          : e.lastSeen ? `last seen ${ago(e.lastSeen)}` : 'never connected'}
-                      </div>
+                          ? (list.length ? `${list.length} running${working ? `, ${working} working` : ''}` : 'idle')
+                          : e.lastSeen ? `seen ${ago(e.lastSeen)}` : 'never connected'}
+                      </span>
                     </span>
                     {waiting > 0 && <span className="badge">{waiting}</span>}
-                    <span className="chev">›</span>
                   </button>
                 );
               })}
-              {!envs.length && !error && <div className="empty">no machines yet</div>}
+              {!envs.length && !error && <div className="empty quiet">no machines yet</div>}
             </div>
 
             <AddMachine client={client} />
             <InstallPwa />
             {error && <div className="error">{error}</div>}
+          </div>
+          <div className="diag">
+            <span>{hubHost || 'no hub'}</span>
+            <span>{conn.online ? 'socket live' : conn.error || 'socket down'}</span>
           </div>
         </div>
       </aside>
@@ -272,7 +314,7 @@ function Shell({ client, online, onSignOut }: {
       <section className={`main${showMain ? ' showing' : ''}`}>
         {!env ? (
           <div className="scroll"><div className="pad">
-            <div className="empty">select a machine</div>
+            <div className="empty quiet">select a machine</div>
           </div></div>
         ) : view.kind === 'env' ? (
           <EnvView
@@ -285,10 +327,10 @@ function Shell({ client, online, onSignOut }: {
           <Browse
             client={client} env={env} path={view.path} onBack={back}
             onInto={(path) => push({ kind: 'browse', path })}
-            onPick={(cwd) => push({ kind: 'profiles', cwd })}
+            onPick={(cwd) => push({ kind: 'start', cwd })}
           />
-        ) : view.kind === 'profiles' ? (
-          <Profiles
+        ) : view.kind === 'start' ? (
+          <Start
             client={client} env={env} cwd={view.cwd} onBack={back}
             onStarted={(s) => { loadSessions(env.id); setStack([{ kind: 'env' }, { kind: 'session', session: s }]); }}
           />
@@ -371,10 +413,10 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
         </div>
 
         <form onSubmit={submit}>
-          {notice && <div className="banner">{notice}</div>}
+          {notice && <div className="banner warn">{notice}</div>}
           {selfHosted ? (
             <div className="pair-ticket">
-              <span className="dot on" />
+              <span className="mdot on" />
               <span><b>{location.host}</b><small>your Helm home</small></span>
             </div>
           ) : (
@@ -405,8 +447,8 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
           </button>
           {error && <div className="error">{error}</div>}
           <p className="note" style={{ marginTop: 14, textAlign: 'center' }}>
-            Run <code>helm link</code> on your VM to get a fresh link.
-            Pair once; this device stays connected until you remove it.
+            Run <code>helm link</code> on your VM for a fresh link.
+            Pair once; this device stays paired until you remove it.
           </p>
         </form>
       </div>
@@ -426,8 +468,8 @@ function AddMachine({ client }: { client: Client }) {
           <div className="code">{code}</div>
           <pre className="snippet">helm join {code} {client.relay}</pre>
           <p className="note" style={{ marginTop: 8 }}>
-            Run that on the machine you are adding. Expires in 10 minutes, and
-            carries the network key — treat it like a password.
+            Run that on the machine you are adding. Expires in 10 minutes and
+            carries the network key: treat it like a password.
           </p>
         </>
       ) : (
@@ -537,32 +579,32 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
         <div className="titles">
           <h1>{env.name}</h1>
           <span className="sub">
-            {env.info.host ?? ''}
-            {env.online ? (direct ? ' · direct' : ' · via home') : ' · offline'}
+            {env.online ? (direct ? 'direct connection' : 'via your Helm home') : 'offline'}
+            {env.info.host ? ` · ${env.info.host}` : ''}
           </span>
         </div>
-        <button className="iconbtn" title="terminal" disabled={!env.online || opening} onClick={openTerminal}>❯_</button>
+        <button className="iconbtn mono" title="terminal" disabled={!env.online || opening} onClick={openTerminal}>❯_</button>
       </div>
 
-      <div className="scroll"><div className="pad">
-        {!env.online && <div className="banner offline">this machine is offline</div>}
+      <div className="scroll"><div className="pad column">
+        {!env.online && <div className="banner warn">this machine is offline</div>}
 
-        <button className="primary big" style={{ marginTop: 0, marginBottom: 6 }} disabled={!env.online} onClick={onBrowse}>
-          + new session
+        <button className="primary big" disabled={!env.online} onClick={onBrowse}>
+          New session
         </button>
 
         {groups.map(([title, list]) => list.length > 0 && (
           <div key={title}>
             <div className={`section${title === 'needs you' ? ' attention' : ''}`}>{title}</div>
-            <div className="list">
-              {list.map((s) => <SessionCard key={s.id} s={s} onOpen={() => onOpen(s)} />)}
+            <div className="rows">
+              {list.map((s) => <SessionRow key={s.id} s={s} onOpen={() => onOpen(s)} />)}
             </div>
           </div>
         ))}
         {!agents.length && (
-          <div className="empty">
+          <div className="empty quiet">
             nothing running on {env.name}
-            <div className="note" style={{ marginTop: 6 }}>start a session: pick a directory, then an agent</div>
+            <div className="note" style={{ marginTop: 6 }}>pick a folder, then an agent</div>
           </div>
         )}
 
@@ -578,21 +620,29 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
   );
 }
 
-function SessionCard({ s, onOpen }: { s: Session; onOpen: () => void }) {
+function SessionRow({ s, onOpen }: { s: Session; onOpen: () => void }) {
   const eng = engineOf(s.engine);
   return (
-    <button className={`card${s.status === 'blocked' ? ' blocked-card' : ''}`} onClick={onOpen}>
+    <button className="row tall" onClick={onOpen}>
       <span className={`mark ${eng.cls}`}>{eng.mark}</span>
       <span className="grow">
-        <div className="name">
+        <span className="rt">
           {s.title}
           {(s as any).adopted && <span className="tag">external</span>}
-        </div>
-        <div className="meta">{eng.label} · {shortPath(s.cwd)}{s.updatedAt ? ` · ${ago(s.updatedAt)}` : ''}</div>
+        </span>
+        <span className="rm">{eng.label}{(s as any).model ? ` · ${(s as any).model}` : ''} · {shortPath(s.cwd)}</span>
       </span>
-      <span className={`pill ${s.status}`}>{s.status === 'blocked' ? 'waiting' : s.status}</span>
+      <StatusChip status={s.status} />
     </button>
   );
+}
+
+function StatusChip({ status }: { status: string }) {
+  if (status === 'blocked') return <span className="chip blocked"><i />waiting</span>;
+  if (status === 'working') return <span className="chip working"><i />working</span>;
+  if (status === 'done') return <span className="chip done"><i />done</span>;
+  if (status === 'exited') return <span className="chip exited">ended</span>;
+  return null;
 }
 
 function UsageRow({ account }: { account: any }) {
@@ -647,11 +697,11 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
     <>
       <div className="bar">
         <button className="iconbtn back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>where?</h1><span className="sub">{here}</span></div>
+        <div className="titles"><h1>Where?</h1><span className="sub">{here}</span></div>
       </div>
-      <div className="scroll"><div className="pad">
-        <button className="primary big" style={{ marginTop: 0 }} onClick={() => onPick(here)}>
-          use {shortPath(here)}
+      <div className="scroll"><div className="pad column">
+        <button className="primary big" onClick={() => onPick(here)}>
+          Start here
         </button>
 
         <div className="section">
@@ -668,19 +718,19 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
               onChange={(e) => setFolder(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') makeFolder(); }}
             />
-            <button className="send" onClick={makeFolder} disabled={!folder.trim()}>+</button>
+            <button className="send" onClick={makeFolder} disabled={!folder.trim()}>↑</button>
           </div>
         )}
 
-        <div className="list tight">
+        <div className="rows">
           {entries.map((e) => (
-            <button key={e.path} className="card" onClick={() => onInto(e.path)}>
+            <button key={e.path} className="row" onClick={() => onInto(e.path)}>
               <span className={`glyph${e.isRepo ? ' repo' : ''}`}>{e.isRepo ? '◆' : '▸'}</span>
-              <span className="grow"><div className="name">{e.name}</div></span>
+              <span className="grow"><span className="rt">{e.name}</span></span>
               <span className="chev">›</span>
             </button>
           ))}
-          {!entries.length && !error && <div className="empty">no subfolders</div>}
+          {!entries.length && !error && <div className="empty quiet">no subfolders</div>}
         </div>
         {error && <div className="error">{error}</div>}
       </div></div>
@@ -688,74 +738,153 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
   );
 }
 
-function Profiles({ client, env, cwd, onBack, onStarted }: {
+// -------------------------------------------------------------------- start
+
+const PREFS = 'helm.prefs';
+type Prefs = Record<string, { model?: string; auto?: boolean; effort?: string; account?: string }>;
+const loadPrefs = (): Prefs => { try { return JSON.parse(localStorage.getItem(PREFS) || '{}'); } catch { return {}; } };
+const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* full */ } };
+
+/**
+ * One screen to start a session: the account, the model, and whether the
+ * agent may act without asking. Everything else the CLI would have wanted on
+ * its command line is remembered from last time.
+ */
+function Start({ client, env, cwd, onBack, onStarted }: {
   client: Client; env: Environment; cwd: string;
   onBack: () => void; onStarted: (s: Session) => void;
 }) {
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [busy, setBusy] = useState('');
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [key, setKey] = useState<string>('');
+  const [models, setModels] = useState<{ default: string | null; models: string[]; effort?: string | null; efforts?: string[] } | null>(null);
+  const [model, setModel] = useState('');
+  const [effort, setEffort] = useState('');
+  const [auto, setAuto] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const prefs = useRef(loadPrefs());
 
   useEffect(() => {
     client.rpc(env.id, 'profile.list')
-      // A shell is not an agent; the terminal has its own button.
-      .then((r: any) => setProfiles(r.profiles.filter((p: any) => !p.disabled && p.engine !== 'shell')))
+      .then((r: any) => {
+        const list = accountsFrom(r.profiles);
+        setAccounts(list);
+        const remembered = prefs.current[env.id]?.account;
+        setKey(list.find((a) => a.key === remembered)?.key ?? list[0]?.key ?? '');
+      })
       .catch((e) => setError(e.message));
   }, [client, env.id]);
 
-  const start = async (p: Profile) => {
-    setBusy(p.id); setError('');
+  const account = accounts?.find((a) => a.key === key) ?? null;
+
+  useEffect(() => {
+    if (!account) return;
+    setModels(null);
+    const p = prefs.current[account.key] ?? {};
+    setModel(p.model ?? '');
+    setEffort(p.effort ?? '');
+    setAuto(p.auto ?? false);
+    client.rpc(env.id, 'model.list', { profileId: account.profile.id }, 30_000)
+      .then((r: any) => setModels(r))
+      .catch(() => setModels({ default: null, models: [] }));
+  }, [client, env.id, account?.key]);
+
+  const start = async () => {
+    if (!account) return;
+    setBusy(true); setError('');
+    prefs.current = {
+      ...prefs.current,
+      [env.id]: { account: account.key },
+      [account.key]: { model, effort, auto },
+    };
+    savePrefs(prefs.current);
     try {
-      const r = await client.rpc<{ session: Session }>(env.id, 'session.start',
-        { cwd, profileId: p.id }, 70_000);
+      const r = await client.rpc<{ session: Session }>(env.id, 'session.start', {
+        cwd, profileId: account.profile.id,
+        model: model || undefined, effort: effort || undefined, auto,
+      }, 70_000);
       onStarted(r.session);
-    } catch (e: any) { setError(e.message); setBusy(''); }
+    } catch (e: any) { setError(e.message); setBusy(false); }
   };
 
-  const grouped = useMemo(() => {
-    const by = new Map<string, Profile[]>();
-    for (const p of profiles) by.set(p.engine, [...(by.get(p.engine) ?? []), p]);
-    return [...by.entries()];
-  }, [profiles]);
+  const eng = account ? engineOf(account.engine) : null;
 
   return (
     <>
       <div className="bar">
         <button className="iconbtn back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>which agent?</h1><span className="sub">{cwd}</span></div>
+        <div className="titles"><h1>New session</h1><span className="sub">{cwd}</span></div>
       </div>
-      <div className="scroll"><div className="pad">
-        {grouped.map(([engine, list]) => (
-          <div key={engine}>
-            <div className="section">{engineOf(engine).label}</div>
-            <div className="list">
-              {list.map((p) => {
-                const d = describeProfile(p);
-                return (
-                  <button key={p.id} className="card" disabled={!!busy} onClick={() => start(p)}>
-                    <span className={`mark ${d.engine.cls}`}>{d.engine.mark}</span>
-                    <span className="grow">
-                      <div className="name">
-                        {d.account}
-                        {d.token && <span className="tag key">token</span>}
-                        {busy === p.id && <span className="tag">starting…</span>}
-                      </div>
-                      <div className="meta">
-                        <code>{d.alias}</code>{d.flags && <> · {d.flags}</>}
-                      </div>
-                    </span>
-                    <span className="chev">›</span>
-                  </button>
-                );
-              })}
+      <div className="scroll"><div className="pad column">
+        <div className="section">agent</div>
+        {accounts === null && <div className="empty quiet">looking for agents…</div>}
+        <div className="rows">
+          {accounts?.map((a) => {
+            const e = engineOf(a.engine);
+            return (
+              <button key={a.key} className={`row tall${a.key === key ? ' active' : ''}`} onClick={() => setKey(a.key)}>
+                <span className={`mark ${e.cls}`}>{e.mark}</span>
+                <span className="grow">
+                  <span className="rt">{e.label} <span className="dim">· {a.account}</span>{a.token && <span className="tag key">token</span>}</span>
+                  <span className="rm">{a.aliases.join(', ')}</span>
+                </span>
+                {a.key === key && <span className="check">✓</span>}
+              </button>
+            );
+          })}
+        </div>
+        {accounts?.length === 0 && (
+          <div className="empty quiet">
+            no agents on {env.name}
+            <div className="note" style={{ marginTop: 6 }}>install claude, codex or opencode there and run <code>helm profiles --refresh</code></div>
+          </div>
+        )}
+
+        {account && (
+          <>
+            <div className="section">model</div>
+            <div className="field">
+              <select value={model} onChange={(e) => setModel(e.target.value)} disabled={!models}>
+                <option value="">{models ? `default${models.default ? ` (${models.default})` : ''}` : 'loading…'}</option>
+                {models?.models.filter((m) => m !== models.default).map((m) => <option key={m} value={m}>{m}</option>)}
+                {model && !models?.models.includes(model) && <option value={model}>{model}</option>}
+              </select>
             </div>
-          </div>
-        ))}
-        {!profiles.length && !error && (
-          <div className="empty">
-            no agents found on {env.name}
-            <div className="note" style={{ marginTop: 6 }}>install claude, codex or opencode there, then run <code>helm profiles --refresh</code></div>
-          </div>
+            <input
+              className="custom" value={model} placeholder="or type a model id"
+              onChange={(e) => setModel(e.target.value)} autoCapitalize="off" autoCorrect="off"
+            />
+
+            {models?.efforts && (
+              <>
+                <div className="section">reasoning</div>
+                <div className="segmented">
+                  <button className={effort === '' ? 'on' : ''} onClick={() => setEffort('')}>default{models.effort ? ` (${models.effort})` : ''}</button>
+                  {models.efforts.map((x) => (
+                    <button key={x} className={effort === x ? 'on' : ''} onClick={() => setEffort(x)}>{x}</button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <div className="section">permissions</div>
+            <button className={`row tall toggle${auto ? ' active' : ''}`} onClick={() => setAuto((v) => !v)}>
+              <span className="grow">
+                <span className="rt">Act without asking</span>
+                <span className="rm">
+                  {account.engine === 'claude' ? '--permission-mode auto'
+                    : account.engine === 'codex' ? '--yolo'
+                    : '--auto'}
+                  {' · '}fewer interruptions, less oversight
+                </span>
+              </span>
+              <span className={`switch${auto ? ' on' : ''}`}><i /></span>
+            </button>
+
+            <button className="primary big" disabled={busy} onClick={start} style={{ marginTop: 22 }}>
+              {busy ? 'starting…' : `Start ${eng?.label}`}
+            </button>
+          </>
         )}
         {error && <div className="error">{error}</div>}
       </div></div>
@@ -765,9 +894,9 @@ function Profiles({ client, env, cwd, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-const QUICK: { label: string; key: string; hint?: string }[] = [
+const QUICK: { label: string; key: string }[] = [
   { label: 'yes', key: 'y' }, { label: 'no', key: 'n' },
-  { label: '↵ enter', key: 'Enter' }, { label: 'esc', key: 'Escape' },
+  { label: 'enter', key: 'Enter' }, { label: 'esc', key: 'Escape' },
   { label: '↑', key: 'Up' }, { label: '↓', key: 'Down' },
   { label: 'tab', key: 'Tab' }, { label: '^C', key: 'C-c' },
 ];
@@ -795,8 +924,6 @@ function SessionView({ client, env, session, onBack, onClosed }: {
 
   useEffect(() => {
     refresh();
-    // The daemon pushes `session.transcript` as the agent writes; this poll
-    // is only the safety net, and what keeps the daemon's watch alive.
     const timer = setInterval(refresh, 5_000);
     const off = client.on((e, kind, payload) => {
       if (e !== env.id) return;
@@ -834,44 +961,32 @@ function SessionView({ client, env, session, onBack, onClosed }: {
     <>
       <div className="bar">
         <button className="iconbtn back" onClick={onBack}>‹</button>
-        <span className={`mark ${eng.cls}`}>{eng.mark}</span>
         <div className="titles">
           <h1>{session.title}</h1>
-          <span className="sub">{env.name} · {shortPath(session.cwd)}</span>
+          <span className="sub">{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''} · {env.name}</span>
         </div>
-        <span className={`pill ${status}`}>{status === 'blocked' ? 'waiting' : status}</span>
+        <StatusChip status={status} />
         {!isShell && (
-          <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} onClick={() => setRaw((v) => !v)}>
-            {raw ? '💬' : '❯_'}
+          <button className="iconbtn mono" title={raw ? 'conversation' : 'terminal'} onClick={() => setRaw((v) => !v)}>
+            {raw ? '¶' : '❯_'}
           </button>
         )}
         <button className="iconbtn" title="more" onClick={() => setMenu((v) => !v)}>⋯</button>
         {menu && (
           <div className="menu" onClick={() => setMenu(false)}>
-            <button onClick={kill}>end session</button>
+            <button onClick={kill}>End session</button>
           </div>
         )}
       </div>
 
       {raw
         ? <Terminal client={client} env={env.id} sessionId={session.id} />
-        : <Chat messages={messages} status={status} engine={eng} />}
-
-      {status === 'blocked' && (
-        <div className="attention-bar">
-          <span className="attention-text">{eng.label} is waiting on you</span>
-          <div className="quick">
-            {QUICK.slice(0, 4).map((q) => (
-              <button key={q.key} onClick={() => key(q.key)}>{q.label}</button>
-            ))}
-          </div>
-        </div>
-      )}
+        : <Chat messages={messages} status={status} />}
 
       {!raw && (
         <Composer
           draft={draft} setDraft={setDraft} onSend={send} onKey={key}
-          placeholder={status === 'blocked' ? 'reply to the agent…' : `message ${eng.label}…`}
+          waiting={status === 'blocked'} engine={eng.label}
         />
       )}
       {error && <div className="error floating">{error}</div>}
@@ -879,36 +994,51 @@ function SessionView({ client, env, session, onBack, onClosed }: {
   );
 }
 
-function Composer({ draft, setDraft, onSend, onKey, placeholder }: {
+function Composer({ draft, setDraft, onSend, onKey, waiting, engine }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
-  onKey: (k: string) => void; placeholder: string;
+  onKey: (k: string) => void; waiting: boolean; engine: string;
 }) {
   const [keys, setKeys] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
-  // Grow with the text, up to a few lines, then scroll.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = '0px';
-    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+    el.style.height = Math.min(el.scrollHeight, 180) + 'px';
   }, [draft]);
 
   return (
     <div className="composer-wrap">
-      {keys && (
-        <div className="keys">
-          {QUICK.map((q) => <button key={q.key} onClick={() => onKey(q.key)}>{q.label}</button>)}
+      <div className="composer-col">
+        {waiting && (
+          <div className="docked warn">
+            <span className="docked-text"><i className="sdot blocked" />Waiting on you</span>
+            <span className="docked-actions">
+              {QUICK.slice(0, 4).map((q) => <button key={q.key} onClick={() => onKey(q.key)}>{q.label}</button>)}
+            </span>
+          </div>
+        )}
+        <div className="slab">
+          <textarea
+            ref={ref} rows={1} value={draft}
+            placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+          />
+          <div className="slab-foot">
+            <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>⌨ keys</button>
+            <span className="spacer" />
+            <button className="send" onClick={onSend} disabled={!draft.trim()} title="send">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+          </div>
+          {keys && (
+            <div className="keys">
+              {QUICK.map((q) => <button key={q.key} onClick={() => onKey(q.key)}>{q.label}</button>)}
+            </div>
+          )}
         </div>
-      )}
-      <div className="composer">
-        <button className={`iconbtn keys-toggle${keys ? ' on' : ''}`} title="keys" onClick={() => setKeys((v) => !v)}>⌨</button>
-        <textarea
-          ref={ref} rows={1} value={draft} placeholder={placeholder}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
-        />
-        <button className="send" onClick={onSend} disabled={!draft.trim()} title="send">↑</button>
       </div>
     </div>
   );
@@ -917,23 +1047,20 @@ function Composer({ draft, setDraft, onSend, onKey, placeholder }: {
 // --------------------------------------------------------------------- chat
 
 const TOOL_GLYPH: Record<string, string> = {
-  Read: '⌕', Write: '✎', Edit: '✎', MultiEdit: '✎', Bash: '❯', Grep: '⌕', Glob: '⌕',
+  Read: '◎', Write: '✎', Edit: '✎', MultiEdit: '✎', Bash: '❯', Grep: '⌕', Glob: '⌕',
   WebFetch: '⇣', WebSearch: '⌕', Task: '⚙', Agent: '⚙', shell: '❯', apply_patch: '✎',
 };
 const toolGlyph = (name: string) =>
-  TOOL_GLYPH[name] ?? (/read|search|grep|glob|list|find/i.test(name) ? '⌕'
+  TOOL_GLYPH[name] ?? (/read|cat|view/i.test(name) ? '◎'
+    : /search|grep|glob|list|find/i.test(name) ? '⌕'
     : /write|edit|patch|create/i.test(name) ? '✎'
     : /bash|shell|exec|run|command/i.test(name) ? '❯' : '⚙');
 
-function Chat({ messages, status, engine }: {
-  messages: Message[] | null; status: string; engine: { label: string; mark: string; cls: string };
-}) {
+function Chat({ messages, status }: { messages: Message[] | null; status: string }) {
   const box = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
   const [unread, setUnread] = useState(false);
 
-  // Follow the conversation unless the reader scrolled up to look at
-  // something, in which case offer a way back down rather than yanking them.
   const onScroll = () => {
     const el = box.current;
     if (!el) return;
@@ -955,28 +1082,25 @@ function Chat({ messages, status, engine }: {
   return (
     <div className="chat-wrap">
       <div className="chat" ref={box} onScroll={onScroll}>
-        {messages === null && <div className="empty quiet">loading conversation…</div>}
-        {messages?.length === 0 && (
-          <div className="empty quiet">
-            nothing yet
-            <div className="note" style={{ marginTop: 6 }}>the conversation appears here as the agent works</div>
-          </div>
-        )}
-        {messages?.map((m, i) => <Turn key={i} m={m} engine={engine} />)}
-        {status === 'working' && (
-          <div className="turn assistant">
-            <span className={`mark ${engine.cls}`}>{engine.mark}</span>
-            <div className="body"><div className="working"><i /><i /><i /></div></div>
-          </div>
-        )}
-        <div style={{ height: 8 }} />
+        <div className="timeline">
+          {messages === null && <p className="placeholder">Loading the conversation…</p>}
+          {messages?.length === 0 && (
+            <p className="placeholder">
+              {status === 'blocked' || status === 'working'
+                ? 'No transcript found for this session yet. The terminal view shows what it is doing.'
+                : 'Send a message to start the conversation.'}
+            </p>
+          )}
+          {messages?.map((m, i) => <Turn key={i} m={m} />)}
+          {status === 'working' && <div className="working"><span className="shine">Working…</span></div>}
+        </div>
       </div>
       {unread && <button className="jump" onClick={jump}>↓ new</button>}
     </div>
   );
 }
 
-function Turn({ m, engine }: { m: Message; engine: { label: string; mark: string; cls: string } }) {
+function Turn({ m }: { m: Message }) {
   if (m.role === 'user') {
     return (
       <div className="turn user">
@@ -984,28 +1108,20 @@ function Turn({ m, engine }: { m: Message; engine: { label: string; mark: string
       </div>
     );
   }
-  const many = m.tools.length > 4;
-  const tools = (
-    <div className="tools">
-      {m.tools.map((t, j) => (
-        <div key={j} className="tool">
-          <span className="tglyph">{toolGlyph(t.name)}</span>
-          <b>{t.name}</b>
-          {t.input && <span className="tin">{t.input}</span>}
-        </div>
-      ))}
+  const many = m.tools.length > 3;
+  const rows = m.tools.map((t, j) => (
+    <div key={j} className="act">
+      <span className="aicon">{toolGlyph(t.name)}</span>
+      <span className="alabel"><b>{t.name}</b>{t.input && <> {t.input}</>}</span>
     </div>
-  );
+  ));
   return (
     <div className="turn assistant">
-      <span className={`mark ${engine.cls}`}>{engine.mark}</span>
-      <div className="body">
-        {m.tools.length > 0 && (many
-          ? <details className="toolgroup"><summary>{m.tools.length} steps</summary>{tools}</details>
-          : tools)}
-        {m.text && <Markdown text={m.text} />}
-        {!m.text && !m.tools.length && m.thinking && <div className="faint">thinking…</div>}
-      </div>
+      {m.tools.length > 0 && (many
+        ? <details className="actgroup"><summary><span className="aicon">⚙</span><span className="alabel">{m.tools.length} steps</span><span className="achev">›</span></summary>{rows}</details>
+        : rows)}
+      {m.text && <Markdown text={m.text} className="prose" />}
+      {!m.text && !m.tools.length && m.thinking && <div className="act"><span className="aicon">◌</span><span className="alabel">Thinking</span></div>}
     </div>
   );
 }

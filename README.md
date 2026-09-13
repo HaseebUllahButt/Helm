@@ -104,7 +104,7 @@ https://helm.example.com/#pair=abc123
 ```
 
 Open it on mobile to pair the PWA automatically. Paste the same link into Helm
-Desktop. The link expires after five minutes; the paired device stays connected
+Desktop. The link expires after ten minutes; the paired device stays connected
 until removed.
 
 ### Add another computer

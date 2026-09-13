@@ -7,6 +7,7 @@ import { HELM_DIR, expand } from './paths.js';
 import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
+import { optionArgs } from './models.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -206,12 +207,15 @@ export class Sessions extends EventEmitter {
     return out.sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 
-  async start({ cwd, profileId, title }) {
+  async start({ cwd, profileId, title, model, auto, effort }) {
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
 
     const spec = materialize(profile);
+    // What was chosen in the app, in the CLI's own words. An explicit choice
+    // goes after the alias's own arguments so it wins if the two disagree.
+    spec.args = [...spec.args, ...optionArgs(profile.engine, { model, auto, effort })];
     const dir = expand(cwd);
 
     const handle = await this.runtime.createSession({
@@ -227,8 +231,10 @@ export class Sessions extends EventEmitter {
       tabId: handle.tabId,
       profileId,
       engine: profile.engine,
+      model: model || null,
+      auto: !!auto,
       cwd: dir,
-      title: title || profile.label,
+      title: title || `${dir.split('/').pop() || dir}`,
       status: 'starting',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -296,12 +302,24 @@ export class Sessions extends EventEmitter {
       const engine = ENGINES[s.engine];
       if (!engine || engine.plain) return { messages: [], source: null };
 
-      s.transcript = await locate({
-        engine: s.engine,
-        home: profile?.env?.[engine.homeEnv] ?? engine.defaultHome,
-        cwd: s.cwd,
-        startedAt: s.createdAt ?? 0,
-      });
+      // A session helm started knows its account. One it adopted from the
+      // keyboard does not - `claudeaa` in a pane looks the same as `claude` -
+      // so try every account home this engine has here and take the newest
+      // transcript that matches the directory.
+      const homes = profile
+        ? [profile.env?.[engine.homeEnv] ?? engine.defaultHome]
+        : [...new Set([
+            engine.defaultHome,
+            ...profiles.filter((p) => p.engine === s.engine).map((p) => p.env?.[engine.homeEnv]).filter(Boolean),
+          ])];
+      let best = null;
+      for (const home of homes) {
+        const path = await locate({ engine: s.engine, home, cwd: s.cwd, startedAt: s.createdAt ?? 0 });
+        if (!path) continue;
+        const mtime = await stat(path).then((st) => st.mtimeMs).catch(() => 0);
+        if (!best || mtime > best.mtime) best = { path, mtime };
+      }
+      s.transcript = best?.path ?? null;
       if (s.transcript && this.#index.has(id)) this.#save();
     }
     // Asking for messages is how a chat view says it is watching.

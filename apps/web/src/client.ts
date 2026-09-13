@@ -169,6 +169,17 @@ export class Client {
   private closed = false;
   private connecting = false;
   private peers = new Map<string, Peer>();
+  private presencePoll: ReturnType<typeof setInterval> | null = null;
+  private onVisible = () => {
+    // Coming back to the foreground: the socket is almost certainly dead and
+    // the backoff timer may be ten seconds out. Try now.
+    if (document.visibilityState === 'visible' && !this.connected && !this.connecting) {
+      this.backoff = 500;
+      this.connect().catch(() => {});
+    }
+  };
+  /** What the last connection attempt ran into, for the diagnostics line. */
+  public lastError = '';
 
   /** The hub we are currently attached to. */
   public relay: string;
@@ -178,6 +189,33 @@ export class Client {
 
   constructor(public endpoints: string[], public token: string) {
     this.relay = endpoints[0];
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.onVisible);
+    }
+  }
+
+  /**
+   * While the socket is down but a hub still answers HTTP, keep presence
+   * honest by asking over HTTP. A carrier that mangles WebSocket upgrades
+   * should degrade the app to "a bit slower", not to "everything is offline".
+   */
+  private startPresencePoll() {
+    if (this.presencePoll) return;
+    this.presencePoll = setInterval(() => {
+      if (this.connected || this.closed) return;
+      this.environments()
+        .then((r) => {
+          for (const env of r.environments) {
+            this.emit(env.id, 'presence', { env: env.id, online: env.online, info: env.info, name: env.name });
+          }
+          this.emit('', 'connection', { online: false, reachable: true, hub: this.relay });
+        })
+        .catch(() => {});
+    }, 10_000);
+  }
+  private stopPresencePoll() {
+    if (this.presencePoll) clearInterval(this.presencePoll);
+    this.presencePoll = null;
   }
 
   get connected() { return this.ws?.readyState === WebSocket.OPEN; }
@@ -215,7 +253,8 @@ export class Client {
           this.closed = true;
           this.emit('', 'unauthorized', {});
         } else {
-          this.emit('', 'connection', { online: false });
+          this.lastError = 'no hub answered';
+          this.emit('', 'connection', { online: false, reachable: false });
           this.scheduleReconnect();
         }
       }
@@ -235,6 +274,8 @@ export class Client {
       ws.onopen = () => {
         this.connecting = false;
         this.backoff = 500;
+        this.lastError = '';
+        this.stopPresencePoll();
         for (const env of this.subscribed) {
           ws.send(JSON.stringify({ t: 'subscribe', env }));
         }
@@ -264,11 +305,15 @@ export class Client {
       };
 
       ws.onerror = () => settle(new Error('could not reach any machine'));
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         this.connecting = false;
         // A deliberate close must not restart the reconnect loop.
         if (this.closed) return;
-        this.emit('', 'connection', { online: false });
+        this.lastError = `socket closed (${ev.code}${ev.reason ? ` ${ev.reason}` : ''})`;
+        // The hub answered HTTP a moment ago, so machines are reachable even
+        // though the socket is not; say that, and keep presence fresh.
+        this.emit('', 'connection', { online: false, reachable: true, hub, error: this.lastError });
+        this.startPresencePoll();
         // Every in-flight call is now unanswerable; fail them rather than
         // leaving the UI spinning forever.
         for (const p of this.pending.values()) p.reject(new Error('disconnected'));
@@ -318,6 +363,10 @@ export class Client {
   /** Tear everything down; used when the signed-in account changes. */
   close() {
     this.closed = true;
+    this.stopPresencePoll();
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.onVisible);
+    }
     for (const env of [...this.peers.keys()]) this.dropDirect(env);
     try { this.ws?.close(); } catch { /* already closing */ }
   }

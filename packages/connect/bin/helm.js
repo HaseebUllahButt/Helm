@@ -36,7 +36,7 @@ const usage = () => {
   helm setup [https-url]             make this always-on VM your Helm home
   helm setup --join <CODE> --at <url> [https-url]
                                      add another always-on VM to an existing mesh
-  helm link [minutes]                link a phone, browser or desktop app (max 15 min)
+  helm link [minutes]                link a phone, browser or desktop app (10 min; max 15)
   helm add                           add another computer
   helm join <CODE> [home-url]        join this computer to a Helm home (installs the service)
   helm join <CODE> [home-url] --foreground   ...but run in this terminal instead

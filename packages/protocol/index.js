@@ -70,8 +70,9 @@ export const M = {
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }
   PROFILE_LIST: 'profile.list',    // {} -> { profiles[] }
+  MODEL_LIST: 'model.list',        // { profileId } -> { default, models[], effort?, efforts? }
   SESSION_LIST: 'session.list',    // {} -> { sessions[] }
-  SESSION_START: 'session.start',  // { cwd, profileId, title? } -> { session }
+  SESSION_START: 'session.start',  // { cwd, profileId, model?, auto?, effort?, title? } -> { session }
   SESSION_ATTACH: 'session.attach',// { id, cols, rows } -> { session, scrollback }
   SESSION_DETACH: 'session.detach',// { id }
   SESSION_INPUT: 'session.input',  // { id, data }
