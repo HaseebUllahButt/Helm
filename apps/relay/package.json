@@ -1,0 +1,16 @@
+{
+  "name": "@helm/relay",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/server.js",
+  "dependencies": {
+    "@helm/protocol": "*",
+    "ws": "^8.18.0"
+  },
+  "exports": {
+    ".": "./src/server.js",
+    "./http": "./src/http.js",
+    "./db": "./src/db.js"
+  },
+  "description": "The hub every machine runs: authenticates members, introduces peers, serves the app."
+}
