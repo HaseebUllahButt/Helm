@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.sqlite
+*.sqlite-*
+.env
+.helm/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
