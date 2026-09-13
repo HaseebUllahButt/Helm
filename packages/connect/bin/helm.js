@@ -38,7 +38,8 @@ const usage = () => {
                                      add another always-on VM to an existing mesh
   helm link [minutes]                link a phone, browser or desktop app (max 15 min)
   helm add                           add another computer
-  helm join <CODE> [home-url]        join this computer to a Helm home
+  helm join <CODE> [home-url]        join this computer to a Helm home (installs the service)
+  helm join <CODE> [home-url] --foreground   ...but run in this terminal instead
   helm status                        show the network and runtime
 
   helm up [--port N] [--tunnel]      run in the foreground
@@ -223,6 +224,23 @@ async function joinCmd() {
   const { join: joinNet } = await import('../src/serve.js');
   const net = await joinNet({ code, at, name: strFlag('name', hostname()), port: port() });
   console.log(`\n  joined. ${Object.keys(net.machines).length} machines in this network.`);
+
+  // A joined machine should stay reachable after this terminal closes, the
+  // same as `helm setup` does for the home - so install the service rather
+  // than serving in the foreground. `--foreground` keeps the old behaviour.
+  if (!rest.includes('--foreground')) {
+    const { installService } = await import('../src/service.js');
+    const args = rest.includes('--name') ? ['--name', strFlag('name', hostname())] : [];
+    const { installed, unit } = await installService({ mode: 'serve', args });
+    if (installed) {
+      console.log(`  installed ${unit} - this machine stays in the network across reboots.`);
+      console.log('\n  Open the app on your phone: it should show this machine online.');
+      console.log('  Check with:     helm status');
+      console.log('  Watch logs:     journalctl --user -u helm-serve -f');
+      console.log('  Run in front:   helm up  (stop the service first)\n');
+      return;
+    }
+  }
   console.log('  bringing this machine up...\n');
   await up();
 }

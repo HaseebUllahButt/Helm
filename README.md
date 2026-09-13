@@ -116,7 +116,9 @@ copy the command it prints:
 helm join ABCD-1234 https://helm.example.com
 ```
 
-The join code is single-use and expires after ten minutes.
+The join code is single-use and expires after ten minutes. `helm join` installs
+Helm as a background service on that computer, so it stays in the network
+after the terminal closes; pass `--foreground` to run it in the terminal instead.
 
 ## Mobile PWA
 
