@@ -788,9 +788,14 @@ const loadPrefs = (): Prefs => { try { return JSON.parse(localStorage.getItem(PR
 const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* full */ } };
 
 /**
- * One screen to start a session: the account, the model, and whether the
- * agent may act without asking. Everything else the CLI would have wanted on
- * its command line is remembered from last time.
+ * One screen, one decision: which account runs here.
+ *
+ * Model, thinking level, permissions and speed used to be chosen here and
+ * then frozen for the life of the session. They are all changeable from
+ * inside the conversation now, so asking for them up front only stands
+ * between you and the session. The account cannot move - it decides which
+ * process starts - so it is the only thing left, and the last one you used
+ * is already selected.
  */
 function Start({ client, env, cwd, onBack, onStarted }: {
   client: Client; env: Environment; cwd: string;
@@ -798,7 +803,6 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 }) {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [key, setKey] = useState<string>('');
-  const [models, setModels] = useState<ModelList | null>(null);
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [auto, setAuto] = useState(false);
@@ -820,18 +824,16 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 
   const account = accounts?.find((a) => a.key === key) ?? null;
 
+  // What this account ran with last time. The session can change all of it,
+  // so these are a starting point, not a question.
   useEffect(() => {
     if (!account) return;
-    setModels(null);
     const p = prefs.current[account.key] ?? {};
     setModel(p.model ?? '');
     setEffort(p.effort ?? '');
     setAuto(p.auto ?? false);
     setMode(p.mode ?? '');
-    client.rpc<ModelList>(env.id, 'model.list', { profileId: account.profile.id }, 30_000)
-      .then((r) => setModels(r))
-      .catch(() => setModels({ default: null, models: [] }));
-  }, [client, env.id, account?.key]);
+  }, [account?.key]);
 
   const start = async () => {
     if (!account) return;
@@ -886,61 +888,10 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 
         {account && (
           <>
-            <div className="section">model</div>
-            <div className="field">
-              <select value={model} onChange={(e) => setModel(e.target.value)} disabled={!models}>
-                <option value="">{models ? `default${models.default ? ` (${models.default})` : ''}` : 'loading…'}</option>
-                {models?.models.filter((m) => m !== models.default).map((m) => <option key={m} value={m}>{m}</option>)}
-                {model && !models?.models.includes(model) && <option value={model}>{model}</option>}
-              </select>
+            <div className="note start-note">
+              Model, thinking, permissions and speed are all changeable inside
+              the session.
             </div>
-            <input
-              className="custom" value={model} placeholder="or type a model id"
-              onChange={(e) => setModel(e.target.value)} autoCapitalize="off" autoCorrect="off"
-            />
-
-            {models?.efforts && (
-              <>
-                <div className="section">reasoning</div>
-                <div className="segmented">
-                  <button className={effort === '' ? 'on' : ''} onClick={() => setEffort('')}>default{models.effort ? ` (${models.effort})` : ''}</button>
-                  {models.efforts.map((x) => (
-                    <button key={x} className={effort === x ? 'on' : ''} onClick={() => setEffort(x)}>{x}</button>
-                  ))}
-                </div>
-              </>
-            )}
-
-            <div className="section">permissions</div>
-            {models?.modes?.length ? (
-              <div className="rows">
-                {models.modes.map((m) => {
-                  const on = (mode || models.modes![0].id) === m.id;
-                  return (
-                    <button key={m.id} className={`row tall${on ? ' active' : ''}${m.danger ? ' danger' : ''}`} onClick={() => setMode(m.id)}>
-                      <span className="grow">
-                        <span className="rt">{m.label}</span>
-                        {m.hint && <span className="rm">{m.hint}</span>}
-                      </span>
-                      {on && <span className="check">✓</span>}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-            <button className={`row tall toggle${auto ? ' active' : ''}`} onClick={() => setAuto((v) => !v)}>
-              <span className="grow">
-                <span className="rt">Act without asking</span>
-                <span className="rm">
-                  {account.engine === 'claude' ? '--permission-mode auto'
-                    : account.engine === 'codex' ? '--yolo'
-                    : '--auto'}
-                  {' · '}fewer interruptions, less oversight
-                </span>
-              </span>
-              <span className={`switch${auto ? ' on' : ''}`}><i /></span>
-            </button>
-            )}
 
             <button className="primary big" disabled={busy} onClick={start} style={{ marginTop: 22 }}>
               {busy ? 'starting…' : `Start ${eng?.label}`}
