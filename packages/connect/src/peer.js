@@ -108,8 +108,8 @@ export class PeerHub {
   }
 
   /** Push an event to every connected client that took the direct route. */
-  broadcast(kind, payload) {
-    const frame = JSON.stringify({ t: 'event', kind, payload });
+  broadcast(kind, payload, eid) {
+    const frame = JSON.stringify({ t: 'event', kind, payload, eid });
     for (const peer of this.#peers.values()) {
       if (peer.channel?.readyState === 'open') peer.channel.send(frame);
     }

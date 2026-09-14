@@ -145,6 +145,9 @@ export class Daemon {
   #tunnels = new Map();
   #stopped = false;
   #reconcile = null;
+  /** This process's half of an event id; a restart must not reuse ids. */
+  #boot = Math.random().toString(36).slice(2, 8);
+  #emitted = 0;
 
   /**
    * @param {object} opts
@@ -365,10 +368,24 @@ export class Daemon {
     }
   }
 
+  /**
+   * Push an event to everyone watching this machine.
+   *
+   * A client with a direct peer connection is *also* still attached to a hub
+   * - the direct channel is preferred for sending, not a replacement - so
+   * both paths reach it and it saw every event twice. The transcript hid
+   * that because it applies events by sequence number, but the terminal
+   * wrote each keystroke's echo twice, which is what "I type one letter and
+   * it shows up as two" was.
+   *
+   * So each event carries an id: this process's boot tag plus a counter.
+   * Whichever copy arrives first wins, the other is dropped, and a restarted
+   * daemon cannot collide with its own past because the boot half is new.
+   */
   #emit(kind, payload) {
-    this.broadcastFrame(T.EVENT, { kind, payload });
-    // Clients on a direct connection are not listening to any hub.
-    this.peers?.broadcast(kind, payload);
+    const eid = `${this.#boot}:${++this.#emitted}`;
+    this.broadcastFrame(T.EVENT, { kind, payload, eid });
+    this.peers?.broadcast(kind, payload, eid);
   }
 
   async describe() {

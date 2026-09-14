@@ -318,7 +318,7 @@ export class Client {
           msg.ok ? p.resolve(msg.result) : p.reject(new Error(msg.error?.message ?? 'failed'));
           return;
         }
-        if (msg.t === 'event') this.emit(msg.env, msg.kind, msg.payload);
+        if (msg.t === 'event') this.deliver(msg.env, msg.kind, msg.payload, msg.eid);
         if (msg.t === 'presence') this.emit(msg.env, 'presence', msg);
         if (msg.t === 'signal') this.onSignal(msg.env, msg.payload);
       };
@@ -457,12 +457,38 @@ export class Client {
         msg.ok ? p.resolve(msg.result) : p.reject(new Error(msg.error?.message ?? 'failed'));
         return;
       }
-      if (msg.t === 'event') this.emit(env, msg.kind, msg.payload);
+      if (msg.t === 'event') this.deliver(env, msg.kind, msg.payload, msg.eid);
     };
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     this.signal(env, { type: 'offer', sdp: pc.localDescription!.sdp });
+  }
+
+  /** Ids of events already handed on, so the second copy is ignored. */
+  private seenEvents = new Set<string>();
+  private seenOrder: string[] = [];
+
+  /**
+   * Deliver an event once.
+   *
+   * The same push arrives over the hub and over the direct peer channel,
+   * because a direct connection is preferred for sending but does not
+   * replace the hub subscription. Without this, a terminal wrote every
+   * keystroke's echo twice. Events from a daemon too old to stamp an id are
+   * passed through rather than dropped.
+   */
+  private deliver(env: string, kind: string, payload: any, eid?: string) {
+    if (eid) {
+      if (this.seenEvents.has(eid)) return;
+      this.seenEvents.add(eid);
+      this.seenOrder.push(eid);
+      // Only the recent past can duplicate; the rest is not worth remembering.
+      if (this.seenOrder.length > 500) {
+        this.seenEvents.delete(this.seenOrder.shift()!);
+      }
+    }
+    this.emit(env, kind, payload);
   }
 
   private signal(env: string, payload: any) {

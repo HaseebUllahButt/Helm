@@ -654,6 +654,10 @@ pre.snippet {
    no way to forget which one you are in. */
 /* The control row: model, thinking, permissions, speed - one tap each, and
    it scrolls sideways rather than wrapping and pushing the composer up. */
+.slab-controls {
+  display: flex; padding: 8px 10px 0; min-width: 0;
+  border-top: 1px solid transparent;
+}
 .chips {
   display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;
   overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;

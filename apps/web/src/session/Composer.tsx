@@ -48,9 +48,9 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
           />
+          {foot && <div className="slab-controls">{foot}</div>}
           <div className="slab-foot">
             {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>⌨ keys</button>}
-            {foot}
             <span className="spacer" />
             {working && onStop && (
               <button className="stop" onClick={onStop} title="stop the agent">
