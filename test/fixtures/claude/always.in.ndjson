@@ -1,0 +1,2 @@
+{"type":"user","session_id":"","parent_tool_use_id":null,"uuid":"e80408b3-90cf-4a17-97c0-632997a673bf","message":{"role":"user","content":[{"type":"text","text":"Use the Write tool to create a file named a.txt containing \"a\", then another file named b.txt containing \"b\". Then say done in one line."}]}}
+{"type":"control_response","response":{"subtype":"success","request_id":"531de5f3-0543-4aa4-84ef-ce6e41d0f101","response":{"behavior":"allow","updatedPermissions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}]}}}

@@ -1,0 +1,2 @@
+{"type":"user","session_id":"","parent_tool_use_id":null,"uuid":"c82edd02-3b40-4bad-9099-61a5b58810fb","message":{"role":"user","content":[{"type":"text","text":"Use the Write tool to create a file named out.txt containing \"hi\". If you cannot, say so in one line."}]}}
+{"type":"control_response","response":{"subtype":"success","request_id":"acaeaf64-557e-4445-88db-f874b0c4edb9","response":{"behavior":"deny","message":"The user declined this on their phone."}}}

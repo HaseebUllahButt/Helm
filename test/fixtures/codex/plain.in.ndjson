@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"helm","title":"Helm","version":"0.0.1"},"capabilities":{"experimentalApi":true}}}
+{"jsonrpc":"2.0","method":"initialized"}
+{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"/tmp/helm-record-DVfAp4","approvalPolicy":"on-request","sandbox":"workspace-write"}}
+{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"01a09e7a-960e-79e2-b7c8-8fc714c00f2a","input":[{"type":"text","text":"Reply with exactly the words: hello from helm","text_elements":[]}],"effort":"low"}}
