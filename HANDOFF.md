@@ -187,6 +187,22 @@ frozen, the UI was cramped, and the terminal typed everything twice.
   whatever it was last doing, so a dead session cannot sit at the top of the
   list under "needs you" forever (`sessions.js` `list()`).
 
+### Two things the owner caught in a screenshot, now fixed
+
+The same sentence printed twice: an `error` event puts an item in the
+transcript where it happened, and `turn.done` then carried the identical
+message into the turn's footer. The footer now omits an error the turn
+already shows and says only that the turn failed.
+
+The model chip said "model". Neither CLI is given a model unless one is
+chosen, but both announce what they started with in their init message and
+helm was dropping it. The daemon keeps it as `engineModel`/`engineEffort` -
+reported, not chosen, so it never becomes an argument on the next launch -
+and the session view now listens for `session.update`, which it never did,
+so a record changing underneath it (the CLI reporting its model, another
+device changing a setting) actually reaches the chips. Verified: the chip
+went from `◆ default` to `◆ opus-5` when the CLI said so.
+
 ### The bug worth remembering: every push arrived twice
 
 Typing one letter in the terminal put two on screen. The daemon was innocent —
@@ -227,23 +243,18 @@ add a third delivery path, it must carry the same id.**
 
 ## Known bad, and not yet fixed
 
-1. **The same error renders twice** — once as a transcript item, once as a
-   floating banner. Visible whenever a driver emits `error`.
-2. **The model chip reads "model"** instead of a name when the account has no
-   recorded default (Claude, typically). It should fall back to the engine's
-   actual default.
-3. **Slash commands are not built.** Worth knowing before designing them:
+1. **Slash commands are not built.** Worth knowing before designing them:
    `/help` and `/status` through `claude -p` return `ok` in ~95 ms with **no
    output** — the built-ins are TUI-local and do nothing headless. Custom
    commands and skills *do* run. So a palette of built-ins would be a lie; a
    palette of the project's own commands plus protocol-level actions would not.
-4. **No vendor logos** — engine marks are the letters `C` / `X` / `O`.
-5. **A real phone has never opened this.** Every run was headless Chromium at
+2. **No vendor logos** — engine marks are the letters `C` / `X` / `O`.
+3. **A real phone has never opened this.** Every run was headless Chromium at
    390×844. Touch, the keyboard pushing the permission sheet, and a carrier-NAT
    WebRTC path are all unproven. This is the biggest gap.
-6. **Push notification when a session blocks** is still the highest-value
+4. **Push notification when a session blocks** is still the highest-value
    missing feature; `permission.request` is a structured event to hang it on.
-7. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
+5. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
    coded from the bindings and have never been seen live.
 
 ## The machines themselves
