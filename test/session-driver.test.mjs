@@ -152,3 +152,32 @@ test('a daemon restart lists a driven session as idle and resumable', async (t) 
   assert.equal(listed.mode, 'default');
   t.after(() => again.kill(s.id));
 });
+
+test('the model the CLI reports is kept, so the app can name what is running', async () => {
+  // Neither CLI takes a model unless one is chosen, but both announce what
+  // they started with. Without keeping it the chip has nothing to show but
+  // the word "model", which is what the owner saw.
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const updates = [];
+  sessions.on('session', (rec) => updates.push({ model: rec.engineModel, effort: rec.engineEffort }));
+
+  const driver = FakeDriver.made[FakeDriver.made.length - 1];
+  driver.emit('init', { model: 'claude-fable-5-1', effort: 'high' });
+
+  const listed = (await sessions.list()).find((x) => x.id === s.id);
+  assert.equal(listed.engineModel, 'claude-fable-5-1');
+  assert.equal(listed.engineEffort, 'high');
+  assert.ok(updates.some((u) => u.model === 'claude-fable-5-1'), 'the app is told');
+  // Reported, not chosen: it must not become an argument on the next launch.
+  assert.equal(listed.model, null);
+
+  // The same announcement again is not news.
+  const before = updates.length;
+  driver.emit('init', { model: 'claude-fable-5-1', effort: 'high' });
+  assert.equal(updates.length, before);
+  await sessions.kill(s.id);
+});

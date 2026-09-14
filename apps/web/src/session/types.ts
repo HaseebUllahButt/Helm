@@ -165,7 +165,18 @@ export function apply(state: LogState, e: HelmEvent): void {
       return;
     case 'turn.done': {
       const turn = turnFor(state.turns, e.turnId);
-      if (turn) turn.done = { status: e.status, costUsd: e.costUsd, durationMs: e.durationMs, error: e.error };
+      if (turn) {
+        // The turn's error is usually the same sentence an `error` event
+        // already put in the transcript ("Not logged in - run /login"), and
+        // printing it twice reads like two things went wrong. Keep the item,
+        // which sits where it happened, and let the footer say only that the
+        // turn failed.
+        const shown = turn.items.some((it) => it.kind === 'error' && it.text === e.error);
+        turn.done = {
+          status: e.status, costUsd: e.costUsd, durationMs: e.durationMs,
+          error: shown ? undefined : e.error,
+        };
+      }
       // Anything still streaming in this turn is over too.
       for (const it of turn?.items ?? []) if (it.status === 'streaming') { it.status = e.status === 'interrupted' ? 'ok' : it.status === 'streaming' ? 'ok' : it.status; it.doneAt ??= e.at; }
       return;

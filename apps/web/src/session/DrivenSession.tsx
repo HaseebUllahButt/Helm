@@ -36,6 +36,15 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
       .then(setOptions).catch(() => setOptions({ default: null, models: [] }));
   }, [client, env.id, session.profileId]);
 
+  // The record changes without us asking: the CLI reports which model it
+  // actually started with, and another device may change a setting. Take
+  // those, or the chips describe a session that no longer exists.
+  useEffect(() => client.on((e, kind, payload: any) => {
+    if (e === env.id && kind === 'session.update' && payload?.session?.id === session.id) {
+      onSession(payload.session);
+    }
+  }), [client, env.id, session.id, onSession]);
+
   const call = async (fn: () => Promise<unknown>) => {
     setBusy(true); setError('');
     try { await fn(); } catch (e: any) { setError(e.message); }

@@ -52,6 +52,9 @@ export interface Session {
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;
   model?: string | null;
+  /** What the CLI said it actually started with, when nothing was picked. */
+  engineModel?: string | null;
+  engineEffort?: string | null;
   mode?: string | null;
   speed?: string | null;
   effort?: string | null;

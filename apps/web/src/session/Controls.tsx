@@ -85,7 +85,10 @@ const shortModel = (slug: string, labels?: Record<string, string>) => {
 function groupsFor(options: ModelList | null, session: Session): Group[] {
   const out: Group[] = [];
   if (!options) return out;
-  const model = session.model || options.default || '';
+  // What is actually running: what the owner picked, else what the CLI said
+  // it started with, else the account default. Only if all three are silent
+  // does the chip have nothing to name.
+  const model = session.model || session.engineModel || options.default || '';
 
   if (options.models.length) {
     const choices: Choice[] = options.models.map((m) => ({
@@ -93,13 +96,18 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       label: options.labels?.[m] ?? m,
       hint: m === options.default ? 'the account default' : undefined,
     }));
+    // A model the CLI reported but that is not in the catalogue is still the
+    // one in use, so it belongs in the list rather than being unselectable.
+    if (model && !choices.some((c) => c.id === model)) {
+      choices.unshift({ id: model, label: options.labels?.[model] ?? model, hint: 'in use now' });
+    }
     out.push({
       kind: 'model',
       title: 'model',
       glyph: '◆',
       choices,
       current: model,
-      currentLabel: model ? shortModel(model, options.labels) : 'model',
+      currentLabel: model ? shortModel(model, options.labels) : 'default',
     });
   }
 
@@ -112,8 +120,8 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       glyph: '◇',
       note: 'How long it reasons before answering. More is slower and costs more.',
       choices: efforts.map((e) => ({ id: e, label: e })),
-      current: session.effort || options.effort || '',
-      currentLabel: session.effort || options.effort || 'default',
+      current: session.effort || session.engineEffort || options.effort || '',
+      currentLabel: session.effort || session.engineEffort || options.effort || 'default',
     });
   }
 

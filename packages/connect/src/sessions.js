@@ -335,6 +335,21 @@ export class Sessions extends EventEmitter {
     });
     this.#drivers.set(s.id, d);
     d.on('event', (e) => this.#onDriverEvent(s, d, e));
+    // Both CLIs announce what they actually started with. Keep it: when the
+    // owner has not picked a model, this is the only way to say which one is
+    // running instead of showing the word "model". It is reported, not
+    // chosen, so it stays separate from `model` and never becomes an
+    // argument on the next launch.
+    d.on('init', (info) => {
+      if (!info) return;
+      const model = info.model ?? null;
+      const effort = info.effort ?? null;
+      if (model === s.engineModel && effort === s.engineEffort) return;
+      s.engineModel = model;
+      s.engineEffort = effort;
+      if (this.#index.has(s.id)) this.#save();
+      this.emit('session', s);
+    });
     return d;
   }
 
