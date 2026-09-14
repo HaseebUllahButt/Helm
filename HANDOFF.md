@@ -162,14 +162,21 @@ a card with the live output tail and exit code, edits as per-file diffs with
 when the CLI says so); questions as option rows with an automatic "Other";
 plans as markdown with Approve / Keep planning (+ an optional note that goes
 back as the deny message). Stop sits beside Send while a turn runs. The
-header's model and mode are tappable pickers. The Start screen's
+header's model is a tappable picker. The Start screen's
 "act without asking" switch became the engine's mode list.
+
+`ModeSheet` is where permissions live once a session is running: a chip in
+the composer's foot saying the mode in one word (ask / edit / plan / auto /
+yolo), tapped to dock the full list in the prompt's slot. shift+tab cycles,
+skipping any mode marked `danger`; a danger mode arms on the first tap and
+commits on the second, then colours the chip and the composer so the state
+is never a surprise. The header's mode button opens the same sheet.
 
 ---
 
 ## Verified today, by running it
 
-- `npm run check` green: types, production build, 31 node tests, and
+- `npm run check` green: types, production build, 35 node tests, and
   `test/network.sh`.
 - **Recorded reality first.** `scripts/record-driver.mjs` ran one real turn
   per case through a helm profile (real account, real credential) and kept
@@ -204,6 +211,15 @@ header's model and mode are tappable pickers. The Start screen's
     the partial text kept (226 chars when pressed, 289 at the end);
   - the mode picker → "Edit freely" → the next Write goes through with no
     prompt (`second.txt` on disk);
+  - (second pass, the mode chip) in `ask` a Write prompts and Allow closes
+    the turn at `3.5s · $0.09`; shift+tab → `edit` and the next Write goes
+    straight through, no sheet, `two.txt` on disk. Codex, one thread: "write
+    outside the workspace" → "it did not work - the filesystem is read-only
+    outside the workspace"; chip → yolo; the same prompt → "Worked - the
+    file was written and verified", the file on disk. That second half only
+    works because `turn/start` now carries `sandboxPolicy` as well as
+    `approvalPolicy` - before, a mode change stopped the questions but left
+    the sandbox where `thread/start` had put it, and the UI was lying;
   - daemon killed and restarted → the transcript is still there, the next
     message resumes with `--resume` → "The file I created first was
     hello.txt.";
