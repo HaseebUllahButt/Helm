@@ -70,7 +70,8 @@ function claudeModels(root) {
   } catch { /* no config yet */ }
   const models = [...seen];
   if (def && !models.includes(def)) models.unshift(def);
-  return { default: def, models };
+  // `claude --effort`; the default depends on the model, so none is claimed.
+  return { default: def, models, effort: null, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
 }
 
 async function opencodeModels(root) {

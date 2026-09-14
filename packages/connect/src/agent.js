@@ -177,7 +177,7 @@ export class Daemon {
       (method, params) => this.dispatch(method, params)
     );
 
-    this.sessions = new Sessions(this.runtime);
+    this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
     this.sessions.resume();
     this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session }));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
@@ -186,6 +186,7 @@ export class Daemon {
     this.sessions.on('status', ({ session, from, to }) =>
       this.#emit(E.SESSION_UPDATE, { session, transition: { from, to } })
     );
+    this.sessions.on('event', ({ id, event }) => this.#queueEvent(id, event));
 
     await this.#tick();
     this.#reconcile = setInterval(
@@ -202,6 +203,8 @@ export class Daemon {
     for (const link of this.#links.values()) link.stop();
     this.peers?.stop();
     this.runtime?.stop();
+    // Headless agents die with the daemon; their sessions resume on demand.
+    this.sessions?.stop().catch(() => {});
   }
 
   // ------------------------------------------------------------------ links
@@ -335,6 +338,30 @@ export class Daemon {
 
   broadcastFrame(t, extra) {
     for (const link of this.live) link.send(t, extra);
+  }
+
+  /** sessionId -> events waiting for the next flush */
+  #eventQueue = new Map();
+  #eventFlush = null;
+
+  /**
+   * Session events go out in small batches, one frame per session per tick,
+   * and only while somebody has asked to watch that session: the relay fans
+   * out per machine, so this is what keeps a phone from receiving the text
+   * of every session on the box.
+   */
+  #queueEvent(id, event) {
+    if (!this.sessions.watching(id)) return;
+    if (!this.#eventQueue.has(id)) this.#eventQueue.set(id, []);
+    this.#eventQueue.get(id).push(event);
+    if (!this.#eventFlush) {
+      this.#eventFlush = setImmediate(() => {
+        this.#eventFlush = null;
+        const batches = [...this.#eventQueue];
+        this.#eventQueue.clear();
+        for (const [sid, events] of batches) this.#emit(E.SESSION_EVENT, { id: sid, events });
+      });
+    }
   }
 
   #emit(kind, payload) {
@@ -499,6 +526,15 @@ export class Daemon {
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
       case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
+
+      // Headless agent sessions.
+      case M.SESSION_EVENTS:  return this.sessions.history(p.id, { since: p.since ?? 0 });
+      case M.SESSION_WATCH:   return this.sessions.watch(p.id);
+      case M.SESSION_UNWATCH: return this.sessions.unwatch(p.id);
+      case M.SESSION_ANSWER:  return this.sessions.answer(p.id, p.requestId, p.decision ?? {});
+      case M.SESSION_INTERRUPT: return this.sessions.interrupt(p.id);
+      case M.SESSION_MODE:    return this.sessions.setMode(p.id, p.mode);
+      case M.SESSION_MODEL:   return this.sessions.setModel(p.id, p.model);
 
       // Past transcripts from each CLI's own store. Off by default: scanning
       // them is only worth it when you actually want to reopen an old chat.

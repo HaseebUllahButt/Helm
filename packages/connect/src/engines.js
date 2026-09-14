@@ -16,6 +16,8 @@ export const ENGINES = {
     sessionsDir: 'sessions',
     sessionIndex: 'session_index.jsonl',
     resumeArgs: (id) => ['resume', id],
+    // Run headless through `codex app-server` (drivers/codex.js).
+    driver: 'codex',
   },
   claude: {
     id: 'claude',
@@ -25,6 +27,8 @@ export const ENGINES = {
     defaultHome: '~/.claude',
     sessionsDir: 'projects',
     resumeArgs: (id) => ['--resume', id],
+    // Run headless through `claude -p` stream-json (drivers/claude.js).
+    driver: 'claude',
   },
   opencode: {
     id: 'opencode',

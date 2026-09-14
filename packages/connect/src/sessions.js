@@ -8,6 +8,10 @@ import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
 import { optionArgs } from './models.js';
+import { EventLog } from './events.js';
+import { ClaudeDriver } from './drivers/claude.js';
+import { CodexDriver } from './drivers/codex.js';
+import { defaultMode, modeFromAuto } from './modes.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -17,6 +21,11 @@ const WATCH_POLL_MS = 120;
 const TRANSCRIPT_POLL_MS = 400;
 // Viewers renew while they are open; this is how long a vanished one costs.
 const WATCH_TTL_MS = 60_000;
+// A headless agent that has been idle this long is closed; the next message
+// resumes the same conversation, so nothing is lost but the warm process.
+const IDLE_REAP_MS = 30 * 60_000;
+
+const DRIVERS = { claude: ClaudeDriver, codex: CodexDriver };
 
 /** herdr requires agent names to match [a-z][a-z0-9_-]{0,31} and be unique. */
 const agentName = (profileId) =>
@@ -24,24 +33,38 @@ const agentName = (profileId) =>
     '-' + randomBytes(2).toString('hex')).slice(0, 32);
 
 /**
- * helm's view of sessions, layered over herdr.
+ * helm's view of sessions.
  *
- * herdr owns the processes and their lifetime; this class owns the mapping
- * from a helm session to the herdr workspace/pane/agent behind it, so that a
+ * Two kinds live here. Agent sessions are driven headless (`drivers/`):
+ * helm owns the process, and what the agent does arrives as a stream of
+ * events kept in `EventLog`. Terminal sessions, and agents someone started
+ * at the keyboard, are herdr panes: herdr owns those processes and this
+ * class only maps a helm session to the workspace/pane behind it, so that a
  * daemon restart reconnects to work that never stopped running.
  */
 export class Sessions extends EventEmitter {
   #index = new Map();
   /** paneId -> what the runtime last told us about a pane we do not own */
   #adopted = new Map();
+  /** sessionId -> live driver */
+  #drivers = new Map();
+  /** sessionId -> reap timer */
+  #reapers = new Map();
+  /** sessionId -> expiry, for event pushes somebody is looking at */
+  #watching = new Map();
 
-  constructor(runtime) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {} } = {}) {
     super();
     this.runtime = runtime;
+    this.events = events;
+    this.log = log;
+    this.makeDriver = makeDriver ?? ((engine, opts) => new DRIVERS[engine](opts));
     this.#load();
     runtime.on('status', (e) => this.#onStatus(e));
     runtime.on('closed', (e) => this.#onClosed(e));
   }
+
+  isDriven(s) { return !!s?.driver; }
 
   /** The runtime handle for a stored session record. */
   #handle(s) {
@@ -193,6 +216,10 @@ export class Sessions extends EventEmitter {
     }
 
     for (const s of this.#index.values()) {
+      if (s.driver) {
+        out.push({ ...s, alive: this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
+        continue;
+      }
       const pane = live.get(s.paneId);
       // A plain shell has no agent for the runtime to classify, so its status
       // would always read 'unknown'. Say what it actually is.
@@ -207,10 +234,11 @@ export class Sessions extends EventEmitter {
     return out.sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 
-  async start({ cwd, profileId, title, model, auto, effort }) {
+  async start({ cwd, profileId, title, model, auto, effort, mode }) {
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, auto });
 
     const spec = materialize(profile);
     // What was chosen in the app, in the CLI's own words. An explicit choice
@@ -259,6 +287,150 @@ export class Sessions extends EventEmitter {
     return session;
   }
 
+  // ---------------------------------------------------------- headless agents
+
+  async #startDriven({ cwd, profile, title, model, effort, mode, auto }) {
+    const dir = expand(cwd);
+    const session = {
+      id: randomBytes(6).toString('hex'),
+      driver: profile.engine,
+      profileId: profile.id,
+      engine: profile.engine,
+      model: model || null,
+      effort: effort || null,
+      mode: mode || (auto != null ? modeFromAuto(profile.engine, auto) : defaultMode(profile.engine)),
+      cwd: dir,
+      title: title || `${dir.split('/').pop() || dir}`,
+      status: 'idle',
+      engineSessionId: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    this.#index.set(session.id, session);
+    const driver = await this.#driver(session);
+    await driver.start();
+    session.engineSessionId = driver.engineSessionId;
+    this.#save();
+    this.emit('session', session);
+    return session;
+  }
+
+  /** The live driver for a session, starting (or resuming) one if needed. */
+  async #driver(s) {
+    let d = this.#drivers.get(s.id);
+    if (d) return d;
+    const profiles = await getProfiles();
+    const profile = profiles.find((p) => p.id === s.profileId);
+    if (!profile) throw new Error(`the account for this session (${s.profileId}) is gone`);
+    const spec = materialize(profile);
+    d = this.makeDriver(s.driver, {
+      cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
+      model: s.model, effort: s.effort, mode: s.mode,
+      engineSessionId: s.engineSessionId,
+      log: (m) => this.log(`[${s.id}] ${m}`),
+    });
+    this.#drivers.set(s.id, d);
+    d.on('event', (e) => this.#onDriverEvent(s, d, e));
+    return d;
+  }
+
+  #onDriverEvent(s, d, e) {
+    if (this.#drivers.get(s.id) !== d && e.type !== 'status') return;
+    if (e.type === 'status') {
+      // A closed process is not a closed conversation: the next message
+      // resumes it. Only an explicit kill removes the session.
+      const status = e.status === 'exited' ? 'idle' : e.status;
+      if (e.status === 'exited' && this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
+      this.#reap(s, status);
+      if (status !== s.status && this.#index.has(s.id)) {
+        const previous = s.status;
+        s.status = status;
+        s.updatedAt = Date.now();
+        this.#save();
+        this.emit('session', s);
+        this.emit('status', { session: s, from: previous, to: status });
+      }
+      if (e.status === 'exited') return;
+    }
+    if (d.engineSessionId && d.engineSessionId !== s.engineSessionId) {
+      s.engineSessionId = d.engineSessionId;
+      this.#save();
+    }
+    const event = this.events.append(s.id, e);
+    s.lastSeq = event.seq;
+    this.emit('event', { id: s.id, event });
+  }
+
+  /** Close a driver that has been idle for a long while; keep the session. */
+  #reap(s, status) {
+    clearTimeout(this.#reapers.get(s.id));
+    this.#reapers.delete(s.id);
+    if (status !== 'idle') return;
+    const t = setTimeout(() => {
+      const d = this.#drivers.get(s.id);
+      if (d && d.status === 'idle') d.kill().catch(() => {});
+    }, IDLE_REAP_MS);
+    t.unref?.();
+    this.#reapers.set(s.id, t);
+  }
+
+  /** Events after `since`, plus what is still waiting on a person. */
+  history(id, { since = 0 } = {}) {
+    const s = this.get(id);
+    return { events: this.events.since(s.id, since), pending: this.events.pending(s.id), last: this.events.last(s.id), session: s };
+  }
+
+  /** Say that somebody is looking at this session; pushes flow while renewed. */
+  watch(id) {
+    this.get(id);
+    this.#watching.set(id, Date.now() + WATCH_TTL_MS);
+    return { ok: true, last: this.events.last(id) };
+  }
+
+  unwatch(id) { this.#watching.delete(id); return { ok: true }; }
+
+  watching(id) {
+    const until = this.#watching.get(id);
+    if (!until) return false;
+    if (Date.now() > until) { this.#watching.delete(id); return false; }
+    return true;
+  }
+
+  async answer(id, requestId, decision) {
+    const d = this.#drivers.get(id);
+    if (!d) throw new Error('the agent is not running; that prompt is gone');
+    await d.answer(requestId, decision);
+    return { ok: true };
+  }
+
+  async interrupt(id) {
+    const d = this.#drivers.get(id);
+    if (d) await d.interrupt();
+    return { ok: true };
+  }
+
+  async setMode(id, mode) {
+    const s = this.get(id);
+    if (!s.driver) throw new Error('not a headless session');
+    s.mode = mode;
+    this.#save();
+    const d = this.#drivers.get(id);
+    if (d) await d.setMode(mode);
+    this.emit('session', s);
+    return { ok: true, session: s };
+  }
+
+  async setModel(id, model) {
+    const s = this.get(id);
+    if (!s.driver) throw new Error('not a headless session');
+    s.model = model || null;
+    this.#save();
+    const d = this.#drivers.get(id);
+    if (d) await d.setModel(s.model);
+    this.emit('session', s);
+    return { ok: true, session: s };
+  }
+
   /**
    * A session record for an id.
    *
@@ -296,6 +468,7 @@ export class Sessions extends EventEmitter {
    */
   async messages(id, { limit = 120 } = {}) {
     const s = this.get(id);
+    if (s.driver) return { messages: [], source: 'events' };
     if (!s.transcript) {
       const profiles = await getProfiles();
       const profile = profiles.find((p) => p.id === s.profileId);
@@ -334,6 +507,7 @@ export class Sessions extends EventEmitter {
 
   async read(id, { lines = 200, source = 'recent', ansi = false } = {}) {
     const s = this.get(id);
+    if (s.driver) throw new Error('a headless session has no terminal');
     const res = await this.runtime.read(this.#handle(s), { lines, source, ansi });
     return { text: res.text, session: s };
   }
@@ -360,6 +534,7 @@ export class Sessions extends EventEmitter {
    */
   async attach(id, { lines = 400, ansi = true } = {}) {
     const s = this.get(id);
+    if (s.driver) throw new Error('a headless session has no terminal');
     const existing = this.#watchers.get(id);
     if (existing) {
       existing.expires = Date.now() + WATCH_TTL_MS;
@@ -448,6 +623,11 @@ export class Sessions extends EventEmitter {
    */
   async input(id, text, { raw = false } = {}) {
     const s = this.get(id);
+    if (s.driver) {
+      const d = await this.#driver(s);
+      await d.send(text.replace(/\n$/, ''));
+      return { ok: true };
+    }
     const handle = this.#handle(s);
     return s.agentName && !raw
       ? this.runtime.sendPrompt(handle, text)
@@ -455,11 +635,24 @@ export class Sessions extends EventEmitter {
   }
 
   keys(id, keys) {
-    return this.runtime.sendKeys(this.#handle(this.get(id)), keys);
+    const s = this.get(id);
+    if (s.driver) throw new Error('a headless session has no terminal');
+    return this.runtime.sendKeys(this.#handle(s), keys);
   }
 
   async kill(id) {
     const s = this.get(id);
+    if (s.driver) {
+      const d = this.#drivers.get(id);
+      this.#drivers.delete(id);
+      clearTimeout(this.#reapers.get(id));
+      if (d) await d.kill();
+      this.#index.delete(id);
+      this.#save();
+      this.events.remove(id);
+      this.emit('session', { ...s, status: 'exited', alive: false });
+      return { ok: true };
+    }
     await this.runtime.close(this.#handle(s));
     if (!s.adopted) {
       this.#index.delete(id);
@@ -470,6 +663,12 @@ export class Sessions extends EventEmitter {
 
   /** Re-watch every surviving pane after a daemon restart. */
   resume() {
-    for (const s of this.#index.values()) this.runtime.watch(this.#handle(s));
+    for (const s of this.#index.values()) if (!s.driver) this.runtime.watch(this.#handle(s));
+  }
+
+  /** Close every live agent process; sessions stay resumable. */
+  async stop() {
+    await Promise.allSettled([...this.#drivers.values()].map((d) => d.kill()));
+    this.#drivers.clear();
   }
 }

@@ -81,6 +81,14 @@ export const M = {
   DIGEST_LIST: 'digest.list',      // { limit? } -> { digests[] }
   SESSION_KEYS: 'session.keys',    // { id, keys[] }  e.g. ["Enter"], ["C-c"]
   SESSION_MESSAGES: 'session.messages', // { id, limit? } -> { messages[], source }
+  // Headless agent sessions: the conversation as helm's own event stream.
+  SESSION_EVENTS: 'session.events',   // { id, since? } -> { events[], pending[], last, session }
+  SESSION_WATCH: 'session.watch',     // { id } -> { ok, last }   start/renew E.SESSION_EVENT pushes
+  SESSION_UNWATCH: 'session.unwatch', // { id }
+  SESSION_ANSWER: 'session.answer',   // { id, requestId, decision: { option, message?, answers? } }
+  SESSION_INTERRUPT: 'session.interrupt', // { id }
+  SESSION_MODE: 'session.mode',       // { id, mode } -> { session }
+  SESSION_MODEL: 'session.model',     // { id, model } -> { session }
   SESSION_INVENTORY: 'session.inventory', // {} -> { live[], recent[] }
   SESSION_RESUME: 'session.resume',// { engine, account, id, cwd } -> { session }
   SESSION_ADOPT: 'session.adopt',  // { paneId } -> { session }  take over a pane
@@ -101,6 +109,9 @@ export const E = {
   // The agent wrote to its transcript; a chat view should re-read it.
   SESSION_TRANSCRIPT: 'session.transcript', // { id }
   DIGEST: 'digest',                 // { digest }   pushed as sessions progress
+  // A headless session did something; `events` are in sequence order and
+  // only flow to clients that called session.watch recently.
+  SESSION_EVENT: 'session.event',   // { id, events[] }
 };
 
 export const frame = (t, extra = {}) => JSON.stringify({ t, ...extra });
