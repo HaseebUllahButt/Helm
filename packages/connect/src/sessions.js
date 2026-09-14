@@ -663,7 +663,19 @@ export class Sessions extends EventEmitter {
 
   /** Re-watch every surviving pane after a daemon restart. */
   resume() {
-    for (const s of this.#index.values()) if (!s.driver) this.runtime.watch(this.#handle(s));
+    for (const s of this.#index.values()) {
+      if (!s.driver) { this.runtime.watch(this.#handle(s)); continue; }
+      // The process that asked died with the previous daemon; a prompt it
+      // left open cannot be answered any more, so close it out here rather
+      // than show a phone a question nobody can act on.
+      for (const p of this.events.pending(s.id)) {
+        this.events.append(s.id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
+      }
+      const open = this.events.openTurn(s.id);
+      if (open) this.events.append(s.id, { type: 'turn.done', turnId: open.turnId, status: 'interrupted', error: 'helm restarted' });
+      if (s.status !== 'idle') { s.status = 'idle'; s.updatedAt = Date.now(); }
+    }
+    this.#save();
   }
 
   /** Close every live agent process; sessions stay resumable. */

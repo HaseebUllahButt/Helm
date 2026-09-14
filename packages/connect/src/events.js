@@ -79,6 +79,16 @@ export class EventLog {
     return [...open.values()];
   }
 
+  /** The turn still running, if the log ends without its turn.done. */
+  openTurn(id) {
+    const events = this.#open(id).events;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === 'turn.done') return null;
+      if (events[i].type === 'turn.start') return events[i];
+    }
+    return null;
+  }
+
   remove(id) {
     this.#logs.delete(id);
     rmSync(this.#file(id), { force: true });

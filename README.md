@@ -147,6 +147,23 @@ npm run desktop:install
 Tagged releases are built by GitHub Actions and published as `.AppImage` and
 `.deb` downloads.
 
+## How a session runs
+
+Claude Code and Codex sessions run **headless**: helm starts the CLI in its
+streaming mode (`claude -p` with stream-json, `codex app-server`) and turns
+what it says into one stream of events - text as it is written, each tool
+call and its result, every permission prompt with the choices the CLI
+offered. The app renders that stream, so the phone shows the agent typing,
+folds tool calls into one line each, and answers a permission prompt, an
+`AskUserQuestion`, or a plan review with a tap. Stop interrupts the turn; the
+model and permission mode can be changed from the session header.
+
+Closing helm does not end a conversation: sessions resume on the next message
+(`claude --resume`, `codex thread/resume`) under the same account.
+
+Plain terminals, and agents you started at the keyboard, still run in
+[herdr](https://herdr.dev) panes and show as a terminal.
+
 ## Profiles and secrets
 
 Helm reads shell aliases and functions and turns them into profiles. This makes
@@ -182,7 +199,9 @@ users into the same network.
 ## Development
 
 Requirements: Node 22+, Rust for desktop builds, and
-[herdr](https://herdr.dev) for agent terminals.
+[herdr](https://herdr.dev) for terminals. Claude Code 2.1.260+ and
+codex-cli 0.154+ on any machine that runs agents (`packages/connect/src/drivers`
+is written against those; older CLIs get a warning at start).
 
 ```bash
 npm install

@@ -125,7 +125,9 @@ export class ClaudeDriver extends Driver {
       type: 'user', session_id: '', parent_tool_use_id: null, uuid: randomUUID(),
       message: { role: 'user', content: [{ type: 'text', text }] },
     });
-    this.push('status', { status: 'working' });
+    // A message sent while a prompt is open is queued behind it; the agent
+    // is still waiting on the person until that prompt is answered.
+    if (!this.pending.size) this.push('status', { status: 'working' });
   }
 
   /**

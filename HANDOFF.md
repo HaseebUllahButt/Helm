@@ -1,11 +1,11 @@
 # Handoff
 
-State of helm as of 2026-09-13, for whoever picks this up next.
+State of helm as of 2026-09-14, evening, for whoever picks this up next.
 
 Read `README.md` first for what the thing is and how it connects. This file
 is the part that is not obvious from the code: **what it is trying to be**,
-what is broken, what was deliberately not built, and what I would not trust
-without checking.
+what changed today and why, what was verified by running it, and what was
+not.
 
 If you only read one section, read the next one. The rest is detail; that is
 the bar the detail exists to hit.
@@ -23,9 +23,12 @@ helm exists so that "waiting on the agent" stops meaning "waiting at the desk".
 The owner's phone should be enough to see that something is blocked, read what
 it asked, answer it, and move on.
 
-This is inspired by T3 Code, and deliberately fixes what the owner found
-wrong with it: it could show you sessions but could not get you *out of the
-chair*.
+This is inspired by T3 Code. The owner likes T3's app (per-provider options,
+model picker, permission modes, the feel of watching an agent work) and
+deliberately does **not** want T3's code or apps in the loop: they are slow,
+and depending on them would tie helm's product to someone else's repo and
+license. **helm's own UI, T3's ideas.** The one-day experiment of consuming
+T3 as the UI is parked on branch `t3-network`, not merged.
 
 **Who it is for.** The owner, and people willing to run an always-on VM. Each
 person owns a completely separate Helm home; there is no shared Helm account
@@ -41,321 +44,284 @@ or start a new one.
 
 A session belongs to a **profile** — a specific CLI on a specific account.
 The owner runs codex, claude and opencode across several logins, and picks per
-session which one to use, the way T3 Code does. Profiles come from their shell
-aliases because that is where that knowledge already lives.
+session which one to use. Profiles come from their shell aliases because that
+is where that knowledge already lives.
 
 ### The bar for "good" here
 
-These are the things that make it feel right, in rough priority:
-
 1. **Setup produces one private link.** `helm setup` makes the VM the Helm
-   home; `helm link` prints a short-lived URL that opens the PWA or can be
-   pasted into Helm Desktop. Pair once. A device is in until explicitly
-   removed — not until a reboot, crash, update, or password expiry.
-
-2. **Blocked sessions surface themselves.** The whole reason this exists. A
-   session waiting on input should be impossible to miss and one tap from
-   answered.
-
-3. **It reads like a chat, not a terminal.** Agent output as conversation —
-   messages, tool calls — the way T3 Code presents it. The raw terminal is
-   available when you want it, but it is not the default way to read what an
-   agent is doing on a phone.
-
-4. **Low latency.** A remote session that lags on every keystroke is one you
-   stop using. Measured 208ms round trip to a distant VM, which is why session
-   data goes peer-to-peer and the hub only makes introductions.
-
-5. **The VM is the stable home.** Laptops dial out to the owner's always-on VM.
-   The VM makes setup and recovery understandable; no third-party tunnel or
-   Helm-operated account is required.
-
-6. **The phone is a control hub; machines are where work happens.** Nothing
-   runs agents on the phone, and nothing should try. Phones drive, machines
-   execute, and phones are never themselves controllable.
-
-### Journeys that should feel effortless
-
-- Add a machine. One command on it, one code from any existing machine.
-- Add a device. One password, once.
-- Start a session anywhere: pick machine, pick directory, pick which CLI and
-  which account, go.
-- Make a new directory from the app, without SSHing anywhere.
-- Open a terminal on any machine from inside the app — SSH is already set up
-  between machines as they join, and the app has a terminal view per machine.
-- See agent usage and limits across accounts, so you know what you have left.
+   home; `helm link` prints a short-lived URL. Pair once; a device is in until
+   explicitly removed.
+2. **Blocked sessions surface themselves.** A session waiting on input should
+   be impossible to miss and one tap from answered.
+3. **It reads like a chat, and it is alive.** Text appears as the model writes
+   it, tool calls show up the moment they start and fill in as they finish, a
+   permission prompt is a card with the real choices. Not a blank screen and
+   then a paragraph.
+4. **Low latency.** Session data goes peer-to-peer; the hub only introduces.
+5. **The VM is the stable home.** Laptops dial out to it.
+6. **The phone is a control hub; machines are where work happens.**
 
 ### Settled, and why — do not relitigate without a reason
 
-- **No Tailscale.** Asked for directly at the start. Not an oversight.
-- **VM-centric, not Helm-cloud-centric.** Every owner supplies their own VM.
-  Helm's author does not host accounts, traffic, or keys for other users.
-- **Profiles reference secrets, never copy them.** Environment variable names
-  and paths only; values stay in the engine's own directory on that machine.
-  Nothing sensitive crosses the network or reaches a database.
-- **Passwords are bootstrap credentials, minutes long.** Devices are durable.
-  Conflating the two caused the worst bug in the project's history.
-- **herdr owns the terminals.** It already detects blocked/working/done per
-  agent and maintains that detection per CLI. Reimplementing it means
-  maintaining output scraping forever, and a missed `blocked` means the phone
-  never buzzes — the one failure the whole project exists to prevent.
+- **No Tailscale.** Asked for directly at the start.
+- **VM-centric, not Helm-cloud-centric.**
+- **Profiles reference secrets, never copy them.**
+- **Passwords are bootstrap credentials, minutes long. Devices are durable.**
+- **No T3 code. No T3 apps.** Design inspiration only (2026-09-14).
+- **Agents run headless through their own protocols; herdr owns terminals.**
+  Until today helm launched each agent's TUI in a herdr pane and spied on it:
+  the chat re-read the transcript file the CLI writes to disk (finished
+  messages only, polled), and a permission prompt was only visible as herdr's
+  `blocked` flag, answered by firing `y`/`n` keystrokes blind. That is why the
+  screen was dead while the agent worked. The fix is structural, not
+  cosmetic: helm now speaks each CLI's programmatic interface (below) and gets
+  a typed event stream, which is exactly what T3 does. herdr still owns plain
+  terminals and read-only "external" agents started at the keyboard.
 
-### Wanted, not built
+---
 
-- **The brain.** A cross-machine layer that knows what is happening
-  everywhere, can summarise it, and can dispatch work to the right machine.
-  Explicitly deferred to v2; session digests are already being collected and
-  stored for it.
-- **Push notification when a session blocks.** Implied by the whole premise,
-  not yet built. Arguably the highest-value missing feature.
+## What changed today (2026-09-14)
 
-### Where better ideas are genuinely welcome
+### Drivers — `packages/connect/src/drivers/`
 
-The owner is not attached to the implementation, only to the outcome. If you
-see a simpler way to hit the bar above, say so — that has already happened
-twice and both times the owner's or a reviewer's idea beat the plan on the
-table:
+One driver per engine runs the CLI *you already have installed*, through the
+profile helm discovered (so `CLAUDE_CONFIG_DIR` / `CODEX_HOME` multi-account
+keeps working unchanged), and translates its protocol into one vocabulary:
 
-- The design was heading toward an election protocol for sharing one tunnel
-  between laptops. The owner pointed out each laptop could simply bring its
-  own, which deletes the entire problem.
-- A review found a live data-loss bug that the plan at the time would have
-  masked rather than fixed.
+```
+turn.start · item.start/delta/update/done · permission.request/resolved ·
+turn.done · status · limits · error
+```
 
-Open questions worth better answers: push delivery when sessions block and
-whether direct relay latency justifies TURN.
+`item.kind` is `text`, `thinking`, `tool`, `command` or `edit`;
+`permission.kind` is `tool`, `command`, `edit`, `question` (AskUserQuestion,
+Codex requestUserInput) or `plan` (ExitPlanMode). Both drivers emit exactly
+this, so the app has one renderer.
+
+- **`claude.js`** — `claude -p --input-format stream-json --output-format
+  stream-json --verbose --include-partial-messages --replay-user-messages
+  --permission-prompt-tool stdio --permission-mode <mode> [--model] [--effort]
+  --session-id=<uuid>` (or `--resume=<uuid>`). One process per session; stdin
+  stays open for its life (closing it ends the session). `content_block_*`
+  stream events become items and deltas; `user` messages with `tool_result`
+  close tool items (rendered from `tool_use_result`, not the text);
+  `can_use_tool` control requests become permission requests, answered with a
+  `control_response`. Interrupt, `set_model` and `set_permission_mode` ride
+  the control channel. **Fail-closed rule:** an unanswered `can_use_tool`
+  blocks the CLI forever, so kill denies anything pending first, and a
+  process exit cancels them in the log.
+- **`codex.js`** — `codex app-server --stdio`, newline-delimited JSON-RPC.
+  One server per account home (it hosts many threads), one driver per thread.
+  `thread/start` / `thread/resume`, `turn/start` with per-turn `effort`,
+  `turn/interrupt`. Notifications `item/*` and `turn/*` map to items; server
+  requests `item/commandExecution/requestApproval`, `item/fileChange/
+  requestApproval`, `item/permissions/requestApproval`, `item/tool/
+  requestUserInput` become permission requests answered by id.
+  `serverRequest/resolved` dismisses a prompt answered elsewhere.
+- **`index.js`** — the base class, a 50 ms per-item delta coalescer (a model
+  streams a few words at a time; a phone on a bad route does not want a
+  frame per delta), the NDJSON reader, and a version check that warns loudly
+  if the CLI is older than the one the driver was written against.
+- **`modes.js`** — the four permission ideas in each CLI's own flags: Claude
+  `manual` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`; Codex
+  `approvalPolicy` × `sandbox` (ask = on-request+workspace-write, edit =
+  never+workspace-write, full = never+danger-full-access, readonly =
+  untrusted+read-only).
+- **`events.js`** — `EventLog`: per-session append-only log under
+  `~/.helm/events/<id>.jsonl`, sequence numbers, last 2000 kept, pending
+  prompts and the open turn derived from the log (right after a restart too).
+
+### The daemon — `sessions.js`, `agent.js`, `protocol`
+
+`Sessions.start` branches on the engine: claude/codex → driver, shell → herdr.
+Driven records carry `driver`, `engineSessionId`, `mode`, `effort`. Events go
+to the log and out as `session.event` batches, **gated by `session.watch`**
+(60 s TTL, renewed by the viewer): the relay fans out per machine, so this is
+what keeps a phone from receiving every session's text. A process that exits
+leaves the session `idle` and resumable; an idle process is reaped after 30
+minutes and the next message resumes the same conversation; only `kill`
+removes the record and its log. On daemon start, prompts orphaned by the
+previous process are cancelled in the log and an open turn is closed as
+`interrupted`, so a phone never shows a question nobody can answer.
+
+New RPCs: `session.events {since}`, `session.watch/unwatch`,
+`session.answer {requestId, decision}`, `session.interrupt`, `session.mode`,
+`session.model`. `model.list` now returns `modes` and Claude's `efforts`.
+
+### The app — `apps/web/src/session/`
+
+`useSessionLog` loads the log, renews the watch, applies pushes in sequence
+order and refetches on a gap or reconnect. `Transcript` renders turns:
+prose typed in with a caret (the visible length chases the real length a
+few characters a frame, off under reduced motion), thinking as a folded
+line with its duration, tools as one line that folds its output, commands as
+a card with the live output tail and exit code, edits as per-file diffs with
++/− counts. `PermissionSheet` docks above the composer: command / diff / plan
+/ JSON with the CLI's own options (Allow · Always allow… · Deny, deny-first
+when the CLI says so); questions as option rows with an automatic "Other";
+plans as markdown with Approve / Keep planning (+ an optional note that goes
+back as the deny message). Stop sits beside Send while a turn runs. The
+header's model and mode are tappable pickers. The Start screen's
+"act without asking" switch became the engine's mode list.
+
+---
+
+## Verified today, by running it
+
+- `npm run check` green: types, production build, 31 node tests, and
+  `test/network.sh`.
+- **Recorded reality first.** `scripts/record-driver.mjs` ran one real turn
+  per case through a helm profile (real account, real credential) and kept
+  every stdout and stdin line under `test/fixtures/{claude,codex}/`. The
+  drivers' tests replay those through `test/fake-cli.mjs`, which pairs
+  requests and responses the way the real CLIs do. What the recordings
+  settled, none of it guessed:
+  - AskUserQuestion is answered through the permission response as
+    `updatedInput: {...input, answers: {question: label}}` — narrowing the
+    options fails schema validation (min 2). Confirmed: "You chose Spaces."
+  - ExitPlanMode arrives as a `can_use_tool` with `input.plan` and
+    `requires_user_interaction: true`; allow → "User has approved your plan".
+  - A Write prompt carries `permission_suggestions: [{setMode acceptEdits,
+    session}]`; echoing it back as `updatedPermissions` stops the next Write
+    from prompting.
+  - `echo` never prompts in default mode (built-in safe list). `--permission-
+    prompt-tool stdio` is what routes prompts to us; `--verbose` is required.
+  - The CLI echoes a `control_response` acknowledging our answer on stdout.
+  - Codex approvals list `availableDecisions` (`accept`, `acceptWith
+    ExecpolicyAmendment`, `cancel`); `decline` is accepted even when not
+    listed. `thread/start` rejects `sessionStartSource: 'appServer'`.
+- **End to end on this laptop**, sandboxed `helm up` (`HELM_DIR`,
+  `HELM_NO_SERVICE=1`) with the real `claudea` and `codex` profiles, driven in
+  headless Chromium at 390×844 over CDP:
+  - pair from the link; machine → New session → folder → account, `haiku`,
+    "Ask before acting" → Start;
+  - a Write asks: the sheet shows the path and `+hi`, Allow unblocks, the
+    turn closes with `4.8s · $0.02`;
+  - AskUserQuestion renders "Indentation / Tabs or spaces?" with two option
+    rows and Other; tap Spaces, Answer → "You chose **Spaces**.";
+  - a prose-only turn streams with the caret; Stop lands as "stopped" with
+    the partial text kept (226 chars when pressed, 289 at the end);
+  - the mode picker → "Edit freely" → the next Write goes through with no
+    prompt (`second.txt` on disk);
+  - daemon killed and restarted → the transcript is still there, the next
+    message resumes with `--resume` → "The file I created first was
+    hello.txt.";
+  - Codex in "Read only": `echo hello from codex` asks (Allow · Always allow
+    echo · Deny), Allow runs it, the command card shows the output, `12s`.
+- Two bugs found by that run and fixed: sending a message while a prompt is
+  open flipped the status to `working` (the CLI queues it; it is still
+  blocked); prompts orphaned by a daemon restart stayed on the phone.
+
+## Not verified, in order of risk
+
+1. **Nothing is deployed.** The Oracle VM (`130.210.33.163`) has no helm.
+   `install.sh` + `helm setup` there, pair a phone, `helm link headless` a
+   laptop. Watch node-pty's build deps and Caddy's certificate.
+2. **A real phone.** Everything above was a 390×844 headless Chromium. Touch,
+   the keyboard pushing the sheet, and a carrier-NAT WebRTC path are untested.
+3. **Codex `item/permissions/requestApproval` deny** answers `{permissions: {},
+   scope: 'turn'}` — from the bindings, never seen live. `requestUserInput`
+   likewise never triggered.
+4. **Claude on a non-default account was exercised (`claudea`); the default
+   `~/.claude` login on this laptop is expired** — the first `plain`
+   recording caught `authentication_failed`, which the driver surfaces as an
+   `error` event. Expect that when a token lapses.
+5. **Throughput on a slow link.** Deltas are coalesced at 50 ms and pushed
+   per session; a 700-word essay was fine on loopback. Unmeasured over a hub
+   on mobile data.
+6. **Windows/macOS**: service install is Linux-only, as before. herdr is still
+   required for `helm up` (it is started for terminals).
 
 ---
 
 ## Where things stand
 
-The repo works. `install.sh` was run end to end from a clean `HOME` and
-produced a working install.
+The laptop's real `~/.helm` still runs the old service (`helm-serve.service`,
+network of one); it was not touched. The e2e work used a scratch `HELM_DIR`.
 
-**Nothing is deployed.** helm was removed from the Oracle VM
-(`130.210.33.163`) at the owner's request — service, `/opt/helm`, `~/.helm`,
-and the shim are gone, and its Caddyfile was replaced with a comment
-(previous config saved at `/etc/caddy/Caddyfile.helm-backup`; Caddy itself is
-still installed). The VM's t3 server and other node service were left alone.
+Not yet pushed to GitHub (remote `git@github.com-me:HaseebUllahButt/helm.git`).
 
-The laptop still runs `helm-serve.service` as a user unit with a network of
-one machine. `helm leave --yes` resets it if you want a clean first-run test.
-
-Not yet pushed to GitHub. The remote is set to
-`git@github.com-me:HaseebUllahButt/helm.git` and `install.sh` points at that
-repo; both need to be real before the curl command works.
+Branches: `main` is this. `t3-network` holds the 2026-09-13 experiment (T3 as
+the UI, Host:port publishing through the hub, `tunnel-socket.js`); its
+network bits could be cherry-picked, its UI direction is over.
 
 ---
 
 ## The architecture, in one page
 
 A **network** is a set of machines plus the devices allowed to drive them,
-sharing one secret key.
+sharing one secret key. The always-on VM is the **Helm home**; several homes
+can coexist. A token is an HMAC claim signed with the network key
+(`packages/protocol/identity.js`), so every joined machine can verify a paired
+device offline.
 
-The always-on VM is the **Helm home** and normal rendezvous point. It is not a
-shared central server: each owner runs their own. A token is an HMAC claim
-signed with the network key (`packages/protocol/identity.js`), so every joined
-machine can still verify a paired device offline.
+Every machine runs both a **hub** (`apps/relay/`: HTTP + WebSocket,
+authenticates members, introduces peers, serves the PWA) and a **daemon**
+(`packages/connect/src/agent.js`: a `Link` to its own loopback hub and to every
+other machine's advertised address). Clients probe every address they know and
+attach to the hub reporting the most online machines. Session data goes
+peer-to-peer over WebRTC when it can; the hub is rendezvous and fallback.
 
-Nothing makes "the home" singular. A network can hold several public homes;
-each advertises its own address, every machine dials all of them, and clients
-race them and pick the one seeing the most machines (failover falls out of the
-same machinery). `helm setup --join <code> --at <home>` stands up a second home
-in one command — join the mesh, configure this VM's own HTTPS, advertise it,
-install the service — and is re-runnable (it re-advertises rather than
-re-founding). Digests, however, are stored per hub (`apps/relay/src/db.js`) and
-not gossiped, so with multiple homes the future cross-machine "brain" would
-need to read all of them.
-
-Every machine runs both:
-
-- a **hub** (`apps/relay/`) — HTTP + WebSocket, authenticates members,
-  introduces peers, serves the PWA
-- a **daemon** (`packages/connect/src/agent.js`) — opens a `Link` to its own
-  loopback hub and to every *other* machine's advertised address, reconciling
-  on a 15s tick
-
-Clients (`apps/web/src/client.ts`) probe every address they know and attach to
-the hub reporting the **most online machines**, latency only as a tie-break.
-Session data then goes peer-to-peer over WebRTC; the hub is rendezvous and
-fallback only.
-
-The **roster** (machines, devices, revocations) is replicated to every machine,
-last-writer-wins per record, revocations one-way.
+The **roster** is replicated to every machine, last-writer-wins per record,
+revocations one-way.
 
 ### Two invariants you can break without noticing
 
-1. **A machine is the only author of its own roster record.**
-   `mergeRoster` skips `net.self`; the hub does not write other machines'
-   records; a first-sight placeholder is stamped `updatedAt: 0`.
-   Break this and a machine overwrites its own address list with someone
-   else's stale view and becomes unreachable until restart. There is a
-   reproduction in the git history for the commit "a machine is the only
-   author of its own roster record".
+1. **A machine is the only author of its own roster record.** `mergeRoster`
+   skips `net.self`; the hub does not write other machines' records.
+2. **A machine attaches to its own hub exactly once, over loopback, as
+   `role=self`.** `server.js` 409s any other self-attach. Break either half and
+   the machine flaps forever.
 
-2. **Never dial an address you hold *twice*.**
-   A machine attaches to its own hub exactly once, over loopback, and that
-   attach is what lets a phone reach the machine through the very hub it is
-   running - without it a single-VM network shows the VM offline and can run
-   nothing. The daemon marks that one link `role=self`; `server.js` accepts it
-   and 409s any *other* self-attach. `#desiredLinks()` still excludes your
-   advertised endpoints and `this.extra`, so the only self-address you dial is
-   loopback. Break either half and a second env attachment for your own id
-   supersedes the loopback one, the two knock each other down, and the machine
-   flaps forever. (An over-broad 409 that refused the loopback attach too was
-   the bug that made the phone unable to control its own VM.)
+### Wanted, not built
 
----
-
-## Known limitations
-
-**cloudflared quick tunnels are unreliable** — at least on the owner's
-connection (Pakistan; `raw.githubusercontent.com` also returns 503 there).
-Three attempts: one URL that never became reachable in 60s, two outright
-failures (`failed to request quick Tunnel: context deadline exceeded`).
-The error is surfaced now rather than hidden, but do not promise anyone that
-`--temporary` is dependable. ngrok worked every time, in about two seconds.
-
----
-
-## Deliberately not built
-
-**The no-VM multi-laptop keeper.** The plan was: several laptops share one
-reserved ngrok domain, whichever is up holds it. Designed in detail, then cut.
-
-Two reasons. First, the owner has a free always-on VM, so the case is
-hypothetical for them. Second, the owner's own suggestion is better: give each
-laptop its **own** tunnel, and no laptop can take another down. That needs no
-election code at all — the existing "advertise your addresses, dial everyone
-else's, race them on the client" machinery already does it. The only cost is
-one free ngrok account per laptop.
-
-If you do build a keeper anyway, two things from the review are worth keeping:
-
-- Do **not** poll the domain every 15s. ngrok's free plan meters HTTP
-  requests (~20k/month); a 15s probe burns that in days. ngrok's own admission
-  control is the free mutex — try to claim, and rejection means someone has it.
-- Watching the child process is not a liveness test. The ngrok agent survives
-  sleep and reconnects in the background, and does not exit when it loses the
-  domain. The authoritative test is `GET https://<domain>/api/network` with
-  your own machine token and comparing `self` to your id.
-
-**Machine-to-machine WebRTC.** Only browser↔machine is direct today; machines
-reach each other over WebSocket through a hub. `node-datachannel` is already a
-dependency, so the pieces exist. Worth doing if tunnel bandwidth matters.
-
-**Automatic HTTPS setup.** Plain `helm setup` detects the VM's public IPv4,
-uses its free `sslip.io` hostname, adds an isolated Helm Caddy config, validates
-it, and then starts the private loopback service. An explicit owned-domain URL
-still expects its DNS and Caddy site to be configured first.
-
-**npm publishing.** `npx helm` will not work: `helm` and `helm-cli` are taken
-on npm. `helmcli` is free, or scope it (`@haseebullahbutt/helm`). The curl
-installer sidesteps this for now.
-
----
-
-## Things I would verify rather than trust
-
-- **TURN.** ICE is STUN-only (`apps/web/src/client.ts`). A phone on mobile
-  data is often behind carrier-grade NAT, where hole punching fails and
-  everything relays through the hub. Nobody has measured this on a real
-  carrier. The client emits a `transport` event with `{ direct: true|false }`
-  — check that before deciding whether TURN is needed.
-- **ngrok's browser interstitial.** Free ngrok shows a warning page on
-  requests that look like browser navigations. `/api/*` and the WebSocket are
-  unaffected. Whether it appears inside the *installed* PWA on a cold launch
-  is untested; `apps/web/public/sw.js` is network-first for navigations, which
-  is where it would show up.
-- **Desktop distribution.** The Linux Tauri app builds locally and a tagged
-  release workflow exists, but no release has run because the repository is
-  not on GitHub yet.
-- **Historical transcripts** (`inventory.js`) are opt-in and were explicitly
-  descoped. They work; they are just not wired into the UI.
+- **Push notification when a session blocks.** Still the highest-value missing
+  feature; `permission.request` is now a structured event to hang it on.
+- **opencode driver** (`opencode serve` SSE or `opencode acp`).
+- **The brain** (cross-machine summaries and dispatch) — v2.
+- Images in messages; a file viewer over Claude's `read_file` control request.
 
 ---
 
 ## Testing
 
-There is a small Node regression suite plus a shell integration script that
-exercises the things most likely to break:
-
 ```
-npm test
+npm test          # node --test test/*.test.mjs && bash test/network.sh
+npm run check     # + tsc and the production web build
 ```
 
-It checks: a missing herdr binary is reported without crashing; a device
-survives a hub restart; a machine that has never seen a device accepts its
-token; a forged token is rejected; a revocation crosses the network; a
-revocation made on a machine that only dials *out* (a laptop) reaches the hub
-it dials (the VM) without a reconnect - that one needs a running herdr and
-skips otherwise; an attached terminal is pushed as deltas by the daemon
-rather than polled by the phone. Run `npm run check` for TypeScript, the
-production web build, and all tests.
+Driver tests (`driver-claude.test.mjs`, `driver-codex.test.mjs`) replay the
+recorded fixtures through `test/fake-cli.mjs`; `events.test.mjs` covers the
+log; `session-driver.test.mjs` runs `Sessions` with a fake driver (start,
+stream, watch TTL, prompt, mode/model, exit-and-resume, kill, restart).
+To re-record after a CLI upgrade: `HELM_PROFILE=claudea node
+scripts/record-driver.mjs claude` (and `codex`); scrub home paths and the
+owner's email before committing (the script collapses `$HOME` to `~`).
 
-**Terminal and chat are push, not poll.** `session.attach` starts a
-daemon-side watch of the pane (`sessions.js`, 120ms cadence against herdr's
-~90ms read) and `session.data` carries only what changed; the viewer renews
-every 25s and detaches on unmount. `session.messages` likewise starts a
-transcript file watch and `session.transcript` tells the chat to re-read.
-Measured on loopback: echo-to-screen went from ~540ms (old 500ms poll) to
-~60ms; on a 200ms link the old path also paid two round trips per poll.
-herdr's `pane.output_matched` / `pane.scroll_changed` events do *not* fire on
-ordinary output (tested), which is why the daemon polls rather than subscribes.
+**Seeing it work** is a sandboxed daemon plus headless Chromium over CDP:
 
-**UI.** The web app follows T3 Code's design (its source was read for the
-exact tokens: neutral-950 canvas, cards 3% lighter, 6% white borders, one
-indigo primary, user turns as a 4%-white bubble, assistant prose at 80%
-white with no bubble, tool calls as 24px lines, shimmer text instead of
-spinners, amber steady for "needs you", sky pulsing for "working", idle draws
-nothing). Sidebar has a "needs you" list across machines; sessions are
-grouped by state; shells are never sessions (the terminal is a header
-button). **Starting a session** is one screen: aliases are collapsed to
-accounts (engine + home dir + credential; flags are not an identity), then
-model (read from the CLI's own records: Codex `model_catalog.json`, Claude
-`.claude.json`, `opencode models`), reasoning effort for Codex, and an
-"act without asking" switch that maps to each CLI's own flag
-(`models.js`). Choices are remembered per account in localStorage. Chat
-renders markdown with `marked` + DOMPurify + highlight.js (code blocks get a
-language header and copy button). A dead token signs the device out with a
-message; pairing is stored in localStorage *and* IndexedDB (`store.ts`),
-and the durable read must never replace a pairing made while it was in
-flight - that race signed a fresh pairing straight back out once, caught
-only by the screenshot walkthrough. Connection state is worded honestly:
-a dropped socket with a hub still answering HTTP is "reconnecting" (and
-presence is polled over HTTP meanwhile), red only after 12s of nothing.
+```
+HELM_DIR=<tmp>/helm HELM_SSH_DIR=<tmp>/ssh HELM_NO_SERVICE=1 \
+  node packages/connect/bin/helm.js up --port 8790 --host 127.0.0.1 --name home
+```
 
-Screenshots are taken headlessly over CDP against a sandboxed `helm up`
-(`HELM_DIR=<tmp> HELM_NO_SERVICE=1 ... up --port 8790 --host 127.0.0.1`,
-then `chromium --headless=new --remote-debugging-port=<random>`); the
-sandbox password expires in ten minutes, so rotate it with `helm login 15`
-before a run, and kill the chromium by PID afterwards - a stale one on the
-same debugging port serves you last hour's page. Worth repeating after any
-UI change, since nothing else looks at it.
-
-Two habits that saved time and one that cost it:
-
-- Measure instead of reasoning. The gossip traffic fix came from
-  `ss -tni | grep bytes_sent` over 60s, not from reading code — 148 MB/month
-  of "nothing changed", cut to 19 MB/month.
-- Sandbox with `HELM_DIR` / `HELM_SSH_DIR` / `HELM_NO_SERVICE=1`. Note that
-  overriding `HOME` breaks herdr, so sandbox `HELM_DIR` specifically.
-- **Do not use `pkill -f` here.** The pattern matches the agent's own shell
-  command line and kills the session. It happened four times. Capture the PID,
-  or `ps -eo pid,args | grep -F ... | grep -v grep`.
+Copy the real `~/.helm/profiles.json` and `secrets.env` into that `HELM_DIR`
+so real accounts are selectable; put scratch repos under `~` so the folder
+browser reaches them; open `http://127.0.0.1:8790/#pair=<password>` in
+`chromium --headless=new --remote-debugging-port=<port>` and drive it with the
+`ws` package (`Page.navigate`, `Runtime.evaluate` for clicks and text,
+`Page.captureScreenshot`; `Emulation.setDeviceMetricsOverride` for a phone).
+The password expires in ten minutes; a paired browser profile stays paired
+across daemon restarts. Kill the daemon **by PID** — `pgrep -f` on its
+arguments matches your own shell and kills the session (it happened again
+today).
 
 ---
 
 ## A note on the review
 
-A second model (Fable) reviewed the architecture twice and both passes paid
-for themselves — it found the self-record wipe, which was live and which my
-own plan would have masked rather than fixed.
-
-It was also wrong twice, in ways worth knowing about: it asserted a
-`--web-addr` flag that ngrok v3 does not have (shipped unverified, ngrok
-exited with `unknown flag`), and claimed terminal output was being broadcast
-to every hub when the web terminal actually polls over RPC. Both were caught
-by running the code.
-
-Worth consulting, worth verifying.
+A second model (Fable) reviews after Opus writes. It has been wrong before in
+ways only running the code caught, and right in ways that saved the project.
+Worth consulting, worth verifying. The recordings in `test/fixtures` exist so
+that the next review argues from what the CLIs actually said.

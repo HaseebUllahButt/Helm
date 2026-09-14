@@ -30,6 +30,15 @@ test('pending permissions are derived from the log', () => {
   assert.deepEqual(log.pending('s').map((e) => e.requestId), ['r2']);
 });
 
+test('the open turn is the last turn.start without a turn.done', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  assert.equal(log.openTurn('s'), null);
+  log.append('s', { type: 'turn.start', turnId: 't1', text: 'a' });
+  assert.equal(log.openTurn('s').turnId, 't1');
+  log.append('s', { type: 'turn.done', turnId: 't1', status: 'ok' });
+  assert.equal(log.openTurn('s'), null);
+});
+
 test('only the tail is kept', () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-events-'));
   const lines = [];

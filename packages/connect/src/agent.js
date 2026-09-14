@@ -7,6 +7,7 @@ import {
   roster as rosterOf, rosterHash,
 } from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
+import { modesFor } from './modes.js';
 import { Sessions } from './sessions.js';
 import { getProfiles, refreshProfiles } from './profiles.js';
 import { listModels } from './models.js';
@@ -513,7 +514,9 @@ export class Daemon {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
         const engine = ENGINES[profile.engine];
-        return listModels(profile.engine, profile.env?.[engine?.homeEnv] ?? engine?.defaultHome);
+        const models = await listModels(profile.engine, profile.env?.[engine?.homeEnv] ?? engine?.defaultHome);
+        // The permission modes this engine offers, so the app never has to know the flags.
+        return { ...models, modes: engine?.driver ? modesFor(profile.engine) : [] };
       }
 
       case M.SESSION_LIST:    return { sessions: await this.sessions.list() };

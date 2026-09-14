@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal } from './Terminal';
 import { Markdown } from './Markdown';
+import { Composer } from './session/Composer';
+import { DrivenSession } from './session/DrivenSession';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import {
   Client, login,
-  type Environment, type Profile, type Session, type DirEntry, type Message,
+  type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList,
 } from './client';
 
 type Auth = StoredAuth;
@@ -334,6 +336,15 @@ function Shell({ client, conn, onSignOut }: {
             client={client} env={env} cwd={view.cwd} onBack={back}
             onStarted={(s) => { loadSessions(env.id); setStack([{ kind: 'env' }, { kind: 'session', session: s }]); }}
           />
+        ) : view.session.driver ? (
+          <DrivenSession
+            key={view.session.id}
+            client={client} env={env}
+            session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
+            onBack={back}
+            onClosed={() => { loadSessions(env.id); back(); }}
+            onSession={(s) => { loadSessions(env.id); setStack((st) => st.map((v) => (v.kind === 'session' && v.session.id === s.id ? { kind: 'session', session: { ...v.session, ...s } } : v))); }}
+          />
         ) : (
           <SessionView
             key={view.session.id}
@@ -630,8 +641,9 @@ function SessionRow({ s, onOpen }: { s: Session; onOpen: () => void }) {
           {s.title}
           {(s as any).adopted && <span className="tag">external</span>}
         </span>
-        <span className="rm">{eng.label}{(s as any).model ? ` · ${(s as any).model}` : ''} · {shortPath(s.cwd)}</span>
+        <span className="rm">{eng.label}{s.model ? ` · ${s.model}` : ''} · {shortPath(s.cwd)}</span>
       </span>
+      {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
       <StatusChip status={s.status} />
     </button>
   );
@@ -741,7 +753,7 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
 // -------------------------------------------------------------------- start
 
 const PREFS = 'helm.prefs';
-type Prefs = Record<string, { model?: string; auto?: boolean; effort?: string; account?: string }>;
+type Prefs = Record<string, { model?: string; auto?: boolean; effort?: string; account?: string; mode?: string }>;
 const loadPrefs = (): Prefs => { try { return JSON.parse(localStorage.getItem(PREFS) || '{}'); } catch { return {}; } };
 const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* full */ } };
 
@@ -756,10 +768,11 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 }) {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [key, setKey] = useState<string>('');
-  const [models, setModels] = useState<{ default: string | null; models: string[]; effort?: string | null; efforts?: string[] } | null>(null);
+  const [models, setModels] = useState<ModelList | null>(null);
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [auto, setAuto] = useState(false);
+  const [mode, setMode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const prefs = useRef(loadPrefs());
@@ -784,8 +797,9 @@ function Start({ client, env, cwd, onBack, onStarted }: {
     setModel(p.model ?? '');
     setEffort(p.effort ?? '');
     setAuto(p.auto ?? false);
-    client.rpc(env.id, 'model.list', { profileId: account.profile.id }, 30_000)
-      .then((r: any) => setModels(r))
+    setMode(p.mode ?? '');
+    client.rpc<ModelList>(env.id, 'model.list', { profileId: account.profile.id }, 30_000)
+      .then((r) => setModels(r))
       .catch(() => setModels({ default: null, models: [] }));
   }, [client, env.id, account?.key]);
 
@@ -795,13 +809,13 @@ function Start({ client, env, cwd, onBack, onStarted }: {
     prefs.current = {
       ...prefs.current,
       [env.id]: { account: account.key },
-      [account.key]: { model, effort, auto },
+      [account.key]: { model, effort, auto, mode },
     };
     savePrefs(prefs.current);
     try {
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start', {
         cwd, profileId: account.profile.id,
-        model: model || undefined, effort: effort || undefined, auto,
+        model: model || undefined, effort: effort || undefined, auto, mode: mode || undefined,
       }, 70_000);
       onStarted(r.session);
     } catch (e: any) { setError(e.message); setBusy(false); }
@@ -868,6 +882,22 @@ function Start({ client, env, cwd, onBack, onStarted }: {
             )}
 
             <div className="section">permissions</div>
+            {models?.modes?.length ? (
+              <div className="rows">
+                {models.modes.map((m) => {
+                  const on = (mode || models.modes![0].id) === m.id;
+                  return (
+                    <button key={m.id} className={`row tall${on ? ' active' : ''}${m.danger ? ' danger' : ''}`} onClick={() => setMode(m.id)}>
+                      <span className="grow">
+                        <span className="rt">{m.label}</span>
+                        {m.hint && <span className="rm">{m.hint}</span>}
+                      </span>
+                      {on && <span className="check">✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
             <button className={`row tall toggle${auto ? ' active' : ''}`} onClick={() => setAuto((v) => !v)}>
               <span className="grow">
                 <span className="rt">Act without asking</span>
@@ -880,6 +910,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
               </span>
               <span className={`switch${auto ? ' on' : ''}`}><i /></span>
             </button>
+            )}
 
             <button className="primary big" disabled={busy} onClick={start} style={{ marginTop: 22 }}>
               {busy ? 'starting…' : `Start ${eng?.label}`}
@@ -893,13 +924,6 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 }
 
 // ------------------------------------------------------------------ session
-
-const QUICK: { label: string; key: string }[] = [
-  { label: 'yes', key: 'y' }, { label: 'no', key: 'n' },
-  { label: 'enter', key: 'Enter' }, { label: 'esc', key: 'Escape' },
-  { label: '↑', key: 'Up' }, { label: '↓', key: 'Down' },
-  { label: 'tab', key: 'Tab' }, { label: '^C', key: 'C-c' },
-];
 
 function SessionView({ client, env, session, onBack, onClosed }: {
   client: Client; env: Environment; session: Session;
@@ -991,56 +1015,6 @@ function SessionView({ client, env, session, onBack, onClosed }: {
       )}
       {error && <div className="error floating">{error}</div>}
     </>
-  );
-}
-
-function Composer({ draft, setDraft, onSend, onKey, waiting, engine }: {
-  draft: string; setDraft: (v: string) => void; onSend: () => void;
-  onKey: (k: string) => void; waiting: boolean; engine: string;
-}) {
-  const [keys, setKeys] = useState(false);
-  const ref = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = '0px';
-    el.style.height = Math.min(el.scrollHeight, 180) + 'px';
-  }, [draft]);
-
-  return (
-    <div className="composer-wrap">
-      <div className="composer-col">
-        {waiting && (
-          <div className="docked warn">
-            <span className="docked-text"><i className="sdot blocked" />Waiting on you</span>
-            <span className="docked-actions">
-              {QUICK.slice(0, 4).map((q) => <button key={q.key} onClick={() => onKey(q.key)}>{q.label}</button>)}
-            </span>
-          </div>
-        )}
-        <div className="slab">
-          <textarea
-            ref={ref} rows={1} value={draft}
-            placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
-          />
-          <div className="slab-foot">
-            <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>⌨ keys</button>
-            <span className="spacer" />
-            <button className="send" onClick={onSend} disabled={!draft.trim()} title="send">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
-            </button>
-          </div>
-          {keys && (
-            <div className="keys">
-              {QUICK.map((q) => <button key={q.key} onClick={() => onKey(q.key)}>{q.label}</button>)}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
   );
 }
 

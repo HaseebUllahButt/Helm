@@ -199,7 +199,7 @@ export class CodexDriver extends Driver {
       ...(this.model ? { model: this.model } : {}),
       ...(this.effort ? { effort: this.effort } : {}),
     };
-    this.push('status', { status: 'working' });
+    if (!this.pending.size) this.push('status', { status: 'working' });
     const res = await this.#server.call('turn/start', params);
     if (res.error) {
       this.push('error', { message: res.error.message, kind: 'turn' });
