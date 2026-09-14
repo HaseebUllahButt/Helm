@@ -231,32 +231,51 @@ is never a surprise. The header's mode button opens the same sheet.
 
 ## Not verified, in order of risk
 
-1. **Nothing is deployed.** The Oracle VM (`130.210.33.163`) has no helm.
-   `install.sh` + `helm setup` there, pair a phone, `helm link headless` a
-   laptop. Watch node-pty's build deps and Caddy's certificate.
-2. **A real phone.** Everything above was a 390×844 headless Chromium. Touch,
+1. **A real phone.** Everything here was a 390×844 headless Chromium. Touch,
    the keyboard pushing the sheet, and a carrier-NAT WebRTC path are untested.
-3. **Codex `item/permissions/requestApproval` deny** answers `{permissions: {},
+   This is now the biggest gap, since the deployment below is not one.
+2. **Codex `item/permissions/requestApproval` deny** answers `{permissions: {},
    scope: 'turn'}` — from the bindings, never seen live. `requestUserInput`
    likewise never triggered.
-4. **Claude on a non-default account was exercised (`claudea`); the default
+3. **Claude on a non-default account was exercised (`claudea`); the default
    `~/.claude` login on this laptop is expired** — the first `plain`
    recording caught `authentication_failed`, which the driver surfaces as an
    `error` event. Expect that when a token lapses.
-5. **Throughput on a slow link.** Deltas are coalesced at 50 ms and pushed
+4. **Throughput on a slow link.** Deltas are coalesced at 50 ms and pushed
    per session; a 700-word essay was fine on loopback. Unmeasured over a hub
    on mobile data.
-6. **Windows/macOS**: service install is Linux-only, as before. herdr is still
+5. **Windows/macOS**: service install is Linux-only, as before. herdr is still
    required for `helm up` (it is started for terminals).
 
 ---
 
 ## Where things stand
 
-The laptop's real `~/.helm` still runs the old service (`helm-serve.service`,
-network of one); it was not touched. The e2e work used a scratch `HELM_DIR`.
+**Deployed and running**, both machines on the same commit as `origin/main`:
 
-Not yet pushed to GitHub (remote `git@github.com-me:HaseebUllahButt/helm.git`).
+- the laptop, `helm-serve.service` (user unit) out of `~/.helm-src`;
+- the Oracle VM `130.210.33.163` as `vpn-arm`, behind Caddy on
+  `https://130-210-33-163.sslip.io` with a sslip.io certificate, plus the
+  per-machine ports 44301-44332 the hub hands out.
+
+Upgrading either is one idempotent command - `install.sh` does
+`fetch` + `reset --hard origin/main` + `npm install` + build - then
+`systemctl --user restart helm-serve`. On the VM, over ssh, that needs
+`XDG_RUNTIME_DIR=/run/user/$(id -u)`. Reach it with
+`ssh -i ~/.helm/id_ed25519 ubuntu@130.210.33.163`.
+
+Verified over the public address, not just on loopback: paired in 2.0s, both
+machines online, a Claude session started **on the laptop through the VM's
+hub**, first text on screen 2.6s after Send, turn closed at `4.0s · $0.08`.
+
+Two things on that VM are **not helm's and were left alone**: a python3
+"Agent Mailbox" listening on `0.0.0.0:8765` and a `cloudflared tunnel --url
+http://localhost:8765` that has been publishing it since 2026-09-13. It has
+an unauthenticated `POST /inbound`. Kill both if they are not wanted.
+
+There is also a real Codex session on the VM, blocked on a prompt in
+`~/t3-app` since 2026-09-13 (herdr workspace w3, `agent_status: blocked`).
+It is a herdr pane, not a driven session, so it shows as a terminal.
 
 Branches: `main` is this. `t3-network` holds the 2026-09-13 experiment (T3 as
 the UI, Host:port publishing through the hub, `tunnel-socket.js`); its
