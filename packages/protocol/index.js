@@ -88,7 +88,9 @@ export const M = {
   SESSION_ANSWER: 'session.answer',   // { id, requestId, decision: { option, message?, answers? } }
   SESSION_INTERRUPT: 'session.interrupt', // { id }
   SESSION_MODE: 'session.mode',       // { id, mode } -> { session }
-  SESSION_MODEL: 'session.model',     // { id, model } -> { session }
+  SESSION_MODEL: 'session.model',
+  SESSION_EFFORT: 'session.effort',    // { id, effort } -> { session }
+  SESSION_SPEED: 'session.speed',      // { id, speed } -> { session }  codex service tier
   SESSION_INVENTORY: 'session.inventory', // {} -> { live[], recent[] }
   SESSION_RESUME: 'session.resume',// { engine, account, id, cwd } -> { session }
   SESSION_ADOPT: 'session.adopt',  // { paneId } -> { session }  take over a pane

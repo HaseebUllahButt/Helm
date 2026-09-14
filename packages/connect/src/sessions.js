@@ -329,7 +329,7 @@ export class Sessions extends EventEmitter {
     const spec = materialize(profile);
     d = this.makeDriver(s.driver, {
       cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
-      model: s.model, effort: s.effort, mode: s.mode,
+      model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
       engineSessionId: s.engineSessionId,
       log: (m) => this.log(`[${s.id}] ${m}`),
     });
@@ -420,6 +420,28 @@ export class Sessions extends EventEmitter {
     this.#save();
     const d = this.#drivers.get(id);
     if (d) await d.setMode(mode);
+    this.emit('session', s);
+    return { ok: true, session: s };
+  }
+
+  async setEffort(id, effort) {
+    const s = this.get(id);
+    if (!s.driver) throw new Error('not a headless session');
+    s.effort = effort || null;
+    this.#save();
+    const d = this.#drivers.get(id);
+    if (d) await d.setEffort(s.effort);
+    this.emit('session', s);
+    return { ok: true, session: s };
+  }
+
+  async setSpeed(id, speed) {
+    const s = this.get(id);
+    if (!s.driver) throw new Error('not a headless session');
+    s.speed = speed || null;
+    this.#save();
+    const d = this.#drivers.get(id);
+    if (d?.setSpeed) await d.setSpeed(s.speed);
     this.emit('session', s);
     return { ok: true, session: s };
   }

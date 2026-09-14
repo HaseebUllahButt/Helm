@@ -129,7 +129,7 @@ cat <<'NEXT'
     helm join <CODE> <VM-URL>    connect that computer to your VM
     helm status                  check your machines
 
-  Full VM, HTTPS, desktop, and phone instructions:
+  Full VM, HTTPS and phone instructions:
 
     SETUP.md inside the Helm install folder
 NEXT

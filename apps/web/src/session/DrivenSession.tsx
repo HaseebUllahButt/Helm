@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { Client, type Environment, type Session, type ModelList } from '../client';
 import { Composer } from './Composer';
 import { PermissionSheet } from './PermissionSheet';
-import { ModeSheet, modeShort } from './ModeSheet';
+import { Controls, type Kind } from './Controls';
 import { Transcript } from './Transcript';
 import { useSessionLog } from './useSessionLog';
 import type { Decision } from './types';
 
 const ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode' };
+const MARK: Record<string, string> = { claude: 'C', codex: 'X', opencode: 'O' };
+const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split('/').slice(-2).join('/');
 
 /**
  * A headless agent session: the transcript built from helm's own events,
@@ -22,8 +24,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [menu, setMenu] = useState<null | 'more' | 'model'>(null);
-  const [modes, setModes] = useState(false);
+  const [menu, setMenu] = useState<null | 'more'>(null);
   const [options, setOptions] = useState<ModelList | null>(null);
   const engine = ENGINE_LABEL[session.engine] ?? session.engine;
   const status = log.loaded ? log.status : session.status;
@@ -51,8 +52,17 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
 
   const answer = (d: Decision) => pending && call(() => client.rpc(env.id, 'session.answer', { id: session.id, requestId: pending.requestId, decision: d }));
   const stop = () => call(() => client.rpc(env.id, 'session.interrupt', { id: session.id }));
-  const setMode = (mode: string) => { setMenu(null); setModes(false); call(async () => { const r: any = await client.rpc(env.id, 'session.mode', { id: session.id, mode }); onSession(r.session); }); };
-  const setModel = (model: string) => { setMenu(null); call(async () => { const r: any = await client.rpc(env.id, 'session.model', { id: session.id, model }); onSession(r.session); }); };
+  // model / thinking / permissions / speed all go the same way: tell the
+  // daemon, take the session it hands back. Nothing restarts that the driver
+  // cannot resume.
+  const RPC: Record<Kind, string> = {
+    model: 'session.model', effort: 'session.effort',
+    mode: 'session.mode', speed: 'session.speed',
+  };
+  const pick = (kind: Kind, value: string) => call(async () => {
+    const r: any = await client.rpc(env.id, RPC[kind], { id: session.id, [kind]: value });
+    onSession(r.session);
+  });
   const kill = async () => {
     setMenu(null);
     if (!confirm(`End "${session.title}"? The agent is closed and this conversation is removed from helm.`)) return;
@@ -69,7 +79,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
     const ring = all.filter((m) => !m.danger);
     if (ring.length < 2) return;
     const at = ring.findIndex((m) => m.id === session.mode);
-    setMode(ring[(at + 1) % ring.length].id);
+    pick('mode', ring[(at + 1) % ring.length].id);
   }, [all, session.mode]);
 
   useEffect(() => {
@@ -84,17 +94,18 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
   const chip = (s: string) => (s === 'blocked' ? <span className="chip blocked"><i />waiting</span>
     : s === 'working' ? <span className="chip working"><i />working</span> : null);
 
+  const controls = Controls({ options, session, busy, onPick: pick });
+
   return (
     <>
       <div className="bar">
         <button className="iconbtn back" onClick={onBack}>‹</button>
         <div className="titles">
           <h1>{session.title}</h1>
-          <span className="sub pickers">
-            <span>{engine}</span>
-            <button className="pick" onClick={() => setMenu(menu === 'model' ? null : 'model')}>{session.model || options?.default || 'default model'}</button>
-            <button className={`pick${mode?.danger ? ' danger' : ''}`} onClick={() => { setMenu(null); setModes((v) => !v); }}>{mode?.label ?? session.mode ?? 'mode'}</button>
-            {!env.online && <span className="offline">· offline</span>}
+          <span className="sub">
+            <span className={`mark ${session.engine}`}>{MARK[session.engine] ?? '·'}</span>
+            {engine} · {shortPath(session.cwd)}
+            {!env.online && <span className="offline"> · offline</span>}
           </span>
         </div>
         {chip(status)}
@@ -102,15 +113,6 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
             <button onClick={kill}>End session</button>
-          </div>
-        )}
-        {menu === 'model' && options && (
-          <div className="menu wide">
-            <div className="menu-title">model</div>
-            <button className={!session.model ? 'on' : ''} onClick={() => setModel('')}>default{options.default ? ` (${options.default})` : ''}</button>
-            {options.models.filter((m) => m !== options.default).map((m) => (
-              <button key={m} className={session.model === m ? 'on' : ''} onClick={() => setModel(m)}>{m}</button>
-            ))}
           </div>
         )}
       </div>
@@ -123,19 +125,9 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
       <Composer
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
         engine={engine} keys={false} waiting={!!pending} danger={mode?.danger}
-        foot={all.length > 1 && (
-          <button
-            className={`modechip${modes ? ' on' : ''}${mode?.danger ? ' danger' : ''}`}
-            onClick={() => setModes((v) => !v)}
-            title={mode ? `${mode.label}${mode.hint ? ` - ${mode.hint}` : ''}` : 'permissions'}
-          >
-            <i />{modeShort(mode, session.mode)}
-          </button>
-        )}
+        foot={controls.chips}
       >
-        {modes && all.length > 0 && (
-          <ModeSheet modes={all} current={session.mode} onPick={setMode} onClose={() => setModes(false)} busy={busy} />
-        )}
+        {controls.sheet}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>

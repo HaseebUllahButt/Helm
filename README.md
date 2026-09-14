@@ -1,6 +1,6 @@
 # helm
 
-Control the coding agents on all your computers from one desktop app or your
+Control the coding agents on all your computers from one app on your
 phone.
 
 Every Helm network belongs to its owner. You run it on your own always-on VM;
@@ -40,9 +40,9 @@ Every other computer connects outward to it, so home routers need no port
 forwarding.
 
 ```text
-phone or Helm Desktop ──▶ your VM ◀── laptop
-                              ▲          laptop dialled out
-                              └──────── desktop
+phone or browser ──▶ your VM ◀── laptop
+                         ▲          laptop dialled out
+                         └──────── another machine
 ```
 
 The VM introduces a device to the computer it wants. Session traffic tries a
@@ -61,7 +61,7 @@ one goes down. Add a second home with `helm setup --join` (below).
 
 ```bash
 helm setup                           make this VM the always-on Helm home
-helm link                            pair a phone, browser or desktop app
+helm link                            pair a phone or browser
 helm add                             add another computer
 helm join CODE https://helm.example.com
 helm status                          show the network and runtime
@@ -103,9 +103,8 @@ It prints one private link such as:
 https://helm.example.com/#pair=abc123
 ```
 
-Open it on mobile to pair the PWA automatically. Paste the same link into Helm
-Desktop. The link expires after ten minutes; the paired device stays connected
-until removed.
+Open it on the device you want to use. The link expires after ten minutes; the
+paired device stays connected until removed.
 
 ### Add another computer
 
@@ -130,22 +129,14 @@ storage and does not inherit a pairing made in Safari: open the Helm address,
 use **Share → Add to Home Screen** first, then open the installed app and
 paste the pairing link (or type the code) there.
 
-The PWA and desktop app use the same interface and stored device membership.
+Installed to the home screen, the PWA is the app: same interface everywhere,
+and a device stays paired until you remove it.
 
-## Desktop app
+## The app
 
-Helm Desktop is a small Tauri window around the same app. Paste the private link
-from `helm link` once and it stays paired.
-
-Build and install it locally on Linux:
-
-```bash
-npm run desktop:build
-npm run desktop:install
-```
-
-Tagged releases are built by GitHub Actions and published as `.AppImage` and
-`.deb` downloads.
+Open the app on any machine in the network and add it to your home screen or
+dock; it installs as a PWA and stays paired until you remove the device. There
+is no separate desktop build to keep in step - one app, one interface.
 
 ## How a session runs
 
@@ -202,11 +193,10 @@ users into the same network.
 | `packages/connect` | daemon, CLI, profiles, SSH, and local runtime |
 | `apps/relay` | the VM home and connection relay |
 | `apps/web` | the mobile PWA and shared interface |
-| `apps/desktop` | the Linux Tauri desktop app |
 
 ## Development
 
-Requirements: Node 22+, Rust for desktop builds, and
+Requirements: Node 22+ and
 [herdr](https://herdr.dev) for terminals. Claude Code 2.1.260+ and
 codex-cli 0.154+ on any machine that runs agents (`packages/connect/src/drivers`
 is written against those; older CLIs get a warning at start).

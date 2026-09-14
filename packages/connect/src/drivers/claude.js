@@ -175,6 +175,20 @@ export class ClaudeDriver extends Driver {
     if (this.#child && mode) await this.#control({ subtype: 'set_permission_mode', mode: mode.cli === 'manual' ? 'default' : mode.cli });
   }
 
+  /**
+   * Effort is `--effort` on the command line, not something the control
+   * channel can change, so the running process has to come back. Ending it
+   * is enough: the conversation is on disk, and the next message respawns
+   * with `--resume` and the new flag. Nothing is lost but the process.
+   */
+  async setEffort(effort) {
+    this.effort = effort || null;
+    if (!this.#child) return;
+    await this.kill();
+    // `kill()` is for good; this one is coming back.
+    this.killed = false;
+  }
+
   async kill() {
     this.killed = true;
     const child = this.#child;

@@ -206,6 +206,7 @@ export class CodexDriver extends Driver {
       sandboxPolicy: policy.sandboxPolicy,
       ...(this.model ? { model: this.model } : {}),
       ...(this.effort ? { effort: this.effort } : {}),
+      ...(this.speed ? { serviceTier: this.speed } : {}),
     };
     if (!this.pending.size) this.push('status', { status: 'working' });
     const res = await this.#server.call('turn/start', params);
@@ -264,6 +265,11 @@ export class CodexDriver extends Driver {
 
   async setModel(model) { this.model = model || null; }
   async setMode(id) { this.mode = id; }
+  /** Rides `turn/start`, so the next message uses it; nothing to restart. */
+  async setEffort(effort) { this.effort = effort || null; }
+
+  /** codex's service tier - what the TUI calls /fast. Also per-turn. */
+  async setSpeed(speed) { this.speed = speed || null; }
 
   async kill() {
     this.killed = true;

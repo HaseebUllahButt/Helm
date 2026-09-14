@@ -53,6 +53,7 @@ export interface Session {
   driver?: string;
   model?: string | null;
   mode?: string | null;
+  speed?: string | null;
   effort?: string | null;
   /** Prompts waiting on a person, for the list view. */
   pending?: number;
@@ -61,7 +62,20 @@ export interface Session {
 
 /** A permission mode an engine offers, in words; the daemon knows the flags. */
 export interface Mode { id: string; label: string; short?: string; hint?: string; danger?: boolean }
-export interface ModelList { default: string | null; models: string[]; effort?: string | null; efforts?: string[]; modes?: Mode[] }
+export interface ModelList {
+  default: string | null;
+  models: string[];
+  /** Slug -> the name the CLI shows a person ("GPT-6-Astra"). */
+  labels?: Record<string, string>;
+  effort?: string | null;
+  efforts?: string[];
+  /** Not every model offers every level; the picker narrows to the one in use. */
+  effortsByModel?: Record<string, string[]>;
+  /** codex's service tiers, e.g. ["fast"]. */
+  speeds?: string[];
+  speedByModel?: Record<string, string[]>;
+  modes?: Mode[];
+}
 
 export interface DirEntry { name: string; path: string; isRepo: boolean; skip: boolean }
 

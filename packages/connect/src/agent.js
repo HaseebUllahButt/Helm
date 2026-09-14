@@ -538,6 +538,8 @@ export class Daemon {
       case M.SESSION_INTERRUPT: return this.sessions.interrupt(p.id);
       case M.SESSION_MODE:    return this.sessions.setMode(p.id, p.mode);
       case M.SESSION_MODEL:   return this.sessions.setModel(p.id, p.model);
+      case M.SESSION_EFFORT:  return this.sessions.setEffort(p.id, p.effort);
+      case M.SESSION_SPEED:   return this.sessions.setSpeed(p.id, p.speed);
 
       // Past transcripts from each CLI's own store. Off by default: scanning
       // them is only worth it when you actually want to reopen an old chat.

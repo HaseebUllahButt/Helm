@@ -246,7 +246,6 @@ function Shell({ client, conn, onSignOut }: {
           <span className={`conn ${status}`} title={conn.error || status}>
             <i />{status === 'live' ? `${envs.filter((e) => e.online).length}/${envs.length} online` : status}
           </span>
-          <button className="iconbtn" onClick={onSignOut} title="unpair this device">⏻</button>
         </div>
 
         <div className="scroll">
@@ -304,6 +303,9 @@ function Shell({ client, conn, onSignOut }: {
 
             <AddMachine client={client} />
             <InstallPwa />
+            <button className="linkish quiet-link" onClick={() => {
+              if (confirm('Unpair this device? You will need a fresh link from `helm link` to sign back in.')) onSignOut();
+            }}>unpair this device</button>
             {error && <div className="error">{error}</div>}
           </div>
           <div className="diag">
@@ -608,7 +610,15 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
           <div key={title}>
             <div className={`section${title === 'needs you' ? ' attention' : ''}`}>{title}</div>
             <div className="rows">
-              {list.map((s) => <SessionRow key={s.id} s={s} onOpen={() => onOpen(s)} />)}
+              {list.map((s) => (
+                <SessionRow
+                  key={s.id} s={s} onOpen={() => onOpen(s)}
+                  onEnd={async () => {
+                    try { await client.rpc(env.id, 'session.kill', { id: s.id }, 20_000); } catch { /* already gone */ }
+                    reload();
+                  }}
+                />
+              ))}
             </div>
           </div>
         ))}
@@ -631,21 +641,41 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
   );
 }
 
-function SessionRow({ s, onOpen }: { s: Session; onOpen: () => void }) {
+/**
+ * A session in the list, and the one gesture that removes it.
+ *
+ * The row is a div rather than a button because it holds a second button:
+ * a conversation you are done with should be closable from the list, not
+ * only from inside it. An agent helm did not start is left alone - helm
+ * does not own that process and has no business ending it.
+ */
+function SessionRow({ s, onOpen, onEnd }: { s: Session; onOpen: () => void; onEnd?: () => void }) {
   const eng = engineOf(s.engine);
+  const adopted = (s as any).adopted;
   return (
-    <button className="row tall" onClick={onOpen}>
-      <span className={`mark ${eng.cls}`}>{eng.mark}</span>
-      <span className="grow">
-        <span className="rt">
-          {s.title}
-          {(s as any).adopted && <span className="tag">external</span>}
+    <div className="row tall rowx">
+      <button className="rowmain" onClick={onOpen}>
+        <span className={`mark ${eng.cls}`}>{eng.mark}</span>
+        <span className="grow">
+          <span className="rt">
+            {s.title}
+            {adopted && <span className="tag">external</span>}
+          </span>
+          <span className="rm">{eng.label}{s.model ? ` · ${s.model}` : ''} · {shortPath(s.cwd)}</span>
         </span>
-        <span className="rm">{eng.label}{s.model ? ` · ${s.model}` : ''} · {shortPath(s.cwd)}</span>
-      </span>
-      {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
-      <StatusChip status={s.status} />
-    </button>
+        {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
+        <StatusChip status={s.status} />
+      </button>
+      {onEnd && !adopted && (
+        <button
+          className="rowend" title={`end "${s.title}"`} aria-label={`end ${s.title}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (confirm(`End "${s.title}"? The agent is closed and this conversation is removed from helm.`)) onEnd();
+          }}
+        >✕</button>
+      )}
+    </div>
   );
 }
 

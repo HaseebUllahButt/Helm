@@ -75,7 +75,6 @@ logs, issues, commits, or chat rooms.
 Tell the owner:
 
 - open the link on mobile to pair the PWA;
-- paste the same link into Helm Desktop;
 - run `helm link` again if it expires;
 - run `helm add` when adding another computer.
 

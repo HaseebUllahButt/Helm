@@ -101,11 +101,11 @@ code, pre, kbd { font-family: var(--mono); }
 .bar.side { background: color-mix(in srgb, var(--sidebar) 80%, transparent); padding-left: 14px; }
 .bar .titles { flex: 1; min-width: 0; }
 .bar h1 {
-  margin: 0; font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em;
+  margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .bar .sub {
-  display: block; font-size: 12px; color: var(--mutedfg);
+  display: block; font-size: 13px; color: var(--mutedfg);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .iconbtn {
@@ -183,12 +183,12 @@ code, pre, kbd { font-family: var(--mono); }
 .row.tall.active { border-color: color-mix(in srgb, var(--primary) 55%, transparent); background: color-mix(in srgb, var(--primary) 8%, var(--card)); }
 .row .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .row .rt {
-  font-size: 14px; display: flex; align-items: center; gap: 6px;
+  font-size: 15.5px; display: flex; align-items: center; gap: 6px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text);
 }
 .row .rt .dim { color: var(--mutedfg); font-weight: 400; }
 .row .rm {
-  font-size: 12px; color: var(--mutedfg);
+  font-size: 13px; color: var(--mutedfg);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .row .chev { color: var(--icon); font-size: 16px; flex: none; }
@@ -360,10 +360,10 @@ pre.snippet {
 .turn.user .bubble {
   max-width: 80%; padding: 12px; border-radius: 18px;
   background: var(--accent); color: var(--text);
-  white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word; font-size: 15.5px; line-height: 1.6;
 }
 .turn.assistant { padding: 2px 4px 8px; gap: 2px; }
-.prose { font-size: 14px; line-height: 1.65; color: var(--text-80); word-break: break-word; }
+.prose { font-size: 15.5px; line-height: 1.68; color: var(--text-80); word-break: break-word; }
 
 /* Activity: one 24px line per tool call, never a card. */
 .act {
@@ -540,7 +540,7 @@ pre.snippet {
 .menu .menu-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--mutedfg); padding: 8px 12px 4px; }
 .menu button.on { background: var(--accent); }
 .menu button .rt { display: block; }
-.menu button .rm { display: block; font-size: 11.5px; color: var(--mutedfg); white-space: normal; }
+.menu button .rm { display: block; font-size: 12.5px; color: var(--mutedfg); white-space: normal; }
 .row.danger .rt { color: var(--amber); }
 
 /* Items */
@@ -652,18 +652,30 @@ pre.snippet {
    you", not to a setting. A mode that removes the guardrails colours the
    chip and puts a hairline round the box you are typing into, so there is
    no way to forget which one you are in. */
-.modechip {
-  display: inline-flex; align-items: center; gap: 5px; width: auto; margin: 0;
-  padding: 3px 9px 3px 7px; font-size: 12px; line-height: 1.6; border-radius: 999px;
-  background: var(--muted); border: 1px solid var(--line); color: var(--mutedfg);
+/* The control row: model, thinking, permissions, speed - one tap each, and
+   it scrolls sideways rather than wrapping and pushing the composer up. */
+.chips {
+  display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;
+  overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
 }
-.modechip:hover:not(:disabled) { background: var(--hover); color: var(--text-dim); }
-.modechip.on { background: var(--accent); color: var(--text-dim); border-color: var(--line-2); }
-.modechip i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: 0.7; }
-.modechip.danger, .modechip.danger.on { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 32%, transparent); background: color-mix(in srgb, var(--amber) 9%, transparent); }
-.modechip.danger i { opacity: 1; animation: pulse 2s steps(6) infinite; }
-.pick.danger { color: var(--amber); }
+.chips::-webkit-scrollbar { display: none; }
+.chip-pick {
+  display: inline-flex; align-items: center; gap: 5px; width: auto; margin: 0; flex: none;
+  padding: 4px 10px 4px 8px; font-size: 12.5px; line-height: 1.5; border-radius: 999px;
+  background: var(--muted); border: 1px solid var(--line); color: var(--text-dim);
+  white-space: nowrap;
+}
+.chip-pick:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.chip-pick.on { background: var(--accent); color: var(--text); border-color: var(--line-2); }
+.chip-pick .cg { font-style: normal; font-size: 10px; color: var(--icon); }
+.chip-pick.on .cg { color: var(--text-dim); }
+.chip-pick.danger, .chip-pick.danger.on {
+  color: var(--amber); border-color: color-mix(in srgb, var(--amber) 32%, transparent);
+  background: color-mix(in srgb, var(--amber) 9%, transparent);
+}
+.chip-pick.danger .cg { color: var(--amber); }
 .slab.danger { border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+.modesheet-note { padding: 0 8px 8px; font-size: 12.5px; color: var(--mutedfg); }
 
 .modesheet {
   position: relative; z-index: 0; margin: 0 6px -17px; padding: 10px 8px 26px;
@@ -688,11 +700,25 @@ pre.snippet {
 }
 .moderow:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .moderow .grow { flex: 1; min-width: 0; }
-.moderow .rt { display: block; font-size: 14px; }
-.moderow .rm { display: block; font-size: 11.5px; color: var(--mutedfg); white-space: normal; }
+.moderow .rt { display: block; font-size: 15.5px; }
+.moderow .rm { display: block; font-size: 12.5px; color: var(--mutedfg); white-space: normal; }
 .moderow .short { font: 11px var(--mono); color: var(--icon); }
 .moderow .check { color: var(--primary); }
 .moderow.on { background: color-mix(in srgb, var(--primary) 9%, transparent); border-color: color-mix(in srgb, var(--primary) 35%, transparent); color: var(--text); }
 .moderow.danger .rt { color: var(--amber); }
 .moderow.armed { background: color-mix(in srgb, var(--amber) 12%, transparent); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .moderow.armed .rm { color: var(--amber); }
+
+/* A row that carries its own action: the body opens it, the ✕ ends it. */
+.row.rowx { padding: 0; display: flex; align-items: stretch; gap: 0; overflow: hidden; }
+.row.rowx .rowmain {
+  display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
+  margin: 0; padding: 8px 4px 8px 10px; background: none; border: 0; text-align: left; color: inherit;
+}
+.row.rowx .rowend {
+  width: auto; margin: 0; padding: 0 12px; background: none; border: 0;
+  color: var(--icon); font-size: 13px; flex: none;
+}
+.row.rowx .rowend:hover { color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
+.quiet-link { display: block; margin: 10px auto 0; color: var(--mutedfg); }
+.quiet-link:hover { color: var(--text-dim); }
