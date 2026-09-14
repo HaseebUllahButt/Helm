@@ -221,11 +221,15 @@ export class Sessions extends EventEmitter {
         continue;
       }
       const pane = live.get(s.paneId);
+      // herdr is the authority on what is still running, so no pane means the
+      // process is gone - whatever the session was last seen doing. Keeping
+      // the remembered status here is how a machine that rebooted mid-turn
+      // ended up showing "needs you" for a session nobody could answer.
       // A plain shell has no agent for the runtime to classify, so its status
       // would always read 'unknown'. Say what it actually is.
-      const status = s.engine === 'shell'
-        ? (pane ? 'shell' : 'exited')
-        : (pane?.status ?? s.status ?? 'unknown');
+      const status = !pane ? 'exited'
+        : s.engine === 'shell' ? 'shell'
+        : (pane.status ?? s.status ?? 'unknown');
       out.push({ ...s, alive: !!pane, status, cwd: pane?.cwd ?? s.cwd, adopted: false });
     }
     // Anything waiting on a human floats to the top; that is the whole point
