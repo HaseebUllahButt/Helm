@@ -155,8 +155,16 @@ what it says into one stream of events - text as it is written, each tool
 call and its result, every permission prompt with the choices the CLI
 offered. The app renders that stream, so the phone shows the agent typing,
 folds tool calls into one line each, and answers a permission prompt, an
-`AskUserQuestion`, or a plan review with a tap. Stop interrupts the turn; the
-model and permission mode can be changed from the session header.
+`AskUserQuestion`, or a plan review with a tap. Stop interrupts the turn.
+
+**How much the agent may do without asking** is a chip in the composer, next
+to Send: `ask` · `edit` · `plan` · `auto` · `yolo` for Claude Code, `ask` ·
+`edit` · `yolo` · `read` for Codex. Tap it for the list with what each one
+means; shift+tab cycles the safe ones from the keyboard. A mode that removes
+the guardrails takes two taps and then colours the chip and the box you type
+in, so it is never a surprise. Changing it mid-conversation is real, not
+cosmetic: Claude gets `set_permission_mode`, and every Codex turn carries the
+approval policy *and* the sandbox.
 
 Closing helm does not end a conversation: sessions resume on the next message
 (`claude --resume`, `codex thread/resume`) under the same account.

@@ -157,7 +157,11 @@ export class CodexDriver extends Driver {
 
   #policy() {
     const mode = modeFor('codex', this.mode);
-    return { approvalPolicy: mode?.approvalPolicy ?? 'on-request', sandbox: mode?.sandbox ?? 'workspace-write' };
+    return {
+      approvalPolicy: mode?.approvalPolicy ?? 'on-request',
+      sandbox: mode?.sandbox ?? 'workspace-write',
+      sandboxPolicy: mode?.sandboxPolicy ?? { type: 'workspaceWrite' },
+    };
   }
 
   async start() {
@@ -190,12 +194,16 @@ export class CodexDriver extends Driver {
   async send(text) {
     await this.start();
     // Per-turn overrides stick to the thread, so a mode or model changed
-    // mid-session takes effect on the next message.
+    // mid-session takes effect on the next message - the sandbox included,
+    // which is the half that makes "act without asking" true rather than
+    // merely quiet.
+    const policy = this.#policy();
     const params = {
       threadId: this.threadId,
       input: [{ type: 'text', text, text_elements: [] }],
       clientUserMessageId: randomUUID(),
-      approvalPolicy: this.#policy().approvalPolicy,
+      approvalPolicy: policy.approvalPolicy,
+      sandboxPolicy: policy.sandboxPolicy,
       ...(this.model ? { model: this.model } : {}),
       ...(this.effort ? { effort: this.effort } : {}),
     };

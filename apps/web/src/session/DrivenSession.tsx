@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Client, type Environment, type Session, type ModelList } from '../client';
 import { Composer } from './Composer';
 import { PermissionSheet } from './PermissionSheet';
+import { ModeSheet, modeShort } from './ModeSheet';
 import { Transcript } from './Transcript';
 import { useSessionLog } from './useSessionLog';
 import type { Decision } from './types';
@@ -21,7 +22,8 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [menu, setMenu] = useState<null | 'more' | 'model' | 'mode'>(null);
+  const [menu, setMenu] = useState<null | 'more' | 'model'>(null);
+  const [modes, setModes] = useState(false);
   const [options, setOptions] = useState<ModelList | null>(null);
   const engine = ENGINE_LABEL[session.engine] ?? session.engine;
   const status = log.loaded ? log.status : session.status;
@@ -49,7 +51,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
 
   const answer = (d: Decision) => pending && call(() => client.rpc(env.id, 'session.answer', { id: session.id, requestId: pending.requestId, decision: d }));
   const stop = () => call(() => client.rpc(env.id, 'session.interrupt', { id: session.id }));
-  const setMode = (mode: string) => { setMenu(null); call(async () => { const r: any = await client.rpc(env.id, 'session.mode', { id: session.id, mode }); onSession(r.session); }); };
+  const setMode = (mode: string) => { setMenu(null); setModes(false); call(async () => { const r: any = await client.rpc(env.id, 'session.mode', { id: session.id, mode }); onSession(r.session); }); };
   const setModel = (model: string) => { setMenu(null); call(async () => { const r: any = await client.rpc(env.id, 'session.model', { id: session.id, model }); onSession(r.session); }); };
   const kill = async () => {
     setMenu(null);
@@ -57,7 +59,28 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
     await call(async () => { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); });
   };
 
-  const mode = options?.modes?.find((m) => m.id === session.mode);
+  const all = options?.modes ?? [];
+  const mode = all.find((m) => m.id === session.mode);
+
+  // shift+tab, the way Claude Code does it at the keyboard. Only the safe
+  // modes are on the ring: handing over the whole machine is a deliberate
+  // act, not something you land on while tabbing.
+  const cycle = useCallback(() => {
+    const ring = all.filter((m) => !m.danger);
+    if (ring.length < 2) return;
+    const at = ring.findIndex((m) => m.id === session.mode);
+    setMode(ring[(at + 1) % ring.length].id);
+  }, [all, session.mode]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      cycle();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cycle]);
   const chip = (s: string) => (s === 'blocked' ? <span className="chip blocked"><i />waiting</span>
     : s === 'working' ? <span className="chip working"><i />working</span> : null);
 
@@ -70,7 +93,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
           <span className="sub pickers">
             <span>{engine}</span>
             <button className="pick" onClick={() => setMenu(menu === 'model' ? null : 'model')}>{session.model || options?.default || 'default model'}</button>
-            <button className="pick" onClick={() => setMenu(menu === 'mode' ? null : 'mode')}>{mode?.label ?? session.mode ?? 'mode'}</button>
+            <button className={`pick${mode?.danger ? ' danger' : ''}`} onClick={() => { setMenu(null); setModes((v) => !v); }}>{mode?.label ?? session.mode ?? 'mode'}</button>
             {!env.online && <span className="offline">· offline</span>}
           </span>
         </div>
@@ -90,16 +113,6 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
             ))}
           </div>
         )}
-        {menu === 'mode' && options?.modes && (
-          <div className="menu wide">
-            <div className="menu-title">permissions</div>
-            {options.modes.map((m) => (
-              <button key={m.id} className={session.mode === m.id ? 'on' : ''} onClick={() => (m.danger && !confirm(`${m.label}: ${m.hint}. Sure?`)) || setMode(m.id)}>
-                <span className="rt">{m.label}</span>{m.hint && <span className="rm">{m.hint}</span>}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       <Transcript
@@ -107,7 +120,22 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
         empty={session.alive === false ? 'This conversation resumes with your next message.' : undefined}
       />
 
-      <Composer draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working} engine={engine} keys={false} waiting={!!pending}>
+      <Composer
+        draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
+        engine={engine} keys={false} waiting={!!pending} danger={mode?.danger}
+        foot={all.length > 1 && (
+          <button
+            className={`modechip${modes ? ' on' : ''}${mode?.danger ? ' danger' : ''}`}
+            onClick={() => setModes((v) => !v)}
+            title={mode ? `${mode.label}${mode.hint ? ` - ${mode.hint}` : ''}` : 'permissions'}
+          >
+            <i />{modeShort(mode, session.mode)}
+          </button>
+        )}
+      >
+        {modes && all.length > 0 && (
+          <ModeSheet modes={all} current={session.mode} onPick={setMode} onClose={() => setModes(false)} busy={busy} />
+        )}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>

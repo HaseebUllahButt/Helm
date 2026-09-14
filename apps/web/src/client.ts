@@ -60,7 +60,7 @@ export interface Session {
 }
 
 /** A permission mode an engine offers, in words; the daemon knows the flags. */
-export interface Mode { id: string; label: string; hint?: string; danger?: boolean }
+export interface Mode { id: string; label: string; short?: string; hint?: string; danger?: boolean }
 export interface ModelList { default: string | null; models: string[]; effort?: string | null; efforts?: string[]; modes?: Mode[] }
 
 export interface DirEntry { name: string; path: string; isRepo: boolean; skip: boolean }

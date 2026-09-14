@@ -37,6 +37,10 @@ test('plain: initialize, thread/start, turn/start; text streams as deltas', asyn
   assert.equal(sent[3].method, 'turn/start');
   assert.deepEqual(sent[3].params.input, [{ type: 'text', text: 'Reply with exactly the words: hello from helm', text_elements: [] }]);
   assert.equal(sent[3].params.effort, 'low');
+  // The sandbox rides every turn, not just thread/start: that is what makes a
+  // mode changed mid-session real rather than cosmetic.
+  assert.deepEqual(sent[3].params.sandboxPolicy, { type: 'workspaceWrite' });
+  assert.equal(sent[3].params.approvalPolicy, 'on-request');
   await driver.kill();
 });
 
@@ -63,6 +67,8 @@ test('command: a command item with an approval request; accept runs it and the o
   const reply = fake.stdinLines().find((l) => l.id !== undefined && 'result' in l);
   assert.deepEqual(reply.result, { decision: 'accept' });
   assert.equal(fake.stdinLines()[2].params.approvalPolicy, 'untrusted');
+  const turn = fake.stdinLines().find((l) => l.method === 'turn/start');
+  assert.deepEqual(turn.params.sandboxPolicy, { type: 'readOnly' });
   await driver.kill();
 });
 

@@ -12,10 +12,11 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, children }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
+  foot?: React.ReactNode; danger?: boolean;
   children?: React.ReactNode;
 }) {
   const [keys, setKeys] = useState(false);
@@ -40,7 +41,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             </span>
           </div>
         )}
-        <div className="slab">
+        <div className={`slab${danger ? ' danger' : ''}`}>
           <textarea
             ref={ref} rows={1} value={draft}
             placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
@@ -49,6 +50,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
           />
           <div className="slab-foot">
             {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>⌨ keys</button>}
+            {foot}
             <span className="spacer" />
             {working && onStop && (
               <button className="stop" onClick={onStop} title="stop the agent">

@@ -645,3 +645,54 @@ pre.snippet {
 .q-other { font-size: 13px; padding: 8px 10px; background: var(--bg); }
 .menu.wide button { color: var(--text-dim); }
 .menu.wide button.on, .menu.wide button:hover { color: var(--text); }
+
+/* ----------------------------------------------- permissions, while you type
+   The chip sits in the composer's foot so it costs no height, and says the
+   mode in one word. Neutral by default: amber belongs to "the agent needs
+   you", not to a setting. A mode that removes the guardrails colours the
+   chip and puts a hairline round the box you are typing into, so there is
+   no way to forget which one you are in. */
+.modechip {
+  display: inline-flex; align-items: center; gap: 5px; width: auto; margin: 0;
+  padding: 3px 9px 3px 7px; font-size: 12px; line-height: 1.6; border-radius: 999px;
+  background: var(--muted); border: 1px solid var(--line); color: var(--mutedfg);
+}
+.modechip:hover:not(:disabled) { background: var(--hover); color: var(--text-dim); }
+.modechip.on { background: var(--accent); color: var(--text-dim); border-color: var(--line-2); }
+.modechip i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: 0.7; }
+.modechip.danger, .modechip.danger.on { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 32%, transparent); background: color-mix(in srgb, var(--amber) 9%, transparent); }
+.modechip.danger i { opacity: 1; animation: pulse 2s steps(6) infinite; }
+.pick.danger { color: var(--amber); }
+.slab.danger { border-color: color-mix(in srgb, var(--amber) 30%, transparent); }
+
+.modesheet {
+  position: relative; z-index: 0; margin: 0 6px -17px; padding: 10px 8px 26px;
+  border-radius: 18px 18px 0 0; background: var(--card); backdrop-filter: blur(16px) saturate(1.08);
+  border: 1px solid var(--line-2); border-bottom: 0;
+  display: flex; flex-direction: column; gap: 2px; max-height: 62vh; overflow: auto;
+}
+.modesheet-head {
+  display: flex; align-items: center; padding: 2px 6px 6px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--mutedfg);
+}
+.modesheet-head span { flex: 1; }
+.modesheet-head .x { width: auto; margin: 0; padding: 2px 6px; background: none; border: 0; color: var(--icon); font-size: 12px; }
+.modesheet-head .x:hover { color: var(--text); }
+.modesheet-foot { padding: 8px 6px 0; font-size: 11.5px; color: var(--icon); }
+@media (pointer: coarse) { .modesheet-foot { display: none; } }
+
+.moderow {
+  display: flex; align-items: center; gap: 10px; width: 100%; margin: 0;
+  padding: 9px 10px; border-radius: var(--radius); text-align: left;
+  background: none; border: 1px solid transparent; color: var(--text-dim);
+}
+.moderow:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.moderow .grow { flex: 1; min-width: 0; }
+.moderow .rt { display: block; font-size: 14px; }
+.moderow .rm { display: block; font-size: 11.5px; color: var(--mutedfg); white-space: normal; }
+.moderow .short { font: 11px var(--mono); color: var(--icon); }
+.moderow .check { color: var(--primary); }
+.moderow.on { background: color-mix(in srgb, var(--primary) 9%, transparent); border-color: color-mix(in srgb, var(--primary) 35%, transparent); color: var(--text); }
+.moderow.danger .rt { color: var(--amber); }
+.moderow.armed { background: color-mix(in srgb, var(--amber) 12%, transparent); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
+.moderow.armed .rm { color: var(--amber); }
