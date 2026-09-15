@@ -1,6 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { Herdr } from '../herdr.js';
 
+/** How long a pane listing stays good enough to reuse. */
+const LIVE_TTL_MS = 1000;
+
 /**
  * The herdr protocol generation helm was written against. herdr reports this
  * from `ping`; if it ever moves we want a loud, specific failure at startup
@@ -141,10 +144,41 @@ export class HerdrRuntime extends EventEmitter {
   }
 
   /** What the runtime believes is still alive, keyed by pane id. */
-  async listLive() {
+  /**
+   * What herdr still has running.
+   *
+   * Two things made this the slowest thing the app waits on, at a measured
+   * 200ms while the daemon itself answers a ping in 1ms. It asked herdr two
+   * questions one after the other, and herdr answers one request per
+   * connection and then hangs up - so that is two connections, set up and
+   * torn down, in series. And `session.list` calls this every time, which is
+   * every reload of a machine you are looking at.
+   *
+   * So: both questions at once, and the answer is worth holding on to for a
+   * moment. Panes do not appear and vanish inside a second, and anything
+   * helm started itself is tracked directly rather than through here.
+   */
+  #liveCache = { at: 0, value: null, inflight: null };
+
+  async listLive({ fresh = false } = {}) {
+    const now = Date.now();
+    if (!fresh && this.#liveCache.value && now - this.#liveCache.at < LIVE_TTL_MS) {
+      return this.#liveCache.value;
+    }
+    // A second caller arriving mid-flight waits for the same answer rather
+    // than opening its own pair of connections.
+    if (this.#liveCache.inflight) return this.#liveCache.inflight;
+    this.#liveCache.inflight = this.#fetchLive().finally(() => { this.#liveCache.inflight = null; });
+    return this.#liveCache.inflight;
+  }
+
+  async #fetchLive() {
     const live = new Map();
     try {
-      const res = await this.herdr.call('pane.list', {});
+      const [res, agents] = await Promise.all([
+        this.herdr.call('pane.list', {}),
+        this.herdr.call('agent.list', {}),
+      ]);
       for (const p of res.panes ?? []) {
         live.set(p.pane_id, {
           status: p.agent_status,
@@ -155,7 +189,6 @@ export class HerdrRuntime extends EventEmitter {
         });
       }
       // Which panes actually hold a recognised agent, and what kind.
-      const agents = await this.herdr.call('agent.list', {});
       for (const a of agents.agents ?? []) {
         const entry = live.get(a.pane_id);
         if (entry) {
@@ -164,7 +197,10 @@ export class HerdrRuntime extends EventEmitter {
           entry.status = a.status ?? entry.status;
         }
       }
-    } catch { /* runtime down: caller falls back to last known state */ }
+      this.#liveCache = { at: Date.now(), value: live, inflight: this.#liveCache.inflight };
+    } catch {
+      /* runtime down: caller falls back to last known state */
+    }
     return live;
   }
 
