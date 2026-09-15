@@ -184,6 +184,7 @@ the Mumbai VM goes **Pakistan → New York → Mumbai** and back. Measured
 | laptop → VM, through the tunnel | **450–970ms** to connect |
 | an RPC relayed hub→laptop and back | **1.1s** |
 | phone ↔ laptop, direct peer-to-peer | **3ms** |
+| Mumbai → Pakistan (via Singapore, hop 10 PTCL) | **146ms** |
 | laptop daemon answering a ping on loopback | **1.3ms** |
 
 The daemon is not slow. The path is long, and it is long by choice.
@@ -227,11 +228,18 @@ kernel would really send that subnet out of, and says so when they differ
 
 ### What is still slow, and what would fix it
 
-**Same wifi: solved.** The phone should now pair directly with the laptop.
-Expect the machine header to read `direct, same network · single-digit ms`.
-If it still says `via your Helm home`, the next suspect is **AP isolation**
-on the router — some mesh and guest networks block client-to-client traffic —
-and `client.route()` reports the candidate pair it settled on.
+**Same wifi: solved and confirmed on the owner's phone (2026-09-15).** The
+machine header reads `direct, same network`, which means session traffic goes
+phone↔laptop over wifi and touches neither Mumbai nor New York.
+
+**Do not hardcode the laptop's LAN address.** It moved from `192.168.10.35`
+to `192.168.1.9` inside one session, because the laptop changed wifi
+networks. That cost an hour and produced a confidently wrong conclusion: a
+test against the old address failed, and it was read as "the router has AP
+isolation and blocks phone-to-laptop traffic" when the truth was that the
+address had ceased to exist. `helm status` prints what is actually
+advertised; start there, and check `ip -4 -o addr` before believing any
+result about the LAN.
 
 **Phone on cellular: not fixable while the exit node is on.** Every route to
 the laptop ends at New York, so it is ~1.1s a round trip. Predictive echo
@@ -248,7 +256,25 @@ bulk stay slow. Two things would change it, both declined by the owner on
   tailnet.
 - **Toggling the exit node off** while working from the phone
   (`tailscale set --exit-node=`) would make the relay path Pakistan →
-  Mumbai → Pakistan, roughly 200ms instead of 1100.
+  Mumbai → Pakistan: **~400ms round trip instead of ~1100ms**, not the
+  ~200ms first guessed. India and Pakistan do not peer directly - the path
+  runs east through Singapore and back, measured at 146ms to PTCL - so
+  geographic closeness is not network closeness here. Do not estimate
+  latency from a map.
+- **A split tunnel for the hub alone**, which keeps the exit node for
+  everything else. Tailscale's catch-all rule sits at priority 5270, so a
+  lower number wins:
+
+  ```bash
+  sudo ip rule add to 130.210.33.163 lookup main priority 5100
+  systemctl --user restart helm-serve
+  ```
+
+  Same ~400ms, without giving up the exit node for anything but helm's own
+  link to the VM. Undo with `ip rule del`; it does not survive a reboot.
+  Note that binding a socket to the LAN interface does **not** work as a
+  substitute - Tailscale's rules match regardless of source address
+  (`ip route get <vm> from 192.168.1.9` still says `dev tailscale0`).
 
 **The option that is closed, so nobody spends an hour on it:** serving the
 app from the laptop itself at `https://haseeb.tail2f39a8.ts.net` would
@@ -752,15 +778,7 @@ add a third delivery path, it must carry the same id.**
    only part of today's work that nothing has exercised end to end, and it
    is thirty seconds to settle: open the app on the phone, "notify this
    device" in the sidebar, then let a session ask for permission.
-2. **Nobody has confirmed the phone now pairs directly.** The LAN-access fix
-   went in at the end of the session and was verified from the laptop's side
-   only (`ping 192.168.10.1` 3/3 at 3ms, `helm status` clean). The phone has
-   not been looked at since. **This is the first thing to check.** Open it on
-   home wifi: the machine header should read `direct, same network` and
-   single-digit milliseconds. If it still says `via your Helm home`, suspect
-   **AP isolation** on the router before suspecting helm, and read the
-   candidate pair out of `client.route()`.
-3. **The touch-facing work has only been driven in headless Chromium** at
+2. **The touch-facing work has only been driven in headless Chromium** at
    390×844 — the `/` palette against a software keyboard, and predictive
    echo, which above 60ms is exactly what a phone on cellular runs.
 
@@ -769,17 +787,17 @@ add a third delivery path, it must carry the same id.**
    an Android Chrome paired since 2026-09-14, and the complaint that started
    the latency work — "mobile to laptop terminal latency is ass" — came from
    it. Check `helm devices` before repeating anything in this section.)*
-4. **Devin got the image and named the colour wrong.** It answered
+3. **Devin got the image and named the colour wrong.** It answered
    "Turquoise circle" to a red square with a white circle - shape right,
    colour wrong, and it read no files that turn. helm's side is clean: the
    JPEG on disk is 64×64 with corner `(254,0,0)`, and those are the exact
    bytes handed to the driver. Worth one more look with a different picture
    before deciding whose problem it is.
-5. **opencode has no credit** ("Insufficient balance"), so its image path is
+4. **opencode has no credit** ("Insufficient balance"), so its image path is
    verified only as far as the agent accepting the content block.
-6. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
+5. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
    coded from the bindings and have never been seen live.
-7. **herdr's own answer is ~100ms** for a pane listing, which is now cached
+6. **herdr's own answer is ~100ms** for a pane listing, which is now cached
    rather than fixed. If adopted panes ever start feeling stale, that cache
    (`LIVE_TTL_MS`) is why.
 
