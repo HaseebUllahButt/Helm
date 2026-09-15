@@ -203,6 +203,9 @@ code, pre, kbd { font-family: var(--mono); }
   display: inline-flex; align-items: center; justify-content: center;
   font: 700 12px/1 var(--mono); background: var(--accent); color: var(--text-dim);
 }
+/* The marks are inline SVG inheriting currentColor, so each engine's tint
+   above colours its logo with nothing further to set. */
+.mark svg { display: block; }
 .mark.claude   { background: color-mix(in srgb, var(--claude) 16%, transparent);   color: var(--claude); }
 .mark.codex    { background: color-mix(in srgb, var(--codex) 14%, transparent);    color: var(--codex); }
 .mark.opencode { background: color-mix(in srgb, var(--opencode) 16%, transparent); color: var(--opencode); }

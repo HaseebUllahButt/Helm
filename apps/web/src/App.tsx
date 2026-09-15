@@ -3,6 +3,7 @@ import { Terminal } from './Terminal';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
+import { EngineMark } from './EngineMark';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import {
   Client, login,
@@ -45,14 +46,15 @@ function useWide() {
 
 // ------------------------------------------------------------------ engines
 
-const ENGINE: Record<string, { label: string; mark: string; cls: string }> = {
-  claude:   { label: 'Claude Code', mark: 'C', cls: 'claude' },
-  codex:    { label: 'Codex',       mark: 'X', cls: 'codex' },
-  opencode: { label: 'opencode',    mark: 'O', cls: 'opencode' },
-  devin:    { label: 'Devin',       mark: 'D', cls: 'devin' },
-  shell:    { label: 'Terminal',    mark: '❯', cls: 'shell' },
+// The badge itself is EngineMark; this is what an engine is called.
+const ENGINE: Record<string, { label: string; cls: string }> = {
+  claude:   { label: 'Claude Code', cls: 'claude' },
+  codex:    { label: 'Codex',       cls: 'codex' },
+  opencode: { label: 'opencode',    cls: 'opencode' },
+  devin:    { label: 'Devin',       cls: 'devin' },
+  shell:    { label: 'Terminal',    cls: 'shell' },
 };
-const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', mark: '·', cls: 'other' };
+const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', cls: 'other' };
 
 /**
  * An account is a CLI plus the home directory (or credential) it runs with.
@@ -997,7 +999,7 @@ function SessionRow({ s, onOpen, onArchive, onDelete }: {
   return (
     <div className="row tall rowx">
       <button className="rowmain" onClick={onOpen}>
-        <span className={`mark ${eng.cls}`}>{eng.mark}</span>
+        <EngineMark engine={eng.cls} />
         <span className="grow">
           <span className="rt">
             {s.title}
@@ -1233,7 +1235,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
             const e = engineOf(a.engine);
             return (
               <button key={a.key} className={`row tall${a.key === key ? ' active' : ''}`} onClick={() => setKey(a.key)}>
-                <span className={`mark ${e.cls}`}>{e.mark}</span>
+                <EngineMark engine={e.cls} />
                 <span className="grow">
                   <span className="rt">{e.label} <span className="dim">· {a.account}</span>{a.token && <span className="tag key">token</span>}</span>
                   <span className="rm">{a.aliases.join(', ')}</span>

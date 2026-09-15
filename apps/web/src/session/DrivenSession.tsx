@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Client, type Environment, type Session, type ModelList } from '../client';
 import { Composer } from './Composer';
 import { MAX_ATTACHMENTS, looksLikeImage, prepareImage } from './image';
+import { EngineMark } from '../EngineMark';
 import { PermissionSheet } from './PermissionSheet';
 import { Controls, type Kind } from './Controls';
 import { Transcript } from './Transcript';
@@ -9,7 +10,6 @@ import { useSessionLog } from './useSessionLog';
 import type { Decision } from './types';
 
 const ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', devin: 'Devin' };
-const MARK: Record<string, string> = { claude: 'C', codex: 'X', opencode: 'O', devin: 'D' };
 const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split('/').slice(-2).join('/');
 
 /**
@@ -184,7 +184,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
         <div className="titles">
           <h1>{session.title}</h1>
           <span className="sub">
-            <span className={`mark ${session.engine}`}>{MARK[session.engine] ?? '·'}</span>
+            <EngineMark engine={session.engine} />
             {engine} · {shortPath(session.cwd)}
             {!env.online && <span className="offline"> · offline</span>}
           </span>
