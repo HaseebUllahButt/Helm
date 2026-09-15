@@ -203,10 +203,26 @@ function EditItem({ item }: { item: Item }) {
   return <div className={`edits${item.status === 'declined' ? ' declined' : item.status === 'error' ? ' bad' : ''}`}><ChangeList changes={changes} /></div>;
 }
 
+/** 48210 -> 48.2k. A subagent's token count is a sense of scale, not a bill. */
+const tokens = (n?: number) => (
+  n == null || n <= 0 ? ''
+    : n < 1000 ? String(n)
+    : n < 100_000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`
+    : `${Math.round(n / 1000)}k`
+);
+
 /**
  * A spawned agent. The card says who it is and what it was asked; while it
  * runs its own tool calls and text stream inside, nested by the drivers'
  * parentId tagging. Folds away when it finishes like any other tool.
+ *
+ * What it cost and what it did outlive the run. The engines report only the
+ * *current* tool, so a card you folded - or opened after it landed - used to
+ * say nothing at all about the work, and the token count the driver had been
+ * collecting the whole time was never shown anywhere. The trail the reducer
+ * keeps fills in for engines that stream no child items of their own; where
+ * there are real children, they are strictly better and the trail stays out
+ * of the way.
  */
 function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
   const live = item.status === 'streaming';
@@ -215,6 +231,9 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
   const task = input?.description ?? input?.prompt ?? item.agent?.description ?? '';
   const kids = byParent.get(item.id) ?? [];
   const out = item.output ?? item.agent?.summary ?? '';
+  const used = tokens(item.agent?.tokens);
+  const calls = item.agent?.toolUses;
+  const trail = kids.length ? [] : (item.agent?.activity ?? []);
   const head = (
     <>
       <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}>⧉</span>
@@ -222,16 +241,23 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
         <b>{who}</b>{task && <> {typeof task === 'string' && task.length > 140 ? task.slice(0, 140) + '…' : String(task)}</>}
       </span>
       {live && item.agent?.lastTool && <span className="ameta">{item.agent.lastTool}</span>}
+      {!live && !!calls && <span className="ameta">{calls} {calls === 1 ? 'tool' : 'tools'}</span>}
+      {used && <span className="ameta">{used}</span>}
       {live && item.elapsed != null && item.elapsed > 2 && <span className="ameta">{Math.round(item.elapsed)}s</span>}
       {item.status === 'error' && <span className="ameta bad">failed</span>}
       {item.status === 'declined' && <span className="ameta">stopped</span>}
     </>
   );
-  if (!kids.length && !out) return <div className="act">{head}</div>;
+  if (!kids.length && !out && !trail.length) return <div className="act">{head}</div>;
   return (
     <details className="actgroup subagent" open={live || undefined}>
       <summary>{head}<span className="achev">›</span></summary>
       <div className="sub-body">
+        {trail.length > 0 && (
+          <ol className="trail">
+            {trail.map((a, i) => <li key={`${a.at}-${i}`}>{a.text}</li>)}
+          </ol>
+        )}
         {kids.map((k) => <ItemView key={k.id} item={k} byParent={byParent} />)}
         {out && <pre className="aout">{out.length > 4000 ? out.slice(0, 4000) + '\n…' : out}</pre>}
       </div>

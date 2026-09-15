@@ -483,6 +483,17 @@ pre.snippet {
 .actgroup[open] .achev { transform: rotate(90deg); }
 .actgroup[open] > .act { margin-left: 8px; }
 
+/* What a spawned agent did, for engines that stream no child items of their
+   own. Quieter than a real item on purpose: this is a trail, not a
+   transcript, and the last step is the one you are looking for. */
+.trail { margin: 2px 0 6px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; }
+.trail li {
+  display: flex; align-items: baseline; gap: 7px;
+  font-size: var(--t-meta); line-height: 1.55; color: var(--mutedfg);
+}
+.trail li::before { content: '\25b8'; color: var(--icon); font-size: 9px; flex: none; }
+.trail li:last-child { color: var(--text-dim); }
+
 /* A subagent's own activity, nested under its card. */
 .sub-body { margin-left: 15px; padding-left: 10px; border-left: 1px solid var(--accent); display: flex; flex-direction: column; gap: 2px; }
 .actgroup.subagent > summary .aicon { color: var(--text-dim); }

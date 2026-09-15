@@ -147,6 +147,27 @@ class CodexServer {
 
 // -------------------------------------------------------------- the driver
 
+/**
+ * What a child agent's item should be called on its parent's trail.
+ *
+ * Codex reports nothing about a spawned agent between "running" and its final
+ * summary, so the only evidence of what it did is the items arriving on its
+ * own thread. Naming each one on the spawn card is what gives a folded
+ * subagent something to show. Prose and reasoning are not steps.
+ */
+function childStep(item) {
+  switch (item.type) {
+    case 'userMessage': case 'agentMessage': case 'reasoning': return null;
+    case 'collabAgentToolCall': case 'collabToolCall': case 'subAgentActivity': return 'spawn';
+    case 'fileChange': return 'edit';
+    case 'commandExecution': {
+      const c = item.command ?? item.commandActions?.map((a) => a.command).find(Boolean) ?? '';
+      return String(c).trim().split(/\s+/)[0] || 'command';
+    }
+    default: return item.type;
+  }
+}
+
 export class CodexDriver extends Driver {
   #server = null;
   #turnId = null;
@@ -407,6 +428,10 @@ export class CodexDriver extends Driver {
 
   #onItemStarted(item, turnId, parentId) {
     if (!item) return;
+    if (parentId) {
+      const step = childStep(item);
+      if (step) this.push('item.update', { id: parentId, agent: { lastTool: step } });
+    }
     const base = { id: item.id, turnId: turnId ?? this.#turnId, parentId };
     switch (item.type) {
       case 'userMessage': return;
