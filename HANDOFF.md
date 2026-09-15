@@ -613,14 +613,22 @@ add a third delivery path, it must carry the same id.**
 
 ## Known bad, and not yet fixed
 
-1. **A real phone has never opened this**, and it is now by some distance
-   the biggest gap — three of the things built today (push notifications,
-   predictive echo, the `/` palette on a touch keyboard) exist *for* a phone
-   and have only ever been driven in headless Chromium at 390×844. A
-   carrier-NAT WebRTC path is unproven too.
-2. **No push has reached a real device.** The encryption is checked against
-   the RFC's own worked example and the fan-out against a stub service, but
-   no Apple or Google endpoint has been handed one.
+1. **Push has never reached a device.** The encryption is checked against
+   RFC 8291's own worked example and the fan-out against a stub push
+   service, but no Apple or Google endpoint has been handed one. This is the
+   only part of today's work that nothing has exercised end to end, and it
+   is thirty seconds to settle: open the app on the phone, "notify this
+   device" in the sidebar, then let a session ask for permission.
+2. **The touch-facing work has only been driven in headless Chromium** at
+   390×844 — the `/` palette against a software keyboard, and predictive
+   echo, which above 60ms is exactly what the phone will be running. The
+   owner's phone is the instrument for that; it exists and is paired.
+
+   *(An earlier version of this list said "a real phone has never opened
+   this". That was wrong and had been wrong for a day: `helm devices` shows
+   an Android Chrome paired since 2026-09-14, and the complaint that started
+   the latency work — "mobile to laptop terminal latency is ass" — came from
+   it. Check `helm devices` before repeating anything in this section.)*
 3. **Devin got the image and named the colour wrong.** It answered
    "Turquoise circle" to a red square with a white circle - shape right,
    colour wrong, and it read no files that turn. helm's side is clean: the
