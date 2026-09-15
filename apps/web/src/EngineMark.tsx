@@ -1,92 +1,65 @@
 /**
- * The badge that says which agent a session is.
+ * The vendor mark for each agent.
  *
- * These were the letters `C` / `X` / `O` / `D`, which read as placeholders
- * because they were. Two of them are now the vendor's own mark, drawn as
- * inline SVG: nothing is fetched (the CSP allows no outside images, and a
- * phone on a bad connection should not be waiting on a logo), and both
- * inherit `currentColor`, so each keeps the engine tint the badge already
- * had and needs no second version for a light theme.
+ * These are the real, single-colour logo shapes rather than Helm-made
+ * approximations. They stay inline so the PWA never waits on a third-party
+ * asset, and `currentColor` lets the existing restrained engine palette work
+ * in every place the mark appears.
  *
- * **opencode and Devin are helm's own marks, not theirs** - a caret for the
- * one that lives in a terminal, a chevron stack for the one that plans in
- * layers. Drawing a vendor's logo from memory and passing it off as theirs
- * is worse than not having it; if you have the official SVG, drop it in
- * here and nothing else has to change.
+ * Sources: Anthropic's Claude mark, OpenAI's Blossom, opencode's official
+ * square brand mark, and Cognition's Devin mark.
  */
 
 const shell = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', devin: 'Devin' };
 
+const common = {
+  width: 16,
+  height: 16,
+  viewBox: '0 0 24 24',
+  'aria-hidden': true as const,
+  focusable: 'false' as const,
+};
+
 export function EngineMark({ engine, className = '' }: { engine?: string; className?: string }) {
   const label = shell[engine as keyof typeof shell] ?? engine ?? 'agent';
-  const common = { width: 16, height: 16, viewBox: '0 0 24 24', 'aria-hidden': true as const, focusable: 'false' as const };
 
   if (engine === 'claude') {
-    // Anthropic's burst: tapered rays around a common centre, the long pair
-    // horizontal. Drawn as one path per ray so the taper survives scaling.
     return (
       <span className={`mark claude ${className}`} title={label}>
         <svg {...common} fill="currentColor">
-          {Array.from({ length: 12 }, (_, i) => {
-            const a = (i * 30 * Math.PI) / 180;
-            const long = i % 6 === 0;
-            const r = long ? 10.5 : 7.6;
-            const w = long ? 1.55 : 1.15;
-            const cx = 12 + Math.cos(a) * (r / 2);
-            const cy = 12 + Math.sin(a) * (r / 2);
-            return (
-              <rect
-                key={i} x={cx - r / 2} y={cy - w / 2} width={r} height={w} rx={w / 2}
-                transform={`rotate(${i * 30} ${cx} ${cy})`}
-              />
-            );
-          })}
+          <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" />
         </svg>
       </span>
     );
   }
 
   if (engine === 'codex') {
-    // OpenAI's knot: one looped strand repeated at 60 degree turns, which is
-    // what gives the mark its six-fold interlace.
     return (
       <span className={`mark codex ${className}`} title={label}>
-        <svg {...common} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-          {Array.from({ length: 6 }, (_, i) => (
-            <path
-              key={i}
-              d="M12 4.2 A 4.6 4.6 0 0 1 16.4 11"
-              transform={`rotate(${i * 60} 12 12)`}
-            />
-          ))}
-          <circle cx="12" cy="12" r="2.1" />
+        <svg {...common} fill="currentColor" fillRule="evenodd">
+          <path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z" />
         </svg>
       </span>
     );
   }
 
   if (engine === 'opencode') {
-    // helm's mark, not opencode's: a prompt caret, for the agent that lives
-    // in a terminal.
     return (
       <span className={`mark opencode ${className}`} title={label}>
-        <svg {...common} fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M6 7.5 10.5 12 6 16.5" />
-          <path d="M13 16.5h5" />
+        <svg {...common} fill="currentColor">
+          <path d="M22 24H2V0h20zM17 4.8H7v14.4h10z" />
         </svg>
       </span>
     );
   }
 
   if (engine === 'devin') {
-    // helm's mark, not Cognition's: stacked chevrons, for the one that
-    // plans in layers before it writes anything.
     return (
       <span className={`mark devin ${className}`} title={label}>
-        <svg {...common} fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M5 8.5 12 5l7 3.5" />
-          <path d="M5 12.5 12 9l7 3.5" />
-          <path d="M5 16.5 12 13l7 3.5" />
+        <svg {...common} fill="currentColor" fillRule="evenodd">
+          <path d="M2.033 9.867l2.554 1.483a.589.589 0 00.592 0l2.554-1.483.01-.008a.608.608 0 00.11-.084l.013-.015a.631.631 0 00.076-.1c.003-.005.008-.01.01-.016a.558.558 0 00.052-.125l.007-.028a.611.611 0 00.019-.14V7.868c0-.572.307-1.105.8-1.392a1.595 1.595 0 011.598 0l1.277.742a.54.54 0 00.129.053l.028.01c.044.01.088.015.133.016h.006l.013-.002a.587.587 0 00.27-.074l.011-.004 2.554-1.483a.596.596 0 00.297-.516V2.253a.595.595 0 00-.297-.516L12.293.257a.587.587 0 00-.591 0L9.148 1.737l-.01.01a.609.609 0 00-.109.083l-.014.015a.632.632 0 00-.076.1c-.003.005-.008.01-.01.016a.57.57 0 00-.052.124l-.007.028a.612.612 0 00-.018.14v1.483c0 .572-.307 1.105-.8 1.393a1.597 1.597 0 01-1.599 0l-1.276-.742a.603.603 0 00-.13-.053l-.028-.008a.658.658 0 00-.133-.018h-.02a.57.57 0 00-.269.074c-.003.002-.008.002-.012.005L2.033 5.872a.596.596 0 00-.297.515v2.966c0 .213.113.41.297.515z" />
+          <path d="M15.943 10.607a1.596 1.596 0 011.599 0l1.276.74c.041.025.085.04.13.055l.028.008c.043.01.088.016.133.018h.005c.005 0 .01-.002.014-.003a.474.474 0 00.122-.016l.021-.005a.616.616 0 00.126-.052c.004-.002.009-.002.013-.005l2.554-1.482a.597.597 0 00.297-.516V6.383a.596.596 0 00-.297-.515l-2.552-1.483a.587.587 0 00-.592 0l-2.553 1.482-.011.008a.61.61 0 00-.108.084l-.014.016a.637.637 0 00-.076.1c-.003.005-.008.01-.01.016a.57.57 0 00-.052.124l-.007.029a.612.612 0 00-.018.14v1.482c0 .572-.307 1.105-.8 1.393a1.597 1.597 0 01-1.599 0l-1.276-.742a.584.584 0 00-.13-.053l-.028-.008a.62.62 0 00-.133-.018h-.02a.587.587 0 00-.269.074l-.012.004L9.15 10a.596.596 0 00-.296.516v2.966c0 .212.112.409.296.515l2.554 1.483s.008.002.012.005c.04.022.082.04.126.052l.02.004a.57.57 0 00.123.017l.014.002h.006c.054 0 .108-.01.16-.025a.587.587 0 00.13-.054l1.277-.741a1.597 1.597 0 012.398 1.392v1.482c0 .049.007.095.019.14l.007.028a.619.619 0 00.051.125c.004.006.008.01.01.016a.6.6 0 00.076.1l.014.015c.033.032.069.06.108.084.004.002.006.006.011.008l2.554 1.483a.59.59 0 00.593 0l2.554-1.483a.597.597 0 00.296-.516v-2.965a.595.595 0 00-.296-.516l-2.554-1.483s-.008-.002-.012-.005a.54.54 0 00-.126-.051c-.007-.003-.013-.003-.02-.005a.635.635 0 00-.125-.017h-.018a.557.557 0 00-.16.026.588.588 0 00-.13.053l-1.276.742a1.595 1.595 0 01-1.598 0 1.615 1.615 0 010-2.785l-.005-.001z" />
+          <path d="M14.848 18.265l-2.554-1.482-.012-.005a.526.526 0 00-.126-.052c-.007-.002-.014-.002-.02-.005a.64.64 0 00-.124-.017h-.02a.56.56 0 00-.16.026.588.588 0 00-.13.053l-1.276.742a1.594 1.594 0 01-1.598 0c-.493-.286-.8-.82-.8-1.393V14.65a.563.563 0 00-.018-.14l-.008-.028a.604.604 0 00-.051-.124l-.01-.017a.603.603 0 00-.076-.1l-.014-.015a.596.596 0 00-.109-.084c-.003-.002-.005-.006-.01-.008L5.178 12.65a.587.587 0 00-.591 0l-2.554 1.483a.596.596 0 00-.297.516v2.965c0 .213.113.41.297.516l2.554 1.483.012.004a.618.618 0 00.267.074l.016.002h.007a.55.55 0 00.16-.026.584.584 0 00.129-.053l1.277-.742a1.597 1.597 0 012.398 1.393v1.482c0 .05.007.095.019.14l.007.028c.013.044.03.085.051.125l.01.016c.022.036.047.07.076.1l.014.015c.032.032.069.06.109.084l.01.008 2.554 1.483a.587.587 0 00.593 0l2.554-1.483a.596.596 0 00.296-.515v-2.966a.596.596 0 00-.296-.516h-.002z" />
         </svg>
       </span>
     );
