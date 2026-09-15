@@ -56,14 +56,6 @@ export const ENGINES = {
     // Run headless through `devin acp` (drivers/devin.js).
     driver: 'devin',
   },
-  devin: {
-    id: 'devin',
-    label: 'Devin',
-    bin: 'devin',
-    // Devin's global config is fixed at ~/.config/devin and the CLI does not
-    // expose a home/config environment variable, so there is no account-home
-    // discovery to perform here. Herdr supplies the terminal integration.
-  },
   shell: {
     id: 'shell',
     label: 'Shell',

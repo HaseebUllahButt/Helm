@@ -231,7 +231,11 @@ async function devinModels(root) {
     labels[m[1]] = m[2].trim();
   }
   if (def && !models.includes(def)) models.unshift(def);
-  return { default: def, models, labels, images: false, imagesByModel: {} };
+  // Devin answers `promptCapabilities.image: true` at ACP `initialize`
+  // (checked against devin 3000.10.21), and that answer is per-agent rather
+  // than per-model. This is only the hint the composer uses before the
+  // driver is up; once it is, the driver's own answer replaces it.
+  return { default: def, models, labels, images: true, imagesByModel: Object.fromEntries(models.map((m) => [m, true])) };
 }
 
 /*

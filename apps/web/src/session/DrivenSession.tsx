@@ -160,7 +160,14 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
   // The clip is only offered when the running model can see images;
   // the daemon enforces the same rule, so this is presentation, not trust.
   const modelNow = session.model || session.engineModel || options?.default || '';
-  const canAttach = options?.imagesByModel?.[modelNow] ?? options?.images ?? (session.engine === 'claude' || session.engine === 'codex');
+  // Last resort only: `model.list` reports the running driver's own answer
+  // once there is one, and the catalogue's before that. This is what is left
+  // when neither has said anything yet - a brand-new session whose agent has
+  // not started. Every engine helm drives takes images, and a wrong "yes"
+  // now ends in a message saying the agent cannot see them, while a wrong
+  // "no" means no clip at all on the first message, which is exactly when
+  // you want to send a screenshot.
+  const canAttach = options?.imagesByModel?.[modelNow] ?? options?.images ?? true;
 
   return (
     <>

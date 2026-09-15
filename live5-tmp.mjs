@@ -1,0 +1,25 @@
+import { writeFileSync } from 'node:fs';
+import { WebSocket } from 'ws';
+const SB = process.env.SB, HOME = process.env.HOME;
+const t = (await (await fetch('http://127.0.0.1:9334/json/list')).json()).find(x=>x.type==='page');
+const ws = new WebSocket(t.webSocketDebuggerUrl,{maxPayload:256*1024*1024});
+let id=0; const w=new Map();
+ws.on('message',(r)=>{const m=JSON.parse(r); if(m.id&&w.has(m.id)){w.get(m.id)(m);w.delete(m.id);}});
+await new Promise(r=>ws.on('open',r));
+const cmd=(me,p={})=>new Promise((res,rej)=>{const i=++id;const to=setTimeout(()=>rej(new Error(me+' timeout')),60000);w.set(i,(x)=>{clearTimeout(to);x.error?rej(new Error(JSON.stringify(x.error))):res(x.result)});ws.send(JSON.stringify({id:i,method:me,params:p}))});
+const ev=async(e)=>(await cmd('Runtime.evaluate',{expression:e,returnByValue:true,awaitPromise:true})).result?.value;
+const shot=async(n)=>{const s=await cmd('Page.captureScreenshot',{format:'png'});writeFileSync(`${SB}/shots/${n}`,Buffer.from(s.data,'base64'));console.log('saved',n);};
+const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+const text=async(n=600)=>(await ev('document.body.innerText'))?.replace(/\n+/g,' | ').slice(0,n);
+const clickText=async(s)=>ev(`(()=>{const el=[...document.querySelectorAll('button,a,.row,li,div,span')].filter(e=>e.children.length===0&&e.textContent.trim()===${JSON.stringify(s)}).pop(); (el?.closest('button,a,.row')||el)?.click(); return !!el;})()`);
+await cmd('Page.enable'); await cmd('Runtime.enable'); await cmd('DOM.enable');
+
+console.log('pick helm-image-check:', await clickText('helm-image-check'));
+await wait(2500);
+console.log('2:', await text());
+await shot('n2.png');
+console.log('start here:', await clickText('Start here'));
+await wait(3000);
+console.log('3:', await text());
+await shot('n3.png');
+ws.close(); process.exit(0);

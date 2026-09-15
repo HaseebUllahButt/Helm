@@ -115,7 +115,16 @@ async function postToHome(net, path, body = {}) {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(5000),
       });
-      const value = await res.json().catch(() => ({}));
+      // A body that is not JSON is not an answer, even with a 200 on it.
+      // Caddy in front of a hub that is still starting, or any proxy with an
+      // interstitial, will hand back HTML - and treating that as `{}` is how
+      // `helm link` once printed `#pair=undefined`, valid for NaN minutes,
+      // instead of saying the home was unreachable and trying the next
+      // address.
+      const text = await res.text();
+      let value;
+      try { value = JSON.parse(text); }
+      catch { throw new Error(`${base} answered ${res.status} but not JSON`); }
       if (!res.ok) throw new Error(value.error || `HTTP ${res.status}`);
       return { base, value };
     } catch (err) {
@@ -133,6 +142,7 @@ async function printDeviceLink(args = rest) {
   const mins = Number(args[0]);
   const ttlMs = Number.isFinite(mins) && mins > 0 ? mins * 60_000 : undefined;
   const { base, value } = await postToHome(net, '/api/auth/rotate', { ttlMs });
+  if (!value.password) throw new Error('your Helm home did not hand back a password');
   const pairUrl = `${base}/#pair=${encodeURIComponent(value.password)}`;
   const valid = Math.max(1, Math.round((value.expiresAt - Date.now()) / 60_000));
   console.log(`\n  Open this private link on the phone or browser you are adding:\n`);
