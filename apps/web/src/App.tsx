@@ -876,9 +876,12 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
       // Always a fresh shell: an earlier terminal is something to go back to,
       // not something to be dropped into - it lists under "terminals" below,
       // where it can be reopened or closed.
-      const count = sessions.filter((s) => s.pty).length;
+      //
+      // Unnamed on purpose. Numbering them here meant counting a list that
+      // might not have caught up, and opening two quickly named both of them
+      // "Terminal 1"; the machine knows what it already has.
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start',
-        { cwd: '~', profileId: 'shell', title: `Terminal ${count + 1}` }, 45_000);
+        { cwd: '~', profileId: 'shell' }, 45_000);
       reload();
       onOpen(r.session);
     } catch (e: any) { setError(e.message); }

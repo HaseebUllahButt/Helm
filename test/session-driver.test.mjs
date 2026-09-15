@@ -345,3 +345,42 @@ test('/usage answers from the log and /compact delegates to the driver', async (
   assert.equal(d.compacted, 'focus on auth');
   await sessions.kill(s.id);
 });
+
+test('terminals are numbered by the machine, not guessed by the app', async () => {
+  const { mkdirSync } = await import('node:fs');
+  mkdirSync(process.env.HELM_DIR, { recursive: true });
+  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
+    version: 1,
+    profiles: [{ id: 'shell', label: 'Shell', engine: 'shell', cmd: '/bin/sh', args: [], env: {}, source: 'builtin' }],
+  }));
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+
+  // A stand-in for the pty host: opening always works, nothing really runs.
+  const { EventEmitter } = await import('node:events');
+  const terminals = Object.assign(new EventEmitter(), {
+    ensure: async () => true,
+    open: async () => ({}),
+    has: () => true,
+    adopt: async () => [],
+  });
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-term')),
+    terminals,
+  });
+
+  // Two in a row, with nothing reloaded in between: the case that produced
+  // two terminals both called "Terminal 1".
+  const [a, b] = await Promise.all([
+    sessions.start({ cwd: '/tmp', profileId: 'shell' }),
+    sessions.start({ cwd: '/tmp', profileId: 'shell' }),
+  ]);
+  const c = await sessions.start({ cwd: '/tmp', profileId: 'shell' });
+  const names = [a.title, b.title, c.title];
+  assert.equal(new Set(names).size, 3, `all different, got ${names.join(', ')}`);
+  assert.ok(names.includes('Terminal 3'), `counted up, got ${names.join(', ')}`);
+
+  // A name the caller chose is still theirs.
+  const named = await sessions.start({ cwd: '/tmp', profileId: 'shell', title: 'build' });
+  assert.equal(named.title, 'build');
+});

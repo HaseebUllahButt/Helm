@@ -408,6 +408,25 @@ export class Sessions extends EventEmitter {
    * honestly as `exited` and the app offers a new one, which is better than
    * reconnecting you to something that is no longer there.
    */
+  /**
+   * The next free "Terminal N".
+   *
+   * The app used to count the terminals it could see and add one, which is
+   * a guess made from a list that may not have caught up - open two in quick
+   * succession and both are called "Terminal 1", which is what happened.
+   * The daemon holds the only list that is actually authoritative, so it
+   * does the naming: one past the highest number in use, and a number freed
+   * by closing a terminal stays free rather than being handed out twice.
+   */
+  #nextTerminalName() {
+    let highest = 0;
+    for (const s of this.#index.values()) {
+      const n = /^Terminal (\d+)$/.exec(s.title ?? '');
+      if (n) highest = Math.max(highest, Number(n[1]));
+    }
+    return `Terminal ${highest + 1}`;
+  }
+
   async #startTerminal({ dir, profileId, title, env }) {
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -415,13 +434,21 @@ export class Sessions extends EventEmitter {
       profileId,
       engine: 'shell',
       cwd: dir,
-      title: title || `${dir.split('/').pop() || dir}`,
+      title: title || this.#nextTerminalName(),
       status: 'shell',
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    await this.terminals.open(session.id, { cwd: dir, env });
+    // Registered before the await, not after: the name is taken from this
+    // same index, and two terminals opened at once would otherwise both read
+    // it before either had been added, and both be called "Terminal 1".
     this.#index.set(session.id, session);
+    try {
+      await this.terminals.open(session.id, { cwd: dir, env });
+    } catch (err) {
+      this.#index.delete(session.id);
+      throw err;
+    }
     this.#save();
     this.emit('session', session);
     return session;
