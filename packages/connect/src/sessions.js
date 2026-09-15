@@ -7,7 +7,7 @@ import { HELM_DIR, expand } from './paths.js';
 import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
-import { optionArgs, supportsImages } from './models.js';
+import { optionArgs } from './models.js';
 import { available as usageAvailable, usage as fetchUsage } from './usage.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
@@ -63,6 +63,61 @@ const agentName = (profileId) =>
  * class only maps a helm session to the workspace/pane behind it, so that a
  * daemon restart reconnects to work that never stopped running.
  */
+/**
+ * What a client may attach to one message.
+ *
+ * The browser already compresses and caps what it sends, but that cap is a
+ * courtesy, not a guarantee: `session.input` is reachable by anything
+ * holding a device token, and whatever arrives is written to the event log
+ * and piped into a CLI's stdin. So the limits are enforced here too, and an
+ * attachment that breaks them fails the send loudly instead of being
+ * quietly dropped on the way to the model.
+ */
+const MAX_IMAGES = 8;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_ATTACHED_BYTES = 24 * 1024 * 1024;
+
+const MB = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
+
+/**
+ * Can this live driver be handed image bytes? One predicate, used both to
+ * decide what to send and to tell the app whether to offer the clip, so the
+ * two can never disagree.
+ */
+export function driverTakesImages(d) {
+  if (!d || typeof d.sendWithAttachments !== 'function') return false;
+  return d.acceptsImages?.() ?? true;
+}
+
+export function acceptImages(attachments) {
+  const list = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+  if (!list.length) return [];
+  if (list.length > MAX_IMAGES) {
+    throw new Error(`too many attachments: ${list.length}, the limit is ${MAX_IMAGES}`);
+  }
+  let total = 0;
+  const out = [];
+  for (const a of list) {
+    const mime = String(a.mime ?? '').toLowerCase().split(';')[0].trim();
+    const filename = String(a.filename ?? 'image').slice(0, 120);
+    if (!mime.startsWith('image/')) throw new Error(`${filename} is ${mime || 'of unknown type'}; only images can be attached`);
+    const data = String(a.data ?? '');
+    if (!data) throw new Error(`${filename} arrived with no image data`);
+    // Base64 is the wire form all the way to the CLIs, so it is validated
+    // rather than re-encoded - a malformed payload would otherwise surface
+    // as an opaque failure from inside the agent.
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data) || data.length % 4 !== 0) {
+      throw new Error(`${filename} is not valid base64`);
+    }
+    const bytes = Math.floor(data.length * 3 / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0);
+    if (bytes > MAX_IMAGE_BYTES) throw new Error(`${filename} is ${MB(bytes)}; the limit is ${MB(MAX_IMAGE_BYTES)}`);
+    total += bytes;
+    if (total > MAX_ATTACHED_BYTES) throw new Error(`those attachments come to ${MB(total)}; the limit is ${MB(MAX_ATTACHED_BYTES)} a message`);
+    out.push({ filename, mime, data });
+  }
+  return out;
+}
+
 export class Sessions extends EventEmitter {
   #index = new Map();
   /** paneId -> what the runtime last told us about a pane we do not own */
@@ -564,6 +619,16 @@ export class Sessions extends EventEmitter {
     return d?.catalog?.() ?? null;
   }
 
+  /**
+   * Whether a *running* agent can be sent images, or null when no driver is
+   * up to ask. ACP agents only answer this at `initialize`, so a session
+   * that has not started yet leaves the app on the model catalogue's guess.
+   */
+  acceptsImages(id) {
+    const d = this.#drivers.get(id);
+    return d ? driverTakesImages(d) : null;
+  }
+
   async setModel(id, model) {
     const s = this.get(id);
     if (!s.driver) throw new Error('not a headless session');
@@ -786,27 +851,43 @@ export class Sessions extends EventEmitter {
         const slash = /^\/(compact|usage)(?:\s+(.*?))?\s*$/s.exec(text.trim());
         if (slash) return this.#slash(s, slash[1], (slash[2] ?? '').trim());
       }
+      // What a client sent is not trusted to be sane: it arrives over the
+      // network and lands in the event log and in a CLI's stdin.
+      const images = acceptImages(attachments);
+
       // Emit optimistically so every watcher (desktop + mobile PWA) sees the
-      // image immediately, even before the agent echoes it back.
-      if (attachments?.length) {
-        const d0 = this.#drivers.get(id);
-        const turnId = d0?.nextTurnId?.() ?? `local-${Date.now()}`;
-        this.events.append(id, { type: 'turn.start', turnId, text: clean, attachments: attachments.map((a) => ({ filename: a.filename, mime: a.mime, data: a.data?.slice(0, 80) + '…' })) });
-        // full images live in the turn for rendering; truncate in log above is just for debugging
-        const last = this.events.since(id, 0).at(-1);
-        if (last) last.attachmentsFull = attachments;
+      // image immediately, even before the agent echoes it back. The bytes
+      // go to the blob store and the event keeps a reference, so the same
+      // picture is still there after a restart.
+      if (images.length) {
+        // The `local-` prefix is a contract, not decoration: the agent will
+        // announce this same turn under its own id a second or two later,
+        // and the app adopts a `local-` turn instead of drawing the message
+        // twice (see `apply` in the web's session/types.ts).
+        const turnId = `local-${Date.now()}`;
+        this.events.append(id, {
+          type: 'turn.start', turnId, text: clean,
+          attachments: images.map((a) => this.events.putAttachment(id, a)),
+        });
       }
       const d = await this.#driver(s);
-      // Only a driver that implements the verb AND a model that can see
-      // images gets the bytes; anything else gets a filename placeholder
-      // in the text, which is always safe while lost bytes are not.
-      if (attachments?.length && typeof d.sendWithAttachments === 'function' && supportsImages(s.driver, s.model)) {
-        await d.sendWithAttachments(clean, attachments);
+      // The driver is the authority on whether this agent can see an image:
+      // it is the one that spoke to the CLI. Anything else gets a filename
+      // placeholder in the text, which is always safe while lost bytes are
+      // not - but it says so out loud rather than dropping them silently.
+      if (images.length && driverTakesImages(d)) {
+        await d.sendWithAttachments(clean, images);
       } else {
         let msg = clean;
-        if (attachments?.length) {
-          const imgs = attachments.map((a) => a.url || a.dataUrl || `[image: ${a.filename || 'image'}]`).join('\n');
-          msg = msg ? `${msg}\n${imgs}` : imgs;
+        if (images.length) {
+          const names = images.map((a) => `[image: ${a.filename || 'image'} - this agent cannot see images]`).join('\n');
+          msg = msg ? `${msg}\n${names}` : names;
+          this.events.append(id, {
+            type: 'error', kind: 'attachment',
+            message: images.length === 1
+              ? `${s.engine} cannot be sent images, so ${images[0].filename || 'the image'} was named but not attached.`
+              : `${s.engine} cannot be sent images, so ${images.length} attachments were named but not sent.`,
+          });
         }
         await d.send(msg);
       }

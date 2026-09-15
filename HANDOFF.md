@@ -1,6 +1,6 @@
 # Handoff
 
-State of helm as of 2026-09-14, evening, for whoever picks this up next.
+State of helm as of 2026-09-15, evening, for whoever picks this up next.
 
 Read `README.md` first for what the thing is and how it connects. This file
 is the part that is not obvious from the code: **what it is trying to be**,
@@ -82,15 +82,24 @@ is where that knowledge already lives.
 
 ---
 
-## Start here: nothing is running
+## Start here: the network is up, both machines need upgrading
 
-**The network was dissolved on purpose** at the end of 2026-09-14 (`helm leave
---yes` on both machines). There is no network key, no roster, no service, and
-no paired device anywhere. `https://130-210-33-163.sslip.io` answers **502**:
-Caddy is up, nothing is behind it. This is a clean slate the owner asked for,
-not a fault.
+As of 2026-09-15 the network is rebuilt and running: `helm status` on the
+laptop reports **2 machines, 3 controllers**, network `076f00e81990`, with the
+VM reachable at `https://130-210-33-163.sslip.io`. (The paragraph that used to
+live here said nothing was running - that was true on the evening of the 14th
+and is not true now.)
 
-Bring it back with:
+**What is stale is the deployed code.** The laptop's `~/.helm-src` sat at
+`adced97` while `origin/main` had moved to `34a3438`; the VM was at `34a3438`
+already, because that work was committed and pushed *from the VM*. After
+pushing today's commit, run the upgrade on both:
+
+```bash
+cd ~/.helm-src && ./install.sh && systemctl --user restart helm-serve
+```
+
+If the network ever needs rebuilding from nothing, that is:
 
 ```bash
 sshvm                 # or: ssh -i ~/Downloads/misc/.vpn/"ssh-key-2026-08-27 (1).key" ubuntu@130.210.33.163
@@ -134,7 +143,107 @@ imports them.
 
 ---
 
-## What changed today (2026-09-14)
+## What changed today (2026-09-15)
+
+A short pass: find out why the usage panel never loaded, and make image
+attachments actually work everywhere they can.
+
+**First, a trap worth knowing about.** This clone was eight commits behind
+`origin/main` and its working tree still held the *pre-merge* version of the
+terminal/pty work - the same changes, older. `git status` looked like a pile
+of unpushed work; it was a pile of already-landed work. The tell is
+`git fetch` followed by `git diff origin/main --numstat`: every file was
+net-negative. If you meet that again, fetch before you believe the diff. The
+old tree is kept in the stash (`pre-sync worktree snapshot 2026-09-15`) and
+can be dropped.
+
+### The usage panel: four separate reasons for one blank space
+
+1. **`env.info.usage` was a snapshot.** The daemon probes for the dashboard
+   once, in `Link.#open()`, when it attaches to its hub. cc-usage-dashboard is
+   a *separate service* and is normally started after the daemon, so the app
+   was told "no dashboard here" for the life of the process. The panel now
+   re-asks the machine itself (`env.info`) whenever the roster says no, and
+   again each minute, so a dashboard that appears later is picked up.
+   `usage.available()` helps by caching a "yes" for five minutes and a "no"
+   for thirty seconds - a no is the answer that goes stale.
+2. **The VM genuinely has no dashboard**, and said so by rendering nothing.
+   There is now an explicit `absent` state: *"no usage dashboard on vpn-arm"*,
+   with a note saying where the numbers come from. `off` (not online) and
+   `absent` (asked, hasn't got one) are different things now.
+3. **`· NaNd ago`.** The dashboard reports `fetchedAt` as an ISO string;
+   `ago()` took a `number` and subtracted it from `Date.now()`. TypeScript
+   missed it because the value arrives through an `any`. `ago()` now takes
+   either and returns `''` for anything it cannot parse.
+4. **Six rows all reading "default".** The dashboard labels most accounts
+   `default`; the row rendered `label` and dropped `provider`, which is the
+   only field that tells them apart. Rows now read `codex`, `grok`,
+   `claude · personal`, `opencode · 2`.
+
+### Images: they were being thrown away, quietly
+
+**`supportsImages()` was a lie.** Its comment said it asked each provider's
+own metadata; its body was `engine === 'claude' || engine === 'codex'`,
+ignoring the `model` argument entirely. Meanwhile the composer decided
+whether to show the clip from `imagesByModel`, built from models.dev. So on
+an opencode or Devin session the clip appeared, the owner attached a
+screenshot, and the daemon turned it into the text `[image: shot.png]` on the
+way to the agent. No error, no sign, just an agent that could not see what it
+had been shown.
+
+Both of those agents can take images - **verified by asking them**:
+`initialize` returns `promptCapabilities.image: true` for opencode 1.18.26
+and for devin 3000.10.21. The ACP driver was discarding that whole response.
+It now keeps it, exposes `acceptsImages()`, and implements
+`sendWithAttachments` with real ACP `{type:'image', mimeType, data}` blocks.
+
+The gate is now one predicate, `driverTakesImages(d)` in `sessions.js`, used
+both to decide what to send and (through `model.list`) to decide whether the
+app offers a clip at all - so the two can no longer disagree. A live driver's
+answer beats the catalogue's guess. When an agent really cannot take images,
+the placeholder says so *and* an `error` event lands in the transcript.
+
+**Images now survive a restart.** The optimistic echo - the turn helm posts
+the moment you hit send, so the picture appears immediately - was writing
+`data.slice(0, 80) + '…'` into the event log and then patching the full bytes
+onto the in-memory object afterwards. Memory was right; the file was not. So
+a reopened session (or any daemon restart) drew the owner's own photo as a
+broken thumbnail, permanently. Image bytes now go to a content-addressed
+blob store, `events/<id>.att/<sha>.bin`, and the event keeps `{filename,
+mime, bytes, ref}`; `since()` puts the bytes back before they reach a client,
+so nothing upstream changed. Blobs are swept when the log's tail moves past
+them, and a blob that is gone renders as a named tile, not a broken image.
+**The base64 the log hands back is byte-identical to what was sent.**
+
+**A message with an image showed up twice.** helm's optimistic turn and the
+agent's own `turn.start` are the same turn under two ids, and the reducer
+pushed both - one bubble with the picture, one with the reply. The app now
+adopts a `local-` turn when the agent announces the same text. The texts are
+compared **trimmed**: helm strips the trailing newline it sends, the CLI
+echoes it back with the newline still on. That one character is why the first
+attempt at this fix did nothing.
+
+**Everything that could refuse silently now speaks.** Picking a fifth image
+returned early with no message at all; files past the limit were dropped
+without a word; a photo whose `File.type` was empty (Android, some
+drag-and-drop) or `image/heic` (every iPhone) was told to "use a JPG, PNG,
+WebP, or GIF image" while being exactly that. The gate is now "does this look
+like an image", the picker accepts `image/*`, the browser is left to say what
+it cannot decode, and HEIC gets a message naming the actual problem. Paste
+and drag-and-drop share one path, and both say something when the agent
+cannot take images. `session.input` also enforces the limits itself now
+(8 images, 8 MB each, 24 MB a message, base64 validated) - the browser's cap
+is a courtesy, and that RPC is reachable by anything holding a device token.
+
+### Also
+
+`test/publish.test.mjs` and `test/gossip.test.mjs` both bound port 18991, and
+the runner runs files in parallel, so `npm test` failed with `EADDRINUSE`
+perhaps half the time. publish moved to 18961.
+
+---
+
+## What changed on 2026-09-14
 
 Two pushes. The morning built the headless drivers; the afternoon was the
 owner using it and finding it wanting.
@@ -347,6 +456,34 @@ add a third delivery path, it must carry the same id.**
 
 ## Verified by running it
 
+### 2026-09-15
+
+- `npm run check` green: types, production build, **66** node tests,
+  `network.sh`.
+- **A real image reached a real model.** Sandboxed daemon, `claudea` profile,
+  a 64px PNG of a white circle on red, sent through `session.input` with the
+  prompt "reply with exactly two words: the background colour, then the shape
+  in the middle". Claude answered **"Red circle"**, turn closed `3.7s · $0.07`.
+- **The bytes are intact on the way back out.** The JSONL holds
+  `{"filename":"dot.png","mime":"image/png","bytes":235,"ref":"06ad6aa3…"}`,
+  the blob is 235 bytes on disk, and the base64 `session.events` hands a client
+  is byte-identical to what was sent.
+- **The ACP path is real.** `initialize` against opencode 1.18.26 and devin
+  3000.10.21 both return `promptCapabilities.image: true`. An image sent
+  through the opencode driver was accepted as a prompt content block and
+  failed downstream on the account's billing ("Insufficient balance"), not on
+  the protocol - so the block was well-formed, but *no ACP agent has yet
+  described an image back*. That is the one thing left to prove here.
+- **The PWA, headless Chromium at 390×844**, signed in from `#local=`: the
+  usage panel renders seven accounts named by provider with `· just now`
+  provenance; the session shows **one** user bubble carrying the red square
+  (two before the reducer fix), zero broken images, and the clip in place.
+  Screenshots taken at each step.
+- The "no dashboard" path: `available()` against a dead port answers `false`
+  in 11 ms, so the app's re-check costs nothing on a machine like the VM.
+
+### 2026-09-14
+
 - `npm run check` green: types, production build, 37 node tests, `network.sh`.
 - Deployed to both machines and driven in headless Chromium against the public
   HTTPS address, not loopback: paired in 2.0s, a Claude session started on the
@@ -361,19 +498,24 @@ add a third delivery path, it must carry the same id.**
 
 ## Known bad, and not yet fixed
 
-
-1. **Slash commands are not built.** Worth knowing before designing them:
+0. **Today's commit is not deployed.** Both machines still run what was on
+   `main` before it. See the top of this file for the upgrade.
+1. **No ACP agent has actually described an image back.** The wire format is
+   verified and the capability is read from the agent itself, but opencode
+   stopped on billing and Devin was not spent on. Send a picture through one
+   and see.
+2. **Slash commands are not built.** Worth knowing before designing them:
    `/help` and `/status` through `claude -p` return `ok` in ~95 ms with **no
    output** — the built-ins are TUI-local and do nothing headless. Custom
    commands and skills *do* run. So a palette of built-ins would be a lie; a
    palette of the project's own commands plus protocol-level actions would not.
-2. **No vendor logos** — engine marks are the letters `C` / `X` / `O`.
-3. **A real phone has never opened this.** Every run was headless Chromium at
+3. **No vendor logos** — engine marks are the letters `C` / `X` / `O`.
+4. **A real phone has never opened this.** Every run was headless Chromium at
    390×844. Touch, the keyboard pushing the permission sheet, and a carrier-NAT
    WebRTC path are all unproven. This is the biggest gap.
-4. **Push notification when a session blocks** is still the highest-value
+5. **Push notification when a session blocks** is still the highest-value
    missing feature; `permission.request` is a structured event to hang it on.
-5. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
+6. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
    coded from the bindings and have never been seen live.
 
 ## The machines themselves
@@ -433,10 +575,10 @@ revocations one-way.
 ### Wanted, not built
 
 See "Known bad, and not yet fixed" above — that list is the backlog, in the
-order the owner will notice it. Beyond it: an opencode driver (`opencode
-serve` SSE or `opencode acp`), images in messages, a file viewer over Claude's
-`read_file` control request, and "the brain" (cross-machine summaries and
-dispatch) as v2.
+order the owner will notice it. The opencode driver and images in messages
+have since been built (`opencode acp`, and images across all four engines).
+Beyond the backlog: a file viewer over Claude's `read_file` control request,
+and "the brain" (cross-machine summaries and dispatch) as v2.
 
 ---
 

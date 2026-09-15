@@ -212,9 +212,13 @@ test('images ride the driver when it implements the verb, else a placeholder', a
   const s1 = await plain.start({ cwd: '/tmp', profileId: 'claudea' });
   await plain.input(s1.id, 'look', { attachments: [{ filename: 'a.png', mime: 'image/png', data: 'iVBORw0KGgo=' }] });
   const d1 = FakeDriver.made.at(-1);
-  assert.match(d1.sent.at(-1), /look\n\[image: a\.png\]/);
+  assert.match(d1.sent.at(-1), /look\n\[image: a\.png - this agent cannot see images\]/);
+  // And the owner is told, rather than the bytes going quietly missing.
+  const said = plain.events.since(s1.id, 0).filter((e) => e.type === 'error' && e.kind === 'attachment');
+  assert.equal(said.length, 1);
+  assert.match(said[0].message, /cannot be sent images/);
 
-  // A driver with the verb gets the bytes untouched.
+  // A driver with the verb gets the bytes.
   class ImageDriver extends FakeDriver {
     async sendWithAttachments(text, attachments) { this.gotAttachments = { text, attachments }; }
   }
@@ -227,7 +231,59 @@ test('images ride the driver when it implements the verb, else a placeholder', a
   await rich.input(s2.id, 'look', { attachments: atts });
   const d2 = ImageDriver.made.at(-1);
   assert.equal(d2.gotAttachments.text, 'look');
-  assert.equal(d2.gotAttachments.attachments, atts);
+  assert.deepEqual(d2.gotAttachments.attachments, atts);
+
+  // The verb is not enough: an ACP agent that said at `initialize` that it
+  // takes no images must not be handed any. This is the case that used to
+  // pass the UI's check and fail silently at the wire.
+  class BlindDriver extends ImageDriver {
+    acceptsImages() { return false; }
+  }
+  const blind = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-blind')),
+    makeDriver: (engine, opts) => new BlindDriver({ engine, ...opts }),
+  });
+  const s3 = await blind.start({ cwd: '/tmp', profileId: 'claudea' });
+  await blind.input(s3.id, 'look', { attachments: atts });
+  const d3 = BlindDriver.made.at(-1);
+  assert.equal(d3.gotAttachments, undefined);
+  assert.match(d3.sent.at(-1), /cannot see images/);
+});
+
+test('an attached image survives a restart, and nonsense is refused', async () => {
+  const { mkdirSync } = await import('node:fs');
+  mkdirSync(process.env.HELM_DIR, { recursive: true });
+  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
+    version: 1,
+    profiles: [{ id: 'claudea', label: 'Claude', engine: 'claude', cmd: 'claude', args: [], env: {}, source: 'alias' }],
+  }));
+  const { Sessions, acceptImages } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+
+  const dir = join(process.env.HELM_DIR, 'events-durable');
+  const data = 'iVBORw0KGgo=';
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  await sessions.input(s.id, 'look', { attachments: [{ filename: 'a.png', mime: 'image/png', data }] });
+
+  // A fresh log over the same directory is what a restarted daemon sees.
+  // The old code wrote 80 characters of base64 and an ellipsis here, so the
+  // owner's own picture came back as a broken thumbnail.
+  const reopened = new EventLog(dir);
+  const turn = reopened.since(s.id, 0).find((e) => e.type === 'turn.start' && e.attachments?.length);
+  assert.ok(turn, 'the turn carrying the image is in the log');
+  assert.equal(turn.attachments[0].data, data);
+  assert.equal(turn.attachments[0].filename, 'a.png');
+
+  // What a client may send is checked here, not only in the browser.
+  assert.throws(() => acceptImages([{ filename: 'notes.txt', mime: 'text/plain', data }]), /only images/);
+  assert.throws(() => acceptImages([{ filename: 'a.png', mime: 'image/png', data: 'not base64!' }]), /valid base64/);
+  assert.throws(() => acceptImages(Array.from({ length: 9 }, () => ({ filename: 'a.png', mime: 'image/png', data }))), /too many/);
+  assert.deepEqual(acceptImages([]), []);
+  assert.deepEqual(acceptImages(undefined), []);
 });
 
 test('model and effort switch mid-session on the live driver', async () => {

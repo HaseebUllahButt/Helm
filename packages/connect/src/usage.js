@@ -29,9 +29,18 @@ function get(path, timeout = 8000) {
   });
 }
 
-/** Remembered answer, so `describe()` is not held up by the probe. */
+/**
+ * Remembered answer, so `describe()` is not held up by the probe.
+ *
+ * A "yes" is worth holding on to: the dashboard is there, and the numbers
+ * behind it change by the day. A "no" is not - the dashboard is a separate
+ * service and is usually started *after* the daemon, so caching that answer
+ * for five minutes is five minutes of the app insisting the machine has no
+ * usage panel while one is running. A no is re-asked within the minute.
+ */
 let known = null;
-const KNOWN_TTL_MS = 5 * 60_000;
+const YES_TTL_MS = 5 * 60_000;
+const NO_TTL_MS = 30_000;
 
 export async function available() {
   // The dashboard rebuilds its cache on a cold call and can take several
@@ -43,7 +52,7 @@ export async function available() {
   if (known && Date.now() < known.until) return known.value;
   let value = false;
   try { await get('/api/usage', 15_000); value = true; } catch { value = false; }
-  known = { value, until: Date.now() + KNOWN_TTL_MS };
+  known = { value, until: Date.now() + (value ? YES_TTL_MS : NO_TTL_MS) };
   return value;
 }
 

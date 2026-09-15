@@ -4,10 +4,35 @@ const MAX_BYTES = 4 * 1024 * 1024;
 const QUALITIES = [0.82, 0.72, 0.62, 0.52, 0.42];
 const MIME = 'image/jpeg';
 
-/** Formats that the browser can be asked to rasterise before compression. */
-export const COMPRESSIBLE_IMAGE_TYPES = new Set([
-  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
-]);
+/** How many images may ride on one message. */
+export const MAX_ATTACHMENTS = 4;
+
+/**
+ * What the file picker offers. Deliberately `image/*` rather than a list of
+ * types: a phone's camera roll is full of HEIC, and naming four MIME types
+ * here would grey those photos out in the picker before the browser ever
+ * got the chance to say whether it can decode one.
+ */
+export const IMAGE_ACCEPT = 'image/*';
+
+const IMAGE_EXTENSIONS = /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif|tiff?)$/i;
+
+/**
+ * Is this worth handing to the decoder?
+ *
+ * The old test was a set of four MIME types, which rejected two things it
+ * should not have. A file picked on Android or dropped from some apps
+ * arrives with `type: ''`, and an iPhone photo arrives as `image/heic` -
+ * both were told to "use a JPG, PNG, WebP, or GIF image" while being
+ * exactly that. The browser is the only honest authority on what it can
+ * decode, so anything image-shaped is offered to it and a real failure is
+ * reported from there.
+ */
+export function looksLikeImage(file: File): boolean {
+  const type = (file.type || '').toLowerCase();
+  if (type.startsWith('image/')) return true;
+  return !type && IMAGE_EXTENSIONS.test(file.name || '');
+}
 
 export interface PreparedImage {
   name: string;
@@ -30,7 +55,13 @@ function loadImage(file: File): Promise<HTMLImageElement> {
     };
     image.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new Error('the browser could not decode it'));
+      // HEIC is the one that actually bites: it is what an iPhone shoots by
+      // default, and only Safari decodes it. Saying so beats "could not
+      // decode it", which reads like the file is broken when it is not.
+      const heic = /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name || '');
+      reject(new Error(heic
+        ? 'this browser cannot read HEIC photos - share it as JPEG'
+        : 'the browser could not decode it'));
     };
     image.src = url;
   });
@@ -71,9 +102,8 @@ function compressedName(name: string): string {
  * file fallback: a caller either gets a compressed JPEG or an error.
  */
 export async function prepareImage(file: File): Promise<PreparedImage> {
-  if (!COMPRESSIBLE_IMAGE_TYPES.has(file.type.toLowerCase())) {
-    throw new Error('use a JPG, PNG, WebP, or GIF image');
-  }
+  if (!looksLikeImage(file)) throw new Error('that is not an image file');
+  if (!file.size) throw new Error('the file is empty');
 
   const image = await loadImage(file);
   const sourceWidth = image.naturalWidth;
@@ -98,6 +128,8 @@ export async function prepareImage(file: File): Promise<PreparedImage> {
     // readable instead of turning their transparent areas black.
     context.fillStyle = '#fff';
     context.fillRect(0, 0, width, height);
+    // An animated GIF gives up its first frame here, which is what the
+    // model would have looked at anyway.
     context.drawImage(image, 0, 0, width, height);
 
     for (const quality of QUALITIES) {

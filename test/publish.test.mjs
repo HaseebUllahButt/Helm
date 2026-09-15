@@ -14,7 +14,10 @@ process.env.HELM_DB = join(dir, 'hub.sqlite');
 process.env.HELM_NO_SERVICE = '1';
 process.env.HELM_HOME_HOST = 'home.test';
 
-const PORT = 18991;
+// 18991/18992 belong to gossip.test.mjs. The runner runs test files in
+// parallel, so a shared port is an intermittent EADDRINUSE, not a bug in
+// either test.
+const PORT = 18961;
 
 /** A stand-in for `t3 serve`: echoes requests as JSON, echoes WebSocket frames. */
 async function fakeT3(WebSocketServer) {

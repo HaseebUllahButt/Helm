@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Client, type Environment, type Session, type ModelList } from '../client';
 import { Composer } from './Composer';
-import { COMPRESSIBLE_IMAGE_TYPES, prepareImage } from './image';
+import { MAX_ATTACHMENTS, looksLikeImage, prepareImage } from './image';
 import { PermissionSheet } from './PermissionSheet';
 import { Controls, type Kind } from './Controls';
 import { Transcript } from './Transcript';
@@ -54,18 +54,34 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
     finally { setBusy(false); }
   };
 
+  /**
+   * Picked, pasted or dropped images, compressed in the browser.
+   *
+   * Every way this can refuse says so. It used to return silently when the
+   * four slots were already full, so picking a photo did nothing at all and
+   * nothing explained why - and files past the limit were dropped without a
+   * word.
+   */
   const onAttach = async (files: FileList) => {
-    const next: typeof attachments = [];
+    const chosen = Array.from(files);
+    if (!chosen.length) return;
     const failures: string[] = [];
-    const available = Math.max(0, 4 - attachments.length);
-    const selected = Array.from(files).slice(0, available);
-    if (!selected.length) return;
+    const available = Math.max(0, MAX_ATTACHMENTS - attachments.length);
+    if (!available) {
+      setError(`Image not added — ${MAX_ATTACHMENTS} images is the limit for one message.`);
+      return;
+    }
+    const selected = chosen.slice(0, available);
+    if (chosen.length > selected.length) {
+      failures.push(`only ${selected.length} of ${chosen.length} fit — ${MAX_ATTACHMENTS} images is the limit`);
+    }
+    const next: typeof attachments = [];
     setPreparingImages((count) => count + 1);
     setError('');
     try {
       for (const f of selected) {
-        if (!COMPRESSIBLE_IMAGE_TYPES.has(f.type.toLowerCase())) {
-          failures.push(`${f.name}: use a JPG, PNG, WebP, or GIF image`);
+        if (!looksLikeImage(f)) {
+          failures.push(`${f.name}: not an image`);
           continue;
         }
         try {
@@ -74,7 +90,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
           failures.push(`${f.name}: ${e?.message || 'compression failed'}`);
         }
       }
-      if (next.length) setAttachments((current) => [...current, ...next].slice(0, 4));
+      if (next.length) setAttachments((current) => [...current, ...next].slice(0, MAX_ATTACHMENTS));
       if (failures.length) setError(`Image not added — ${failures.join('; ')}`);
     } finally {
       setPreparingImages((count) => Math.max(0, count - 1));
@@ -178,6 +194,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
         engine={engine} keys={false} waiting={!!pending} danger={mode?.danger}
         foot={controls.chips} canAttach={canAttach} preparing={preparingImages > 0}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
+        onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
       >
         {controls.sheet}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}

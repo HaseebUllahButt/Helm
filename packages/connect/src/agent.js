@@ -552,6 +552,15 @@ export class Daemon {
           if (!live.efforts?.length) delete models.effortsByModel;
           if (live.current && !models.default) models.default = live.current;
         }
+        // Whether the composer offers a clip at all. A running agent's own
+        // answer beats the catalogue's guess: opencode's models.dev entry
+        // says what the provider can do, `initialize` says what this agent
+        // will actually accept, and only the second one can be right.
+        const liveImages = p.id ? this.sessions.acceptsImages(p.id) : null;
+        if (liveImages !== null) {
+          models.images = liveImages;
+          models.imagesByModel = {};
+        }
         // The permission modes this engine offers, so the app never has to know the flags.
         return { ...models, modes: engine?.driver ? modesFor(profile.engine) : [] };
       }

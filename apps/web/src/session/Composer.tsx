@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { COMPRESSIBLE_IMAGE_TYPES } from './image';
+import { IMAGE_ACCEPT, looksLikeImage } from './image';
 
 export const QUICK: { label: string; key: string }[] = [
   { label: 'yes', key: 'y' }, { label: 'no', key: 'n' },
@@ -13,7 +13,7 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
@@ -26,10 +26,29 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   canAttach?: boolean;
   /** True while selected images are being compressed in the browser. */
   preparing?: boolean;
+  /** Called when images arrive but this agent cannot see them. */
+  onAttachUnsupported?: () => void;
 }) {
   const [keys, setKeys] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * Images arriving by paste or drop. Both routes land here so they cannot
+   * drift apart, and both say something when the agent cannot take images -
+   * a screenshot pasted into a session that silently ignores it is the
+   * worst version of this feature.
+   */
+  const take = (list: FileList | File[] | undefined | null) => {
+    const images = Array.from(list ?? []).filter(looksLikeImage);
+    if (!images.length) return false;
+    if (!canAttach || !onAttach) { onAttachUnsupported?.(); return true; }
+    const dt = new DataTransfer();
+    images.forEach((f) => dt.items.add(f));
+    onAttach(dt.files);
+    return true;
+  };
 
   useEffect(() => {
     const el = ref.current;
@@ -50,13 +69,18 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             </span>
           </div>
         )}
-        <div className={`slab${danger ? ' danger' : ''}`}>
+        <div
+          className={`slab${danger ? ' danger' : ''}${dragging ? ' dropping' : ''}`}
+          onDragOver={(e) => { if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) { e.preventDefault(); setDragging(true); } }}
+          onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
+          onDrop={(e) => { setDragging(false); if (take(e.dataTransfer?.files)) e.preventDefault(); }}
+        >
           {attachments && attachments.length > 0 && (
             <div className="attach-previews">
               {attachments.map((a, i) => (
-                <span key={i} className="attach-preview">
+                <span key={i} className="attach-preview" title={a.name}>
                   <img src={a.url} alt={a.name} />
-                  <button onClick={() => onRemoveAttachment?.(i)} title="remove">×</button>
+                  <button onClick={() => onRemoveAttachment?.(i)} title={`remove ${a.name}`} aria-label={`remove ${a.name}`}>×</button>
                 </span>
               ))}
             </div>
@@ -65,21 +89,14 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             ref={ref} rows={1} value={draft}
             placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
             onChange={(e) => setDraft(e.target.value)}
-            onPaste={(e) => {
-              if (!canAttach) return;
-              const files = Array.from(e.clipboardData?.files ?? []).filter(f => f.type.startsWith('image/'));
-              if (files.length && onAttach) {
-                e.preventDefault();
-                const dt = new DataTransfer(); files.forEach(f => dt.items.add(f)); onAttach(dt.files);
-              }
-            }}
+            onPaste={(e) => { if (take(e.clipboardData?.files)) e.preventDefault(); }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
           />
           {foot && <div className="slab-controls">{foot}</div>}
           <div className="slab-foot">
             {onAttach && canAttach && (
               <>
-                <input ref={fileRef} type="file" accept={Array.from(COMPRESSIBLE_IMAGE_TYPES).join(',')} multiple style={{ display: 'none' }} onChange={(e) => { if (e.target.files?.length) onAttach(e.target.files); e.target.value = ''; }} />
+                <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} multiple style={{ display: 'none' }} onChange={(e) => { if (e.target.files?.length) onAttach(e.target.files); e.target.value = ''; }} />
                 <button className="ctl" onClick={() => fileRef.current?.click()} title="attach image">📎</button>
               </>
             )}

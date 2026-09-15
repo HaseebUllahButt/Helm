@@ -258,7 +258,17 @@ function TurnView({ turn, working, blocked }: { turn: Turn; working: boolean; bl
   });
   return (
     <>
-      {(turn.text || turn.attachments?.length) && <div className="turn user"><div className="bubble">{turn.text}{turn.attachments?.map((a,i)=>(<img key={i} src={`data:${a.mime};base64,${a.data}`} alt={a.filename} style={{maxWidth:'100%',borderRadius:8,marginTop:8}} />))}</div></div>}
+      {(turn.text || turn.attachments?.length) && (
+        <div className="turn user"><div className="bubble">
+          {turn.text}
+          {turn.attachments?.map((a, i) => (a.data
+            // A blob the log has swept past still has its name, and saying
+            // so beats a browser's broken-image glyph.
+            ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={a.filename} loading="lazy" />
+            : <span key={i} className="turn-image-gone" title={a.filename}>🖼 {a.filename || 'image'} — no longer stored</span>
+          ))}
+        </div></div>
+      )}
       <div className="turn assistant">
         {roots.map((it) => <ItemView key={it.id} item={it} byParent={byParent} />)}
         {!d && working && !turn.items.some((it) => it.status === 'streaming' && it.kind === 'text') && (

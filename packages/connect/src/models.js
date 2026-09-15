@@ -234,20 +234,15 @@ async function devinModels(root) {
   return { default: def, models, labels, images: false, imagesByModel: {} };
 }
 
-/**
- * Can this model be sent images? Consulted before attaching anything: a
- * model that cannot see images gets a filename placeholder in the text
- * instead of bytes it would choke on or silently ignore.
- *
- * claude and codex run current families where everything takes vision;
- * opencode asks each provider's own metadata (models.dev), where only some
- * do. Unknown engines and models default to false - a placeholder in the
- * text is always safe, lost bytes are not.
+/*
+ * There was a `supportsImages(engine, model)` here. Its comment described
+ * asking each provider's own metadata; its body was `engine === 'claude' ||
+ * engine === 'codex'`, ignoring the model entirely. So the composer offered
+ * a clip for any opencode model models.dev said takes attachments, and the
+ * daemon then turned those bytes into `[image: shot.jpg]` on the way to the
+ * agent. The running driver answers this now (`sessions.driverTakesImages`),
+ * because it is the only thing that has actually spoken to the CLI.
  */
-export function supportsImages(engine, model) {
-  if (engine === 'claude' || engine === 'codex') return true;
-  return false;
-}
 
 /**
  * Turn the choices a person made in the app into the CLI's own arguments.

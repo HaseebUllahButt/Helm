@@ -58,6 +58,13 @@ export class AcpDriver extends Driver {
   #loading = false;
   /** latest configOptions the agent advertised (model/mode/effort pickers) */
   #options = [];
+  /**
+   * Whether this agent said it can take images in a prompt. ACP agents
+   * differ - opencode's answer follows the provider behind the model, Devin
+   * answers for itself - so it is read from what the agent advertised at
+   * `initialize` rather than guessed from the engine's name.
+   */
+  #imagePrompts = false;
 
   constructor(spec, opts) {
     super({ engine: spec.engine, ...opts });
@@ -124,6 +131,7 @@ export class AcpDriver extends Driver {
       this.push('error', { message: `${this.engine} initialize failed: ${init.error.message}`, kind: 'init' });
       return;
     }
+    this.#imagePrompts = init.result?.agentCapabilities?.promptCapabilities?.image === true;
 
     const res = this.engineSessionId ? await this.#load(this.engineSessionId) : null;
     if (res?.result) {
@@ -218,6 +226,37 @@ export class AcpDriver extends Driver {
     this.#call('session/prompt', {
       sessionId: this.engineSessionId,
       prompt: [{ type: 'text', text }],
+    }).then((res) => this.#turnDone(turnId, res));
+  }
+
+  /** What `initialize` advertised; false until the agent has answered. */
+  acceptsImages() { return this.#imagePrompts; }
+
+  /**
+   * Text plus image blocks in one prompt. ACP carries an image as its own
+   * content block - `{ type: 'image', mimeType, data }` with the bytes
+   * base64 inline - so nothing has to be written to a file the agent might
+   * not be allowed to read. Anything without image bytes is skipped.
+   */
+  async sendWithAttachments(text, attachments) {
+    await this.start();
+    if (!this.engineSessionId || !this.#child) {
+      this.push('error', { message: `${this.engine} has no session; it never finished starting`, kind: 'init' });
+      return;
+    }
+    const prompt = text ? [{ type: 'text', text }] : [];
+    for (const a of attachments ?? []) {
+      if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
+      prompt.push({ type: 'image', mimeType: a.mime, data: a.data });
+    }
+    if (!prompt.length) return this.send('(empty message)');
+    const turnId = `turn-${randomUUID().slice(0, 8)}`;
+    this.#turnId = turnId;
+    this.push('turn.start', { turnId, text });
+    if (!this.pending.size) this.push('status', { status: 'working' });
+    this.#call('session/prompt', {
+      sessionId: this.engineSessionId,
+      prompt,
     }).then((res) => this.#turnDone(turnId, res));
   }
 

@@ -56,7 +56,7 @@ export interface Turn {
   id: string;
   text: string;
   at: number;
-  attachments?: { filename: string; mime: string; data: string }[];
+  attachments?: { filename: string; mime: string; data?: string; bytes?: number; missing?: boolean }[];
   items: Item[];
   done?: TurnEnd;
 }
@@ -132,9 +132,25 @@ export function apply(state: LogState, e: HelmEvent): void {
   if (e.seq <= state.last) return;
   state.last = e.seq;
   switch (e.type) {
-    case 'turn.start':
-      state.turns.push({ id: e.turnId ?? String(e.seq), text: e.text ?? '', at: e.at, items: [], attachments: e.attachmentsFull ?? e.attachments ?? [] });
+    case 'turn.start': {
+      const id = e.turnId ?? String(e.seq);
+      // helm posts the owner's message the moment it is sent, so an image
+      // appears at once instead of after the agent gets round to echoing
+      // it. The agent then announces the same turn under its own id -
+      // seconds later, and without the attachment. Adopting the local turn
+      // rather than pushing a second one is what keeps a message with a
+      // picture on it from showing up twice, once with and once without.
+      const open = state.turns[state.turns.length - 1];
+      // Compared trimmed: helm strips the trailing newline off what it
+      // sends, and the CLI echoes the prompt back with it still attached.
+      if (open && open.id.startsWith('local-') && !open.items.length && !open.done
+          && open.text.trim() === (e.text ?? '').trim()) {
+        open.id = id;
+        return;
+      }
+      state.turns.push({ id, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [] });
       return;
+    }
     case 'item.start': {
       const turn = turnFor(state.turns, e.turnId);
       if (!turn) return;
