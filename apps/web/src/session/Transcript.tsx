@@ -216,13 +216,10 @@ const tokens = (n?: number) => (
  * runs its own tool calls and text stream inside, nested by the drivers'
  * parentId tagging. Folds away when it finishes like any other tool.
  *
- * What it cost and what it did outlive the run. The engines report only the
- * *current* tool, so a card you folded - or opened after it landed - used to
- * say nothing at all about the work, and the token count the driver had been
- * collecting the whole time was never shown anywhere. The trail the reducer
- * keeps fills in for engines that stream no child items of their own; where
- * there are real children, they are strictly better and the trail stays out
- * of the way.
+ * What it cost outlives the run. The driver had been collecting a token count
+ * for every subagent since subagents landed and nothing ever displayed one,
+ * because the frame that said the agent had finished replaced the frame that
+ * held the numbers. A folded card now carries them.
  */
 function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
   const live = item.status === 'streaming';
@@ -233,12 +230,14 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
   const out = item.output ?? item.agent?.summary ?? '';
   const used = tokens(item.agent?.tokens);
   const calls = item.agent?.toolUses;
-  const trail = kids.length ? [] : (item.agent?.activity ?? []);
+  // While it runs, what it is doing now beats what it was asked: the engine
+  // rewrites `description` as the child works, and nothing showed it.
+  const doing = live && item.agent?.description ? item.agent.description : task;
   const head = (
     <>
       <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}>⧉</span>
       <span className={`alabel${live ? ' shine' : ''}`}>
-        <b>{who}</b>{task && <> {typeof task === 'string' && task.length > 140 ? task.slice(0, 140) + '…' : String(task)}</>}
+        <b>{who}</b>{doing && <> {typeof doing === 'string' && doing.length > 140 ? doing.slice(0, 140) + '…' : String(doing)}</>}
       </span>
       {live && item.agent?.lastTool && <span className="ameta">{item.agent.lastTool}</span>}
       {!live && !!calls && <span className="ameta">{calls} {calls === 1 ? 'tool' : 'tools'}</span>}
@@ -248,16 +247,11 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
       {item.status === 'declined' && <span className="ameta">stopped</span>}
     </>
   );
-  if (!kids.length && !out && !trail.length) return <div className="act">{head}</div>;
+  if (!kids.length && !out) return <div className="act">{head}</div>;
   return (
     <details className="actgroup subagent" open={live || undefined}>
       <summary>{head}<span className="achev">›</span></summary>
       <div className="sub-body">
-        {trail.length > 0 && (
-          <ol className="trail">
-            {trail.map((a, i) => <li key={`${a.at}-${i}`}>{a.text}</li>)}
-          </ol>
-        )}
         {kids.map((k) => <ItemView key={k.id} item={k} byParent={byParent} />)}
         {out && <pre className="aout">{out.length > 4000 ? out.slice(0, 4000) + '\n…' : out}</pre>}
       </div>

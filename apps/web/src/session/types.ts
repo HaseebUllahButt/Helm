@@ -13,30 +13,17 @@ export type ItemStatus = 'streaming' | 'ok' | 'error' | 'declined';
 
 export interface Change { path: string; kind: string; diff: string }
 
-/** One line in a subagent's trail: what it was doing, and when. */
-export interface AgentActivity { at: number; text: string }
-
 /** What the engine says about a spawned agent, while it runs and when it lands. */
 export interface AgentInfo {
   id?: string;
   status?: string;
+  /** What it is doing *now*. Claude rewrites this as the child works. */
   description?: string;
   lastTool?: string;
   toolUses?: number;
   tokens?: number;
   summary?: string;
-  /**
-   * What this agent has been doing, oldest first. Built here rather than
-   * sent: the engines report only the *current* tool, so a card you folded
-   * away - or came back to after it finished - said nothing about the work
-   * it did. Derived in the reducer, so it rebuilds identically when the log
-   * is replayed from disk and costs nothing on the wire.
-   */
-  activity?: AgentActivity[];
 }
-
-/** How much of a subagent's trail is worth keeping. */
-const ACTIVITY_KEEP = 8;
 
 /**
  * Fold one engine update into what is already known about a spawned agent.
@@ -45,23 +32,14 @@ const ACTIVITY_KEEP = 8;
  * the agent works (`lastTool`, `toolUses`, `tokens`) and a thin one when it
  * lands (`status`, `summary`) - so assigning the new object over the old
  * threw away every number the run had accumulated at the exact moment the
- * run finished and the numbers became worth reading.
+ * run finished and the numbers became worth reading. Seen in a real run:
+ *
+ *   {status:running, description:"List .ts files", lastTool:"Bash", tokens:8531}
+ *   {status:running}                          <- wiped it
+ *   {status:completed, summary:"Found 2 ..."}  <- and again
  */
-export function foldAgent(prev: AgentInfo | undefined, next: AgentInfo, at: number): AgentInfo {
-  const merged: AgentInfo = { ...prev, ...next };
-  const trail = prev?.activity ? prev.activity.slice() : [];
-  const note = (text?: string) => {
-    const line = String(text ?? '').trim();
-    if (!line || trail[trail.length - 1]?.text === line) return;
-    trail.push({ at, text: line });
-    if (trail.length > ACTIVITY_KEEP) trail.splice(0, trail.length - ACTIVITY_KEEP);
-  };
-  // What it was asked, then each tool as it reaches for it. The summary is
-  // not a step - it is the result, and it already has its own place.
-  if (next.description !== prev?.description) note(next.description);
-  if (next.lastTool !== prev?.lastTool) note(next.lastTool);
-  merged.activity = trail;
-  return merged;
+export function foldAgent(prev: AgentInfo | undefined, next: AgentInfo): AgentInfo {
+  return { ...prev, ...next };
 }
 
 export interface Item {
@@ -198,9 +176,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       turn.items.push({
         id: e.id, kind: e.kind, turnId: e.turnId, text: '', status: 'streaming', startedAt: e.at,
         name: e.name, input: e.input, command: e.command, cwd: e.cwd, changes: e.changes,
-        parentId: e.parentId,
-        // A spawn card that arrives already describing itself starts its trail.
-        agent: e.agent ? foldAgent(undefined, e.agent, e.at ?? Date.now()) : undefined,
+        parentId: e.parentId, agent: e.agent,
       });
       return;
     }
@@ -216,7 +192,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       if (!it) return;
       const { type: _t, seq: _s, at: _a, id: _i, agent, ...rest } = e;
       Object.assign(it, rest);
-      if (agent) it.agent = foldAgent(it.agent, agent, e.at ?? Date.now());
+      if (agent) it.agent = foldAgent(it.agent, agent);
       return;
     }
     case 'item.done': {
