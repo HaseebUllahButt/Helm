@@ -611,10 +611,13 @@ try {
       if (await loadPty()) {
         const { TerminalHost } = await import('../src/terminals.js');
         const host = new TerminalHost();
-        const up = await host.ensure().catch(() => false);
+        // `spawn: false`: asking a machine how it is should not change it.
+        // Reporting used to start a terminal host as a side effect, so the
+        // answer was true partly because the question had been asked.
+        const up = await host.ensure({ spawn: false }).catch(() => false);
         const open = up ? host.list().length : 0;
         host.detach();
-        console.log(`terminals: own pty${up ? `, host running (${open} open)` : ''}`);
+        console.log(`terminals: own pty${up ? `, host running (${open} open)` : ', host idle'}`);
       } else {
         console.log(`terminals: herdr panes (slow) - no pty: ${ptyUnavailable()}`);
         console.log('           build one with a compiler installed, then re-run install.sh');

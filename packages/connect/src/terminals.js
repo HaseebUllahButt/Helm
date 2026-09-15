@@ -120,13 +120,20 @@ export class TerminalHost extends EventEmitter {
         this.#attach(sock);
         // The host greets us with what it is holding; until that arrives we
         // do not know which terminals survived.
-        const greeted = (msg) => {
-          if (msg.t !== 'hello') return;
-          this.off('hello', greeted);
-          resolve();
-        };
+        //
+        // The deadline is deliberately *not* unref'd. It was, and that made
+        // a connected-but-silent host hang the caller forever: with nothing
+        // else holding the loop open, the timer never fired, the promise
+        // never settled, and `helm status` exited on node's unsettled
+        // top-level await warning without ever printing its terminals line.
+        // Clearing it on both paths is what keeps a ref'd timer honest.
+        const done = (fn, arg) => { clearTimeout(timer); this.off('hello', greeted); fn(arg); };
+        const greeted = (msg) => { if (msg.t === 'hello') done(resolve); };
+        const timer = setTimeout(
+          () => done(reject, new Error('the terminal host did not say hello')),
+          4000,
+        );
         this.on('hello', greeted);
-        setTimeout(() => reject(new Error('the terminal host did not say hello')), 4000).unref?.();
       });
     });
   }

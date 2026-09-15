@@ -78,14 +78,33 @@ say "built apps/web/dist"
 
 # ---------------------------------------------------------------- terminals
 
-# The terminal in the app needs a pty, which is a compiled addon. There is a
-# prebuilt binary for common node versions and a source build otherwise; if
-# neither works helm still runs, but terminals fall back to reading a herdr
-# pane's rendered screen on a timer, which is slow enough to notice. Say so
-# here rather than leaving it to be discovered on a phone.
+# The terminal in the app needs a pty, which is a compiled addon. It ships
+# prebuilt binaries, but only up to whatever node ABI was current when it was
+# published - node 26 is ABI 147 and the newest prebuilt is 131 - so on a
+# recent node there is nothing to load and helm falls back to reading a herdr
+# pane's rendered screen on a timer, which is slow enough to notice.
+#
+# This used to only *report* that, which meant a machine quietly ran on the
+# slow path until someone went looking. If there is a compiler here, build
+# the thing. It takes about half a minute.
 step "checking terminal support"
-if (cd "$DIR" && node -e 'import("@homebridge/node-pty-prebuilt-multiarch").then(()=>process.exit(0),()=>process.exit(1))') 2>/dev/null; then
+
+pty_loads() {
+  (cd "$DIR" && node -e 'import("@homebridge/node-pty-prebuilt-multiarch").then(()=>process.exit(0),()=>process.exit(1))') 2>/dev/null
+}
+
+PTY_DIR="$DIR/node_modules/@homebridge/node-pty-prebuilt-multiarch"
+
+if pty_loads; then
   say "fast terminals (pty)"
+elif (need cc || need gcc || need g++) && need make && need python3 && [ -d "$PTY_DIR" ]; then
+  say "no prebuilt pty for $(node -v) - building one (about 30s)"
+  if (cd "$PTY_DIR" && npx --yes node-gyp rebuild) >/dev/null 2>&1 && pty_loads; then
+    say "fast terminals (pty, compiled here)"
+  else
+    say "! the pty build failed - terminals will use the slow fallback."
+    say "  see why with:  cd $PTY_DIR && npx node-gyp rebuild"
+  fi
 else
   say "! no pty support - terminals will use the slow fallback."
   say "  it needs a compiler to build one:"
