@@ -33,7 +33,7 @@ await shot('e1-attached.png');
 if (await ev(`document.querySelectorAll('.attach-preview img').length`) > 0) {
   await ev(`(()=>{const ta=document.querySelector('.slab textarea');
     const set=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set;
-    set.call(ta,'Describe ONLY the image I just attached, in exactly two words: background colour, then the shape. Do not read any files.');
+    set.call(ta,'Answer from the attached image ONLY. Do not open, read or search any files. Two words: background colour, then the shape.');
     ta.dispatchEvent(new Event('input',{bubbles:true})); return true;})()`);
   await wait(600);
   await ev(`document.querySelector('button.send')?.click()`);

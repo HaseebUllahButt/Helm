@@ -18,6 +18,7 @@ import { inventory } from './inventory.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
+import { describe as describeAsk, fanOut, isNew } from './notify.js';
 
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30_000;
@@ -194,7 +195,10 @@ export class Daemon {
     this.sessions.on('status', ({ session, from, to }) =>
       this.#emit(E.SESSION_UPDATE, { session, transition: { from, to } })
     );
-    this.sessions.on('event', ({ id, event }) => this.#queueEvent(id, event));
+    this.sessions.on('event', ({ id, event }) => {
+      this.#queueEvent(id, event);
+      if (event?.type === 'permission.request') this.#notify(id, event).catch(() => {});
+    });
 
     await this.#tick();
     this.#reconcile = setInterval(
@@ -390,6 +394,37 @@ export class Daemon {
     const eid = `${this.#boot}:${++this.#emitted}`;
     this.broadcastFrame(T.EVENT, { kind, payload, eid });
     this.peers?.broadcast(kind, payload, eid);
+  }
+
+  /**
+   * A session has stopped and is waiting on a person. Tell their phone.
+   *
+   * Notifications are the difference between "the agent is blocked" and
+   * "the agent has been blocked for forty minutes", which is the whole
+   * reason this project exists. Everything here is best-effort: a push
+   * service that is slow or down must never hold up the event reaching the
+   * app, which is why the caller does not await it.
+   */
+  async #notify(id, event) {
+    const key = `${id}:${event.requestId ?? event.seq ?? ''}`;
+    if (!isNew(key)) return;
+    let rows = [];
+    try {
+      const { q } = await import('@helm/relay/db');
+      rows = q.pushAll.all();
+    } catch { return; }
+    if (!rows.length) return;
+    let session = null;
+    try { session = this.sessions.get(id); } catch { /* gone already */ }
+    const payload = describeAsk({ ...session, envId: this.id }, event);
+    const sent = await fanOut(rows, payload, {
+      drop: async (endpoint) => {
+        const { q } = await import('@helm/relay/db');
+        q.pushDelete.run(endpoint);
+      },
+      log: (m) => this.log?.(m),
+    });
+    if (sent) this.log?.(`push: told ${sent} device${sent === 1 ? '' : 's'} that ${payload.title}`);
   }
 
   async describe() {

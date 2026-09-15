@@ -223,6 +223,44 @@ function Shell({ client, conn, onSignOut }: {
     history.replaceState({ helm: 1, depth: nav.current.depth, stack: next, selected: nav.current.selected }, '');
   };
 
+  /**
+   * Opening straight onto the session a notification was about.
+   *
+   * Two ways in, because a phone can be in either state: the app was closed
+   * and the service worker opened it at `#open=<env>/<session>`, or the app
+   * was already open and the worker posted a message to it. Both land here,
+   * and both have to wait - the session list for that machine may not have
+   * arrived yet, so the target is parked and the effect below spends it once
+   * the record it names exists.
+   */
+  const wanted = useRef<{ envId: string; sessionId: string } | null>(null);
+  useEffect(() => {
+    const take = (envId?: string, sessionId?: string) => {
+      if (!envId || !sessionId) return;
+      wanted.current = { envId, sessionId };
+      setSelected(envId);
+    };
+    const m = /^#open=([^/]+)\/(.+)$/.exec(location.hash);
+    if (m) {
+      take(m[1], m[2]);
+      history.replaceState(history.state, '', location.pathname + location.search);
+    }
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'helm:open') take(e.data.envId, e.data.sessionId);
+    };
+    navigator.serviceWorker?.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker?.removeEventListener('message', onMessage);
+  }, []);
+
+  useEffect(() => {
+    const want = wanted.current;
+    if (!want) return;
+    const found = (sessions[want.envId] ?? []).find((x) => x.id === want.sessionId);
+    if (!found) return;
+    wanted.current = null;
+    navigate([{ kind: 'env' }, { kind: 'session', session: found }], want.envId);
+  }, [sessions]);
+
   useEffect(() => {
     if (conn.online) { setDownSince(null); return; }
     setDownSince((t) => t ?? Date.now());
@@ -370,6 +408,7 @@ function Shell({ client, conn, onSignOut }: {
             </div>
 
             <AddMachine client={client} />
+            <Notifications client={client} />
             <InstallPwa />
             <button className="linkish quiet-link" onClick={() => {
               if (confirm('Unpair this device? You will need a fresh link from `helm link` to sign back in.')) onSignOut();
@@ -622,6 +661,101 @@ function AddMachine({ client }: { client: Client }) {
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
+
+/**
+ * Turning on "tell me when a session is waiting".
+ *
+ * The browser only asks for permission from a real click, and only over
+ * https, so this is a button and it stays hidden on plain http where the
+ * whole thing is impossible anyway. Every way it can fail says why: a
+ * permission the person already denied cannot be re-asked from inside the
+ * page, and silently doing nothing is the worst answer to give there.
+ */
+function Notifications({ client }: { client: Client }) {
+  const [state, setState] = useState<'unknown' | 'off' | 'on' | 'blocked' | 'unsupported'>('unknown');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const able = 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
+    if (!able || location.protocol !== 'https:') { setState('unsupported'); return; }
+    if (Notification.permission === 'denied') { setState('blocked'); return; }
+    navigator.serviceWorker.ready
+      .then((reg) => reg.pushManager.getSubscription())
+      .then((sub) => setState(sub ? 'on' : 'off'))
+      .catch(() => setState('off'));
+  }, []);
+
+  const enable = async () => {
+    setBusy(true); setError('');
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') { setState(permission === 'denied' ? 'blocked' : 'off'); return; }
+      const { key } = await client.pushKey();
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: base64urlToBytes(key),
+      });
+      await client.pushSubscribe({
+        endpoint: sub.endpoint,
+        keys: (sub.toJSON() as any).keys,
+        label: navigator.platform || 'this device',
+      });
+      setState('on');
+    } catch (e: any) {
+      setError(e?.message || 'could not turn notifications on');
+    } finally { setBusy(false); }
+  };
+
+  const disable = async () => {
+    setBusy(true); setError('');
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await client.pushUnsubscribe(sub.endpoint);
+        await sub.unsubscribe();
+      }
+      setState('off');
+    } catch (e: any) {
+      setError(e?.message || 'could not turn them off');
+    } finally { setBusy(false); }
+  };
+
+  if (state === 'unknown' || state === 'unsupported') return null;
+  return (
+    <>
+      <div className="section">when a session is blocked</div>
+      {state === 'blocked' ? (
+        <p className="note">
+          Notifications are blocked for this site. Turn them back on in the
+          browser&rsquo;s settings for this address, then reload.
+        </p>
+      ) : (
+        <button className="ghost" disabled={busy} onClick={state === 'on' ? disable : enable}>
+          {busy ? 'one moment\u2026' : state === 'on' ? 'stop notifying this device' : 'notify this device'}
+        </button>
+      )}
+      {error && <p className="note">{error}</p>}
+    </>
+  );
+}
+
+/**
+ * The VAPID key travels as base64url; `subscribe` wants the raw bytes.
+ * Typed as ArrayBuffer rather than Uint8Array because lib.dom's BufferSource
+ * will not take a view whose buffer might be shared.
+ */
+function base64urlToBytes(value: string): ArrayBuffer {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/')
+    + '='.repeat((4 - (value.length % 4)) % 4);
+  const raw = atob(padded);
+  const out = new ArrayBuffer(raw.length);
+  const view = new Uint8Array(out);
+  for (let i = 0; i < raw.length; i += 1) view[i] = raw.charCodeAt(i);
+  return out;
 }
 
 function InstallPwa() {

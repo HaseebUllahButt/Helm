@@ -6,6 +6,7 @@
   "exports": {
     ".": "./index.js",
     "./identity": "./identity.js",
-    "./network": "./network.js"
+    "./network": "./network.js",
+    "./push": "./push.js"
   }
 }

@@ -668,6 +668,22 @@ export class Client {
   removeDevice(id: string) { return this.http(`/api/devices/${id}`, { method: 'DELETE' }); }
 
   digests(limit = 50) { return this.http<{ digests: any[] }>(`/api/digests?limit=${limit}`); }
+
+  /** The hub's VAPID public key: what a browser checks push signatures against. */
+  pushKey() { return this.http<{ key: string }>('/api/push/key'); }
+
+  /** Remember where to reach this browser when the app is closed. */
+  pushSubscribe(body: { endpoint: string; keys: unknown; label?: string }) {
+    return this.http<{ ok: true }>('/api/push/subscribe', {
+      method: 'POST', body: JSON.stringify(body),
+    });
+  }
+
+  pushUnsubscribe(endpoint?: string) {
+    return this.http<{ ok: true }>('/api/push/unsubscribe', {
+      method: 'POST', body: JSON.stringify({ endpoint }),
+    });
+  }
 }
 
 export interface Device {

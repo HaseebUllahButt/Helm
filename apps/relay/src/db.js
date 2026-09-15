@@ -65,6 +65,22 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS digests_env_time ON digests(env_id, created_at DESC);
+
+  -- Where to reach a device when the app is closed. One row per browser that
+  -- turned notifications on; the endpoint is the browser vendor's, and the
+  -- keys are that browser's, so nothing here is useful to anyone else.
+  --
+  -- Keyed by endpoint rather than by device: the same phone re-subscribing
+  -- (a reinstall, a cleared site) gets a new endpoint and the old one starts
+  -- answering 410, which is when it is deleted.
+  CREATE TABLE IF NOT EXISTS push_subs (
+    endpoint   TEXT PRIMARY KEY,
+    device_id  TEXT NOT NULL,
+    p256dh     TEXT NOT NULL,
+    auth       TEXT NOT NULL,
+    label      TEXT,
+    created_at INTEGER NOT NULL
+  );
 `);
 
 // `CREATE TABLE IF NOT EXISTS` leaves an existing table alone, so a hub that
@@ -118,4 +134,15 @@ export const q = {
   digestByEnv: db.prepare(
     'SELECT * FROM digests WHERE env_id = ? ORDER BY created_at DESC LIMIT ?'
   ),
+
+  pushSet: db.prepare(
+    `INSERT INTO push_subs (endpoint, device_id, p256dh, auth, label, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(endpoint) DO UPDATE SET
+       device_id = excluded.device_id, p256dh = excluded.p256dh,
+       auth = excluded.auth, label = excluded.label`
+  ),
+  pushAll: db.prepare('SELECT * FROM push_subs'),
+  pushForDevice: db.prepare('SELECT * FROM push_subs WHERE device_id = ?'),
+  pushDelete: db.prepare('DELETE FROM push_subs WHERE endpoint = ?'),
 };

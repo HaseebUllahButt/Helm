@@ -274,6 +274,42 @@ export function makeHttpHandler({ online, kick }) {
       return json(res, 200, roster(loadNetwork()));
     }
 
+    // ---- push: where to reach this device when the app is not open.
+    //
+    // The VAPID public key is not a secret - it is what the browser checks
+    // the signature against, and it has to be handed out before anything can
+    // subscribe.
+    if (path === '/api/push/key' && req.method === 'GET') {
+      const { keys } = await import('@helm/protocol/push');
+      return json(res, 200, { key: keys().publicKey });
+    }
+
+    if (path === '/api/push/subscribe' && req.method === 'POST') {
+      const body = await readBody(req).catch(() => ({}));
+      const endpoint = String(body.endpoint ?? '');
+      const p256dh = String(body.keys?.p256dh ?? '');
+      const auth = String(body.keys?.auth ?? '');
+      // An endpoint is a URL this machine will POST to. Only accept the
+      // https ones the push services actually use; anything else would make
+      // the hub a willing sender of requests chosen by whoever asked.
+      if (!/^https:\/\//.test(endpoint) || !p256dh || !auth) {
+        return json(res, 400, { error: 'that is not a push subscription' });
+      }
+      q.pushSet.run(endpoint, claims.sub, p256dh, auth, String(body.label ?? '').slice(0, 60), now());
+      return json(res, 200, { ok: true });
+    }
+
+    if (path === '/api/push/unsubscribe' && req.method === 'POST') {
+      const body = await readBody(req).catch(() => ({}));
+      if (body.endpoint) q.pushDelete.run(String(body.endpoint));
+      else for (const row of q.pushForDevice.all(claims.sub)) q.pushDelete.run(row.endpoint);
+      return json(res, 200, { ok: true });
+    }
+
+    if (path === '/api/push/status' && req.method === 'GET') {
+      return json(res, 200, { subscribed: q.pushForDevice.all(claims.sub).length > 0 });
+    }
+
     if (path === '/api/auth/rotate' && req.method === 'POST') {
       const body = await readBody(req).catch(() => ({}));
       return json(res, 200, rotatePassword(null, passwordTtl(body.ttlMs)));
