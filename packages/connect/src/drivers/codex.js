@@ -219,6 +219,42 @@ export class CodexDriver extends Driver {
     this.push('turn.start', { turnId: this.#turnId, text });
   }
 
+  /**
+   * Text plus images in one turn. The app-server takes images as a `url`
+   * (verified against codex-cli 0.154.0 - a bare `path` is rejected, and
+   * the model API rejects `file://`, so bytes go inline as a data URL).
+   * Anything without image bytes is skipped.
+   */
+  async sendWithAttachments(text, attachments) {
+    await this.start();
+    const policy = this.#policy();
+    const input = text ? [{ type: 'text', text, text_elements: [] }] : [];
+    for (const a of attachments ?? []) {
+      if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
+      input.push({ type: 'image', url: `data:${a.mime};base64,${a.data}` });
+    }
+    if (!input.length) return this.send('(empty message)');
+    const params = {
+      threadId: this.threadId,
+      input,
+      clientUserMessageId: randomUUID(),
+      approvalPolicy: policy.approvalPolicy,
+      sandboxPolicy: policy.sandboxPolicy,
+      ...(this.model ? { model: this.model } : {}),
+      ...(this.effort ? { effort: this.effort } : {}),
+      ...(this.speed ? { serviceTier: this.speed } : {}),
+    };
+    if (!this.pending.size) this.push('status', { status: 'working' });
+    const res = await this.#server.call('turn/start', params);
+    if (res.error) {
+      this.push('error', { message: res.error.message, kind: 'turn' });
+      this.push('status', { status: 'idle' });
+      return;
+    }
+    this.#turnId = res.result.turn.id;
+    this.push('turn.start', { turnId: this.#turnId, text });
+  }
+
   async answer(requestId, decision) {
     const req = this.pending.get(requestId);
     const raw = this.#requests.get(requestId);

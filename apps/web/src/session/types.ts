@@ -42,6 +42,7 @@ export interface Turn {
   id: string;
   text: string;
   at: number;
+  attachments?: { filename: string; mime: string; data: string }[];
   items: Item[];
   done?: TurnEnd;
 }
@@ -116,7 +117,7 @@ export function apply(state: LogState, e: HelmEvent): void {
   state.last = e.seq;
   switch (e.type) {
     case 'turn.start':
-      state.turns.push({ id: e.turnId ?? String(e.seq), text: e.text ?? '', at: e.at, items: [] });
+      state.turns.push({ id: e.turnId ?? String(e.seq), text: e.text ?? '', at: e.at, items: [], attachments: e.attachmentsFull ?? e.attachments ?? [] });
       return;
     case 'item.start': {
       const turn = turnFor(state.turns, e.turnId);

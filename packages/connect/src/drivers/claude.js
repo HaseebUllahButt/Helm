@@ -131,6 +131,27 @@ export class ClaudeDriver extends Driver {
   }
 
   /**
+   * Text plus image blocks in one user message. Anything that is not an
+   * image (or has no bytes) is skipped rather than sent as a placeholder
+   * the model would try to read as words.
+   */
+  async sendWithAttachments(text, attachments) {
+    await this.start();
+    const content = [];
+    if (text) content.push({ type: 'text', text });
+    for (const a of attachments ?? []) {
+      if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
+      content.push({ type: 'image', source: { type: 'base64', media_type: a.mime, data: a.data } });
+    }
+    if (!content.length) return this.send('(empty message)');
+    this.#write({
+      type: 'user', session_id: '', parent_tool_use_id: null, uuid: randomUUID(),
+      message: { role: 'user', content },
+    });
+    if (!this.pending.size) this.push('status', { status: 'working' });
+  }
+
+  /**
    * Answer a permission request. `decision` is what the phone chose:
    *   { option: 'allow' | 'always' | 'deny', message?, answers?, updatedInput? }
    */

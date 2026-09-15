@@ -7,7 +7,7 @@ import { HELM_DIR, expand } from './paths.js';
 import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
-import { optionArgs } from './models.js';
+import { optionArgs, supportsImages } from './models.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver } from './drivers/codex.js';
@@ -673,11 +673,34 @@ export class Sessions extends EventEmitter {
    * a bare newline - has to reach the pane untouched, whereas the chat view
    * wants a whole message handed to the agent as a prompt.
    */
-  async input(id, text, { raw = false } = {}) {
+  async input(id, text, { raw = false, attachments = [] } = {}) {
     const s = this.get(id);
     if (s.driver) {
+      const clean = text.replace(/\n$/, '');
+      // Emit optimistically so every watcher (desktop + mobile PWA) sees the
+      // image immediately, even before the agent echoes it back.
+      if (attachments?.length) {
+        const d0 = this.#drivers.get(id);
+        const turnId = d0?.nextTurnId?.() ?? `local-${Date.now()}`;
+        this.events.append(id, { type: 'turn.start', turnId, text: clean, attachments: attachments.map((a) => ({ filename: a.filename, mime: a.mime, data: a.data?.slice(0, 80) + '…' })) });
+        // full images live in the turn for rendering; truncate in log above is just for debugging
+        const last = this.events.since(id, 0).at(-1);
+        if (last) last.attachmentsFull = attachments;
+      }
       const d = await this.#driver(s);
-      await d.send(text.replace(/\n$/, ''));
+      // Only a driver that implements the verb AND a model that can see
+      // images gets the bytes; anything else gets a filename placeholder
+      // in the text, which is always safe while lost bytes are not.
+      if (attachments?.length && typeof d.sendWithAttachments === 'function' && supportsImages(s.driver, s.model)) {
+        await d.sendWithAttachments(clean, attachments);
+      } else {
+        let msg = clean;
+        if (attachments?.length) {
+          const imgs = attachments.map((a) => a.url || a.dataUrl || `[image: ${a.filename || 'image'}]`).join('\n');
+          msg = msg ? `${msg}\n${imgs}` : imgs;
+        }
+        await d.send(msg);
+      }
       return { ok: true };
     }
     const handle = this.#handle(s);

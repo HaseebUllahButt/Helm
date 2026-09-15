@@ -55,6 +55,8 @@ class FakeDriver extends EventEmitter {
   async interrupt() { this.interrupted = true; }
   async setMode(m) { this.mode = m; }
   async setModel(m) { this.model = m; }
+  async setEffort(e) { this.effort = e; }
+  async compact(hint) { this.compacted = hint ?? ''; }
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
 
@@ -181,3 +183,57 @@ test('the model the CLI reports is kept, so the app can name what is running', a
   assert.equal(updates.length, before);
   await sessions.kill(s.id);
 });
+
+test('images ride the driver when it implements the verb, else a placeholder', async () => {
+  const { mkdirSync } = await import('node:fs');
+  mkdirSync(process.env.HELM_DIR, { recursive: true });
+  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
+    version: 1,
+    profiles: [{ id: 'claudea', label: 'Claude', engine: 'claude', cmd: 'claude', args: [], env: {}, source: 'alias' }],
+  }));
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+
+  // A driver without sendWithAttachments: the model gets words, not bytes.
+  const plain = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-plain')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s1 = await plain.start({ cwd: '/tmp', profileId: 'claudea' });
+  await plain.input(s1.id, 'look', { attachments: [{ filename: 'a.png', mime: 'image/png', data: 'iVBORw0KGgo=' }] });
+  const d1 = FakeDriver.made.at(-1);
+  assert.match(d1.sent.at(-1), /look\n\[image: a\.png\]/);
+
+  // A driver with the verb gets the bytes untouched.
+  class ImageDriver extends FakeDriver {
+    async sendWithAttachments(text, attachments) { this.gotAttachments = { text, attachments }; }
+  }
+  const rich = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-rich')),
+    makeDriver: (engine, opts) => new ImageDriver({ engine, ...opts }),
+  });
+  const s2 = await rich.start({ cwd: '/tmp', profileId: 'claudea' });
+  const atts = [{ filename: 'b.png', mime: 'image/png', data: 'iVBORw0KGgo=' }];
+  await rich.input(s2.id, 'look', { attachments: atts });
+  const d2 = ImageDriver.made.at(-1);
+  assert.equal(d2.gotAttachments.text, 'look');
+  assert.equal(d2.gotAttachments.attachments, atts);
+});
+
+test('model and effort switch mid-session on the live driver', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  await sessions.input(s.id, 'hi');
+  await sessions.setModel(s.id, 'claude-sonnet-5');
+  await sessions.setEffort(s.id, 'max');
+  const d = FakeDriver.made.at(-1);
+  assert.equal(d.model, 'claude-sonnet-5');
+  assert.equal(d.effort, 'max');
+  assert.equal(sessions.get(s.id).model, 'claude-sonnet-5');
+  assert.equal(sessions.get(s.id).effort, 'max');
+  await sessions.kill(s.id);
+});
+

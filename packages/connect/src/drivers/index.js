@@ -69,6 +69,9 @@ export class Driver extends EventEmitter {
   }
 
   // The verbs a session can ask of any driver. Subclasses implement them.
+  // No default sendWithAttachments on purpose: sessions checks for its
+  // presence to decide whether the driver can carry image bytes, and a
+  // default that quietly dropped them made every attachment vanish.
   async start() { throw new Error('not implemented'); }
   async send(_text) { throw new Error('not implemented'); }
   async answer(_requestId, _decision) { throw new Error('not implemented'); }

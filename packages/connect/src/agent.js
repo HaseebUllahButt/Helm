@@ -542,7 +542,7 @@ export class Daemon {
       // reply carries the current screen so the viewer has something at once.
       case M.SESSION_ATTACH:  return this.sessions.attach(p.id, { lines: p.lines ?? 400, ansi: p.ansi ?? true });
       case M.SESSION_DETACH:  return this.sessions.detach(p.id);
-      case M.SESSION_INPUT:   await this.sessions.input(p.id, p.data, { raw: p.raw }); return { ok: true };
+      case M.SESSION_INPUT:   await this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments }); return { ok: true };
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
       case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);

@@ -211,7 +211,7 @@ function TurnView({ turn, working, blocked }: { turn: Turn; working: boolean; bl
   const d = turn.done;
   return (
     <>
-      {turn.text && <div className="turn user"><div className="bubble">{turn.text}</div></div>}
+      {(turn.text || turn.attachments?.length) && <div className="turn user"><div className="bubble">{turn.text}{turn.attachments?.map((a,i)=>(<img key={i} src={`data:${a.mime};base64,${a.data}`} alt={a.filename} style={{maxWidth:'100%',borderRadius:8,marginTop:8}} />))}</div></div>}
       <div className="turn assistant">
         {turn.items.map((it) => <ItemView key={it.id} item={it} />)}
         {!d && working && !turn.items.some((it) => it.status === 'streaming' && it.kind === 'text') && (

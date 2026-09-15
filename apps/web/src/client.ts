@@ -77,6 +77,9 @@ export interface ModelList {
   /** codex's service tiers, e.g. ["fast"]. */
   speeds?: string[];
   speedByModel?: Record<string, string[]>;
+  /** Whether this engine takes image input at all; per-model when known. */
+  images?: boolean;
+  imagesByModel?: Record<string, boolean>;
   modes?: Mode[];
 }
 

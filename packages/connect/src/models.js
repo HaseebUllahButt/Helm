@@ -88,6 +88,9 @@ async function codexModels(root) {
     effortsByModel,
     speeds: [...new Set(Object.values(speedByModel).flat())],
     speedByModel,
+    // Every current codex model takes image input.
+    images: true,
+    imagesByModel: Object.fromEntries(models.map((m) => [m, true])),
   };
 }
 
@@ -131,7 +134,11 @@ function claudeModels(root) {
   const models = [...seen];
   if (def && !models.includes(def)) models.unshift(def);
   // `claude --effort`; the default depends on the model, so none is claimed.
-  return { default: def, models, effort: null, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
+  // Every model in the family takes image input.
+  return {
+    default: def, models, effort: null, efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    images: true, imagesByModel: Object.fromEntries(models.map((m) => [m, true])),
+  };
 }
 
 async function opencodeModels(root) {
@@ -149,7 +156,64 @@ async function opencodeModels(root) {
   });
   const models = stdout.split('\n').map((l) => l.trim()).filter((l) => l && l.includes('/'));
   if (def && !models.includes(def)) models.unshift(def);
-  return { default: def, models };
+
+  // Expose correct reasoning levels from opencode's models cache (provider metadata
+  // at models.dev). This is the source of truth for zen/opencode models - e.g.
+  // muse-spark-1.2-contributor-free supports up to xhigh, not max (only
+  // muse-spark-1.3 non-free has max). Without this the UI would offer an
+  // invalid level or hide a valid one.
+  let effortsByModel = {};
+  let labels = {};
+  let attachmentByModel = {};
+  try {
+    const cacheFiles = [
+      join(expand('~'), '.cache', 'opencode', 'models.json'),
+      join(root, '..', '.cache', 'opencode', 'models.json'),
+    ];
+    let cache = null;
+    for (const f of cacheFiles) {
+      if (!existsSync(f)) continue;
+      try { cache = JSON.parse(readFileSync(f, 'utf8')); break; } catch { /* next */ }
+    }
+    if (cache?.opencode?.models) {
+      for (const [id, meta] of Object.entries(cache.opencode.models)) {
+        const slug = `opencode/${id}`;
+        if (meta.name) labels[slug] = meta.name;
+        if (meta.attachment) attachmentByModel[slug] = true;
+        const effortOpt = (meta.reasoning_options ?? []).find((o) => o.type === 'effort');
+        if (effortOpt?.values?.length) effortsByModel[slug] = effortOpt.values;
+      }
+    }
+  } catch { /* cache unavailable - fall back to generic efforts */ }
+
+  const order = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+  const union = [...new Set(Object.values(effortsByModel).flat())].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+
+  return {
+    default: def,
+    models,
+    labels,
+    efforts: union.length ? union : ['low', 'medium', 'high', 'xhigh'],
+    effortsByModel,
+    attachmentByModel,
+    images: models.some((m) => attachmentByModel[m]),
+    imagesByModel: { ...attachmentByModel },
+  };
+}
+
+/**
+ * Can this model be sent images? Consulted before attaching anything: a
+ * model that cannot see images gets a filename placeholder in the text
+ * instead of bytes it would choke on or silently ignore.
+ *
+ * claude and codex run current families where everything takes vision;
+ * opencode asks each provider's own metadata (models.dev), where only some
+ * do. Unknown engines and models default to false - a placeholder in the
+ * text is always safe, lost bytes are not.
+ */
+export function supportsImages(engine, model) {
+  if (engine === 'claude' || engine === 'codex') return true;
+  return false;
 }
 
 /**
