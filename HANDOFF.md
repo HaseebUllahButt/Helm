@@ -453,17 +453,20 @@ pair - but it is why reading a candidate list is confusing the first time.
   exactly like a delivery problem. Fires on `permission.request` and nothing
   else, because a phone that buzzes for every finished turn has its
   notifications switched off within a day. A 410 forgets that subscription.
-  Tapping lands on the session that asked. **Never delivered to a real
-  phone** - everything up to the POST is verified against a stub service, but
-  no Apple or Google endpoint has seen one, and headless Chromium cannot
-  subscribe.
+  Tapping lands on the session that asked. Delivery happens on each hub,
+  because the public VM owns the phone subscription even when the session
+  runs on the laptop; the old machine-local lookup could never find that
+  subscription. `notification-route.test.mjs` proves the remote-machine →
+  subscription-owning-hub path. **Never delivered to a real phone** -
+  everything up to the POST is verified against a stub service, but no Apple
+  or Google endpoint has seen one, and headless Chromium cannot subscribe.
 - **A `/` palette**, of things that actually run: helm's own actions, plus
   the owner's own command files where each CLI reads them. Deliberately not
   the CLI built-ins - `/help` through `claude -p` returns `ok` in 95ms having
   printed nothing.
-- **Engine marks** are SVG now. Claude's and OpenAI's are theirs; **opencode
-  and Devin are helm's own** and `EngineMark.tsx` says so. Drop in the
-  official files if you have them.
+- **Engine marks** are the vendors' real single-colour SVG shapes now:
+  Claude, OpenAI, opencode and Devin. They stay inline and inherit the badge
+  tint, so the PWA makes no logo request and needs no light/dark duplicate.
 
 ### The bug that made a whole driver dead code
 
@@ -487,6 +490,53 @@ clip. Nothing failed. A duplicate key is invisible in JavaScript, so
   says whether it takes images in its reply to `initialize`, and the driver
   starts lazily - so the gate read the initial `false` and turned the
   picture into `[image: dot.jpg]`, for Devin, which answers `image: true`.
+
+### The UI: a revamp for weight and for hierarchy
+
+Two complaints in one pass - the app was heavy to load, and the chrome
+outshouted the things it was showing.
+
+**Weight.** Everything shipped in a single 206KB gzipped chunk, so signing in
+waited on a terminal emulator and a syntax highlighter that most sessions
+never touch. xterm now loads when a terminal is opened; marked, DOMPurify and
+highlight.js moved to `apps/web/src/md.ts` and are fetched on idle, so a
+conversation still opens instantly and a cold start does not pay for them.
+React is its own chunk so it survives a deploy in the browser's cache. First
+paint went **206KB -> 87KB gzipped**. Until the markdown chunk lands, prose
+renders as plain text rather than as a blank space.
+
+**Cost while streaming, which was the bigger one.** The typewriter in
+`Transcript.tsx` stepped once per animation frame, and every step re-parsed
+the *whole* message through marked, DOMPurify and the highlighter - measured
+at 1.5ms for a 3.5KB reply on the laptop, several times that on a phone, sixty
+times a second - while a dependency-less effect in the same file read
+`scrollHeight` and forced layout at the same rate. Agents emit tokens about
+fifteen times a second, so the reveal now steps at about twenty: smoother
+than the source it is smoothing, at a third of the work.
+
+**Do not memoise turns to fix the rest of it.** The obvious next step is
+`memo()` on `TurnView`, and it is a trap: `apply()` in `session/types.ts`
+mutates turns and items in place and `publish()` hands back the same `turns`
+array, so a memoised turn compares equal to itself and renders stale text
+while the agent is still writing. It needs a version counter on the turn
+first.
+
+**Hierarchy.** Machines and sessions were quiet text rows while the setup
+actions - things you do exactly once - were full-width slabs, and "New
+session" was a saturated indigo billboard louder than the amber that means
+*a session needs you*. That inverts the app's own rule about rationed colour.
+Machines are cards now, setup is a footer of plain rows under "this device",
+and the screen's action is tonal, so amber is the loudest colour again. One
+type scale in `:root` replaced sixteen ad-hoc font sizes between 10px and
+16px, rows and radii are tighter, and keyboard focus is visible at last -
+tabbing through the app used to light nothing at all.
+
+Found only by looking at it, once it was on screen: the session header
+printed the machine name twice, the engine mark sat flush against the
+subtitle it overlapped, the composer was translucent enough to read the
+transcript through it, "open its own address" on the login screen rendered in
+the browser's default blue-violet, a disabled button still looked pressable,
+and the one emoji in the chrome is now a drawn paperclip.
 
 ### Also
 
@@ -711,8 +761,16 @@ add a third delivery path, it must carry the same id.**
 
 ### 2026-09-15
 
-- `npm run check` green: types, production build, **85** node tests,
+- `npm run check` green: types, production build, **90** node tests,
   `network.sh`.
+- A remote-machine notification reached a stub push service through the hub
+  that owned the phone subscription, stayed encrypted, and a repeated frame
+  with the same permission-request tag did not send twice.
+- The revamped UI driven in headless Chromium at 390x844 and 1280x800 against
+  a sandbox daemon: login, machine list, machine screen, transcript, the `/`
+  palette, and a real pty through the lazily-loaded terminal chunk - which
+  confirms the code split does not break the mount. Production build measured
+  before and after.
 - **Deployed to both machines and driven against the public HTTPS address**,
   not loopback: paired a browser, opened the laptop *through the VM's hub*,
   started a Devin session, attached a picture through the real file input and
@@ -772,12 +830,12 @@ add a third delivery path, it must carry the same id.**
 
 ## Known bad, and not yet fixed
 
-1. **Push has never reached a device.** The encryption is checked against
-   RFC 8291's own worked example and the fan-out against a stub push
-   service, but no Apple or Google endpoint has been handed one. This is the
-   only part of today's work that nothing has exercised end to end, and it
-   is thirty seconds to settle: open the app on the phone, "notify this
-   device" in the sidebar, then let a session ask for permission.
+1. **Push has never reached a real device.** The encryption is checked
+   against RFC 8291's own worked example, and the normal laptop → VM hub →
+   subscribed phone topology is covered against a stub push service, but no
+   Apple or Google endpoint has been handed one. This is thirty seconds to
+   settle: open the app on the phone, "notify this device" in the sidebar,
+   then let a session ask for permission.
 2. **The touch-facing work has only been driven in headless Chromium** at
    390×844 — the `/` palette against a software keyboard, and predictive
    echo, which above 60ms is exactly what a phone on cellular runs.
