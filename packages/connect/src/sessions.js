@@ -393,10 +393,21 @@ export class Sessions extends EventEmitter {
     this.#reapers.set(s.id, t);
   }
 
-  /** Events after `since`, plus what is still waiting on a person. */
-  history(id, { since = 0 } = {}) {
+  /**
+   * Events after `since`, plus what is still waiting on a person.
+   *
+   * Capped per call: an old chat holds up to 2000 events and a single reply
+   * that large is megabytes - enough to exceed the WebRTC data-channel limit
+   * even fragmented (and slow over the relay too). Callers page with
+   * `since` until `hasMore` is false; each page's last `seq` is the next
+   * `since`.
+   */
+  history(id, { since = 0, limit = 500 } = {}) {
     const s = this.get(id);
-    return { events: this.events.since(s.id, since), pending: this.events.pending(s.id), last: this.events.last(s.id), session: s };
+    const capped = Math.max(1, Math.min(Number(limit) || 500, 1000));
+    const all = this.events.since(s.id, since);
+    const events = all.slice(0, capped);
+    return { events, pending: this.events.pending(s.id), last: this.events.last(s.id), session: s, hasMore: all.length > events.length };
   }
 
   /** Say that somebody is looking at this session; pushes flow while renewed. */

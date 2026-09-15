@@ -548,7 +548,7 @@ export class Daemon {
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
 
       // Headless agent sessions.
-      case M.SESSION_EVENTS:  return this.sessions.history(p.id, { since: p.since ?? 0 });
+      case M.SESSION_EVENTS:  return this.sessions.history(p.id, { since: p.since ?? 0, limit: p.limit ?? 500 });
       case M.SESSION_WATCH:   return this.sessions.watch(p.id);
       case M.SESSION_UNWATCH: return this.sessions.unwatch(p.id);
       case M.SESSION_ANSWER:  return this.sessions.answer(p.id, p.requestId, p.decision ?? {});

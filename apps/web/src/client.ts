@@ -104,6 +104,37 @@ interface Peer {
   pc: RTCPeerConnection;
   channel: RTCDataChannel;
   ready: boolean;
+  fragments: Map<string, { n: number; parts: string[]; got: number }>;
+}
+
+/**
+ * Mirrors packages/connect/src/peer.js: libdatachannel and browsers cap a
+ * single data-channel message (~256KB max, less in practice), while an old
+ * chat's history reply can be megabytes. Frames over DC_CHUNK_AT bytes are
+ * fragmented into `dc-chunk` pieces and reassembled here. The WebSocket relay
+ * path has no such limit and is never fragmented.
+ */
+const DC_CHUNK_AT = 16_000;
+const DC_CHUNK_TYPE = 'dc-chunk';
+
+function sendDirect(channel: RTCDataChannel, frame: string): boolean {
+  try {
+    if (frame.length <= DC_CHUNK_AT) {
+      channel.send(frame);
+      return true;
+    }
+    const gid = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const n = Math.ceil(frame.length / DC_CHUNK_AT);
+    for (let i = 0; i < n; i++) {
+      channel.send(JSON.stringify({
+        t: DC_CHUNK_TYPE, gid, i, n,
+        data: frame.slice(i * DC_CHUNK_AT, (i + 1) * DC_CHUNK_AT),
+      }));
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** How long to wait for a hub to answer before writing it off for this attempt. */
@@ -415,8 +446,25 @@ export class Client {
       this.pending.set(id, { resolve, reject });
       const frame = JSON.stringify({ t: 'rpc', id, env, method, params });
       // Prefer the direct channel: relaying costs two internet round trips
-      // per call, which is what makes a remote session feel dead.
-      direct ? peer!.channel.send(frame) : this.ws!.send(frame);
+      // per call, which is what makes a remote session feel dead. A large
+      // frame (image attachments, old-chat history) is fragmented; if the
+      // direct send fails outright, fall back to the relay in the same call.
+      let sent = false;
+      if (direct) sent = sendDirect(peer!.channel, frame);
+      if (!sent) {
+        if (!this.connected) {
+          this.pending.delete(id);
+          reject(new Error('not connected'));
+          return;
+        }
+        try {
+          this.ws!.send(frame);
+        } catch (e: any) {
+          this.pending.delete(id);
+          reject(e);
+          return;
+        }
+      }
       setTimeout(() => {
         if (this.pending.delete(id)) reject(new Error(`${method} timed out`));
       }, timeout);
@@ -434,7 +482,7 @@ export class Client {
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     const channel = pc.createDataChannel('helm', { ordered: true });
-    const peer: Peer = { pc, channel, ready: false };
+    const peer: Peer = { pc, channel, ready: false, fragments: new Map() };
     this.peers.set(env, peer);
 
     pc.onicecandidate = ({ candidate }) => {
@@ -452,7 +500,10 @@ export class Client {
     };
     channel.onclose = () => this.dropDirect(env);
     channel.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data);
+      const raw = this.accumulate(peer, ev.data);
+      if (raw == null) return;
+      let msg: any;
+      try { msg = JSON.parse(raw); } catch { return; }
       if (msg.t === 'rpcResult') {
         const p = this.pending.get(msg.id);
         if (!p) return;
@@ -506,6 +557,35 @@ export class Client {
     } else if (payload?.type === 'candidate' && payload.candidate) {
       await peer.pc.addIceCandidate(payload.candidate).catch(() => {});
     }
+  }
+
+  /**
+   * Reassemble a possibly-fragmented direct-channel frame. Returns the full
+   * JSON string once complete, or null while waiting for more pieces.
+   */
+  private accumulate(peer: Peer, raw: any): string | null {
+    if (typeof raw !== 'string') return null;
+    let msg: any;
+    try { msg = JSON.parse(raw); } catch { return null; }
+    if (msg?.t !== DC_CHUNK_TYPE || typeof msg.gid !== 'string') return raw;
+    const { gid, i, n, data } = msg;
+    if (!Number.isInteger(n) || n <= 1 || n > 2000) return null;
+    if (!Number.isInteger(i) || i < 0 || i >= n) return null;
+    let entry = peer.fragments.get(gid);
+    if (!entry) {
+      entry = { n, parts: new Array(n), got: 0 };
+      peer.fragments.set(gid, entry);
+    }
+    if (entry.parts[i] !== undefined) return null;
+    entry.parts[i] = typeof data === 'string' ? data : '';
+    entry.got++;
+    if (peer.fragments.size > 8) {
+      const oldest = peer.fragments.keys().next().value as string | undefined;
+      if (oldest && oldest !== gid) peer.fragments.delete(oldest);
+    }
+    if (entry.got < entry.n) return null;
+    peer.fragments.delete(gid);
+    return entry.parts.join('');
   }
 
   dropDirect(env: string) {

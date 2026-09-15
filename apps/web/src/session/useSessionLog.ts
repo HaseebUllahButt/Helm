@@ -21,14 +21,22 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
 
   const fetchSince = useCallback((since: number) => {
     if (fetching.current) return fetching.current;
-    fetching.current = client
-      .rpc<{ events: HelmEvent[]; pending: any[]; last: number }>(env, 'session.events', { id: sessionId, since }, 20_000)
-      .then((r) => {
+    fetching.current = (async () => {
+      // Page through: an old chat can hold 2000 events and one reply that
+      // large exceeds the data-channel message limit.
+      let cursor = since;
+      for (let pages = 0; pages < 8; pages++) {
+        const r = await client
+          .rpc<{ events: HelmEvent[]; pending: any[]; last: number; hasMore?: boolean }>(
+            env, 'session.events', { id: sessionId, since: cursor, limit: 500 }, 20_000);
         for (const e of r.events) apply(log.current, e);
-        log.current.loaded = true;
-        setError('');
-        publish();
-      })
+        if (r.events.length) cursor = r.events[r.events.length - 1].seq;
+        if (!r.hasMore) break;
+      }
+      log.current.loaded = true;
+      setError('');
+      publish();
+    })()
       .catch((e: any) => setError(e.message))
       .finally(() => { fetching.current = null; });
     return fetching.current;
