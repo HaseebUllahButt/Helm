@@ -93,6 +93,7 @@ export const M = {
   SESSION_EFFORT: 'session.effort',    // { id, effort } -> { session }
   SESSION_SPEED: 'session.speed',      // { id, speed } -> { session }  codex service tier
   SESSION_INVENTORY: 'session.inventory', // {} -> { live[], recent[] }
+  SESSION_COMMANDS: 'session.commands',   // { id } -> { commands: [{name, description, source}] }
   SESSION_RESUME: 'session.resume',// { engine, account, id, cwd } -> { session }
   SESSION_ADOPT: 'session.adopt',  // { paneId } -> { session }  take over a pane
   SSH_INFO: 'ssh.info',            // {} -> { pubkey, sshUser, sshPort }

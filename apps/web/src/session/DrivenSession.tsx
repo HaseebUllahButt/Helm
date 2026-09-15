@@ -29,6 +29,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [options, setOptions] = useState<ModelList | null>(null);
+  const [commands, setCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
   const engine = ENGINE_LABEL[session.engine] ?? session.engine;
   const status = log.loaded ? log.status : session.status;
   const working = status === 'working';
@@ -38,6 +39,13 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
     client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id }, 30_000)
       .then(setOptions).catch(() => setOptions({ default: null, models: [] }));
   }, [client, env.id, session.profileId]);
+
+  // What `/` offers. Read from the machine because that is where the
+  // commands are: files beside the project, or in that account's config.
+  useEffect(() => {
+    client.rpc<{ commands: typeof commands }>(env.id, 'session.commands', { id: session.id }, 20_000)
+      .then((r) => setCommands(r.commands ?? [])).catch(() => setCommands([]));
+  }, [client, env.id, session.id]);
 
   // The record changes without us asking: the CLI reports which model it
   // actually started with, and another device may change a setting. Take
@@ -202,6 +210,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
         foot={controls.chips} canAttach={canAttach} preparing={preparingImages > 0}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
+        commands={commands}
       >
         {controls.sheet}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}

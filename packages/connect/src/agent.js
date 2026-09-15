@@ -11,6 +11,7 @@ import { modesFor } from './modes.js';
 import { Sessions } from './sessions.js';
 import { getProfiles, refreshProfiles } from './profiles.js';
 import { listModels } from './models.js';
+import { listCommands } from './commands.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import * as usageApi from './usage.js';
@@ -630,6 +631,21 @@ export class Daemon {
       // them is only worth it when you actually want to reopen an old chat.
       case M.SESSION_INVENTORY:
         return { recent: await inventory(await getProfiles()) };
+
+      // What `/` offers in this session: helm's own actions plus whatever
+      // commands the owner has written for this engine, in this directory.
+      case M.SESSION_COMMANDS: {
+        const s2 = this.sessions.get(p.id);
+        const profile = (await getProfiles()).find((x) => x.id === s2.profileId);
+        const engine = ENGINES[s2.engine];
+        return {
+          commands: listCommands({
+            engine: s2.engine,
+            cwd: s2.cwd,
+            home: profile?.env?.[engine?.homeEnv] ?? engine?.defaultHome,
+          }),
+        };
+      }
 
       case M.USAGE:           return usageApi.usage();
       case M.USAGE_HISTORY:   return usageApi.limitHistory(p.steps);

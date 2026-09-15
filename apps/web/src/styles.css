@@ -486,6 +486,21 @@ pre.snippet {
    and a drop that worked look identical. */
 .slab.dropping::after { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
 
+/* The `/` palette, above the composer and inside its slab. */
+.palette {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 6px 6px 0; max-height: 260px; overflow-y: auto;
+}
+.palette button {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: baseline;
+  width: 100%; text-align: left; border: 0; background: transparent; color: var(--text-dim);
+  padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.palette button.on { background: var(--hover); color: var(--text); }
+.palette .pname { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); }
+.palette .pdesc { color: var(--mutedfg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette .psrc { color: var(--icon); font-size: 11px; }
+
 /* Images already sent, inside the owner's own message. */
 .turn-image { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; }
 .turn-image-gone {

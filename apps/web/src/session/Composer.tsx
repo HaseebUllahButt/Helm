@@ -13,7 +13,7 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
@@ -28,9 +28,35 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   preparing?: boolean;
   /** Called when images arrive but this agent cannot see them. */
   onAttachUnsupported?: () => void;
+  /** What `/` offers here: helm's own actions plus the owner's own commands. */
+  commands?: { name: string; description?: string; source?: string }[];
 }) {
   const [keys, setKeys] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [pick, setPick] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+
+  /**
+   * The palette opens while the whole message is still just a command being
+   * typed - `/re`, not `/review the thing`. Once there is an argument you
+   * have chosen your command, and a list covering the composer is in the way.
+   */
+  const typing = /^\/(\S*)$/.exec(draft);
+  const matches = (!dismissed && typing && commands?.length)
+    ? commands.filter((c) => c.name.toLowerCase().startsWith(typing[1].toLowerCase())).slice(0, 8)
+    : [];
+  const open = matches.length > 0;
+  const chosen = matches[Math.min(pick, matches.length - 1)];
+  const complete = (name: string) => {
+    setDraft(`/${name} `);
+    setDismissed(true);
+    ref.current?.focus();
+  };
+
+  // A fresh set of matches starts at the top, and a cleared draft re-arms
+  // the palette for the next `/`.
+  useEffect(() => { setPick(0); }, [draft]);
+  useEffect(() => { if (!draft.startsWith('/')) setDismissed(false); }, [draft]);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -75,6 +101,24 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
           onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
           onDrop={(e) => { setDragging(false); if (take(e.dataTransfer?.files)) e.preventDefault(); }}
         >
+          {open && (
+            <div className="palette" role="listbox">
+              {matches.map((c, i) => (
+                <button
+                  key={c.name}
+                  role="option"
+                  aria-selected={c === chosen}
+                  className={c === chosen ? 'on' : ''}
+                  onMouseEnter={() => setPick(i)}
+                  onClick={() => complete(c.name)}
+                >
+                  <span className="pname">/{c.name}</span>
+                  {c.description && <span className="pdesc">{c.description}</span>}
+                  <span className="psrc">{c.source}</span>
+                </button>
+              ))}
+            </div>
+          )}
           {attachments && attachments.length > 0 && (
             <div className="attach-previews">
               {attachments.map((a, i) => (
@@ -90,7 +134,22 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={(e) => { if (take(e.clipboardData?.files)) e.preventDefault(); }}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+            onKeyDown={(e) => {
+              if (open) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setPick((p) => (p + 1) % matches.length); return; }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setPick((p) => (p - 1 + matches.length) % matches.length); return; }
+                if (e.key === 'Escape') { e.preventDefault(); setDismissed(true); return; }
+                // Tab and Enter both complete rather than send: the message
+                // is still only the command's name, so sending it now would
+                // be sending a half-typed one.
+                if (e.key === 'Tab' || e.key === 'Enter') {
+                  e.preventDefault();
+                  if (chosen) complete(chosen.name);
+                  return;
+                }
+              }
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
+            }}
           />
           {foot && <div className="slab-controls">{foot}</div>}
           <div className="slab-foot">
