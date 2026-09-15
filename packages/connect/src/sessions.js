@@ -871,6 +871,13 @@ export class Sessions extends EventEmitter {
         });
       }
       const d = await this.#driver(s);
+      // An ACP agent only says whether it takes images in its reply to
+      // `initialize`, and the driver is started lazily - so asking before it
+      // is up gets `false` for an agent that would have said yes, and the
+      // picture becomes a filename. Start it first when there is an image
+      // riding on the answer. `start()` returns immediately if it is already
+      // running, and `send` would have called it a line later anyway.
+      if (images.length) await d.start?.();
       // The driver is the authority on whether this agent can see an image:
       // it is the one that spoke to the CLI. Anything else gets a filename
       // placeholder in the text, which is always safe while lost bytes are
