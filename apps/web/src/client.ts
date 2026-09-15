@@ -270,6 +270,68 @@ export class Client {
   /** Which machines are currently reachable without going through a hub. */
   directTo(env: string) { return this.peers.get(env)?.ready ?? false; }
 
+  /**
+   * What one round trip to a machine costs, in milliseconds.
+   *
+   * Worth measuring rather than assuming, because the two routes differ by
+   * two orders of magnitude. A direct peer connection on the same wifi is a
+   * few milliseconds; the same phone relaying through a hub on the other
+   * side of the world was measured at 1.1 seconds a round trip, every leg of
+   * it crossing the same slow link twice. The terminal reads this to decide
+   * how to draw, and the sidebar shows it so a bad connection looks like a
+   * bad connection instead of like broken software.
+   */
+  private rtt = new Map<string, number>();
+  private rttTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+  latency(env: string): number | null { return this.rtt.get(env) ?? null; }
+
+  /**
+   * Start measuring, and keep measuring, until every watcher has stopped.
+   *
+   * Refcounted because two things want this at once - the machine header,
+   * which shows the number, and the terminal, which uses it to decide
+   * whether to draw keystrokes before they land. Without the count, closing
+   * one would silently stop the other's measurements and the terminal would
+   * quietly go back to feeling slow.
+   */
+  private rttWatchers = new Map<string, number>();
+
+  watchLatency(env: string) {
+    this.rttWatchers.set(env, (this.rttWatchers.get(env) ?? 0) + 1);
+    if (this.rttTimers.has(env)) return () => this.unwatchLatency(env);
+    const ping = async () => {
+      if (!this.connected && !this.directTo(env)) return;
+      const started = performance.now();
+      try {
+        await this.rpc(env, 'ping', {}, 15_000);
+        const sample = performance.now() - started;
+        // Smoothed, because one slow sample is usually a scheduler hiccup
+        // rather than a worse connection, and a number that jumps around is
+        // one nobody trusts. Weighted towards the new sample so that moving
+        // from wifi to cellular shows up quickly.
+        const was = this.rtt.get(env);
+        this.rtt.set(env, was == null ? sample : was * 0.6 + sample * 0.4);
+      } catch {
+        this.rtt.delete(env);
+      }
+      this.emit(env, 'latency', { env, ms: this.rtt.get(env) ?? null });
+    };
+    ping();
+    const timer = setInterval(ping, 5_000);
+    this.rttTimers.set(env, timer);
+    return () => this.unwatchLatency(env);
+  }
+
+  private unwatchLatency(env: string) {
+    const left = (this.rttWatchers.get(env) ?? 1) - 1;
+    if (left > 0) { this.rttWatchers.set(env, left); return; }
+    this.rttWatchers.delete(env);
+    const timer = this.rttTimers.get(env);
+    if (timer) clearInterval(timer);
+    this.rttTimers.delete(env);
+  }
+
   constructor(public endpoints: string[], public token: string) {
     this.relay = endpoints[0];
     if (typeof document !== 'undefined') {

@@ -45,16 +45,115 @@ export function Terminal({ client, env, sessionId }: {
     let stopped = false;
     let isPty = false;
 
+    /**
+     * Predictive echo, the way mosh does it.
+     *
+     * A keystroke normally only appears once it has been to the machine and
+     * back. On the same wifi that is a few milliseconds and nobody notices.
+     * Relayed through a hub on the other side of the world it was measured
+     * at over a second a round trip, and typing at that distance is
+     * unusable - you are not typing, you are dictating and waiting.
+     *
+     * So when the link is slow, a printable character is drawn immediately
+     * and remembered as owed. The machine's echo arrives a moment later and
+     * almost always starts with exactly what was drawn, in which case that
+     * prefix is dropped - it is already on screen. When it does not match,
+     * the guess was wrong: erase it and let the machine's bytes stand. The
+     * machine is always the authority; this only ever gets ahead of it.
+     *
+     * The guesses are deliberately timid, because a corrupted screen is far
+     * worse than a slow one:
+     *
+     *   - nothing is predicted until the machine has been seen echoing, so
+     *     a password prompt is not typed into in plain sight;
+     *   - only printable characters, never control codes or escapes, whose
+     *     effect cannot be guessed;
+     *   - never in a full-screen program (vim, less), where a keystroke
+     *     means something other than itself;
+     *   - never close to the right edge, where erasing a wrong guess would
+     *     have to cross a line break;
+     *   - and never on a fast link, where there is nothing to win and a
+     *     wrong guess would be the only thing anyone saw.
+     */
+    const PREDICT_ABOVE_MS = 60;
+    const MAX_PREDICTED = 32;
+    let owed = '';            // drawn here, not yet echoed back
+    let owedSince = 0;
+    let echoes = false;       // has this program been seen echoing?
+    let fullScreen = false;   // vim, less, anything on the alternate screen
+    let lastSent = '';
+
+    const unpredict = () => {
+      if (!owed) return;
+      // Safe because nothing has been drawn since: any output would have
+      // gone through `show` and settled these first.
+      xterm.write('\b \b'.repeat(owed.length));
+      owed = '';
+    };
+
+    const mayPredict = (data: string) => {
+      const rtt = client.latency(env);
+      if (!isPty || !echoes || fullScreen) return false;
+      if (rtt == null || rtt < PREDICT_ABOVE_MS) return false;
+      if (owed.length >= MAX_PREDICTED) return false;
+      // One printable character. Anything else means something.
+      if (data.length !== 1 || data < ' ' || data === '\x7f') return false;
+      const buffer = xterm.buffer.active;
+      return buffer.cursorX + owed.length + 2 < xterm.cols;
+    };
+
+    /** Output the machine sent, reconciled against anything drawn early. */
+    const settle = (text: string) => {
+      if (/\x1b\[\?(1049|47|1047)h/.test(text)) { unpredict(); fullScreen = true; }
+      if (/\x1b\[\?(1049|47|1047)l/.test(text)) fullScreen = false;
+
+      if (!owed) {
+        // Not predicting, but still watching: a program that echoes what it
+        // is sent is one whose echo can be drawn early next time.
+        if (lastSent && text.startsWith(lastSent)) echoes = true;
+        xterm.write(text);
+        return;
+      }
+      if (text.startsWith(owed)) {
+        const rest = text.slice(owed.length);
+        owed = '';
+        if (rest) xterm.write(rest);
+        return;
+      }
+      if (owed.startsWith(text)) {
+        // The echo is arriving in pieces; keep waiting for the rest.
+        owed = owed.slice(text.length);
+        owedSince = Date.now();
+        return;
+      }
+      // Wrong. Take it back and believe the machine.
+      unpredict();
+      echoes = false;
+      xterm.write(text);
+    };
+
     const show = (text: string, reset: boolean) => {
       if (reset) {
+        owed = '';
         xterm.reset();
         xterm.write(text);
         seen = text;
       } else {
-        xterm.write(text);
+        settle(text);
         seen += text;
       }
     };
+
+    // A guess nobody ever confirmed. Usually a password prompt, which is
+    // exactly when a character must not be left sitting on screen.
+    const staleGuess = setInterval(() => {
+      if (!owed) return;
+      const rtt = client.latency(env) ?? 0;
+      if (Date.now() - owedSince > Math.max(500, rtt * 3)) {
+        unpredict();
+        echoes = false;
+      }
+    }, 250);
 
     /**
      * `renew` keeps our place in the daemon's list of viewers without asking
@@ -79,8 +178,17 @@ export function Terminal({ client, env, sessionId }: {
     // Everything typed goes straight through, control characters included.
     // Fire and forget: waiting for the round trip would only add latency.
     const typed = xterm.onData((data) => {
+      if (mayPredict(data)) {
+        if (!owed) owedSince = Date.now();
+        owed += data;
+        xterm.write(data);
+      }
+      lastSent = data;
       client.rpc(env, 'session.input', { id: sessionId, data, raw: true }, 10_000).catch(() => {});
     });
+
+    // How far away this machine is, which is what decides whether to guess.
+    const stopLatency = client.watchLatency(env);
 
     const off = client.on((e, kind, payload) => {
       if (e === env && kind === 'session.data' && payload?.id === sessionId) {
@@ -110,6 +218,8 @@ export function Terminal({ client, env, sessionId }: {
     return () => {
       stopped = true;
       clearInterval(renew);
+      clearInterval(staleGuess);
+      stopLatency();
       off();
       typed.dispose();
       resized.dispose();

@@ -21,6 +21,8 @@ import { homedir } from 'node:os';
 
 /** Output is gathered for this long before being sent, to make one frame of many writes. */
 const FLUSH_MS = 16;
+/** Output arriving after this long a gap is treated as an echo, not a stream. */
+const QUIET_MS = 60;
 /** ...unless this much piles up first, so a big paste is not held back. */
 const MAX_PENDING = 64 * 1024;
 /** What a reconnecting viewer gets replayed. */
@@ -72,7 +74,7 @@ export class Terminals extends EventEmitter {
       env: { ...process.env, ...env, TERM: 'xterm-256color' },
     });
 
-    const t = { pty: child, ring: '', pending: '', timer: null, viewUntil: 0, cols, rows };
+    const t = { pty: child, ring: '', pending: '', timer: null, viewUntil: 0, lastOut: 0, cols, rows };
     this.#live.set(id, t);
 
     child.onData((chunk) => {
@@ -81,7 +83,19 @@ export class Terminals extends EventEmitter {
       t.ring = trim(t.ring + chunk);
       if (!this.#viewed(t)) return;
       t.pending += chunk;
-      if (t.pending.length >= MAX_PENDING) this.#flush(id);
+
+      // Coalescing exists for `cat`ing a big file, where sixty frames a
+      // second is plenty and one frame per write would flood the channel.
+      // It should not apply to the echo of a keystroke: that is one small
+      // chunk after a quiet moment, and holding it for up to 16ms to see if
+      // a friend shows up is 16ms added to the one number anybody feels.
+      //
+      // So: the first chunk after a pause goes out now, and only a stream
+      // that is genuinely streaming gets batched.
+      const now = Date.now();
+      const quiet = now - t.lastOut > QUIET_MS;
+      t.lastOut = now;
+      if (quiet || t.pending.length >= MAX_PENDING) this.#flush(id);
       else if (!t.timer) {
         t.timer = setTimeout(() => this.#flush(id), FLUSH_MS);
         t.timer.unref?.();

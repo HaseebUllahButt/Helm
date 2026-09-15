@@ -650,6 +650,9 @@ export class Daemon {
       case M.USAGE:           return usageApi.usage();
       case M.USAGE_HISTORY:   return usageApi.limitHistory(p.steps);
 
+      // Nothing to compute: the answer is the round trip itself.
+      case M.PING:            return { t: Date.now() };
+
       case M.SSH_INFO:        return sshInfo();
 
       default:

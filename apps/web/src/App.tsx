@@ -800,6 +800,7 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
 }) {
   const [usage, setUsage] = useState<UsageState>({ kind: 'off' });
   const [direct, setDirect] = useState(false);
+  const [ping, setPing] = useState<number | null>(null);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
 
@@ -808,8 +809,13 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
     reload();
     return client.on((e, kind, payload) => {
       if (e === env.id && kind === 'transport') setDirect(payload.direct);
+      if (e === env.id && kind === 'latency') setPing(payload.ms);
     });
   }, [client, env.id, reload]);
+
+  // Measured while you are looking at the machine, which is also when the
+  // terminal wants to know whether to draw keystrokes before they land.
+  useEffect(() => client.watchLatency(env.id), [client, env.id]);
 
   useEffect(() => {
     if (env.online) client.openDirect(env.id).catch(() => {});
@@ -896,6 +902,13 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
           <h1>{env.name}</h1>
           <span className="sub">
             {env.online ? (direct ? 'direct connection' : 'via your Helm home') : 'offline'}
+            {env.online && ping != null && (
+              // The number matters because the two routes differ by two
+              // orders of magnitude, and a relayed phone that feels broken
+              // is usually just far away. Saying so is the difference
+              // between "helm is slow" and "this connection is slow".
+              <span className={ping > 250 ? 'quiet slow' : 'quiet'}> · {Math.round(ping)}ms</span>
+            )}
             {env.info.host ? ` · ${env.info.host}` : ''}
           </span>
         </div>

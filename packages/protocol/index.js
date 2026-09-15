@@ -96,6 +96,10 @@ export const M = {
   SESSION_COMMANDS: 'session.commands',   // { id } -> { commands: [{name, description, source}] }
   SESSION_RESUME: 'session.resume',// { engine, account, id, cwd } -> { session }
   SESSION_ADOPT: 'session.adopt',  // { paneId } -> { session }  take over a pane
+  // A round trip that does nothing, for measuring what one costs. The
+  // terminal needs to know: how it draws depends on how far away you are.
+  PING: 'ping',                    // {} -> { t }
+
   SSH_INFO: 'ssh.info',            // {} -> { pubkey, sshUser, sshPort }
   USAGE: 'usage.get',              // {} -> { fetchedAt, accounts[] }
   USAGE_HISTORY: 'usage.history',  // { steps? } -> limit-economics analysis

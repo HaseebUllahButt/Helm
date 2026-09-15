@@ -489,6 +489,9 @@ pre.snippet {
    and a drop that worked look identical. */
 .slab.dropping::after { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
 
+/* A round trip slow enough that the terminal starts guessing ahead. */
+.quiet.slow { color: var(--amber); }
+
 /* The `/` palette, above the composer and inside its slab. */
 .palette {
   display: flex; flex-direction: column; gap: 1px;
