@@ -156,7 +156,15 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             {onAttach && canAttach && (
               <>
                 <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} multiple style={{ display: 'none' }} onChange={(e) => { if (e.target.files?.length) onAttach(e.target.files); e.target.value = ''; }} />
-                <button className="ctl" onClick={() => fileRef.current?.click()} title="attach image">📎</button>
+                {/* A paperclip drawn rather than an emoji: the emoji rendered in
+                    the platform's own colour, which made it the only coloured
+                    glyph in the chrome and the brightest thing in the composer. */}
+                <button className="ctl icon" onClick={() => fileRef.current?.click()} title="attach image" aria-label="attach image">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </button>
               </>
             )}
             {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>⌨ keys</button>}

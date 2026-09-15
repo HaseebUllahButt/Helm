@@ -32,24 +32,34 @@ const money = (usd?: number) => (usd == null ? '' : usd < 0.01 ? '<$0.01' : `$${
 
 /**
  * Show text as it arrives, but never all at once: the visible length chases
- * the real length a few characters per frame, faster when it falls behind.
+ * the real length, faster when it falls behind.
+ *
+ * The cadence is deliberate. Every step re-renders this message, and a
+ * re-render re-parses the whole thing through marked, DOMPurify and the
+ * syntax highlighter - 1.5ms for a 3.5KB reply on a laptop, several times
+ * that on a phone. Stepping once a frame spent all of it on an effect no
+ * one can perceive: tokens arrive from the agent about fifteen times a
+ * second, so revealing them twenty times a second is already smoother than
+ * the source. Sixty was three times the cost for no visible gain.
  */
+const STEP_MS = 45;
+
 function useTyped(text: string, live: boolean) {
   const [shown, setShown] = useState(live ? 0 : text.length);
   const shownRef = useRef(shown);
   useEffect(() => {
     if (!live) { shownRef.current = text.length; setShown(text.length); return; }
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) { shownRef.current = text.length; setShown(text.length); return; }
-    let raf = 0;
-    const step = () => {
+    if (shownRef.current >= text.length) return;
+    const timer = setInterval(() => {
       const behind = text.length - shownRef.current;
-      if (behind <= 0) return;
-      shownRef.current += Math.max(2, Math.ceil(behind / 6));
+      if (behind <= 0) { clearInterval(timer); return; }
+      // Catch up within a few steps however far behind we are, so a burst
+      // of tokens never leaves the reveal trailing the agent.
+      shownRef.current += Math.max(3, Math.ceil(behind / 3));
       setShown(Math.min(shownRef.current, text.length));
-      raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
+    }, STEP_MS);
+    return () => clearInterval(timer);
   }, [text, live]);
   return live ? text.slice(0, Math.min(shown, text.length)) : text;
 }

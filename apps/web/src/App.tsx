@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Terminal } from './Terminal';
+import { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
@@ -54,6 +53,13 @@ const ENGINE: Record<string, { label: string; cls: string }> = {
   devin:    { label: 'Devin',       cls: 'devin' },
   shell:    { label: 'Terminal',    cls: 'shell' },
 };
+/**
+ * xterm is a third of this app's JavaScript and matters only once a terminal
+ * is open, so it is fetched then rather than on every cold start. The wait is
+ * hidden behind the round trip that opens the pty anyway.
+ */
+const Terminal = lazy(() => import('./Terminal').then((m) => ({ default: m.Terminal })));
+
 const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', cls: 'other' };
 
 /**
@@ -382,7 +388,7 @@ function Shell({ client, conn, onSignOut }: {
             )}
 
             <div className="section">machines</div>
-            <div className="rows">
+            <div className="rows cards">
               {envs.map((e) => {
                 const list = agentsOf(e.id);
                 const working = list.filter((s) => s.status === 'working').length;
@@ -390,7 +396,7 @@ function Shell({ client, conn, onSignOut }: {
                 return (
                   <button
                     key={e.id}
-                    className={`row${e.id === selected && wide ? ' active' : ''}`}
+                    className={`row tall${e.id === selected && wide ? ' active' : ''}`}
                     onClick={() => openEnv(e.id)}
                   >
                     <span className={`mdot ${e.online ? 'on' : 'off'}`} />
@@ -403,18 +409,28 @@ function Shell({ client, conn, onSignOut }: {
                       </span>
                     </span>
                     {waiting > 0 && <span className="badge">{waiting}</span>}
+                    <span className="chev">›</span>
                   </button>
                 );
               })}
               {!envs.length && !error && <div className="empty quiet">no machines yet</div>}
             </div>
 
-            <AddMachine client={client} />
-            <Notifications client={client} />
-            <InstallPwa />
-            <button className="linkish quiet-link" onClick={() => {
-              if (confirm('Unpair this device? You will need a fresh link from `helm link` to sign back in.')) onSignOut();
-            }}>unpair this device</button>
+            {/* Setup is three things you do once and then never again. As
+                full-width slabs they outweighed the machines above them,
+                which is the wrong way round: they are a footer, so they
+                look like one. */}
+            <div className="section">this device</div>
+            <div className="rows">
+              <AddMachine client={client} />
+              <Notifications client={client} />
+              <InstallPwa />
+              <button className="row destructive" onClick={() => {
+                if (confirm('Unpair this device? You will need a fresh link from `helm link` to sign back in.')) onSignOut();
+              }}>
+                <span className="grow"><span className="rt">Unpair this device</span></span>
+              </button>
+            </div>
             {error && <div className="error">{error}</div>}
           </div>
           <div className="diag">
@@ -637,22 +653,25 @@ function AddMachine({ client }: { client: Client }) {
 
   return (
     <>
-      <div className="section">add a computer</div>
       {code ? (
-        <>
+        <div className="setup-open">
           <div className="code">{code}</div>
           <pre className="snippet">helm join {code} {client.relay}</pre>
           <p className="note" style={{ marginTop: 8 }}>
             Run that on the machine you are adding. Expires in 10 minutes and
             carries the network key: treat it like a password.
           </p>
-        </>
+        </div>
       ) : (
         <button
-          className="ghost"
+          className="row"
           onClick={() => client.invite().then((r) => setCode(r.code)).catch((e) => setError(e.message))}
         >
-          create join code
+          <span className="grow">
+            <span className="rt">Add a computer</span>
+            <span className="rm">create a join code</span>
+          </span>
+          <span className="chev">›</span>
         </button>
       )}
       {error && <div className="error">{error}</div>}
@@ -729,18 +748,23 @@ function Notifications({ client }: { client: Client }) {
   if (state === 'unknown' || state === 'unsupported') return null;
   return (
     <>
-      <div className="section">when a session is blocked</div>
       {state === 'blocked' ? (
-        <p className="note">
+        <p className="note setup-open">
           Notifications are blocked for this site. Turn them back on in the
           browser&rsquo;s settings for this address, then reload.
         </p>
       ) : (
-        <button className="ghost" disabled={busy} onClick={state === 'on' ? disable : enable}>
-          {busy ? 'one moment\u2026' : state === 'on' ? 'stop notifying this device' : 'notify this device'}
+        <button className="row" disabled={busy} onClick={state === 'on' ? disable : enable}>
+          <span className="grow">
+            <span className="rt">Notify this device</span>
+            <span className="rm">when a session needs you</span>
+          </span>
+          <span className={`tag${state === 'on' ? ' key' : ''}`}>
+            {busy ? '\u2026' : state === 'on' ? 'on' : 'off'}
+          </span>
         </button>
       )}
-      {error && <p className="note">{error}</p>}
+      {error && <p className="note setup-open">{error}</p>}
     </>
   );
 }
@@ -778,15 +802,20 @@ function InstallPwa() {
   if (standalone || (!offer && !ios)) return null;
   return (
     <>
-      <div className="section">this device</div>
       {offer ? (
-        <button className="ghost" onClick={async () => {
+        <button className="row" onClick={async () => {
           await offer.prompt();
           await offer.userChoice;
           setOffer(null);
-        }}>install Helm app</button>
+        }}>
+          <span className="grow">
+            <span className="rt">Install Helm app</span>
+            <span className="rm">run it like a native app</span>
+          </span>
+          <span className="chev">›</span>
+        </button>
       ) : (
-        <p className="note install-note">On iPhone or iPad: tap Share, then Add to Home Screen.</p>
+        <p className="note install-note setup-open">On iPhone or iPad: tap Share, then Add to Home Screen.</p>
       )}
     </>
   );
@@ -931,7 +960,7 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
               // between "helm is slow" and "this connection is slow".
               <span className={ping > 250 ? 'quiet slow' : 'quiet'}> · {Math.round(ping)}ms</span>
             )}
-            {env.info.host ? ` · ${env.info.host}` : ''}
+            {env.info.host && env.info.host !== env.name ? ` \u00b7 ${env.info.host}` : ''}
           </span>
         </div>
         <button
@@ -1005,7 +1034,7 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
             {usage.kind === 'failed' && <div className="empty quiet">usage unavailable — {usage.error}</div>}
             {usage.kind === 'ready' && (
               usage.accounts.length
-                ? <div className="usage">{usage.accounts.map((a) => <UsageRow key={a.id} account={a} />)}</div>
+                ? <div className="usage panel">{usage.accounts.map((a) => <UsageRow key={a.id} account={a} />)}</div>
                 : <div className="empty quiet">no accounts reported</div>
             )}
           </>
@@ -1393,7 +1422,9 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived }: {
       </div>
 
       {raw
-        ? <Terminal client={client} env={env.id} sessionId={session.id} />
+        ? <Suspense fallback={<div className="xterm-host" />}>
+            <Terminal client={client} env={env.id} sessionId={session.id} />
+          </Suspense>
         : <Chat messages={messages} status={status} />}
 
       {!raw && (

@@ -9,25 +9,36 @@
    =========================================================================== */
 
 :root {
-  --bg:        #0a0a0a;
-  --card:      #0f0f0f;
-  --sidebar:   #000;
-  --raised:    #131313;
+  /* Surfaces. Four steps, each a few percent apart, so depth reads as depth
+     and not as a different colour. */
+  --bg:        #0a0a0b;
+  --card:      #101012;
+  --sidebar:   #060607;
+  --raised:    #17171a;
   --muted:     rgb(255 255 255 / 3%);
-  --accent:    rgb(255 255 255 / 4%);
-  --hover:     rgb(255 255 255 / 5%);
-  --line:      rgb(255 255 255 / 6%);
-  --line-2:    rgb(255 255 255 / 8%);
-  --input:     rgb(255 255 255 / 8%);
+  --accent:    rgb(255 255 255 / 5%);
+  --hover:     rgb(255 255 255 / 7%);
+  --line:      rgb(255 255 255 / 7%);
+  --line-2:    rgb(255 255 255 / 11%);
+  --input:     rgb(255 255 255 / 9%);
 
-  --text:      #f5f5f5;
-  --text-80:   rgb(245 245 245 / 80%);
-  --text-dim:  #a3a3a3;
-  --mutedfg:   #7f7f80;
-  --icon:      #6b6b6c;
+  /* Text. Four steps as well, and they are the main tool for hierarchy -
+     colour is not. */
+  --text:      #f4f4f5;
+  --text-80:   rgb(244 244 245 / 82%);
+  --text-dim:  #a1a1aa;
+  --mutedfg:   #71717a;
+  --icon:      #62626b;
 
-  --primary:   oklch(0.571 0.21 264);
-  --primary-h: oklch(0.54 0.21 264);
+  /* Three indigos with three jobs. The fill is deep enough to sit on a
+     near-black page instead of glowing off it - at full width and full
+     chroma it was the brightest thing on every screen, which put a button
+     that is always there above the amber that means "a session needs you".
+     The quiet one is for text: links, checkmarks, a selected row. */
+  --primary:   oklch(0.585 0.185 264);
+  --primary-t: oklch(0.635 0.185 264);
+  --primary-h: oklch(0.645 0.185 264);
+  --primary-q: oklch(0.755 0.12 264);
   --amber:     #fbbf24;
   --sky:       #7dd3fc;
   --emerald:   #34d399;
@@ -38,13 +49,28 @@
   --opencode:  #c4b5fd;
   --devin:     #a7f3d0;
 
-  --radius:    10px;
+  /* A type scale, so sizes are chosen from a set rather than invented at
+     each call site. The old sheet had sixteen distinct font sizes between
+     10px and 16px; most of them were the same size to the eye. */
+  --t-micro:   11px;   /* section labels, chips, diagnostics */
+  --t-meta:    12.5px; /* the second line of a row */
+  --t-body:    14px;   /* rows, menus, controls */
+  --t-read:    15px;   /* prose and anything long enough to read */
+  --t-title:   15.5px; /* a screen's own name */
+
+  /* Radii track size: small things get small corners. Everything here was
+     10-18px before, which reads as bubbly at phone scale. */
+  --radius:    9px;
   --radius-sm: 6px;
   --radius-md: 8px;
-  --radius-xl: 14px;
-  --slab:      22px;
+  --radius-xl: 13px;
+  --slab:      20px;
+
+  /* The left gutter every row's mark sits in, so text starts on one line all
+     the way down a screen. */
+  --gutter:    30px;
   --sidebar-w: 300px;
-  --measure:   48rem;
+  --measure:   46rem;
 
   --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   --ease: cubic-bezier(0.2, 0, 0, 1);
@@ -57,7 +83,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font: var(--t-body)/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
 }
@@ -92,8 +118,8 @@ code, pre, kbd { font-family: var(--mono); }
 
 .bar {
   display: flex; align-items: center; gap: 8px; flex: none; position: relative;
-  min-height: 52px;
-  padding: max(10px, env(safe-area-inset-top)) 12px 10px;
+  min-height: 50px;
+  padding: max(9px, env(safe-area-inset-top)) 12px 9px;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--bg) 80%, transparent);
   backdrop-filter: blur(16px) saturate(1.08);
@@ -102,11 +128,19 @@ code, pre, kbd { font-family: var(--mono); }
 .bar.side { background: color-mix(in srgb, var(--sidebar) 80%, transparent); padding-left: 14px; }
 .bar .titles { flex: 1; min-width: 0; }
 .bar h1 {
-  margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
+  margin: 0; font-size: var(--t-title); font-weight: 600; letter-spacing: -0.017em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* The engine mark rides the subtitle line, so it is sized to that line
+   rather than to a list row - at row size it was taller than the text and
+   touching the first letter of it. */
+.bar .sub .mark {
+  width: 18px; height: 18px; border-radius: 5px;
+  margin-right: 7px; vertical-align: -4px;
+}
+.bar .sub .mark svg { width: 11px; height: 11px; }
 .bar .sub {
-  display: block; font-size: 13px; color: var(--mutedfg);
+  display: block; font-size: var(--t-meta); color: var(--mutedfg);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .iconbtn {
@@ -126,15 +160,15 @@ code, pre, kbd { font-family: var(--mono); }
   box-shadow: inset 0 1px rgb(255 255 255 / 4%), 0 24px 72px -20px rgb(0 0 0 / 90%);
 }
 .menu button {
-  display: block; width: 100%; text-align: left; padding: 8px 10px;
-  border-radius: var(--radius-sm); font-size: 13.5px; color: var(--text-dim);
+  display: block; width: 100%; text-align: left; padding: 7px 10px;
+  border-radius: var(--radius-sm); font-size: var(--t-body); color: var(--text-dim);
 }
 .menu button:hover { background: var(--accent); }
 .menu button.destructive { color: var(--red); }
 
 .brand { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
-.brand img { width: 22px; height: 22px; border-radius: 6px; flex: none; }
-.brand b { font-size: 14.5px; font-weight: 600; letter-spacing: -0.01em; }
+.brand img { width: 21px; height: 21px; border-radius: 6px; flex: none; }
+.brand b { font-size: var(--t-body); font-weight: 600; letter-spacing: -0.012em; }
 
 /* Connection state, as words. Only "offline" is red. */
 .conn {
@@ -162,46 +196,55 @@ code, pre, kbd { font-family: var(--mono); }
 
 .section {
   display: flex; align-items: center; gap: 8px;
-  margin: 18px 0 6px; padding: 0 8px; height: 20px;
-  font-size: 11.5px; font-weight: 500; color: var(--mutedfg);
+  margin: 20px 0 7px; padding: 0 8px; height: 16px;
+  font-size: var(--t-micro); font-weight: 500; color: var(--mutedfg);
+  text-transform: uppercase; letter-spacing: 0.07em;
 }
-.section:first-child { margin-top: 2px; }
+.section:first-child { margin-top: 4px; }
 .section .spacer { flex: 1; }
+.section .quiet { text-transform: none; letter-spacing: 0; }
 .section.attention { color: var(--amber); }
-.section.attention::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+.section.attention::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--amber); }
 .pad .section { padding: 0 2px; }
 
 .rows { display: flex; flex-direction: column; gap: 2px; }
 .row {
-  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px;
-  padding: 6px 8px; border-radius: var(--radius-md); text-align: left;
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px;
+  padding: 5px 8px; border-radius: var(--radius-md); text-align: left;
   color: var(--text-dim); transition: background 0.12s var(--ease), color 0.12s var(--ease);
 }
 .row:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .row.active { background: var(--muted); color: var(--text); }
 .row.active .rt { font-weight: 500; }
-.row.tall { min-height: 52px; padding: 8px 10px; background: var(--card); border: 1px solid var(--line); }
+/* A card row: used where the row is the content of the screen rather than a
+   line in a list of settings. */
+.row.tall {
+  min-height: 46px; padding: 7px 10px; background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
 .row.tall:hover:not(:disabled) { background: var(--raised); border-color: var(--line-2); }
 .row.tall.active { border-color: color-mix(in srgb, var(--primary) 55%, transparent); background: color-mix(in srgb, var(--primary) 8%, var(--card)); }
+.rows.cards { gap: 5px; }
 .row .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .row .rt {
-  font-size: 15.5px; display: flex; align-items: center; gap: 6px;
+  font-size: var(--t-body); font-weight: 500; display: flex; align-items: center; gap: 6px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text);
+  letter-spacing: -0.006em;
 }
 .row .rt .dim { color: var(--mutedfg); font-weight: 400; }
 .row .rm {
-  font-size: 13px; color: var(--mutedfg);
+  font-size: var(--t-meta); color: var(--mutedfg); line-height: 1.35;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.row .chev { color: var(--icon); font-size: 16px; flex: none; }
-.row .check { color: var(--primary); font-weight: 700; flex: none; }
-.row .glyph { font: 600 13px/1 var(--mono); color: var(--icon); width: 18px; text-align: center; flex: none; }
+.row .chev { color: var(--icon); font-size: 15px; flex: none; }
+.row .check { color: var(--primary-q); font-weight: 700; flex: none; }
+.row .glyph { font: 600 12px/1 var(--mono); color: var(--icon); width: 18px; text-align: center; flex: none; }
 .row .glyph.repo { color: var(--emerald); }
 
 .mark {
-  width: 28px; height: 28px; border-radius: 8px; flex: none;
+  width: 26px; height: 26px; border-radius: 7px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  font: 700 12px/1 var(--mono); background: var(--accent); color: var(--text-dim);
+  font: 700 11px/1 var(--mono); background: var(--accent); color: var(--text-dim);
 }
 /* The marks are inline SVG inheriting currentColor, so each engine's tint
    above colours its logo with nothing further to set. */
@@ -248,7 +291,7 @@ code, pre, kbd { font-family: var(--mono); }
 
 input, textarea, select {
   background: var(--card); border: 1px solid var(--input);
-  border-radius: var(--radius); padding: 10px 12px; width: 100%; font-size: 15px;
+  border-radius: var(--radius); padding: 10px 12px; width: 100%; font-size: var(--t-read);
   transition: border-color 0.15s var(--ease);
 }
 input::placeholder, textarea::placeholder { color: rgb(127 127 128 / 75%); }
@@ -280,27 +323,73 @@ input.custom { font-family: var(--mono); font-size: 13px; }
 .switch.on { background: var(--primary); }
 .switch.on i { transform: translateX(16px); background: #fff; }
 
+/* The one filled button on a screen. It was a full-bleed slab in a saturated
+   indigo - at phone width that reads as a billboard and outshouts the list of
+   sessions underneath it, which is what you actually came to look at. Same
+   colour, a third less height, and the fill is slightly graded so it sits on
+   the page rather than on top of it. */
 button.primary {
-  background: var(--primary); color: #fff; border-radius: var(--radius);
-  padding: 11px 16px; width: 100%; font-weight: 500; margin-top: 12px;
-  box-shadow: inset 0 1px rgb(255 255 255 / 16%);
-  transition: background 0.15s var(--ease);
+  background: linear-gradient(var(--primary-t), var(--primary));
+  color: #fff; border-radius: var(--radius);
+  padding: 10px 16px; width: 100%; font-size: var(--t-body); font-weight: 550;
+  letter-spacing: -0.006em; margin-top: 12px;
+  box-shadow: inset 0 1px rgb(255 255 255 / 18%), 0 1px 2px rgb(0 0 0 / 40%);
+  transition: filter 0.15s var(--ease);
 }
-button.primary.big { padding: 13px 16px; font-size: 15px; margin-top: 0; margin-bottom: 8px; }
-button.primary:hover:not(:disabled) { background: var(--primary-h); }
-button.primary:disabled { opacity: 0.3; box-shadow: none; }
+/* The screen's own action, where a list of sessions is the content. Tonal
+   rather than filled: at full width a solid indigo was the brightest thing
+   on the machine screen, which broke the rule the rest of the app keeps -
+   amber, meaning "a session needs you", should be the loudest colour here,
+   and it cannot be if a button that is always present outshines it. */
+button.primary.big {
+  padding: 11px 16px; margin-top: 0; margin-bottom: 10px;
+  background: color-mix(in srgb, var(--primary) 20%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--primary) 46%, transparent);
+  color: var(--primary-q);
+  box-shadow: inset 0 1px rgb(255 255 255 / 5%);
+}
+button.primary.big:hover:not(:disabled) {
+  filter: none;
+  background: color-mix(in srgb, var(--primary) 32%, var(--card));
+  border-color: color-mix(in srgb, var(--primary) 66%, transparent);
+  color: #fff;
+}
+button.primary.big:disabled { opacity: 0.4; }
+/* On a phone the column is the button's natural width. On a laptop the same
+   rule stretched it across 700px of empty space, which made a single action
+   look like a banner. */
+@media (min-width: 900px) {
+  button.primary.big { width: auto; min-width: 190px; align-self: flex-start; }
+}
+button.primary:hover:not(:disabled) { filter: brightness(1.12); }
+/* Inert, not dimmed: a faded indigo slab still reads as a filled button and
+   invites the tap it is going to ignore. */
+button.primary:disabled {
+  background: var(--muted); color: var(--icon);
+  box-shadow: none; opacity: 1; cursor: default;
+}
 
 button.ghost {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 10px 14px; width: 100%; color: var(--text-dim); font-weight: 500; margin-top: 6px;
+  padding: 9px 14px; width: 100%; color: var(--text-dim);
+  font-size: var(--t-body); font-weight: 500; margin-top: 6px;
 }
-button.ghost:hover { background: var(--raised); color: var(--text); }
-button.linkish { color: var(--primary); font-size: 12px; font-weight: 500; filter: brightness(1.25); }
+button.ghost:hover { background: var(--raised); color: var(--text); border-color: var(--line-2); }
+button.linkish { color: var(--primary-q); font-size: var(--t-meta); font-weight: 500; }
+button.linkish:hover { color: var(--text); }
+
+/* Keyboard focus has to be visible; before this, tabbing through the app lit
+   nothing at all. Pointer clicks keep their quiet look. */
+:where(button, a, input, textarea, select):focus-visible {
+  outline: 2px solid var(--primary-q); outline-offset: 2px; border-radius: var(--radius-sm);
+}
 
 .inline-form { display: flex; gap: 8px; margin: 0 0 8px; }
 .inline-form .send {
   flex: none; width: 42px; height: 42px; border-radius: 50%;
-  background: var(--primary); color: #fff; font-size: 16px; font-weight: 600;
+  background: linear-gradient(var(--primary-h), var(--primary));
+  color: #fff; font-size: 16px; font-weight: 600;
+  box-shadow: inset 0 1px rgb(255 255 255 / 18%);
 }
 
 .error {
@@ -309,8 +398,8 @@ button.linkish { color: var(--primary); font-size: 12px; font-weight: 500; filte
   border: 1px solid color-mix(in srgb, var(--red) 32%, transparent);
 }
 .error.floating { margin: 0 14px 10px; }
-.note { color: var(--mutedfg); font-size: 12.5px; }
-.empty { padding: 36px 16px; text-align: center; color: var(--mutedfg); font-size: 13.5px; }
+.note { color: var(--mutedfg); font-size: var(--t-meta); line-height: 1.5; }
+.empty { padding: 28px 16px; text-align: center; color: var(--mutedfg); font-size: var(--t-meta); }
 .empty.quiet { border: 0; }
 .placeholder { color: rgb(127 127 128 / 75%); font-size: 14px; margin: 20px 4px; }
 
@@ -352,6 +441,8 @@ pre.snippet {
 .pair-ticket b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .pair-ticket small { color: var(--mutedfg); font-size: 11.5px; }
 .auth code { color: var(--text-dim); }
+.auth a, .note a { color: var(--primary-q); text-decoration: none; font-weight: 500; }
+.auth a:hover, .note a:hover { text-decoration: underline; }
 .install-note { margin: 0; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
 
 /* ------------------------------------------------------------------- chat */
@@ -362,14 +453,17 @@ pre.snippet {
 .timeline { max-width: var(--measure); width: 100%; margin: 0 auto; display: flex; flex-direction: column; }
 
 .turn { display: flex; flex-direction: column; min-width: 0; }
-.turn.user { align-items: flex-end; padding-bottom: 16px; }
+.turn.user { align-items: flex-end; padding-bottom: 14px; }
 .turn.user .bubble {
-  max-width: 80%; padding: 12px; border-radius: 18px;
-  background: var(--accent); color: var(--text);
-  white-space: pre-wrap; word-break: break-word; font-size: 15.5px; line-height: 1.6;
+  max-width: 85%; padding: 9px 13px; border-radius: 15px 15px 4px 15px;
+  background: var(--accent); border: 1px solid var(--line); color: var(--text);
+  white-space: pre-wrap; word-break: break-word;
+  font-size: var(--t-read); line-height: 1.52;
 }
 .turn.assistant { padding: 2px 4px 8px; gap: 2px; }
-.prose { font-size: 15.5px; line-height: 1.68; color: var(--text-80); word-break: break-word; }
+.prose { font-size: var(--t-read); line-height: 1.62; color: var(--text-80); word-break: break-word; }
+/* Before the markdown chunk lands, the same text as plain text. */
+.md.raw { white-space: pre-wrap; }
 
 /* Activity: one 24px line per tool call, never a card. */
 .act {
@@ -463,7 +557,7 @@ pre.snippet {
 
 .slab {
   position: relative; z-index: 1; border-radius: var(--slab); padding: 1px;
-  background: color-mix(in srgb, var(--raised) 80%, transparent); backdrop-filter: blur(16px) saturate(1.08);
+  background: color-mix(in srgb, var(--raised) 93%, transparent); backdrop-filter: blur(20px) saturate(1.1);
 }
 .slab::after {
   content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
@@ -471,9 +565,9 @@ pre.snippet {
 }
 .slab textarea {
   display: block; width: 100%; background: transparent; border: 0; box-shadow: none; resize: none;
-  padding: 14px 16px 6px; min-height: 44px; max-height: 180px; line-height: 1.5; font-size: 16px; color: var(--text);
+  padding: 12px 15px 5px; min-height: 42px; max-height: 180px; line-height: 1.5; font-size: 16px; color: var(--text);
 }
-.slab textarea:focus { box-shadow: none; }
+.slab textarea:focus { box-shadow: none; outline: none; }
 .slab-foot { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; }
 .slab-foot .spacer { flex: 1; }
 .attach-status { color: var(--mutedfg); font-size: 11px; white-space: nowrap; }
@@ -496,6 +590,7 @@ pre.snippet {
 .palette {
   display: flex; flex-direction: column; gap: 1px;
   padding: 6px 6px 0; max-height: 260px; overflow-y: auto;
+  border-bottom: 1px solid var(--line);
 }
 .palette button {
   display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: baseline;
@@ -518,12 +613,15 @@ pre.snippet {
   height: 28px; padding: 0 10px; border-radius: 8px; font-size: 12.5px; color: rgb(127 127 128 / 80%);
 }
 .ctl:hover, .ctl.on { color: var(--text); background: var(--accent); }
+.ctl.icon { display: inline-flex; align-items: center; justify-content: center; width: 32px; padding: 0; }
+.ctl.icon svg { display: block; }
 .send {
   width: 36px; height: 36px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
-  background: var(--primary); color: #fff; box-shadow: inset 0 1px rgb(255 255 255 / 16%);
-  transition: transform 0.15s var(--ease), background 0.15s var(--ease), opacity 0.15s;
+  background: linear-gradient(var(--primary-h), var(--primary)); color: #fff;
+  box-shadow: inset 0 1px rgb(255 255 255 / 18%), 0 1px 3px rgb(0 0 0 / 45%);
+  transition: transform 0.15s var(--ease), filter 0.15s var(--ease), opacity 0.15s;
 }
-.send:hover:not(:disabled) { transform: scale(1.05); background: var(--primary-h); }
+.send:hover:not(:disabled) { transform: scale(1.05); filter: brightness(1.15); }
 .send:disabled { opacity: 0.3; box-shadow: none; }
 .keys { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 10px 10px; }
 .keys button {
@@ -540,8 +638,15 @@ pre.snippet {
 
 /* ------------------------------------------------------------------ usage */
 
-.usage { display: flex; flex-direction: column; gap: 8px; padding: 0 4px; }
-.usage-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.usage { display: flex; flex-direction: column; padding: 0 4px; }
+/* Usage sat bare on the background while everything above it was carded, so
+   it read as a footnote rather than as part of the screen. */
+.usage.panel {
+  padding: 2px 12px; background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
+.usage-row { display: flex; align-items: center; gap: 10px; font-size: var(--t-meta); min-height: 32px; }
+.usage.panel .usage-row + .usage-row { border-top: 1px solid var(--muted); }
 .usage-row .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
 .usage-row .cost { color: var(--mutedfg); font-variant-numeric: tabular-nums; font-size: 12.5px; }
 .meter { width: 68px; height: 4px; border-radius: 2px; background: var(--input); overflow: hidden; flex: none; }
@@ -773,5 +878,13 @@ pre.snippet {
 }
 .row.rowx .rowend:hover { color: var(--text); background: var(--accent); }
 .row.rowx .row-menu { top: calc(100% - 4px); right: 4px; }
-.quiet-link { display: block; margin: 10px auto 0; color: var(--mutedfg); }
-.quiet-link:hover { color: var(--text-dim); }
+
+/* Setup rows that have opened into a form or a note keep the group's left
+   edge, so the section does not jump sideways when one expands. */
+.setup-open { margin: 6px 2px 10px; }
+/* Quiet until you reach for it. Unpairing is rare and reversible only by
+   fetching a fresh link, but painting it red at rest made the loudest thing
+   on the screen the one action you almost never want. */
+.row.destructive .rt { color: var(--mutedfg); font-weight: 400; }
+.row.destructive:hover { background: color-mix(in srgb, var(--red) 10%, transparent); }
+.row.destructive:hover .rt { color: var(--red); }
