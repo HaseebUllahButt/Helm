@@ -49,6 +49,7 @@ const ENGINE: Record<string, { label: string; mark: string; cls: string }> = {
   claude:   { label: 'Claude Code', mark: 'C', cls: 'claude' },
   codex:    { label: 'Codex',       mark: 'X', cls: 'codex' },
   opencode: { label: 'opencode',    mark: 'O', cls: 'opencode' },
+  devin:    { label: 'Devin',       mark: 'D', cls: 'devin' },
   shell:    { label: 'Terminal',    mark: '❯', cls: 'shell' },
 };
 const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', mark: '·', cls: 'other' };
@@ -79,7 +80,7 @@ function accountsFrom(profiles: Profile[]): Account[] {
     // also unsets a variable is the same account with a different mood.
     const key = [p.engine, home ?? '', [...(p.envFrom ?? [])].sort().join(',')].join('|');
     const leaf = home?.split('/').pop() ?? '';
-    const suffix = leaf.replace(/^\.?(claude|codex|opencode|config)-?/, '');
+    const suffix = leaf.replace(/^\.?(claude|codex|opencode|devin|config)-?/, '');
     const existing = by.get(key);
     if (existing) {
       existing.aliases.push(p.id);
@@ -94,7 +95,7 @@ function accountsFrom(profiles: Profile[]): Account[] {
       profile: p, aliases: [p.id],
     });
   }
-  const order = ['claude', 'codex', 'opencode'];
+  const order = ['claude', 'codex', 'opencode', 'devin'];
   return [...by.values()].sort((a, b) =>
     (order.indexOf(a.engine) - order.indexOf(b.engine)) || a.account.localeCompare(b.account));
 }
@@ -224,7 +225,7 @@ function Shell({ client, conn, onSignOut }: {
     else setSelected(null);
   };
 
-  const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => s.engine !== 'shell');
+  const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => s.engine !== 'shell' && !s.archived);
   const blocked = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
   const showMain = wide || !!selected;
 
@@ -345,6 +346,7 @@ function Shell({ client, conn, onSignOut }: {
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onClosed={() => { loadSessions(env.id); back(); }}
+            onArchived={() => { loadSessions(env.id); back(); }}
             onSession={(s) => { loadSessions(env.id); setStack((st) => st.map((v) => (v.kind === 'session' && v.session.id === s.id ? { kind: 'session', session: { ...v.session, ...s } } : v))); }}
           />
         ) : (
@@ -352,6 +354,7 @@ function Shell({ client, conn, onSignOut }: {
             key={view.session.id}
             client={client} env={env} session={view.session} onBack={back}
             onClosed={() => { loadSessions(env.id); back(); }}
+            onArchived={() => { loadSessions(env.id); back(); }}
           />
         )}
       </section>
@@ -577,13 +580,26 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
     finally { setOpening(false); }
   };
 
-  const agents = sessions.filter((s) => s.engine !== 'shell');
+  const agents = sessions.filter((s) => s.engine !== 'shell' && !s.archived);
+  const archived = sessions.filter((s) => s.engine !== 'shell' && s.archived);
   const groups: [string, Session[]][] = [
     ['needs you', agents.filter((s) => s.status === 'blocked')],
     ['working', agents.filter((s) => s.status === 'working')],
     ['idle', agents.filter((s) => !['blocked', 'working', 'exited'].includes(s.status))],
     ['finished', agents.filter((s) => s.status === 'exited')],
   ];
+
+  const setArchived = async (s: Session, archived: boolean) => {
+    setError('');
+    try { await client.rpc(env.id, 'session.archive', { id: s.id, archived }, 20_000); reload(); }
+    catch (e: any) { setError(e.message); }
+  };
+
+  const deleteSession = async (s: Session) => {
+    setError('');
+    try { await client.rpc(env.id, 'session.kill', { id: s.id }, 20_000); reload(); }
+    catch (e: any) { setError(e.message); }
+  };
 
   return (
     <>
@@ -613,18 +629,30 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
               {list.map((s) => (
                 <SessionRow
                   key={s.id} s={s} onOpen={() => onOpen(s)}
-                  onEnd={async () => {
-                    try { await client.rpc(env.id, 'session.kill', { id: s.id }, 20_000); } catch { /* already gone */ }
-                    reload();
-                  }}
+                  onArchive={() => setArchived(s, true)}
+                  onDelete={() => deleteSession(s)}
                 />
               ))}
             </div>
           </div>
         ))}
+        {archived.length > 0 && (
+          <div>
+            <div className="section">archived</div>
+            <div className="rows">
+              {archived.map((s) => (
+                <SessionRow
+                  key={s.id} s={s} onOpen={() => onOpen(s)}
+                  onArchive={() => setArchived(s, false)}
+                  onDelete={() => deleteSession(s)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
         {!agents.length && (
           <div className="empty quiet">
-            nothing running on {env.name}
+            {archived.length ? 'no active sessions' : `nothing running on ${env.name}`}
             <div className="note" style={{ marginTop: 6 }}>pick a folder, then an agent</div>
           </div>
         )}
@@ -642,16 +670,20 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
 }
 
 /**
- * A session in the list, and the one gesture that removes it.
+ * A session in the list with actions to archive or permanently remove it.
  *
  * The row is a div rather than a button because it holds a second button:
- * a conversation you are done with should be closable from the list, not
+ * a conversation you are done with should be manageable from the list, not
  * only from inside it. An agent helm did not start is left alone - helm
  * does not own that process and has no business ending it.
  */
-function SessionRow({ s, onOpen, onEnd }: { s: Session; onOpen: () => void; onEnd?: () => void }) {
+function SessionRow({ s, onOpen, onArchive, onDelete }: {
+  s: Session; onOpen: () => void; onArchive?: () => void; onDelete?: () => void;
+}) {
   const eng = engineOf(s.engine);
   const adopted = (s as any).adopted;
+  const [menu, setMenu] = useState(false);
+  const managed = !adopted && (!!onArchive || !!onDelete);
   return (
     <div className="row tall rowx">
       <button className="rowmain" onClick={onOpen}>
@@ -666,14 +698,28 @@ function SessionRow({ s, onOpen, onEnd }: { s: Session; onOpen: () => void; onEn
         {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
         <StatusChip status={s.status} />
       </button>
-      {onEnd && !adopted && (
-        <button
-          className="rowend" title={`end "${s.title}"`} aria-label={`end ${s.title}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (confirm(`End "${s.title}"? The agent is closed and this conversation is removed from helm.`)) onEnd();
-          }}
-        >✕</button>
+      {managed && (
+        <>
+          <button
+            className="rowend" title="thread actions" aria-label={`actions for ${s.title}`}
+            onClick={(e) => { e.stopPropagation(); setMenu((open) => !open); }}
+          >⋯</button>
+          {menu && (
+            <div className="menu row-menu" onClick={(e) => e.stopPropagation()}>
+              {onArchive && (
+                <button onClick={() => { setMenu(false); onArchive(); }}>
+                  {s.archived ? 'Unarchive thread' : 'Archive thread'}
+                </button>
+              )}
+              {onDelete && (
+                <button className="destructive" onClick={() => {
+                  setMenu(false);
+                  if (confirm(`Delete "${s.title}"? This ends the agent and permanently removes the thread from helm.`)) onDelete();
+                }}>Delete thread</button>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -882,7 +928,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
         {accounts?.length === 0 && (
           <div className="empty quiet">
             no agents on {env.name}
-            <div className="note" style={{ marginTop: 6 }}>install claude, codex or opencode there and run <code>helm profiles --refresh</code></div>
+            <div className="note" style={{ marginTop: 6 }}>install claude, codex, opencode or Devin there and run <code>helm profiles --refresh</code></div>
           </div>
         )}
 
@@ -906,9 +952,9 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-function SessionView({ client, env, session, onBack, onClosed }: {
+function SessionView({ client, env, session, onBack, onClosed, onArchived }: {
   client: Client; env: Environment; session: Session;
-  onBack: () => void; onClosed: () => void;
+  onBack: () => void; onClosed: () => void; onArchived: () => void;
 }) {
   const isShell = session.engine === 'shell';
   const [messages, setMessages] = useState<Message[] | null>(null);
@@ -957,8 +1003,14 @@ function SessionView({ client, env, session, onBack, onClosed }: {
   };
 
   const kill = async () => {
-    if (!confirm(`End "${session.title}"? The agent process is closed.`)) return;
+    if (!confirm(`Delete "${session.title}"? The agent process is closed and the thread is removed from helm.`)) return;
     try { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); }
+    catch (e: any) { setError(e.message); }
+  };
+
+  const archive = async () => {
+    setMenu(false);
+    try { await client.rpc(env.id, 'session.archive', { id: session.id, archived: !session.archived }); onArchived(); }
     catch (e: any) { setError(e.message); }
   };
 
@@ -979,7 +1031,8 @@ function SessionView({ client, env, session, onBack, onClosed }: {
         <button className="iconbtn" title="more" onClick={() => setMenu((v) => !v)}>⋯</button>
         {menu && (
           <div className="menu" onClick={() => setMenu(false)}>
-            <button onClick={kill}>End session</button>
+            <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
+            <button className="destructive" onClick={kill}>Delete thread</button>
           </div>
         )}
       </div>

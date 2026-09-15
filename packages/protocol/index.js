@@ -78,6 +78,7 @@ export const M = {
   SESSION_INPUT: 'session.input',  // { id, data }
   SESSION_RESIZE: 'session.resize',// { id, cols, rows }
   SESSION_KILL: 'session.kill',    // { id }
+  SESSION_ARCHIVE: 'session.archive', // { id, archived? } -> { session }
   DIGEST_LIST: 'digest.list',      // { limit? } -> { digests[] }
   SESSION_KEYS: 'session.keys',    // { id, keys[] }  e.g. ["Enter"], ["C-c"]
   SESSION_MESSAGES: 'session.messages', // { id, limit? } -> { messages[], source }

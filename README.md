@@ -144,9 +144,9 @@ Claude Code and Codex sessions run **headless**: helm starts the CLI in its
 streaming mode (`claude -p` with stream-json, `codex app-server`) and turns
 what it says into one stream of events - text as it is written, each tool
 call and its result, every permission prompt with the choices the CLI
-offered. The app renders that stream, so the phone shows the agent typing,
-folds tool calls into one line each, and answers a permission prompt, an
-`AskUserQuestion`, or a plan review with a tap. Stop interrupts the turn.
+offered. OpenCode and Devin are detected and started through the terminal
+runtime. The app renders the agent screen, and the phone can watch and send
+messages to all four CLIs. Stop interrupts the turn.
 
 **How much the agent may do without asking** is a chip in the composer, next
 to Send: `ask` · `edit` · `plan` · `auto` · `yolo` for Claude Code, `ask` ·

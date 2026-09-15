@@ -218,7 +218,7 @@ export class Sessions extends EventEmitter {
 
     for (const s of this.#index.values()) {
       if (s.driver) {
-        out.push({ ...s, alive: this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
+        out.push({ ...s, archived: !!s.archived, alive: this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
         continue;
       }
       const pane = live.get(s.paneId);
@@ -231,7 +231,7 @@ export class Sessions extends EventEmitter {
       const status = !pane ? 'exited'
         : s.engine === 'shell' ? 'shell'
         : (pane.status ?? s.status ?? 'unknown');
-      out.push({ ...s, alive: !!pane, status, cwd: pane?.cwd ?? s.cwd, adopted: false });
+      out.push({ ...s, archived: !!s.archived, alive: !!pane, status, cwd: pane?.cwd ?? s.cwd, adopted: false });
     }
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
@@ -804,6 +804,17 @@ export class Sessions extends EventEmitter {
       this.#save();
     }
     return { ok: true };
+  }
+
+  /** Hide a session from the active list without stopping or deleting it. */
+  archive(id, archived = true) {
+    const s = this.get(id);
+    if (s.adopted) throw new Error('an external session cannot be archived');
+    s.archived = !!archived;
+    s.archivedAt = s.archived ? Date.now() : null;
+    this.#save();
+    this.emit('session', s);
+    return { ok: true, session: s };
   }
 
   /** Re-watch every surviving pane after a daemon restart. */

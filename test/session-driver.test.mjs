@@ -129,6 +129,14 @@ test('a headless session: start, stream, watch, prompt, resume, kill', async (t)
   d.push('status', { status: 'exited' });
   assert.equal(sessions.get(s.id).status, 'idle');
   assert.equal((await sessions.list()).find((x) => x.id === s.id).alive, false);
+
+  // Archiving hides the thread without stopping it, and unarchiving restores it.
+  await sessions.archive(s.id);
+  assert.equal((await sessions.list()).find((x) => x.id === s.id).archived, true);
+  assert.equal(sessions.get(s.id).status, 'idle');
+  await sessions.archive(s.id, false);
+  assert.equal((await sessions.list()).find((x) => x.id === s.id).archived, false);
+
   await sessions.input(s.id, 'again');
   const d2 = FakeDriver.made.at(-1);
   assert.notEqual(d2, d);

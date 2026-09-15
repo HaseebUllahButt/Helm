@@ -546,6 +546,7 @@ export class Daemon {
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
       case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
+      case M.SESSION_ARCHIVE: return this.sessions.archive(p.id, p.archived !== false);
 
       // Headless agent sessions.
       case M.SESSION_EVENTS:  return this.sessions.history(p.id, { since: p.since ?? 0, limit: p.limit ?? 500 });

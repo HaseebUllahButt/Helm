@@ -61,6 +61,8 @@ export interface Session {
   /** Prompts waiting on a person, for the list view. */
   pending?: number;
   adopted?: boolean;
+  /** Archived threads stay on the machine but are hidden from active groups. */
+  archived?: boolean;
 }
 
 /** A permission mode an engine offers, in words; the daemon knows the flags. */

@@ -175,9 +175,11 @@ async function opencodeModels(root) {
       if (!existsSync(f)) continue;
       try { cache = JSON.parse(readFileSync(f, 'utf8')); break; } catch { /* next */ }
     }
-    if (cache?.opencode?.models) {
-      for (const [id, meta] of Object.entries(cache.opencode.models)) {
-        const slug = `opencode/${id}`;
+    // Providers sit at the top level - opencode, opencode-go, opencode-zen
+    // and any custom ones - each holding model ids without the prefix.
+    for (const [provider, prov] of Object.entries(cache ?? {})) {
+      for (const [id, meta] of Object.entries(prov?.models ?? {})) {
+        const slug = `${provider}/${id}`;
         if (meta.name) labels[slug] = meta.name;
         if (meta.attachment) attachmentByModel[slug] = true;
         const effortOpt = (meta.reasoning_options ?? []).find((o) => o.type === 'effort');

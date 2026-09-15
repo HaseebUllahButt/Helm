@@ -36,6 +36,7 @@
   --claude:    #e8a27a;
   --codex:     #c7d2fe;
   --opencode:  #c4b5fd;
+  --devin:     #f9a8d4;
 
   --radius:    10px;
   --radius-sm: 6px;
@@ -126,9 +127,10 @@ code, pre, kbd { font-family: var(--mono); }
 }
 .menu button {
   display: block; width: 100%; text-align: left; padding: 8px 10px;
-  border-radius: var(--radius-sm); font-size: 13.5px; color: var(--red);
+  border-radius: var(--radius-sm); font-size: 13.5px; color: var(--text-dim);
 }
 .menu button:hover { background: var(--accent); }
+.menu button.destructive { color: var(--red); }
 
 .brand { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
 .brand img { width: 22px; height: 22px; border-radius: 6px; flex: none; }
@@ -204,6 +206,7 @@ code, pre, kbd { font-family: var(--mono); }
 .mark.claude   { background: color-mix(in srgb, var(--claude) 16%, transparent);   color: var(--claude); }
 .mark.codex    { background: color-mix(in srgb, var(--codex) 14%, transparent);    color: var(--codex); }
 .mark.opencode { background: color-mix(in srgb, var(--opencode) 16%, transparent); color: var(--opencode); }
+.mark.devin    { background: color-mix(in srgb, var(--devin) 16%, transparent);    color: var(--devin); }
 .mark.shell    { background: color-mix(in srgb, var(--emerald) 14%, transparent);  color: var(--emerald); }
 
 .mdot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin: 0 4px; }
@@ -466,6 +469,7 @@ pre.snippet {
 .slab textarea:focus { box-shadow: none; }
 .slab-foot { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; }
 .slab-foot .spacer { flex: 1; }
+.attach-status { color: var(--mutedfg); font-size: 11px; white-space: nowrap; }
 .ctl {
   height: 28px; padding: 0 10px; border-radius: 8px; font-size: 12.5px; color: rgb(127 127 128 / 80%);
 }
@@ -713,8 +717,8 @@ pre.snippet {
 .moderow.armed { background: color-mix(in srgb, var(--amber) 12%, transparent); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .moderow.armed .rm { color: var(--amber); }
 
-/* A row that carries its own action: the body opens it, the ✕ ends it. */
-.row.rowx { padding: 0; display: flex; align-items: stretch; gap: 0; overflow: hidden; }
+/* A row that carries its own action menu: the body opens it. */
+.row.rowx { padding: 0; display: flex; align-items: stretch; gap: 0; position: relative; overflow: visible; }
 .row.rowx .rowmain {
   display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
   margin: 0; padding: 8px 4px 8px 10px; background: none; border: 0; text-align: left; color: inherit;
@@ -723,6 +727,7 @@ pre.snippet {
   width: auto; margin: 0; padding: 0 12px; background: none; border: 0;
   color: var(--icon); font-size: 13px; flex: none;
 }
-.row.rowx .rowend:hover { color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
+.row.rowx .rowend:hover { color: var(--text); background: var(--accent); }
+.row.rowx .row-menu { top: calc(100% - 4px); right: 4px; }
 .quiet-link { display: block; margin: 10px auto 0; color: var(--mutedfg); }
 .quiet-link:hover { color: var(--text-dim); }

@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Client, type Environment, type Session, type ModelList } from '../client';
 import { Composer } from './Composer';
+import { COMPRESSIBLE_IMAGE_TYPES, prepareImage } from './image';
 import { PermissionSheet } from './PermissionSheet';
 import { Controls, type Kind } from './Controls';
 import { Transcript } from './Transcript';
 import { useSessionLog } from './useSessionLog';
 import type { Decision } from './types';
 
-const ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode' };
-const MARK: Record<string, string> = { claude: 'C', codex: 'X', opencode: 'O' };
+const ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', devin: 'Devin' };
+const MARK: Record<string, string> = { claude: 'C', codex: 'X', opencode: 'O', devin: 'D' };
 const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split('/').slice(-2).join('/');
 
 /**
@@ -16,13 +17,14 @@ const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split(
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
-export function DrivenSession({ client, env, session, onBack, onClosed, onSession }: {
+export function DrivenSession({ client, env, session, onBack, onClosed, onArchived, onSession }: {
   client: Client; env: Environment; session: Session;
-  onBack: () => void; onClosed: () => void; onSession: (s: Session) => void;
+  onBack: () => void; onClosed: () => void; onArchived: () => void; onSession: (s: Session) => void;
 }) {
   const { log, error: logError } = useSessionLog(client, env.id, session.id);
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<{ name: string; mime: string; data: string; url: string }[]>([]);
+  const [preparingImages, setPreparingImages] = useState(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
@@ -54,18 +56,33 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
 
   const onAttach = async (files: FileList) => {
     const next: typeof attachments = [];
-    for (const f of Array.from(files)) {
-      if (!f.type.startsWith('image/')) continue;
-      const data = await new Promise<string>((res, rej) => {
-        const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f);
-      });
-      const url = `data:${f.type};base64,${data}`;
-      next.push({ name: f.name, mime: f.type, data, url });
+    const failures: string[] = [];
+    const available = Math.max(0, 4 - attachments.length);
+    const selected = Array.from(files).slice(0, available);
+    if (!selected.length) return;
+    setPreparingImages((count) => count + 1);
+    setError('');
+    try {
+      for (const f of selected) {
+        if (!COMPRESSIBLE_IMAGE_TYPES.has(f.type.toLowerCase())) {
+          failures.push(`${f.name}: use a JPG, PNG, WebP, or GIF image`);
+          continue;
+        }
+        try {
+          next.push(await prepareImage(f));
+        } catch (e: any) {
+          failures.push(`${f.name}: ${e?.message || 'compression failed'}`);
+        }
+      }
+      if (next.length) setAttachments((current) => [...current, ...next].slice(0, 4));
+      if (failures.length) setError(`Image not added — ${failures.join('; ')}`);
+    } finally {
+      setPreparingImages((count) => Math.max(0, count - 1));
     }
-    setAttachments(a => [...a, ...next].slice(0, 4));
   };
   const send = async () => {
     const body = draft.trim();
+    if (preparingImages) return;
     if (!body && !attachments.length) return;
     const atts = attachments;
     setDraft(''); setAttachments([]);
@@ -88,8 +105,13 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
   });
   const kill = async () => {
     setMenu(null);
-    if (!confirm(`End "${session.title}"? The agent is closed and this conversation is removed from helm.`)) return;
+    if (!confirm(`Delete "${session.title}"? The agent is closed and this conversation is removed from helm.`)) return;
     await call(async () => { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); });
+  };
+
+  const archive = async () => {
+    setMenu(null);
+    await call(async () => { await client.rpc(env.id, 'session.archive', { id: session.id, archived: !session.archived }); onArchived(); });
   };
 
   const all = options?.modes ?? [];
@@ -119,6 +141,11 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
 
   const controls = Controls({ options, session, busy, onPick: pick });
 
+  // The clip is only offered when the running model can see images;
+  // the daemon enforces the same rule, so this is presentation, not trust.
+  const modelNow = session.model || (session as any).engineModel || options?.default || '';
+  const canAttach = options?.imagesByModel?.[modelNow] ?? options?.images ?? (session.engine === 'claude' || session.engine === 'codex');
+
   return (
     <>
       <div className="bar">
@@ -135,7 +162,8 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
         <button className="iconbtn" title="more" onClick={() => setMenu(menu === 'more' ? null : 'more')}>⋯</button>
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
-            <button onClick={kill}>End session</button>
+            <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
+            <button className="destructive" onClick={kill}>Delete thread</button>
           </div>
         )}
       </div>
@@ -145,15 +173,10 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
         empty={session.alive === false ? 'This conversation resumes with your next message.' : undefined}
       />
 
-  // The clip is only offered when the running model can see images;
-  // the daemon enforces the same rule, so this is presentation, not trust.
-  const modelNow = session.model || (session as any).engineModel || options?.default || '';
-  const canAttach = options?.imagesByModel?.[modelNow] ?? options?.images ?? (session.engine === 'claude' || session.engine === 'codex');
-
       <Composer
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
         engine={engine} keys={false} waiting={!!pending} danger={mode?.danger}
-        foot={controls.chips} canAttach={canAttach}
+        foot={controls.chips} canAttach={canAttach} preparing={preparingImages > 0}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
       >
         {controls.sheet}
