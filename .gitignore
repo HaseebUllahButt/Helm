@@ -6,3 +6,6 @@ dist/
 .helm/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+
+# Scratch scripts from driving the app by hand; never part of the tree.
+*-tmp.mjs
