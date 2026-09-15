@@ -240,9 +240,13 @@ export class Client {
   private peers = new Map<string, Peer>();
   private presencePoll: ReturnType<typeof setInterval> | null = null;
   private onVisible = () => {
+    if (document.visibilityState !== 'visible') return;
+    // Picking the phone back up. It may well be on a different network than
+    // it was when you put it down, so anything relaying is worth another go.
+    this.retryDirectNow();
     // Coming back to the foreground: the socket is almost certainly dead and
     // the backoff timer may be ten seconds out. Try now.
-    if (document.visibilityState === 'visible' && !this.connected && !this.connecting) {
+    if (!this.connected && !this.connecting) {
       this.backoff = 500;
       this.connect().catch(() => {});
     }
@@ -258,6 +262,10 @@ export class Client {
   private onNetworkChange = () => {
     if (this.closed) return;
     this.backoff = 500;
+    // Moving between networks is exactly when a direct connection that was
+    // impossible becomes possible - the phone that just joined the wifi the
+    // machine is on. Do not make it wait out a backoff to find that out.
+    this.retryDirectNow();
     if (this.connected) this.ws?.close(4001, 'network changed');
     else if (!this.connecting) this.connect().catch(() => {});
   };
@@ -568,6 +576,9 @@ export class Client {
     if (typeof window !== 'undefined') {
       window.removeEventListener('online', this.onNetworkChange);
     }
+    this.wantDirect.clear();
+    for (const timer of this.directRetry.values()) clearTimeout(timer);
+    this.directRetry.clear();
     for (const env of [...this.peers.keys()]) this.dropDirect(env);
     try { this.ws?.close(); } catch { /* already closing */ }
   }
@@ -618,8 +629,54 @@ export class Client {
    * Try to reach an environment directly. Safe to call repeatedly; if it
    * fails or never completes, everything keeps working over the relay.
    */
+  /**
+   * Machines we would like a direct connection to, and how long to wait
+   * before the next attempt.
+   *
+   * A direct connection is attempted once when you open a machine, and if it
+   * fails everything keeps working over the relay - which is correct, and was
+   * also the end of it. Nothing ever tried again. So a phone that failed to
+   * pair once stayed relayed for the life of the page: walk in the door,
+   * swap from cellular to the same wifi as the laptop, and helm would still
+   * be going through a hub on another continent. The owner's phone did
+   * exactly this for a day.
+   *
+   * Now it keeps trying, backing off to every half minute, and starts over
+   * immediately when the browser says the network changed - which is the
+   * moment the answer is most likely to have changed too.
+   */
+  private wantDirect = new Set<string>();
+  private directRetry = new Map<string, ReturnType<typeof setTimeout>>();
+  private directWait = new Map<string, number>();
+  private static DIRECT_FIRST_MS = 4_000;
+  private static DIRECT_MAX_MS = 30_000;
+
+  private retryDirect(env: string) {
+    if (!this.wantDirect.has(env) || this.closed) return;
+    if (this.directRetry.has(env) || this.peers.has(env)) return;
+    const wait = this.directWait.get(env) ?? Client.DIRECT_FIRST_MS;
+    this.directWait.set(env, Math.min(wait * 2, Client.DIRECT_MAX_MS));
+    const timer = setTimeout(() => {
+      this.directRetry.delete(env);
+      this.openDirect(env).catch(() => {});
+    }, wait);
+    this.directRetry.set(env, timer);
+  }
+
+  /** The network moved under us: everything we know about routes is stale. */
+  private retryDirectNow() {
+    for (const env of this.wantDirect) {
+      const timer = this.directRetry.get(env);
+      if (timer) clearTimeout(timer);
+      this.directRetry.delete(env);
+      this.directWait.delete(env);
+      this.openDirect(env).catch(() => {});
+    }
+  }
+
   async openDirect(env: string) {
-    if (this.peers.has(env) || !this.connected) return;
+    this.wantDirect.add(env);
+    if (this.peers.has(env) || !this.connected) { this.retryDirect(env); return; }
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     const channel = pc.createDataChannel('helm', { ordered: true });
@@ -637,6 +694,8 @@ export class Client {
 
     channel.onopen = () => {
       peer.ready = true;
+      // It worked, so the next failure starts its backoff from scratch.
+      this.directWait.delete(env);
       this.emit(env, 'transport', { direct: true });
     };
     channel.onclose = () => this.dropDirect(env);
@@ -735,6 +794,8 @@ export class Client {
     this.peers.delete(env);
     try { peer.channel.close(); peer.pc.close(); } catch { /* already gone */ }
     this.emit(env, 'transport', { direct: false });
+    // Losing it is not the end of trying for it.
+    this.retryDirect(env);
   }
 
   // ------------------------------------------------------------- REST helpers
