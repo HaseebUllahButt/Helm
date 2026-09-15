@@ -287,6 +287,36 @@ export class Client {
   latency(env: string): number | null { return this.rtt.get(env) ?? null; }
 
   /**
+   * Which pair of addresses a direct connection actually settled on.
+   *
+   * "Direct" is not one thing. A pair of `host` candidates on the same wifi
+   * is a millisecond; a pair of `srflx` ones is a trip out to whatever the
+   * internet thinks your address is and back, which behind a VPN means a
+   * datacentre on another continent - measured here at 575ms while the app
+   * cheerfully said "direct connection". Worth being able to see.
+   */
+  async route(env: string): Promise<{ local?: string; remote?: string; rttMs?: number } | null> {
+    const peer = this.peers.get(env);
+    if (!peer?.ready) return null;
+    try {
+      const stats = await peer.pc.getStats();
+      let pair: any = null;
+      stats.forEach((r: any) => {
+        if (r.type === 'candidate-pair' && (r.nominated || r.selected) && r.state === 'succeeded') pair = r;
+      });
+      if (!pair) return null;
+      const find = (id: string) => { let out: any = null; stats.forEach((r: any) => { if (r.id === id) out = r; }); return out; };
+      return {
+        local: find(pair.localCandidateId)?.candidateType,
+        remote: find(pair.remoteCandidateId)?.candidateType,
+        rttMs: pair.currentRoundTripTime != null ? pair.currentRoundTripTime * 1000 : undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Start measuring, and keep measuring, until every watcher has stopped.
    *
    * Refcounted because two things want this at once - the machine header,

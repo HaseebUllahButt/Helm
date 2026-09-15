@@ -817,6 +817,19 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
   // terminal wants to know whether to draw keystrokes before they land.
   useEffect(() => client.watchLatency(env.id), [client, env.id]);
 
+  // Which pair of addresses a "direct" connection settled on. Two `host`
+  // candidates are the same wifi and a millisecond; two `srflx` ones went
+  // out to the internet and came back, which is direct in name only.
+  const [route, setRoute] = useState<{ local?: string; remote?: string } | null>(null);
+  useEffect(() => {
+    if (!direct) { setRoute(null); return; }
+    let live = true;
+    const look = () => { client.route(env.id).then((r) => { if (live) setRoute(r); }).catch(() => {}); };
+    look();
+    const timer = setInterval(look, 10_000);
+    return () => { live = false; clearInterval(timer); };
+  }, [client, env.id, direct]);
+
   useEffect(() => {
     if (env.online) client.openDirect(env.id).catch(() => {});
   }, [client, env.id, env.online]);
@@ -901,7 +914,13 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
         <div className="titles">
           <h1>{env.name}</h1>
           <span className="sub">
-            {env.online ? (direct ? 'direct connection' : 'via your Helm home') : 'offline'}
+            {env.online
+              ? (direct
+                ? (route?.local === 'host' && route?.remote === 'host'
+                  ? 'direct, same network'
+                  : route ? `direct, out and back (${route.local}/${route.remote})` : 'direct connection')
+                : 'via your Helm home')
+              : 'offline'}
             {env.online && ping != null && (
               // The number matters because the two routes differ by two
               // orders of magnitude, and a relayed phone that feels broken
