@@ -29,30 +29,38 @@ export async function hubRpc(net, env, method, params = {}, { timeout = 20_000 }
 }
 
 function rpcVia(hub, token, env, method, params, timeout) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/helm/ws?role=client`, {
-      headers: { authorization: `Bearer ${token}` },
-      handshakeTimeout: 5000,
+  // helm's protocol lives at /helm/ws now; a hub from before the move still
+  // answers at /ws, so a transport failure there is worth one retry.
+  const base = hub.replace(/^http/, 'ws');
+  return attempt(`${base}/helm/ws?role=client`).catch((err) =>
+    err.rpc ? Promise.reject(err) : attempt(`${base}/ws?role=client`));
+
+  function attempt(url) {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url, {
+        headers: { authorization: `Bearer ${token}` },
+        handshakeTimeout: 5000,
+      });
+      const id = `c${Date.now().toString(36)}`;
+      const timer = setTimeout(() => { done(new Error('timed out')); }, timeout);
+      let settled = false;
+      const done = (err, value, rpc = false) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { ws.close(); } catch { /* already gone */ }
+        if (err) { err.rpc = rpc; reject(err); } else resolve(value);
+      };
+      ws.on('open', () => ws.send(JSON.stringify({ t: T.RPC, id, env, method, params })));
+      ws.on('message', (raw) => {
+        let msg;
+        try { msg = JSON.parse(raw); } catch { return; }
+        if (msg.t !== T.RPC_RESULT || msg.id !== id) return;
+        msg.ok ? done(null, msg.result) : done(new Error(msg.error?.message || 'failed'), null, true);
+      });
+      ws.on('unexpected-response', (_req, res) => done(new Error(`hub answered ${res.statusCode}`)));
+      ws.on('error', (err) => done(new Error(err.message || 'could not reach the hub')));
+      ws.on('close', () => done(new Error('hub closed the connection')));
     });
-    const id = `c${Date.now().toString(36)}`;
-    const timer = setTimeout(() => { done(new Error('timed out')); }, timeout);
-    let settled = false;
-    const done = (err, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try { ws.close(); } catch { /* already gone */ }
-      err ? reject(err) : resolve(value);
-    };
-    ws.on('open', () => ws.send(JSON.stringify({ t: T.RPC, id, env, method, params })));
-    ws.on('message', (raw) => {
-      let msg;
-      try { msg = JSON.parse(raw); } catch { return; }
-      if (msg.t !== T.RPC_RESULT || msg.id !== id) return;
-      msg.ok ? done(null, msg.result) : done(new Error(msg.error?.message || 'failed'));
-    });
-    ws.on('unexpected-response', (_req, res) => done(new Error(`hub answered ${res.statusCode}`)));
-    ws.on('error', (err) => done(new Error(err.message || 'could not reach the hub')));
-    ws.on('close', () => done(new Error('hub closed the connection')));
-  });
+  }
 }
