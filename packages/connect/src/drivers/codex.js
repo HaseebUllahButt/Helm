@@ -35,6 +35,8 @@ class CodexServer {
   #calls = new Map();
   /** threadId -> driver */
   #drivers = new Map();
+  /** spawned child threadId -> the driver that owns its parent thread */
+  #aliases = new Map();
   #starting = null;
 
   constructor(cmd, env, log) {
@@ -51,8 +53,13 @@ class CodexServer {
   attach(driver) { this.#drivers.set(driver.threadId, driver); }
   detach(driver) {
     this.#drivers.delete(driver.threadId);
+    for (const [tid, d] of this.#aliases) if (d === driver) this.#aliases.delete(tid);
     if (!this.#drivers.size) this.#stop();
   }
+
+  /** Route a spawned agent's thread to the driver that spawned it. */
+  alias(threadId, driver) { this.#aliases.set(threadId, driver); }
+  #route(threadId) { return this.#drivers.get(threadId) ?? this.#aliases.get(threadId); }
 
   async ensure() {
     if (this.#child) return;
@@ -118,7 +125,7 @@ class CodexServer {
   #onMessage(m) {
     if (m.id !== undefined && m.method) {
       // The server is asking us something (an approval).
-      const d = this.#drivers.get(m.params?.threadId);
+      const d = this.#route(m.params?.threadId);
       if (d) d.onServerRequest(m);
       else this.respond(m.id, { decision: 'decline' });
       return;
@@ -130,7 +137,7 @@ class CodexServer {
     }
     if (m.method) {
       const threadId = m.params?.threadId;
-      if (threadId) this.#drivers.get(threadId)?.onNotification(m.method, m.params);
+      if (threadId) this.#route(threadId)?.onNotification(m.method, m.params);
       else if (m.method === 'account/rateLimits/updated') {
         for (const d of this.#drivers.values()) d.push('limits', { codex: m.params?.rateLimits });
       }
@@ -147,6 +154,10 @@ export class CodexDriver extends Driver {
   #interrupting = false;
   /** itemId -> what we know about it (kind, changes) */
   #items = new Map();
+  /** spawned child threadId -> the collab item that spawned it */
+  #subagentThreads = new Map();
+  /** the most recent spawn_agent item; later collab calls name its child */
+  #lastSpawn = null;
   /** server request id -> { method, params } */
   #requests = new Map();
 
@@ -324,6 +335,23 @@ export class CodexDriver extends Driver {
   // ------------------------------------------------------------- the stream
 
   onNotification(method, p) {
+    if (p.threadId && p.threadId !== this.threadId) {
+      // A spawned agent's own thread: its items fold under the spawn card,
+      // but its turns, status and usage are not this session's.
+      const parentId = this.#subagentThreads.get(p.threadId);
+      if (!parentId) return;
+      switch (method) {
+        case 'item/started': return this.#onItemStarted(p.item, this.#turnId, parentId);
+        case 'item/completed': return this.#onItemCompleted(p.item);
+        case 'item/agentMessage/delta':
+        case 'item/reasoning/textDelta':
+        case 'item/reasoning/summaryTextDelta':
+        case 'item/commandExecution/outputDelta':
+          if (p.delta) this.push('item.delta', { id: p.itemId, text: p.delta });
+          return;
+        default: return;
+      }
+    }
     switch (method) {
       case 'turn/started':
         this.#turnId = p.turn?.id ?? this.#turnId;
@@ -377,11 +405,37 @@ export class CodexDriver extends Driver {
     return (changes ?? []).map((c) => ({ path: c.path, kind: c.kind?.type ?? 'update', diff: clip(c.diff, 20_000) }));
   }
 
-  #onItemStarted(item, turnId) {
+  #onItemStarted(item, turnId, parentId) {
     if (!item) return;
-    const base = { id: item.id, turnId: turnId ?? this.#turnId };
+    const base = { id: item.id, turnId: turnId ?? this.#turnId, parentId };
     switch (item.type) {
       case 'userMessage': return;
+      // One agent spawning another (spawn_agent | send_input | resume_agent
+      // | wait | close_agent). The card is the child; what it does arrives on
+      // the child's own threadId, which we alias back to here.
+      case 'collabAgentToolCall':
+      case 'collabToolCall':
+      case 'subAgentActivity': {
+        // Live traffic: spawnAgent carries no receiverThreadIds - the child
+        // thread id shows up on the `wait` call that follows it. Parent the
+        // child to the spawn card, not the wait that happened to name it.
+        const isSpawn = /spawn/i.test(item.tool ?? '');
+        const children = item.receiverThreadIds ?? (item.agentThreadId ? [item.agentThreadId] : []);
+        if (isSpawn) this.#lastSpawn = item.id;
+        const parent = isSpawn ? item.id : (this.#lastSpawn ?? item.id);
+        for (const t of children) {
+          if (!this.#subagentThreads.has(t)) this.#subagentThreads.set(t, parent);
+          this.#server?.alias(t, this);
+        }
+        this.#items.set(item.id, { kind: 'subagent' });
+        this.push('item.start', {
+          ...base, kind: 'subagent',
+          name: item.tool ?? item.type,
+          input: item.prompt || item.model ? { prompt: item.prompt, model: item.model } : undefined,
+          agent: { status: 'running' },
+        });
+        return;
+      }
       case 'agentMessage':
         this.#items.set(item.id, { kind: 'text' });
         this.push('item.start', { ...base, kind: 'text' });
@@ -424,6 +478,15 @@ export class CodexDriver extends Driver {
       case 'fileChange':
         this.push('item.done', { id: item.id, status, changes: this.#changes(item.changes) });
         break;
+      case 'collabAgentToolCall':
+      case 'collabToolCall':
+      case 'subAgentActivity': {
+        const states = Object.values(item.agentsStates ?? {});
+        const summary = states.map((s) => s?.message).filter(Boolean).join('\n');
+        this.push('item.update', { id: item.id, agent: { status: item.status ?? 'completed', summary: summary || undefined } });
+        this.push('item.done', { id: item.id, status, output: clip(summary) || undefined });
+        break;
+      }
       default:
         this.push('item.done', { id: item.id, status: 'ok' });
     }
@@ -479,6 +542,7 @@ export class CodexDriver extends Driver {
     this.push('status', { status: 'blocked' });
     this.push('permission.request', {
       requestId, itemId: p.itemId, kind, tool: m.method.split('/')[1], title, detail,
+      parentId: p.threadId && p.threadId !== this.threadId ? this.#subagentThreads.get(p.threadId) : undefined,
       reason: p.reason ?? undefined, questions, options, defaultTo: 'allow', allowEdit: false,
     });
   }

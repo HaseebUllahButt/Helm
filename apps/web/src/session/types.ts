@@ -8,15 +8,29 @@
 
 export interface HelmEvent { seq: number; at: number; type: string; [k: string]: any }
 
-export type ItemKind = 'text' | 'thinking' | 'tool' | 'command' | 'edit' | 'error';
+export type ItemKind = 'text' | 'thinking' | 'tool' | 'command' | 'edit' | 'subagent' | 'error';
 export type ItemStatus = 'streaming' | 'ok' | 'error' | 'declined';
 
 export interface Change { path: string; kind: string; diff: string }
+
+/** What the engine says about a spawned agent, while it runs and when it lands. */
+export interface AgentInfo {
+  id?: string;
+  status?: string;
+  description?: string;
+  lastTool?: string;
+  toolUses?: number;
+  tokens?: number;
+  summary?: string;
+}
 
 export interface Item {
   id: string;
   kind: ItemKind;
   turnId?: string;
+  /** Set when this item ran inside a subagent: the id of its `subagent` card. */
+  parentId?: string;
+  agent?: AgentInfo;
   /** Prose, thinking, or command output as it streams. */
   text: string;
   /** Tools: the name, and the input either parsed or as partial JSON. */
@@ -62,6 +76,8 @@ export interface PermissionOption { id: string; role: 'allow' | 'allow-always' |
 export interface Permission {
   requestId: string;
   itemId?: string;
+  /** The subagent item this request came from, when a child agent is asking. */
+  parentId?: string;
   kind: 'tool' | 'command' | 'edit' | 'question' | 'plan';
   tool?: string;
   title: string;
@@ -126,13 +142,14 @@ export function apply(state: LogState, e: HelmEvent): void {
       turn.items.push({
         id: e.id, kind: e.kind, turnId: e.turnId, text: '', status: 'streaming', startedAt: e.at,
         name: e.name, input: e.input, command: e.command, cwd: e.cwd, changes: e.changes,
+        parentId: e.parentId, agent: e.agent,
       });
       return;
     }
     case 'item.delta': {
       const it = findItem(state.turns, e.id);
       if (!it) return;
-      if (it.kind === 'tool') it.inputJson = (it.inputJson ?? '') + e.text;
+      if (it.kind === 'tool' || it.kind === 'subagent') it.inputJson = (it.inputJson ?? '') + e.text;
       else it.text += e.text;
       return;
     }

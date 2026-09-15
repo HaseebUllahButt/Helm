@@ -28,6 +28,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
         <i className="sdot blocked" />
         <b>{p.title}</b>
         {p.tool && p.kind !== 'plan' && <span className="tag">{p.tool}</span>}
+        {p.parentId && <span className="tag">subagent</span>}
       </div>
       {p.reason && <div className="sheet-reason">{p.reason}</div>}
       <div className="sheet-body">

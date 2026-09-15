@@ -35,7 +35,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
   const pending = log.pending[0];
 
   useEffect(() => {
-    client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId }, 30_000)
+    client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id }, 30_000)
       .then(setOptions).catch(() => setOptions({ default: null, models: [] }));
   }, [client, env.id, session.profileId]);
 
@@ -143,7 +143,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
 
   // The clip is only offered when the running model can see images;
   // the daemon enforces the same rule, so this is presentation, not trust.
-  const modelNow = session.model || (session as any).engineModel || options?.default || '';
+  const modelNow = session.model || session.engineModel || options?.default || '';
   const canAttach = options?.imagesByModel?.[modelNow] ?? options?.images ?? (session.engine === 'claude' || session.engine === 'codex');
 
   return (

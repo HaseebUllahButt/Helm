@@ -62,6 +62,17 @@ const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', ma
  * so collapse the aliases to accounts and keep the plainest alias of each as
  * the one to launch.
  */
+/**
+ * What the usage panel knows. `off` is "this machine has no usage dashboard",
+ * which is a normal state and not an error - the difference used to be
+ * invisible, because every one of these rendered as nothing.
+ */
+type UsageState =
+  | { kind: 'off' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; accounts: any[]; fetchedAt?: number }
+  | { kind: 'failed'; error: string };
+
 interface Account {
   key: string;
   engine: string;
@@ -170,6 +181,46 @@ function Shell({ client, conn, onSignOut }: {
   const [error, setError] = useState('');
   const [downSince, setDownSince] = useState<number | null>(null);
 
+  /**
+   * Navigation lives in the browser history, so the phone's back button
+   * walks back through views instead of closing the installed app. Each
+   * entry snapshots the view stack and the selected machine together -
+   * "where you are" is both - and popstate is the only thing that moves
+   * backward, whether it came from the ‹ button or the system gesture.
+   * `nav` mirrors the state for code that cannot wait a render.
+   */
+  const nav = useRef<{ stack: MainView[]; selected: string | null; depth: number }>(
+    { stack: [{ kind: 'env' }], selected: null, depth: 0 });
+
+  useEffect(() => {
+    history.replaceState({ helm: 1, ...nav.current }, '');
+    const onPop = (e: PopStateEvent) => {
+      const s = e.state;
+      if (!s?.helm) return;
+      nav.current = { stack: s.stack, selected: s.selected, depth: s.depth };
+      setStack(s.stack);
+      setSelected(s.selected);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  /** A real move: new view, new history entry, phone-back returns from it. */
+  const navigate = (next: MainView[], sel = nav.current.selected) => {
+    const depth = nav.current.depth + 1;
+    nav.current = { stack: next, selected: sel, depth };
+    setStack(next);
+    setSelected(sel);
+    history.pushState({ helm: 1, depth, stack: next, selected: sel }, '');
+  };
+
+  /** Same place, fresher snapshot: session records change under a view. */
+  const restate = (next: MainView[]) => {
+    nav.current = { ...nav.current, stack: next };
+    setStack(next);
+    history.replaceState({ helm: 1, depth: nav.current.depth, stack: next, selected: nav.current.selected }, '');
+  };
+
   useEffect(() => {
     if (conn.online) { setDownSince(null); return; }
     setDownSince((t) => t ?? Date.now());
@@ -214,15 +265,29 @@ function Shell({ client, conn, onSignOut }: {
 
   const env = envs.find((e) => e.id === selected) ?? null;
   const view = stack[stack.length - 1];
-  const openEnv = (id: string) => { setSelected(id); setStack([{ kind: 'env' }]); };
-  const openSession = (envId: string, s: Session) => {
-    setSelected(envId);
-    setStack([{ kind: 'env' }, { kind: 'session', session: s }]);
+
+  // Stable per machine. Handed to EnvView, which lists it as an effect
+  // dependency: a fresh arrow on every render re-ran that effect, which
+  // re-subscribed, re-listed the sessions and blanked the usage panel, and
+  // the listing then re-rendered us - so the panel appeared and vanished
+  // several times a second.
+  const reloadEnv = useCallback(() => {
+    if (env) loadSessions(env.id);
+  }, [loadSessions, env?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openEnv = (id: string) => {
+    if (id === nav.current.selected && nav.current.stack.length === 1) return;
+    navigate([{ kind: 'env' }], id);
   };
-  const push = (v: MainView) => setStack((s) => [...s, v]);
+  const openSession = (envId: string, s: Session) => {
+    navigate([{ kind: 'env' }, { kind: 'session', session: s }], envId);
+  };
+  const push = (v: MainView) => navigate([...nav.current.stack, v]);
   const back = () => {
-    if (stack.length > 1) setStack((s) => s.slice(0, -1));
-    else setSelected(null);
+    // One history entry per push, so any stack deeper than its root has
+    // somewhere to pop to. At the root there is no such entry; there the ‹
+    // means "back to the machine list" on a phone and nothing on desktop.
+    if (nav.current.depth > 0) history.back();
+    else if (!wide) setSelected(null);
   };
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => s.engine !== 'shell' && !s.archived);
@@ -323,8 +388,9 @@ function Shell({ client, conn, onSignOut }: {
           </div></div>
         ) : view.kind === 'env' ? (
           <EnvView
+            key={env.id}
             client={client} env={env} wide={wide} onBack={back}
-            sessions={sessions[env.id] ?? []} reload={() => loadSessions(env.id)}
+            sessions={sessions[env.id] ?? []} reload={reloadEnv}
             onBrowse={() => push({ kind: 'browse' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
           />
@@ -337,7 +403,13 @@ function Shell({ client, conn, onSignOut }: {
         ) : view.kind === 'start' ? (
           <Start
             client={client} env={env} cwd={view.cwd} onBack={back}
-            onStarted={(s) => { loadSessions(env.id); setStack([{ kind: 'env' }, { kind: 'session', session: s }]); }}
+            onStarted={(s) => {
+              loadSessions(env.id);
+              // The browsing chain collapses into the session it produced:
+              // this entry is replaced so back lands on the folder picker,
+              // not on a form for a session that already exists.
+              restate([{ kind: 'env' }, { kind: 'session', session: s }]);
+            }}
           />
         ) : view.session.driver ? (
           <DrivenSession
@@ -347,7 +419,10 @@ function Shell({ client, conn, onSignOut }: {
             onBack={back}
             onClosed={() => { loadSessions(env.id); back(); }}
             onArchived={() => { loadSessions(env.id); back(); }}
-            onSession={(s) => { loadSessions(env.id); setStack((st) => st.map((v) => (v.kind === 'session' && v.session.id === s.id ? { kind: 'session', session: { ...v.session, ...s } } : v))); }}
+            onSession={(s) => {
+              loadSessions(env.id);
+              restate(nav.current.stack.map((v) => (v.kind === 'session' && v.session.id === s.id ? { kind: 'session', session: { ...v.session, ...s } } : v)));
+            }}
           />
         ) : (
           <SessionView
@@ -379,16 +454,28 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
     onDone(auth);
   };
 
-  const connect = async (endpoint: string, secret: string) => {
+  const connect = async (endpoint: string, secret: string, local?: string) => {
     setBusy(true); setError('');
     try {
-      finish(await login(endpoint, secret));
+      finish(await login(endpoint, secret, local));
     } catch (err: any) {
       setError(err.message);
       setLinkSecretFailed(true);
       setPassword((p) => (p === secret ? '' : p));
     } finally { setBusy(false); }
   };
+
+  // `helm open` puts this machine's own key in the fragment. Nothing to type:
+  // the daemon takes it only from loopback and only if it matches the file it
+  // came from, so holding it already means holding the network key.
+  useEffect(() => {
+    const local = new URLSearchParams(location.hash.replace(/^#\/?/, '')).get('local');
+    if (!local || autoStarted.current) return;
+    autoStarted.current = true;
+    connect(location.origin, '', local);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const isLocal = /^(127\.|localhost|\[::1\])/.test(location.hostname);
 
   useEffect(() => {
     let cancelled = false;
@@ -398,6 +485,29 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
       .catch(() => { if (!cancelled) setSelfHosted(false); });
     return () => { cancelled = true; };
   }, []);
+
+  // The page is being served by a daemon on this very computer, which is the
+  // whole claim a local sign-in makes - ask it for the local key directly
+  // rather than waiting for a link. Nothing answers that but this machine.
+  useEffect(() => {
+    if (!isLocal || selfHosted !== true || autoStarted.current) return;
+    autoStarted.current = true;
+    fetch('/api/auth/local', { method: 'POST' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v) => { if (v?.local) connect(location.origin, '', v.local); })
+      .catch(() => {});
+  }, [selfHosted]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The other direction: the app was installed from the VM's public address
+  // but a daemon is also running on this computer - it signs in on its own,
+  // so point there rather than asking for a code.
+  const [localHelm, setLocalHelm] = useState<string | null>(null);
+  useEffect(() => {
+    if (isLocal) return;
+    fetch('http://127.0.0.1:8787/api/health', { cache: 'no-store' })
+      .then((r) => { if (r.ok) setLocalHelm('http://127.0.0.1:8787'); })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const target = openedWith.current;
@@ -462,6 +572,12 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
             {busy ? 'pairing…' : 'pair this device'}
           </button>
           {error && <div className="error">{error}</div>}
+          {localHelm && (
+            <p className="note" style={{ marginTop: 14, textAlign: 'center' }}>
+              A helm is running on this computer - it signs in on its own:{' '}
+              <a href={localHelm}>open its own address</a>
+            </p>
+          )}
           <p className="note" style={{ marginTop: 14, textAlign: 'center' }}>
             Run <code>helm link</code> on your VM for a fresh link.
             Pair once; this device stays paired until you remove it.
@@ -544,13 +660,12 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
   client: Client; env: Environment; wide: boolean; sessions: Session[];
   reload: () => void; onBack: () => void; onBrowse: () => void; onOpen: (s: Session) => void;
 }) {
-  const [usage, setUsage] = useState<any[] | null>(null);
+  const [usage, setUsage] = useState<UsageState>({ kind: 'off' });
   const [direct, setDirect] = useState(false);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    setUsage(null); setError('');
     client.subscribe(env.id);
     reload();
     return client.on((e, kind, payload) => {
@@ -562,18 +677,36 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
     if (env.online) client.openDirect(env.id).catch(() => {});
   }, [client, env.id, env.online]);
 
+  // Kept fresh while you are looking at the machine. The numbers come from a
+  // dashboard on that machine, which can be absent or slow, so every one of
+  // those outcomes gets said out loud rather than rendering an empty gap.
   useEffect(() => {
-    if (!env.online || !env.info.usage) return;
-    client.rpc(env.id, 'usage.get').then((u: any) => setUsage(u.accounts)).catch(() => {});
+    if (!env.online || !env.info.usage) { setUsage({ kind: 'off' }); return; }
+    let live = true;
+    const pull = (first: boolean) => {
+      if (first) setUsage((u) => (u.kind === 'ready' ? u : { kind: 'loading' }));
+      client.rpc(env.id, 'usage.get')
+        .then((u: any) => {
+          if (live) setUsage({ kind: 'ready', accounts: u.accounts ?? [], fetchedAt: u.fetchedAt });
+        })
+        .catch((e: any) => {
+          if (live) setUsage((was) => (was.kind === 'ready' ? was : { kind: 'failed', error: e.message }));
+        });
+    };
+    pull(true);
+    const timer = setInterval(() => pull(false), 60_000);
+    return () => { live = false; clearInterval(timer); };
   }, [client, env.id, env.online, env.info.usage]);
 
   const openTerminal = async () => {
     setOpening(true); setError('');
     try {
-      const existing = sessions.find((s) => s.engine === 'shell' && s.alive !== false);
-      if (existing) { onOpen(existing); return; }
+      // Always a fresh shell: an earlier terminal is something to go back to,
+      // not something to be dropped into - it lists under "terminals" below,
+      // where it can be reopened or closed.
+      const count = sessions.filter((s) => s.pty).length;
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start',
-        { cwd: '~', profileId: 'shell', title: 'Terminal' }, 45_000);
+        { cwd: '~', profileId: 'shell', title: `Terminal ${count + 1}` }, 45_000);
       reload();
       onOpen(r.session);
     } catch (e: any) { setError(e.message); }
@@ -587,6 +720,7 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
     ['working', agents.filter((s) => s.status === 'working')],
     ['idle', agents.filter((s) => !['blocked', 'working', 'exited'].includes(s.status))],
     ['finished', agents.filter((s) => s.status === 'exited')],
+    ['terminals', sessions.filter((s) => s.pty && s.alive !== false)],
   ];
 
   const setArchived = async (s: Session, archived: boolean) => {
@@ -612,7 +746,15 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
             {env.info.host ? ` · ${env.info.host}` : ''}
           </span>
         </div>
-        <button className="iconbtn mono" title="terminal" disabled={!env.online || opening} onClick={openTerminal}>❯_</button>
+        <button
+          className="iconbtn mono"
+          // A machine with no pty falls back to sampling a herdr pane's
+          // screen, which is slow enough to be worth saying before you open
+          // one and wonder what is wrong with it.
+          title={env.info.terminals === 'panes' ? 'terminal (slow: no pty on this machine)' : 'terminal'}
+          disabled={!env.online || opening}
+          onClick={openTerminal}
+        >{env.info.terminals === 'panes' ? '❯!' : '❯_'}</button>
       </div>
 
       <div className="scroll"><div className="pad column">
@@ -657,10 +799,21 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
           </div>
         )}
 
-        {usage && usage.length > 0 && (
+        {usage.kind !== 'off' && (
           <>
-            <div className="section">usage today</div>
-            <div className="usage">{usage.map((a) => <UsageRow key={a.id} account={a} />)}</div>
+            <div className="section">
+              usage today
+              {usage.kind === 'ready' && usage.fetchedAt && (
+                <span className="quiet"> · {ago(usage.fetchedAt)}</span>
+              )}
+            </div>
+            {usage.kind === 'loading' && <div className="empty quiet">reading usage…</div>}
+            {usage.kind === 'failed' && <div className="empty quiet">usage unavailable — {usage.error}</div>}
+            {usage.kind === 'ready' && (
+              usage.accounts.length
+                ? <div className="usage">{usage.accounts.map((a) => <UsageRow key={a.id} account={a} />)}</div>
+                : <div className="empty quiet">no accounts reported</div>
+            )}
           </>
         )}
         {error && <div className="error">{error}</div>}
@@ -928,7 +1081,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
         {accounts?.length === 0 && (
           <div className="empty quiet">
             no agents on {env.name}
-            <div className="note" style={{ marginTop: 6 }}>install claude, codex, opencode or Devin there and run <code>helm profiles --refresh</code></div>
+            <div className="note" style={{ marginTop: 6 }}>install claude, codex, opencode or devin there and run <code>helm profiles --refresh</code></div>
           </div>
         )}
 

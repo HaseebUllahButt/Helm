@@ -15,6 +15,8 @@ const exec = promisify(execFile);
  *   claude    the account's .claude.json remembers the last model per project;
  *             the rest is the current published family
  *   opencode  `opencode models`, which asks every configured provider
+ *   devin     `devin models list` - uid plus display name per line; thinking
+ *             level is baked into each model name, so there is no effort chip
  *
  * `home` is the account's home directory (CODEX_HOME etc.), so a personal
  * account reports its own default.
@@ -35,6 +37,7 @@ export async function listModels(engine, home) {
     if (engine === 'codex') value = await codexModels(root);
     else if (engine === 'claude') value = claudeModels(root);
     else if (engine === 'opencode') value = await opencodeModels(root);
+    else if (engine === 'devin') value = await devinModels(root);
   } catch { /* fall through to nothing */ }
   cache.set(key, { at: Date.now(), value });
   return value;
@@ -201,6 +204,34 @@ async function opencodeModels(root) {
     images: models.some((m) => attachmentByModel[m]),
     imagesByModel: { ...attachmentByModel },
   };
+}
+
+/**
+ * `devin models list` prints family headers ("Claude Opus 5 (claude-opus-5)")
+ * then one indented line per model: `uid   Display Name   [meta]`. The
+ * account's default sits in ~/.config/devin/config.json under agent.model.
+ */
+async function devinModels(root) {
+  let def = null;
+  try {
+    const cfg = JSON.parse(readFileSync(join(root, 'devin', 'config.json'), 'utf8'));
+    if (typeof cfg?.agent?.model === 'string') def = cfg.agent.model;
+  } catch { /* no config */ }
+  const { stdout } = await exec(ENGINES.devin?.bin ?? 'devin', ['models', 'list'], {
+    timeout: 30_000,
+    maxBuffer: 4 << 20,
+    env: { ...process.env, XDG_CONFIG_HOME: root },
+  });
+  const models = [];
+  const labels = {};
+  for (const line of stdout.split('\n')) {
+    const m = /^ {2,}(\S+)\s{2,}(.+?)\s{2,}\[/.exec(line);
+    if (!m || m[1] === 'aliases:') continue;
+    models.push(m[1]);
+    labels[m[1]] = m[2].trim();
+  }
+  if (def && !models.includes(def)) models.unshift(def);
+  return { default: def, models, labels, images: false, imagesByModel: {} };
 }
 
 /**

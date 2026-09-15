@@ -12,7 +12,10 @@ import { available as usageAvailable, usage as fetchUsage } from './usage.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver } from './drivers/codex.js';
+import { OpencodeDriver } from './drivers/opencode.js';
+import { DevinDriver } from './drivers/devin.js';
 import { defaultMode, modeFromAuto } from './modes.js';
+import { TerminalHost } from './terminals.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -26,7 +29,24 @@ const WATCH_TTL_MS = 60_000;
 // resumes the same conversation, so nothing is lost but the warm process.
 const IDLE_REAP_MS = 30 * 60_000;
 
-const DRIVERS = { claude: ClaudeDriver, codex: CodexDriver };
+const DRIVERS = { claude: ClaudeDriver, codex: CodexDriver, opencode: OpencodeDriver, devin: DevinDriver };
+
+/**
+ * The quick keys above the phone keyboard, as the bytes a terminal expects.
+ * herdr takes these by name; a pty takes what a keyboard would have sent.
+ */
+const NAMED_KEYS = {
+  Enter: '\r', Escape: '\x1b', Tab: '\t', Backspace: '\x7f', Space: ' ',
+  Up: '\x1b[A', Down: '\x1b[B', Right: '\x1b[C', Left: '\x1b[D',
+  Home: '\x1b[H', End: '\x1b[F', PageUp: '\x1b[5~', PageDown: '\x1b[6~',
+};
+
+const KEY_BYTES = (key) => {
+  if (NAMED_KEYS[key]) return NAMED_KEYS[key];
+  const ctrl = /^C-([a-z@[\]\\^_])$/i.exec(key);
+  if (ctrl) return String.fromCharCode(ctrl[1].toLowerCase().charCodeAt(0) & 0x1f);
+  return key;
+};
 
 /** herdr requires agent names to match [a-z][a-z0-9_-]{0,31} and be unique. */
 const agentName = (profileId) =>
@@ -54,18 +74,39 @@ export class Sessions extends EventEmitter {
   /** sessionId -> expiry, for event pushes somebody is looking at */
   #watching = new Map();
 
-  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {} } = {}) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost() } = {}) {
     super();
     this.runtime = runtime;
     this.events = events;
     this.log = log;
     this.makeDriver = makeDriver ?? ((engine, opts) => new DRIVERS[engine](opts));
+    this.terminals = terminals;
     this.#load();
     runtime.on('status', (e) => this.#onStatus(e));
     runtime.on('closed', (e) => this.#onClosed(e));
+    // A pty's bytes go out on the same event a watched pane's text does, so
+    // the client has one thing to listen to.
+    this.terminals.on('data', (d) => this.emit('data', d));
+    this.terminals.on('exit', ({ id, code }) => {
+      const s = this.#index.get(id);
+      if (!s) return;
+      this.emit('exit', { id, code });
+      this.emit('session', { ...s, status: 'exited', alive: false });
+    });
   }
 
   isDriven(s) { return !!s?.driver; }
+
+  /**
+   * What a terminal on this machine will be: helm's own pty, or the slow
+   * herdr-pane fallback. Answerable with no host running - which is the usual
+   * case, since one only starts when a terminal is opened.
+   */
+  async terminalBackend() {
+    if (this.terminals.usable) return 'pty';
+    const { loadPty } = await import('./pty.js');
+    return (await loadPty()) ? 'pty' : 'panes';
+  }
 
   /** The runtime handle for a stored session record. */
   #handle(s) {
@@ -221,6 +262,11 @@ export class Sessions extends EventEmitter {
         out.push({ ...s, archived: !!s.archived, alive: this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
         continue;
       }
+      if (s.pty) {
+        const alive = this.terminals.has(s.id);
+        out.push({ ...s, alive, status: alive ? 'shell' : 'exited', adopted: false });
+        continue;
+      }
       const pane = live.get(s.paneId);
       // herdr is the authority on what is still running, so no pane means the
       // process is gone - whatever the session was last seen doing. Keeping
@@ -250,6 +296,13 @@ export class Sessions extends EventEmitter {
     // goes after the alias's own arguments so it wins if the two disagree.
     spec.args = [...spec.args, ...optionArgs(profile.engine, { model, auto, effort })];
     const dir = expand(cwd);
+
+    // A plain shell is a terminal, and helm can run one itself - far better
+    // than borrowing a herdr pane and reading its screen back. Where the pty
+    // addon is missing the old path still works, slowly.
+    if (spec.plain && await this.terminals.ensure()) {
+      return this.#startTerminal({ dir, profileId, title, env: spec.env });
+    }
 
     const handle = await this.runtime.createSession({
       cwd: dir,
@@ -288,6 +341,33 @@ export class Sessions extends EventEmitter {
     this.#index.set(session.id, session);
     this.#save();
     this.runtime.watch(handle);
+    this.emit('session', session);
+    return session;
+  }
+
+  // ---------------------------------------------------------------- terminals
+
+  /**
+   * A terminal helm owns. Unlike a herdr pane it does not outlive the daemon:
+   * the shell is our child, so a restart ends it. `list()` reports that
+   * honestly as `exited` and the app offers a new one, which is better than
+   * reconnecting you to something that is no longer there.
+   */
+  async #startTerminal({ dir, profileId, title, env }) {
+    const session = {
+      id: randomBytes(6).toString('hex'),
+      pty: true,
+      profileId,
+      engine: 'shell',
+      cwd: dir,
+      title: title || `${dir.split('/').pop() || dir}`,
+      status: 'shell',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await this.terminals.open(session.id, { cwd: dir, env });
+    this.#index.set(session.id, session);
+    this.#save();
     this.emit('session', session);
     return session;
   }
@@ -473,6 +553,17 @@ export class Sessions extends EventEmitter {
     return { ok: true, session: s };
   }
 
+  /**
+   * The pickers a running agent advertised, when the driver is live. ACP
+   * agents report their model list - with real names - at session start,
+   * which beats anything a CLI subcommand can print. Null when the driver
+   * is not up or reports nothing.
+   */
+  catalog(id) {
+    const d = this.#drivers.get(id);
+    return d?.catalog?.() ?? null;
+  }
+
   async setModel(id, model) {
     const s = this.get(id);
     if (!s.driver) throw new Error('not a headless session');
@@ -585,9 +676,19 @@ export class Sessions extends EventEmitter {
    * A watch lives as long as viewers keep renewing it; a phone that vanishes
    * mid-session stops costing anything within a minute.
    */
-  async attach(id, { lines = 400, ansi = true } = {}) {
+  async attach(id, { lines = 400, ansi = true, cols, rows, renew = false } = {}) {
     const s = this.get(id);
     if (s.driver) throw new Error('a headless session has no terminal');
+    // helm's own terminal needs no polling: the pty pushes as it writes. The
+    // reply is everything worth drawing, and the viewer replaces its screen
+    // with it, so a reconnect cannot paint the same bytes twice - which is
+    // also why a renewal deliberately returns nothing to draw.
+    if (s.pty) {
+      const text = renew
+        ? (await this.terminals.renew(id), null)
+        : await this.terminals.view(id, { cols, rows });
+      return { text, pty: true, session: s };
+    }
     const existing = this.#watchers.get(id);
     if (existing) {
       existing.expires = Date.now() + WATCH_TTL_MS;
@@ -628,6 +729,7 @@ export class Sessions extends EventEmitter {
   }
 
   detach(id) {
+    this.terminals.unview(id);
     const w = this.#watchers.get(id);
     if (!w) return { ok: true };
     clearTimeout(w.timer);
@@ -710,6 +812,7 @@ export class Sessions extends EventEmitter {
       }
       return { ok: true };
     }
+    if (s.pty) { await this.terminals.write(id, text); return { ok: true }; }
     const handle = this.#handle(s);
     return s.agentName && !raw
       ? this.runtime.sendPrompt(handle, text)
@@ -779,9 +882,24 @@ export class Sessions extends EventEmitter {
     }
   }
 
+  /**
+   * The viewer's size. A pty renders for it; a herdr pane has its own
+   * geometry that the phone does not get to choose, so this is a no-op there
+   * rather than an error - the terminal view sends it either way.
+   */
+  resize(id, cols, rows) {
+    const s = this.get(id);
+    if (s.pty) this.terminals.resize(id, cols, rows);
+    return { ok: true };
+  }
+
   keys(id, keys) {
     const s = this.get(id);
     if (s.driver) throw new Error('a headless session has no terminal');
+    if (s.pty) {
+      this.terminals.write(id, keys.map(KEY_BYTES).join(''));
+      return { ok: true };
+    }
     return this.runtime.sendKeys(this.#handle(s), keys);
   }
 
@@ -795,6 +913,13 @@ export class Sessions extends EventEmitter {
       this.#index.delete(id);
       this.#save();
       this.events.remove(id);
+      this.emit('session', { ...s, status: 'exited', alive: false });
+      return { ok: true };
+    }
+    if (s.pty) {
+      await this.terminals.close(id);
+      this.#index.delete(id);
+      this.#save();
       this.emit('session', { ...s, status: 'exited', alive: false });
       return { ok: true };
     }
@@ -817,9 +942,34 @@ export class Sessions extends EventEmitter {
     return { ok: true, session: s };
   }
 
+  /**
+   * Find out which terminals outlived this daemon.
+   *
+   * The host holds them, so an upgrade or a crash leaves them running - but
+   * not forever, and not if the host itself was stopped. Anything the host
+   * does not have is genuinely gone, and its record goes with it rather than
+   * offering a phone a terminal that no longer exists.
+   */
+  async adoptTerminals() {
+    const ok = await this.terminals.ensure({ spawn: false }).catch(() => false);
+    let changed = false;
+    for (const s of [...this.#index.values()]) {
+      if (!s.pty) continue;
+      if (ok && this.terminals.has(s.id)) continue;
+      this.#index.delete(s.id);
+      changed = true;
+      this.emit('session', { ...s, status: 'exited', alive: false });
+    }
+    if (changed) this.#save();
+    return ok;
+  }
+
   /** Re-watch every surviving pane after a daemon restart. */
   resume() {
     for (const s of this.#index.values()) {
+      // A terminal lives in the host process, which outlives us - so its
+      // record stays until `adoptTerminals()` has asked what really survived.
+      if (s.pty) continue;
       if (!s.driver) { this.runtime.watch(this.#handle(s)); continue; }
       // The process that asked died with the previous daemon; a prompt it
       // left open cannot be answered any more, so close it out here rather

@@ -35,10 +35,15 @@ db.exec(`
 
   -- Invites let a new machine join the network. Claiming one hands over the
   -- network key, so they are single-use and short-lived.
+  -- role is what the person adding the machine said it was: 'pc' for one that
+  -- dials out, 'vm' for one that also becomes a home with its own address.
+  -- Carrying it on the invite is what lets "helm join" be the only command
+  -- typed on the far machine, whichever kind it is.
   CREATE TABLE IF NOT EXISTS invites (
     code       TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL,
-    used_by    TEXT
+    used_by    TEXT,
+    role       TEXT NOT NULL DEFAULT 'pc'
   );
 
   -- What each machine last told us about itself. A cache, so the UI can show
@@ -62,6 +67,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS digests_env_time ON digests(env_id, created_at DESC);
 `);
 
+// `CREATE TABLE IF NOT EXISTS` leaves an existing table alone, so a hub that
+// predates a column needs to be told about it directly.
+for (const [table, column, spec] of [
+  ['invites', 'role', "TEXT NOT NULL DEFAULT 'pc'"],
+]) {
+  const has = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
+  if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${spec}`);
+}
+
 export const now = () => Date.now();
 export const newId = (n = 8) => randomBytes(n).toString('hex');
 
@@ -84,7 +98,7 @@ export const q = {
        rotated_at = excluded.rotated_at`
   ),
 
-  inviteInsert: db.prepare('INSERT INTO invites (code, expires_at) VALUES (?, ?)'),
+  inviteInsert: db.prepare('INSERT INTO invites (code, expires_at, role) VALUES (?, ?, ?)'),
   inviteGet: db.prepare('SELECT * FROM invites WHERE code = ?'),
   inviteUse: db.prepare('UPDATE invites SET used_by = ? WHERE code = ?'),
   inviteSweep: db.prepare('DELETE FROM invites WHERE expires_at < ?'),

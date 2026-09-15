@@ -12,6 +12,14 @@ import { join } from 'node:path';
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-session-driver-'));
 process.env.HELM_NO_SERVICE = '1';
 
+// A profile for the fakes to be started from, for every test in the file -
+// the first test's cleanup must not take it away from the rest.
+test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
+writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
+  version: 1,
+  profiles: [{ id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: ['--model', 'x'], env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' }, source: 'alias' }],
+}));
+
 class StubRuntime extends EventEmitter {
   async read() { return { text: '' }; }
   watch() {}
@@ -61,12 +69,6 @@ class FakeDriver extends EventEmitter {
 }
 
 test('a headless session: start, stream, watch, prompt, resume, kill', async (t) => {
-  t.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-  // A profile for the fake to be started from.
-  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
-    version: 1,
-    profiles: [{ id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: ['--model', 'x'], env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' }, source: 'alias' }],
-  }));
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
   const events = new EventLog(join(process.env.HELM_DIR, 'events'));

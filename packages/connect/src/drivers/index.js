@@ -7,9 +7,9 @@ import { execFile } from 'node:child_process';
  * the app renders Claude Code and Codex with the same components:
  *
  *   turn.start          { turnId, text }
- *   item.start          { id, kind, turnId, ... }   kind: text | thinking | tool | command | edit
+ *   item.start          { id, kind, turnId, parentId?, ... }   kind: text | thinking | tool | command | edit | subagent
  *   item.delta          { id, text }                appended to the item's text / output / input JSON
- *   item.update         { id, ...fields }
+ *   item.update         { id, ...fields }           e.g. { agent: { status, lastTool, toolUses } }
  *   item.done           { id, status, output?, exitCode?, error? }   status: ok | error | declined
  *   permission.request  { requestId, itemId, kind, title, detail, options[], defaultTo, ... }
  *   permission.resolved { requestId, decision }
@@ -17,6 +17,11 @@ import { execFile } from 'node:child_process';
  *   status              { status }                  working | blocked | idle | exited
  *   limits              { ... }
  *   error               { message, kind? }
+ *
+ * A `subagent` item is a spawned child agent; items that ran inside it carry
+ * its id as `parentId` so the app can nest them under the spawn card. Its
+ * `agent` field tracks what the engine reports about the child - status,
+ * the last tool it ran, its summary when it finishes.
  *
  * A driver is one session: it is created with the resolved profile (command,
  * environment, arguments), a working directory and the options chosen when

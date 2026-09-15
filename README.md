@@ -57,44 +57,55 @@ HTTPS address; every computer dials all of them, and each device attaches to
 whichever home currently reaches the most machines, failing over to another if
 one goes down. Add a second home with `helm setup --join` (below).
 
-## Five commands
+## Adding things
+
+`helm setup` makes this VM the home. After that, every command is named for
+what you are adding:
 
 ```bash
-helm setup                           make this VM the always-on Helm home
-helm link                            pair a phone or browser
-helm add                             add another computer
-helm join CODE https://helm.example.com
-helm status                          show the network and runtime
+helm add controller    a phone or browser: controls machines, runs nothing
+helm add pc            a laptop or desktop: runs agents, and controls others
+helm add vm            another always-on machine, dialled by the rest
 ```
 
-If you already own a domain, you can instead run
-`helm setup https://helm.your-domain.com` after pointing it at the VM and
-configuring Caddy.
-
-### A second always-on VM
-
-To add another home to an existing network, get a join code from any connected
-machine with `helm add`, then on the new VM run:
+Only `helm add controller` prints a **link to open**. The other two print a
+**code to type**, and what you type on the machine being added is always the
+same command, whichever kind it is:
 
 ```bash
-helm setup --join ABCD-1234 --at https://helm.example.com
+helm join ABCD-1234 https://helm.example.com
 ```
 
-That joins the existing mesh (rather than starting a new one), gives this VM
-its own free HTTPS address, and installs it as a background home — one command,
-the same as the first VM. Pass an explicit `https://…` at the end if you own a
-domain for it. Devices already paired need no new link; they simply gain a
-second home to fall back on.
+The code remembers which kind you asked for. A pc dials out to the home and
+needs no address of its own; a vm additionally claims a free HTTPS address,
+configures Caddy and starts serving, so the rest of the network can dial it
+too. Controllers already paired need no new link; they simply gain a second
+home to fall back on.
 
-The older `helm up`, `helm invite`, and `helm login` commands remain available
-for scripts and advanced setups.
+If you already own a domain, run `helm setup https://helm.your-domain.com`
+after pointing it at the VM and configuring Caddy.
 
-### Pair another device
+### The app on a machine
+
+A computer that has joined does not need a pairing link to open the app — it
+already holds the network key:
+
+```bash
+helm open
+```
+
+That opens the app on `127.0.0.1`, signed in, showing every machine in the
+network. This is how a laptop drives the VM.
+
+The older `helm up`, `helm invite`, `helm link` and `helm login` commands
+remain available for scripts and existing setups.
+
+### Pair a phone
 
 Run this anywhere that can reach the Helm home:
 
 ```bash
-helm link
+helm add controller
 ```
 
 It prints one private link such as:

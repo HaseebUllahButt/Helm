@@ -76,6 +76,25 @@ step "building the app"
   || die "could not build the web app - run 'npm --workspace @helm/web run build' in $DIR to see why"
 say "built apps/web/dist"
 
+# ---------------------------------------------------------------- terminals
+
+# The terminal in the app needs a pty, which is a compiled addon. There is a
+# prebuilt binary for common node versions and a source build otherwise; if
+# neither works helm still runs, but terminals fall back to reading a herdr
+# pane's rendered screen on a timer, which is slow enough to notice. Say so
+# here rather than leaving it to be discovered on a phone.
+step "checking terminal support"
+if (cd "$DIR" && node -e 'import("@homebridge/node-pty-prebuilt-multiarch").then(()=>process.exit(0),()=>process.exit(1))') 2>/dev/null; then
+  say "fast terminals (pty)"
+else
+  say "! no pty support - terminals will use the slow fallback."
+  say "  it needs a compiler to build one:"
+  say "    debian/ubuntu:  sudo apt install -y build-essential python3"
+  say "    fedora:         sudo dnf install -y gcc-c++ make python3"
+  say "    arch:           sudo pacman -S --needed base-devel python"
+  say "  then re-run this installer."
+fi
+
 # -------------------------------------------------------------------- link
 
 step "putting helm on your PATH"
@@ -124,9 +143,11 @@ cat <<'NEXT'
 
   Commands worth remembering:
 
-    helm link                    make a fresh private device link
-    helm add                     make a code for another computer
-    helm join <CODE> <VM-URL>    connect that computer to your VM
+    helm add controller          a link to open on a phone or browser
+    helm add pc                  a code for another computer
+    helm add vm                  a code for another always-on machine
+    helm join <CODE> <VM-URL>    run that on the machine being added
+    helm open                    open the app here, already signed in
     helm status                  check your machines
 
   Full VM, HTTPS and phone instructions:

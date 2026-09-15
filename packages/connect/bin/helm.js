@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-import { hostname } from 'node:os';
+import { hostname, platform } from 'node:os';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import { argv, exit } from 'node:process';
 import {
   loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, machineToken,
+  localKey,
 } from '@helm/protocol/network';
 import { refreshProfiles, getProfiles } from '../src/profiles.js';
 import { proxy } from '../src/proxy.js';
@@ -34,12 +36,14 @@ const usage = () => {
   console.log(`helm - control your coding agents from anywhere
 
   helm setup [https-url]             make this always-on VM your Helm home
-  helm setup --join <CODE> --at <url> [https-url]
-                                     add another always-on VM to an existing mesh
-  helm link [minutes]                link a phone, browser or desktop app (10 min; max 15)
-  helm add                           add another computer
-  helm join <CODE> [home-url]        join this computer to a Helm home (installs the service)
-  helm join <CODE> [home-url] --foreground   ...but run in this terminal instead
+  helm open                          open the app here, signed in (no link needed)
+
+  helm add controller                a phone or browser: controls, runs nothing
+  helm add pc                        a laptop or desktop: runs agents, controls others
+  helm add vm                        another always-on machine, dialled by the rest
+  helm join <CODE> <home-url>        run on the machine being added, whichever kind
+
+  helm join <CODE> <home-url> --foreground   ...run in this terminal instead
   helm status                        show the network and runtime
 
   helm up [--port N] [--tunnel]      run in the foreground
@@ -49,12 +53,12 @@ const usage = () => {
   helm up --host <address>          local listen address (default 0.0.0.0)
   helm up --install                 keep it running across reboots
 
-  helm invite                       same as 'helm add'
+  helm link [minutes]               same as 'helm add controller'
   helm join <CODE> --at <url>       long form of 'helm join CODE url'
 
-  helm devices                      phones and browsers that can drive this network
+  helm devices                      controllers that can drive this network
   helm machines                     machines in this network
-  helm remove <id>                  remove a device or machine, permanently
+  helm remove <id>                  remove a controller or machine, permanently
   helm leave                        remove this machine from its network
 
   helm login [minutes]              new short-lived password for signing in a device
@@ -63,8 +67,9 @@ const usage = () => {
   helm proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
   helm service install|uninstall    background service
 
-A device you sign in stays signed in until you remove it. Passwords are only
-for adding one, and expire in minutes.
+Only 'helm add controller' prints a link to open; the others print a code to
+type on the machine you are adding. A controller you sign in stays signed in
+until you remove it - passwords are only for adding one, and expire in minutes.
 `);
 };
 
@@ -123,17 +128,34 @@ async function postToHome(net, path, body = {}) {
   );
 }
 
-async function printDeviceLink() {
+async function printDeviceLink(args = rest) {
   const net = requireNetwork();
-  const mins = Number(rest[0]);
+  const mins = Number(args[0]);
   const ttlMs = Number.isFinite(mins) && mins > 0 ? mins * 60_000 : undefined;
   const { base, value } = await postToHome(net, '/api/auth/rotate', { ttlMs });
   const pairUrl = `${base}/#pair=${encodeURIComponent(value.password)}`;
   const valid = Math.max(1, Math.round((value.expiresAt - Date.now()) / 60_000));
-  console.log(`\n  Open this private link on your phone or in Helm Desktop:\n`);
+  console.log(`\n  Open this private link on the phone or browser you are adding:\n`);
   console.log(`    ${pairUrl}\n`);
   console.log(`  It expires in ${valid} minute${valid === 1 ? '' : 's'}.`);
-  console.log('  Once paired, the device stays connected until you remove it.\n');
+  console.log('  Once paired, that device stays signed in until you remove it.\n');
+}
+
+/**
+ * The app, on the machine you are sitting at.
+ *
+ * No pairing link: the local key in ~/.helm signs this browser in, which is
+ * the same trust as being able to read the network key beside it. This is
+ * what makes a laptop a controller for every other machine, the VM included.
+ */
+async function openApp() {
+  const net = requireNetwork();
+  const url = `http://127.0.0.1:${net.port ?? 8787}/#local=${encodeURIComponent(localKey())}`;
+  console.log(`\n    ${url}\n`);
+  const opener = platform() === 'darwin' ? 'open' : 'xdg-open';
+  const child = spawn(opener, [url], { stdio: 'ignore', detached: true });
+  child.on('error', () => console.log('  (open that in a browser)\n'));
+  child.unref();
 }
 
 /** Point the relay's local database at this machine's helm directory. */
@@ -186,12 +208,43 @@ async function up() {
   });
 }
 
-async function invite() {
+/**
+ * `helm add <what>`.
+ *
+ * Three things can join, and they are different enough that naming them is
+ * the whole point: a controller is a screen with no agents on it, a pc runs
+ * agents and drives others, a vm runs agents and is somewhere to dial. Only a
+ * controller gets a link to open; the machines get a code to type.
+ */
+const CONTROLLER_WORDS = ['controller', 'mobile', 'phone', 'browser', 'device'];
+
+async function add() {
+  const what = (rest.find((a) => !a.startsWith('--')) || '').toLowerCase();
+
+  if (CONTROLLER_WORDS.includes(what)) return printDeviceLink(rest.slice(1));
+  if (what === 'pc' || what === 'laptop' || what === 'vm') {
+    return inviteMachine(what === 'vm' ? 'vm' : 'pc');
+  }
+
+  console.log('\n  What are you adding?\n');
+  console.log('    helm add controller    a phone or browser - controls machines, runs nothing');
+  console.log('    helm add pc            a laptop or desktop - runs agents, and controls others');
+  console.log('    helm add vm            an always-on machine - runs agents, and others dial it\n');
+  if (what) console.log(`  ("${what}" is none of those.)\n`);
+}
+
+async function inviteMachine(role) {
   const net = requireNetwork();
-  const { base: where, value } = await postToHome(net, '/api/invite');
+  const { base: where, value } = await postToHome(net, '/api/invite', { role });
   const { code } = value;
-  console.log(`\n  On the machine you are adding, run:\n`);
+  console.log(`\n  On the ${role === 'vm' ? 'VM' : 'computer'} you are adding, run:\n`);
   console.log(`    helm join ${code} ${where}\n`);
+  if (role === 'vm') {
+    console.log('  It will take its own https address and start serving, so other');
+    console.log('  machines can dial it as well as this one.');
+  } else {
+    console.log('  It will dial this home; it needs no address of its own.');
+  }
   console.log('  The invite is single-use and expires in 10 minutes.');
   console.log('  It carries the network key, so treat it like a password.\n');
 }
@@ -225,6 +278,15 @@ async function joinCmd() {
   const net = await joinNet({ code, at, name: strFlag('name', hostname()), port: port() });
   console.log(`\n  joined. ${Object.keys(net.machines).length} machines in this network.`);
 
+  // An invite made with `helm add vm` says so, and a vm is a home: it needs an
+  // address of its own and https in front of it, which is the rest of what
+  // `helm setup` does. Nobody has to remember a second command for it.
+  if (net.role === 'vm') {
+    console.log('  invited as a vm, so this machine becomes a home as well.\n');
+    await setup({ alreadyJoined: true });
+    return;
+  }
+
   // A joined machine should stay reachable after this terminal closes, the
   // same as `helm setup` does for the home - so install the service rather
   // than serving in the foreground. `--foreground` keeps the old behaviour.
@@ -245,13 +307,18 @@ async function joinCmd() {
   await up();
 }
 
-async function setup() {
+async function setup({ alreadyJoined = false } = {}) {
   // Joining an existing mesh is opt-in: `--join <code> --at <existing-home>`.
   // A code needs somewhere to redeem it, so the two travel together. Any bare
   // positional is still THIS machine's own https address, exactly as when
   // founding a network, so a second VM reads the same way as the first.
-  const joinCode = typeof flagOf('join') === 'string' ? strFlag('join') : null;
-  if (rest.includes('--join') && !joinCode) {
+  //
+  // `helm join` with a vm invite arrives here having already joined, and only
+  // wants the rest: an address, https in front of it, and the service.
+  const joinCode = alreadyJoined || typeof flagOf('join') !== 'string'
+    ? null
+    : strFlag('join');
+  if (!alreadyJoined && rest.includes('--join') && !joinCode) {
     die('--join needs an invite code: helm setup --join ABCD-1234 --at https://home.example');
   }
   const joinAt = joinCode ? cleanEndpoint(strFlag('at', process.env.HELM_AT)) : null;
@@ -268,7 +335,12 @@ async function setup() {
     const next = rest[i + 1];
     if (next && !next.startsWith('--')) flagValues.add(i + 1);
   });
-  let home = cleanEndpoint(rest.find((a, i) => !a.startsWith('--') && !flagValues.has(i)));
+  // Arriving from `helm join`, the positionals are the invite code and the
+  // home it was redeemed at - neither of which is this machine's own address.
+  // Take one only from --advertise there, or work it out below.
+  let home = alreadyJoined
+    ? cleanEndpoint(strFlag('advertise'))
+    : cleanEndpoint(rest.find((a, i) => !a.startsWith('--') && !flagValues.has(i)));
   if (!home) {
     const { configureFreeHttps, detectPublicIpv4, freeHostname } = await import('../src/caddy.js');
     const ip = process.env.HELM_PUBLIC_IP || await detectPublicIpv4();
@@ -438,7 +510,11 @@ try {
 
     case 'add':
     case 'invite':
-      await invite();
+      await add();
+      break;
+
+    case 'open':
+      await openApp();
       break;
 
     case 'join':
@@ -514,9 +590,9 @@ try {
       if (!net) { console.log('not in a network - run `helm up`'); break; }
       const me = net.machines[net.self];
       console.log(`network:  ${net.id}`);
-      console.log(`machine:  ${me?.name} (${short(net.self)})`);
+      console.log(`machine:  ${me?.name} (${short(net.self)}${net.role ? `, ${net.role}` : ''})`);
       console.log(`members:  ${Object.keys(net.machines).length} machines, ` +
-                  `${Object.keys(net.devices).length} devices`);
+                  `${Object.keys(net.devices).length} controllers`);
       console.log(`reachable at: ${(me?.endpoints ?? []).join(' ') || '(not advertised yet)'}`);
       const peers = allEndpoints(net).filter((e) => !(me?.endpoints ?? []).includes(e));
       if (peers.length) console.log(`other hubs:   ${peers.join(' ')}`);
@@ -527,6 +603,21 @@ try {
         console.log(`runtime:  herdr ${info.version} (protocol ${info.protocol})`);
       } catch (err) {
         console.log(`runtime:  unavailable - ${err.message}`);
+      }
+
+      // Which terminal you actually get. The fallback works but is slow
+      // enough to notice, and it used to be invisible until you used it.
+      const { loadPty, ptyUnavailable } = await import('../src/pty.js');
+      if (await loadPty()) {
+        const { TerminalHost } = await import('../src/terminals.js');
+        const host = new TerminalHost();
+        const up = await host.ensure().catch(() => false);
+        const open = up ? host.list().length : 0;
+        host.detach();
+        console.log(`terminals: own pty${up ? `, host running (${open} open)` : ''}`);
+      } else {
+        console.log(`terminals: herdr panes (slow) - no pty: ${ptyUnavailable()}`);
+        console.log('           build one with a compiler installed, then re-run install.sh');
       }
       break;
     }

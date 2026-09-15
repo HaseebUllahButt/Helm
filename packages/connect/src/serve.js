@@ -134,7 +134,7 @@ export async function join({ code, at, name, port = 8787 }) {
     throw new Error(`could not join: ${(await res.json().catch(() => ({}))).error ?? res.status}`);
   }
 
-  const { id, key, machines, devices, revoked, self: inviter } = await res.json();
+  const { id, key, machines, devices, revoked, self: inviter, role } = await res.json();
   joinNetwork({ id, key, name: name || hostname(), port, machines, devices, revoked });
 
   // We just reached the inviter at `base`, which is not necessarily an address
@@ -147,6 +147,11 @@ export async function join({ code, at, name, port = 8787 }) {
     host.endpoints = [...(host.endpoints ?? []), base];
     saveNetwork(net);
   }
+
+  // What it was invited as travels with the code, so the far end does not
+  // have to be told a second time which kind of machine it is.
+  net.role = role === 'vm' ? 'vm' : 'pc';
+  saveNetwork(net);
 
   return net;
 }
@@ -173,16 +178,28 @@ function report({
   const mins = Math.max(1, Math.round((hub.expiresAt - Date.now()) / 60000));
   const machines = Object.keys(net.machines).length;
 
+  // A password on every start was the reason `setup`, `join` and a plain
+  // restart all looked like they were handing you a link, with no way to tell
+  // which one you were supposed to use. Print one only when there is nothing
+  // yet to sign in from, or when it was asked for.
+  const controllers = Object.keys(net.devices ?? {}).length;
+  const offerLink = controllers === 0 || process.argv.includes('--link');
+
   console.log(`\n  ${rule}`);
-  console.log(`    open on your phone:  ${primary}`);
-  console.log(`    password:            ${hub.password}   (valid ${mins} min)`);
+  console.log(`    this machine:  ${primary}`);
+  if (offerLink) {
+    console.log(`    password:      ${hub.password}   (valid ${mins} min)`);
+  }
   console.log(`  ${rule}\n`);
 
   if (fresh) {
     console.log(`  Started a new network. "${daemon.name}" is its first machine.`);
-    console.log('  Add another with:  helm invite\n');
+    console.log('  Add a phone with:      helm add controller');
+    console.log('  Add a computer with:   helm add pc\n');
   } else {
-    console.log(`  ${machines} machine${machines === 1 ? '' : 's'} in this network.`);
+    console.log(`  ${machines} machine${machines === 1 ? '' : 's'}, ` +
+                `${controllers} controller${controllers === 1 ? '' : 's'} in this network.`);
+    if (!offerLink) console.log('  Open it here with:  helm open');
   }
 
   if (lan.length) console.log(`  On this network:   ${lan.join('  ')}`);
@@ -220,8 +237,10 @@ function report({
     console.log('\n  ! the web app is not built - run: npm --workspace @helm/web run build');
   }
 
-  console.log('\n  The password expires. Devices you have already added do not -');
-  console.log('  they stay until you remove them, and survive restarts.');
+  if (offerLink) {
+    console.log('\n  The password expires. Controllers you have already added do not -');
+    console.log('  they stay until you remove them, and survive restarts.');
+  }
   console.log(`\n  Serving ${daemon.name}. Leave this running; ctrl-c to stop.\n`);
 }
 

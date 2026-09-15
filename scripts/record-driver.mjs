@@ -248,14 +248,108 @@ const CODEX_CASES = {
   },
 };
 
+// -------------------------------------------------------------------- acp
+//
+// `devin acp` and `opencode acp` both speak ACP: initialize, session/new,
+// then one session/prompt call per turn. The driver sends
+// session/set_config_option for the session mode; the recorder does the
+// same so the fixture carries a response for every call the driver makes.
+
+async function acpCase(engine, name, c) {
+  console.log(`\n== ${engine}/${name}`);
+  const cwd = scratch();
+  const w = new Wire(ACP.cmd, ACP.args(cwd), { cwd, env: ACP.env });
+  let id = 0;
+  const call = (method, params) => {
+    const rid = `rec-${++id}`;
+    w.send({ jsonrpc: '2.0', id: rid, method, params });
+    return w.wait((m) => m.id === rid);
+  };
+  let sessionId = null, interrupted = false;
+  w.on((m) => {
+    if (m.id !== undefined && m.method) {
+      const res = c.answer(m.method, m.params);
+      console.log(`  request ${m.method} -> ${JSON.stringify(res).slice(0, 160)}`);
+      w.send({ jsonrpc: '2.0', id: m.id, ...(res && 'error' in res ? { error: res.error } : { result: res }) });
+    }
+    if (c.interrupt && !interrupted && sessionId && m.method === 'session/update' &&
+        ['agent_message_chunk', 'agent_thought_chunk'].includes(m.params?.update?.sessionUpdate)) {
+      interrupted = true;
+      setTimeout(() => w.send({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId } }), 300);
+    }
+  });
+  await call('initialize', {
+    protocolVersion: 1,
+    clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+    clientInfo: { name: 'helm', title: 'Helm', version: '0.1.0' },
+  });
+  const created = await call('session/new', { cwd, mcpServers: [] });
+  if (!created.result) throw new Error(`session/new failed: ${JSON.stringify(created.error)}`);
+  sessionId = created.result.sessionId;
+  await call('session/set_config_option', { sessionId, configId: 'mode', value: c.acpMode });
+  try {
+    await Promise.race([
+      call('session/prompt', { sessionId, prompt: [{ type: 'text', text: c.prompt }] }),
+      sleep(180_000),
+    ]);
+  } catch (e) { console.log('  ', e.message); }
+  await sleep(500);
+  await w.end();
+  w.save(engine, name);
+}
+
+const allowOnce = (_method, p) => {
+  const o = (p?.options ?? []).find((x) => x.kind === 'allow_once') ?? p?.options?.[0];
+  return { outcome: { outcome: 'selected', optionId: o?.optionId } };
+};
+const rejectOnce = (_method, p) => {
+  const o = (p?.options ?? []).find((x) => x.kind === 'reject_once') ?? p?.options?.[0];
+  return { outcome: { outcome: 'selected', optionId: o?.optionId } };
+};
+
+const DEVIN_CASES = {
+  plain: { acpMode: 'accept-edits', prompt: 'Reply with exactly the words: hello from helm', answer: rejectOnce },
+  // A write inside the session directory runs free in accept-edits; a
+  // network call is what stops to ask.
+  command: {
+    acpMode: 'accept-edits',
+    prompt: 'Run the shell command `curl -s -o /dev/null -w "%{http_code}" https://example.com` and tell me the status code it prints. Do nothing else.',
+    answer: (method, p) => (method === 'session/request_permission' ? allowOnce(method, p) : rejectOnce(method, p)),
+  },
+  decline: {
+    acpMode: 'accept-edits',
+    prompt: 'Run the shell command `curl -s -o /dev/null -w "%{http_code}" https://example.com` and tell me the status code. If it is declined, say so in one line.',
+    answer: rejectOnce,
+  },
+  interrupt: {
+    acpMode: 'accept-edits', interrupt: true,
+    prompt: 'Write the numbers from 1 to 300, one per line, with no other text.',
+    answer: rejectOnce,
+  },
+};
+
+// opencode's ACP cases cannot be recorded without a working provider login;
+// test/fixtures/opencode is written by hand from the observed handshake.
+// With a provider configured: `node scripts/record-driver.mjs opencode`.
+const OPENCODE_CASES = {
+  plain: { acpMode: 'build', prompt: 'Reply with exactly the words: hello from helm', answer: rejectOnce },
+  command: {
+    acpMode: 'build',
+    prompt: 'Run the shell command `echo helm-test` exactly once, then say done.',
+    answer: (method, p) => (method === 'session/request_permission' ? allowOnce(method, p) : rejectOnce(method, p)),
+  },
+};
+
 // -------------------------------------------------------------------- main
 
 const [engine, only] = process.argv.slice(2);
-const table = engine === 'claude' ? CLAUDE_CASES : engine === 'codex' ? CODEX_CASES : null;
-if (!table) { console.error('usage: record-driver.mjs <claude|codex> [case]'); process.exit(2); }
-const run = engine === 'claude' ? claudeCase : codexCase;
+const table = { claude: CLAUDE_CASES, codex: CODEX_CASES, devin: DEVIN_CASES, opencode: OPENCODE_CASES }[engine] ?? null;
+if (!table) { console.error('usage: record-driver.mjs <claude|codex|devin|opencode> [case]'); process.exit(2); }
+const launch = ['devin', 'opencode'].includes(engine) ? launcher(engine) : null;
+const ACP = launch ? { ...launch, args: engine === 'opencode' ? (cwd) => ['acp', '--cwd', cwd] : () => ['acp'] } : null;
 const CLAUDE = engine === 'claude' ? launcher('claude') : null;
 const CODEX = engine === 'codex' ? launcher('codex') : null;
+const run = { claude: claudeCase, codex: codexCase, devin: (n, c) => acpCase('devin', n, c), opencode: (n, c) => acpCase('opencode', n, c) }[engine];
 for (const [name, c] of Object.entries(table)) {
   if (only && only !== name) continue;
   await run(name, c);

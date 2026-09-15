@@ -167,6 +167,42 @@ test('kill: a prompt still open is denied before the process is closed', async (
   assert.equal(log.of('status').pop().status, 'exited');
 });
 
+test('subagent: a Task call is a subagent card; the child\'s stream nests under it', async () => {
+  const { driver, log } = make('subagent');
+  await driver.send('spawn an Explore agent');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+
+  const task = log.of('item.start').find((e) => e.kind === 'subagent');
+  assert.ok(task, 'the Task call started as a subagent item');
+  assert.equal(task.name, 'Task');
+  assert.equal(task.id, 'toolu_task01');
+  const taskInput = log.of('item.update').find((e) => e.id === task.id && e.input);
+  assert.equal(taskInput.input.subagent_type, 'Explore');
+
+  // The sidechain's own tools and text carry the Task id as parentId.
+  const glob = log.of('item.start').find((e) => e.name === 'Glob');
+  assert.equal(glob.parentId, 'toolu_task01');
+  const childText = log.of('item.start').find((e) => e.kind === 'text' && e.parentId === 'toolu_task01');
+  assert.ok(childText, 'subagent text nested under the card');
+  assert.equal(log.of('item.delta').filter((e) => e.id === childText.id).map((e) => e.text).join(''), 'Found 3 TypeScript files.');
+
+  // task_* system frames keep the card's agent status current.
+  const progress = log.of('item.update').find((e) => e.id === task.id && e.agent?.lastTool === 'Glob');
+  assert.ok(progress, 'task_progress landed on the card');
+  assert.ok(log.of('item.update').some((e) => e.id === task.id && e.agent?.status === 'completed'));
+
+  // The tool_result is the agent's report; it lands after the notification.
+  const taskDone = log.of('item.done').filter((e) => e.id === task.id).pop();
+  assert.equal(taskDone.status, 'ok');
+  assert.equal(taskDone.output, 'Found 3 TypeScript files: a.ts, b.ts, c.ts');
+
+  // The parent's own items are not parented.
+  const parentText = log.of('item.start').find((e) => e.kind === 'text' && !e.parentId);
+  assert.ok(parentText);
+  await driver.kill();
+});
+
 test('deltas to one item are coalesced into fewer events', async () => {
   const { driver, log } = make('tool');
   await driver.send('go');

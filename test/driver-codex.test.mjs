@@ -115,6 +115,41 @@ test('interrupt: turn/interrupt with the live turn id; the turn ends interrupted
   await driver.kill();
 });
 
+test('subagent: spawn_agent is a card; the child thread\'s items nest under it', async () => {
+  const { driver, log } = make('subagent');
+  await driver.send('spawn a subagent');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+
+  const card = log.of('item.start').find((e) => e.kind === 'subagent');
+  assert.ok(card, 'the collab call started as a subagent item');
+  assert.equal(card.name, 'spawn_agent');
+  assert.equal(card.input.prompt, 'Draft a one-line plan for the refactor');
+  assert.equal(card.agent.status, 'running');
+
+  // The child thread's items arrive on its own threadId and nest under the card.
+  const childCmd = log.of('item.start').find((e) => e.kind === 'command');
+  assert.equal(childCmd.parentId, card.id);
+  assert.equal(childCmd.command, 'ls src');
+  const childText = log.of('item.start').find((e) => e.kind === 'text' && e.parentId === card.id);
+  assert.ok(childText, 'the child\'s message nested under the card');
+  const childDone = log.of('item.done').find((e) => e.id === childCmd.id);
+  assert.equal(childDone.output, 'a.ts\nb.ts\nc.ts\n');
+
+  // spawn_agent carries no receiverThreadIds - the `wait` card names the
+  // child, and its children still nest under the spawn card.
+  const wait = log.of('item.start').find((e) => e.name === 'wait');
+  assert.equal(wait.kind, 'subagent');
+  const waitDone = log.of('item.done').find((e) => e.id === wait.id);
+  assert.equal(waitDone.status, 'ok');
+  assert.match(waitDone.output, /move the parser/);
+
+  // The child's thread never closes our turn or steals the status line.
+  assert.equal(log.of('turn.done').length, 1);
+  assert.deepEqual(log.of('status').map((e) => e.status), ['working', 'idle']);
+  await driver.kill();
+});
+
 test('resume: an existing thread id resumes instead of starting', () => {
   const d = new CodexDriver({ cmd: 'codex', env: {}, cwd: '/x', mode: 'ask', engineSessionId: 'thread-1' });
   assert.equal(d.threadId, 'thread-1');

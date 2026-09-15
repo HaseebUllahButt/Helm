@@ -183,9 +183,13 @@ export class Daemon {
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
     this.sessions.resume();
+    // Terminals live in their own process, so some of them are still running.
+    // Ask which, once, rather than assuming either way.
+    this.sessions.adoptTerminals().catch(() => {});
     this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session }));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
+    this.sessions.on('exit', (e) => this.#emit(E.SESSION_EXIT, e));
     this.sessions.on('transcript', (ref) => this.#emit(E.SESSION_TRANSCRIPT, ref));
     this.sessions.on('status', ({ session, from, to }) =>
       this.#emit(E.SESSION_UPDATE, { session, transition: { from, to } })
@@ -396,6 +400,8 @@ export class Daemon {
       release: release(),
       runtime: this.runtimeInfo,
       usage: await usageApi.available(),
+      // 'pty' or 'panes': what a terminal here will actually be.
+      terminals: await this.sessions.terminalBackend(),
       startedAt: Date.now(),
     };
   }
@@ -532,6 +538,20 @@ export class Daemon {
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
         const engine = ENGINES[profile.engine];
         const models = await listModels(profile.engine, profile.env?.[engine?.homeEnv] ?? engine?.defaultHome);
+        // A live agent reports the pickers it actually has - real display
+        // names, the levels this session offers - which beats what the CLI
+        // can print. The printed list is the fallback for a cold session.
+        const live = p.id ? this.sessions.catalog(p.id) : null;
+        if (live) {
+          if (live.models?.length) models.models = [...new Set([...live.models, ...models.models])];
+          models.labels = { ...(models.labels ?? {}), ...(live.labels ?? {}) };
+          // The running agent's pickers are the truth for what it takes: a
+          // session whose agent advertises no thinking level gets no chip -
+          // offering one would set a value the agent then refuses.
+          models.efforts = live.efforts ?? [];
+          if (!live.efforts?.length) delete models.effortsByModel;
+          if (live.current && !models.default) models.default = live.current;
+        }
         // The permission modes this engine offers, so the app never has to know the flags.
         return { ...models, modes: engine?.driver ? modesFor(profile.engine) : [] };
       }
@@ -540,8 +560,11 @@ export class Daemon {
       case M.SESSION_START:   return { session: await this.sessions.start(p) };
       // Attaching starts a push stream of the screen (E.SESSION_DATA); the
       // reply carries the current screen so the viewer has something at once.
-      case M.SESSION_ATTACH:  return this.sessions.attach(p.id, { lines: p.lines ?? 400, ansi: p.ansi ?? true });
+      case M.SESSION_ATTACH:  return this.sessions.attach(p.id, {
+        lines: p.lines ?? 400, ansi: p.ansi ?? true, cols: p.cols, rows: p.rows,
+      });
       case M.SESSION_DETACH:  return this.sessions.detach(p.id);
+      case M.SESSION_RESIZE:  return this.sessions.resize(p.id, p.cols, p.rows);
       case M.SESSION_INPUT:   await this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments }); return { ok: true };
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
       case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });

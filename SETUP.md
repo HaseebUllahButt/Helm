@@ -62,10 +62,10 @@ success until it returns HTTP 200.
 
 ## 4. Return the link
 
-If a fresh device link is needed, run:
+If a fresh controller link is needed, run:
 
 ```bash
-helm link
+helm add controller
 ```
 
 Return the complete `https://.../#pair=...` link to the owner through a private
@@ -75,29 +75,36 @@ logs, issues, commits, or chat rooms.
 Tell the owner:
 
 - open the link on mobile to pair the PWA;
-- run `helm link` again if it expires;
-- run `helm add` when adding another computer.
+- run `helm add controller` again if it expires;
+- run `helm add pc` when adding another computer, and `helm add vm` for
+  another always-on home;
+- on a computer that has already joined, `helm open` opens the app signed in,
+  with no link at all.
 
 ## 5. Add another computer
 
 On any connected computer:
 
 ```bash
-helm add
+helm add pc
 ```
 
 Install Helm on the new computer, then run the exact `helm join ...` command
-printed by `helm add`.
+printed by `helm add pc`.
 
 ## 5a. Add a second always-on VM (optional)
 
 A network can hold more than one home, so devices keep working when any one VM
-is down. On an existing machine, get a code with `helm add`. On the new VM,
-after installing Caddy and Helm:
+is down. On an existing machine, get a code with `helm add vm`. On the new VM,
+after installing Caddy and Helm, run the command that code was printed with:
 
 ```bash
-helm setup --join <CODE> --at https://your-first-home.example
+helm join <CODE> https://your-first-home.example
 ```
+
+The code says "vm", so that machine also takes an address of its own and
+starts serving. (`helm setup --join <CODE> --at <url>` still does the same
+thing, for existing scripts.)
 
 This joins the existing network instead of founding a new one, assigns the new
 VM its own free HTTPS address (or pass an explicit `https://…` at the end),
@@ -117,6 +124,6 @@ loginctl show-user "$USER" -p Linger
 ```
 
 Also request `/api/health` under the printed public address. Then generate a
-fresh `helm link`. Report the public home address, pairing link, service status,
+fresh `helm add controller`. Report the public home address, pairing link, service status,
 whether `Linger=yes`, and whether the health check passed. Never report or copy
 the network key from `~/.helm/network.json`.

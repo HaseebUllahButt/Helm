@@ -25,6 +25,8 @@ export interface Environment {
     platform?: string;
     arch?: string;
     usage?: boolean;
+    /** 'pty' when terminals are helm's own; 'panes' is the slow fallback. */
+    terminals?: 'pty' | 'panes';
     runtime?: { version: string };
   };
 }
@@ -51,6 +53,8 @@ export interface Session {
   updatedAt?: number;
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;
+  /** Set on a terminal helm owns: a pty, not a herdr pane. */
+  pty?: boolean;
   model?: string | null;
   /** What the CLI said it actually started with, when nothing was picked. */
   engineModel?: string | null;
@@ -243,6 +247,20 @@ export class Client {
       this.connect().catch(() => {});
     }
   };
+
+  /**
+   * The network underneath us changed - Wi-Fi to cellular, one LAN to
+   * another. A socket can survive that looking open while reaching nothing,
+   * and the hub that was the right one to hold may not be reachable at all
+   * any more. Drop it and race the addresses again; closing here goes through
+   * `onclose`, which is what schedules the fresh attempt.
+   */
+  private onNetworkChange = () => {
+    if (this.closed) return;
+    this.backoff = 500;
+    if (this.connected) this.ws?.close(4001, 'network changed');
+    else if (!this.connecting) this.connect().catch(() => {});
+  };
   /** What the last connection attempt ran into, for the diagnostics line. */
   public lastError = '';
 
@@ -256,6 +274,9 @@ export class Client {
     this.relay = endpoints[0];
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.onVisible);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', this.onNetworkChange);
     }
   }
 
@@ -431,6 +452,9 @@ export class Client {
     this.stopPresencePoll();
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisible);
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', this.onNetworkChange);
     }
     for (const env of [...this.peers.keys()]) this.dropDirect(env);
     try { this.ws?.close(); } catch { /* already closing */ }
@@ -662,12 +686,20 @@ export interface Device {
  * long after it. Along with it comes the list of addresses to try in future,
  * so this device is no longer tied to whichever machine signed it in.
  */
-export async function login(endpoint: string, password: string) {
+/**
+ * Sign in to a machine.
+ *
+ * Normally that means a pairing password from `helm add controller`. On the
+ * machine itself, `helm open` supplies its local key instead - the daemon
+ * accepts it only from loopback, and only if it matches the file in ~/.helm
+ * that just handed it to us.
+ */
+export async function login(endpoint: string, password: string, local?: string) {
   const base = endpoint.replace(/\/$/, '');
   const res = await fetch(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ password, label: deviceLabel() }),
+    body: JSON.stringify({ password, local, label: deviceLabel() }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({} as any));

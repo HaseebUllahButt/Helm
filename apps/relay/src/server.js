@@ -41,6 +41,7 @@ export async function startRelay({
     makeHttpHandler, clientTokenFrom, identify, rotatePassword, ROLE, SECURITY_HEADERS,
   } = http;
   const { createWsLayer } = await import('./ws.js');
+  const { createPublish } = await import('./publish.js');
 
   // Starting up opens a fresh login window so there is always a way in from a
   // new device. It does not disturb devices that are already members - they
@@ -49,8 +50,9 @@ export async function startRelay({
     ? rotatePassword(password, passwordTtlMs)
     : { password: null, expiresAt: 0 };
 
-  const { wss, online, kick } = createWsLayer();
+  const { wss, online, kick, routeTunnel } = createWsLayer();
   const api = makeHttpHandler({ online, kick });
+  const publish = createPublish({ online, routeTunnel, hubPort: port });
 
   const serveStatic = async (req, res) => {
     if (!webRoot) return false;
@@ -75,10 +77,54 @@ export async function startRelay({
     }
   };
 
-  const server = createServer((req, res) => {
-    const handle = req.url.startsWith('/api/')
+  // What the app checks against its own bundle: the hashed asset this hub's
+  // index.html points at. An installed PWA resumes the page it loaded rather
+  // than reloading, so without this an old bundle runs until it happens to
+  // die. The answer is just a filename - nothing worth hiding behind auth.
+  const version = async (req, res) => {
+    try {
+      const html = await readFile(join(webRoot, 'index.html'), 'utf8');
+      const m = /src="([^"]*assets\/[^"]+)"/.exec(html);
+      res.writeHead(200, {
+        'content-type': 'application/json', 'cache-control': 'no-store', ...SECURITY_HEADERS,
+      });
+      res.end(JSON.stringify({ build: m?.[1] ?? null }));
+    } catch {
+      res.writeHead(404, { 'content-type': 'application/json', ...SECURITY_HEADERS });
+      res.end('{}');
+    }
+  };
+
+  // helm's own world lives under /helm and at addresses nobody publishes.
+  // On a published host everything else belongs to that machine's T3.
+  const helmPath = (req) => {
+    if (req.url === '/helm' || req.url.startsWith('/helm/')) {
+      req.url = req.url.slice(5) || '/';
+      return true;
+    }
+    return false;
+  };
+
+  const routeHelm = (req, res) =>
+    req.url === '/api/version'
+      ? version(req, res)
+      : req.url.startsWith('/api/')
       ? api(req, res)
-      : serveStatic(req, res).then((served) => (served ? null : api(req, res)));
+      : serveStatic(req, res).then((served) => {
+          if (served) return null;
+          // Not an api path and not a file: helm's own 404. Falling through
+          // to api() here would 401 an unknown page, which reads as auth, not
+          // absence.
+          res.writeHead(404, { 'content-type': 'application/json', ...SECURITY_HEADERS });
+          res.end(JSON.stringify({ error: 'not found' }));
+          return null;
+        });
+
+  const server = createServer((req, res) => {
+    const own = helmPath(req);
+    const handle = (!own && publish.handleRequest(req, res))
+      ? null
+      : routeHelm(req, res);
 
     Promise.resolve(handle).catch((err) => {
       res.writeHead(500, { 'content-type': 'application/json' });
@@ -98,7 +144,15 @@ export async function startRelay({
 
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
-    if (url.pathname !== '/ws') return socket.destroy();
+    // /helm/ws is helm's protocol by any name; /ws is the same endpoint for
+    // older clients - unless the Host names a published machine, in which
+    // case the socket is that machine's T3 saying hello, not helm's.
+    const helmWs = url.pathname === '/helm/ws'
+      || (url.pathname === '/ws' && publish.resolve(req.headers.host)?.kind !== 'machine');
+    if (!helmWs) {
+      if (publish.handleUpgrade(req, socket, head)) return;
+      return socket.destroy();
+    }
 
     const token =
       tokenFromProtocols(req.headers['sec-websocket-protocol']) ||
@@ -176,7 +230,7 @@ export async function startRelay({
     });
   });
   return {
-    server, port,
+    server, port, online,
     password: auth.password,
     expiresAt: auth.expiresAt,
     stop: () => server.close(),
