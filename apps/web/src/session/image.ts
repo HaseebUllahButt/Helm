@@ -41,7 +41,41 @@ export interface PreparedImage {
   url: string;
 }
 
-function loadImage(file: File): Promise<HTMLImageElement> {
+/** What a decoded image is, whichever route decoded it. */
+type Decoded = { source: CanvasImageSource; width: number; height: number };
+
+function cannotDecode(file: File): Error {
+  // HEIC is the one that actually bites: it is what an iPhone shoots by
+  // default, and only Safari decodes it. Saying so beats "could not decode
+  // it", which reads like the file is broken when it is not.
+  const heic = /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name || '');
+  return new Error(heic
+    ? 'this browser cannot read HEIC photos - share it as JPEG'
+    : 'the browser could not decode it');
+}
+
+/**
+ * Decode a picked file.
+ *
+ * `createImageBitmap` first, and not only because it is tidier than juggling
+ * an object URL's lifetime: the app is served under a CSP, and an `img-src`
+ * without `blob:` makes `new Image()` on an object URL fail for *every*
+ * photo, with an error that blames the file. (It did. That is fixed in the
+ * relay's headers too, but a decoder that never needs the permission cannot
+ * be broken by it again.) It also applies EXIF orientation, so a picture
+ * taken in portrait does not arrive on its side.
+ *
+ * The `<img>` route stays as the fallback for anything without it.
+ */
+async function loadImage(file: File): Promise<Decoded> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      if (bitmap.width && bitmap.height) {
+        return { source: bitmap, width: bitmap.width, height: bitmap.height };
+      }
+    } catch { /* fall through and try the old way */ }
+  }
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const image = new Image();
@@ -51,17 +85,11 @@ function loadImage(file: File): Promise<HTMLImageElement> {
         reject(new Error('the image has no usable dimensions'));
         return;
       }
-      resolve(image);
+      resolve({ source: image, width: image.naturalWidth, height: image.naturalHeight });
     };
     image.onerror = () => {
       URL.revokeObjectURL(url);
-      // HEIC is the one that actually bites: it is what an iPhone shoots by
-      // default, and only Safari decodes it. Saying so beats "could not
-      // decode it", which reads like the file is broken when it is not.
-      const heic = /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name || '');
-      reject(new Error(heic
-        ? 'this browser cannot read HEIC photos - share it as JPEG'
-        : 'the browser could not decode it'));
+      reject(cannotDecode(file));
     };
     image.src = url;
   });
@@ -106,8 +134,8 @@ export async function prepareImage(file: File): Promise<PreparedImage> {
   if (!file.size) throw new Error('the file is empty');
 
   const image = await loadImage(file);
-  const sourceWidth = image.naturalWidth;
-  const sourceHeight = image.naturalHeight;
+  const sourceWidth = image.width;
+  const sourceHeight = image.height;
   const longest = Math.max(sourceWidth, sourceHeight);
   let maxDimension = Math.min(MAX_DIMENSION, Math.max(longest, MIN_DIMENSION));
 
@@ -130,7 +158,7 @@ export async function prepareImage(file: File): Promise<PreparedImage> {
     context.fillRect(0, 0, width, height);
     // An animated GIF gives up its first frame here, which is what the
     // model would have looked at anyway.
-    context.drawImage(image, 0, 0, width, height);
+    context.drawImage(image.source, 0, 0, width, height);
 
     for (const quality of QUALITIES) {
       const candidate = await encode(canvas, quality);
@@ -140,6 +168,12 @@ export async function prepareImage(file: File): Promise<PreparedImage> {
       }
     }
     maxDimension = Math.floor(maxDimension * 0.8);
+  }
+
+  // An ImageBitmap holds decoded pixels until it is closed, which on a phone
+  // with four photos queued is real memory.
+  if (typeof ImageBitmap !== 'undefined' && image.source instanceof ImageBitmap) {
+    image.source.close();
   }
 
   if (!blob) throw new Error('the image could not be compressed below 4 MB');

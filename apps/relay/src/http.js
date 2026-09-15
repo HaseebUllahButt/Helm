@@ -37,7 +37,10 @@ export const SECURITY_HEADERS = {
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    // blob: is not optional: the composer decodes a picked photo locally
+    // before sending it, and without this every attachment failed with "the
+    // browser could not decode it" - the CSP, not the file.
+    "img-src 'self' data: blob:",
     "connect-src 'self' https: wss: http: ws:",
     "frame-ancestors 'none'",
   ].join('; '),
