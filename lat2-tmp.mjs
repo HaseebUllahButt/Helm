@@ -17,7 +17,8 @@ await until(`[...document.querySelectorAll('.rt')].some(x=>x.textContent.trim()=
 await ev(`(()=>{const e=[...document.querySelectorAll('.rt')].find(x=>x.textContent.trim()==='haseeb'); e?.closest('button')?.click();})()`);
 await until(`!!document.querySelector('.sub')`,'machine view');
 await wait(9000);
-console.log('header:', await ev(`document.querySelector('.sub')?.innerText?.replace(/\\n/g,' ')`));
+console.log('at 9s :', await ev(`document.querySelector('.sub')?.innerText?.replace(/\\n/g,' ')`));
+for (const extra of [20000, 20000, 20000]) { await wait(extra); console.log('later :', await ev(`document.querySelector('.sub')?.innerText?.replace(/\\n/g,' ')`)); }
 // the VM too, for contrast
 await ev(`(()=>{const b=document.querySelector('.main .iconbtn, .main button'); })()`);
 ws.close(); process.exit(0);

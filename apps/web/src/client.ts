@@ -281,10 +281,27 @@ export class Client {
    * how to draw, and the sidebar shows it so a bad connection looks like a
    * bad connection instead of like broken software.
    */
-  private rtt = new Map<string, number>();
+  private rttSamples = new Map<string, number[]>();
   private rttTimers = new Map<string, ReturnType<typeof setInterval>>();
 
-  latency(env: string): number | null { return this.rtt.get(env) ?? null; }
+  /**
+   * The lowest of the last few samples, not an average of them.
+   *
+   * What we want to know is what the path costs, and every source of error
+   * only ever adds: a busy main thread, a page still loading, a daemon
+   * reading a file. Averaging folds all of that in, and smoothing spreads
+   * it over the next minute - the first version of this showed "947ms" on a
+   * connection that was actually 3ms, for forty seconds after opening the
+   * machine, which is exactly the wrong thing to tell someone wondering why
+   * their terminal feels slow. The minimum is the honest floor and it
+   * recovers the moment one clean sample lands.
+   */
+  private static RTT_KEEP = 8;
+
+  latency(env: string): number | null {
+    const samples = this.rttSamples.get(env);
+    return samples?.length ? Math.min(...samples) : null;
+  }
 
   /**
    * Which pair of addresses a direct connection actually settled on.
@@ -336,19 +353,21 @@ export class Client {
       try {
         await this.rpc(env, 'ping', {}, 15_000);
         const sample = performance.now() - started;
-        // Smoothed, because one slow sample is usually a scheduler hiccup
-        // rather than a worse connection, and a number that jumps around is
-        // one nobody trusts. Weighted towards the new sample so that moving
-        // from wifi to cellular shows up quickly.
-        const was = this.rtt.get(env);
-        this.rtt.set(env, was == null ? sample : was * 0.6 + sample * 0.4);
+        const samples = this.rttSamples.get(env) ?? [];
+        samples.push(sample);
+        // A bounded window, so moving from wifi to cellular shows up rather
+        // than being outvoted forever by one good sample from before.
+        while (samples.length > Client.RTT_KEEP) samples.shift();
+        this.rttSamples.set(env, samples);
       } catch {
-        this.rtt.delete(env);
+        this.rttSamples.delete(env);
       }
-      this.emit(env, 'latency', { env, ms: this.rtt.get(env) ?? null });
+      this.emit(env, 'latency', { env, ms: this.latency(env) });
     };
     ping();
-    const timer = setInterval(ping, 5_000);
+    // Often enough that the window fills while you are still looking at the
+    // machine you just opened, and cheap: the reply is a timestamp.
+    const timer = setInterval(ping, 3_000);
     this.rttTimers.set(env, timer);
     return () => this.unwatchLatency(env);
   }
@@ -360,6 +379,7 @@ export class Client {
     const timer = this.rttTimers.get(env);
     if (timer) clearInterval(timer);
     this.rttTimers.delete(env);
+    this.rttSamples.delete(env);
   }
 
   constructor(public endpoints: string[], public token: string) {
