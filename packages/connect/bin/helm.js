@@ -604,6 +604,24 @@ try {
       console.log(`members:  ${Object.keys(net.machines).length} machines, ` +
                   `${Object.keys(net.devices).length} controllers`);
       console.log(`reachable at: ${(me?.endpoints ?? []).join(' ') || '(not advertised yet)'}`);
+
+      // A full-tunnel VPN leaves the LAN address on the interface but routes
+      // the subnet into the tunnel, so the address helm advertises is one it
+      // cannot answer on. Nothing else reports this, and the symptom - a
+      // phone on the same wifi quietly relaying through the hub instead of
+      // connecting directly - looks like helm being slow.
+      const { lanIsRoutable } = await import('../src/net-addr.js');
+      const lan = await lanIsRoutable();
+      if (lan && !lan.ok) {
+        console.log(`
+  ! ${lan.address} is advertised for this network, but traffic to it leaves
+    over ${lan.via} rather than ${lan.expected}. A device on the same wifi
+    cannot reach this machine directly, so sessions relay through your Helm
+    home - which is slower, often by a lot.
+
+    Usually a VPN carrying everything. With Tailscale:
+      tailscale set --exit-node-allow-lan-access=true`);
+      }
       const peers = allEndpoints(net).filter((e) => !(me?.endpoints ?? []).includes(e));
       if (peers.length) console.log(`other hubs:   ${peers.join(' ')}`);
       try {
