@@ -7,9 +7,12 @@ is the part that is not obvious from the code: **what it is trying to be**,
 what changed today and why, what was verified by running it, and what was
 not.
 
-If you only read two sections, read **"What this is for"** (the bar the rest
-exists to hit) and **"Start here: nothing is running"** (the network was
-deliberately torn down; you will need to rebuild it before anything works).
+If you only read three sections, read **"What this is for"** (the bar the
+rest exists to hit), **"Start here"** (what is running right now), and **"The
+network, and why it is the whole latency story"** — that last one is not
+about helm's code at all, and it explains most of what anyone has ever
+complained about feeling slow. Every latency number in this file was
+measured on 2026-09-15; none of them are estimates unless they say so.
 
 ---
 
@@ -91,7 +94,11 @@ live here said nothing was running - that was true on the evening of the 14th
 and is not true now.)
 
 **Both machines were upgraded through the day** and are on the same commit
-as `main`. The loop, whenever you push:
+as `main`. One thing outside the repo changed too: the laptop's Tailscale now
+has `--exit-node-allow-lan-access` on (see "The network" below, and do not
+undo it by accident — the flag clears the exit node if passed alone).
+
+The loop, whenever you push:
 
 ```bash
 cd ~/.helm-src && ./install.sh && systemctl --user restart helm-serve
@@ -140,6 +147,126 @@ from the parked experiment still sit in both install dirs; nothing on `main`
 imports them.
 
 ---
+
+---
+
+## The network, and why it is the whole latency story
+
+Read this before touching anything that feels slow. Nothing in helm's code
+accounts for most of the latency anyone has complained about; the shape of
+the network does, and that shape is not obvious from any one machine.
+
+```
+  phone  ──────────────────────────┐
+  (Pakistan, wifi or cellular)     │
+                                   ▼
+                          VM / Helm home
+                          Oracle, MUMBAI
+                          130-210-33-163.sslip.io
+                                   │
+                                   ▼
+                          exit node, NEW YORK
+                          DigitalOcean 157.230.182.111
+                          (100.72.183.111 on the tailnet)
+                                   │
+                                   ▼
+                          laptop "haseeb"
+                          (Pakistan, 192.168.10.35)
+```
+
+The laptop runs **Tailscale with a New York exit node**, so its traffic to
+the Mumbai VM goes **Pakistan → New York → Mumbai** and back. Measured
+2026-09-15:
+
+| leg | measured |
+|---|---|
+| VM ↔ exit node | **195ms** |
+| laptop → VM, through the tunnel | **450–970ms** to connect |
+| an RPC relayed hub→laptop and back | **1.1s** |
+| phone ↔ laptop, direct peer-to-peer | **3ms** |
+| laptop daemon answering a ping on loopback | **1.3ms** |
+
+The daemon is not slow. The path is long, and it is long by choice.
+
+### What was wrong, and what was changed
+
+The laptop had `ExitNodeAllowLANAccess: False`, which meant **it could not
+reach its own LAN**: `ip route get 192.168.10.1` came back `dev tailscale0`
+and a ping to its own router got 100% loss. The interface still held
+192.168.10.35, so helm advertised it and a phone on the same wifi sent
+packets there — and the replies left through New York and never came back.
+ICE lost its one good candidate pair and fell back to relaying through the
+hub, which is the 1.1s. Nothing anywhere said why; it just felt like helm
+being slow.
+
+Fixed on 2026-09-15 with:
+
+```bash
+tailscale set --exit-node=100.72.183.111 --exit-node-allow-lan-access=true
+```
+
+Now `1.1.1.1` still routes `dev tailscale0` (internet still goes via New
+York, which is the point of the exit node) while `192.168.10.1` routes
+`dev wlp115s0` and pings in 3ms.
+
+**Two traps, both hit for real:**
+
+- `tailscale set --exit-node-allow-lan-access=true` **on its own clears the
+  exit node.** It did, and the laptop spent a minute routing out its own ISP
+  before it was noticed and restored. Always pass `--exit-node=` in the same
+  command.
+- `tailscale up` refuses unless every non-default flag is restated, and the
+  one easy to forget here is `--operator=haseeb` — without it you lose
+  passwordless `tailscale` control. `tailscale set` does not have this
+  problem, which is why it is the command to use.
+
+`helm status` now catches the underlying condition itself: it compares the
+interface holding the advertised LAN address against the interface the
+kernel would really send that subnet out of, and says so when they differ
+(`net-addr.js`, `lanIsRoutable`).
+
+### What is still slow, and what would fix it
+
+**Same wifi: solved.** The phone should now pair directly with the laptop.
+Expect the machine header to read `direct, same network · single-digit ms`.
+If it still says `via your Helm home`, the next suspect is **AP isolation**
+on the router — some mesh and guest networks block client-to-client traffic —
+and `client.route()` reports the candidate pair it settled on.
+
+**Phone on cellular: not fixable while the exit node is on.** Every route to
+the laptop ends at New York, so it is ~1.1s a round trip. Predictive echo
+(below) makes typing feel normal; scrollback, a large paste and anything
+bulk stay slow. Two things would change it, both declined by the owner on
+2026-09-15 and recorded here so they are not re-proposed as if new:
+
+- **The phone on the tailnet.** Tailnet peer traffic does not go through an
+  exit node — an exit node only carries internet-bound traffic — so
+  phone↔laptop would connect directly and never touch New York. The daemon
+  already offers `100.80.16.79` as an ICE candidate, and WebRTC is not
+  subject to the mixed-content rule that stops the phone loading the app
+  from `http://100.80.16.79:8787`. The owner does not want the phone on the
+  tailnet.
+- **Toggling the exit node off** while working from the phone
+  (`tailscale set --exit-node=`) would make the relay path Pakistan →
+  Mumbai → Pakistan, roughly 200ms instead of 1100.
+
+**The option that is closed, so nobody spends an hour on it:** serving the
+app from the laptop itself at `https://haseeb.tail2f39a8.ts.net` would
+remove the VM from the path entirely — no mixed content, no WebRTC needed.
+MagicDNS is on, but `tailscale cert` answers *"your Tailscale account does
+not support getting TLS certs"*: this is `reachraza1@gmail.com`'s tailnet
+and the owner is a member, not the admin. It would take that admin enabling
+HTTPS certificates in the console. Worth asking for; not something this
+repo can do.
+
+### The phone is real, and it is the instrument
+
+`helm devices` shows an **Android Chrome paired since 2026-09-14**, and it
+is what the owner drives sessions from. An earlier version of this file
+claimed "a real phone has never opened this"; that was wrong for a day, and
+the report that started the latency work came from that phone. **Check
+`helm devices` before writing anything about what has or has not been
+tried.**
 
 ## What changed today (2026-09-15)
 
@@ -575,6 +702,12 @@ add a third delivery path, it must carry the same id.**
   node-pty ships binaries up to 131, so there was nothing to load and helm
   had quietly been on the slow herdr-pane path since the last upgrade;
   `install.sh` builds the addon now instead of only reporting it missing.
+- **The laptop can reach its own LAN again**, which is the thing that should
+  make the phone fast on home wifi: `ping 192.168.10.1` went from 100% loss
+  to 3/3 at 3ms, `ip route get 192.168.10.1` from `dev tailscale0` to
+  `dev wlp115s0`, and the internet route stayed on `dev tailscale0` with the
+  public address still 157.230.182.111. Verified from the laptop only — **the
+  phone has not been checked since**, which is item 2 of the backlog.
 - **A real image reached a real model.** Sandboxed daemon, `claudea` profile,
   a 64px PNG of a white circle on red, sent through `session.input` with the
   prompt "reply with exactly two words: the background colour, then the shape
@@ -619,27 +752,34 @@ add a third delivery path, it must carry the same id.**
    only part of today's work that nothing has exercised end to end, and it
    is thirty seconds to settle: open the app on the phone, "notify this
    device" in the sidebar, then let a session ask for permission.
-2. **The touch-facing work has only been driven in headless Chromium** at
+2. **Nobody has confirmed the phone now pairs directly.** The LAN-access fix
+   went in at the end of the session and was verified from the laptop's side
+   only (`ping 192.168.10.1` 3/3 at 3ms, `helm status` clean). The phone has
+   not been looked at since. **This is the first thing to check.** Open it on
+   home wifi: the machine header should read `direct, same network` and
+   single-digit milliseconds. If it still says `via your Helm home`, suspect
+   **AP isolation** on the router before suspecting helm, and read the
+   candidate pair out of `client.route()`.
+3. **The touch-facing work has only been driven in headless Chromium** at
    390×844 — the `/` palette against a software keyboard, and predictive
-   echo, which above 60ms is exactly what the phone will be running. The
-   owner's phone is the instrument for that; it exists and is paired.
+   echo, which above 60ms is exactly what a phone on cellular runs.
 
    *(An earlier version of this list said "a real phone has never opened
    this". That was wrong and had been wrong for a day: `helm devices` shows
    an Android Chrome paired since 2026-09-14, and the complaint that started
    the latency work — "mobile to laptop terminal latency is ass" — came from
    it. Check `helm devices` before repeating anything in this section.)*
-3. **Devin got the image and named the colour wrong.** It answered
+4. **Devin got the image and named the colour wrong.** It answered
    "Turquoise circle" to a red square with a white circle - shape right,
    colour wrong, and it read no files that turn. helm's side is clean: the
    JPEG on disk is 64×64 with corner `(254,0,0)`, and those are the exact
    bytes handed to the driver. Worth one more look with a different picture
    before deciding whose problem it is.
-4. **opencode has no credit** ("Insufficient balance"), so its image path is
+5. **opencode has no credit** ("Insufficient balance"), so its image path is
    verified only as far as the agent accepting the content block.
-5. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
+6. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
    coded from the bindings and have never been seen live.
-6. **herdr's own answer is ~100ms** for a pane listing, which is now cached
+7. **herdr's own answer is ~100ms** for a pane listing, which is now cached
    rather than fixed. If adopted panes ever start feeling stale, that cache
    (`LIVE_TTL_MS`) is why.
 
@@ -647,6 +787,18 @@ add a third delivery path, it must carry the same id.**
 
 Both run Linux with helm in `~/.helm-src`. Kept across the wash:
 `profiles.json` on both, `secrets.env` on the laptop, and the ssh keys.
+
+- **The laptop is on Tailscale behind a New York exit node**, which is the
+  single biggest thing shaping how helm feels — see "The network, and why it
+  is the whole latency story". `--exit-node-allow-lan-access` is **on** as of
+  2026-09-15; it was off, and that was why a phone on the same wifi relayed
+  everything through Mumbai. Do not change exit-node settings with
+  `tailscale set` without passing `--exit-node=` in the same command: alone,
+  the LAN-access flag clears the exit node.
+- **node 26 on the laptop has no prebuilt `node-pty`** (ABI 147; the package
+  ships up to 131), so it is compiled from source. `install.sh` does that
+  now. If terminals ever feel like they are polling again, `helm status` says
+  `own pty` or `herdr panes (slow)` and which.
 
 - **The owner's default `~/.claude` login is expired** — "OAuth session expired
   and could not be refreshed". Everything today ran on the `claudea` profile.
