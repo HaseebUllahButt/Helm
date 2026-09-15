@@ -41,6 +41,20 @@ export const ENGINES = {
     configPath: 'opencode/opencode.json',
     sessionsDir: 'opencode/storage',
     resumeArgs: (id) => ['--session', id],
+    // Run headless through `opencode acp` (drivers/opencode.js).
+    driver: 'opencode',
+  },
+  devin: {
+    id: 'devin',
+    label: 'Devin',
+    bin: 'devin',
+    // Same XDG caveat as opencode: config lives in ~/.config/devin, the login
+    // in ~/.local/share/devin.
+    homeEnv: 'XDG_CONFIG_HOME',
+    defaultHome: '~/.config',
+    configPath: 'devin/config.json',
+    // Run headless through `devin acp` (drivers/devin.js).
+    driver: 'devin',
   },
   shell: {
     id: 'shell',

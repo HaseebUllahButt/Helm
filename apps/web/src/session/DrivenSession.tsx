@@ -7,8 +7,8 @@ import { Transcript } from './Transcript';
 import { useSessionLog } from './useSessionLog';
 import type { Decision } from './types';
 
-const ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode' };
-const MARK: Record<string, string> = { claude: 'C', codex: 'X', opencode: 'O' };
+const ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', devin: 'Devin' };
+const MARK: Record<string, string> = { claude: 'C', codex: 'X', opencode: 'O', devin: 'D' };
 const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split('/').slice(-2).join('/');
 
 /**
@@ -22,6 +22,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
 }) {
   const { log, error: logError } = useSessionLog(client, env.id, session.id);
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState<{ name: string; mime: string; data: string; url: string }[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
@@ -32,7 +33,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
   const pending = log.pending[0];
 
   useEffect(() => {
-    client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId }, 30_000)
+    client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id }, 30_000)
       .then(setOptions).catch(() => setOptions({ default: null, models: [] }));
   }, [client, env.id, session.profileId]);
 
@@ -51,12 +52,25 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
     finally { setBusy(false); }
   };
 
+  const onAttach = async (files: FileList) => {
+    const next: typeof attachments = [];
+    for (const f of Array.from(files)) {
+      if (!f.type.startsWith('image/')) continue;
+      const data = await new Promise<string>((res, rej) => {
+        const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f);
+      });
+      const url = `data:${f.type};base64,${data}`;
+      next.push({ name: f.name, mime: f.type, data, url });
+    }
+    setAttachments(a => [...a, ...next].slice(0, 4));
+  };
   const send = async () => {
     const body = draft.trim();
-    if (!body) return;
-    setDraft('');
-    try { await client.rpc(env.id, 'session.input', { id: session.id, data: body }, 70_000); }
-    catch (e: any) { setError(e.message); setDraft(body); }
+    if (!body && !attachments.length) return;
+    const atts = attachments;
+    setDraft(''); setAttachments([]);
+    try { await client.rpc(env.id, 'session.input', { id: session.id, data: body, attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000); }
+    catch (e: any) { setError(e.message); setDraft(body); setAttachments(atts); }
   };
 
   const answer = (d: Decision) => pending && call(() => client.rpc(env.id, 'session.answer', { id: session.id, requestId: pending.requestId, decision: d }));
@@ -105,6 +119,11 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
 
   const controls = Controls({ options, session, busy, onPick: pick });
 
+  // The clip is only offered when the running model can see images;
+  // the daemon enforces the same rule, so this is presentation, not trust.
+  const modelNow = session.model || session.engineModel || options?.default || '';
+  const canAttach = options?.imagesByModel?.[modelNow] ?? options?.images ?? (session.engine === 'claude' || session.engine === 'codex');
+
   return (
     <>
       <div className="bar">
@@ -134,7 +153,8 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onSessio
       <Composer
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
         engine={engine} keys={false} waiting={!!pending} danger={mode?.danger}
-        foot={controls.chips}
+        foot={controls.chips} canAttach={canAttach}
+        onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
       >
         {controls.sheet}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}

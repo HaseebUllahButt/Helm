@@ -14,6 +14,51 @@ const ICE_SERVERS = [
   { urls: 'stun:stun.cloudflare.com:3478' },
 ];
 
+/**
+ * libdatachannel (and browsers) cap a single data-channel message well below
+ * what a chat history can be - an old session's `session.events` reply is
+ * easily megabytes. Anything over CHUNK_AT is fragmented into small
+ * `dc-chunk` frames and reassembled on the other side (see client.ts, which
+ * implements the same wire format). The relay path has no such limit, so a
+ * direct copy that still fails to send is simply dropped: the hub already
+ * carries the same event.
+ */
+export const DC_CHUNK_AT = 16_000;
+export const DC_CHUNK_TYPE = 'dc-chunk';
+
+/** Split a large frame into chunk frames. Small frames pass through as-is. */
+export function fragment(frame, gid) {
+  if (frame.length <= DC_CHUNK_AT) return [frame];
+  const n = Math.ceil(frame.length / DC_CHUNK_AT);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push(JSON.stringify({
+      t: DC_CHUNK_TYPE, gid, i, n,
+      data: frame.slice(i * DC_CHUNK_AT, (i + 1) * DC_CHUNK_AT),
+    }));
+  }
+  return out;
+}
+
+/** Best-effort send of one (possibly fragmented) frame; never throws. */
+function sendFrame(channel, frame) {
+  if (!channel || channel.readyState !== 'open') return false;
+  try {
+    if (frame.length <= DC_CHUNK_AT) {
+      channel.send(frame);
+      return true;
+    }
+    const gid = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    for (const piece of fragment(frame, gid)) channel.send(piece);
+    return true;
+  } catch {
+    // "Message size exceeds" or a racing close: the relay carries the same
+    // event, so dropping this copy is correct. RPC replies have no relay
+    // copy; the caller times out and retries over the hub.
+    return false;
+  }
+}
+
 export class PeerHub {
   #peers = new Map();
 
@@ -75,11 +120,44 @@ export class PeerHub {
 
     pc.ondatachannel = ({ channel }) => {
       peer.channel = channel;
-      channel.onmessage = (ev) => this.#onMessage(peer, ev.data);
-      channel.onclose = () => { peer.channel = null; };
+      peer.fragments = new Map();
+      channel.onmessage = (ev) => this.#onRaw(peer, ev.data);
+      channel.onclose = () => { peer.channel = null; peer.fragments?.clear(); };
     };
 
     return peer;
+  }
+
+  #onRaw(peer, raw) {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+    if (msg?.t === DC_CHUNK_TYPE && typeof msg.gid === 'string') {
+      const full = this.#accumulate(peer, msg);
+      if (full == null) return;
+      raw = full;
+    }
+    this.#onMessage(peer, raw);
+  }
+
+  #accumulate(peer, { gid, i, n, data }) {
+    if (!peer.fragments) peer.fragments = new Map();
+    let entry = peer.fragments.get(gid);
+    if (!entry) {
+      if (!Number.isInteger(n) || n <= 1 || n > 2000) return null;
+      entry = { n, parts: new Array(n), got: 0, at: Date.now() };
+      peer.fragments.set(gid, entry);
+    }
+    if (!Number.isInteger(i) || i < 0 || i >= entry.n || entry.parts[i] !== undefined) return null;
+    entry.parts[i] = typeof data === 'string' ? data : '';
+    entry.got++;
+    // Stale fragments from a peer that went away mid-message must not leak.
+    if (peer.fragments.size > 8) {
+      const oldest = [...peer.fragments.keys()][0];
+      peer.fragments.delete(oldest);
+    }
+    if (entry.got < entry.n) return null;
+    peer.fragments.delete(gid);
+    return entry.parts.join('');
   }
 
   /**
@@ -92,9 +170,7 @@ export class PeerHub {
     if (msg.t !== 'rpc') return;
 
     const reply = (body) => {
-      if (peer.channel?.readyState === 'open') {
-        peer.channel.send(JSON.stringify({ t: 'rpcResult', ...body }));
-      }
+      sendFrame(peer.channel, JSON.stringify({ t: 'rpcResult', ...body }));
     };
 
     try {
@@ -111,7 +187,7 @@ export class PeerHub {
   broadcast(kind, payload, eid) {
     const frame = JSON.stringify({ t: 'event', kind, payload, eid });
     for (const peer of this.#peers.values()) {
-      if (peer.channel?.readyState === 'open') peer.channel.send(frame);
+      sendFrame(peer.channel, frame);
     }
   }
 

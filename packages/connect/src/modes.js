@@ -26,6 +26,23 @@ export const MODES = {
     { id: 'full', label: 'Act without asking', short: 'yolo', hint: 'no sandbox, no questions', approvalPolicy: 'never', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' }, danger: true },
     { id: 'readonly', label: 'Read only', short: 'read', hint: 'cannot write; every command asks', approvalPolicy: 'untrusted', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } },
   ],
+  // ACP engines: `acp` is the value for configId 'mode'. opencode only knows
+  // build/plan, so `autoAllow` makes the driver itself answer the prompts a
+  // mode would skip - an edit auto-allow still stops for a command.
+  opencode: [
+    { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', acp: 'build' },
+    { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'edits go through, commands still ask', acp: 'build', autoAllow: ['edit'] },
+    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', acp: 'plan' },
+    { id: 'auto', label: 'Act without asking', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'build', autoAllow: 'all', danger: true },
+  ],
+  // devin's session modes are its own words: Code is its default and asks on
+  // the risky half, Ask runs no tools at all, Bypass is the dangerous one.
+  devin: [
+    { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'edits and safe commands go through, the rest ask', acp: 'accept-edits' },
+    { id: 'read', label: 'Read only', short: 'read', hint: 'answers without touching anything', acp: 'ask' },
+    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'plans changes before implementing', acp: 'plan' },
+    { id: 'yolo', label: 'Bypass all checks', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'bypass', danger: true },
+  ],
 };
 
 export const modesFor = (engine) => MODES[engine] ?? [];
@@ -36,5 +53,5 @@ export const modeFor = (engine, id) =>
 /** What the old `auto` toggle meant, for callers that still send it. */
 export const modeFromAuto = (engine, auto) => {
   const list = modesFor(engine);
-  return (auto ? list.find((m) => m.id === 'auto' || m.id === 'full') : list[0])?.id ?? null;
+  return (auto ? list.find((m) => m.id === 'auto' || m.id === 'full' || m.danger) : list[0])?.id ?? null;
 };

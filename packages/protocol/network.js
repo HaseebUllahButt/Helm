@@ -40,6 +40,28 @@ export function loadNetwork() {
   try { return JSON.parse(readFileSync(NETWORK_FILE, 'utf8')); } catch { return null; }
 }
 
+const LOCAL_KEY_FILE = join(HELM_DIR, 'local.key');
+
+/**
+ * The secret that lets a browser *on this machine* sign itself in.
+ *
+ * Being on the loopback interface is not enough on its own: the VM's Caddy
+ * terminates HTTPS and proxies to the hub over loopback, so every request
+ * from the internet arrives looking local. This file is the thing an outsider
+ * cannot get - it is readable only by the user whose agents these are, and
+ * anyone who can read it can already read the network key sitting beside it.
+ */
+export function localKey() {
+  if (existsSync(LOCAL_KEY_FILE)) {
+    const v = readFileSync(LOCAL_KEY_FILE, 'utf8').trim();
+    if (v) return v;
+  }
+  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
+  const v = newNetworkKey();
+  writeFileSync(LOCAL_KEY_FILE, v, { mode: 0o600 });
+  return v;
+}
+
 export const saveNetwork = write;
 
 export function requireNetwork() {

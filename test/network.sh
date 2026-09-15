@@ -69,7 +69,14 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8801/api/network 
 
 echo
 echo "=== 4. machine B joins the network ==="
-ADD_OUTPUT=$(env HELM_DIR=$S/A node packages/connect/bin/helm.js add)
+# `helm add` on its own names the three things that can join rather than
+# guessing; only `add pc` / `add vm` mint a code.
+BARE=$(env HELM_DIR=$S/A node packages/connect/bin/helm.js add)
+printf '%s\n' "$BARE" | grep -q '[A-Z2-9]\{4\}-[A-Z2-9]\{4\}' \
+  && fail "bare 'helm add' minted an invite instead of asking what to add" \
+  || echo "  PASS  bare 'helm add' asks what you are adding"
+
+ADD_OUTPUT=$(env HELM_DIR=$S/A node packages/connect/bin/helm.js add pc)
 INVITE=$(printf '%s\n' "$ADD_OUTPUT" | grep -o '[A-Z2-9]\{4\}-[A-Z2-9]\{4\}' | head -1)
 echo "invite: $INVITE"
 env HELM_DIR=$S/B node -e '
@@ -129,7 +136,7 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8801/api/network 
 echo
 echo "=== 8. a second always-on VM joins the mesh with 'helm setup --join' ==="
 mkdir -p "$S/C"
-ADD2=$(env HELM_DIR=$S/A node packages/connect/bin/helm.js add)
+ADD2=$(env HELM_DIR=$S/A node packages/connect/bin/helm.js add vm)
 INVITE2=$(printf '%s\n' "$ADD2" | grep -o '[A-Z2-9]\{4\}-[A-Z2-9]\{4\}' | head -1)
 # HELM_NO_SERVICE=1 stops before the systemd/HTTPS steps; an explicit https
 # home skips Caddy. What we are checking is that setup --join lands this VM in
@@ -142,6 +149,13 @@ C_NET=$(env HELM_DIR=$S/C node -e 'import("@helm/protocol/network").then(N=>{con
 [ -n "$A_NET" ] && [ "$A_NET" = "$C_NET" ] \
   && echo "  PASS  second VM joined the same mesh ($C_NET)" \
   || fail "second VM did not join A's mesh (A=$A_NET C=$C_NET)"
+
+# The invite said "vm", so the machine that redeemed it knows it is a home and
+# needs no second command to be told so.
+C_ROLE=$(env HELM_DIR=$S/C node -e 'import("@helm/protocol/network").then(N=>console.log(N.loadNetwork()?.role ?? "none"))')
+[ "$C_ROLE" = "vm" ] \
+  && echo "  PASS  the invite carried its role to the joining machine (vm)" \
+  || fail "the joining machine did not learn its role (got $C_ROLE)"
 
 echo
 echo "done."

@@ -7,9 +7,9 @@ import { execFile } from 'node:child_process';
  * the app renders Claude Code and Codex with the same components:
  *
  *   turn.start          { turnId, text }
- *   item.start          { id, kind, turnId, ... }   kind: text | thinking | tool | command | edit
+ *   item.start          { id, kind, turnId, parentId?, ... }   kind: text | thinking | tool | command | edit | subagent
  *   item.delta          { id, text }                appended to the item's text / output / input JSON
- *   item.update         { id, ...fields }
+ *   item.update         { id, ...fields }           e.g. { agent: { status, lastTool, toolUses } }
  *   item.done           { id, status, output?, exitCode?, error? }   status: ok | error | declined
  *   permission.request  { requestId, itemId, kind, title, detail, options[], defaultTo, ... }
  *   permission.resolved { requestId, decision }
@@ -17,6 +17,11 @@ import { execFile } from 'node:child_process';
  *   status              { status }                  working | blocked | idle | exited
  *   limits              { ... }
  *   error               { message, kind? }
+ *
+ * A `subagent` item is a spawned child agent; items that ran inside it carry
+ * its id as `parentId` so the app can nest them under the spawn card. Its
+ * `agent` field tracks what the engine reports about the child - status,
+ * the last tool it ran, its summary when it finishes.
  *
  * A driver is one session: it is created with the resolved profile (command,
  * environment, arguments), a working directory and the options chosen when
@@ -69,8 +74,14 @@ export class Driver extends EventEmitter {
   }
 
   // The verbs a session can ask of any driver. Subclasses implement them.
+  // No default sendWithAttachments on purpose: sessions checks for its
+  // presence to decide whether the driver can carry image bytes, and a
+  // default that quietly dropped them made every attachment vanish.
   async start() { throw new Error('not implemented'); }
   async send(_text) { throw new Error('not implemented'); }
+  // Summarise the conversation so far into a fresh context window. The
+  // default speaks the /compact both CLIs understand as user text.
+  async compact(hint) { return this.send('/compact' + (hint ? ` ${hint}` : '')); }
   async answer(_requestId, _decision) { throw new Error('not implemented'); }
   async interrupt() { throw new Error('not implemented'); }
   async setModel(_model) { throw new Error('not implemented'); }

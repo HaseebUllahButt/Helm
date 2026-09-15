@@ -7,11 +7,15 @@ import { HELM_DIR, expand } from './paths.js';
 import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
-import { optionArgs } from './models.js';
+import { optionArgs, supportsImages } from './models.js';
+import { available as usageAvailable, usage as fetchUsage } from './usage.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver } from './drivers/codex.js';
+import { OpencodeDriver } from './drivers/opencode.js';
+import { DevinDriver } from './drivers/devin.js';
 import { defaultMode, modeFromAuto } from './modes.js';
+import { TerminalHost } from './terminals.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -25,7 +29,24 @@ const WATCH_TTL_MS = 60_000;
 // resumes the same conversation, so nothing is lost but the warm process.
 const IDLE_REAP_MS = 30 * 60_000;
 
-const DRIVERS = { claude: ClaudeDriver, codex: CodexDriver };
+const DRIVERS = { claude: ClaudeDriver, codex: CodexDriver, opencode: OpencodeDriver, devin: DevinDriver };
+
+/**
+ * The quick keys above the phone keyboard, as the bytes a terminal expects.
+ * herdr takes these by name; a pty takes what a keyboard would have sent.
+ */
+const NAMED_KEYS = {
+  Enter: '\r', Escape: '\x1b', Tab: '\t', Backspace: '\x7f', Space: ' ',
+  Up: '\x1b[A', Down: '\x1b[B', Right: '\x1b[C', Left: '\x1b[D',
+  Home: '\x1b[H', End: '\x1b[F', PageUp: '\x1b[5~', PageDown: '\x1b[6~',
+};
+
+const KEY_BYTES = (key) => {
+  if (NAMED_KEYS[key]) return NAMED_KEYS[key];
+  const ctrl = /^C-([a-z@[\]\\^_])$/i.exec(key);
+  if (ctrl) return String.fromCharCode(ctrl[1].toLowerCase().charCodeAt(0) & 0x1f);
+  return key;
+};
 
 /** herdr requires agent names to match [a-z][a-z0-9_-]{0,31} and be unique. */
 const agentName = (profileId) =>
@@ -53,18 +74,39 @@ export class Sessions extends EventEmitter {
   /** sessionId -> expiry, for event pushes somebody is looking at */
   #watching = new Map();
 
-  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {} } = {}) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost() } = {}) {
     super();
     this.runtime = runtime;
     this.events = events;
     this.log = log;
     this.makeDriver = makeDriver ?? ((engine, opts) => new DRIVERS[engine](opts));
+    this.terminals = terminals;
     this.#load();
     runtime.on('status', (e) => this.#onStatus(e));
     runtime.on('closed', (e) => this.#onClosed(e));
+    // A pty's bytes go out on the same event a watched pane's text does, so
+    // the client has one thing to listen to.
+    this.terminals.on('data', (d) => this.emit('data', d));
+    this.terminals.on('exit', ({ id, code }) => {
+      const s = this.#index.get(id);
+      if (!s) return;
+      this.emit('exit', { id, code });
+      this.emit('session', { ...s, status: 'exited', alive: false });
+    });
   }
 
   isDriven(s) { return !!s?.driver; }
+
+  /**
+   * What a terminal on this machine will be: helm's own pty, or the slow
+   * herdr-pane fallback. Answerable with no host running - which is the usual
+   * case, since one only starts when a terminal is opened.
+   */
+  async terminalBackend() {
+    if (this.terminals.usable) return 'pty';
+    const { loadPty } = await import('./pty.js');
+    return (await loadPty()) ? 'pty' : 'panes';
+  }
 
   /** The runtime handle for a stored session record. */
   #handle(s) {
@@ -220,6 +262,11 @@ export class Sessions extends EventEmitter {
         out.push({ ...s, alive: this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
         continue;
       }
+      if (s.pty) {
+        const alive = this.terminals.has(s.id);
+        out.push({ ...s, alive, status: alive ? 'shell' : 'exited', adopted: false });
+        continue;
+      }
       const pane = live.get(s.paneId);
       // herdr is the authority on what is still running, so no pane means the
       // process is gone - whatever the session was last seen doing. Keeping
@@ -249,6 +296,13 @@ export class Sessions extends EventEmitter {
     // goes after the alias's own arguments so it wins if the two disagree.
     spec.args = [...spec.args, ...optionArgs(profile.engine, { model, auto, effort })];
     const dir = expand(cwd);
+
+    // A plain shell is a terminal, and helm can run one itself - far better
+    // than borrowing a herdr pane and reading its screen back. Where the pty
+    // addon is missing the old path still works, slowly.
+    if (spec.plain && await this.terminals.ensure()) {
+      return this.#startTerminal({ dir, profileId, title, env: spec.env });
+    }
 
     const handle = await this.runtime.createSession({
       cwd: dir,
@@ -287,6 +341,33 @@ export class Sessions extends EventEmitter {
     this.#index.set(session.id, session);
     this.#save();
     this.runtime.watch(handle);
+    this.emit('session', session);
+    return session;
+  }
+
+  // ---------------------------------------------------------------- terminals
+
+  /**
+   * A terminal helm owns. Unlike a herdr pane it does not outlive the daemon:
+   * the shell is our child, so a restart ends it. `list()` reports that
+   * honestly as `exited` and the app offers a new one, which is better than
+   * reconnecting you to something that is no longer there.
+   */
+  async #startTerminal({ dir, profileId, title, env }) {
+    const session = {
+      id: randomBytes(6).toString('hex'),
+      pty: true,
+      profileId,
+      engine: 'shell',
+      cwd: dir,
+      title: title || `${dir.split('/').pop() || dir}`,
+      status: 'shell',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await this.terminals.open(session.id, { cwd: dir, env });
+    this.#index.set(session.id, session);
+    this.#save();
     this.emit('session', session);
     return session;
   }
@@ -393,10 +474,21 @@ export class Sessions extends EventEmitter {
     this.#reapers.set(s.id, t);
   }
 
-  /** Events after `since`, plus what is still waiting on a person. */
-  history(id, { since = 0 } = {}) {
+  /**
+   * Events after `since`, plus what is still waiting on a person.
+   *
+   * Capped per call: an old chat holds up to 2000 events and a single reply
+   * that large is megabytes - enough to exceed the WebRTC data-channel limit
+   * even fragmented (and slow over the relay too). Callers page with
+   * `since` until `hasMore` is false; each page's last `seq` is the next
+   * `since`.
+   */
+  history(id, { since = 0, limit = 500 } = {}) {
     const s = this.get(id);
-    return { events: this.events.since(s.id, since), pending: this.events.pending(s.id), last: this.events.last(s.id), session: s };
+    const capped = Math.max(1, Math.min(Number(limit) || 500, 1000));
+    const all = this.events.since(s.id, since);
+    const events = all.slice(0, capped);
+    return { events, pending: this.events.pending(s.id), last: this.events.last(s.id), session: s, hasMore: all.length > events.length };
   }
 
   /** Say that somebody is looking at this session; pushes flow while renewed. */
@@ -459,6 +551,17 @@ export class Sessions extends EventEmitter {
     if (d?.setSpeed) await d.setSpeed(s.speed);
     this.emit('session', s);
     return { ok: true, session: s };
+  }
+
+  /**
+   * The pickers a running agent advertised, when the driver is live. ACP
+   * agents report their model list - with real names - at session start,
+   * which beats anything a CLI subcommand can print. Null when the driver
+   * is not up or reports nothing.
+   */
+  catalog(id) {
+    const d = this.#drivers.get(id);
+    return d?.catalog?.() ?? null;
   }
 
   async setModel(id, model) {
@@ -573,9 +676,19 @@ export class Sessions extends EventEmitter {
    * A watch lives as long as viewers keep renewing it; a phone that vanishes
    * mid-session stops costing anything within a minute.
    */
-  async attach(id, { lines = 400, ansi = true } = {}) {
+  async attach(id, { lines = 400, ansi = true, cols, rows, renew = false } = {}) {
     const s = this.get(id);
     if (s.driver) throw new Error('a headless session has no terminal');
+    // helm's own terminal needs no polling: the pty pushes as it writes. The
+    // reply is everything worth drawing, and the viewer replaces its screen
+    // with it, so a reconnect cannot paint the same bytes twice - which is
+    // also why a renewal deliberately returns nothing to draw.
+    if (s.pty) {
+      const text = renew
+        ? (await this.terminals.renew(id), null)
+        : await this.terminals.view(id, { cols, rows });
+      return { text, pty: true, session: s };
+    }
     const existing = this.#watchers.get(id);
     if (existing) {
       existing.expires = Date.now() + WATCH_TTL_MS;
@@ -616,6 +729,7 @@ export class Sessions extends EventEmitter {
   }
 
   detach(id) {
+    this.terminals.unview(id);
     const w = this.#watchers.get(id);
     if (!w) return { ok: true };
     clearTimeout(w.timer);
@@ -662,22 +776,129 @@ export class Sessions extends EventEmitter {
    * a bare newline - has to reach the pane untouched, whereas the chat view
    * wants a whole message handed to the agent as a prompt.
    */
-  async input(id, text, { raw = false } = {}) {
+  async input(id, text, { raw = false, attachments = [] } = {}) {
     const s = this.get(id);
     if (s.driver) {
+      const clean = text.replace(/\n$/, '');
+      // Slash commands are helm's, not the agent's: intercept before the
+      // text reaches a CLI that would read them as words in a prompt.
+      if (!raw) {
+        const slash = /^\/(compact|usage)(?:\s+(.*?))?\s*$/s.exec(text.trim());
+        if (slash) return this.#slash(s, slash[1], (slash[2] ?? '').trim());
+      }
+      // Emit optimistically so every watcher sees the image immediately,
+      // even before the agent echoes it back.
+      if (attachments?.length) {
+        const d0 = this.#drivers.get(id);
+        const turnId = d0?.nextTurnId?.() ?? `local-${Date.now()}`;
+        this.events.append(id, { type: 'turn.start', turnId, text: clean, attachments: attachments.map((a) => ({ filename: a.filename, mime: a.mime, data: a.data?.slice(0, 80) + '…' })) });
+        const last = this.events.since(id, 0).at(-1);
+        if (last) last.attachmentsFull = attachments;
+      }
       const d = await this.#driver(s);
-      await d.send(text.replace(/\n$/, ''));
+      // Only a driver that implements the verb AND a model that can see
+      // images gets the bytes; anything else gets a filename placeholder
+      // in the text, which is always safe while lost bytes are not.
+      if (attachments?.length && typeof d.sendWithAttachments === 'function' && supportsImages(s.driver, s.model)) {
+        await d.sendWithAttachments(clean, attachments);
+      } else {
+        let msg = clean;
+        if (attachments?.length) {
+          const imgs = attachments.map((a) => a.url || a.dataUrl || `[image: ${a.filename || 'image'}]`).join('\n');
+          msg = msg ? `${msg}\n${imgs}` : imgs;
+        }
+        await d.send(msg);
+      }
       return { ok: true };
     }
+    if (s.pty) { await this.terminals.write(id, text); return { ok: true }; }
     const handle = this.#handle(s);
     return s.agentName && !raw
       ? this.runtime.sendPrompt(handle, text)
       : this.runtime.sendText(handle, text);
   }
 
+  /**
+   * `/compact [hint]` summarises the conversation into a fresh context;
+   * `/usage` reports what this session burned plus plan usage when the
+   * local usage dashboard is running. Both render as ordinary turns so
+   * every watcher sees them, and neither is sent to the agent as a prompt.
+   */
+  async #slash(s, cmd, arg) {
+    const turnId = `local-${Date.now().toString(36)}`;
+    const text = `/${cmd}${arg ? ` ${arg}` : ''}`;
+    if (cmd === 'compact') {
+      this.#emitLocal(s, turnId, text);
+      const d = await this.#driver(s);
+      await d.compact(arg);
+      return { ok: true };
+    }
+    const lines = [];
+    let turns = 0, input = 0, output = 0, cost = 0;
+    for (const e of this.events.since(s.id, 0)) {
+      if (e?.type !== 'turn.done') continue;
+      turns++;
+      input += e.usage?.input ?? 0;
+      output += e.usage?.output ?? 0;
+      cost += e.costUsd ?? 0;
+    }
+    const usd = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : (v ?? '—'));
+    lines.push(`${turns} turns this session · ${(input / 1000).toFixed(1)}k tokens in / ${(output / 1000).toFixed(1)}k out${cost ? ` · ${usd(cost)}` : ''}`);
+    try {
+      if (await usageAvailable()) {
+        const u = await fetchUsage();
+        for (const a of u?.accounts ?? []) {
+          const bits = [`today ${usd(a.today)}`, `month ${usd(a.month)}`];
+          if (a.rateLimits) bits.push(`limits ${typeof a.rateLimits === 'string' ? a.rateLimits : JSON.stringify(a.rateLimits).slice(0, 120)}`);
+          lines.push(`${a.label ?? a.id}: ${bits.join(' · ')}`);
+        }
+      } else {
+        lines.push('plan usage unavailable (usage dashboard not running here)');
+      }
+    } catch (err) {
+      lines.push(`plan usage unavailable: ${err?.message ?? err}`);
+    }
+    this.#emitLocal(s, turnId, text, lines.join('\n'));
+    return { ok: true };
+  }
+
+  /** A turn helm itself speaks: appended and pushed like any driver event. */
+  #emitLocal(s, turnId, text, body = null) {
+    const itemId = `local-${turnId}`;
+    const evs = [
+      { type: 'turn.start', turnId, text },
+      ...(body == null ? [] : [
+        { type: 'item.start', id: itemId, kind: 'text', turnId },
+        { type: 'item.delta', id: itemId, text: body },
+        { type: 'item.done', id: itemId, status: 'ok' },
+      ]),
+      { type: 'turn.done', turnId, status: 'ok' },
+    ];
+    for (const e of evs) {
+      const event = this.events.append(s.id, e);
+      s.lastSeq = event.seq;
+      this.emit('event', { id: s.id, event });
+    }
+  }
+
+  /**
+   * The viewer's size. A pty renders for it; a herdr pane has its own
+   * geometry that the phone does not get to choose, so this is a no-op there
+   * rather than an error - the terminal view sends it either way.
+   */
+  resize(id, cols, rows) {
+    const s = this.get(id);
+    if (s.pty) this.terminals.resize(id, cols, rows);
+    return { ok: true };
+  }
+
   keys(id, keys) {
     const s = this.get(id);
     if (s.driver) throw new Error('a headless session has no terminal');
+    if (s.pty) {
+      this.terminals.write(id, keys.map(KEY_BYTES).join(''));
+      return { ok: true };
+    }
     return this.runtime.sendKeys(this.#handle(s), keys);
   }
 
@@ -694,6 +915,13 @@ export class Sessions extends EventEmitter {
       this.emit('session', { ...s, status: 'exited', alive: false });
       return { ok: true };
     }
+    if (s.pty) {
+      await this.terminals.close(id);
+      this.#index.delete(id);
+      this.#save();
+      this.emit('session', { ...s, status: 'exited', alive: false });
+      return { ok: true };
+    }
     await this.runtime.close(this.#handle(s));
     if (!s.adopted) {
       this.#index.delete(id);
@@ -702,9 +930,34 @@ export class Sessions extends EventEmitter {
     return { ok: true };
   }
 
+  /**
+   * Find out which terminals outlived this daemon.
+   *
+   * The host holds them, so an upgrade or a crash leaves them running - but
+   * not forever, and not if the host itself was stopped. Anything the host
+   * does not have is genuinely gone, and its record goes with it rather than
+   * offering a phone a terminal that no longer exists.
+   */
+  async adoptTerminals() {
+    const ok = await this.terminals.ensure({ spawn: false }).catch(() => false);
+    let changed = false;
+    for (const s of [...this.#index.values()]) {
+      if (!s.pty) continue;
+      if (ok && this.terminals.has(s.id)) continue;
+      this.#index.delete(s.id);
+      changed = true;
+      this.emit('session', { ...s, status: 'exited', alive: false });
+    }
+    if (changed) this.#save();
+    return ok;
+  }
+
   /** Re-watch every surviving pane after a daemon restart. */
   resume() {
     for (const s of this.#index.values()) {
+      // A terminal lives in the host process, which outlives us - so its
+      // record stays until `adoptTerminals()` has asked what really survived.
+      if (s.pty) continue;
       if (!s.driver) { this.runtime.watch(this.#handle(s)); continue; }
       // The process that asked died with the previous daemon; a prompt it
       // left open cannot be answered any more, so close it out here rather

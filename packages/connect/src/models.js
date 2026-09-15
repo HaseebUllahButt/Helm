@@ -15,6 +15,8 @@ const exec = promisify(execFile);
  *   claude    the account's .claude.json remembers the last model per project;
  *             the rest is the current published family
  *   opencode  `opencode models`, which asks every configured provider
+ *   devin     `devin models list` - uid plus display name per line; thinking
+ *             level is baked into each model name, so there is no effort chip
  *
  * `home` is the account's home directory (CODEX_HOME etc.), so a personal
  * account reports its own default.
@@ -35,6 +37,7 @@ export async function listModels(engine, home) {
     if (engine === 'codex') value = await codexModels(root);
     else if (engine === 'claude') value = claudeModels(root);
     else if (engine === 'opencode') value = await opencodeModels(root);
+    else if (engine === 'devin') value = await devinModels(root);
   } catch { /* fall through to nothing */ }
   cache.set(key, { at: Date.now(), value });
   return value;
@@ -88,6 +91,9 @@ async function codexModels(root) {
     effortsByModel,
     speeds: [...new Set(Object.values(speedByModel).flat())],
     speedByModel,
+    // Every current codex model takes image input.
+    images: true,
+    imagesByModel: Object.fromEntries(models.map((m) => [m, true])),
   };
 }
 
@@ -131,7 +137,11 @@ function claudeModels(root) {
   const models = [...seen];
   if (def && !models.includes(def)) models.unshift(def);
   // `claude --effort`; the default depends on the model, so none is claimed.
-  return { default: def, models, effort: null, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
+  // Every model in the family takes image input.
+  return {
+    default: def, models, effort: null, efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    images: true, imagesByModel: Object.fromEntries(models.map((m) => [m, true])),
+  };
 }
 
 async function opencodeModels(root) {
@@ -149,7 +159,74 @@ async function opencodeModels(root) {
   });
   const models = stdout.split('\n').map((l) => l.trim()).filter((l) => l && l.includes('/'));
   if (def && !models.includes(def)) models.unshift(def);
-  return { default: def, models };
+
+  // Provider metadata opencode keeps in its own cache (models.dev): real
+  // display names and the thinking levels each model takes, for a session
+  // whose catalogue has not answered yet. Keys are provider/model ids.
+  const labels = {};
+  const effortsByModel = {};
+  try {
+    let cache = null;
+    for (const f of [join(expand('~'), '.cache', 'opencode', 'models.json'), join(root, '..', '.cache', 'opencode', 'models.json')]) {
+      if (!existsSync(f)) continue;
+      try { cache = JSON.parse(readFileSync(f, 'utf8')); break; } catch { /* next */ }
+    }
+    for (const [provider, prov] of Object.entries(cache ?? {})) {
+      for (const [id, meta] of Object.entries(prov?.models ?? {})) {
+        const slug = `${provider}/${id}`;
+        if (meta.name) labels[slug] = meta.name;
+        const effort = (meta.reasoning_options ?? []).find((o) => o.type === 'effort');
+        if (effort?.values?.length) effortsByModel[slug] = effort.values;
+      }
+    }
+  } catch { /* no cache - slugs still work, just less pretty */ }
+
+  // The thinking levels opencode's ACP server advertises for a session.
+  // Image input is not plumbed through the opencode driver, so models
+  // here report no support and callers fall back to a text placeholder.
+  return { default: def, models, labels, effortsByModel, efforts: ['minimal', 'low', 'medium', 'high', 'max'], images: false, imagesByModel: {} };
+}
+
+/**
+ * `devin models list` prints family headers ("Claude Opus 5 (claude-opus-5)")
+ * then one indented line per model: `uid   Display Name   [meta]`. The
+ * account's default sits in ~/.config/devin/config.json under agent.model.
+ */
+async function devinModels(root) {
+  let def = null;
+  try {
+    const cfg = JSON.parse(readFileSync(join(root, 'devin', 'config.json'), 'utf8'));
+    if (typeof cfg?.agent?.model === 'string') def = cfg.agent.model;
+  } catch { /* no config */ }
+  const { stdout } = await exec(ENGINES.devin?.bin ?? 'devin', ['models', 'list'], {
+    timeout: 30_000,
+    maxBuffer: 4 << 20,
+    env: { ...process.env, XDG_CONFIG_HOME: root },
+  });
+  const models = [];
+  const labels = {};
+  for (const line of stdout.split('\n')) {
+    const m = /^ {2,}(\S+)\s{2,}(.+?)\s{2,}\[/.exec(line);
+    if (!m || m[1] === 'aliases:') continue;
+    models.push(m[1]);
+    labels[m[1]] = m[2].trim();
+  }
+  if (def && !models.includes(def)) models.unshift(def);
+  return { default: def, models, labels, images: false, imagesByModel: {} };
+}
+
+/**
+ * Can this model be sent images? Consulted before attaching anything: a
+ * model that cannot see images gets a filename placeholder in the text
+ * instead of bytes it would choke on or silently ignore.
+ *
+ * claude and codex run current families where everything takes vision.
+ * Unknown engines and models default to false - a placeholder in the
+ * text is always safe, lost bytes are not.
+ */
+export function supportsImages(engine, model) {
+  if (engine === 'claude' || engine === 'codex') return true;
+  return false;
 }
 
 /**

@@ -102,10 +102,13 @@ export const M = {
 // -------------------------------------------------------------- event kinds
 
 export const E = {
-  // Rendered terminal text, pushed while a viewer is attached. `reset` means
-  // the screen was redrawn and `text` replaces everything; otherwise `text`
-  // is appended to what the viewer already has.
-  SESSION_DATA: 'session.data',     // { id, text, reset }
+  // Terminal output, pushed while a viewer is attached.
+  //
+  // From a pty helm owns this is the raw byte stream, appended as it arrives.
+  // From a herdr pane it is the *rendered screen*, sampled: `reset` then means
+  // the program redrew and `text` replaces everything rather than being
+  // appended.
+  SESSION_DATA: 'session.data',     // { id, text, reset? }
   SESSION_EXIT: 'session.exit',     // { id, code }
   SESSION_UPDATE: 'session.update', // { session }
   // The agent wrote to its transcript; a chat view should re-read it.

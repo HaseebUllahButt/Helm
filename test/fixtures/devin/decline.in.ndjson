@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":"rec-1","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"helm","title":"Helm","version":"0.1.0"}}}
+{"jsonrpc":"2.0","id":"rec-2","method":"session/new","params":{"cwd":"/tmp/helm-record-3yqKTh","mcpServers":[]}}
+{"jsonrpc":"2.0","id":"rec-3","method":"session/set_config_option","params":{"sessionId":"mica-sleep","configId":"mode","value":"accept-edits"}}
+{"jsonrpc":"2.0","id":"rec-4","method":"session/prompt","params":{"sessionId":"mica-sleep","prompt":[{"type":"text","text":"Run the shell command `curl -s -o /dev/null -w \"%{http_code}\" https://example.com` and tell me the status code. If it is declined, say so in one line."}]}}
+{"jsonrpc":"2.0","id":"1b6cea78-ea72-42c1-8981-e35a9d3b5c46","result":{"outcome":{"outcome":"selected","optionId":"reject_once"}}}

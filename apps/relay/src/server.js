@@ -75,8 +75,28 @@ export async function startRelay({
     }
   };
 
+  // What the app checks against its own bundle: the hashed asset this hub's
+  // index.html points at. An installed PWA resumes the page it loaded rather
+  // than reloading, so without this an old bundle runs until it happens to
+  // die. The answer is just a filename - nothing worth hiding behind auth.
+  const version = async (req, res) => {
+    try {
+      const html = await readFile(join(webRoot, 'index.html'), 'utf8');
+      const m = /src="([^"]*assets\/[^"]+)"/.exec(html);
+      res.writeHead(200, {
+        'content-type': 'application/json', 'cache-control': 'no-store', ...SECURITY_HEADERS,
+      });
+      res.end(JSON.stringify({ build: m?.[1] ?? null }));
+    } catch {
+      res.writeHead(404, { 'content-type': 'application/json', ...SECURITY_HEADERS });
+      res.end('{}');
+    }
+  };
+
   const server = createServer((req, res) => {
-    const handle = req.url.startsWith('/api/')
+    const handle = req.url === '/api/version'
+      ? version(req, res)
+      : req.url.startsWith('/api/')
       ? api(req, res)
       : serveStatic(req, res).then((served) => (served ? null : api(req, res)));
 

@@ -10,16 +10,18 @@
 //     recorded control_request pauses until a control_response for it is
 //     read; a recorded control_response (the receipt for an interrupt)
 //     waits for a control_request from the test and echoes its request_id
-//   - codex: a recorded response (id + result) waits for the next request
-//     from the test and takes its id; a recorded server request (id +
-//     method) pauses until the test answers it; notifications flow freely
+//   - codex, and the ACP CLIs (devin, opencode): a recorded response (id +
+//     result) waits for the next request from the test and takes its id; a
+//     recorded server request (id + method, like session/request_permission)
+//     pauses until the test answers it; notifications flow freely
 // `--version` prints a version that satisfies the driver.
 
 import { readFileSync, appendFileSync } from 'node:fs';
 
+const VERSIONS = { codex: 'codex-cli 0.154.0', devin: 'devin 3000.10.21', opencode: '1.18.26' };
 const kind = process.argv[2];
 if (process.argv.includes('--version')) {
-  console.log(kind === 'codex' ? 'codex-cli 0.154.0' : '2.1.260 (Claude Code)');
+  console.log(VERSIONS[kind] ?? '2.1.260 (Claude Code)');
   process.exit(0);
 }
 

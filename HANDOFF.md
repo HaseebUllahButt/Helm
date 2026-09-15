@@ -187,6 +187,140 @@ frozen, the UI was cramped, and the terminal typed everything twice.
   whatever it was last doing, so a dead session cannot sit at the top of the
   list under "needs you" forever (`sessions.js` `list()`).
 
+### Later: the terminal, the flicker, and the three links
+
+Six complaints from using it, which came down to four causes. **Not committed —
+another agent was adding opencode/devin/acp drivers in the same tree at the
+same time, so the working copy holds both sets of changes.**
+
+**1. helm owns the terminal now (`packages/connect/src/pty.js`).** The old one
+was a herdr pane that helm *screen-scraped*: `attach()` polled `pane.read` for
+400 rendered lines every 120ms, diffed the text, and pushed either an append
+or - whenever the new screen was not a prefix of the old, which is every
+full-screen program - the **entire screen** with `reset: true`. Each keystroke
+was its own RPC into herdr, which "answers one request per connection and then
+hangs up", so every character opened a fresh unix socket. Echo had to wait for
+the next poll.
+
+It is now a pty helm spawns, raw bytes both ways, coalesced into ~16ms frames,
+with a 256KB scrollback ring for reconnects. `session.resize` was declared in
+the protocol and implemented nowhere; it works now, so the program renders for
+the phone's width instead of being reflowed into it. **Measured: 18ms echo,
+steady, against 120ms of polling latency alone before.**
+
+This also explains the junk at the prompt. There were **two emulators in
+series** - herdr rendered the pty into a screen, helm re-serialised that screen
+as ANSI, and xterm rendered it again *and answered control queries inside it*
+(device attributes, cursor position), sending those answers back as keystrokes.
+One pty, one emulator, no phantom input.
+
+`node-pty` was already a dependency and imported nowhere. It is a compiled
+addon: the VM's Node 22 has a prebuilt binary, this laptop's Node 26 does not
+and built from source (gcc/make/python3, all present). **If it will not load,
+helm falls back to the old herdr path rather than refusing to run** - so a
+machine without build tools still works, slowly.
+
+The `❯_` button used to reuse *any* shell session it found, including herdr
+panes helm merely adopted - during testing it dropped me into the owner's real
+shell in `~/dev/me/aitink` and typed into it. It now reuses only helm's own
+terminals.
+
+**Terminals outlive the daemon** (`bin/helm-terminals.js`,
+`src/terminals.js`). A pty belongs to whoever opened it, so holding them in the
+daemon meant an upgrade killed your build. A small host process owns them
+instead; the daemon talks to it over a unix socket and reconnects after a
+restart, scrollback and all. Three things that make it work, each of which
+looked optional and was not:
+
+- **It must escape the daemon's cgroup.** The service unit sets no
+  `KillMode`, so systemd's default `control-group` kills everything the
+  service started - a plain detached child included. The host is started with
+  `systemd-run --user` (a detached child is the fallback where there is no
+  systemd).
+- **The socket cannot live in `HELM_DIR`.** A unix socket path is capped near
+  107 bytes and a deep helm directory exceeds it: `listen` fails `EINVAL` and
+  terminals fall back to the slow path with no sign of why. It is
+  `$XDG_RUNTIME_DIR/helm-terminals-<hash of HELM_DIR>.sock` - short, per-user,
+  and per-directory so a sandboxed daemon never reaches the real one's
+  terminals.
+- **A host that fails says so.** Its output goes to `~/.helm/terminals.log`,
+  not `/dev/null`, which is how the EINVAL above stayed hidden for an hour.
+
+The host exits once it holds nothing and nobody is attached, and immediately if
+its socket has been removed underneath it - a host nobody can reach should not
+sit on the machine holding shells nobody can see.
+
+**Proven by doing it:** a terminal running `for i in $(seq 1 120); do echo
+tick-$i; sleep 1; done`, daemon killed, new daemon started - the session came
+back `alive=true pty=true`, replayed 29 ticks of scrollback, and went on to
+print tick-30, 31, 32.
+
+**When there is no pty at all**, helm still runs and still falls back to herdr
+panes - but it is no longer silent about it. `install.sh` checks and prints the
+package to install, `helm status` says `terminals: own pty` or `herdr panes
+(slow)` with the reason, and the app's terminal button reads `❯!` with a
+tooltip saying why.
+
+**2. The usage panel flashed and vanished** because `App.tsx` passed
+`reload={() => loadSessions(env.id)}` - a new function on every render - to
+`EnvView`, whose effect listed `reload` as a dependency and opened with
+`setUsage(null)`. Every parent render blanked the panel, re-subscribed and
+re-listed sessions, which re-rendered the parent. A `useCallback` ends the
+loop; the panel now says loading / unavailable / how old the numbers are
+instead of rendering nothing in every unhappy case, and refreshes each minute.
+`usageApi.available()`'s 15s probe is cached for five minutes rather than
+running inside every `describe()`.
+
+**3. Three commands printed a link; now each is named for what it adds.**
+`helm add controller | pc | vm`, and bare `helm add` lists the three rather
+than guessing. Only `controller` prints a link to **open**; `pc` and `vm` print
+a code to **type**, and the far machine always runs the same `helm join <code>
+<url>` - the invite carries its role (`invites.role` in the hub db), so a vm
+additionally claims its address, configures Caddy and serves, with no second
+command to remember. The serve banner no longer prints a password on every
+start, only when the network has no controllers yet or on `--link`; that was
+what made `setup`, `join` and a plain restart all look like they were handing
+you a link.
+
+**4. `helm open` signs the app in on the machine itself**, which is what makes
+the laptop a controller for the VM. **The trap here nearly shipped:** Caddy
+terminates HTTPS and proxies to the hub over loopback, so *every request from
+the internet arrives at the hub from 127.0.0.1* - a bare loopback check would
+have handed a device token to anyone who could reach the public URL. It
+requires loopback **and** the local key from `~/.helm/local.key` (0600, minted
+on demand), compared in constant time. `test/local-login.test.mjs` encodes
+that: the key works, and no-key, wrong-key and wrong-length all get 401 from
+the same loopback address.
+
+**5. Moving networks re-probes.** The client already raced every known address
+on connect; it now also does so on the browser's `online` event, dropping a
+socket that looks open but reaches nothing. `reachableFromHere` still skips
+`http://` LAN addresses from an HTTPS page - that is the browser's
+mixed-content rule, not helm's, and `helm open` sidesteps it on loopback.
+
+Verified by running it, not by reading: sandboxed daemon, real shell, the PWA
+in headless Chromium at 390x844. Signed in from `#local=` with no pairing
+screen; `❯_` opened a clean prompt with nothing pre-typed; `echo
+typed-in-browser` appeared exactly once and ran. 43 tests green (4 new pty
+tests against a real shell, including `tput cols` reporting 132 after a
+resize).
+
+### Two things the owner caught in a screenshot, now fixed
+
+The same sentence printed twice: an `error` event puts an item in the
+transcript where it happened, and `turn.done` then carried the identical
+message into the turn's footer. The footer now omits an error the turn
+already shows and says only that the turn failed.
+
+The model chip said "model". Neither CLI is given a model unless one is
+chosen, but both announce what they started with in their init message and
+helm was dropping it. The daemon keeps it as `engineModel`/`engineEffort` -
+reported, not chosen, so it never becomes an argument on the next launch -
+and the session view now listens for `session.update`, which it never did,
+so a record changing underneath it (the CLI reporting its model, another
+device changing a setting) actually reaches the chips. Verified: the chip
+went from `◆ default` to `◆ opus-5` when the CLI said so.
+
 ### The bug worth remembering: every push arrived twice
 
 Typing one letter in the terminal put two on screen. The daemon was innocent —
@@ -227,23 +361,21 @@ add a third delivery path, it must carry the same id.**
 
 ## Known bad, and not yet fixed
 
-1. **The same error renders twice** — once as a transcript item, once as a
-   floating banner. Visible whenever a driver emits `error`.
-2. **The model chip reads "model"** instead of a name when the account has no
-   recorded default (Claude, typically). It should fall back to the engine's
-   actual default.
-3. **Slash commands are not built.** Worth knowing before designing them:
+0. **Nothing above from the terminal/CLI pass is committed**, and the tree also
+   holds another agent's in-progress opencode/devin/acp drivers. Sort out what
+   belongs in which commit before pushing.
+1. **Slash commands are not built.** Worth knowing before designing them:
    `/help` and `/status` through `claude -p` return `ok` in ~95 ms with **no
    output** — the built-ins are TUI-local and do nothing headless. Custom
    commands and skills *do* run. So a palette of built-ins would be a lie; a
    palette of the project's own commands plus protocol-level actions would not.
-4. **No vendor logos** — engine marks are the letters `C` / `X` / `O`.
-5. **A real phone has never opened this.** Every run was headless Chromium at
+2. **No vendor logos** — engine marks are the letters `C` / `X` / `O`.
+3. **A real phone has never opened this.** Every run was headless Chromium at
    390×844. Touch, the keyboard pushing the permission sheet, and a carrier-NAT
    WebRTC path are all unproven. This is the biggest gap.
-6. **Push notification when a session blocks** is still the highest-value
+4. **Push notification when a session blocks** is still the highest-value
    missing feature; `permission.request` is a structured event to hang it on.
-7. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
+5. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
    coded from the bindings and have never been seen live.
 
 ## The machines themselves

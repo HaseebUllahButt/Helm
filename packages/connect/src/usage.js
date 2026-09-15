@@ -29,12 +29,26 @@ function get(path, timeout = 8000) {
   });
 }
 
+/** Remembered answer, so `describe()` is not held up by the probe. */
+let known = null;
+const KNOWN_TTL_MS = 5 * 60_000;
+
 export async function available() {
   // The dashboard rebuilds its cache on a cold call and can take several
   // seconds; a short timeout here reports "missing" for a server that is
-  // merely busy.
-  try { await get('/api/usage', 15_000); return true; } catch { return false; }
+  // merely busy. That patience is why the answer is remembered: describing a
+  // machine is on the path of opening it in the app, and waiting fifteen
+  // seconds there to learn something that changes daily is not a trade worth
+  // making.
+  if (known && Date.now() < known.until) return known.value;
+  let value = false;
+  try { await get('/api/usage', 15_000); value = true; } catch { value = false; }
+  known = { value, until: Date.now() + KNOWN_TTL_MS };
+  return value;
 }
+
+/** Forget the remembered answer - for tests, and for `helm status`. */
+export function forget() { known = null; }
 
 export async function usage() {
   const data = await get('/api/usage');

@@ -6,17 +6,15 @@ import type { Client } from './client';
 /**
  * A real terminal in the browser.
  *
- * The daemon watches the pane and pushes what changed (`session.data`), so
- * the phone never asks "anything new?" across the network. Attaching returns
- * the current screen; every push after that is either an append or, when the
- * program redrew, a replacement. The attach is renewed periodically so the
- * daemon keeps watching, and re-done after a reconnect, when pushes may have
- * been missed - the full screen that comes back is compared with what we have
- * and replaces it only if they differ.
+ * Attaching says how big we are drawing and gets back everything worth
+ * showing; after that the daemon pushes output as it happens (`session.data`).
  *
- * Appending rather than repainting a fixed-size screen lets xterm wrap to the
- * phone's width, which matters far more on a 390px screen than matching the
- * pane's column count exactly.
+ * Two kinds of session arrive here. helm's own terminals are a pty, so the
+ * pushes are the raw byte stream and every one is an append - and because the
+ * program is told our size, it renders for this screen instead of being
+ * reflowed into it. A herdr pane (an agent someone started at the keyboard)
+ * is still sampled as a rendered screen, where `reset` means the program
+ * redrew and the text replaces what we have.
  */
 export function Terminal({ client, env, sessionId }: {
   client: Client; env: string; sessionId: string;
@@ -45,10 +43,11 @@ export function Terminal({ client, env, sessionId }: {
 
     let seen = '';
     let stopped = false;
+    let isPty = false;
 
     const show = (text: string, reset: boolean) => {
       if (reset) {
-        xterm.clear();
+        xterm.reset();
         xterm.write(text);
         seen = text;
       } else {
@@ -57,14 +56,23 @@ export function Terminal({ client, env, sessionId }: {
       }
     };
 
-    const attach = async () => {
+    /**
+     * `renew` keeps our place in the daemon's list of viewers without asking
+     * for the screen again. A pty would otherwise hand back its whole
+     * scrollback every time and we would redraw it, which is a flicker once
+     * every renewal for no reason.
+     */
+    const attach = async (renew = false) => {
       try {
-        const r = await client.rpc<{ text: string }>(env, 'session.attach', {
-          id: sessionId, lines: 400, ansi: true,
+        const r = await client.rpc<{ text: string | null; pty?: boolean }>(env, 'session.attach', {
+          id: sessionId, lines: 400, ansi: true, cols: xterm.cols, rows: xterm.rows, renew,
         });
         if (stopped) return;
-        const text = r.text ?? '';
-        if (text !== seen) show(text, true);
+        isPty = !!r.pty;
+        if (r.text == null) return;
+        // A pty's reply is the whole scrollback, so it always replaces what we
+        // have: anything else would draw the bytes twice after a reconnect.
+        if (isPty || r.text !== seen) show(r.text, true);
       } catch { /* offline; the reconnect handler tries again */ }
     };
 
@@ -78,20 +86,33 @@ export function Terminal({ client, env, sessionId }: {
       if (e === env && kind === 'session.data' && payload?.id === sessionId) {
         show(payload.text ?? '', !!payload.reset);
       }
+      // Back after a drop: ask for everything, since pushes were missed.
       if (kind === 'connection' && payload?.online) attach();
+      if (e === env && kind === 'session.exit' && payload?.id === sessionId) {
+        xterm.write('\r\n\x1b[2m[ the terminal ended ]\x1b[0m\r\n');
+      }
     });
 
     const onResize = () => { try { fit.fit(); } catch { /* hidden */ } };
     window.addEventListener('resize', onResize);
 
+    // Tell the far end what we are drawing at, so the program lays itself out
+    // for this screen. A herdr pane ignores it; its geometry is not ours.
+    const resized = xterm.onResize(({ cols, rows }) => {
+      client.rpc(env, 'session.resize', { id: sessionId, cols, rows }, 10_000).catch(() => {});
+    });
+
     attach();
-    const renew = setInterval(attach, 25_000);
+    // The renew keeps a watching viewer registered, so output stops being
+    // pushed to a phone that has gone away.
+    const renew = setInterval(() => attach(true), 25_000);
 
     return () => {
       stopped = true;
       clearInterval(renew);
       off();
       typed.dispose();
+      resized.dispose();
       window.removeEventListener('resize', onResize);
       client.rpc(env, 'session.detach', { id: sessionId }, 5_000).catch(() => {});
       xterm.dispose();

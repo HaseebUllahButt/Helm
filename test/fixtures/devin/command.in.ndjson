@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":"rec-1","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"helm","title":"Helm","version":"0.1.0"}}}
+{"jsonrpc":"2.0","id":"rec-2","method":"session/new","params":{"cwd":"/tmp/helm-record-x3sjxG","mcpServers":[]}}
+{"jsonrpc":"2.0","id":"rec-3","method":"session/set_config_option","params":{"sessionId":"clean-sort","configId":"mode","value":"accept-edits"}}
+{"jsonrpc":"2.0","id":"rec-4","method":"session/prompt","params":{"sessionId":"clean-sort","prompt":[{"type":"text","text":"Run the shell command `curl -s -o /dev/null -w \"%{http_code}\" https://example.com` and tell me the status code it prints. Do nothing else."}]}}
+{"jsonrpc":"2.0","id":"71317a30-35b7-4cc9-9923-7f22465f676c","result":{"outcome":{"outcome":"selected","optionId":"allow_once"}}}

@@ -193,13 +193,50 @@ function EditItem({ item }: { item: Item }) {
   return <div className={`edits${item.status === 'declined' ? ' declined' : item.status === 'error' ? ' bad' : ''}`}><ChangeList changes={changes} /></div>;
 }
 
-function ItemView({ item }: { item: Item }) {
+/**
+ * A spawned agent. The card says who it is and what it was asked; while it
+ * runs its own tool calls and text stream inside, nested by the drivers'
+ * parentId tagging. Folds away when it finishes like any other tool.
+ */
+function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
+  const live = item.status === 'streaming';
+  const input = item.input ?? tryParse(item.inputJson);
+  const who = input?.subagent_type ?? item.name ?? 'subagent';
+  const task = input?.description ?? input?.prompt ?? item.agent?.description ?? '';
+  const kids = byParent.get(item.id) ?? [];
+  const out = item.output ?? item.agent?.summary ?? '';
+  const head = (
+    <>
+      <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}>⧉</span>
+      <span className={`alabel${live ? ' shine' : ''}`}>
+        <b>{who}</b>{task && <> {typeof task === 'string' && task.length > 140 ? task.slice(0, 140) + '…' : String(task)}</>}
+      </span>
+      {live && item.agent?.lastTool && <span className="ameta">{item.agent.lastTool}</span>}
+      {live && item.elapsed != null && item.elapsed > 2 && <span className="ameta">{Math.round(item.elapsed)}s</span>}
+      {item.status === 'error' && <span className="ameta bad">failed</span>}
+      {item.status === 'declined' && <span className="ameta">stopped</span>}
+    </>
+  );
+  if (!kids.length && !out) return <div className="act">{head}</div>;
+  return (
+    <details className="actgroup subagent" open={live || undefined}>
+      <summary>{head}<span className="achev">›</span></summary>
+      <div className="sub-body">
+        {kids.map((k) => <ItemView key={k.id} item={k} byParent={byParent} />)}
+        {out && <pre className="aout">{out.length > 4000 ? out.slice(0, 4000) + '\n…' : out}</pre>}
+      </div>
+    </details>
+  );
+}
+
+function ItemView({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
   switch (item.kind) {
     case 'text': return <TextItem item={item} />;
     case 'thinking': return <ThinkingItem item={item} />;
     case 'tool': return <ToolItem item={item} />;
     case 'command': return <CommandItem item={item} />;
     case 'edit': return <EditItem item={item} />;
+    case 'subagent': return <SubagentItem item={item} byParent={byParent} />;
     case 'error': return <div className="act bad"><span className="aicon bad">!</span><span className="alabel wrap">{item.text}</span></div>;
     default: return null;
   }
@@ -209,11 +246,21 @@ function ItemView({ item }: { item: Item }) {
 
 function TurnView({ turn, working, blocked }: { turn: Turn; working: boolean; blocked: boolean }) {
   const d = turn.done;
+  // Subagent children hang off their spawn card; a missing parent renders flat.
+  const ids = new Set(turn.items.map((i) => i.id));
+  const byParent = new Map<string, Item[]>();
+  const roots = turn.items.filter((it) => {
+    if (!it.parentId || !ids.has(it.parentId)) return true;
+    const kids = byParent.get(it.parentId) ?? [];
+    kids.push(it);
+    byParent.set(it.parentId, kids);
+    return false;
+  });
   return (
     <>
-      {turn.text && <div className="turn user"><div className="bubble">{turn.text}</div></div>}
+      {(turn.text || turn.attachments?.length) && <div className="turn user"><div className="bubble">{turn.text}{turn.attachments?.map((a,i)=>(<img key={i} src={`data:${a.mime};base64,${a.data}`} alt={a.filename} style={{maxWidth:'100%',borderRadius:8,marginTop:8}} />))}</div></div>}
       <div className="turn assistant">
-        {turn.items.map((it) => <ItemView key={it.id} item={it} />)}
+        {roots.map((it) => <ItemView key={it.id} item={it} byParent={byParent} />)}
         {!d && working && !turn.items.some((it) => it.status === 'streaming' && it.kind === 'text') && (
           blocked
             ? <div className="working quiet">Waiting for you</div>

@@ -12,15 +12,21 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
   foot?: React.ReactNode; danger?: boolean;
   children?: React.ReactNode;
+  onAttach?: (files: FileList) => void;
+  attachments?: { name: string; url: string }[];
+  onRemoveAttachment?: (i: number) => void;
+  /** False when the running model cannot see images: no clip, no paste. */
+  canAttach?: boolean;
 }) {
   const [keys, setKeys] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const el = ref.current;
@@ -42,14 +48,38 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
           </div>
         )}
         <div className={`slab${danger ? ' danger' : ''}`}>
+          {attachments && attachments.length > 0 && (
+            <div className="attach-previews">
+              {attachments.map((a, i) => (
+                <span key={i} className="attach-preview">
+                  <img src={a.url} alt={a.name} />
+                  <button onClick={() => onRemoveAttachment?.(i)} title="remove">×</button>
+                </span>
+              ))}
+            </div>
+          )}
           <textarea
             ref={ref} rows={1} value={draft}
             placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={(e) => {
+              if (!canAttach) return;
+              const files = Array.from(e.clipboardData?.files ?? []).filter(f => f.type.startsWith('image/'));
+              if (files.length && onAttach) {
+                e.preventDefault();
+                const dt = new DataTransfer(); files.forEach(f => dt.items.add(f)); onAttach(dt.files);
+              }
+            }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
           />
           {foot && <div className="slab-controls">{foot}</div>}
           <div className="slab-foot">
+            {onAttach && canAttach && (
+              <>
+                <input ref={fileRef} type="file" accept="image/*,image/png,image/jpeg,image/webp,image/gif" multiple style={{ display: 'none' }} onChange={(e) => { if (e.target.files?.length) onAttach(e.target.files); e.target.value = ''; }} />
+                <button className="ctl" onClick={() => fileRef.current?.click()} title="attach image">📎</button>
+              </>
+            )}
             {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>⌨ keys</button>}
             <span className="spacer" />
             {working && onStop && (
@@ -57,7 +87,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>
               </button>
             )}
-            <button className="send" onClick={onSend} disabled={!draft.trim()} title="send">
+            <button className="send" onClick={onSend} disabled={!draft.trim() && !attachments?.length} title="send">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </div>

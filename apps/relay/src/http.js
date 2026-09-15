@@ -1,9 +1,17 @@
+import { timingSafeEqual } from 'node:crypto';
 import { q, now, newId, newInviteCode } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, issueDevice, revoke,
-  authenticate, allEndpoints,
+  authenticate, allEndpoints, localKey,
 } from '@helm/protocol/network';
 import { ROLE } from '@helm/protocol/identity';
+
+/** Compare two secrets without leaking where they first differ. */
+const safeEqual = (a, b) => {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && timingSafeEqual(x, y);
+};
 
 const INVITE_TTL_MS = 10 * 60 * 1000;
 
@@ -60,6 +68,20 @@ function currentPassword() {
   if (!row || row.expires_at < now()) return null;
   return row.password;
 }
+
+/**
+ * Is this request from the machine itself?
+ *
+ * The socket's own address is the only thing worth trusting here - a header
+ * saying "I am 127.0.0.1" is written by whoever sent it. `::ffff:127.0.0.1`
+ * is the same address seen through a dual-stack socket.
+ */
+export function isLoopback(req) {
+  const addr = req.socket?.remoteAddress;
+  if (!addr) return false;
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
+    || addr.startsWith('127.');
+};
 
 const json = (res, code, body) => {
   res.writeHead(code, {
@@ -139,6 +161,28 @@ export function makeHttpHandler({ online, kick }) {
       return json(res, 200, { ok: true, network: net?.id ?? null });
     }
 
+    // The local key, for a page this machine itself is serving. `helm open`
+    // used to be the only way it reached a browser; this makes opening
+    // 127.0.0.1:8787 sign itself in with nothing to type.
+    //
+    // Held to the claim actually being made: the request must arrive over
+    // loopback, be addressed to a loopback name, and not be a cross-site
+    // fetch - Caddy on a public machine forwards internet requests that look
+    // local to the socket but carry its public host, and a browser blocks a
+    // foreign site from reading a response with no CORS headers anyway.
+    if (path === '/api/auth/local' && req.method === 'POST') {
+      const localHost = /^(127\.|localhost|\[::1\])/.test(String(req.headers.host));
+      const sameSite = req.headers['sec-fetch-site'] !== 'cross-site';
+      if (!isLoopback(req) || !localHost || !sameSite) {
+        res.writeHead(403, { 'content-type': 'application/json', ...SECURITY_HEADERS });
+        return res.end(JSON.stringify({ error: 'only a page served by this machine may do that' }));
+      }
+      res.writeHead(200, {
+        'content-type': 'application/json', 'cache-control': 'no-store', ...SECURITY_HEADERS,
+      });
+      return res.end(JSON.stringify({ local: localKey() }));
+    }
+
     // Exchange the short-lived password for a durable device token. The token
     // is signed with the network key, so every machine in the network will
     // accept it - including ones that have never heard of this device.
@@ -146,11 +190,28 @@ export function makeHttpHandler({ online, kick }) {
       const net = loadNetwork();
       if (!net) return json(res, 503, { error: 'this machine is not in a network yet' });
 
-      const expected = currentPassword();
       const body = await readBody(req).catch(() => ({}));
+
+      // A browser on the machine itself signs in with the local key instead of
+      // a pairing password: anyone who can read that file can already read the
+      // network key sitting beside it, so there is nothing left to protect by
+      // sending them to another device for a link.
+      //
+      // Both halves are required. Loopback alone would be wrong - Caddy
+      // terminates HTTPS and proxies to this hub over loopback, so a request
+      // from the internet also arrives from 127.0.0.1 - and the key alone
+      // would travel further than this machine.
+      if (body.local && isLoopback(req) && safeEqual(body.local, localKey())) {
+        const { id, token } = issueDevice(net, body.label || 'this machine');
+        return json(res, 200, {
+          token, deviceId: id, network: net.id, endpoints: allEndpoints(net), local: true,
+        });
+      }
+
+      const expected = currentPassword();
       if (!expected) {
         return json(res, 403, {
-          error: 'the pairing link has expired - run `helm link` for a new one',
+          error: 'the pairing link has expired - run `helm add controller` for a new one',
         });
       }
       if (body.password !== expected) return json(res, 401, { error: 'bad password' });
@@ -177,9 +238,11 @@ export function makeHttpHandler({ online, kick }) {
       if (row.expires_at < now()) return json(res, 410, { error: 'invite expired' });
 
       q.inviteUse.run(String(body.name || 'machine').slice(0, 64), code);
+      // `role` travels back so the joining machine knows what it was invited
+      // as, and can set itself up as a home without being told again.
       return json(res, 200, {
         id: net.id, key: net.key, self: net.self, ...roster(net),
-        endpoints: allEndpoints(net),
+        endpoints: allEndpoints(net), role: row.role ?? 'pc',
       });
     }
 
@@ -215,10 +278,12 @@ export function makeHttpHandler({ online, kick }) {
 
     if (path === '/api/invite' && req.method === 'POST') {
       q.inviteSweep.run(now());
+      const body = await readBody(req).catch(() => ({}));
+      const role = body.role === 'vm' ? 'vm' : 'pc';
       const code = newInviteCode();
       const expiresAt = now() + INVITE_TTL_MS;
-      q.inviteInsert.run(code, expiresAt);
-      return json(res, 200, { code, expiresAt, endpoints: allEndpoints(net) });
+      q.inviteInsert.run(code, expiresAt, role);
+      return json(res, 200, { code, expiresAt, role, endpoints: allEndpoints(net) });
     }
 
     if (path === '/api/machines' && req.method === 'GET') {
