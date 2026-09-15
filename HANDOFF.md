@@ -82,7 +82,7 @@ is where that knowledge already lives.
 
 ---
 
-## Start here: the network is up, both machines need upgrading
+## Start here: the network is up and both machines are current
 
 As of 2026-09-15 the network is rebuilt and running: `helm status` on the
 laptop reports **2 machines, 3 controllers**, network `076f00e81990`, with the
@@ -90,10 +90,8 @@ VM reachable at `https://130-210-33-163.sslip.io`. (The paragraph that used to
 live here said nothing was running - that was true on the evening of the 14th
 and is not true now.)
 
-**What is stale is the deployed code.** The laptop's `~/.helm-src` sat at
-`adced97` while `origin/main` had moved to `34a3438`; the VM was at `34a3438`
-already, because that work was committed and pushed *from the VM*. After
-pushing today's commit, run the upgrade on both:
+**Both machines were upgraded through the day** and are on the same commit
+as `main`. The loop, whenever you push:
 
 ```bash
 cd ~/.helm-src && ./install.sh && systemctl --user restart helm-serve
@@ -234,6 +232,108 @@ and drag-and-drop share one path, and both say something when the agent
 cannot take images. `session.input` also enforces the limits itself now
 (8 images, 8 MB each, 24 MB a message, base64 validated) - the browser's cap
 is a courtesy, and that RPC is reachable by anything holding a device token.
+
+### Latency: what was real, what was my own instrument
+
+The owner's complaint was that phone-to-laptop terminal latency was "ass".
+Measured before changing anything, which was the right call, because half of
+what looked wrong was not.
+
+**What is real.** A TCP connect from this laptop to the VM is **450-970ms**,
+and an RPC relayed through that hub and back is **1.1 seconds**. The laptop
+egresses through a VPN - its server-reflexive address is a datacentre IP -
+so anything that leaves the machine pays that twice. Nothing helm computes
+is the problem; the path is.
+
+**What was not real.** The app said `direct connection · 947ms` on a link
+that actually measures **3ms**. The samples were fine; the statistic was
+not. A smoothed average seeded during page load folds in every source of
+error - a busy main thread, WebRTC still settling, a daemon reading a file -
+and each of those only ever adds, then the smoothing spread it over the next
+minute. It reports the **minimum of the last eight samples** now, which is
+the honest floor of what a path costs and recovers the instant one clean
+sample lands. If you are about to conclude something from a latency number
+in this app, check it has had ten seconds first.
+
+**What was fixed.**
+
+- **The terminal draws keystrokes before they have been anywhere**
+  (`Terminal.tsx`), which is mosh's trick. A printable character is drawn at
+  once and remembered as owed; the echo arrives and almost always begins
+  with exactly what was drawn, so that prefix is dropped. A wrong guess is
+  erased and the machine's bytes stand - the machine is always the
+  authority. Timid on purpose: nothing until this program has been *seen*
+  echoing, only printable characters, never on the alternate screen, never
+  near the right edge where taking a guess back would cross a line break,
+  and **never below 60ms**, where there is nothing to win. Verified by
+  forcing it on: `echo aaa-bbb` came out once, not twice, and a `read -s`
+  password prompt showed nothing on screen while all seven characters
+  reached the shell.
+- **The pty stopped batching echo.** 16ms frames are right for `cat`-ing a
+  file and wrong for one keystroke, so the first chunk after a pause goes
+  out immediately and only a real stream is coalesced.
+- **`session.list` went from 103ms to 0.6ms.** All of it was
+  `runtime.listLive`, which asked herdr two questions in series - and herdr
+  answers one request per connection and then hangs up, so that is two
+  connections built and torn down on every refresh of a machine you are
+  looking at. Both at once now, and the answer is held for a second.
+- **The machine header says which kind of direct it got**: "direct, same
+  network" against "direct, out and back (srflx/srflx)", with the measured
+  round trip beside it, amber past 250ms.
+
+**Measured after:** direct same-network round trip **3ms**, keystroke to
+pixels in a real terminal **~50ms** with prediction off (it is below the
+threshold at that speed, and 50ms is three animation frames, most of it
+xterm's own rendering).
+
+**Worth knowing:** a browser hides its own host candidates behind mDNS
+`.local` names, so the daemon cannot pair with them. It does not matter -
+the *daemon's* LAN candidate is not hidden and ICE only needs one working
+pair - but it is why reading a candidate list is confusing the first time.
+
+### Notifications, slash commands, engine marks
+
+- **Push (`packages/protocol/push.js`).** RFC 8291 payload encryption and
+  RFC 8292 VAPID with node's own crypto, no dependency. `push.test.mjs`
+  replays the RFC's own worked example and checks the body matches byte for
+  byte - a wrong HKDF info string fails for every subscription while looking
+  exactly like a delivery problem. Fires on `permission.request` and nothing
+  else, because a phone that buzzes for every finished turn has its
+  notifications switched off within a day. A 410 forgets that subscription.
+  Tapping lands on the session that asked. **Never delivered to a real
+  phone** - everything up to the POST is verified against a stub service, but
+  no Apple or Google endpoint has seen one, and headless Chromium cannot
+  subscribe.
+- **A `/` palette**, of things that actually run: helm's own actions, plus
+  the owner's own command files where each CLI reads them. Deliberately not
+  the CLI built-ins - `/help` through `claude -p` returns `ok` in 95ms having
+  printed nothing.
+- **Engine marks** are SVG now. Claude's and OpenAI's are theirs; **opencode
+  and Devin are helm's own** and `EngineMark.tsx` says so. Drop in the
+  official files if you have them.
+
+### The bug that made a whole driver dead code
+
+`ENGINES` is one object literal that two people edited at once, and it
+declared **`devin` twice**. The second had no `driver`, so it silently won:
+every Devin session went to a herdr pane instead of the ACP driver written
+for it - raw key strip where the model chips belong, no permission cards, no
+clip. Nothing failed. A duplicate key is invisible in JavaScript, so
+`engines-shape.test.mjs` reads them back out of the source.
+
+### Two more found only by using the real app
+
+- **The CSP was eating every attached image.** `img-src` was `'self' data:`,
+  so `URL.createObjectURL` in the composer's decoder produced a `blob:` URL
+  the page was not allowed to load, and every photo failed with "the browser
+  could not decode it". Both fixed: `blob:` is allowed, and the decoder uses
+  `createImageBitmap`, which needs no URL at all and applies EXIF
+  orientation. Found by attaching a picture in the app rather than posting
+  bytes over RPC, which is what every earlier check had done.
+- **The image gate asked before the agent had started.** An ACP agent only
+  says whether it takes images in its reply to `initialize`, and the driver
+  starts lazily - so the gate read the initial `false` and turned the
+  picture into `[image: dot.jpg]`, for Devin, which answers `image: true`.
 
 ### Also
 
@@ -458,8 +558,23 @@ add a third delivery path, it must carry the same id.**
 
 ### 2026-09-15
 
-- `npm run check` green: types, production build, **66** node tests,
+- `npm run check` green: types, production build, **85** node tests,
   `network.sh`.
+- **Deployed to both machines and driven against the public HTTPS address**,
+  not loopback: paired a browser, opened the laptop *through the VM's hub*,
+  started a Devin session, attached a picture through the real file input and
+  watched it compress, preview and send.
+- **Latency, measured:** direct same-network round trip 3ms; `session.list`
+  0.6ms (was 103ms); keystroke to pixels in a real terminal ~50ms. The
+  relayed path is 1.1s a round trip and always will be - that is the VPN and
+  the distance, which is what predictive echo exists for.
+- **Predictive echo, forced on to test it:** `echo aaa-bbb` appeared once,
+  and a `read -s` prompt showed nothing while all seven characters reached
+  the shell.
+- **The terminals are fast again on this laptop.** node 26 is ABI 147 and
+  node-pty ships binaries up to 131, so there was nothing to load and helm
+  had quietly been on the slow herdr-pane path since the last upgrade;
+  `install.sh` builds the addon now instead of only reporting it missing.
 - **A real image reached a real model.** Sandboxed daemon, `claudea` profile,
   a 64px PNG of a white circle on red, sent through `session.input` with the
   prompt "reply with exactly two words: the background colour, then the shape
@@ -498,25 +613,27 @@ add a third delivery path, it must carry the same id.**
 
 ## Known bad, and not yet fixed
 
-0. **Today's commit is not deployed.** Both machines still run what was on
-   `main` before it. See the top of this file for the upgrade.
-1. **No ACP agent has actually described an image back.** The wire format is
-   verified and the capability is read from the agent itself, but opencode
-   stopped on billing and Devin was not spent on. Send a picture through one
-   and see.
-2. **Slash commands are not built.** Worth knowing before designing them:
-   `/help` and `/status` through `claude -p` return `ok` in ~95 ms with **no
-   output** — the built-ins are TUI-local and do nothing headless. Custom
-   commands and skills *do* run. So a palette of built-ins would be a lie; a
-   palette of the project's own commands plus protocol-level actions would not.
-3. **No vendor logos** — engine marks are the letters `C` / `X` / `O`.
-4. **A real phone has never opened this.** Every run was headless Chromium at
-   390×844. Touch, the keyboard pushing the permission sheet, and a carrier-NAT
-   WebRTC path are all unproven. This is the biggest gap.
-5. **Push notification when a session blocks** is still the highest-value
-   missing feature; `permission.request` is a structured event to hang it on.
-6. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
+1. **A real phone has never opened this**, and it is now by some distance
+   the biggest gap — three of the things built today (push notifications,
+   predictive echo, the `/` palette on a touch keyboard) exist *for* a phone
+   and have only ever been driven in headless Chromium at 390×844. A
+   carrier-NAT WebRTC path is unproven too.
+2. **No push has reached a real device.** The encryption is checked against
+   the RFC's own worked example and the fan-out against a stub service, but
+   no Apple or Google endpoint has been handed one.
+3. **Devin got the image and named the colour wrong.** It answered
+   "Turquoise circle" to a red square with a white circle - shape right,
+   colour wrong, and it read no files that turn. helm's side is clean: the
+   JPEG on disk is 64×64 with corner `(254,0,0)`, and those are the exact
+   bytes handed to the driver. Worth one more look with a different picture
+   before deciding whose problem it is.
+4. **opencode has no credit** ("Insufficient balance"), so its image path is
+   verified only as far as the agent accepting the content block.
+5. Codex `item/permissions/requestApproval` deny and `requestUserInput` are
    coded from the bindings and have never been seen live.
+6. **herdr's own answer is ~100ms** for a pane listing, which is now cached
+   rather than fixed. If adopted panes ever start feeling stale, that cache
+   (`LIVE_TTL_MS`) is why.
 
 ## The machines themselves
 
