@@ -4,6 +4,7 @@ import { q, now, newId } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, rosterHash,
 } from '@helm/protocol/network';
+import { fanOut, isNew } from './notify.js';
 
 const HEARTBEAT_MS = 30_000;
 
@@ -87,6 +88,18 @@ export function createWsLayer() {
         for (const [sock2, subs] of clients) {
           if (subs.has(envId)) send(sock2, T.EVENT, { ...msg, env: envId });
         }
+        return;
+      }
+
+      case T.NOTIFY: {
+        const payload = msg.payload;
+        if (!payload?.tag || !payload?.title || !isNew(payload.tag)) return;
+        fanOut(q.pushAll.all(), payload, {
+          drop: (endpoint) => q.pushDelete.run(endpoint),
+          log: (line) => console.error(`[helm] ${line}`),
+        }).then((sent) => {
+          if (sent) console.log(`[helm] push: told ${sent} device${sent === 1 ? '' : 's'} that ${payload.title}`);
+        }).catch(() => {});
         return;
       }
 

@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-notify-'));
 
-const { describe: describeAsk, fanOut, isNew, forget } = await import('../packages/connect/src/notify.js');
+const { describe: describeAsk } = await import('../packages/connect/src/notify.js');
+const { fanOut, isNew, forget } = await import('../apps/relay/src/notify.js');
 
 /** A stand-in for FCM or APNs: records what it was sent, answers as told. */
 function stubPushService(replies) {

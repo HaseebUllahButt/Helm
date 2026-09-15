@@ -3,7 +3,8 @@
 // Every frame is JSON: { t: <type>, ... }.  The relay is a dumb pipe: it
 // authenticates both ends, tracks which environments are online, and forwards
 // `rpc` / `rpcResult` / `event` frames between a client and one environment.
-// It never interprets payloads.
+// It only interprets the two payloads it owns: durable digests and push
+// notifications for subscriptions stored on that hub.
 
 export const PROTOCOL_VERSION = 1;
 
@@ -23,6 +24,11 @@ export const T = {
 
   // daemon -> relay -> subscribed clients
   EVENT: 'event',           // { env, kind, payload }
+
+  // daemon -> every connected hub. Each hub fans out only to browser
+  // subscriptions stored there, so phones and sessions may live on
+  // different machines without putting push endpoints in the roster.
+  NOTIFY: 'notify',         // { payload: { title, body, tag, envId, sessionId } }
 
   // relay -> client, environment presence changed
   PRESENCE: 'presence',     // { env, online, info }
