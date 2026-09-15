@@ -8,6 +8,7 @@ import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
 import { optionArgs, supportsImages } from './models.js';
+import { available as usageAvailable, usage as fetchUsage } from './usage.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver } from './drivers/codex.js';
@@ -677,6 +678,12 @@ export class Sessions extends EventEmitter {
     const s = this.get(id);
     if (s.driver) {
       const clean = text.replace(/\n$/, '');
+      // Slash commands are helm's, not the agent's: intercept before the
+      // text reaches a CLI that would read them as words in a prompt.
+      if (!raw) {
+        const slash = /^\/(compact|usage)(?:\s+(.*?))?\s*$/s.exec(text.trim());
+        if (slash) return this.#slash(s, slash[1], (slash[2] ?? '').trim());
+      }
       // Emit optimistically so every watcher (desktop + mobile PWA) sees the
       // image immediately, even before the agent echoes it back.
       if (attachments?.length) {
@@ -707,6 +714,69 @@ export class Sessions extends EventEmitter {
     return s.agentName && !raw
       ? this.runtime.sendPrompt(handle, text)
       : this.runtime.sendText(handle, text);
+  }
+
+  /**
+   * `/compact [hint]` summarises the conversation into a fresh context;
+   * `/usage` reports what this session burned plus plan usage when the
+   * local usage dashboard is running. Both render as ordinary turns so
+   * every watcher sees them, and neither is sent to the agent as a prompt.
+   */
+  async #slash(s, cmd, arg) {
+    const turnId = `local-${Date.now().toString(36)}`;
+    const text = `/${cmd}${arg ? ` ${arg}` : ''}`;
+    if (cmd === 'compact') {
+      this.#emitLocal(s, turnId, text);
+      const d = await this.#driver(s);
+      await d.compact(arg);
+      return { ok: true };
+    }
+    const lines = [];
+    let turns = 0, input = 0, output = 0, cost = 0;
+    for (const e of this.events.since(s.id, 0)) {
+      if (e?.type !== 'turn.done') continue;
+      turns++;
+      input += e.usage?.input ?? 0;
+      output += e.usage?.output ?? 0;
+      cost += e.costUsd ?? 0;
+    }
+    const usd = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : (v ?? '—'));
+    lines.push(`${turns} turns this session · ${(input / 1000).toFixed(1)}k tokens in / ${(output / 1000).toFixed(1)}k out${cost ? ` · ${usd(cost)}` : ''}`);
+    try {
+      if (await usageAvailable()) {
+        const u = await fetchUsage();
+        for (const a of u?.accounts ?? []) {
+          const bits = [`today ${usd(a.today)}`, `month ${usd(a.month)}`];
+          if (a.rateLimits) bits.push(`limits ${typeof a.rateLimits === 'string' ? a.rateLimits : JSON.stringify(a.rateLimits).slice(0, 120)}`);
+          lines.push(`${a.label ?? a.id}: ${bits.join(' · ')}`);
+        }
+      } else {
+        lines.push('plan usage unavailable (usage dashboard not running here)');
+      }
+    } catch (err) {
+      lines.push(`plan usage unavailable: ${err?.message ?? err}`);
+    }
+    this.#emitLocal(s, turnId, text, lines.join('\n'));
+    return { ok: true };
+  }
+
+  /** A turn helm itself speaks: appended and pushed like any driver event. */
+  #emitLocal(s, turnId, text, body = null) {
+    const itemId = `local-${turnId}`;
+    const evs = [
+      { type: 'turn.start', turnId, text },
+      ...(body == null ? [] : [
+        { type: 'item.start', id: itemId, kind: 'text', turnId },
+        { type: 'item.delta', id: itemId, text: body },
+        { type: 'item.done', id: itemId, status: 'ok' },
+      ]),
+      { type: 'turn.done', turnId, status: 'ok' },
+    ];
+    for (const e of evs) {
+      const event = this.events.append(s.id, e);
+      s.lastSeq = event.seq;
+      this.emit('event', { id: s.id, event });
+    }
   }
 
   keys(id, keys) {

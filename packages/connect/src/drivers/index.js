@@ -74,6 +74,9 @@ export class Driver extends EventEmitter {
   // default that quietly dropped them made every attachment vanish.
   async start() { throw new Error('not implemented'); }
   async send(_text) { throw new Error('not implemented'); }
+  // Summarise the conversation so far into a fresh context window. The
+  // default speaks the /compact both CLIs understand as user text.
+  async compact(hint) { return this.send('/compact' + (hint ? ` ${hint}` : '')); }
   async answer(_requestId, _decision) { throw new Error('not implemented'); }
   async interrupt() { throw new Error('not implemented'); }
   async setModel(_model) { throw new Error('not implemented'); }
