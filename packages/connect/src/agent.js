@@ -12,6 +12,7 @@ import { Sessions } from './sessions.js';
 import { getProfiles, refreshProfiles } from './profiles.js';
 import { listModels } from './models.js';
 import { listCommands } from './commands.js';
+import { accountKey, modelPrefs, saveModelPrefs, applyModelPrefs, loadSettings } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import * as usageApi from './usage.js';
@@ -552,10 +553,17 @@ export class Daemon {
       case M.FS_ROOTS:  return fsApi.roots();
       case M.FS_MKDIR:  return fsApi.makeDir(p);
 
-      case M.PROFILE_LIST:
-        return { profiles: p.refresh
+      case M.PROFILE_LIST: {
+        const profiles = p.refresh
           ? (await refreshProfiles()).profiles
-          : await getProfiles() };
+          : await getProfiles();
+        // Each profile carries its account key and model prefs, so the app
+        // groups aliases and renders the picker filter with no extra call.
+        const cfg = loadSettings();
+        return {
+          profiles: profiles.map((x) => ({ ...x, account: accountKey(x), prefs: modelPrefs(x, cfg) })),
+        };
+      }
 
       case M.MODEL_LIST: {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
@@ -585,8 +593,18 @@ export class Daemon {
           models.images = liveImages;
           models.imagesByModel = {};
         }
+        // The account's approved list trims the picker; `all` skips that for
+        // the settings editor, which needs everything to pick from.
+        const prefs = modelPrefs(profile);
+        const filtered = applyModelPrefs(models, prefs, { all: !!p.all });
         // The permission modes this engine offers, so the app never has to know the flags.
-        return { ...models, modes: engine?.driver ? modesFor(profile.engine) : [] };
+        return { ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [] };
+      }
+
+      case M.MODEL_PREFS: {
+        const profile = (await getProfiles()).find((x) => x.id === p.profileId);
+        if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
+        return { ok: true, prefs: saveModelPrefs(profile, { default: p.default, approved: p.approved }) };
       }
 
       case M.SESSION_LIST:    return { sessions: await this.sessions.list() };

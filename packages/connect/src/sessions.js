@@ -8,6 +8,7 @@ import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
 import { optionArgs } from './models.js';
+import { modelPrefs } from './settings.js';
 import { available as usageAvailable, usage as fetchUsage } from './usage.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
@@ -344,6 +345,9 @@ export class Sessions extends EventEmitter {
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
+    // The account's configured default is what a new session starts with; a
+    // model chosen up front always wins.
+    if (!model) model = modelPrefs(profile)?.default ?? null;
     if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, auto });
 
     const spec = materialize(profile);

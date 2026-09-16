@@ -76,7 +76,8 @@ export const M = {
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }
   PROFILE_LIST: 'profile.list',    // {} -> { profiles[] }
-  MODEL_LIST: 'model.list',        // { profileId } -> { default, models[], effort?, efforts? }
+  MODEL_LIST: 'model.list',        // { profileId, id?, all? } -> { default, models[], more?[], prefs?, effort?, efforts? }
+  MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[] } -> { prefs }  per-account picker filter
   SESSION_LIST: 'session.list',    // {} -> { sessions[] }
   SESSION_START: 'session.start',  // { cwd, profileId, model?, auto?, effort?, title? } -> { session }
   SESSION_ATTACH: 'session.attach',// { id, cols, rows } -> { session, scrollback }

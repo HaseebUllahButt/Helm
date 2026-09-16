@@ -52,6 +52,7 @@ export function Controls({ options, session, busy, onPick }: {
         title={group.title}
         note={group.note}
         choices={group.choices}
+        more={group.more}
         current={group.current}
         busy={busy}
         onClose={() => setOpen(null)}
@@ -69,6 +70,8 @@ interface Group {
   glyph?: string;
   note?: string;
   choices: Choice[];
+  /** The long tail the account's approved list hides - one tap away, not offered first. */
+  more?: Choice[];
   current: string;
   currentLabel: string;
   danger?: boolean;
@@ -95,15 +98,17 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
   // does the chip have nothing to name.
   const model = session.model || session.engineModel || options.default || '';
 
-  if (options.models.length) {
-    const choices: Choice[] = options.models.map((m) => ({
+  if (options.models.length || options.more?.length) {
+    const choice = (m: string): Choice => ({
       id: m,
       label: options.labels?.[m] ?? m,
-      hint: m === options.default ? 'the account default' : undefined,
-    }));
-    // A model the CLI reported but that is not in the catalogue is still the
-    // one in use, so it belongs in the list rather than being unselectable.
-    if (model && !choices.some((c) => c.id === model)) {
+      hint: m === options.default ? 'the default' : undefined,
+    });
+    const choices = options.models.map(choice);
+    const more = (options.more ?? []).map(choice);
+    // A model the CLI reported but that is in neither list is still the one
+    // in use, so it belongs in the list rather than being unselectable.
+    if (model && !choices.some((c) => c.id === model) && !more.some((c) => c.id === model)) {
       choices.unshift({ id: model, label: options.labels?.[model] ?? model, hint: 'in use now' });
     }
     out.push({
@@ -111,6 +116,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       title: 'model',
       glyph: '◆',
       choices,
+      more,
       current: model,
       currentLabel: model ? shortModel(model, options.labels, session.engine) : 'default',
     });
@@ -165,16 +171,46 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** A dangerous choice arms on the first tap and commits on the second. */
-function ChoiceSheet({ title, note, choices, current, busy, onPick, onClose }: {
-  title: string; note?: string; choices: Choice[]; current: string;
+/**
+ * A dangerous choice arms on the first tap and commits on the second.
+ *
+ * `more` is the model sheet's overflow: an account can approve a short list
+ * for everyday use, and the rest of what the CLI offers sits behind one row -
+ * or one search - rather than being hidden entirely.
+ */
+function ChoiceSheet({ title, note, choices, more = [], current, busy, onPick, onClose }: {
+  title: string; note?: string; choices: Choice[]; more?: Choice[]; current: string;
   busy?: boolean; onPick: (id: string) => void; onClose: () => void;
 }) {
   const [arming, setArming] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const match = (c: Choice) =>
+    !q || c.label.toLowerCase().includes(q) || c.id.toLowerCase().includes(q);
+  const main = choices.filter(match);
+  const rest = more.filter(match);
   const choose = (c: Choice) => {
     if (c.id === current) return onClose();
     if (c.danger && arming !== c.id) return setArming(c.id);
     onPick(c.id);
+  };
+  const row = (c: Choice) => {
+    const on = c.id === current;
+    const armed = arming === c.id;
+    return (
+      <button
+        key={c.id || 'default'} role="option" aria-selected={on} disabled={busy}
+        className={`moderow${on ? ' on' : ''}${c.danger ? ' danger' : ''}${armed ? ' armed' : ''}`}
+        onClick={() => choose(c)}
+      >
+        <span className="grow">
+          <span className="rt">{c.label}</span>
+          {(armed || c.hint) && <span className="rm">{armed ? 'Tap again to confirm' : c.hint}</span>}
+        </span>
+        {on && <span className="check">✓</span>}
+      </button>
+    );
   };
   return (
     <div className="modesheet" role="listbox" aria-label={title}>
@@ -183,23 +219,24 @@ function ChoiceSheet({ title, note, choices, current, busy, onPick, onClose }: {
         <button className="x" onClick={onClose} aria-label="close">✕</button>
       </div>
       {note && <div className="modesheet-note">{note}</div>}
-      {choices.map((c) => {
-        const on = c.id === current;
-        const armed = arming === c.id;
-        return (
-          <button
-            key={c.id || 'default'} role="option" aria-selected={on} disabled={busy}
-            className={`moderow${on ? ' on' : ''}${c.danger ? ' danger' : ''}${armed ? ' armed' : ''}`}
-            onClick={() => choose(c)}
-          >
-            <span className="grow">
-              <span className="rt">{c.label}</span>
-              {(armed || c.hint) && <span className="rm">{armed ? 'Tap again to confirm' : c.hint}</span>}
-            </span>
-            {on && <span className="check">✓</span>}
-          </button>
-        );
-      })}
+      {more.length > 0 && (
+        <input
+          className="sheetfilter" value={query} placeholder="search all models"
+          autoCapitalize="off" autoCorrect="off" autoComplete="off"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      )}
+      {main.map(row)}
+      {rest.length > 0 && (q || expanded ? rest.map(row) : (
+        <button className="moderow more" onClick={() => setExpanded(true)}>
+          <span className="grow">
+            <span className="rt">{rest.length} more</span>
+            <span className="rm">everything else the account offers</span>
+          </span>
+          <span className="chev">›</span>
+        </button>
+      ))}
+      {q && !main.length && !rest.length && <div className="modesheet-note">no matches</div>}
     </div>
   );
 }

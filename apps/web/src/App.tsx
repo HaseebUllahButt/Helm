@@ -6,7 +6,7 @@ import { EngineMark } from './EngineMark';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import {
   Client, login,
-  type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList,
+  type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
 } from './client';
 
 type Auth = StoredAuth;
@@ -90,6 +90,7 @@ interface Account {
   token: boolean;
   profile: Profile;
   aliases: string[];
+  prefs?: ModelPrefs | null;
 }
 
 function accountsFrom(profiles: Profile[]): Account[] {
@@ -98,13 +99,15 @@ function accountsFrom(profiles: Profile[]): Account[] {
     if (p.engine === 'shell' || (p as any).disabled) continue;
     const home = Object.values(p.env ?? {}).find((v) => /^[~/]/.test(v));
     // Engine + home + credential is what makes an account; an alias that
-    // also unsets a variable is the same account with a different mood.
-    const key = [p.engine, home ?? '', [...(p.envFrom ?? [])].sort().join(',')].join('|');
+    // also unsets a variable is the same account with a different mood. The
+    // daemon computes the same key, which is what its model prefs index by.
+    const key = p.account ?? [p.engine, home ?? '', [...(p.envFrom ?? [])].sort().join(',')].join('|');
     const leaf = home?.split('/').pop() ?? '';
     const suffix = leaf.replace(/^\.?(claude|codex|opencode|devin|config)-?/, '');
     const existing = by.get(key);
     if (existing) {
       existing.aliases.push(p.id);
+      existing.prefs ??= p.prefs;
       // Fewest arguments = the plainest way to launch this account.
       if ((p.args ?? []).length < (existing.profile.args ?? []).length) existing.profile = p;
       continue;
@@ -113,7 +116,7 @@ function accountsFrom(profiles: Profile[]): Account[] {
       key, engine: p.engine,
       account: suffix || 'default',
       token: (p.envFrom ?? []).some((k) => /TOKEN|KEY/i.test(k)),
-      profile: p, aliases: [p.id],
+      profile: p, aliases: [p.id], prefs: p.prefs,
     });
   }
   const order = ['claude', 'codex', 'opencode', 'devin'];
@@ -178,6 +181,8 @@ type MainView =
   | { kind: 'env' }
   | { kind: 'browse'; path?: string }
   | { kind: 'start'; cwd: string }
+  | { kind: 'settings' }
+  | { kind: 'models'; account: Account }
   | { kind: 'session'; session: Session };
 
 function Shell({ client, conn, onSignOut }: {
@@ -451,8 +456,16 @@ function Shell({ client, conn, onSignOut }: {
             client={client} env={env} wide={wide} onBack={back}
             sessions={sessions[env.id] ?? []} reload={reloadEnv}
             onBrowse={() => push({ kind: 'browse' })}
+            onSettings={() => push({ kind: 'settings' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
           />
+        ) : view.kind === 'settings' ? (
+          <EnvSettings
+            client={client} env={env} onBack={back}
+            onEdit={(account) => push({ kind: 'models', account })}
+          />
+        ) : view.kind === 'models' ? (
+          <ModelPrefsView client={client} env={env} account={view.account} onBack={back} />
         ) : view.kind === 'browse' ? (
           <Browse
             client={client} env={env} path={view.path} onBack={back}
@@ -823,9 +836,9 @@ function InstallPwa() {
 
 // --------------------------------------------------------------- one machine
 
-function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen }: {
+function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSettings, onOpen }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[];
-  reload: () => void; onBack: () => void; onBrowse: () => void; onOpen: (s: Session) => void;
+  reload: () => void; onBack: () => void; onBrowse: () => void; onSettings: () => void; onOpen: (s: Session) => void;
 }) {
   const [usage, setUsage] = useState<UsageState>({ kind: 'off' });
   const [direct, setDirect] = useState(false);
@@ -972,6 +985,7 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onOpen
           disabled={!env.online || opening}
           onClick={openTerminal}
         >{env.info.terminals === 'panes' ? '❯!' : '❯_'}</button>
+        <button className="iconbtn" title={`${env.name} settings`} onClick={onSettings}>⚙</button>
       </div>
 
       <div className="scroll"><div className="pad column">
@@ -1135,6 +1149,180 @@ function UsageRow({ account }: { account: any }) {
   );
 }
 
+// ----------------------------------------------------------------- settings
+
+/**
+ * Per-machine settings. Today: for each account on the machine, which models
+ * the picker offers and which one a new session starts with. The prefs live
+ * in the machine's ~/.helm/config.json, so they follow the machine and apply
+ * no matter which device asks.
+ */
+function EnvSettings({ client, env, onBack, onEdit }: {
+  client: Client; env: Environment; onBack: () => void; onEdit: (a: Account) => void;
+}) {
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    client.rpc(env.id, 'profile.list')
+      .then((r: any) => setAccounts(accountsFrom(r.profiles)))
+      .catch((e) => setError(e.message));
+  }, [client, env.id]);
+
+  return (
+    <>
+      <div className="bar">
+        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <div className="titles"><h1>Settings</h1><span className="sub">{env.name}</span></div>
+      </div>
+      <div className="scroll"><div className="pad column">
+        <div className="section">models</div>
+        {accounts === null && !error && <div className="empty quiet">looking for agents…</div>}
+        {accounts?.length === 0 && <div className="empty quiet">no agents on {env.name}</div>}
+        <div className="rows">
+          {accounts?.map((a) => {
+            const e = engineOf(a.engine);
+            const n = a.prefs?.approved?.length ?? 0;
+            return (
+              <button key={a.key} className="row tall" onClick={() => onEdit(a)}>
+                <EngineMark engine={e.cls} />
+                <span className="grow">
+                  <span className="rt">{e.label} <span className="dim">· {a.account}</span></span>
+                  <span className="rm">
+                    {n
+                      ? `${n} model${n === 1 ? '' : 's'}${a.prefs?.default ? ` · starts ${a.prefs.default.replace(/^[^/]+\//, '')}` : ''}`
+                      : 'all models'}
+                  </span>
+                </span>
+                <span className="chev">›</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="note">
+          The checked models are what the model picker offers; everything else
+          stays one tap away under “more”. The default is what a new session
+          starts with.
+        </p>
+        {error && <div className="error">{error}</div>}
+      </div></div>
+    </>
+  );
+}
+
+/**
+ * The model prefs editor for one account: a checklist over the CLI's full
+ * list - long for opencode, so it filters - plus the model new sessions
+ * start with. Checking nothing means "offer everything", the state the
+ * account was in before this screen existed.
+ */
+function ModelPrefsView({ client, env, account, onBack }: {
+  client: Client; env: Environment; account: Account; onBack: () => void;
+}) {
+  const [list, setList] = useState<ModelList | null>(null);
+  const [approved, setApproved] = useState<Set<string>>(new Set());
+  const [def, setDef] = useState('');
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const eng = engineOf(account.engine);
+
+  useEffect(() => {
+    client.rpc(env.id, 'model.list', { profileId: account.profile.id, all: true }, 45_000)
+      .then((r: ModelList) => {
+        setList(r);
+        setApproved(new Set(r.prefs?.approved ?? []));
+        setDef(r.prefs?.default ?? '');
+      })
+      .catch((e) => setError(e.message));
+  }, [client, env.id, account.profile.id]);
+
+  const toggle = (m: string) => {
+    const next = new Set(approved);
+    if (next.has(m)) next.delete(m); else next.add(m);
+    if (def && !next.has(def)) setDef('');
+    setApproved(next);
+  };
+
+  const save = async () => {
+    setBusy(true); setError('');
+    try {
+      await client.rpc(env.id, 'model.prefs', {
+        profileId: account.profile.id,
+        default: def || null,
+        approved: [...approved],
+      }, 20_000);
+      onBack();
+    } catch (e: any) { setError(e.message); setBusy(false); }
+  };
+
+  const all = list?.models ?? [];
+  const q = query.trim().toLowerCase();
+  const match = (m: string) =>
+    !q || m.toLowerCase().includes(q) || (list?.labels?.[m] ?? '').toLowerCase().includes(q);
+  // Approved first in the CLI's own order, including any the CLI no longer
+  // offers (kept visible so a stale entry can be unchecked, not hidden).
+  const on = [...all.filter((m) => approved.has(m)), ...[...approved].filter((m) => !all.includes(m))]
+    .filter(match);
+  const off = all.filter((m) => !approved.has(m)).filter(match);
+  const defaults = all.filter((m) => approved.has(m));
+  // A stored default the CLI stopped offering is still what sessions start
+  // with - keep it selectable rather than silently dropping it.
+  if (def && !defaults.includes(def)) defaults.push(def);
+
+  const row = (m: string, checked: boolean) => (
+    <button key={m} className={`row tall${checked ? ' active' : ''}`} onClick={() => toggle(m)}>
+      <span className="grow">
+        <span className="rt">{list?.labels?.[m] ?? m}</span>
+        {(list?.labels?.[m] && list.labels[m] !== m) && <span className="rm">{m}</span>}
+        {!all.includes(m) && <span className="rm">not offered by the CLI anymore</span>}
+      </span>
+      {checked && <span className="check">✓</span>}
+    </button>
+  );
+
+  return (
+    <>
+      <div className="bar">
+        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <div className="titles"><h1>Models</h1><span className="sub">{eng.label} · {account.account} · {env.name}</span></div>
+      </div>
+      <div className="scroll"><div className="pad column">
+        {list === null && !error && <div className="empty quiet">asking the CLI for its models…</div>}
+
+        {list !== null && (
+          <>
+            <div className="section">start new sessions with</div>
+            <select value={def} onChange={(e) => setDef(e.target.value)} disabled={!approved.size}>
+              <option value="">the CLI's default</option>
+              {defaults.map((m) => <option key={m} value={m}>{list.labels?.[m] ?? m}</option>)}
+            </select>
+
+            <div className="section">in the picker</div>
+            <input
+              value={query} onChange={(e) => setQuery(e.target.value)}
+              placeholder={`filter ${all.length} models`} autoCapitalize="off" autoCorrect="off"
+            />
+            {on.length > 0 && <div className="rows">{on.map((m) => row(m, true))}</div>}
+            {on.length > 0 && off.length > 0 && <div className="section">everything else</div>}
+            <div className="rows">{off.map((m) => row(m, false))}</div>
+            {q && !on.length && !off.length && <div className="empty quiet">no matches</div>}
+
+            <p className="note">
+              Checked models are the picker's short list; the rest stay reachable
+              under “more”. Check nothing to offer the whole list.
+            </p>
+            <button className="primary big" disabled={busy} onClick={save}>
+              {busy ? 'saving…' : 'Save'}
+            </button>
+          </>
+        )}
+        {error && <div className="error">{error}</div>}
+      </div></div>
+    </>
+  );
+}
+
 // ----------------------------------------------------------------- browsing
 
 function Browse({ client, env, path, onBack, onInto, onPick }: {
@@ -1255,11 +1443,12 @@ function Start({ client, env, cwd, onBack, onStarted }: {
   const account = accounts?.find((a) => a.key === key) ?? null;
 
   // What this account ran with last time. The session can change all of it,
-  // so these are a starting point, not a question.
+  // so these are a starting point, not a question. A default configured on
+  // the machine outranks what this device merely remembers.
   useEffect(() => {
     if (!account) return;
     const p = prefs.current[account.key] ?? {};
-    setModel(p.model ?? '');
+    setModel(account.prefs?.default ?? p.model ?? '');
     setEffort(p.effort ?? '');
     setAuto(p.auto ?? false);
     setMode(p.mode ?? '');

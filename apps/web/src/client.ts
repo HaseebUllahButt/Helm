@@ -31,6 +31,12 @@ export interface Environment {
   };
 }
 
+/** Per-account model picker settings, stored on the machine. */
+export interface ModelPrefs {
+  default: string | null;
+  approved: string[];
+}
+
 export interface Profile {
   id: string;
   label: string;
@@ -40,6 +46,9 @@ export interface Profile {
   env?: Record<string, string>;
   envFrom?: string[];
   source: string;
+  /** Account key every alias of the same login shares, from the daemon. */
+  account?: string;
+  prefs?: ModelPrefs | null;
 }
 
 export interface Session {
@@ -74,6 +83,9 @@ export interface Mode { id: string; label: string; short?: string; hint?: string
 export interface ModelList {
   default: string | null;
   models: string[];
+  /** What the account's approved list filtered out - reachable, not offered first. */
+  more?: string[];
+  prefs?: ModelPrefs | null;
   /** Slug -> the name the CLI shows a person ("GPT-6-Astra"). */
   labels?: Record<string, string>;
   effort?: string | null;

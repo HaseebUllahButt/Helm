@@ -865,6 +865,14 @@ pre.snippet {
 .moderow.danger .rt { color: var(--amber); }
 .moderow.armed { background: color-mix(in srgb, var(--amber) 12%, transparent); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .moderow.armed .rm { color: var(--amber); }
+.moderow.more .rt { color: var(--mutedfg); font-size: 14px; }
+.moderow .chev { color: var(--icon); font-size: 15px; flex: none; }
+
+/* The model sheet's search box: sits inside the sheet, quieter than a form input. */
+.sheetfilter {
+  margin: 0 2px 6px; padding: 8px 10px; width: auto;
+  font-size: 14px; border-radius: var(--radius-md);
+}
 
 /* A row that carries its own action menu: the body opens it. */
 .row.rowx { padding: 0; display: flex; align-items: stretch; gap: 0; position: relative; overflow: visible; }
