@@ -84,6 +84,8 @@ export interface Session {
   turns?: number;
   /** The id the CLI itself gave this session; matches inventory rows. */
   engineSessionId?: string | null;
+  /** On a row read from a CLI's history: the account it was recorded under. */
+  account?: string;
 }
 
 /** A thread a CLI recorded on its own, whether or not helm started it. */

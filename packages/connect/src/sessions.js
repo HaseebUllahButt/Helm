@@ -8,9 +8,8 @@ import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
-import { modelPrefs } from './settings.js';
 import { optionArgs } from './models.js';
-
+import { modelPrefs, accountKey } from './settings.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver } from './drivers/codex.js';
@@ -522,7 +521,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, profile, title, model, effort, mode, auto, brain = false }) {
+  async #startDriven({ cwd, profile, title, model, effort, mode, auto, brain = false, engineSessionId = null }) {
     const dir = expand(cwd);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -540,16 +539,18 @@ export class Sessions extends EventEmitter {
       // `input` knows to put the network's state in front of what is typed.
       brain: brain || undefined,
       status: 'idle',
-      engineSessionId: null,
-
+      // Set when picking up a conversation the CLI already has: the driver
+      // reads this as "resume", not "start".
+      engineSessionId,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
     this.#index.set(session.id, session);
     const driver = await this.#driver(session);
     await driver.start();
-    session.engineSessionId = driver.engineSessionId;
-
+    // A fresh session takes whatever id the driver minted; a resumed one
+    // already had the id that made it a resume, and must keep it.
+    session.engineSessionId = engineSessionId ?? driver.engineSessionId;
     this.#save();
     this.emit('session', session);
     return session;
@@ -707,6 +708,76 @@ export class Sessions extends EventEmitter {
    * `since`.
    */
 /**
+   * Pick up a conversation this machine's CLI recorded on its own.
+   *
+   * A session started at the keyboard - `claude` in a terminal, `codex` in a
+   * pane - is listed by `inventory()` and, until now, could only be looked at.
+   * That is the wrong half of the promise: the point of helm is to walk away
+   * from the desk, and the thread you most want on your phone is the one you
+   * were just working on.
+   *
+   * There is no process to attach to; the CLI exited. What this does is start
+   * a *new* driven session carrying the old one's id, so the engine resumes
+   * its own conversation - the same `--resume` the CLI would do - and helm
+   * then owns it like any other thread. `engineSessionId` set before the
+   * driver is built is the whole mechanism; every driver already treats a
+   * supplied id as "resume this" rather than "start this".
+   *
+   * The account matters: a conversation recorded under one login cannot be
+   * resumed under another, because the transcript is not there to resume.
+   * So the profile is chosen by matching the engine *and* the account the
+   * inventory read it from, and only then falling back to the engine.
+   */
+  async resumeExternal({ engine, account, id, cwd, title }) {
+    if (!id) throw new Error('which conversation?');
+    const spec = ENGINES[engine];
+    if (!spec?.driver) throw new Error(`helm cannot drive ${engine} sessions`);
+
+    // Already resumed once: hand back the thread rather than making a second
+    // one that fights the first for the same conversation.
+    for (const s2 of this.#index.values()) {
+      if (s2.engineSessionId === id && s2.driver) return this.get(s2.id);
+    }
+
+    const profiles = await getProfiles();
+    const forEngine = profiles.filter((x) => x.engine === engine);
+    if (!forEngine.length) throw new Error(`no ${engine} account on this machine`);
+
+    // The account the inventory recorded names a *home*, not something that
+    // can necessarily run. `inventory()` dedupes by engine and home and keeps
+    // whichever alias it saw first, and aliases onto one home differ in the
+    // part that matters: here `claude-p` and `claudea` are both
+    // `CLAUDE_CONFIG_DIR=~/.claude-personal`, and only `claudea` carries
+    // `CLAUDE_CODE_OAUTH_TOKEN`. Resuming under the first one starts a CLI
+    // that cannot authenticate and answers nothing, which looks exactly like
+    // resume being broken.
+    //
+    // So: find the home the recorded account means, then among the aliases
+    // onto that home take the one best able to run it - credentials first,
+    // then the plainest, the same ordering the account picker uses.
+    const spoken = forEngine.find((x) => accountKey(x) === account)
+      ?? forEngine.find((x) => x.id === account);
+    const homeOf = (x) => x.env?.[spec.homeEnv] ?? spec.defaultHome;
+    const home = spoken ? homeOf(spoken) : null;
+    const candidates = home ? forEngine.filter((x) => homeOf(x) === home) : forEngine;
+    const profile = [...candidates].sort((a, b) =>
+      ((b.envFrom?.length ?? 0) > 0 ? 1 : 0) - ((a.envFrom?.length ?? 0) > 0 ? 1 : 0)
+      || (a.args?.length ?? 0) - (b.args?.length ?? 0))[0];
+    if (!profile) throw new Error(`no ${engine} account on this machine`);
+
+    const session = await this.#startDriven({
+      cwd: cwd || '~', profile, title: title || null,
+      model: null, effort: null, mode: null, auto: null,
+      engineSessionId: id,
+    });
+    // Nothing to mark: the row it came from is matched to this session by
+    // its engineSessionId and drops out of the list on the next refresh
+    // (`dedupeDetected` in the web app), which is also what stops a resumed
+    // thread appearing twice.
+    return session;
+  }
+
+  /**
    * This machine's contribution to the digest: its live sessions, each with
    * the line `brain.js` derives from its event log. Separate from `list()`
    * on purpose - `list()` is polled by every paired device every 15 seconds,

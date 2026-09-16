@@ -143,6 +143,11 @@ const foundRow = (x: InventorySession): Session => ({
   profileId: '', status: 'idle', adopted: true, alive: false,
   archived: !!x.archived,
   model: x.model ?? null, updatedAt: x.updatedAt,
+  // What `session.resume` needs to pick the conversation back up: the CLI's
+  // own id, and the account it was recorded under - a thread written by one
+  // login cannot be resumed by another, because the transcript is not there.
+  engineSessionId: x.id,
+  account: x.account,
 });
 
 /**
@@ -407,6 +412,32 @@ function Shell({ client, conn, onSignOut }: {
    * always-on machine and its Groq key is the one that was expired, so the
    * laptop is what answers.
    */
+  /**
+   * Continue a conversation that was started at a keyboard.
+   *
+   * The row came out of a CLI's own history and has no process behind it, so
+   * there is nothing to attach to: the machine starts a fresh driven session
+   * carrying the old conversation's id, the engine resumes it, and what comes
+   * back is an ordinary helm thread. It takes a moment - a CLI is starting -
+   * so the row says so rather than looking ignored.
+   */
+  const [resuming, setResuming] = useState<string | null>(null);
+  const resumeFound = async (envId: string, s: Session) => {
+    if (resuming) return;
+    setResuming(s.id);
+    setError('');
+    try {
+      const r = await client.rpc<{ session: Session }>(envId, 'session.resume', {
+        engine: s.engine, account: (s as any).account,
+        id: s.engineSessionId, cwd: s.cwd, title: s.title,
+      }, 60_000);
+      loadSessions(envId);
+      navigate([...nav.current.stack, { kind: 'session', session: r.session }], envId);
+    } catch (e: any) {
+      setError(`could not continue that thread: ${e.message}`);
+    } finally { setResuming(null); }
+  };
+
   const voiceEnvs = envs.filter((e) => e.online && e.info.voice);
   const transcribeVia = (preferred?: string) => {
     const order = [
@@ -591,6 +622,7 @@ function Shell({ client, conn, onSignOut }: {
           <Threads
             client={client} envs={envs} sessions={sessions} onBack={back}
             search={view.search}
+            onResume={resumeFound} resuming={resuming}
             onOpen={(envId, s) => navigate([{ kind: 'threads' }, { kind: 'session', session: s }], envId)}
             onChanged={loadSessions}
           />
@@ -603,6 +635,7 @@ function Shell({ client, conn, onSignOut }: {
             key={env.id}
             client={client} env={env} wide={wide} onBack={back}
             sessions={sessions[env.id] ?? []} reload={reloadEnv}
+            onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
             onBrowse={() => push({ kind: 'browse' })}
             onSettings={() => push({ kind: 'settings' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
@@ -1011,9 +1044,12 @@ function InstallPwa() {
 
 // --------------------------------------------------------------- one machine
 
-function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSettings, onOpen }: {
+function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSettings, onOpen, onResume, resuming }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[];
   reload: () => void; onBack: () => void; onBrowse: () => void; onSettings: () => void; onOpen: (s: Session) => void;
+  /** Continue a conversation a CLI recorded on its own; starts the engine. */
+  onResume: (s: Session) => void;
+  resuming: string | null;
 }) {
   const [direct, setDirect] = useState(false);
   const [ping, setPing] = useState<number | null>(null);
@@ -1216,7 +1252,8 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
             <div className="rows">
               {recent.map((row) => (
                 <SessionRow
-                  key={row.id} s={row}
+                  key={row.id} s={row} busy={resuming === row.id}
+                  onOpen={env.online ? () => onResume(row) : undefined}
                   onArchive={() => setArchived(row, true)}
                   onDelete={() => deleteSession(row)}
                 />
@@ -1228,8 +1265,10 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
           <div className="rows">
             {filed.map((s) => (
               <SessionRow
-                key={s.id} s={s}
-                onOpen={s.id.startsWith('found:') ? undefined : () => onOpen(s)}
+                key={s.id} s={s} busy={resuming === s.id}
+                onOpen={s.id.startsWith('found:')
+                  ? (env.online ? () => onResume(s) : undefined)
+                  : () => onOpen(s)}
                 onArchive={() => setArchived(s, false)}
                 onDelete={() => deleteSession(s)}
               />
@@ -1309,9 +1348,11 @@ function Fold({ title, count, openWhen = false, children }: {
  * only from inside it. An agent helm did not start is left alone - helm
  * does not own that process and has no business ending it.
  */
-function SessionRow({ s, onOpen, onRename, onArchive, onDelete }: {
+function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy }: {
   s: Session; onOpen?: () => void; onRename?: (title: string) => void;
   onArchive?: () => void; onDelete?: () => void;
+  /** Resuming a past conversation starts a CLI, which takes a moment. */
+  busy?: boolean;
 }) {
   const eng = engineOf(s.engine);
   const adopted = s.adopted;
@@ -1340,7 +1381,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete }: {
           </span>
         </span>
         {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
-        <StatusChip status={s.status} />
+        {busy ? <span className="chip working"><i />opening</span> : <StatusChip status={s.status} />}
       </Main>
       {managed && (
         <>
@@ -1509,9 +1550,12 @@ function BrainView({ client, envs, onBack, onStarted }: {
  * sessions, and not what you came here for - so there is one filter for the
  * words and one for the noise.
  */
-function Threads({ client, envs, sessions, search, onBack, onOpen, onChanged }: {
+function Threads({ client, envs, sessions, search, onBack, onOpen, onChanged, onResume, resuming }: {
   client: Client; envs: Environment[]; sessions: Record<string, Session[]>; search?: boolean;
   onBack: () => void; onOpen: (envId: string, s: Session) => void; onChanged: (envId: string) => void;
+  /** Continue a conversation a CLI recorded on its own; starts the engine. */
+  onResume: (envId: string, s: Session) => void;
+  resuming: string | null;
 }) {
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
@@ -1637,10 +1681,11 @@ function Threads({ client, envs, sessions, search, onBack, onOpen, onChanged }: 
                 <div className="foldhead">{collapseCwd(cwd)}</div>
                 <div className="rows">
                   {list.map((s) => s.id.startsWith('found:') ? (
-                    // helm cannot open one of these - it has no live session
-                    // behind it - but it can stop putting it in front of you.
+                    // Nothing is running behind this row, so opening it means
+                    // asking the machine to resume the conversation first.
                     <SessionRow
-                      key={s.id} s={s}
+                      key={s.id} s={s} busy={resuming === s.id}
+                      onOpen={env.online ? () => onResume(env.id, s) : undefined}
                       onArchive={() => setArchived(env.id, s, !s.archived)}
                       onDelete={() => deleteSession(env.id, s)}
                     />
@@ -1664,7 +1709,8 @@ function Threads({ client, envs, sessions, search, onBack, onOpen, onChanged }: 
               <div className="rows">
                 {list.map((s) => s.id.startsWith('found:') ? (
                   <SessionRow
-                    key={s.id} s={s}
+                    key={s.id} s={s} busy={resuming === s.id}
+                    onOpen={env.online ? () => onResume(env.id, s) : undefined}
                     onArchive={() => setArchived(env.id, s, false)}
                     onDelete={() => deleteSession(env.id, s)}
                   />

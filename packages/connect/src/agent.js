@@ -771,6 +771,11 @@ export class Daemon {
         return { session: wire(this.sessions.get(session.id)), created: true };
       }
 
+      // Picking up a conversation the CLI recorded on its own. The protocol
+      // has had a name for this since the beginning and nothing behind it.
+      case M.SESSION_RESUME:
+        return { session: wire(await this.sessions.resumeExternal(p)) };
+
       // The device records; the machine holding the key does the rest, so no
       // phone ever has to be trusted with one.
       case M.VOICE_TRANSCRIBE: return transcribe({ audio: p.audio, mime: p.mime, prompt: p.prompt });
