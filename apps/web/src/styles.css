@@ -988,3 +988,6 @@ pre.snippet {
 }
 .section.fold.attention { color: var(--amber); }
 
+/* Threads inside a project read as belonging to it, not as a sibling of the
+   heading above them. */
+.side-pad .section.fold + .rows .row { padding-left: 18px; }

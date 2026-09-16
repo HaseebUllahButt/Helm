@@ -130,6 +130,17 @@ function accountsFrom(profiles: Profile[]): Account[] {
 }
 
 /**
+ * A folder's short name, and the path only when it says something extra.
+ *
+ * The last segment is what anyone calls a project - "helm", "t3-app" - but it
+ * is not unique: `~/dev/me/github/helm` and `~/Helm` are two different
+ * projects that would both be called "helm". The full path goes beside it,
+ * except where it would just repeat the name back ("~" under "~").
+ */
+const projectName = (cwd: string) => cwd.split('/').filter(Boolean).pop() || cwd;
+const projectNote = (cwd: string) => (projectName(cwd) === cwd ? undefined : cwd);
+
+/**
  * Groups that stay open on a machine screen. Everything else folds: a machine
  * that has been worked at is mostly history, and a wall of it is what pushed
  * the live work off the top of a phone screen.
@@ -490,6 +501,36 @@ function Shell({ client, conn, onSignOut }: {
     ? { env: envs.find((e) => e.id === remembered.envId) ?? { id: remembered.envId, name: 'its machine', online: false, lastSeen: null, info: {} } as Environment, s: remembered.session }
     : null);
 
+  /**
+   * The network by project rather than by machine.
+   *
+   * machine -> directory -> session is how work is *started*; it is not how
+   * anyone thinks about it afterwards. You think "the helm one" and "the T3
+   * one", and those live in a directory that may well exist on two machines.
+   * So the sidebar also groups every thread by its folder, across machines,
+   * newest project first.
+   *
+   * Collapsed, because this is a list of everything: it should be a thing you
+   * open when you are looking for a project, not a wall between you and the
+   * machines above it.
+   */
+  const projects = (() => {
+    const by = new Map<string, { cwd: string; rows: { env: Environment; s: Session }[]; at: number }>();
+    for (const e of envs) {
+      for (const s of sessions[e.id] ?? []) {
+        if (s.archived) continue;
+        const cwd = collapseCwd(s.cwd || '~');
+        const g = by.get(cwd) ?? { cwd, rows: [], at: 0 };
+        g.rows.push({ env: e, s });
+        g.at = Math.max(g.at, s.updatedAt ?? 0);
+        by.set(cwd, g);
+      }
+    }
+    return [...by.values()]
+      .map((g) => ({ ...g, rows: g.rows.sort((a, b) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0)) }))
+      .sort((a, b) => b.at - a.at);
+  })();
+
   /** Straight into the conversation. The picker is for when there is none. */
   const openBrain = () => {
     if (brain) navigate([{ kind: 'session', session: brain.s }], brain.env.id);
@@ -576,6 +617,34 @@ function Shell({ client, conn, onSignOut }: {
               })}
               {!envs.length && !error && <div className="empty quiet">no machines yet</div>}
             </div>
+
+            {projects.length > 0 && (
+              <>
+                <div className="section">projects</div>
+                {projects.map((g) => (
+                  <Fold
+                    key={g.cwd}
+                    title={projectName(g.cwd)}
+                    count={g.rows.length}
+                    note={projectNote(g.cwd)}
+                    attention={g.rows.some(({ s }) => s.status === 'blocked')}
+                  >
+                    <div className="rows">
+                      {g.rows.map(({ env: e, s }) => (
+                        <button key={`${e.id}:${s.id}`} className="row" onClick={() => openSession(e.id, s)}>
+                          <span className={`sdot ${s.status}`} />
+                          <span className="grow">
+                            <span className="rt">{s.title}</span>
+                            <span className="rm">{[e.name, engineOf(s.engine).label, money(s.costUsd)].filter(Boolean).join(' · ')}</span>
+                          </span>
+                          <span className="chev">›</span>
+                        </button>
+                      ))}
+                    </div>
+                  </Fold>
+                ))}
+              </>
+            )}
 
             <div className="section">sessions</div>
             <div className="rows">
@@ -1816,9 +1885,9 @@ function Threads({ client, envs, sessions, search, onBack, onOpen, onChanged, on
             {folders.map(([cwd, list]) => (
               <Fold
                 key={cwd}
-                title={collapseCwd(cwd).split('/').filter(Boolean).pop() || collapseCwd(cwd)}
+                title={projectName(collapseCwd(cwd))}
                 count={list.length}
-                note={collapseCwd(cwd)}
+                note={projectNote(collapseCwd(cwd))}
                 openWhen={!!q}
                 attention={list.some((s) => s.status === 'blocked')}
               >
