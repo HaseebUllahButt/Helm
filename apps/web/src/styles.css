@@ -934,3 +934,22 @@ pre.snippet {
 .row.destructive .rt { color: var(--mutedfg); font-weight: 400; }
 .row.destructive:hover { background: color-mix(in srgb, var(--red) 10%, transparent); }
 .row.destructive:hover .rt { color: var(--red); }
+
+/* A section header that opens and closes what is under it. Archived threads
+   are why it exists: they belong on the screen they were archived on, one tap
+   away, rather than in front of the work that is still live. */
+.section.fold {
+  width: 100%; height: auto; padding-top: 2px; padding-bottom: 2px;
+  color: var(--mutedfg); transition: color 0.12s var(--ease);
+}
+.section.fold:hover { color: var(--text); }
+.section.fold .caret {
+  flex: none; color: var(--icon); font-size: 15px; line-height: 1;
+  transition: transform 0.12s var(--ease);
+}
+.section.fold.open .caret { transform: rotate(90deg); }
+.section.fold .count {
+  text-transform: none; letter-spacing: 0; color: var(--icon); font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) { .section.fold .caret { transition: none; } }
+

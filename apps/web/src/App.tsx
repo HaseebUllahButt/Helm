@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react';
+import { useCallback, useEffect, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
@@ -216,7 +216,7 @@ export function App() {
 
 type MainView =
   | { kind: 'env' }
-  | { kind: 'threads' }
+  | { kind: 'threads'; search?: boolean }
   | { kind: 'browse'; path?: string }
   | { kind: 'start'; cwd: string }
   | { kind: 'settings' }
@@ -394,6 +394,7 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => s.engine !== 'shell' && !s.archived);
+
   const blocked = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
   const showMain = wide || !!selected || view.kind === 'threads';
 
@@ -480,6 +481,17 @@ function Shell({ client, conn, onSignOut }: {
                 </span>
                 <span className="chev">›</span>
               </button>
+              {/* All sessions has had a search box since it shipped, two taps
+                  down and below the fold on a phone - which is the same as not
+                  having one. This is that screen with the cursor already in the
+                  box, from the only screen the app always shows. */}
+              <button className="row" onClick={() => navigate([{ kind: 'threads', search: true }])}>
+                <span className="grow">
+                  <span className="rt">Search threads</span>
+                  <span className="rm">titles and folders, every machine</span>
+                </span>
+                <span className="chev">›</span>
+              </button>
             </div>
 
             {/* Setup is three things you do once and then never again. As
@@ -510,6 +522,7 @@ function Shell({ client, conn, onSignOut }: {
         {view.kind === 'threads' ? (
           <Threads
             client={client} envs={envs} sessions={sessions} onBack={back}
+            search={view.search}
             onOpen={(envId, s) => navigate([{ kind: 'threads' }, { kind: 'session', session: s }], envId)}
             onChanged={loadSessions}
           />
@@ -938,6 +951,7 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
   const [ping, setPing] = useState<number | null>(null);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
     client.subscribe(env.id);
@@ -1005,21 +1019,38 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
     finally { setOpening(false); }
   };
 
-  const agents = sessions.filter((s) => s.engine !== 'shell' && !s.archived);
-  const archivedCount = sessions.filter((s) => s.archived).length;
+  // The same words a search on All sessions matches, so that looking for a
+  // thread does not depend on which screen you happen to be standing on.
+  const q = query.trim().toLowerCase();
+  const hit = (s: Session) =>
+    !q || `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q);
+
+  const agents = sessions.filter((s) => s.engine !== 'shell' && !s.archived && hit(s));
   const groups: [string, Session[]][] = [
     ['needs you', agents.filter((s) => s.status === 'blocked')],
     ['working', agents.filter((s) => s.status === 'working')],
     ['idle', agents.filter((s) => !['blocked', 'working', 'exited'].includes(s.status))],
     ['finished', agents.filter((s) => s.status === 'exited')],
-    ['terminals', sessions.filter((s) => s.pty && s.alive !== false && !s.archived)],
+    ['terminals', sessions.filter((s) => s.pty && s.alive !== false && !s.archived && hit(s))],
   ];
 
   // A taste of the machine's own history, capped so a well-used laptop does
-  // not bury the active groups; All sessions has the rest.
-  // Archived ones are filed under All sessions, like every other thread the
-  // owner has put away; this screen is for what is still in front of them.
-  const recent = dedupeDetected(sessions, earlier).filter((x) => !x.archived).slice(0, 6);
+  // not bury the active groups; All sessions has the rest. Filtered before
+  // the cap, or a search would only ever look at the six most recent.
+  const detected = dedupeDetected(sessions, earlier);
+  const recent = detected.filter((x) => !x.archived).map(foundRow).filter(hit).slice(0, 6);
+
+  // Archived threads are on the machine they were archived on, folded away.
+  // They used to be on All sessions and nowhere else, which made "where did
+  // that thread go" a question with a two-screen answer.
+  const filed = [
+    ...sessions.filter((s) => s.archived),
+    ...detected.filter((x) => x.archived).map(foundRow),
+  ].filter(hit).sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+  // Enough on this machine that finding one by eye is work. The box stays
+  // once something is typed in it, however few rows the typing leaves.
+  const searchable = sessions.length + detected.length > 5 || !!q;
 
   const setArchived = async (s: Session, archived: boolean) => {
     setError('');
@@ -1086,6 +1117,16 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
           <span className="plus">+</span>New session
         </button>
 
+        {searchable && (
+          <div className="filterbar">
+            <input
+              className="sheetfilter grow" value={query} placeholder={`search ${env.name}`}
+              autoCapitalize="off" autoCorrect="off" autoComplete="off"
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+        )}
+
         {groups.map(([title, list]) => list.length > 0 && (
           <div key={title}>
             <div className={`section${title === 'needs you' ? ' attention' : ''}`}>{title}</div>
@@ -1105,26 +1146,41 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
           <div>
             <div className="section">earlier</div>
             <div className="rows">
-              {recent.map((x) => {
-                const row = foundRow(x);
-                return (
-                  <SessionRow
-                    key={row.id} s={row}
-                    onArchive={() => setArchived(row, true)}
-                    onDelete={() => deleteSession(row)}
-                  />
-                );
-              })}
+              {recent.map((row) => (
+                <SessionRow
+                  key={row.id} s={row}
+                  onArchive={() => setArchived(row, true)}
+                  onDelete={() => deleteSession(row)}
+                />
+              ))}
             </div>
           </div>
         )}
-        {!agents.length && (
+        <Fold title="archived" count={filed.length} openWhen={!!q}>
+          <div className="rows">
+            {filed.map((s) => (
+              <SessionRow
+                key={s.id} s={s}
+                onOpen={s.id.startsWith('found:') ? undefined : () => onOpen(s)}
+                onArchive={() => setArchived(s, false)}
+                onDelete={() => deleteSession(s)}
+              />
+            ))}
+          </div>
+        </Fold>
+        {/* Nothing to say when the fold above is holding the answer: a
+            search that found an archived thread and only an archived thread
+            is a search that worked, and "nothing matches" underneath the
+            thing that matched is just wrong. */}
+        {!agents.length && !recent.length && !(q && filed.length) && (
           <div className="empty quiet">
-            {archivedCount ? 'no active sessions' : `nothing running on ${env.name}`}
+            {q ? 'nothing matches' : filed.length ? 'no active sessions' : `nothing running on ${env.name}`}
             <div className="note" style={{ marginTop: 6 }}>
-              {archivedCount
-                ? `${archivedCount} archived thread${archivedCount === 1 ? '' : 's'} under All sessions`
-                : 'pick a folder, then an agent'}
+              {q
+                ? 'All sessions searches every machine'
+                : filed.length
+                  ? `${filed.length} archived thread${filed.length === 1 ? '' : 's'}, folded below`
+                  : 'pick a folder, then an agent'}
             </div>
           </div>
         )}
@@ -1145,6 +1201,35 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
 function rename(s: Session, onRename: (title: string) => void) {
   const next = prompt('Name this thread', s.title)?.trim();
   if (next && next !== s.title) onRename(next);
+}
+
+/**
+ * A section that can be put away, with what it holds counted on the header.
+ *
+ * Archived threads are the reason it exists. Filing one away should not mean
+ * losing it: it belongs on the screen it came from, behind one tap, rather
+ * than in front of the work that is still live. A search opens it, because a
+ * thread you are looking for by name is a thread you want found whether or
+ * not you remember archiving it - and it stays open afterwards if you closed
+ * it yourself, which is the one case where guessing would be rude.
+ */
+function Fold({ title, count, openWhen = false, children }: {
+  title: string; count: number; openWhen?: boolean; children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (openWhen) setOpen(true); }, [openWhen]);
+  if (!count) return null;
+  return (
+    <div>
+      <button
+        className={`section fold${open ? ' open' : ''}`} aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="caret">›</span>{title}<span className="count">{count}</span>
+      </button>
+      {open && children}
+    </div>
+  );
 }
 
 /**
@@ -1240,18 +1325,19 @@ function StatusChip({ status }: { status: string }) {
 /**
  * Every session on every machine, grouped by the folder it runs in.
  *
- * This is where archived threads live: the machine screen only shows active
- * work, so archiving is not "delete it quietly" - it is filed here, where it
- * can be reopened or unarchived. Sessions are sorted by activity within each
- * folder, and folders by their most recent one.
+ * Sessions are sorted by activity within each folder, and folders by their
+ * most recent one. Archived threads are folded away at the bottom rather
+ * than tagged in place: archiving is not "delete it quietly", but it is not
+ * "keep showing it either". A search opens the fold, so a thread is findable
+ * by name whether or not you remember filing it.
  *
  * It needs a search because of what it honestly contains. On a machine that
  * has been worked at, most rows are terminal panes helm did not start - real
  * sessions, and not what you came here for - so there is one filter for the
  * words and one for the noise.
  */
-function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
-  client: Client; envs: Environment[]; sessions: Record<string, Session[]>;
+function Threads({ client, envs, sessions, search, onBack, onOpen, onChanged }: {
+  client: Client; envs: Environment[]; sessions: Record<string, Session[]>; search?: boolean;
   onBack: () => void; onOpen: (envId: string, s: Session) => void; onChanged: (envId: string) => void;
 }) {
   const [error, setError] = useState('');
@@ -1307,9 +1393,15 @@ function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
   // The folder is part of what you are searching for: "the helm one on the
   // VM" is a path, not a title.
   const q = query.trim().toLowerCase();
-  const keep = (s: Session) =>
+  const matches = (s: Session) =>
     (!mine || !s.adopted) &&
     (!q || `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q));
+  // Archived threads used to sit in the folders with everything else, tagged
+  // and otherwise indistinguishable, which made the screen longer for no gain
+  // - the whole point of archiving one is that it is not what you are looking
+  // at. They are counted and folded away at the bottom instead.
+  const keep = (s: Session) => !s.archived && matches(s);
+  const byRecent = (a: Session, b: Session) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 
   const total = envs.reduce((n, e) =>
     n + (sessions[e.id]?.length ?? 0) + dedupeDetected(sessions[e.id] ?? [], found[e.id] ?? []).length, 0);
@@ -1328,6 +1420,12 @@ function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
       .sort((a, b) => (b[1][0].updatedAt ?? 0) - (a[1][0].updatedAt ?? 0));
     return { env, folders };
   }).filter((g) => g.folders.length > 0);
+  const filed = envs.map((env) => {
+    const list = sessions[env.id] ?? [];
+    const extras = dedupeDetected(list, found[env.id] ?? []).map(foundRow);
+    return { env, list: [...list, ...extras].filter((x) => x.archived && matches(x)).sort(byRecent) };
+  }).filter((g) => g.list.length > 0);
+  const filedCount = filed.reduce((n, g) => n + g.list.length, 0);
   // Every machine is asked for its list on the way in, and that round trip
   // is long enough to read: "no sessions yet" while they are still arriving
   // is a wrong answer, not an empty one.
@@ -1346,7 +1444,7 @@ function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
         <div className="filterbar">
           <input
             className="sheetfilter grow" value={query} placeholder="search titles and folders"
-            autoCapitalize="off" autoCorrect="off" autoComplete="off"
+            autoCapitalize="off" autoCorrect="off" autoComplete="off" autoFocus={search}
             onChange={(e) => setQuery(e.target.value)}
           />
           <button
@@ -1386,7 +1484,30 @@ function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
             ))}
           </div>
         ))}
-        {!groups.length && (
+        <Fold title="archived" count={filedCount} openWhen={!!q}>
+          {filed.map(({ env, list }) => (
+            <div key={env.id}>
+              <div className="foldhead">{env.name}</div>
+              <div className="rows">
+                {list.map((s) => s.id.startsWith('found:') ? (
+                  <SessionRow
+                    key={s.id} s={s}
+                    onArchive={() => setArchived(env.id, s, false)}
+                    onDelete={() => deleteSession(env.id, s)}
+                  />
+                ) : (
+                  <SessionRow
+                    key={s.id} s={s} onOpen={() => onOpen(env.id, s)}
+                    onRename={(title) => setTitle(env.id, s, title)}
+                    onArchive={() => setArchived(env.id, s, false)}
+                    onDelete={() => deleteSession(env.id, s)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </Fold>
+        {!groups.length && !filedCount && (
           <div className="empty quiet">
             {!asked ? 'asking every machine…' : total ? 'nothing matches' : 'no sessions yet'}
           </div>
