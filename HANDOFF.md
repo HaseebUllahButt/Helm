@@ -1,6 +1,6 @@
 # Handoff
 
-State of helm as of 2026-09-16, evening, for whoever picks this up next.
+State of helm as of 2026-09-17, for whoever picks this up next.
 
 Read `README.md` first for what the thing is and how it connects. This file
 is the part that is not obvious from the code: **what it is trying to be**,
@@ -295,6 +295,348 @@ claimed "a real phone has never opened this"; that was wrong for a day, and
 the report that started the latency work came from that phone. **Check
 `helm devices` before writing anything about what has or has not been
 tried.**
+
+## What changed on 2026-09-17
+
+Archived threads got a place to be, searching them got a way in, the network
+got a brain, voice prompting landed, T3 left the tree - and then four things
+the owner found by using it on a phone, three of which were real bugs.
+
+### Found by using it: the laptop said its own VM was offline
+
+**Symptom.** "laptop helm isnt picking up vm". The phone was fine.
+
+**Cause, and it is a good one.** `probeEndpoints` gave every hub 2500ms to
+answer and then took the one that saw the most machines. The owner's laptop is
+behind a Tailscale exit node in New York, so its own hub answers on loopback in
+**1.8ms** while the VM's takes **2.8-6.7s** (measured five times). Every probe
+of the VM aborted before it replied, so the only hub that ever answered was the
+laptop's own - and that hub cannot see the VM, because machines dial *out* to
+the home and the VM can never dial back into a private LAN address. The app
+then reported the VM offline while it was happily serving the phone.
+
+One deadline was doing two different jobs. They are now separate: `PROBE_MS`
+(2.5s) is how long to wait before settling for the hubs that have answered, and
+`PROBE_PATIENCE_MS` (9s) is how long a hub is still allowed to answer at all.
+`connect` attaches to the best answer it has at the first deadline and upgrades
+if a slower hub turns out to see strictly more of the network. The upgrade is
+sticky - `preferred` - because without it the reconnect would settle on the
+near hub again and flap between the two forever.
+
+Driven against the real network with the two real hubs seeded: settles, then at
+t=12s reports **2/2 online** on `130-210-33-163.sslip.io`, with both machines
+listed. Before: 1/2, on loopback.
+
+*Slow must never read as gone.* That is the rule this broke.
+
+### External sessions can be picked up from the phone
+
+**The ask.** "start a session with my laptop and the VM and then continue that
+from my phone". Sessions started at a keyboard were listed and could not be
+opened - the wrong half of the promise, since the thread you most want on your
+phone is the one you were just working on.
+
+`SESSION_RESUME` and `SESSION_ADOPT` had been in `packages/protocol/index.js`
+since the beginning **with nothing behind them**: no dispatch case, no
+implementation, no caller. `session.resume` is now real.
+
+There is no process to attach to - the CLI exited. It starts a *new* driven
+session carrying the old conversation's id, so the engine resumes its own
+transcript exactly as `claude --resume` would, and helm owns it afterwards like
+any other thread. Every driver already treated a supplied `engineSessionId` as
+"resume this"; what was missing was anything that supplied one.
+
+**The account is the subtle part.** `inventory()` dedupes by engine and home
+and keeps whichever alias it saw first, so the account it records names a
+*home*, not something that can necessarily run: here `claude-p` and `claudea`
+are both `CLAUDE_CONFIG_DIR=~/.claude-personal` and only `claudea` carries
+`CLAUDE_CODE_OAUTH_TOKEN`. Resuming under the first one starts a CLI that
+cannot authenticate and answers nothing - which looks exactly like resume being
+broken, and did, for one round. It now resolves the recorded account to its
+home and takes the alias best able to run it: credentials first, then plainest.
+
+Proven with a conversation helm never touched: `claude -p "Remember this word:
+PELICAN"` in a terminal, then `session.resume` through the daemon, then asking
+the resumed thread what the word was - **"PELICAN"**. Resuming the same
+conversation twice returns the same thread rather than two agents fighting over
+one transcript, and the row disappears from the list on the next refresh
+because `dedupeDetected` already matches it by `engineSessionId`.
+
+In the app every external row is now openable - All sessions, the machine
+screen's "earlier", and inside the archived fold - and says `opening` while the
+engine starts, because starting a CLI takes a second and a row that does
+nothing looks broken.
+
+### The phone kept the old green logo
+
+The icon changed on 2026-09-16 (`2fce0b1`) from emerald `#34d399` to the muted
+`#131317`/`#c2c6d4`, and the installed PWA never noticed. Chrome updates a
+WebAPK when the *manifest* changes, and every icon `src` was byte-identical
+text - `/icon-192.png` before and after - so as far as Chrome was concerned
+nothing had.
+
+The icon URLs now carry `?v=2`, which makes the manifest genuinely different.
+`background_color` and `theme_color` were still `#0b0d10` from the old palette,
+and `index.html` still had `<link rel="mask-icon" color="#6ee7b7">` - the last
+of the green, sitting in the shell the whole time. All aligned to `#0a0a0b`.
+
+**This needs a deploy, and possibly one reinstall.** Chrome checks for a WebAPK
+update roughly daily; if the icon is still green a day after deploying, removing
+and re-adding the app is the certain fix.
+
+### The service worker could pin a dead shell forever
+
+Two faults, found while working out how the old icon survived:
+
+**`addAll` is all-or-nothing.** One shell URL that 404s and the whole install
+rejects, the new worker never activates, and the device keeps running the old
+one - old shell, old icon - with nothing anywhere saying why. The page needs
+`/index.html`; the icons are niceties and are no longer worth failing over.
+
+**The cached shell was frozen at install time.** Navigation was network-first
+with a cached `/index.html` fallback, and nothing ever wrote that cache again
+after `install`. Every later deploy left it pointing at hashed bundles that no
+longer exist, so the first open on a bad connection loaded an index.html whose
+scripts all 404 - a blank app, and a deploy that looks like it worked
+everywhere except the phone. A successful navigation now replaces it. `CACHE`
+is `helm-shell-v4`, so the old one is dropped on activate.
+
+### Still open
+
+**Terminals on the VM produce nothing.** Reproduced through the real hub:
+`session.start` succeeds (pty, 1.5s), `session.attach` returns **0 characters
+of scrollback**, and a shell command sent into it is never echoed. Not a
+missing pty - `loadPty()` returns true there on the linux-arm prebuild - and
+not herdr, which plain terminals do not use (it is absent on the VM regardless:
+`HELM_HERDR_BIN` points at `~/.local/bin/herdr`, which does not exist). The
+`helm-terminals.js` host process **is** running, so the next thing to look at
+is that host: whether it is a stale one from an older build, and what happens
+to the shell it spawns. Restarting `helm-serve` on the VM is the first thing to
+try.
+
+*(Two false alarms on the way, both from measuring rather than reasoning: the
+VM appeared to serve a 0-byte `favicon-32.png` - a flaky read over a 4-second
+link, it serves 1384 bytes correctly - and node-pty appeared missing because
+the check looked in `build/Release` when the VM uses a prebuild.)*
+
+### Archived is a fold, on the screen it was archived on
+
+Archiving had put threads on All sessions **and nowhere else**, tagged inline
+among everything live - so "where did that thread go" had a two-screen answer,
+and the screen they landed on got longer for no gain.
+
+`Fold` is a section header that opens what is under it and counts it on the
+way. Archived threads are folded at the bottom of the machine they were
+archived on *and* at the bottom of All sessions, and they are out of the folder
+groups rather than tagged inside them. A search opens the fold: a thread you
+are looking for by name should be found whether or not you remember filing it.
+
+### The search that existed and nobody could reach
+
+All sessions has had a search box since 2026-09-16 - two taps down and below
+the fold on a phone, which is the same as not having one. The sidebar now has
+**Search threads**, which opens that screen with the cursor already in the box.
+The machine screen got its own box (`search <machine>`) over the same words:
+title, folder, engine. It appears past five rows and stays once you have typed.
+
+Found by driving it: searching `caddy` matched one archived thread and the
+empty state underneath still read "nothing matches" - wrong, and directly below
+the thing that matched. It is suppressed when the fold is holding the answer.
+
+### T3 is out of the tree
+
+719 lines for a direction settled on 2026-09-14 ("no T3 code, no T3 apps"),
+all of it landed in `c352547` alongside work that was wanted. Three states,
+none of them load-bearing:
+
+- `t3.js` and `t3-instances.js` (407 lines) - imported by nothing but each other.
+- `apps/relay/src/publish.js` - constructed at startup and consulted on every
+  request and upgrade, and inert twice over: `resolve()` bails unless the Host
+  matches `homeHosts(net)`, which reads `HELM_HOME_HOST`, which is set nowhere
+  but in its own test; and no daemon has ever advertised `info.t3.port`, so the
+  best it could answer was `503`. That second gate is the reason it was inert
+  rather than a live bug - without `homeHosts` returning `[]`, a bare request
+  to the VM would have resolved to `no-t3` and 503ed instead of serving the
+  PWA, since only `/helm/*` bypassed the proxy.
+- `tunnel-socket.js` (publish's only importer) and `test/publish.test.mjs`
+  (publish's only test).
+
+`homeHosts` and `publishedPorts` went with them. What is genuinely lost is the
+per-machine publishing trick - deterministic ports from the roster, WebSockets
+tunnelled as raw bytes through a machine's own link - which is worth
+remembering if helm ever publishes its *own* per-machine surface at the home
+address. `git show c352547`, and branch `t3-network`, have all of it.
+
+---
+
+### The brain
+
+**An addition, not a replacement.** machine → directory → session is still how
+helm is used: you pick a machine, pick a folder, start an agent there and drive
+it yourself. That is the product, it is unchanged, and it is the right way to
+work when you know which repo you mean. The brain sits beside it for the times
+you do not - "what is waiting on me", "tell that session to try again", a job
+you want done somewhere without deciding where first. Anything the brain can do
+you can do yourself, from the app or from `helm digest`/`say`/`spawn` in a
+terminal; it is a caller of the same RPCs, with no privilege the owner lacks.
+
+**One agent for the whole network rather than one per folder.** That is the
+only thing it adds: a thread that is not tied to a directory, so a question
+about the network has somewhere to be asked.
+
+**It is an ordinary driven session.** Same driver, same event stream, same
+permission cards, same model picker, same cost line, same `--resume`. It is
+marked `brain: true` on the record, started with `cwd: '~'` and titled *Brain*.
+Everything the app already does for a session, it does for this one for free -
+including "change its brain", which is the model chip in the composer.
+
+**Its tools are the `helm` CLI, through its own shell.** This is the decision
+the rest follows from. The alternative was MCP, which is four different stories
+(a Claude flag, a Codex toml, ACP for the other two) and version-fragile in all
+four. A CLI is one story, works identically on every engine helm drives, and
+its guardrail is the permission card the owner already answers on their phone:
+`Bash(helm say d5b56b "…")` is a card like any other, and the mode chip
+(`ask`/`edit`/`auto`/`yolo`) is the brain's blast radius.
+
+Five verbs, in `packages/connect/bin/helm.js`:
+
+```
+helm brain [--account <id>] [--on <machine>]   open it (start or resume)
+helm digest [--json]                           every machine, folder, session
+helm thread <id> [-n 40]                       one conversation, folded
+helm say <id> <text...>                        prompt an existing session
+helm spawn <machine> <folder> <account> <text> start one and prompt it
+```
+
+They reach every machine through `hubRpc`, which existed and had no callers.
+
+### The context problem, and the three layers that answer it
+
+A busy laptop here holds 182 threads. "Give the agent everything that is going
+on" cannot mean pasting transcripts, so `packages/connect/src/brain.js` is
+built in three layers and **only the first is context**:
+
+1. **A digest**: one line per live session - machine, folder, engine, model,
+   status, cost, age, and what it last did. Archived and finished threads are
+   left out. A hundred threads is a couple of thousand tokens.
+2. **Depth on request**: `helm thread <id>` folds a conversation back into
+   prose and tool calls; `helm digest --json` gives it structurally. The brain
+   pulls what the digest made it curious about.
+3. **Its hands**: `helm say`, `helm spawn`.
+
+**Nothing is summarised by a model.** `lastLine` derives each line from the
+tail of the event log a session already writes, ordered by what the owner would
+want first: an unanswered permission beats a running tool beats the last thing
+said. A digest costs one cheap RPC per machine and no tokens.
+
+**What gets prepended is one line, not the digest.** `summaryLine` - `[helm
+2026-09-16 18:00 · 2 machines, 1 offline · 1 waiting on you]` - goes in front
+of every message the owner sends the brain, and that is all: a screenful of
+machine state in front of every message would be a running cost on every turn,
+in the transcript as well as the context. The line tells the brain whether the
+picture is worth fetching. A test asserts it stays under 120 characters with
+40 machines and 800 sessions.
+
+It is really sent, so the app really shows it - but it is helm talking, not the
+owner, so `Transcript.tsx` splits it back off and renders it as a quiet
+monospace line above the bubble rather than inside it. The regex there and the
+format here are pinned together by a test.
+
+**Offline machines stay in the digest.** `snapshot.json` keeps what each
+machine last said, and `mergeSnapshot` writes only what answered - so a
+sleeping laptop appears dated ("last seen 3h ago") instead of vanishing. This
+was the backlog item "offline machines are silently missing from every thread",
+and for the brain it stops being cosmetic: a brain that omits a sleeping
+machine does not have a gap in its knowledge, it has a wrong answer. Whether a
+machine is "online" is derived from the snapshot's own timestamps, so the two
+halves of a digest line cannot disagree.
+
+The refresh is fire-and-forget on the send path (a message must not wait on
+every machine answering) and on a 45s timer **only while a brain session
+exists**, so a network without one pays nothing.
+
+### Three bugs that only running it found
+
+**The digest line was always blank.** `localDigest` read
+`events.since(id, 0).events` - `since` returns the array itself - inside a
+`catch` that said nothing, so every line came out empty, which looks exactly
+like "nothing has happened in that session". The test had encoded the same
+wrong assumption with a stand-in whose `since` returned `{ events: [] }`. It
+now uses a real `EventLog` against a temp dir, which is the only version of
+that test that could have failed.
+
+**Events are flat, not `{ type, payload }`.** The first `lastLine` and the
+first `helm thread` both read `e.payload.*` and printed `null` and
+`[undefined]` against a real session. Events are `{ seq, at, type, ...fields }`
+and incremental: a tool's arguments arrive as `item.delta` and land as
+`item.update`, and a whole sentence from the model is nothing but deltas. Both
+readers now `fold()` the log into items first and then look, which is also why
+`helm thread` prints one line for a sentence instead of forty.
+
+**The brain called the wrong `helm`.** Driven for real, `helm digest` came back
+`unknown command "digest"` - the `helm` on PATH is the *installed* one, which
+is behind the daemon whenever a deploy has not happened yet, and the brain then
+tried to work around it with `helm status`. The brain's abilities are whatever
+`helm` it can reach supports, so it gets its own: `ensureShim()` writes a
+one-line `~/.helm/bin/helm` that runs *this daemon's* CLI with *this daemon's*
+node, and a brain session's PATH starts with it. It cannot be out of step with
+the code that wrote it.
+
+Also: on a phone, tapping **Brain** rendered the screen behind the sidebar and
+looked like nothing happened - `showMain` listed `threads` as the view with no
+machine selected and did not know about `brain`.
+
+### Verified by running it
+
+Sandboxed daemon, real `claudea`/`claude-p` profiles, headless Chromium at
+390×844 over CDP.
+
+- `helm digest` end to end: CLI → `hubRpc` → daemon → `sessions.digest()` →
+  `localDigest` → `render`.
+- `helm spawn vm ~/dev/me/github/helm claudea "…"` started a real Claude
+  session and prompted it; its derived line then read *"It's the user-facing
+  guide to Helm…"* in the next digest.
+- `helm brain` with no account listed the accounts and exited 1; with
+  `--account claudea` it started, and the brain's **first act was to run
+  `helm digest`** and block on the permission card - which is the design.
+- Approved it: the brain read the network correctly, distinguishing helm's own
+  sessions from adopted terminal panes, for $0.04.
+- **The brain drove another agent**: told to ask `d5b56b` for PONG, it ran
+  `helm say d5b56b "Reply with just the word PONG."`, and that thread replied
+  `PONG`.
+- In the app: the **Brain** row in the sidebar with its machine and engine; the
+  thread with three `[helm …]` notes rendered as quiet monospace lines above
+  the owner's bubbles; the start screen at phone width; and starting the brain
+  by tapping an account, landing in the session with `brain: true`.
+- Archived fold and search: both screens, unarchive from inside the fold,
+  opening an archived thread from it, and search across machines.
+
+`test/brain.test.mjs` is 15 tests: the derived line's ordering, folding deltas
+back into sentences, the offline machine surviving a refresh, the prepended
+line's size, and the pin between `summaryLine`'s format and the web's regex.
+
+**A trap worth writing down**: Chromium served a cached `index.html` pointing
+at a bundle from before the last build, and `Network.setCacheDisabled` did not
+shift it - a cache-busting `?v=<epoch>` did. Two separate "the fix is not
+working" dead ends came from that. Check which bundle the page actually loaded
+(`performance.getEntriesByType('resource')`) before believing a UI check.
+
+### Left for next time
+
+- **The brain hits a permission card for every `helm` call**, including
+  read-only ones. Correct by default, and tedious: either start it in `auto`,
+  or teach the driver that `helm digest`/`helm thread` are reads. The card
+  offers "always" and Claude remembers it, so this is smaller than it looks.
+- **Only the machine running the brain has a shell for it.** Anything on
+  another machine goes through `helm spawn`/`helm say`. That is the right
+  default; a `helm run <machine> <cmd>` is the obvious next verb.
+- `helm brain` puts the brain on the roster's `vm` if there is one, else this
+  machine. There is no way to move one, and no second one is prevented across
+  *different* machines - `brainSession()` is per machine.
+- The machine screen's search and All sessions' search are two boxes over the
+  same words. One of them should probably win.
+
+---
 
 ## What changed on 2026-09-15
 
@@ -1230,7 +1572,10 @@ add a third delivery path, it must carry the same id.**
    did not change" look like a failed deploy twice on 2026-09-16. Check what
    the machine *serves* (`curl -s <addr>/icon.svg`) before believing the
    screen.
-9. **The model catalogue can be ten minutes stale**, by choice - `models.js`
+9. **The brain asks permission for every `helm` call**, reads included.
+   Correct by default and tedious in practice: start it in `auto`, or answer
+   "always" once on `helm digest`. See "The brain" under 2026-09-17.
+10. **The model catalogue can be ten minutes stale**, by choice - `models.js`
    holds it that long and the device paints its own copy first. Upgrade a CLI
    or edit its config and the new model will not appear immediately. There is
    no "refresh" in the app yet; reopening after the hold expires is all there
@@ -1310,20 +1655,26 @@ have since been built (`opencode acp`, and images across all four engines),
 and so, on 2026-09-16, have renaming a thread, searching All sessions, a
 per-thread cost, and a desktop entry (`helm app`).
 
-Four things were proposed that day and not built, in the order they were
-ranked:
+Of the four things proposed that day and not built, two were done on the
+17th: **the brain** (which was ranked last, as v2) and, because the brain
+could not be honest without it, **offline machines in the network-wide
+picture** — though only in the brain's digest, via `snapshot.json`. The web's
+All sessions screen still loads lists for online machines only, so that screen
+still under-reports a sleeping laptop. It could now read the same snapshot.
+
+Still wanted:
 
 1. **Machine-side defaults for mode and effort, not just the model.** `Start`
    says it out loud: the model default lives on the machine where every device
    agrees, while the permission mode, thinking effort and auto flag live in
    *this phone's* localStorage. The same argument the model-prefs work made,
    applied to the other three.
-2. **Offline machines are silently missing from "every thread".** Session
-   lists load only for machines that are online, so a sleeping one contributes
-   nothing to a screen that claims to list everything. Cache the last list per
-   machine and show it dimmed with "last seen 3h ago".
+2. **All sessions should show offline machines too**, from the snapshot the
+   brain already keeps, dimmed with "last seen 3h ago".
 3. A **file viewer** over Claude's `read_file` control request.
-4. **"The brain"** — cross-machine summaries and dispatch — as v2.
+4. **`helm run <machine> <cmd>`** — the brain reaches other machines only by
+   spawning or talking to a session on them, which is the right default and
+   sometimes the long way round.
 
 ---
 
@@ -1343,7 +1694,11 @@ the two codex sandbox spellings agreeing; `model-prefs.test.mjs` covers the
 per-account picker and refuses anything that is not a model name;
 `inventory.test.mjs` reads each CLI's own history, including opencode storing
 its model as JSON; `desktop-entry.test.mjs` writes `helm app`'s launcher into
-a temp `XDG_DATA_HOME`, so running the suite never touches a real desktop.
+a temp `XDG_DATA_HOME`, so running the suite never touches a real desktop;
+`brain.test.mjs` covers the digest — the derived line's ordering, folding
+deltas back into sentences, an offline machine surviving a refresh, the size
+of the line prepended to every brain message, and the pin between that line's
+format and the regex the web splits it off with.
 
 **The web has no test runner**, which is why so much of this file is
 measurements taken from a browser instead. Anything that only shows up on

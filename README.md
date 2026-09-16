@@ -174,6 +174,34 @@ Closing helm does not end a conversation: sessions resume on the next message
 Plain terminals, and agents you started at the keyboard, still run in
 [herdr](https://herdr.dev) panes and show as a terminal.
 
+## The brain (optional)
+
+Sessions are the main way to use helm: open a machine, pick a folder, start an
+agent and drive it. The brain is an extra thread beside that, for the questions
+that are not about one folder.
+
+```bash
+helm brain --account claudea
+```
+
+It sees every machine and every running session, and acts on them through the
+`helm` command in its own shell - so it can answer "what is waiting on me",
+read a thread on another machine, or start one. It is an ordinary session, so
+the model picker in the composer is how you change which model it thinks with,
+and the permission mode is how much it may do without asking.
+
+The same verbs work from any terminal in the network:
+
+```bash
+helm digest                       every machine, folder and running session
+helm thread <id>                  one conversation
+helm say <id> "<text>"            prompt an existing session
+helm spawn <machine> <folder> <account> "<text>"
+```
+
+`helm digest` keeps the last answer from every machine, so one that is asleep
+is listed with when it was last seen rather than left out.
+
 ## Profiles and secrets
 
 Helm reads shell aliases and functions and turns them into profiles. This makes
@@ -201,7 +229,7 @@ users into the same network.
 | | |
 |---|---|
 | `packages/protocol` | membership, credentials, and wire messages |
-| `packages/connect` | daemon, CLI, profiles, SSH, and local runtime |
+| `packages/connect` | daemon, CLI, profiles, SSH, the brain, and local runtime |
 | `apps/relay` | the VM home and connection relay |
 | `apps/web` | the mobile PWA and shared interface |
 
