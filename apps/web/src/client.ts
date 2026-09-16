@@ -180,7 +180,30 @@ function sendDirect(channel: RTCDataChannel, frame: string): boolean {
 }
 
 /** How long to wait for a hub to answer before writing it off for this attempt. */
+/**
+ * How long to wait before settling for the hubs that have answered.
+ *
+ * Short, because on a good network every hub answers in milliseconds and this
+ * is the cold open of the whole app.
+ */
 const PROBE_MS = 2500;
+
+/**
+ * How long a hub is still allowed to answer.
+ *
+ * These are two different questions and treating them as one was a bug. The
+ * owner's laptop sits behind a VPN exit node in another country, so its own
+ * hub answers on loopback in 2ms while the VM's answers in 3-7 seconds. With
+ * one 2.5s deadline the VM's hub never answered at all, the laptop's hub won
+ * by default - and that hub cannot see the VM, because the VM dials out to it
+ * and never the other way round. The app then said the VM was offline while
+ * it was serving the phone perfectly well.
+ *
+ * "Slow" must not be allowed to read as "gone". So a far hub gets until here
+ * to reply, and `connect` attaches to the best answer it has at PROBE_MS and
+ * upgrades if something with more reach arrives afterwards.
+ */
+const PROBE_PATIENCE_MS = 9000;
 
 /** How many addresses to keep for a network. Newest win. */
 const MAX_ENDPOINTS = 12;
@@ -227,16 +250,44 @@ export async function pickEndpoint(
  * network rebuilt from scratch - and retrying forever is the wrong response.
  */
 export async function probeEndpoints(
-  endpoints: string[], token: string
-): Promise<{ best: string | null; unauthorized: boolean; answered: Set<string> }> {
+  endpoints: string[], token: string, timeout = PROBE_PATIENCE_MS
+): Promise<ProbeResult> {
+  const round = startProbes(endpoints, token, timeout);
+  await round.settled;
+  return round.result();
+}
+
+/** A hub that answered: where it is, how much of the network it can see. */
+interface Reached { base: string; reach: number; elapsed: number }
+
+interface ProbeResult {
+  best: string | null;
+  unauthorized: boolean;
+  answered: Set<string>;
+  reached: Reached[];
+}
+
+/** Most machines visible wins; nearest is only the tie-break. */
+const byReach = (a: Reached, b: Reached) => b.reach - a.reach || a.elapsed - b.elapsed;
+
+/**
+ * Ask every hub at once, and report what has come back whenever asked.
+ *
+ * One request per endpoint, ever: the results accumulate as they arrive, so
+ * "the best answer so far" and "the best answer there is" are two reads of
+ * the same round rather than two rounds.
+ */
+function startProbes(endpoints: string[], token: string, timeout: number) {
   const statuses: number[] = [];
-  // Answering at all is the thing worth knowing separately from winning: a
-  // 401 is a machine that is there and refusing us, which is not a dead
-  // address. `learn()` uses this to tell a stale address from a sleeping one.
+  // Answering at all is worth knowing separately from winning: a 401 is a
+  // machine that is there and refusing us, which is not a dead address.
+  // `learn()` uses this to tell a stale address from a sleeping one.
   const answered = new Set<string>();
+  const up: Reached[] = [];
+
   const probes = endpoints.map(async (base) => {
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), PROBE_MS);
+    const timer = setTimeout(() => ctl.abort(), timeout);
     const started = performance.now();
     try {
       const res = await fetch(`${base}/api/network`, {
@@ -245,28 +296,48 @@ export async function probeEndpoints(
       });
       statuses.push(res.status);
       answered.add(base);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) return;
       const body = await res.json();
-      return {
+      up.push({
         base,
         reach: (body.machines ?? []).filter((m: Environment) => m.online).length,
         elapsed: performance.now() - started,
-      };
-    } finally {
-      clearTimeout(timer);
-    }
+      });
+    } catch { /* unreachable, or too slow even for our patience */ }
+    finally { clearTimeout(timer); }
   });
 
-  const settled = await Promise.allSettled(probes);
-  const up = settled
-    .filter((r): r is PromiseFulfilledResult<{ base: string; reach: number; elapsed: number }> =>
-      r.status === 'fulfilled')
-    .map((r) => r.value);
-  const unauthorized = !up.length && statuses.length > 0 && statuses.every((s) => s === 401);
-  if (!up.length) return { best: null, unauthorized, answered };
+  return {
+    settled: Promise.allSettled(probes),
+    result(): ProbeResult {
+      const ranked = up.slice().sort(byReach);
+      return {
+        best: ranked[0]?.base ?? null,
+        // Every machine that answered said no: the token is dead, and saying
+        // so beats "retrying" until the end of time.
+        unauthorized: !ranked.length && statuses.length > 0 && statuses.every((s) => s === 401),
+        answered,
+        reached: ranked,
+      };
+    },
+  };
+}
 
-  up.sort((a, b) => b.reach - a.reach || a.elapsed - b.elapsed);
-  return { best: up[0].base, unauthorized, answered };
+/**
+ * The best hub we can have quickly, and the best hub there is.
+ *
+ * `soon` resolves when every probe has settled, or at `settleAfter` if some
+ * are still out - the app attaches to whatever has answered by then, which on
+ * a normal network is everything. `later` resolves when the last probe
+ * finishes, so a hub that was merely far away still gets counted.
+ */
+function probeInTwoPhases(endpoints: string[], token: string, settleAfter = PROBE_MS) {
+  const round = startProbes(endpoints, token, PROBE_PATIENCE_MS);
+  const deadline = new Promise<void>((resolve) => setTimeout(resolve, settleAfter));
+  return {
+    soon: Promise.race([round.settled, deadline]).then(() => round.result()),
+    later: round.settled.then(() => round.result()),
+  };
 }
 
 export class Client {
@@ -315,6 +386,12 @@ export class Client {
 
   /** The hub we are currently attached to. */
   public relay: string;
+  /**
+   * A hub found to see more of the network than the one we would otherwise
+   * settle on. Sticky, so the upgrade happens once rather than on every
+   * reconnect; cleared the moment it stops answering.
+   */
+  private preferred: string | null = null;
 
   /** Which machines are currently reachable without going through a hub. */
   directTo(env: string) { return this.peers.get(env)?.ready ?? false; }
@@ -496,10 +573,49 @@ export class Client {
       // What was actually tried, and what actually answered. `learn()` needs
       // both: an address it skipped is not an address that failed.
       const tried = this.endpoints.filter(reachableFromHere);
-      const probe = await probeEndpoints(tried, this.token);
-      ({ best: hub, unauthorized } = probe);
       this.tried = new Set(tried);
-      this.answered = probe.answered;
+
+      // A hub already known to see more of the network than its neighbours is
+      // used directly. Without this the upgrade below would happen on every
+      // single reconnect - settle on the near hub, discover the far one is
+      // better, close, reconnect, settle on the near hub again - and the app
+      // would flap between them forever.
+      if (this.preferred && tried.includes(this.preferred)) {
+        const check = await probeEndpoints([this.preferred], this.token);
+        if (check.best) {
+          this.answered = check.answered;
+          hub = check.best;
+        } else {
+          // It stopped answering; fall through and choose again.
+          this.preferred = null;
+        }
+      }
+
+      if (!hub) {
+        const { soon, later } = probeInTwoPhases(tried, this.token);
+        const probe = await soon;
+        ({ best: hub, unauthorized } = probe);
+        this.answered = probe.answered;
+
+        // A hub that was still thinking when we settled may see more of the
+        // network than the one we took. Attaching to a hub that cannot see a
+        // machine makes that machine look switched off - which is exactly
+        // what a VPN'd laptop did, showing its own VM as offline while the
+        // phone was talking to it happily. Worth one reconnect to move, but
+        // only for strictly more reach, never for a few milliseconds.
+        const settledOn = hub;
+        const chosenReach = probe.reached.find((r) => r.base === settledOn)?.reach ?? 0;
+        later.then((full) => {
+          if (this.closed || this.relay !== settledOn) return;
+          const best = full.reached[0];
+          if (!best || best.base === settledOn || best.reach <= chosenReach) return;
+          this.preferred = best.base;
+          this.relay = best.base;
+          // Closing makes the socket's own onclose reconnect, which now goes
+          // straight to the better hub through `preferred`.
+          this.ws?.close();
+        }).catch(() => {});
+      }
     } finally {
       if (!hub) {
         this.connecting = false;
