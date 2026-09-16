@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { hostname, platform } from 'node:os';
-import { rmSync } from 'node:fs';
+import { rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { argv, exit } from 'node:process';
 import {
   loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, machineToken,
@@ -14,6 +14,7 @@ import { createRuntime } from '../src/runtime/index.js';
 import { HELM_DIR } from '../src/paths.js';
 import { M } from '@helm/protocol';
 import { hubRpc } from '../src/hub-client.js';
+import { levelOfWav, SILENCE_RMS } from '../src/voice.js';
 import {
   render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot,
 } from '../src/brain.js';
@@ -77,6 +78,7 @@ const usage = () => {
   helm say <id> <text...>           send a prompt into an existing session
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
 
+  helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
   helm proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
   helm service install|uninstall    background service
 
@@ -454,6 +456,137 @@ function listDevices() {
   for (const d of devices) {
     console.log(`${short(d.id)}  ${(d.label || 'device').padEnd(16)} added ${ago(d.addedAt)}`);
   }
+}
+
+// ------------------------------------------------------------------ dictate
+
+const DICTATE_PID = '/tmp/helm-dictate.pid';
+const DICTATE_WAV = '/tmp/helm-dictate.wav';
+const DICTATE_OPUS = '/tmp/helm-dictate.ogg';
+
+/** Say it on the desktop too, the way the owner's own binding already does. */
+const notify = (body, urgent = false) => {
+  try {
+    spawn('notify-send', [...(urgent ? ['-u', 'critical'] : []), 'helm dictate', body], { stdio: 'ignore' }).unref();
+  } catch { /* no notification daemon: the terminal output is the fallback */ }
+};
+
+/** The first of these that exists. pipewire on this desktop, ALSA elsewhere. */
+function recorder() {
+  for (const [cmd, args] of [
+    ['pw-record', ['--rate=16000', '--channels=1', DICTATE_WAV]],
+    ['arecord', ['-q', '-f', 'S16_LE', '-r', '16000', '-c', '1', DICTATE_WAV]],
+  ]) {
+    try { if (execFileSync('sh', ['-c', `command -v ${cmd}`]).toString().trim()) return { cmd, args }; }
+    catch { /* not installed */ }
+  }
+  return null;
+}
+
+/** Opus if ffmpeg is here, the original WAV if it is not. */
+function compress(wav) {
+  try {
+    execFileSync('sh', ['-c', 'command -v ffmpeg']);
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', DICTATE_WAV, '-c:a', 'libopus', '-b:a', '24k', DICTATE_OPUS]);
+    const small = readFileSync(DICTATE_OPUS);
+    rmSync(DICTATE_OPUS, { force: true });
+    if (small.length && small.length < wav.length) return { audio: small, mime: 'audio/ogg' };
+  } catch { /* no ffmpeg, or it refused the file: the WAV is fine */ }
+  return { audio: wav, mime: 'audio/wav' };
+}
+
+/**
+ * Transcribe through whichever machine holds a key.
+ *
+ * This machine first: it is a loopback call and needs no network at all. Then
+ * any other that says it can, which is what makes a machine with no key of its
+ * own still able to dictate.
+ */
+async function transcribeSomewhere(audio, mime) {
+  const net = requireNetwork();
+  const machines = Object.values(net.machines ?? {});
+  const order = [net.self, ...machines.map((m) => m.id).filter((id) => id !== net.self)];
+  const failures = [];
+  for (const id of order) {
+    try {
+      const r = await hubRpc(net, id, M.VOICE_TRANSCRIBE, { audio, mime }, { timeout: 60_000 });
+      return { text: r.text, via: net.machines[id]?.name ?? id };
+    } catch (err) { failures.push(`${net.machines[id]?.name ?? id}: ${err.message}`); }
+  }
+  die(`no machine could transcribe that:\n  ${failures.join('\n  ')}`);
+}
+
+/**
+ * Speak a prompt, from a keyboard shortcut.
+ *
+ * One verb, toggled, because it is bound to one key: the first press starts
+ * recording and the second stops it and sends the words somewhere. The owner's
+ * existing Super+D binding needed two (start, then Super+Shift+D) and put the
+ * result in the clipboard to be pasted; this puts it straight into a session.
+ *
+ * The recording is made here because this is where the microphone is - the VM
+ * has no sound card - while the key may live on any machine. Those are two
+ * different machines in this network more often than not.
+ */
+async function dictate() {
+  const to = flagOf('to');
+
+  if (existsSync(DICTATE_PID)) {
+    const pid = Number(readFileSync(DICTATE_PID, 'utf8').trim());
+    // SIGINT, not SIGKILL: pw-record has to finish writing the WAV header, and
+    // a killed recording is a file no decoder will take.
+    try { process.kill(pid, 'SIGINT'); } catch { /* already gone */ }
+    rmSync(DICTATE_PID, { force: true });
+    // Give it a moment to flush before the file is read.
+    await new Promise((r) => setTimeout(r, 350));
+
+    let audio;
+    try { audio = readFileSync(DICTATE_WAV); } catch { audio = null; }
+    if (!audio?.length) { notify('nothing was recorded', true); die('nothing was recorded'); }
+
+    // Nothing reached the microphone: say so here rather than paying Groq to
+    // hallucinate a "Thank you." into the owner's prompt.
+    const level = levelOfWav(audio);
+    if (level && level.rms < SILENCE_RMS) {
+      rmSync(DICTATE_WAV, { force: true });
+      notify('nothing was said - is the microphone muted?', true);
+      die(`nothing was said (loudness ${level.rms.toFixed(4)}, silence is under ${SILENCE_RMS}) - is the microphone muted, or the wrong input selected?`);
+    }
+
+    notify('transcribing…');
+    // Raw 16kHz WAV is about ten times the size of the same speech as Opus,
+    // and every one of those bytes is carried to another machine and then to
+    // Groq. Measured on a 12-second clip: 4.9s as WAV, 0.8s as Opus, for the
+    // same words. Compression costs ~100ms and is skipped when ffmpeg is not
+    // installed, because sending the WAV still works.
+    const { audio: body, mime } = compress(audio);
+    const { text, via } = await transcribeSomewhere(body.toString('base64'), mime);
+    rmSync(DICTATE_WAV, { force: true });
+    if (!text) { notify('nothing was said', true); die('nothing was said'); }
+
+    if (to) {
+      const { env, machine, session } = await findSession(to);
+      await brainRpc(env, M.SESSION_INPUT, { id: session.id, data: text });
+      notify(`sent to ${session.title}: ${text}`);
+      console.log(`${machine} ${shortId(session.id)} (${session.title}) <- ${text}`);
+      return;
+    }
+    // No destination: the clipboard, which is what the owner's own script
+    // does and what makes this useful in a browser helm does not own.
+    try { const c = spawn('wl-copy', ['-t', 'text/plain'], { stdio: ['pipe', 'ignore', 'ignore'] }); c.stdin.end(text); } catch { /* no wayland clipboard */ }
+    notify(`in the clipboard (via ${via}): ${text}`);
+    console.log(text);
+    return;
+  }
+
+  const rec = recorder();
+  if (!rec) die('no recorder here - install pipewire (pw-record) or alsa-utils (arecord)');
+  rmSync(DICTATE_WAV, { force: true });
+  const child = spawn(rec.cmd, rec.args, { stdio: 'ignore', detached: true });
+  child.unref();
+  writeFileSync(DICTATE_PID, String(child.pid));
+  notify(to ? `recording for ${to}… press the key again to send` : 'recording… press the key again to transcribe');
+  console.log(`recording (${rec.cmd}); run \`helm dictate${to ? ` --to ${to}` : ''}\` again to stop`);
 }
 
 // ------------------------------------------------------------------- brain
@@ -860,6 +993,10 @@ try {
 
     case 'spawn':
       await spawn_();
+      break;
+
+    case 'dictate':
+      await dictate();
       break;
 
     case 'help':
