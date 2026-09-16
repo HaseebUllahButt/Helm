@@ -128,6 +128,13 @@ function accountsFrom(profiles: Profile[]): Account[] {
     (order.indexOf(a.engine) - order.indexOf(b.engine)) || a.account.localeCompare(b.account));
 }
 
+/**
+ * Groups that stay open on a machine screen. Everything else folds: a machine
+ * that has been worked at is mostly history, and a wall of it is what pushed
+ * the live work off the top of a phone screen.
+ */
+const OPEN_GROUPS = new Set(['needs you', 'working', 'idle']);
+
 const shortPath = (p: string) => {
   const parts = p.replace(/\/$/, '').split('/');
   return parts.length > 3 ? '…/' + parts.slice(-2).join('/') : p;
@@ -1231,24 +1238,43 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
           </div>
         )}
 
+        {/* A session waiting on a person is the reason this app exists, so
+            that group is never behind a tap; nor is what is running right
+            now. The rest of a worked-at machine is history, and history is
+            folded - which is what makes the top of the screen readable on a
+            phone at all. */}
         {groups.map(([title, list]) => list.length > 0 && (
-          <div key={title}>
-            <div className={`section${title === 'needs you' ? ' attention' : ''}`}>{title}</div>
-            <div className="rows">
-              {list.map((s) => (
-                <SessionRow
-                  key={s.id} s={s} onOpen={() => onOpen(s)}
-                  onRename={(title) => setTitle(s, title)}
-                  onArchive={() => setArchived(s, true)}
-                  onDelete={() => deleteSession(s)}
-                />
-              ))}
+          OPEN_GROUPS.has(title) ? (
+            <div key={title}>
+              <div className={`section${title === 'needs you' ? ' attention' : ''}`}>{title}</div>
+              <div className="rows">
+                {list.map((s) => (
+                  <SessionRow
+                    key={s.id} s={s} onOpen={() => onOpen(s)}
+                    onRename={(t) => setTitle(s, t)}
+                    onArchive={() => setArchived(s, true)}
+                    onDelete={() => deleteSession(s)}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
+          ) : (
+            <Fold key={title} title={title} count={list.length} openWhen={!!q}>
+              <div className="rows">
+                {list.map((s) => (
+                  <SessionRow
+                    key={s.id} s={s} onOpen={() => onOpen(s)}
+                    onRename={(t) => setTitle(s, t)}
+                    onArchive={() => setArchived(s, true)}
+                    onDelete={() => deleteSession(s)}
+                  />
+                ))}
+              </div>
+            </Fold>
+          )
         ))}
         {recent.length > 0 && (
-          <div>
-            <div className="section">earlier</div>
+          <Fold title="earlier" count={recent.length} openWhen={!!q}>
             <div className="rows">
               {recent.map((row) => (
                 <SessionRow
@@ -1259,7 +1285,7 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
                 />
               ))}
             </div>
-          </div>
+          </Fold>
         )}
         <Fold title="archived" count={filed.length} openWhen={!!q}>
           <div className="rows">
@@ -1320,19 +1346,25 @@ function rename(s: Session, onRename: (title: string) => void) {
  * not you remember archiving it - and it stays open afterwards if you closed
  * it yourself, which is the one case where guessing would be rude.
  */
-function Fold({ title, count, openWhen = false, children }: {
+function Fold({ title, count, note, openWhen = false, defaultOpen = false, attention = false, children }: {
   title: string; count: number; openWhen?: boolean; children: ReactNode;
+  /** A word beside the count - a machine name, the newest thread's age. */
+  note?: string;
+  /** Groups that are the reason you opened the screen start open. */
+  defaultOpen?: boolean;
+  attention?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   useEffect(() => { if (openWhen) setOpen(true); }, [openWhen]);
   if (!count) return null;
   return (
     <div>
       <button
-        className={`section fold${open ? ' open' : ''}`} aria-expanded={open}
+        className={`section fold${open ? ' open' : ''}${attention ? ' attention' : ''}`} aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
         <span className="caret">›</span>{title}<span className="count">{count}</span>
+        {note && <span className="note-inline">{note}</span>}
       </button>
       {open && children}
     </div>
@@ -1677,8 +1709,14 @@ function Threads({ client, envs, sessions, search, onBack, onOpen, onChanged, on
               {!env.online && <span className="quiet"> · offline</span>}
             </div>
             {folders.map(([cwd, list]) => (
-              <div key={cwd}>
-                <div className="foldhead">{collapseCwd(cwd)}</div>
+              <Fold
+                key={cwd}
+                title={collapseCwd(cwd).split('/').filter(Boolean).pop() || collapseCwd(cwd)}
+                count={list.length}
+                note={collapseCwd(cwd)}
+                openWhen={!!q}
+                attention={list.some((s) => s.status === 'blocked')}
+              >
                 <div className="rows">
                   {list.map((s) => s.id.startsWith('found:') ? (
                     // Nothing is running behind this row, so opening it means
@@ -1698,7 +1736,7 @@ function Threads({ client, envs, sessions, search, onBack, onOpen, onChanged, on
                     />
                   ))}
                 </div>
-              </div>
+              </Fold>
             ))}
           </div>
         ))}

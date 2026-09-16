@@ -982,3 +982,9 @@ pre.snippet {
   display: block; width: 100%; height: 100%; background: var(--amber);
   transform-origin: left; transition: transform 0.08s linear;
 }
+.section.fold .note-inline {
+  text-transform: none; letter-spacing: 0; color: var(--icon);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.section.fold.attention { color: var(--amber); }
+
