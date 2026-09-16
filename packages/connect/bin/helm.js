@@ -12,6 +12,11 @@ import { refreshProfiles, getProfiles } from '../src/profiles.js';
 import { proxy } from '../src/proxy.js';
 import { createRuntime } from '../src/runtime/index.js';
 import { HELM_DIR } from '../src/paths.js';
+import { M } from '@helm/protocol';
+import { hubRpc } from '../src/hub-client.js';
+import {
+  render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot,
+} from '../src/brain.js';
 
 // Unix pipelines routinely close their read end early (`helm machines |
 // head`). Treat that as successful completion instead of printing an
@@ -65,6 +70,13 @@ const usage = () => {
   helm login [minutes]              new short-lived password for signing in a device
   helm status                       membership, links and runtime
   helm profiles [--refresh]         the agent profiles found here
+
+  helm brain [--on <machine>]       open the network's own agent (prints how to reach it)
+  helm digest [--json]              every machine, folder and running session
+  helm thread <id> [-n 40]          the recent conversation of one session
+  helm say <id> <text...>           send a prompt into an existing session
+  helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
+
   helm proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
   helm service install|uninstall    background service
 
@@ -444,6 +456,154 @@ function listDevices() {
   }
 }
 
+// ------------------------------------------------------------------- brain
+//
+// The network, addressable from a shell. The brain uses these; so can a
+// person, which is the reason they print rather than return JSON by default.
+
+const brainRpc = (env, method, params = {}, timeout = 25_000) =>
+  hubRpc(requireNetwork(), env, method, params, { timeout });
+
+/** A machine by name, short id or full id. */
+function machineId(who) {
+  const net = requireNetwork();
+  const all = Object.values(net.machines ?? {});
+  const want = String(who ?? '').toLowerCase();
+  const hit = all.find((m) => m.id === who)
+    || all.find((m) => m.name.toLowerCase() === want)
+    || all.find((m) => m.id.startsWith(want))
+    || all.find((m) => m.name.toLowerCase().startsWith(want));
+  if (!hit) die(`no machine called "${who}" - try: ${all.map((m) => m.name).join(', ')}`);
+  return hit.id;
+}
+
+/** The home machine: where a brain lives unless told otherwise. */
+function brainHome() {
+  const net = requireNetwork();
+  const vm = Object.values(net.machines ?? {}).find((m) => m.role === 'vm' && m.id !== net.self);
+  return flagOf('on') ? machineId(flagOf('on')) : (vm?.id ?? net.self);
+}
+
+/** Ask every machine for its digest and write the snapshot down. */
+async function gather() {
+  const net = requireNetwork();
+  const fresh = {};
+  await Promise.all(Object.keys(net.machines ?? {}).map(async (id) => {
+    try {
+      const r = await hubRpc(net, id, M.BRAIN_DIGEST, {}, { timeout: 8000 });
+      fresh[id] = { name: r.name ?? net.machines[id]?.name ?? id, sessions: r.sessions ?? [] };
+    } catch { /* offline: the snapshot keeps what it had, dated */ }
+  }));
+  const snap = writeSnapshot(mergeSnapshot(readSnapshot(), fresh));
+  const now = Date.now();
+  const roster = Object.fromEntries(Object.values(net.machines ?? {}).map((m) =>
+    [m.id, { name: m.name, online: now - (snap.machines?.[m.id]?.at ?? 0) < 90_000 }]));
+  return { snap, roster };
+}
+
+async function printDigest() {
+  const { snap, roster } = await gather();
+  if (rest.includes('--json')) {
+    console.log(JSON.stringify({ machines: roster, snapshot: snap }, null, 2));
+    return;
+  }
+  console.log(render(snap, { roster }));
+}
+
+/**
+ * Which session does this id mean, and on which machine?
+ *
+ * Ids are short in the digest because they are meant to be typed. Two
+ * machines could in principle both hold one starting with the same six
+ * characters, so an ambiguous id is an error that lists the candidates -
+ * never a guess, because guessing here sends a prompt to the wrong agent.
+ */
+async function findSession(id) {
+  if (!id) die('which session? `helm digest` lists them');
+  const { snap } = await gather();
+  const hits = [];
+  for (const [env, entry] of Object.entries(snap.machines ?? {})) {
+    for (const s of entry.sessions ?? []) {
+      if (s.id === id || shortId(s.id) === id || s.id.startsWith(id)) {
+        hits.push({ env, machine: entry.name, session: s });
+      }
+    }
+  }
+  if (!hits.length) die(`no session "${id}" - \`helm digest\` lists them`);
+  if (hits.length > 1) {
+    die(`"${id}" matches ${hits.length} sessions:\n` +
+        hits.map((h) => `  ${h.machine}  ${h.session.id}  ${h.session.title}`).join('\n'));
+  }
+  return hits[0];
+}
+
+async function printThread() {
+  const { env, machine, session } = await findSession(rest[0]);
+  const n = Number(flagOf('n', flagOf('tail', 40)));
+  const r = await brainRpc(env, M.SESSION_EVENTS, { id: session.id, since: 0, limit: 4000 });
+  console.log(`${machine}  ${session.id}  ${session.title}`);
+  console.log(`${session.engine}${session.model ? ` (${session.model})` : ''} in ${session.cwd} - ${session.status}\n`);
+  for (const line of readThread(r.events ?? [], { limit: Math.max(1, n) })) console.log(line);
+  const open = (r.pending ?? []).length;
+  if (open) console.log(`\n${open} permission request${open === 1 ? '' : 's'} waiting - answer in the app, or with \`helm say\` if it takes words.`);
+}
+
+async function say() {
+  const [id, ...words] = rest.filter((x) => !x.startsWith('--'));
+  const text = words.join(' ');
+  if (!text) die('what should it say? `helm say <id> <text>`');
+  const { env, machine, session } = await findSession(id);
+  await brainRpc(env, M.SESSION_INPUT, { id: session.id, data: text });
+  console.log(`sent to ${machine} ${shortId(session.id)} (${session.title})`);
+}
+
+async function spawn_() {
+  const args = rest.filter((x) => !x.startsWith('--'));
+  const [who, folder, account, ...words] = args;
+  const text = words.join(' ');
+  if (!who || !folder || !account) {
+    die('helm spawn <machine> <folder> <account> <text...>');
+  }
+  const env = machineId(who);
+  const { profiles } = await brainRpc(env, M.PROFILE_LIST, {});
+  const want = account.toLowerCase();
+  const profile = profiles.find((x) => x.id === account)
+    || profiles.find((x) => String(x.account ?? '').toLowerCase() === want)
+    || profiles.find((x) => x.id.toLowerCase().startsWith(want));
+  if (!profile) {
+    die(`no account "${account}" on that machine - it has: ${profiles.map((x) => x.id).join(', ')}`);
+  }
+  const { session } = await brainRpc(env, M.SESSION_START, {
+    cwd: folder, profileId: profile.id, model: flagOf('model'), mode: flagOf('mode'),
+    title: flagOf('title'),
+  }, 60_000);
+  if (text) await brainRpc(env, M.SESSION_INPUT, { id: session.id, data: text });
+  console.log(`${shortId(session.id)}  ${session.title}  (${profile.engine} on ${who}, ${folder})`);
+  if (text) console.log('prompted.');
+}
+
+async function openBrain() {
+  const env = brainHome();
+  const net = requireNetwork();
+  const name = net.machines[env]?.name ?? env;
+  let account = flagOf('account');
+  try {
+    const { session, created } = await brainRpc(env, M.BRAIN_OPEN, {
+      profileId: account, model: flagOf('model'), mode: flagOf('mode'),
+    }, 60_000);
+    console.log(`${created ? 'started' : 'resumed'} the brain on ${name}: ${shortId(session.id)} (${session.engine}${session.model ? `, ${session.model}` : ''})`);
+    console.log('open it in the app under "brain", or talk to it here:');
+    console.log(`  helm say ${shortId(session.id)} "what is waiting on me?"`);
+  } catch (err) {
+    if (!/needs a profileId/.test(err.message)) throw err;
+    const { profiles } = await brainRpc(env, M.PROFILE_LIST, {});
+    const usable = profiles.filter((x) => ['claude', 'codex', 'opencode', 'devin'].includes(x.engine));
+    console.error(`helm: which account should be the brain on ${name}?\n`);
+    for (const x of usable) console.error(`  helm brain --account ${x.id}${' '.repeat(Math.max(1, 22 - x.id.length))}${x.engine}`);
+    exit(1);
+  }
+}
+
 function listMachines() {
   const net = requireNetwork();
   for (const m of Object.values(net.machines)) {
@@ -674,6 +834,33 @@ try {
       }
       break;
     }
+
+    // ------------------------------------------------------------- brain
+    //
+    // These five are what the brain has instead of an integration. It runs
+    // them through its own shell, which is why the same thing works on
+    // Claude Code, Codex, opencode and Devin without a line of driver code -
+    // and why the permission card the owner already answers on their phone
+    // is the brain's guardrail too.
+    case 'brain':
+      await openBrain();
+      break;
+
+    case 'digest':
+      await printDigest();
+      break;
+
+    case 'thread':
+      await printThread();
+      break;
+
+    case 'say':
+      await say();
+      break;
+
+    case 'spawn':
+      await spawn_();
+      break;
 
     case 'help':
     case '--help':
