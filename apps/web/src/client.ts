@@ -187,6 +187,9 @@ const MAX_ENDPOINTS = 12;
  * probing a LAN hub like `http://192.168.x.x:8787` from the VM-hosted PWA
  * fails every time. Skip those rather than spending a probe timeout on them.
  */
+/** The origin this page was served from, if it was served from one. */
+const here = (): string[] => (typeof location === 'undefined' || !location.origin ? [] : [location.origin]);
+
 const reachableFromHere = (base: string) =>
   typeof location === 'undefined' ||
   location.protocol !== 'https:' ||
@@ -420,7 +423,11 @@ export class Client {
   }
 
   constructor(public endpoints: string[], public token: string) {
-    this.relay = endpoints[0];
+    // Wherever this page came from is a hub that works: it just served the
+    // page. Stored endpoints can be years of addresses old, so it goes in
+    // whether or not the list remembers it.
+    this.endpoints = [...new Set([...here(), ...endpoints])].slice(0, MAX_ENDPOINTS);
+    this.relay = this.endpoints[0];
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.onVisible);
     }
@@ -577,7 +584,14 @@ export class Client {
    * every time, forever.
    */
   learn(endpoints: string[]) {
-    const merged = [...new Set([...endpoints, ...this.endpoints])].slice(0, MAX_ENDPOINTS);
+    // `here()` leads, because the cap is a real eviction: two machines
+    // advertising a LAN address, a tailnet address, a public one and whatever
+    // they had last week is already more than twelve, and the address that
+    // served the page was being pushed off the end of the list. The desktop
+    // app then sat on "reconnecting" while probing two LAN addresses this
+    // laptop had not had for days - with a working hub on the other end of
+    // the socket that had just handed it the page.
+    const merged = [...new Set([...here(), ...endpoints, ...this.endpoints])].slice(0, MAX_ENDPOINTS);
     const same =
       merged.length === this.endpoints.length &&
       merged.every((e, i) => e === this.endpoints[i]);

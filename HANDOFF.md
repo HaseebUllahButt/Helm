@@ -742,6 +742,29 @@ Helm app" in the sidebar, once it has landed there); then it is in scope, with
 no redirect and nothing to click. The VM-hosted install remains the right one
 for a phone, which has no daemon of its own.
 
+### "reconnecting", with a working hub on the other end of the socket
+
+Found while checking the desktop app actually worked, by looking at its
+sockets rather than its screen: `ss` showed chromium in `SYN-SENT` to
+`192.168.10.35:8787` and `10.7.171.6:8787`, and **nothing established to
+`127.0.0.1:8787`** - the address that had just served it the page. The first
+of those is the LAN address this laptop stopped having days ago (see "Do not
+hardcode the laptop's LAN address" above).
+
+`learn()` folds every address a machine advertises into the device's list,
+newest first, capped at twelve so a laptop that travels does not probe every
+cafe it ever visited. Two machines advertising a LAN address, a tailnet
+address, a public one and whatever they had last week is already more than
+twelve - so **the origin the app was served from was being pushed off the end
+of the list**, and `connect()` would then probe twelve addresses none of which
+this browser could reach.
+
+The origin serving the page answers by definition. It now leads the list, in
+the constructor and in every `learn()`. Measured against the real daemon by
+overwriting a signed-in device's stored endpoints with three dead addresses:
+the old build sat on `offline` / "no machines yet" for as long as it was
+watched; the new one reloads to the machine list.
+
 A note on why the page cannot just sign itself in where it stands: the daemon
 refuses `/api/auth/local` to a cross-site fetch on purpose (`sec-fetch-site`),
 because Caddy makes every internet request arrive from loopback. Navigating is
