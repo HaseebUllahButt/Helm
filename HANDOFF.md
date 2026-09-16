@@ -742,6 +742,26 @@ Helm app" in the sidebar, once it has landed there); then it is in scope, with
 no redirect and nothing to click. The VM-hosted install remains the right one
 for a phone, which has no daemon of its own.
 
+### The model catalogue: the slowest read in the app, remembered
+
+"Do you cache this stuff?" - pointed at the Models screen. Half: the daemon
+held a catalogue for sixty seconds in memory (`models.js`), and the app held
+nothing at all. So opening the screen twice in an afternoon spawned the CLI
+twice, and for opencode that is a process enumerating three dozen models while
+a phone waits on the other end of a relay. It is why that RPC carries a 45
+second timeout and the screen has an "asking the CLI for its models…" state.
+
+Now: the device remembers what it last heard (`modelCache.ts`, in the `kv`
+store beside the pairing) and paints it immediately, with the machine's answer
+replacing it when it lands - the same shape as the chat cache. The daemon's
+own hold went from one minute to ten, because a catalogue changes when a CLI
+is upgraded or its config is edited and neither is urgent to notice.
+
+Measured on the real daemon, opencode's 36 models: **4,973ms to a list on
+screen with nothing remembered, 107ms with.** Both pickers use it - the
+session's model sheet as well as the settings editor - so the model chip in a
+session header stops reading "default" until a CLI has been spawned.
+
 ### A quieter palette, and a wheel that reads at 20px
 
 The owner's words were "the UI still looks vibecoded, mute the green neon".

@@ -7,6 +7,7 @@ import { PermissionSheet } from './PermissionSheet';
 import { Controls, type Kind } from './Controls';
 import { Transcript } from './Transcript';
 import { money } from '../format';
+import { loadModels, saveModels } from '../modelCache';
 import { useSessionLog } from './useSessionLog';
 import type { Decision } from './types';
 
@@ -36,9 +37,18 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
   const working = status === 'working';
   const pending = log.pending[0];
 
+  // The catalogue this device last heard, then the machine's answer behind it.
+  // Without the first half the model chip reads "default" and the picker is
+  // empty until a CLI has been spawned and a round trip has come back.
   useEffect(() => {
+    let stale = false;
+    loadModels(env.id, session.profileId).then((cached) => {
+      if (!stale && cached) setOptions((now) => now ?? cached);
+    });
     client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id }, 30_000)
-      .then(setOptions).catch(() => setOptions({ default: null, models: [] }));
+      .then((r) => { if (!stale) { setOptions(r); saveModels(env.id, session.profileId, r); } })
+      .catch(() => setOptions((now) => now ?? { default: null, models: [] }));
+    return () => { stale = true; };
   }, [client, env.id, session.profileId]);
 
   // What `/` offers. Read from the machine because that is where the

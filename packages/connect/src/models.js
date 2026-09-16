@@ -21,10 +21,14 @@ const exec = promisify(execFile);
  * `home` is the account's home directory (CODEX_HOME etc.), so a personal
  * account reports its own default.
  *
- * Asking the CLI costs a process, so an answer is held briefly: a phone
- * opening a picker should not spawn one every time.
+ * Asking the CLI costs a process, so the answer is held: a phone opening a
+ * picker should not spawn one every time. A minute was too short to be that -
+ * opening the settings screen twice in an afternoon spawned twice, and for
+ * opencode that is a process enumerating three dozen models while a phone
+ * waits. A catalogue changes when a CLI is upgraded or its config is edited,
+ * neither of which is urgent to notice, so it is held for ten.
  */
-const CACHE_MS = 60_000;
+const CACHE_MS = 10 * 60_000;
 const cache = new Map();
 
 export async function listModels(engine, home) {

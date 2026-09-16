@@ -10,6 +10,7 @@ import {
   type InventorySession,
 } from './client';
 import { money } from './format';
+import { loadModels, saveModels } from './modelCache';
 import { loadMessages, saveMessages } from './session/logCache';
 
 type Auth = StoredAuth;
@@ -1476,14 +1477,22 @@ function ModelPrefsView({ client, env, account, onBack }: {
   const eng = engineOf(account.engine);
 
   useEffect(() => {
+    let stale = false;
+    const take = (r: ModelList, remembered?: boolean) => {
+      if (stale) return;
+      setList(r);
+      setApproved(new Set(r.prefs?.approved ?? []));
+      setDef(r.prefs?.default ?? '');
+      if (!remembered) saveModels(env.id, account.profile.id, r, true);
+    };
+    // Paint the catalogue this device already knows - the whole list, which is
+    // the slowest thing the app asks for - and let the real answer replace it.
+    loadModels(env.id, account.profile.id, true).then((c) => { if (c && !list) take(c, true); });
     client.rpc(env.id, 'model.list', { profileId: account.profile.id, all: true }, 45_000)
-      .then((r: ModelList) => {
-        setList(r);
-        setApproved(new Set(r.prefs?.approved ?? []));
-        setDef(r.prefs?.default ?? '');
-      })
-      .catch((e) => setError(e.message));
-  }, [client, env.id, account.profile.id]);
+      .then((r: ModelList) => take(r))
+      .catch((e) => { if (!stale && !list) setError(e.message); });
+    return () => { stale = true; };
+  }, [client, env.id, account.profile.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = (m: string) => {
     const next = new Set(approved);
