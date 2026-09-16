@@ -310,8 +310,9 @@ export function createWsLayer() {
       // A machine reconnecting supersedes its own stale socket.
       online.get(envId)?.close(4009, 'superseded');
       sock.envId = envId;
-      // What the daemon said about itself at attach - which T3 port it runs,
-      // today - so publish can route to it without a db read per request.
+      // What the daemon said about itself at attach - host, platform, which
+      // terminal backend it has - kept on the socket so anything asking does
+      // not need a db read per request.
       sock.info = auth.info || {};
       online.set(envId, sock);
       q.stateSet.run(envId, JSON.stringify(auth.info || {}), now());

@@ -263,23 +263,3 @@ export function allEndpoints(net) {
 
 // ------------------------------------------------------------------ publish
 
-/**
- * The hostnames a hub serves published-machine requests on: the public name
- * it is fronted by, set explicitly because the hub cannot know which of its
- * addresses is "the" home name. Everything else stays helm's own.
- */
-export function homeHosts(net) {
-  const host = process.env.HELM_HOME_HOST;
-  return host ? [host.toLowerCase()] : [];
-}
-
-/**
- * The port each machine's T3 answers on at the home host, in roster join
- * order, so every machine agrees without talking. Deterministic: same
- * roster, same ports, everywhere.
- */
-export function publishedPorts(net) {
-  const order = Object.values(net?.machines ?? {})
-    .sort((a, b) => (a.addedAt ?? 0) - (b.addedAt ?? 0) || String(a.id).localeCompare(String(b.id)));
-  return new Map(order.map((m, i) => [m.id, 44300 + i]));
-}

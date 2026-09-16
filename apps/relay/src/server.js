@@ -41,7 +41,6 @@ export async function startRelay({
     makeHttpHandler, clientTokenFrom, identify, rotatePassword, ROLE, SECURITY_HEADERS,
   } = http;
   const { createWsLayer } = await import('./ws.js');
-  const { createPublish } = await import('./publish.js');
 
   // Starting up opens a fresh login window so there is always a way in from a
   // new device. It does not disturb devices that are already members - they
@@ -50,9 +49,8 @@ export async function startRelay({
     ? rotatePassword(password, passwordTtlMs)
     : { password: null, expiresAt: 0 };
 
-  const { wss, online, kick, routeTunnel } = createWsLayer();
+  const { wss, online, kick } = createWsLayer();
   const api = makeHttpHandler({ online, kick });
-  const publish = createPublish({ online, routeTunnel, hubPort: port });
 
   const serveStatic = async (req, res) => {
     if (!webRoot) return false;
@@ -95,8 +93,10 @@ export async function startRelay({
     }
   };
 
-  // helm's own world lives under /helm and at addresses nobody publishes.
-  // On a published host everything else belongs to that machine's T3.
+  // `/helm/...` is the app's own prefix, kept because clients send it: the
+  // web app opens `/helm/ws` and older ones open `/ws`. It used to matter
+  // more - everything outside it belonged to the machine's T3 - and now it
+  // is simply stripped.
   const helmPath = (req) => {
     if (req.url === '/helm' || req.url.startsWith('/helm/')) {
       req.url = req.url.slice(5) || '/';
@@ -121,12 +121,8 @@ export async function startRelay({
         });
 
   const server = createServer((req, res) => {
-    const own = helmPath(req);
-    const handle = (!own && publish.handleRequest(req, res))
-      ? null
-      : routeHelm(req, res);
-
-    Promise.resolve(handle).catch((err) => {
+    helmPath(req);
+    Promise.resolve(routeHelm(req, res)).catch((err) => {
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: String(err?.message || err) }));
     });
@@ -145,14 +141,8 @@ export async function startRelay({
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
     // /helm/ws is helm's protocol by any name; /ws is the same endpoint for
-    // older clients - unless the Host names a published machine, in which
-    // case the socket is that machine's T3 saying hello, not helm's.
-    const helmWs = url.pathname === '/helm/ws'
-      || (url.pathname === '/ws' && publish.resolve(req.headers.host)?.kind !== 'machine');
-    if (!helmWs) {
-      if (publish.handleUpgrade(req, socket, head)) return;
-      return socket.destroy();
-    }
+    // older clients.
+    if (url.pathname !== '/helm/ws' && url.pathname !== '/ws') return socket.destroy();
 
     const token =
       tokenFromProtocols(req.headers['sec-websocket-protocol']) ||

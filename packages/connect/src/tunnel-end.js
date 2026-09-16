@@ -3,9 +3,9 @@ import { T } from '@helm/protocol';
 
 /**
  * The far end of a tunnel: a TCP connection to a port on this machine's
- * loopback interface. This is how ssh and the hub's T3 proxy reach a box
- * behind NAT - the daemon already holds the outbound link, so nothing has
- * to accept an inbound connection.
+ * loopback interface. This is how ssh reaches a box behind NAT - the daemon
+ * already holds the outbound link, so nothing has to accept an inbound
+ * connection.
  *
  * Only ports this machine chose to expose are allowed. A hub is trusted to
  * carry bytes, not to pick which local services it may reach.
