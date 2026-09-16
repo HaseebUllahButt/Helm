@@ -87,16 +87,20 @@ is where that knowledge already lives.
 
 ## Start here: the network is up and both machines are current
 
-As of 2026-09-16 the network is running: `helm status` on the laptop reports
-**2 machines, 8 controllers**, network `076f00e81990`, with the VM reachable
-at `https://130-210-33-163.sslip.io`. (The paragraph that used to live here
-said nothing was running - that was true on the evening of the 14th and has
-not been true since.)
+As of the evening of 2026-09-17 the network is running: **2 machines**,
+network `076f00e81990`, the VM reachable at `https://130-210-33-163.sslip.io`,
+and both hubs reporting both machines online. (The paragraph that used to live
+here said nothing was running - that was true on the evening of the 14th and
+has not been true since.)
 
-**Both machines are on `main`** and were upgraded several times through the
-16th; at the end of that day both served the same bundle as a local build,
-which is the check worth repeating - a deploy that restarts the service but
-serves an old `dist` looks exactly like a working one. One thing outside the repo changed too: the laptop's Tailscale now
+**Both machines are on `main` at the same commit** and were deployed twice on
+the 17th; both serve the identical bundle. That is the check worth repeating -
+a deploy that restarts the service but serves an old `dist` looks exactly like
+a working one, so compare what each machine *serves*, not what it has pulled.
+
+There is a **brain** on the VM (Codex), started by the owner. Push
+notifications **work** and have delivered real "needs you" alerts to the
+phone; see "Known bad" #1, which said the opposite for two days. One thing outside the repo changed too: the laptop's Tailscale now
 has `--exit-node-allow-lan-access` on (see "The network" below, and do not
 undo it by accident — the flag clears the exit node if passed alone).
 
@@ -298,9 +302,17 @@ tried.**
 
 ## What changed on 2026-09-17
 
-Archived threads got a place to be, searching them got a way in, the network
-got a brain, voice prompting landed, T3 left the tree - and then four things
-the owner found by using it on a phone, three of which were real bugs.
+A long day. Archived threads got a place to be, searching them got a way in,
+the network got a brain, voice prompting landed, and T3 left the tree. Then
+the owner used it on a phone and found five more things: the laptop calling
+its own VM offline, external sessions that could be listed and not opened, an
+icon three days stale, a terminal that produced nothing, and push notifications
+that turned out to have been working all along while this file said otherwise.
+
+Everything here is on `main` and deployed to both machines. The sections below
+are roughly in the order they happened; the two worth reading first are
+"Found by using it" and "Terminals on the VM", because both are lessons about
+believing a measurement.
 
 ### The app, after a day of using it on a phone
 
@@ -441,23 +453,39 @@ scripts all 404 - a blank app, and a deploy that looks like it worked
 everywhere except the phone. A successful navigation now replaces it. `CACHE`
 is `helm-shell-v4`, so the old one is dropped on activate.
 
-### Still open
+### Terminals on the VM: fixed by the owner, cause not written down
 
-**Terminals on the VM produce nothing.** Reproduced through the real hub:
-`session.start` succeeds (pty, 1.5s), `session.attach` returns **0 characters
-of scrollback**, and a shell command sent into it is never echoed. Not a
-missing pty - `loadPty()` returns true there on the linux-arm prebuild - and
-not herdr, which plain terminals do not use (it is absent on the VM regardless:
-`HELM_HERDR_BIN` points at `~/.local/bin/herdr`, which does not exist). The
-`helm-terminals.js` host process **is** running, so the next thing to look at
-is that host: whether it is a stale one from an older build, and what happens
-to the shell it spawns. Restarting `helm-serve` on the VM is the first thing to
-try.
+For most of the day a terminal on the VM produced nothing: `session.start`
+succeeded (pty, 1.5s), `session.attach` returned **0 characters of
+scrollback**, and a command sent into it was never echoed. The owner fixed it
+while this was still being dug into, and **how is not recorded** - if it
+recurs, start from what was established rather than from the top:
 
-*(Two false alarms on the way, both from measuring rather than reasoning: the
-VM appeared to serve a 0-byte `favicon-32.png` - a flaky read over a 4-second
-link, it serves 1384 bytes correctly - and node-pty appeared missing because
-the check looked in `build/Release` when the VM uses a prebuild.)*
+- **node-pty is fine there.** Spawning `$SHELL` through
+  `packages/connect/src/pty.js` on the VM and writing a command to it returns
+  the prompt and the output, 198 bytes of it. So the fault was above the pty.
+- **herdr is irrelevant and also absent.** Plain terminals use the pty;
+  `HELM_HERDR_BIN` points at `~/.local/bin/herdr`, which does not exist.
+- **`systemctl --user restart helm-serve` does not restart the terminal
+  host.** That is deliberate - the host is a separate process precisely so
+  shells survive a daemon upgrade - but it means "I restarted it" is not the
+  same claim as "the host is current". The host running on the VM had been up
+  since **Sep 14 21:39**, and `helm-terminals.js` was not added until
+  `c352547` on **Sep 15**. An upgraded daemon was talking to a host from
+  before that file existed.
+
+**The latent gap, whatever today's cause turned out to be:** nothing makes the
+host restart when the daemon is upgraded, and nothing checks that the two
+agree. A version in the host's `hello` frame, and a daemon that restarts a
+host older than itself, would turn a silent dead terminal into a one-line
+upgrade. Worth building before this bites again.
+
+*(Two false alarms on the way, both from trusting a measurement over a slow
+link rather than reasoning about it: the VM appeared to serve a 0-byte
+`favicon-32.png` - it serves 1384 bytes correctly - and node-pty appeared
+missing because the check looked in `build/Release` when the VM uses a
+prebuild. A third, worse one: "restarting did not fix it, so it is not a stale
+host" was a conclusion drawn from a restart that never touched the host.)*
 
 ### Archived is a fold, on the screen it was archived on
 
@@ -661,6 +689,56 @@ shift it - a cache-busting `?v=<epoch>` did. Two separate "the fix is not
 working" dead ends came from that. Check which bundle the page actually loaded
 (`performance.getEntriesByType('resource')`) before believing a UI check.
 
+### Speaking a prompt
+
+Typing a paragraph of instructions on a screen keyboard, into a session that
+is waiting on you, is the exact friction helm exists to remove. So the
+composer has a microphone, and there is `helm dictate` for the keyboard.
+
+**The key never leaves the machine.** The device records, a machine
+transcribes, words come back - the same bargain as every other credential
+here. No phone ever holds a Groq key, so a paired device that is lost cannot
+spend anyone's credit. `~/.config/groq-api-key` is read because that is what
+the owner's own Super+D binding already reads; a path in `config.json` wins,
+so a machine that keeps credentials elsewhere says so once instead of having
+the file copied.
+
+**Which machine transcribes is chosen per session** - the session's own first,
+then any other that says it can. That fallback is not hypothetical: **the
+Groq key on the VM is invalid** (`/home/ubuntu/sangi/creds/groq-key.txt`,
+rejected by Groq as "Invalid API Key", and 664 so it is world-readable
+besides). The laptop's key works, so the laptop is what answers. Replacing the
+VM's key is the one outstanding chore here.
+
+**`helm dictate` is the Super+D story.** One verb, toggled, because it is
+bound to one key: first press records, second stops and sends. The owner's
+existing binding needed two keys and a paste; `--to` puts the words straight
+into a session on any machine. The recording happens where the microphone is -
+the VM has no sound card - while the key may live anywhere, and in this
+network those are usually different machines.
+
+Two things that only came out of running it against real speech:
+
+**Groq picks its decoder from the filename**, so a browser's
+`audio/webm;codecs=opus` arriving as "blob" is refused as an unknown format.
+Safari records `audio/mp4` and supports none of the others, which is every
+installed PWA on an iPhone - hence `extensionFor` and a probed recorder
+format rather than an assumed one.
+
+**Whisper does not answer "nothing" when handed nothing.** An empty room came
+back as `.`, and then as `Thank you.` - both of which would land in the
+composer as though they had been spoken. Filtering those phrases afterwards is
+the wrong fix, so silence is simply not sent. It measures **RMS, not peak**: a
+quiet room here peaks at 0.045 off one chair creak while its RMS is 0.0086
+against 0.209 for speech. The first version used peak and let "Thank you."
+through twice.
+
+Verified: real speech through both paths (WAV from `pw-record`, Opus from a
+browser recorder) returning the same words, the RPC round trip, the size and
+silence guards, and `helm dictate` end to end at 1.5s including compression.
+**The microphone button itself is unverified** - headless Chromium refuses
+microphone capture outright - so it is the owner's to try.
+
 ### Left for next time
 
 - **The brain hits a permission card for every `helm` call**, including
@@ -675,6 +753,20 @@ working" dead ends came from that. Check which bundle the page actually loaded
   *different* machines - `brainSession()` is per machine.
 - The machine screen's search and All sessions' search are two boxes over the
   same words. One of them should probably win.
+- **Replace the VM's Groq key.** `/home/ubuntu/sangi/creds/groq-key.txt` is
+  rejected by Groq and is mode 664. Until then the laptop does every
+  transcription, so dictation stops working when the laptop sleeps - which is
+  exactly when a phone wants it.
+- **Restart the terminal host when the daemon is upgraded**, and version the
+  handshake between them. See the terminal section above: nothing today makes
+  those two agree, and when they disagree a terminal is silently dead.
+- **All sessions still under-reports a sleeping machine.** The brain's
+  `snapshot.json` already holds what each machine last said; that screen could
+  read it and show an offline machine dimmed with "last seen 3h ago", which is
+  what the backlog asked for and the brain got.
+- **The projects sidebar is `session.list` only, by choice** - live and
+  helm-known threads, not the full CLI history. Asked and answered on the
+  17th: cheap beats complete here. Do not change it without asking again.
 
 ---
 
@@ -1744,7 +1836,8 @@ per-account picker and refuses anything that is not a model name;
 `inventory.test.mjs` reads each CLI's own history, including opencode storing
 its model as JSON; `desktop-entry.test.mjs` writes `helm app`'s launcher into
 a temp `XDG_DATA_HOME`, so running the suite never touches a real desktop;
-`brain.test.mjs` covers the digest — the derived line's ordering, folding
+`voice.test.mjs` covers what silence sounds like, the WAV chunk walk, and the
+filename Groq needs to pick a decoder; `brain.test.mjs` covers the digest — the derived line's ordering, folding
 deltas back into sentences, an offline machine surviving a refresh, the size
 of the line prepended to every brain message, and the pin between that line's
 format and the regex the web splits it off with.
