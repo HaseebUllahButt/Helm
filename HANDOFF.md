@@ -765,6 +765,19 @@ overwriting a signed-in device's stored endpoints with three dead addresses:
 the old build sat on `offline` / "no machines yet" for as long as it was
 watched; the new one reloads to the machine list.
 
+**And the dead ones are dropped now, which they never were.** `learn()` was
+additive: an address only ever left by being pushed off the end of the cap, so
+a device carried every address it had ever been told about and probed them all
+on every connect. Pruning happens only after a *successful* connect, holding a
+freshly advertised list from a hub that answered, and only for an address that
+is no longer advertised **and** was just tried **and** did not answer. Nothing
+is dropped while it works; nothing a sleeping machine still advertises is
+dropped; and a failure cannot be blamed on the address when the device itself
+was offline, because then there would have been no successful connect to prune
+from. Both halves driven against the real daemon: three dead addresses gone on
+the first reload, while `http://localhost:8787` - the same daemon under a name
+the network does not advertise - was kept, because it answered.
+
 A note on why the page cannot just sign itself in where it stands: the daemon
 refuses `/api/auth/local` to a cross-site fetch on purpose (`sec-fetch-site`),
 because Caddy makes every internet request arrive from loopback. Navigating is

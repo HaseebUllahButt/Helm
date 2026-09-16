@@ -224,8 +224,12 @@ export async function pickEndpoint(
  */
 export async function probeEndpoints(
   endpoints: string[], token: string
-): Promise<{ best: string | null; unauthorized: boolean }> {
+): Promise<{ best: string | null; unauthorized: boolean; answered: Set<string> }> {
   const statuses: number[] = [];
+  // Answering at all is the thing worth knowing separately from winning: a
+  // 401 is a machine that is there and refusing us, which is not a dead
+  // address. `learn()` uses this to tell a stale address from a sleeping one.
+  const answered = new Set<string>();
   const probes = endpoints.map(async (base) => {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), PROBE_MS);
@@ -236,6 +240,7 @@ export async function probeEndpoints(
         headers: { authorization: `Bearer ${token}` },
       });
       statuses.push(res.status);
+      answered.add(base);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = await res.json();
       return {
@@ -254,10 +259,10 @@ export async function probeEndpoints(
       r.status === 'fulfilled')
     .map((r) => r.value);
   const unauthorized = !up.length && statuses.length > 0 && statuses.every((s) => s === 401);
-  if (!up.length) return { best: null, unauthorized };
+  if (!up.length) return { best: null, unauthorized, answered };
 
   up.sort((a, b) => b.reach - a.reach || a.elapsed - b.elapsed);
-  return { best: up[0].base, unauthorized };
+  return { best: up[0].base, unauthorized, answered };
 }
 
 export class Client {
@@ -484,8 +489,13 @@ export class Client {
     let hub: string | null = null;
     let unauthorized = false;
     try {
-      ({ best: hub, unauthorized } =
-        await probeEndpoints(this.endpoints.filter(reachableFromHere), this.token));
+      // What was actually tried, and what actually answered. `learn()` needs
+      // both: an address it skipped is not an address that failed.
+      const tried = this.endpoints.filter(reachableFromHere);
+      const probe = await probeEndpoints(tried, this.token);
+      ({ best: hub, unauthorized } = probe);
+      this.tried = new Set(tried);
+      this.answered = probe.answered;
     } finally {
       if (!hub) {
         this.connecting = false;
@@ -575,13 +585,26 @@ export class Client {
       .catch(() => {});
   }
 
+  /** What the last probe tried, and which of those answered. */
+  private tried = new Set<string>();
+  private answered = new Set<string>();
+
   /**
-   * Remember addresses we did not previously know about.
+   * Remember addresses we did not previously know about, and forget the ones
+   * that have stopped being either.
    *
    * Capped, and newest first. A laptop that travels advertises a different
    * private address on every network it joins, and an uncapped list means
    * every cafe it ever visited gets probed on every single connect - slower
    * every time, forever.
+   *
+   * Dropping is the other half, and it only happens here - after a *successful*
+   * connect, holding a freshly advertised list from a hub that answered. An
+   * address goes only if the network no longer advertises it AND it was just
+   * tried AND it did not answer. So nothing is ever dropped while it works,
+   * nothing is dropped that a sleeping machine still advertises, and nothing
+   * is dropped on the strength of a failure that might just have been this
+   * device being offline - because if it were, we would not be here.
    */
   learn(endpoints: string[]) {
     // `here()` leads, because the cap is a real eviction: two machines
@@ -591,7 +614,10 @@ export class Client {
     // app then sat on "reconnecting" while probing two LAN addresses this
     // laptop had not had for days - with a working hub on the other end of
     // the socket that had just handed it the page.
-    const merged = [...new Set([...here(), ...endpoints, ...this.endpoints])].slice(0, MAX_ENDPOINTS);
+    const advertised = new Set([...here(), ...endpoints]);
+    const alive = this.endpoints.filter(
+      (e) => advertised.has(e) || this.answered.has(e) || !this.tried.has(e));
+    const merged = [...new Set([...here(), ...endpoints, ...alive])].slice(0, MAX_ENDPOINTS);
     const same =
       merged.length === this.endpoints.length &&
       merged.every((e, i) => e === this.endpoints[i]);
