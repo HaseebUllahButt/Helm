@@ -1,4 +1,5 @@
 import type { HelmEvent } from './types';
+import { txn } from '../idb';
 
 /**
  * On-device cache of session event logs, so opening a chat paints
@@ -22,9 +23,6 @@ import type { HelmEvent } from './types';
  * the network answers.
  */
 
-const DB = 'helm';
-const STORE = 'session-logs';
-const VERSION = 1;
 /** Stored event shape version; bump when HelmEvent changes incompatibly. */
 const SHAPE = 1;
 /** How many sessions to keep records for; opening an old chat just refetches. */
@@ -39,6 +37,12 @@ const MAX_MESSAGE_SESSIONS = 50;
  */
 const MAX_EVENTS = 4000;
 
+/**
+ * The store keeps its keys out of line - `kv` next door needs that, and one
+ * rule for the database is simpler than two - so every write passes the key
+ * beside the record. A `put` without it throws `DataError`, which is exactly
+ * what used to happen here, into a `catch` that said nothing.
+ */
 interface Record {
   key: string;
   /** Absent means the event-log records that existed before messages were cached. */
@@ -67,39 +71,13 @@ function trim(events: HelmEvent[]): HelmEvent[] {
   return events.slice(from);
 }
 
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') return reject(new Error('no indexedDB'));
-    const req = indexedDB.open(DB, VERSION);
-    req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE);
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error('indexedDB open failed'));
-  });
-}
-
-async function txn<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-  const db = await openDb();
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const tx = db.transaction(STORE, mode);
-      const req = fn(tx.objectStore(STORE));
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error ?? new Error('indexedDB request failed'));
-    });
-  } finally {
-    db.close();
-  }
-}
-
 /** The stored log for a session, or null on a miss / version skew / any failure. */
 export async function loadCached(env: string, sessionId: string): Promise<{ last: number; events: HelmEvent[] } | null> {
   try {
-    const rec = await txn<Record | undefined>('readonly', (s) => s.get(`${env}:${sessionId}`));
+    const rec = await txn<Record | undefined>('session-logs', 'readonly', (s) => s.get(`${env}:${sessionId}`));
     if (!rec || rec.shape !== SHAPE || rec.kind === 'messages' || !Array.isArray(rec.events)) return null;
     // Touch for LRU without rewriting the payload.
-    txn('readwrite', (s) => s.put({ ...rec, at: Date.now() })).catch(() => {});
+    txn('session-logs', 'readwrite', (s) => s.put({ ...rec, at: Date.now() }, rec.key)).catch(() => {});
     return { last: rec.last ?? 0, events: rec.events };
   } catch {
     return null;
@@ -110,8 +88,8 @@ export async function loadCached(env: string, sessionId: string): Promise<{ last
 export async function saveCached(env: string, sessionId: string, last: number, events: HelmEvent[]): Promise<void> {
   try {
     const key = `${env}:${sessionId}`;
-    await txn('readwrite', (s) => s.put(
-      { key, kind: 'events', shape: SHAPE, at: Date.now(), last, events: trim(events) } satisfies Record));
+    await txn('session-logs', 'readwrite', (s) => s.put(
+      { key, kind: 'events', shape: SHAPE, at: Date.now(), last, events: trim(events) } satisfies Record, key));
     await prune(key);
   } catch {
     /* cache is best-effort; the network path still works */
@@ -121,9 +99,9 @@ export async function saveCached(env: string, sessionId: string, last: number, e
 /** The messages of a herdr-pane chat, or null on a miss or any failure. */
 export async function loadMessages<T>(env: string, sessionId: string): Promise<T[] | null> {
   try {
-    const rec = await txn<Record | undefined>('readonly', (s) => s.get(`msg:${env}:${sessionId}`));
+    const rec = await txn<Record | undefined>('session-logs', 'readonly', (s) => s.get(`msg:${env}:${sessionId}`));
     if (!rec || rec.shape !== SHAPE || !Array.isArray(rec.messages)) return null;
-    txn('readwrite', (s) => s.put({ ...rec, at: Date.now() })).catch(() => {});
+    txn('session-logs', 'readwrite', (s) => s.put({ ...rec, at: Date.now() }, rec.key)).catch(() => {});
     return rec.messages as T[];
   } catch {
     return null;
@@ -134,7 +112,7 @@ export async function loadMessages<T>(env: string, sessionId: string): Promise<T
 export async function saveMessages(env: string, sessionId: string, messages: unknown[]): Promise<void> {
   try {
     const key = `msg:${env}:${sessionId}`;
-    await txn('readwrite', (s) => s.put({ key, kind: 'messages', shape: SHAPE, at: Date.now(), messages } satisfies Record));
+    await txn('session-logs', 'readwrite', (s) => s.put({ key, kind: 'messages', shape: SHAPE, at: Date.now(), messages } satisfies Record, key));
     await prune(key);
   } catch {
     /* best-effort, as above */
@@ -147,16 +125,16 @@ export async function saveMessages(env: string, sessionId: string, messages: unk
  * fifty message records must not evict the event logs.
  */
 async function prune(keep: string): Promise<void> {
-  const keys = await txn<IDBValidKey[]>('readonly', (s) => s.getAllKeys());
+  const keys = await txn<IDBValidKey[]>('session-logs', 'readonly', (s) => s.getAllKeys());
   if (keys.length <= MAX_SESSIONS) return;
-  const all = await txn<Record[]>('readonly', (s) => s.getAll());
+  const all = await txn<Record[]>('session-logs', 'readonly', (s) => s.getAll());
   const drop: Record[] = [];
   for (const [kind, max] of [['messages', MAX_MESSAGE_SESSIONS], ['events', MAX_SESSIONS]] as const) {
     const mine = all.filter((r) => (r.kind ?? 'events') === kind).sort((a, b) => a.at - b.at);
     if (mine.length > max) drop.push(...mine.slice(0, mine.length - max));
   }
   if (!drop.length) return;
-  await txn('readwrite', (s) => {
+  await txn('session-logs', 'readwrite', (s) => {
     for (const r of drop) if (r.key !== keep) s.delete(r.key);
     return s.get(keep);
   });

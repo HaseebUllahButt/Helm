@@ -620,6 +620,57 @@ dependency of that effect. **12,578ms → 4ms**, and it was never specific to
 the new screen: it was every cold open of the app, including the machine
 screen, on every device.
 
+### The chat cache had never once worked
+
+`logCache.ts` has claimed since it was written that opening a chat "paints
+instantly" from IndexedDB. It never did, for two reasons, each of which is
+enough on its own and both of which land in a `catch` that says nothing.
+
+**Two modules opened the same database at version 1.** `store.ts` (the
+pairing, store `kv`) and `logCache.ts` (the chat cache, store `session-logs`)
+each called `indexedDB.open('helm', 1)` and each created only its own store in
+`onupgradeneeded`. Whichever ran first created the database; the second opened
+the same version, so its upgrade never fired and **its store never existed**.
+Every read and write from the loser threw `NotFoundError`. Which one lost
+depended on the launch: a device pairing for the first time wrote `kv` first
+and cached no chat ever after, while a device launching with its pairing
+already in localStorage opened a chat first - and then the durable copy of the
+pairing, the thing that exists to survive a browser evicting localStorage,
+silently could not be written. Seen directly in a sandbox: `v1 stores=kv`,
+with a two-turn chat open on screen.
+
+**And every write would have thrown anyway.** The store is created with
+out-of-line keys and `saveCached` called `put(record)` with no key beside it,
+which is a `DataError`. So even on the launches where the store existed,
+nothing was ever stored.
+
+Now: one opener in `apps/web/src/idb.ts` that declares every store, at version
+2 so databases already out there get the missing one built without losing what
+they hold (watched it go `v1 stores=kv` → `v2 stores=kv,session-logs` with the
+device still paired). Every put passes its key.
+
+**What was also wrong, once it worked at all:** the log was written back only
+when the view unmounted. A phone does not unmount views - it is swiped away,
+or the tab is evicted in the background - so everything that streamed in since
+the chat was opened was cached nowhere. It now saves two seconds after the
+stream goes quiet, and again the moment the page is hidden. The herdr-pane
+chats cache their read-back messages too, under their own key; they had no
+cache at all and opened blank every time.
+
+Measured after the fix, on a real Claude session: the record is there (23
+events) while the chat is still open and nothing has unmounted, and reopening
+the chat painted the transcript **4ms after the tap**, before the network was
+asked at all.
+
+Both chat views were driven, which for the herdr one meant building the
+situation it needs: `workspace.create` + `agent.start` put a real `claude` TUI
+in a pane helm had not started, answered its trust prompt with `Down`/`Enter`,
+and prompted it - then the app adopted it as an external session. First open
+wrote `msg:<env>:pane:w12:p1` with two messages; reopening rendered the reply
+**4ms after the tap** with no assistant turn on screen beforehand. The pane was
+closed afterwards by its workspace id; the other six in that herdr are the
+owner's.
+
 ---
 
 ## What changed on 2026-09-14

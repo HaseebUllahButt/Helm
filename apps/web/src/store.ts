@@ -1,3 +1,5 @@
+import { txn } from './idb';
+
 /**
  * Where the pairing lives.
  *
@@ -6,42 +8,24 @@
  * fast path; IndexedDB is the copy that survives a cleared localStorage (they
  * are evicted independently on some browsers) and is what the installed PWA
  * reads when it launches. Whichever has it wins; both are rewritten on save.
+ *
+ * The IndexedDB half goes through the shared opener in `idb.ts`, which exists
+ * because this store and the chat cache used to race to create the database
+ * and the loser's store was silently never there.
  */
 const KEY = 'helm.auth';
-const DB = 'helm';
-const STORE = 'kv';
 
 export interface StoredAuth { endpoints: string[]; token: string; deviceId?: string }
 
-function idb(): Promise<IDBDatabase | null> {
-  return new Promise((resolve) => {
-    try {
-      const req = indexedDB.open(DB, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(null);
-    } catch { resolve(null); }
-  });
-}
-
 async function idbGet(): Promise<StoredAuth | null> {
-  const db = await idb();
-  if (!db) return null;
-  return new Promise((resolve) => {
-    try {
-      const req = db.transaction(STORE, 'readonly').objectStore(STORE).get(KEY);
-      req.onsuccess = () => resolve((req.result as StoredAuth) ?? null);
-      req.onerror = () => resolve(null);
-    } catch { resolve(null); }
-  });
+  try { return (await txn<StoredAuth | undefined>('kv', 'readonly', (s) => s.get(KEY))) ?? null; }
+  catch { return null; }
 }
 
 async function idbSet(value: StoredAuth | null) {
-  const db = await idb();
-  if (!db) return;
   try {
-    const store = db.transaction(STORE, 'readwrite').objectStore(STORE);
-    value ? store.put(value, KEY) : store.delete(KEY);
+    if (value) await txn('kv', 'readwrite', (s) => s.put(value, KEY));
+    else await txn('kv', 'readwrite', (s) => s.delete(KEY));
   } catch { /* best effort */ }
 }
 
