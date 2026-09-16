@@ -742,6 +742,48 @@ Helm app" in the sidebar, once it has landed there); then it is in scope, with
 no redirect and nothing to click. The VM-hosted install remains the right one
 for a phone, which has no daemon of its own.
 
+### A quieter palette, and a wheel that reads at 20px
+
+The owner's words were "the UI still looks vibecoded, mute the green neon".
+Screenshotting the two main screens at 390x844 said what that meant:
+
+- **Three neon dots on the first screen.** `--emerald` at full chroma was the
+  brightest thing on a near-black page, and it was spent on *online* - the
+  state a machine is in almost always. Now `oklch(0.74 0.068 165)`, a sage
+  that says "alive" without being the first thing you see. Amber, which means
+  "a session is waiting for you", is the loudest colour again, which is what
+  the sheet's own comment says it should be.
+- **The settings button was a full-colour cyan gear.** `⚙` is U+2699 and most
+  systems render it from the emoji font, so the quietest button on the bar
+  came out brighter than anything else. It is an inline SVG now.
+- **Nine engine marks in nine saturated vendor colours** read as a bag of
+  sweets. Each is at about two thirds its shipped chroma and the tiles behind
+  them went from 14-16% to 10-11%: still recognisable at 26px, no longer a
+  competition.
+- **Every row was an outlined card.** Nine bordered rectangles down a screen
+  compete with their own contents; the fill alone says "row" and the hairline
+  comes back on hover.
+- **"New session" was a full-width tinted banner** above the list it belongs
+  to. It is now a row: the same height, the same left edge, and a `+` where
+  each row keeps its engine mark, so its label starts on the same line as
+  every title underneath it.
+- **`external` was the first thing an ellipsis ate.** The tag lived inside the
+  truncating title, so on a long name the one word saying what the row was
+  disappeared. The title truncates; the tags beside it do not.
+- **opencode rows showed a wall of JSON** where the model goes - it stores
+  `model` as `{"id":…,"providerID":…,"variant":…}` and the inventory reader
+  passed it through whole.
+
+**The logo.** The old mark was a neon gradient wheel with eight spokes and
+eight handles: at 32px it was a green asterisk, and at 20px in the sidebar it
+was mush. Four shapes were drawn and rendered at 20/32/48/128 to look at
+rather than to imagine - ring-and-nubs read as a sun, ring-and-dots as a
+camera aperture, four spokes as a crosshair. Six spokes with six handles is
+the one that reads as a ship's wheel at every size. One muted colour
+(`#c2c6d4`), no gradient, on a `#131317` tile with a hairline. Every asset was
+regenerated from it, including a maskable icon whose mark is pulled in to 78%
+so a circular mask cannot clip the handles.
+
 ### `helm app`, and the icon that was somebody else's
 
 The desktop app is a command now: `helm app` writes a desktop entry pointed at

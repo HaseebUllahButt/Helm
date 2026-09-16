@@ -66,6 +66,19 @@ const Terminal = lazy(() => import('./Terminal').then((m) => ({ default: m.Termi
 const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', cls: 'other' };
 
 /**
+ * Settings, drawn rather than typed. `⚙` is U+2699, which most systems render
+ * from the emoji font - so the quietest button on the bar came out as a
+ * full-colour cyan gear, the brightest thing on the screen.
+ */
+const Sliders = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+    <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
+    <circle cx="16" cy="7" r="2.2" /><circle cx="10" cy="17" r="2.2" />
+  </svg>
+);
+
+/**
  * An account is a CLI plus the home directory (or credential) it runs with.
  * A shell full of aliases yields the same account many times over, each with
  * different flags - `d`, `codexp`, `codexpx` are all "Codex, personal". The
@@ -1062,14 +1075,14 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
           disabled={!env.online || opening}
           onClick={openTerminal}
         >{env.info.terminals === 'panes' ? '❯!' : '❯_'}</button>
-        <button className="iconbtn" title={`${env.name} settings`} onClick={onSettings}>⚙</button>
+        <button className="iconbtn" title={`${env.name} settings`} onClick={onSettings}><Sliders /></button>
       </div>
 
       <div className="scroll"><div className="pad column">
         {!env.online && <div className="banner warn">this machine is offline</div>}
 
-        <button className="primary big" disabled={!env.online} onClick={onBrowse}>
-          New session
+        <button className="action" disabled={!env.online} onClick={onBrowse}>
+          <span className="plus">+</span>New session
         </button>
 
         {groups.map(([title, list]) => list.length > 0 && (
@@ -1164,7 +1177,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete }: {
         <EngineMark engine={eng.cls} />
         <span className="grow">
           <span className="rt">
-            {s.title}
+            <span className="rt-text">{s.title}</span>
             {adopted && <span className="tag">external</span>}
             {s.archived && <span className="tag">archived</span>}
           </span>

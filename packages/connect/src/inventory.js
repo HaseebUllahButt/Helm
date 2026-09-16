@@ -210,6 +210,17 @@ function devin(home, account) {
 
 // ----------------------------------------------------------------- opencode
 
+/**
+ * opencode stores the model as a JSON object, not a name:
+ * `{"id":"…","providerID":"…","variant":"…"}`. Passed through whole, it landed
+ * in the session list where the model goes and filled the row with JSON.
+ */
+const opencodeModel = (v) => {
+  if (typeof v !== 'string' || !v) return null;
+  if (!v.startsWith('{')) return v;
+  try { return JSON.parse(v).id ?? null; } catch { return null; }
+};
+
 function opencode(home, account) {
   // opencode keeps a real database, so this is the one engine where we get
   // titles, cost and model without parsing anything.
@@ -238,7 +249,7 @@ function opencode(home, account) {
           title: r.title || 'opencode session',
           cwd: collapse(r.directory ?? HOME),
           updatedAt: Number(r.time_updated) || 0,
-          model: r.model,
+          model: opencodeModel(r.model),
         });
       }
       conn.close();

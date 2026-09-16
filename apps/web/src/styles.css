@@ -39,15 +39,22 @@
   --primary-t: oklch(0.635 0.185 264);
   --primary-h: oklch(0.645 0.185 264);
   --primary-q: oklch(0.755 0.12 264);
-  --amber:     #fbbf24;
-  --sky:       #7dd3fc;
-  --emerald:   #34d399;
-  --red:       #f87171;
+  --amber:     #e8b23f;
+  --sky:       #8ec6e8;
+  /* Muted on purpose. At full chroma this was the brightest thing on a
+     near-black page, and it was spent on "online" - the state a machine is in
+     almost always. Three neon dots on the first screen read as decoration,
+     which made the amber that means "answer me" just one more colour. */
+  --emerald:   oklch(0.74 0.068 165);
+  --red:       #e88a8a;
 
-  --claude:    #e8a27a;
-  --codex:     #c7d2fe;
-  --opencode:  #c4b5fd;
-  --devin:     #a7f3d0;
+  /* Each engine's own colour, at about two thirds the chroma it ships with.
+     Recognisable at 26px, and a list of nine of them is a list, not a bag of
+     sweets. */
+  --claude:    #d3a186;
+  --codex:     #b9c1d6;
+  --opencode:  #b3abd8;
+  --devin:     #a3cdb9;
 
   /* A type scale, so sizes are chosen from a set rather than invented at
      each call site. The old sheet had sixteen distinct font sizes between
@@ -225,11 +232,14 @@ code, pre, kbd { font-family: var(--mono); }
 .row.active .rt { font-weight: 500; }
 /* A card row: used where the row is the content of the screen rather than a
    line in a list of settings. */
+/* No outline. Nine bordered cards down a screen is nine rectangles competing
+   with their own contents; the fill alone is enough to say "row", and the
+   hairline comes back on hover where it means something. */
 .row.tall {
   min-height: 46px; padding: 7px 10px; background: var(--card);
-  border: 1px solid var(--line); border-radius: var(--radius);
+  border: 1px solid transparent; border-radius: var(--radius);
 }
-.row.tall:hover:not(:disabled) { background: var(--raised); border-color: var(--line-2); }
+.row.tall:hover:not(:disabled) { background: var(--raised); border-color: var(--line); }
 .row.tall.active { border-color: color-mix(in srgb, var(--primary) 55%, transparent); background: color-mix(in srgb, var(--primary) 8%, var(--card)); }
 .rows.cards { gap: 5px; }
 .row .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -238,6 +248,10 @@ code, pre, kbd { font-family: var(--mono); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text);
   letter-spacing: -0.006em;
 }
+/* The title truncates; the tags beside it do not. They were inside the
+   ellipsis, so "external" was the first thing to disappear off a long name -
+   the one word that said what the row even was. */
+.row .rt .rt-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .rt .dim { color: var(--mutedfg); font-weight: 400; }
 .row .rm {
   font-size: var(--t-meta); color: var(--mutedfg); line-height: 1.35;
@@ -256,13 +270,13 @@ code, pre, kbd { font-family: var(--mono); }
 /* The marks are inline SVG inheriting currentColor, so each engine's tint
    above colours its logo with nothing further to set. */
 .mark svg { display: block; }
-.mark.claude   { background: color-mix(in srgb, var(--claude) 16%, transparent);   color: var(--claude); }
-.mark.codex    { background: color-mix(in srgb, var(--codex) 14%, transparent);    color: var(--codex); }
-.mark.opencode { background: color-mix(in srgb, var(--opencode) 16%, transparent); color: var(--opencode); }
-.mark.devin    { background: color-mix(in srgb, var(--devin) 14%, transparent);    color: var(--devin); }
-.mark.shell    { background: color-mix(in srgb, var(--emerald) 14%, transparent);  color: var(--emerald); }
+.mark.claude   { background: color-mix(in srgb, var(--claude) 11%, transparent);   color: var(--claude); }
+.mark.codex    { background: color-mix(in srgb, var(--codex) 10%, transparent);    color: var(--codex); }
+.mark.opencode { background: color-mix(in srgb, var(--opencode) 11%, transparent); color: var(--opencode); }
+.mark.devin    { background: color-mix(in srgb, var(--devin) 10%, transparent);    color: var(--devin); }
+.mark.shell    { background: color-mix(in srgb, var(--emerald) 11%, transparent);  color: var(--emerald); }
 
-.mdot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin: 0 4px; }
+.mdot { width: 7px; height: 7px; border-radius: 50%; flex: none; margin: 0 4px; }
 .mdot.on { background: var(--emerald); }
 .mdot.off { background: rgb(255 255 255 / 14%); }
 .sdot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin: 0 3px; display: inline-block; }
@@ -349,11 +363,35 @@ button.primary {
    amber, meaning "a session needs you", should be the loudest colour here,
    and it cannot be if a button that is always present outshines it. */
 button.primary.big {
-  padding: 11px 16px; margin-top: 0; margin-bottom: 10px;
-  background: color-mix(in srgb, var(--primary) 20%, var(--card));
-  border: 1px solid color-mix(in srgb, var(--primary) 46%, transparent);
+  padding: 9px 16px; margin-top: 0; margin-bottom: 10px;
+  background: color-mix(in srgb, var(--primary) 16%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--primary) 34%, transparent);
   color: var(--primary-q);
-  box-shadow: inset 0 1px rgb(255 255 255 / 5%);
+}
+
+/* The machine screen is a list, and its one action belongs to that list
+   rather than sitting above it as a banner: the same height, the same left
+   edge, the same radius, with a + where each row keeps its engine mark - so
+   the label starts on the same line as every title underneath it. */
+.action {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: 46px; padding: 7px 10px; margin-bottom: 10px;
+  border-radius: var(--radius); text-align: left;
+  background: color-mix(in srgb, var(--primary) 8%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--text); font-size: var(--t-body); font-weight: 500;
+  transition: background 0.12s var(--ease), border-color 0.12s var(--ease);
+}
+.action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--primary) 14%, var(--card));
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+.action:disabled { opacity: 0.45; }
+.action .plus {
+  width: 26px; height: 26px; border-radius: 7px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  color: var(--primary-q); font-size: 16px; line-height: 1; font-weight: 400;
 }
 button.primary.big:hover:not(:disabled) {
   filter: none;

@@ -77,3 +77,29 @@ test('a profiles file fresh from join answers; an old one is stale', async () =>
   utimesSync(file, old, old);
   assert.equal(profilesStale(), true);
 });
+
+test('opencode inventory: the model is a JSON object, not a name', async () => {
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const dir = join(XDG, 'opencode-test');
+  mkdirSync(dir, { recursive: true });
+  const db = new DatabaseSync(join(dir, 'opencode.db'));
+  db.exec(`CREATE TABLE session (
+    id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER,
+    agent TEXT, model TEXT)`);
+  const ins = db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?, ?)');
+  // What opencode really writes, and what the row filled up with before.
+  ins.run('oc-1', 'A thread', '/tmp/oc', Date.now(), 'build',
+    '{"id":"muse-spark-1.2","providerID":"opencode","variant":"xhigh"}');
+  // A plain name, in case a version ever writes one, and a broken value.
+  ins.run('oc-2', 'Another', '/tmp/oc', Date.now() - 1000, 'build', 'plain-model-name');
+  ins.run('oc-3', 'Third', '/tmp/oc', Date.now() - 2000, 'build', '{not json');
+  db.close();
+
+  const found = await inventory([
+    { id: 'oc', engine: 'opencode', env: { XDG_CONFIG_HOME: '~/.config' } },
+  ]);
+  const by = (id) => found.find((s) => s.id === id);
+  assert.equal(by('oc-1').model, 'muse-spark-1.2', 'the name out of the object');
+  assert.equal(by('oc-2').model, 'plain-model-name', 'a plain name is left alone');
+  assert.equal(by('oc-3').model, null, 'nonsense becomes nothing, not JSON on screen');
+});
