@@ -389,7 +389,15 @@ export class AcpDriver extends Driver {
       case 'usage_update':
         this.push('limits', { [this.engine]: { used: u.used, size: u.size, cost: u.cost } });
         return;
-      default: return; // user_message_chunk, current_mode_update, commands, titles
+      case 'session_info_update': {
+        // The name the agent gave its session. It arrives more than once -
+        // first a copy of the prompt, then the real title once the model has
+        // written one - so whoever listens takes the latest, not the first.
+        const title = typeof u.title === 'string' ? u.title.trim() : '';
+        if (title) this.push('title', { title });
+        return;
+      }
+      default: return; // user_message_chunk, current_mode_update, commands
     }
   }
 

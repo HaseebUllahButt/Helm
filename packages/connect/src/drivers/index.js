@@ -15,6 +15,7 @@ import { execFile } from 'node:child_process';
  *   permission.resolved { requestId, decision }
  *   turn.done           { turnId, status, costUsd?, usage?, error? }  status: ok | interrupted | error
  *   status              { status }                  working | blocked | idle | exited
+ *   title               { title }                   the name the agent gave its own session
  *   limits              { ... }
  *   error               { message, kind? }
  *

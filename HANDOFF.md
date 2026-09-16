@@ -522,6 +522,36 @@ perhaps half the time. publish moved to 18961.
 
 ---
 
+## What changed on 2026-09-16
+
+Three things, all about the session list being worth reading.
+
+**Sessions name themselves, after two prompts.** ACP agents already report
+the title they chose (`session_info_update`); the driver ignored it. It is
+now a `title` event, and `Sessions` adopts a generated name only once the
+session has two user prompts behind it - named on the first alone, a real
+fraction of sessions would be called "hi". The agent's own name is kept on
+the record as `generatedTitle` and outranks the fallback, which is the first
+informative line of the first two prompts (greetings skipped). For engines
+that never report a name - claude, codex - the prompt-derived one is all they
+get. A `title` passed to `session.start` marks the record `titleBy: 'user'`
+and is never overwritten. `session.resume`d sessions keep their count and
+pending name in sessions.json, so the rule survives restarts.
+
+**All sessions, one screen.** A "sessions" section in the sidebar opens a
+view listing every session on every machine, grouped by folder - the place to
+answer "what was running where". Rows have the same actions as the machine
+screen (open, archive/unarchive, delete); external panes are tagged, not
+manageable.
+
+**Archived left the machine screen.** It used to list them under their own
+section; now they only appear in All sessions, where they can be unarchived
+or deleted. The empty state on a machine that holds only archived threads
+says where they went. Archived terminals also stopped listing under
+"terminals".
+
+---
+
 ## What changed on 2026-09-14
 
 Two pushes. The morning built the headless drivers; the afternoon was the

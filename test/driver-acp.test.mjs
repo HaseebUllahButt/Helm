@@ -86,6 +86,16 @@ for (const engine of ['devin', 'opencode']) {
   });
 }
 
+test('devin: the session names itself and the title reaches helm', async () => {
+  const { driver, log } = make('devin', 'plain');
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done');
+  const titled = log.of('title');
+  assert.equal(titled.length, 1);
+  assert.equal(titled[0].title, 'Reply with exactly the words: hello from helm');
+  await driver.kill();
+});
+
 test('devin: the permission sheet carries the editable command', async () => {
   const { driver, log } = make('devin', 'command');
   await driver.send('run curl');

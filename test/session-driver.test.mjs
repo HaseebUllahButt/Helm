@@ -338,6 +338,48 @@ test('/compact delegates to the driver', async () => {
   await sessions.kill(s.id);
 });
 
+test('a session names itself after two prompts, not one', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-titles')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
+  assert.equal(s.title, 'proj', 'the folder is the name until one is earned');
+  const d = FakeDriver.made.at(-1);
+
+  // One prompt in, a title that is just the prompt back is not trusted:
+  // half the time that prompt is "hi".
+  await sessions.input(s.id, 'hi');
+  d.push('title', { title: 'hi' });
+  assert.equal(sessions.get(s.id).title, 'proj');
+
+  // Two prompts in, the gate opens. The agent only ever said "hi", so the
+  // prompts themselves name the session - then the agent's real title,
+  // arriving late, outranks that.
+  await sessions.input(s.id, 'fix the login bug');
+  assert.equal(sessions.get(s.id).title, 'fix the login bug');
+  d.push('title', { title: 'Login bug fix' });
+  assert.equal(sessions.get(s.id).title, 'Login bug fix');
+  await sessions.kill(s.id);
+});
+
+test('a name typed at start is never overwritten by a generated one', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-titles-user')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea', title: 'build' });
+  await sessions.input(s.id, 'one');
+  await sessions.input(s.id, 'two');
+  FakeDriver.made.at(-1).push('title', { title: 'something else entirely' });
+  assert.equal(sessions.get(s.id).title, 'build');
+  await sessions.kill(s.id);
+});
+
 test('terminals are numbered by the machine, not guessed by the app', async () => {
   const { mkdirSync } = await import('node:fs');
   mkdirSync(process.env.HELM_DIR, { recursive: true });

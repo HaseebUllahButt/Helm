@@ -208,6 +208,13 @@ code, pre, kbd { font-family: var(--mono); }
 .pad .section { padding: 0 2px; }
 
 .rows { display: flex; flex-direction: column; gap: 2px; }
+/* The folder a group of threads lives in - the All sessions screen files
+   every session under where it ran. */
+.foldhead {
+  margin: 12px 0 4px; padding: 0 10px;
+  font: 500 11px var(--mono); color: var(--mutedfg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .row {
   display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px;
   padding: 5px 8px; border-radius: var(--radius-md); text-align: left;

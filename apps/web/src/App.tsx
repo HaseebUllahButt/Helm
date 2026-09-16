@@ -166,6 +166,7 @@ export function App() {
 
 type MainView =
   | { kind: 'env' }
+  | { kind: 'threads' }
   | { kind: 'browse'; path?: string }
   | { kind: 'start'; cwd: string }
   | { kind: 'settings' }
@@ -330,7 +331,7 @@ function Shell({ client, conn, onSignOut }: {
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => s.engine !== 'shell' && !s.archived);
   const blocked = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
-  const showMain = wide || !!selected;
+  const showMain = wide || !!selected || view.kind === 'threads';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -406,6 +407,17 @@ function Shell({ client, conn, onSignOut }: {
               {!envs.length && !error && <div className="empty quiet">no machines yet</div>}
             </div>
 
+            <div className="section">sessions</div>
+            <div className="rows">
+              <button className="row" onClick={() => navigate([{ kind: 'threads' }])}>
+                <span className="grow">
+                  <span className="rt">All sessions</span>
+                  <span className="rm">every thread, grouped by folder</span>
+                </span>
+                <span className="chev">›</span>
+              </button>
+            </div>
+
             {/* Setup is three things you do once and then never again. As
                 full-width slabs they outweighed the machines above them,
                 which is the wrong way round: they are a footer, so they
@@ -431,7 +443,13 @@ function Shell({ client, conn, onSignOut }: {
       </aside>
 
       <section className={`main${showMain ? ' showing' : ''}`}>
-        {!env ? (
+        {view.kind === 'threads' ? (
+          <Threads
+            client={client} envs={envs} sessions={sessions} onBack={back}
+            onOpen={(envId, s) => navigate([{ kind: 'threads' }, { kind: 'session', session: s }], envId)}
+            onChanged={loadSessions}
+          />
+        ) : !env ? (
           <div className="scroll"><div className="pad">
             <div className="empty quiet">select a machine</div>
           </div></div>
@@ -879,13 +897,13 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
   };
 
   const agents = sessions.filter((s) => s.engine !== 'shell' && !s.archived);
-  const archived = sessions.filter((s) => s.engine !== 'shell' && s.archived);
+  const archivedCount = sessions.filter((s) => s.archived).length;
   const groups: [string, Session[]][] = [
     ['needs you', agents.filter((s) => s.status === 'blocked')],
     ['working', agents.filter((s) => s.status === 'working')],
     ['idle', agents.filter((s) => !['blocked', 'working', 'exited'].includes(s.status))],
     ['finished', agents.filter((s) => s.status === 'exited')],
-    ['terminals', sessions.filter((s) => s.pty && s.alive !== false)],
+    ['terminals', sessions.filter((s) => s.pty && s.alive !== false && !s.archived)],
   ];
 
   const setArchived = async (s: Session, archived: boolean) => {
@@ -957,24 +975,14 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
             </div>
           </div>
         ))}
-        {archived.length > 0 && (
-          <div>
-            <div className="section">archived</div>
-            <div className="rows">
-              {archived.map((s) => (
-                <SessionRow
-                  key={s.id} s={s} onOpen={() => onOpen(s)}
-                  onArchive={() => setArchived(s, false)}
-                  onDelete={() => deleteSession(s)}
-                />
-              ))}
-            </div>
-          </div>
-        )}
         {!agents.length && (
           <div className="empty quiet">
-            {archived.length ? 'no active sessions' : `nothing running on ${env.name}`}
-            <div className="note" style={{ marginTop: 6 }}>pick a folder, then an agent</div>
+            {archivedCount ? 'no active sessions' : `nothing running on ${env.name}`}
+            <div className="note" style={{ marginTop: 6 }}>
+              {archivedCount
+                ? `${archivedCount} archived thread${archivedCount === 1 ? '' : 's'} under All sessions`
+                : 'pick a folder, then an agent'}
+            </div>
           </div>
         )}
 
@@ -1007,6 +1015,7 @@ function SessionRow({ s, onOpen, onArchive, onDelete }: {
           <span className="rt">
             {s.title}
             {adopted && <span className="tag">external</span>}
+            {s.archived && <span className="tag">archived</span>}
           </span>
           <span className="rm">{eng.label}{s.model ? ` · ${s.model}` : ''} · {shortPath(s.cwd)}</span>
         </span>
@@ -1046,6 +1055,84 @@ function StatusChip({ status }: { status: string }) {
   if (status === 'done') return <span className="chip done"><i />done</span>;
   if (status === 'exited') return <span className="chip exited">ended</span>;
   return null;
+}
+
+// ------------------------------------------------------------------ threads
+
+/**
+ * Every session on every machine, grouped by the folder it runs in.
+ *
+ * This is where archived threads live: the machine screen only shows active
+ * work, so archiving is not "delete it quietly" - it is filed here, where it
+ * can be reopened or unarchived. Sessions are sorted by activity within each
+ * folder, and folders by their most recent one.
+ */
+function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
+  client: Client; envs: Environment[]; sessions: Record<string, Session[]>;
+  onBack: () => void; onOpen: (envId: string, s: Session) => void; onChanged: (envId: string) => void;
+}) {
+  const [error, setError] = useState('');
+
+  const setArchived = async (envId: string, s: Session, archived: boolean) => {
+    setError('');
+    try { await client.rpc(envId, 'session.archive', { id: s.id, archived }, 20_000); onChanged(envId); }
+    catch (e: any) { setError(e.message); }
+  };
+  const deleteSession = async (envId: string, s: Session) => {
+    setError('');
+    try { await client.rpc(envId, 'session.kill', { id: s.id }, 20_000); onChanged(envId); }
+    catch (e: any) { setError(e.message); }
+  };
+
+  const groups = envs.map((env) => {
+    const byFolder = new Map<string, Session[]>();
+    for (const s of sessions[env.id] ?? []) {
+      const key = s.cwd || '~';
+      const list = byFolder.get(key) ?? [];
+      if (!list.length) byFolder.set(key, list);
+      list.push(s);
+    }
+    const folders = [...byFolder.entries()]
+      .map(([cwd, list]): [string, Session[]] =>
+        [cwd, [...list].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))])
+      .sort((a, b) => (b[1][0].updatedAt ?? 0) - (a[1][0].updatedAt ?? 0));
+    return { env, folders };
+  }).filter((g) => g.folders.length > 0);
+
+  return (
+    <>
+      <div className="bar">
+        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <div className="titles"><h1>All sessions</h1><span className="sub">every thread, grouped by folder</span></div>
+      </div>
+      <div className="scroll"><div className="pad column">
+        {groups.map(({ env, folders }) => (
+          <div key={env.id}>
+            <div className="section">
+              {env.name}
+              {!env.online && <span className="quiet"> · offline</span>}
+            </div>
+            {folders.map(([cwd, list]) => (
+              <div key={cwd}>
+                <div className="foldhead">{cwd.replace(/^\/home\/[^/]+/, '~')}</div>
+                <div className="rows">
+                  {list.map((s) => (
+                    <SessionRow
+                      key={s.id} s={s} onOpen={() => onOpen(env.id, s)}
+                      onArchive={() => setArchived(env.id, s, !s.archived)}
+                      onDelete={() => deleteSession(env.id, s)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+        {!groups.length && <div className="empty quiet">no sessions yet</div>}
+        {error && <div className="error">{error}</div>}
+      </div></div>
+    </>
+  );
 }
 
 // ----------------------------------------------------------------- settings

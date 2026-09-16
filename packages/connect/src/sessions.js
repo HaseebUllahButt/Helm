@@ -32,6 +32,30 @@ const IDLE_REAP_MS = 30 * 60_000;
 const DRIVERS = { claude: ClaudeDriver, codex: CodexDriver, opencode: OpencodeDriver, devin: DevinDriver };
 
 /**
+ * A name for a session that is more than the folder it runs in.
+ *
+ * Two sources: the agent itself - ACP sessions report the title they chose
+ * as `session_info_update`, kept on the record as `generatedTitle` - and the
+ * prompts, which always exist. Either kind lands only once the session has
+ * TITLE_AFTER user prompts behind it: named on the first alone, a real
+ * fraction of sessions would be called "hi". The name the owner typed at
+ * start (`titleBy: 'user'`) always wins.
+ */
+const TITLE_AFTER = 2;
+const TITLE_RANK = { auto: 1, agent: 2, user: 3 };
+/** A prompt that says nothing about the work the session is for. */
+const GREETING = /^(hi+|hey+|hello+|yo|sup|hiya|howdy|test(ing)?|ping|ok(ay)?|thanks?( you)?|good (morning|afternoon|evening))[.\s!?,]*$/i;
+
+/** The first informative line among the sampled prompts, or null. */
+const promptTitle = (samples) => {
+  for (const p of samples ?? []) {
+    const line = String(p).split('\n').map((l) => l.trim()).find(Boolean);
+    if (line && !GREETING.test(line)) return line.length > 60 ? line.slice(0, 59) + '…' : line;
+  }
+  return null;
+};
+
+/**
  * The quick keys above the phone keyboard, as the bytes a terminal expects.
  * herdr takes these by name; a pty takes what a keyboard would have sent.
  */
@@ -379,6 +403,7 @@ export class Sessions extends EventEmitter {
       auto: !!auto,
       cwd: dir,
       title: title || `${dir.split('/').pop() || dir}`,
+      titleBy: title ? 'user' : null,
       status: 'starting',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -438,6 +463,7 @@ export class Sessions extends EventEmitter {
       engine: 'shell',
       cwd: dir,
       title: title || this.#nextTerminalName(),
+      titleBy: title ? 'user' : null,
       status: 'shell',
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -471,6 +497,7 @@ export class Sessions extends EventEmitter {
       mode: mode || (auto != null ? modeFromAuto(profile.engine, auto) : defaultMode(profile.engine)),
       cwd: dir,
       title: title || `${dir.split('/').pop() || dir}`,
+      titleBy: title ? 'user' : null,
       status: 'idle',
       engineSessionId: null,
       createdAt: Date.now(),
@@ -537,6 +564,7 @@ export class Sessions extends EventEmitter {
       }
       if (e.status === 'exited') return;
     }
+    if (e.type === 'title') return this.#titled(s, e.title, 'agent');
     if (d.engineSessionId && d.engineSessionId !== s.engineSessionId) {
       s.engineSessionId = d.engineSessionId;
       this.#save();
@@ -544,6 +572,44 @@ export class Sessions extends EventEmitter {
     const event = this.events.append(s.id, e);
     s.lastSeq = event.seq;
     this.emit('event', { id: s.id, event });
+  }
+
+  /**
+   * One more real prompt behind the session. The title gate opens at
+   * TITLE_AFTER: take the agent's own name when it reported a meaningful
+   * one, else make one out of the prompts themselves.
+   */
+  #prompted(s, text) {
+    if (!this.#index.has(s.id)) return;
+    s.prompts = (s.prompts ?? 0) + 1;
+    const sample = (s.promptSample ??= []);
+    if (sample.length < TITLE_AFTER) sample.push(String(text).slice(0, 200));
+    if (s.prompts !== TITLE_AFTER) { this.#save(); return; }
+    const agent = s.generatedTitle && !GREETING.test(s.generatedTitle) ? s.generatedTitle : null;
+    const pick = agent ?? promptTitle(s.promptSample);
+    if (pick) return this.#titled(s, pick, agent ? 'agent' : 'auto');
+    this.#save();
+  }
+
+  /**
+   * Adopt a candidate title once the session is old enough for it to be
+   * trusted. The agent's own name outranks one derived from the prompts; a
+   * name the owner typed outranks both.
+   */
+  #titled(s, title, by) {
+    const clean = String(title ?? '').replace(/\s+/g, ' ').trim();
+    if (!clean) return;
+    if (by === 'agent' && s.generatedTitle !== clean) {
+      s.generatedTitle = clean;
+      this.#save();
+    }
+    if ((s.prompts ?? 0) < TITLE_AFTER) return;
+    if ((TITLE_RANK[by] ?? 0) < (TITLE_RANK[s.titleBy] ?? 0)) return;
+    if (s.title === clean) return;
+    s.title = clean.slice(0, 80);
+    s.titleBy = by;
+    this.#save();
+    this.emit('session', s);
   }
 
   /** Close a driver that has been idle for a long while; keep the session. */
@@ -908,6 +974,7 @@ export class Sessions extends EventEmitter {
       // riding on the answer. `start()` returns immediately if it is already
       // running, and `send` would have called it a line later anyway.
       if (images.length) await d.start?.();
+      this.#prompted(s, clean);
       // The driver is the authority on whether this agent can see an image:
       // it is the one that spoke to the CLI. Anything else gets a filename
       // placeholder in the text, which is always safe while lost bytes are
@@ -932,9 +999,11 @@ export class Sessions extends EventEmitter {
     }
     if (s.pty) { await this.terminals.write(id, text); return { ok: true }; }
     const handle = this.#handle(s);
-    return s.agentName && !raw
-      ? this.runtime.sendPrompt(handle, text)
-      : this.runtime.sendText(handle, text);
+    if (s.agentName && !raw) {
+      this.#prompted(s, text);
+      return this.runtime.sendPrompt(handle, text);
+    }
+    return this.runtime.sendText(handle, text);
   }
 
   /** `/compact [hint]` summarises the conversation into a fresh context. */
