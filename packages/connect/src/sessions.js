@@ -65,6 +65,14 @@ const promptTitle = (samples) => {
 };
 
 /**
+ * Rows helm does not own: a herdr pane it did not start (`pane:`), and a past
+ * session read out of a CLI's own history (`found:`). They are real work and
+ * belong in the list, but helm has no record of its own to archive or delete -
+ * so what the owner does with one is kept beside the sessions as a mark.
+ */
+const EXTERNAL = /^(pane:|found:)/;
+
+/**
  * What a session looks like on the wire: everything but helm's own notes.
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
@@ -168,6 +176,8 @@ export class Sessions extends EventEmitter {
   #reapers = new Map();
   /** sessionId -> expiry, for event pushes somebody is looking at */
   #watching = new Map();
+  /** external id -> 'archived' | 'removed', for rows helm does not own */
+  #marks = new Map();
 
   constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost() } = {}) {
     super();
@@ -220,6 +230,7 @@ export class Sessions extends EventEmitter {
     try {
       const raw = JSON.parse(readFileSync(INDEX_FILE, 'utf8'));
       for (const s of raw.sessions || []) this.#index.set(s.id, s);
+      for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
     } catch { /* a corrupt index must not stop the daemon booting */ }
   }
 
@@ -227,7 +238,11 @@ export class Sessions extends EventEmitter {
     mkdirSync(HELM_DIR, { recursive: true });
     writeFileSync(
       INDEX_FILE,
-      JSON.stringify({ version: 1, sessions: [...this.#index.values()] }, null, 2),
+      JSON.stringify({
+        version: 1,
+        sessions: [...this.#index.values()],
+        external: Object.fromEntries(this.#marks),
+      }, null, 2),
       { mode: 0o600 }
     );
   }
@@ -333,6 +348,8 @@ export class Sessions extends EventEmitter {
     this.#adopted.clear();
     for (const [paneId, pane] of live) {
       if (ours.has(paneId)) continue;
+      const mark = this.#marks.get(`pane:${paneId}`);
+      if (mark === 'removed') continue;
       this.#adopted.set(paneId, pane);
       this.runtime.watch({ paneId });
       out.push({
@@ -346,6 +363,7 @@ export class Sessions extends EventEmitter {
         cwd: pane.cwd,
         title: pane.agentName ?? pane.title ?? paneId,
         status: pane.engine ? (pane.status ?? 'unknown') : 'shell',
+        archived: mark === 'archived',
         alive: true,
         adopted: true,
         updatedAt: Date.now(),
@@ -1097,6 +1115,10 @@ export class Sessions extends EventEmitter {
   }
 
   async kill(id) {
+    // A row read out of a CLI's own history: there is no process to stop and
+    // nothing of ours to delete. "Delete" here means stop listing it - the
+    // CLI's own transcript is its data, not helm's, and stays where it is.
+    if (id.startsWith('found:')) return this.#mark(id, 'removed');
     const s = this.get(id);
     if (s.driver) {
       const d = this.#drivers.get(id);
@@ -1124,6 +1146,17 @@ export class Sessions extends EventEmitter {
     return { ok: true };
   }
 
+  /** What the owner has filed away or dismissed among the rows helm does not own. */
+  marks() { return Object.fromEntries(this.#marks); }
+
+  #mark(id, state) {
+    if (state) this.#marks.set(id, state); else this.#marks.delete(id);
+    this.#save();
+    const session = { id, adopted: true, archived: state === 'archived', removed: state === 'removed' };
+    this.emit('session', session);
+    return { ok: true, session };
+  }
+
   /** Hide a session from the active list without stopping or deleting it. */
   /**
    * The name the owner typed, which outranks anything helm or the agent
@@ -1139,8 +1172,11 @@ export class Sessions extends EventEmitter {
   }
 
   archive(id, archived = true) {
+    // Nothing of helm's to write on, so the mark is the record. Archiving one
+    // of these is the only way to get a machine's own terminal panes and a
+    // CLI's year of history out of the way without pretending they are gone.
+    if (EXTERNAL.test(id)) return this.#mark(id, archived ? 'archived' : null);
     const s = this.get(id);
-    if (s.adopted) throw new Error('an external session cannot be archived');
     s.archived = !!archived;
     s.archivedAt = s.archived ? Date.now() : null;
     this.#save();

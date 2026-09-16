@@ -638,8 +638,19 @@ export class Daemon {
 
       // Past transcripts from each CLI's own store. Off by default: scanning
       // them is only worth it when you actually want to reopen an old chat.
-      case M.SESSION_INVENTORY:
-        return { recent: await inventory(await currentProfiles()) };
+      case M.SESSION_INVENTORY: {
+        // What the owner archived or dismissed applies here too: these rows
+        // are the ones most worth getting rid of, since a machine's CLIs
+        // remember every session ever run on it.
+        const marks = this.sessions.marks();
+        const recent = [];
+        for (const x of await inventory(await currentProfiles())) {
+          const mark = marks[`found:${x.engine}:${x.id}`];
+          if (mark === 'removed') continue;
+          recent.push(mark === 'archived' ? { ...x, archived: true } : x);
+        }
+        return { recent };
+      }
 
       // What `/` offers in this session: helm's own actions plus whatever
       // commands the owner has written for this engine, in this directory.

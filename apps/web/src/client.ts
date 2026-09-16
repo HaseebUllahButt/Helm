@@ -91,6 +91,8 @@ export interface InventorySession {
   cwd: string;
   updatedAt: number;
   model?: string;
+  /** Filed away by the owner; the machine remembers, so every device agrees. */
+  archived?: boolean;
 }
 
 /** A permission mode an engine offers, in words; the daemon knows the flags. */

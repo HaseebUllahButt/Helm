@@ -127,6 +127,7 @@ const foundRow = (x: InventorySession): Session => ({
   id: `found:${x.engine}:${x.id}`,
   title: x.title, cwd: x.cwd, engine: x.engine,
   profileId: '', status: 'idle', adopted: true, alive: false,
+  archived: !!x.archived,
   model: x.model ?? null, updatedAt: x.updatedAt,
 });
 
@@ -931,16 +932,19 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
   // by hand in a terminal show up here, marked external, instead of the
   // machine looking like nothing ever happened on it.
   const [earlier, setEarlier] = useState<InventorySession[]>([]);
-  useEffect(() => {
+  // Named, because archiving one of these has to refresh the list it came
+  // from - the machine is the only place that remembers what was filed away.
+  const reloadEarlier = useCallback(() => {
     if (!env.online) { setEarlier([]); return; }
-    let live = true;
-    const load = () => client.rpc(env.id, 'session.inventory', {}, 20_000)
-      .then((r: any) => { if (live) setEarlier(r.recent ?? []); })
+    client.rpc(env.id, 'session.inventory', {}, 20_000)
+      .then((r: any) => setEarlier(r.recent ?? []))
       .catch(() => {});
-    load();
-    const timer = setInterval(load, 60_000);
-    return () => { live = false; clearInterval(timer); };
   }, [client, env.id, env.online]);
+  useEffect(() => {
+    reloadEarlier();
+    const timer = setInterval(reloadEarlier, 60_000);
+    return () => clearInterval(timer);
+  }, [reloadEarlier]);
 
   const openTerminal = async () => {
     setOpening(true); setError('');
@@ -972,18 +976,24 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
 
   // A taste of the machine's own history, capped so a well-used laptop does
   // not bury the active groups; All sessions has the rest.
-  const recent = dedupeDetected(sessions, earlier).slice(0, 6);
+  // Archived ones are filed under All sessions, like every other thread the
+  // owner has put away; this screen is for what is still in front of them.
+  const recent = dedupeDetected(sessions, earlier).filter((x) => !x.archived).slice(0, 6);
 
   const setArchived = async (s: Session, archived: boolean) => {
     setError('');
-    try { await client.rpc(env.id, 'session.archive', { id: s.id, archived }, 20_000); reload(); }
-    catch (e: any) { setError(e.message); }
+    try {
+      await client.rpc(env.id, 'session.archive', { id: s.id, archived }, 20_000);
+      reload(); reloadEarlier();
+    } catch (e: any) { setError(e.message); }
   };
 
   const deleteSession = async (s: Session) => {
     setError('');
-    try { await client.rpc(env.id, 'session.kill', { id: s.id }, 20_000); reload(); }
-    catch (e: any) { setError(e.message); }
+    try {
+      await client.rpc(env.id, 'session.kill', { id: s.id }, 20_000);
+      reload(); reloadEarlier();
+    } catch (e: any) { setError(e.message); }
   };
 
   const setTitle = async (s: Session, title: string) => {
@@ -1054,7 +1064,16 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
           <div>
             <div className="section">earlier</div>
             <div className="rows">
-              {recent.map((x) => <SessionRow key={`found:${x.engine}:${x.id}`} s={foundRow(x)} />)}
+              {recent.map((x) => {
+                const row = foundRow(x);
+                return (
+                  <SessionRow
+                    key={row.id} s={row}
+                    onArchive={() => setArchived(row, true)}
+                    onDelete={() => deleteSession(row)}
+                  />
+                );
+              })}
             </div>
           </div>
         )}
@@ -1102,8 +1121,13 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete }: {
 }) {
   const eng = engineOf(s.engine);
   const adopted = s.adopted;
+  // A thread read out of a CLI's own history rather than run by helm.
+  const found = s.id.startsWith('found:');
   const [menu, setMenu] = useState(false);
-  const managed = !adopted && (!!onRename || !!onArchive || !!onDelete);
+  // Work helm did not start is still the owner's to file away. It used to get
+  // no menu at all, which on a machine that has been worked at means most of
+  // the list is rows you cannot do anything about.
+  const managed = !!onRename || !!onArchive || !!onDelete;
   // A thread helm cannot open - one it found in a CLI's history rather than
   // one it runs - gets no button body: nothing happens on the way in.
   const Main: any = onOpen ? 'button' : 'div';
@@ -1132,7 +1156,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete }: {
           >⋯</button>
           {menu && (
             <div className="menu row-menu" onClick={(e) => e.stopPropagation()}>
-              {onRename && (
+              {onRename && !adopted && (
                 <button onClick={() => { setMenu(false); rename(s, onRename); }}>Rename thread</button>
               )}
               {onArchive && (
@@ -1143,8 +1167,16 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete }: {
               {onDelete && (
                 <button className="destructive" onClick={() => {
                   setMenu(false);
-                  if (confirm(`Delete "${s.title}"? This ends the agent and permanently removes the thread from helm.`)) onDelete();
-                }}>Delete thread</button>
+                  // Three different things wear this one menu item, so each
+                  // says what it really does. helm never deletes a CLI's own
+                  // history: that conversation is the owner's, not our record.
+                  const ask = found
+                    ? `Remove "${s.title}" from helm? ${eng.label} keeps the conversation - helm just stops listing it.`
+                    : adopted
+                      ? `Close "${s.title}"? This ends the program running in that pane, which helm did not start.`
+                      : `Delete "${s.title}"? This ends the agent and permanently removes the thread from helm.`;
+                  if (confirm(ask)) onDelete();
+                }}>{found ? 'Remove from helm' : adopted ? 'Close this pane' : 'Delete thread'}</button>
               )}
             </div>
           )}
@@ -1207,14 +1239,22 @@ function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, envKey]);
 
+  // A row helm does not own is filed on the machine, not here, so both of
+  // these refresh the list that produced it as well as the session list.
+  const refresh = (envId: string) => {
+    onChanged(envId);
+    client.rpc(envId, 'session.inventory', {}, 20_000)
+      .then((r: any) => setFound((f) => ({ ...f, [envId]: r.recent ?? [] })))
+      .catch(() => {});
+  };
   const setArchived = async (envId: string, s: Session, archived: boolean) => {
     setError('');
-    try { await client.rpc(envId, 'session.archive', { id: s.id, archived }, 20_000); onChanged(envId); }
+    try { await client.rpc(envId, 'session.archive', { id: s.id, archived }, 20_000); refresh(envId); }
     catch (e: any) { setError(e.message); }
   };
   const deleteSession = async (envId: string, s: Session) => {
     setError('');
-    try { await client.rpc(envId, 'session.kill', { id: s.id }, 20_000); onChanged(envId); }
+    try { await client.rpc(envId, 'session.kill', { id: s.id }, 20_000); refresh(envId); }
     catch (e: any) { setError(e.message); }
   };
   const setTitle = async (envId: string, s: Session, title: string) => {
@@ -1285,7 +1325,13 @@ function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
                 <div className="foldhead">{collapseCwd(cwd)}</div>
                 <div className="rows">
                   {list.map((s) => s.id.startsWith('found:') ? (
-                    <SessionRow key={s.id} s={s} />
+                    // helm cannot open one of these - it has no live session
+                    // behind it - but it can stop putting it in front of you.
+                    <SessionRow
+                      key={s.id} s={s}
+                      onArchive={() => setArchived(env.id, s, !s.archived)}
+                      onDelete={() => deleteSession(env.id, s)}
+                    />
                   ) : (
                     <SessionRow
                       key={s.id} s={s} onOpen={() => onOpen(env.id, s)}

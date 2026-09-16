@@ -673,6 +673,56 @@ owner's.
 
 ---
 
+### Everything in the list is the owner's to get rid of
+
+A machine that has been worked at is mostly rows helm did not start: a real
+one here listed **182 threads**, of which six were helm's. The rest are the
+terminal panes herdr holds and every session each CLI has ever recorded on
+this machine - which is the point of reading those histories, but they arrived
+with no menu at all. `managed` was `!adopted`, so the only threads that could
+be archived or deleted were the ones helm ran.
+
+Now every row has the menu, and the three kinds say what they actually do:
+
+- **A thread helm ran** - rename, archive, *Delete thread* (ends the agent,
+  removes the thread), as before.
+- **A pane helm did not start** - archive, or *Close this pane*, which is
+  honest about ending a program helm did not start. `session.kill` already
+  closed the pane; the app simply never offered it.
+- **A session found in a CLI's own history** - archive, or *Remove from helm*,
+  which stops helm listing it and touches nothing else. **helm does not delete
+  a CLI's transcript.** That conversation is the owner's data, not helm's
+  record, and a menu item that quietly erased a year of Codex history would be
+  the wrong kind of surprise.
+
+There is no record of helm's to write on for either external kind, so the
+answer is a mark kept beside the sessions in `sessions.json` (`external: {
+"found:codex:<id>": "removed" }`). `list()` applies marks to panes and
+`session.inventory` applies them to the histories, so the machine remembers
+and every paired device agrees - archive one from a phone and the laptop shows
+it archived too.
+
+Driven on the real machine's herdr and CLI histories: 182 rows, every one with
+a menu; archiving a found row tagged it `archived` in All sessions and took it
+off the machine screen; removing one dropped the list to 181 and it was still
+gone after a reload.
+
+### The desktop window: the titlebar experiment is out
+
+`display_override: ["window-controls-overlay"]` landed this morning and the
+result on the owner's desktop was three stacked bars - the app's own titlebar,
+Chrome's `127.0.0.1:8787` origin strip, and helm's top bar under it. Reverted,
+along with its `@media (display-mode: window-controls-overlay)` block: a plain
+`standalone` window again.
+
+The other half of that report - "if there is a link, just auto open that
+network" - is already the behaviour and was re-checked: a fresh browser at
+`http://127.0.0.1:8787` signs itself in through `/api/auth/local` and lands on
+the machine list (`2/2 online`), no link screen. That path is loopback-only on
+purpose; see the loopback trap above.
+
+---
+
 ## What changed on 2026-09-14
 
 Two pushes. The morning built the headless drivers; the afternoon was the

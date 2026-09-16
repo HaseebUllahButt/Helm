@@ -469,6 +469,44 @@ test('a thread keeps what it has cost', async () => {
   await sessions.kill(s.id);
 });
 
+test('work helm did not start can be filed away or struck off', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  // A machine with a pane helm never started, which is what the runtime
+  // reports for anything the owner opened at the keyboard.
+  class WithPane extends StubRuntime {
+    async listLive() {
+      return new Map([['w1:p1', { workspaceId: 'w1', tabId: 'w1:t1', cwd: '/tmp/x', engine: 'claude', status: 'idle' }]]);
+    }
+  }
+  const sessions = new Sessions(new WithPane(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-external')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+
+  const pane = () => sessions.list().then((l) => l.find((x) => x.id === 'pane:w1:p1'));
+  assert.equal((await pane()).archived, false, 'listed, and not filed away');
+
+  // Archiving one is reversible and says so in the list.
+  sessions.archive('pane:w1:p1', true);
+  assert.equal((await pane()).archived, true);
+  sessions.archive('pane:w1:p1', false);
+  assert.equal((await pane()).archived, false);
+
+  // A thread read out of a CLI's own history has no record and no process:
+  // "delete" means stop listing it, and nothing else.
+  assert.deepEqual(sessions.marks(), {});
+  await sessions.kill('found:claude:abc123');
+  assert.deepEqual(sessions.marks(), { 'found:claude:abc123': 'removed' });
+  sessions.archive('found:codex:def456', true);
+  assert.equal(sessions.marks()['found:codex:def456'], 'archived');
+
+  // And a dismissed pane stops being listed at all.
+  await sessions.kill('found:claude:abc123');
+  sessions.archive('pane:w1:p1', true);
+  assert.equal((await pane()).archived, true, 'still there, filed');
+});
+
 test('terminals are numbered by the machine, not guessed by the app', async () => {
   const { mkdirSync } = await import('node:fs');
   mkdirSync(process.env.HELM_DIR, { recursive: true });
