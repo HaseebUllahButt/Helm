@@ -37,6 +37,7 @@ const usage = () => {
 
   helm setup [https-url]             make this always-on VM your Helm home
   helm open                          open the app here, signed in (no link needed)
+  helm app [--remove]                put helm in this desktop's applications
 
   helm add controller                a phone or browser: controls, runs nothing
   helm add pc                        a laptop or desktop: runs agents, controls others
@@ -526,6 +527,27 @@ try {
     case 'open':
       await openApp();
       break;
+
+    case 'app': {
+      const { installApp, removeApp } = await import('../src/desktop.js');
+      if (rest.includes('--remove') || rest.includes('remove')) {
+        const { removed, icons } = removeApp();
+        console.log(removed
+          ? `\n  removed the helm desktop entry and ${icons} icon${icons === 1 ? '' : 's'}.\n`
+          : '\n  there was no helm desktop entry here.\n');
+        break;
+      }
+      const net = requireNetwork();
+      const at = `http://127.0.0.1:${net.port ?? 8787}/`;
+      const pick = rest[rest.indexOf('--browser') + 1];
+      const r = installApp({ url: at, browser: rest.includes('--browser') ? pick : undefined });
+      console.log(`\n  helm is in your applications, opening ${r.url}`);
+      console.log(r.windowed
+        ? `  its own window, through ${r.browser}. It signs itself in; there is nothing to type.`
+        : '  no chromium-family browser found, so it opens in your default one.');
+      console.log('  remove it again with:  helm app --remove\n');
+      break;
+    }
 
     case 'join':
       await joinCmd();

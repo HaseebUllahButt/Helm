@@ -742,6 +742,34 @@ Helm app" in the sidebar, once it has landed there); then it is in scope, with
 no redirect and nothing to click. The VM-hosted install remains the right one
 for a phone, which has no daemon of its own.
 
+### `helm app`, and the icon that was somebody else's
+
+The desktop app is a command now: `helm app` writes a desktop entry pointed at
+`http://127.0.0.1:<port>`, opened through a chromium-family browser with
+`--app=` so it gets a bare window - no tab strip, no origin bar - and the local
+key signs it in with nothing to type. `helm app --remove` takes it and its
+icons away again. Linux only, like `helm service`; elsewhere it says so.
+
+**The icon must not be called `helm`.** Icon lookup goes through the user's
+theme before it falls back to hicolor, and Papirus - which this machine runs -
+ships an unrelated `helm.svg`. Installing ours as `helm` at eight sizes
+changed nothing: the launcher kept drawing Papirus's blue circle, because the
+active theme is searched first and it had a `helm`. The name is `helm-app`,
+which nobody else claims, and `Gtk.IconTheme.lookup_icon` confirms it resolves
+to ours at 32, 48 and 128.
+
+Icons come from `apps/web/public`: the shipped 192 and 512 PNGs and the SVG go
+in as they are, and the smaller sizes are generated when the machine has
+ImageMagick and skipped when it does not - a 512 scaled down by the launcher
+is soft, but soft beats a hard dependency.
+
+Also worth knowing, since it is the reason the command exists: **installing the
+PWA from the browser is not the same thing.** A phone installs it from the VM's
+public address, which is right. A computer that runs a daemon of its own then
+has an app whose scope is the VM's origin, so it opens on a pairing screen, and
+going where it should means leaving that scope - which Chrome marks with the
+grey origin bar the owner asked to be rid of.
+
 ### "reconnecting", with a working hub on the other end of the socket
 
 Found while checking the desktop app actually worked, by looking at its
