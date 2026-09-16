@@ -20,10 +20,17 @@ import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
 import { describe as describeAsk } from './notify.js';
+import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
+import { hubRpc } from './hub-client.js';
 
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30_000;
+/** How recently a machine must have answered to be called online. */
+const FRESH_MS = 90_000;
+
 const RECONCILE_MS = 15_000;
+/** How often the brain's picture of the network is refreshed, while one exists. */
+const BRAIN_REFRESH_MS = 45_000;
 const HEARTBEAT_MS = 20_000;
 
 /**
@@ -145,6 +152,7 @@ class Link {
 export class Daemon {
   #links = new Map();
   #tunnels = new Map();
+  #brainTimer = null;
   #stopped = false;
   #reconcile = null;
   /** This process's half of an event id; a restart must not reuse ids. */
@@ -184,6 +192,19 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    // The line the brain gets in front of what the owner types. Read from the
+    // snapshot on disk rather than the network, because it is on the send
+    // path: a message must not wait on every machine answering. The refresh
+    // below keeps it at most one message stale, which for "2 machines, 1
+    // waiting on you" is close enough to be worth nothing in latency.
+    this.sessions.brief = () => {
+      const snap = readSnapshot();
+      // Fire and forget: the next message gets the fresher answer. Waiting
+      // on every machine here would put the whole network's round trip in
+      // front of the owner pressing send.
+      this.refreshSnapshot().catch(() => {});
+      return summaryLine(snap, { roster: this.rosterState(snap) });
+    };
     this.sessions.resume();
     // Terminals live in their own process, so some of them are still running.
     // Ask which, once, rather than assuming either way.
@@ -201,6 +222,15 @@ export class Daemon {
       if (event?.type === 'permission.request') this.#notify(id, event);
     });
 
+    // Kept warm only while there is a brain to read it. A network with no
+    // brain thread pays nothing for this; one with a brain gets a digest
+    // that is current when the owner opens it rather than when they send
+    // their second message.
+    this.#brainTimer = setInterval(() => {
+      if (this.sessions?.brainSession()) this.refreshSnapshot().catch(() => {});
+    }, BRAIN_REFRESH_MS);
+    this.#brainTimer.unref?.();
+
     await this.#tick();
     this.#reconcile = setInterval(
       () => this.#tick().catch((err) =>
@@ -210,8 +240,48 @@ export class Daemon {
     this.#reconcile.unref?.();
   }
 
+  /**
+   * Every machine's own line in the digest, gathered and written down.
+   *
+   * Asked of each machine over its own hub, in parallel, and merged onto what
+   * was there before - so a machine that did not answer keeps its last known
+   * state with the time it was taken. A brain that quietly omits a sleeping
+   * laptop does not have a gap, it has a wrong answer.
+   */
+  async refreshSnapshot() {
+    const net = loadNetwork() ?? this.net;
+    const fresh = {};
+    const ids = Object.keys(net.machines ?? {});
+    await Promise.all(ids.map(async (id) => {
+      try {
+        const r = id === this.id
+          ? { name: this.name, ...(await this.sessions.digest()) }
+          : await hubRpc(net, id, M.BRAIN_DIGEST, {}, { timeout: 8000 });
+        fresh[id] = { name: r.name ?? net.machines[id]?.name ?? id, sessions: r.sessions ?? [] };
+      } catch { /* offline, or too old to know the method: keep what we had */ }
+    }));
+    return writeSnapshot(mergeSnapshot(readSnapshot(), fresh));
+  }
+
+  /**
+   * Which machines are up, as the digest prints them.
+   *
+   * Taken from the snapshot's own timestamps rather than from the link state:
+   * "it answered when we last asked" is exactly the claim the digest makes
+   * about a machine, so deriving it from anything else would let the two
+   * disagree - a machine listed online above sessions that are hours old.
+   */
+  rosterState(snap = readSnapshot(), now = Date.now()) {
+    const net = loadNetwork() ?? this.net;
+    return Object.fromEntries(Object.values(net.machines ?? {}).map((m) => {
+      const at = snap?.machines?.[m.id]?.at ?? 0;
+      return [m.id, { name: m.name, online: now - at < FRESH_MS }];
+    }));
+  }
+
   stop() {
     this.#stopped = true;
+    clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
     for (const link of this.#links.values()) link.stop();
     this.peers?.stop();
@@ -665,6 +735,35 @@ export class Daemon {
             home: profile?.env?.[engine?.homeEnv] ?? engine?.defaultHome,
           }),
         };
+      }
+
+      // ----------------------------------------------------------- brain
+      case M.BRAIN_DIGEST:    return { name: this.name, ...(await this.sessions.digest()) };
+
+      case M.BRAIN_SNAPSHOT: {
+        const snap = await this.refreshSnapshot();
+        return { text: render(snap, { roster: this.rosterState(snap) }), snapshot: snap };
+      }
+
+      case M.BRAIN_OPEN: {
+        const existing = this.sessions.brainSession();
+        if (existing) {
+          // Changing the brain is changing the model, not starting a second
+          // one: the thread, and everything it has learned, is the point.
+          if (p.model && p.model !== existing.model) await this.sessions.setModel(existing.id, p.model);
+          if (p.mode && p.mode !== existing.mode) await this.sessions.setMode(existing.id, p.mode);
+          return { session: wire(this.sessions.get(existing.id)), created: false };
+        }
+        if (!p.profileId) throw new Error('brain.open needs a profileId the first time');
+        const session = await this.sessions.start({
+          cwd: '~', profileId: p.profileId, model: p.model, mode: p.mode,
+          title: 'Brain', brain: true,
+        });
+        // The brief goes in as the first message rather than a system prompt:
+        // helm drives four CLIs and not all of them take one, and a message
+        // survives `--resume`, so a restarted brain still knows what it is.
+        await this.sessions.input(session.id, brief(this.name), { raw: true });
+        return { session: wire(this.sessions.get(session.id)), created: true };
       }
 
       // Nothing to compute: the answer is the round trip itself.

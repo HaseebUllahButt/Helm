@@ -7,8 +7,10 @@ import { HELM_DIR, expand } from './paths.js';
 import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
-import { optionArgs } from './models.js';
+import { localDigest, pathWithShim } from './brain.js';
 import { modelPrefs } from './settings.js';
+import { optionArgs } from './models.js';
+
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver } from './drivers/codex.js';
@@ -398,14 +400,15 @@ export class Sessions extends EventEmitter {
     return out.sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 
-  async start({ cwd, profileId, title, model, auto, effort, mode }) {
+  async start({ cwd, profileId, title, model, auto, effort, mode, brain = false }) {
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
     // The account's configured default is what a new session starts with; a
     // model chosen up front always wins.
     if (!model) model = modelPrefs(profile)?.default ?? null;
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, auto });
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, auto, brain });
+    if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
     // What was chosen in the app, in the CLI's own words. An explicit choice
@@ -519,7 +522,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, profile, title, model, effort, mode, auto }) {
+  async #startDriven({ cwd, profile, title, model, effort, mode, auto, brain = false }) {
     const dir = expand(cwd);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -532,8 +535,13 @@ export class Sessions extends EventEmitter {
       cwd: dir,
       title: title || `${dir.split('/').pop() || dir}`,
       titleBy: title ? 'user' : null,
+      // The brain is a thread like any other - same driver, same events, same
+      // permission cards - marked so that it can be found again and so that
+      // `input` knows to put the network's state in front of what is typed.
+      brain: brain || undefined,
       status: 'idle',
       engineSessionId: null,
+
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -541,6 +549,7 @@ export class Sessions extends EventEmitter {
     const driver = await this.#driver(session);
     await driver.start();
     session.engineSessionId = driver.engineSessionId;
+
     this.#save();
     this.emit('session', session);
     return session;
@@ -554,6 +563,11 @@ export class Sessions extends EventEmitter {
     const profile = profiles.find((p) => p.id === s.profileId);
     if (!profile) throw new Error(`the account for this session (${s.profileId}) is gone`);
     const spec = materialize(profile);
+    // The brain's tools are the `helm` command, so which `helm` it finds is
+    // the whole question. Give it this daemon's own, ahead of the installed
+    // one: a machine that has not been upgraded yet would otherwise hand the
+    // brain a CLI that does not have the verbs its brief promises.
+    if (s.brain) spec.env = { ...spec.env, PATH: pathWithShim(spec.env?.PATH) };
     d = this.makeDriver(s.driver, {
       cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
       model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
@@ -692,6 +706,23 @@ export class Sessions extends EventEmitter {
    * `since` until `hasMore` is false; each page's last `seq` is the next
    * `since`.
    */
+/**
+   * This machine's contribution to the digest: its live sessions, each with
+   * the line `brain.js` derives from its event log. Separate from `list()`
+   * on purpose - `list()` is polled by every paired device every 15 seconds,
+   * and reading every session's event tail is not something to do on that
+   * schedule for people who are not asking for it.
+   */
+  async digest() {
+    return { sessions: localDigest(await this.list(), this.events) };
+  }
+
+  /** The brain's thread on this machine, if it has one. */
+  brainSession() {
+    for (const s of this.#index.values()) if (s.brain) return s;
+    return null;
+  }
+
   history(id, { since = 0, limit = 500 } = {}) {
     const s = this.get(id);
     const capped = Math.max(1, Math.min(Number(limit) || 500, 1000));
@@ -998,7 +1029,7 @@ export class Sessions extends EventEmitter {
   async input(id, text, { raw = false, attachments = [] } = {}) {
     const s = this.get(id);
     if (s.driver) {
-      const clean = text.replace(/\n$/, '');
+      let clean = text.replace(/\n$/, '');
       // Slash commands are helm's, not the agent's: intercept before the
       // text reaches a CLI that would read them as words in a prompt.
       if (!raw) {
@@ -1024,6 +1055,11 @@ export class Sessions extends EventEmitter {
           attachments: images.map((a) => this.events.putAttachment(id, a)),
         });
       }
+      // The brain is asked about a network, not a folder, so what it is
+      // told has to include which network and in what state. One line, not
+      // the digest: see `summaryLine`.
+      const brainLine = s.brain && !raw ? this.brief?.() : null;
+
       const d = await this.#driver(s);
       // An ACP agent only says whether it takes images in its reply to
       // `initialize`, and the driver is started lazily - so asking before it
@@ -1032,7 +1068,11 @@ export class Sessions extends EventEmitter {
       // riding on the answer. `start()` returns immediately if it is already
       // running, and `send` would have called it a line later anyway.
       if (images.length) await d.start?.();
+      // Sampled before the prefix goes on: the network's state is helm's
+      // note to the agent, and naming the thread "[helm 2 machines…]" would
+      // be naming it after helm rather than after the work.
       if (!raw) this.#prompted(s, clean);
+      if (brainLine) clean = `${brainLine}\n\n${clean}`;
       // The driver is the authority on whether this agent can see an image:
       // it is the one that spoke to the CLI. Anything else gets a filename
       // placeholder in the text, which is always safe while lost bytes are

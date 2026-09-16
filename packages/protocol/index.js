@@ -101,6 +101,10 @@ export const M = {
   SESSION_EFFORT: 'session.effort',    // { id, effort } -> { session }
   SESSION_SPEED: 'session.speed',      // { id, speed } -> { session }  codex service tier
   SESSION_INVENTORY: 'session.inventory', // {} -> { live[], recent[] }
+  // The brain: one agent for the whole network rather than one per folder.
+  BRAIN_DIGEST: 'brain.digest',    // {} -> { name, sessions[] }  this machine's line in the digest
+  BRAIN_OPEN: 'brain.open',        // { profileId?, model?, mode? } -> { session }  start or resume it
+  BRAIN_SNAPSHOT: 'brain.snapshot',// {} -> { text, snapshot }  the whole network as the brain reads it
   SESSION_COMMANDS: 'session.commands',   // { id } -> { commands: [{name, description, source}] }
   SESSION_RESUME: 'session.resume',// { engine, account, id, cwd } -> { session }
   SESSION_ADOPT: 'session.adopt',  // { paneId } -> { session }  take over a pane
