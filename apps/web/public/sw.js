@@ -6,16 +6,25 @@
  * here would mean showing you a session state that is no longer true, which is
  * worse than showing you nothing.
  */
-const CACHE = 'helm-shell-v3';
+const CACHE = 'helm-shell-v4';
 const SHELL = [
   '/', '/index.html', '/manifest.webmanifest',
   '/icon.svg', '/icon-180.png', '/icon-192.png', '/favicon-32.png',
 ];
 
+/**
+ * `addAll` is all-or-nothing: one icon that 404s and the whole install
+ * rejects, the new worker never activates, and the device keeps running the
+ * old one - old shell, old icon - with nothing anywhere saying why. The page
+ * needs `/index.html`; everything else is a nicety worth having and not worth
+ * failing over.
+ */
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await Promise.allSettled(SHELL.map((url) => cache.add(url)));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', (event) => {
@@ -36,10 +45,25 @@ self.addEventListener('fetch', (event) => {
 
   // Navigations resolve to the app shell: this is a single-page app, so every
   // path is a route rather than a document on disk.
+  // Navigations are network-first, and what comes back replaces the copy we
+  // fall back to. Without that write the cached shell is frozen at whatever
+  // was current when this worker installed: every later deploy leaves it
+  // pointing at hashed bundles that no longer exist, so the first open on a
+  // bad connection loads an index.html whose scripts all 404 - a blank app,
+  // and a deploy that looks like it worked everywhere except the phone.
   if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request).catch(() => caches.match('/index.html').then((r) => r ?? Response.error()))
-    );
+    event.respondWith((async () => {
+      try {
+        const res = await fetch(request);
+        if (res.ok && res.type === 'basic') {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put('/index.html', copy)).catch(() => {});
+        }
+        return res;
+      } catch {
+        return (await caches.match('/index.html')) ?? Response.error();
+      }
+    })());
     return;
   }
 
