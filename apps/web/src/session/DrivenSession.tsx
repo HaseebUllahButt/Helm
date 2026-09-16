@@ -19,11 +19,13 @@ const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split(
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
-export function DrivenSession({ client, env, session, onBack, onClosed, onArchived, onSession, onTranscribe }: {
+export function DrivenSession({ client, env, session, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings }: {
   client: Client; env: Environment; session: Session;
   onBack: () => void; onClosed: () => void; onArchived: () => void; onSession: (s: Session) => void;
   /** Absent when no machine in the network holds a Groq key. */
   onTranscribe?: (audio: string, mime: string) => Promise<string>;
+  /** Only on the brain: the way to what it is made of. */
+  onSettings?: () => void;
 }) {
   const { log, error: logError } = useSessionLog(client, env.id, session.id);
   const [draft, setDraft] = useState('');
@@ -215,6 +217,18 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
           </span>
         </div>
         {chip(status)}
+        {/* The brain has no folder to go back to and no siblings to compare
+            it with, so what it is made of has to be reachable from inside it.
+            Ordinary threads keep the ⋯ menu alone. */}
+        {session.brain && onSettings && (
+          <button className="iconbtn" title="what this brain is made of" aria-label="brain settings" onClick={onSettings}>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3.2" />
+              <path d="M12 2.8v2.6M12 18.6v2.6M4.5 4.5l1.9 1.9M17.6 17.6l1.9 1.9M2.8 12h2.6M18.6 12h2.6M4.5 19.5l1.9-1.9M17.6 6.4l1.9-1.9" />
+            </svg>
+          </button>
+        )}
         <button className="iconbtn" title="more" onClick={() => setMenu(menu === 'more' ? null : 'more')}>⋯</button>
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
