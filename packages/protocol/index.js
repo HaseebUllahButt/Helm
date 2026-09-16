@@ -108,8 +108,6 @@ export const M = {
   PING: 'ping',                    // {} -> { t }
 
   SSH_INFO: 'ssh.info',            // {} -> { pubkey, sshUser, sshPort }
-  USAGE: 'usage.get',              // {} -> { fetchedAt, accounts[] }
-  USAGE_HISTORY: 'usage.history',  // { steps? } -> limit-economics analysis
 };
 
 // -------------------------------------------------------------- event kinds

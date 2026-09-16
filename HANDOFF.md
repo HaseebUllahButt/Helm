@@ -296,8 +296,7 @@ tried.**
 
 ## What changed today (2026-09-15)
 
-A short pass: find out why the usage panel never loaded, and make image
-attachments actually work everywhere they can.
+A short pass: make image attachments actually work everywhere they can.
 
 **First, a trap worth knowing about.** This clone was eight commits behind
 `origin/main` and its working tree still held the *pre-merge* version of the
@@ -307,29 +306,6 @@ of unpushed work; it was a pile of already-landed work. The tell is
 net-negative. If you meet that again, fetch before you believe the diff. The
 old tree is kept in the stash (`pre-sync worktree snapshot 2026-09-15`) and
 can be dropped.
-
-### The usage panel: four separate reasons for one blank space
-
-1. **`env.info.usage` was a snapshot.** The daemon probes for the dashboard
-   once, in `Link.#open()`, when it attaches to its hub. cc-usage-dashboard is
-   a *separate service* and is normally started after the daemon, so the app
-   was told "no dashboard here" for the life of the process. The panel now
-   re-asks the machine itself (`env.info`) whenever the roster says no, and
-   again each minute, so a dashboard that appears later is picked up.
-   `usage.available()` helps by caching a "yes" for five minutes and a "no"
-   for thirty seconds - a no is the answer that goes stale.
-2. **The VM genuinely has no dashboard**, and said so by rendering nothing.
-   There is now an explicit `absent` state: *"no usage dashboard on vpn-arm"*,
-   with a note saying where the numbers come from. `off` (not online) and
-   `absent` (asked, hasn't got one) are different things now.
-3. **`· NaNd ago`.** The dashboard reports `fetchedAt` as an ISO string;
-   `ago()` took a `number` and subtracted it from `Date.now()`. TypeScript
-   missed it because the value arrives through an `any`. `ago()` now takes
-   either and returns `''` for anything it cannot parse.
-4. **Six rows all reading "default".** The dashboard labels most accounts
-   `default`; the row rendered `label` and dropped `provider`, which is the
-   only field that tells them apart. Rows now read `codex`, `grok`,
-   `claude · personal`, `opencode · 2`.
 
 ### Images: they were being thrown away, quietly
 
@@ -673,17 +649,7 @@ package to install, `helm status` says `terminals: own pty` or `herdr panes
 (slow)` with the reason, and the app's terminal button reads `❯!` with a
 tooltip saying why.
 
-**2. The usage panel flashed and vanished** because `App.tsx` passed
-`reload={() => loadSessions(env.id)}` - a new function on every render - to
-`EnvView`, whose effect listed `reload` as a dependency and opened with
-`setUsage(null)`. Every parent render blanked the panel, re-subscribed and
-re-listed sessions, which re-rendered the parent. A `useCallback` ends the
-loop; the panel now says loading / unavailable / how old the numbers are
-instead of rendering nothing in every unhappy case, and refreshes each minute.
-`usageApi.available()`'s 15s probe is cached for five minutes rather than
-running inside every `describe()`.
-
-**3. Three commands printed a link; now each is named for what it adds.**
+**2. Three commands printed a link; now each is named for what it adds.**
 `helm add controller | pc | vm`, and bare `helm add` lists the three rather
 than guessing. Only `controller` prints a link to **open**; `pc` and `vm` print
 a code to **type**, and the far machine always runs the same `helm join <code>
@@ -694,7 +660,7 @@ start, only when the network has no controllers yet or on `--link`; that was
 what made `setup`, `join` and a plain restart all look like they were handing
 you a link.
 
-**4. `helm open` signs the app in on the machine itself**, which is what makes
+**3. `helm open` signs the app in on the machine itself**, which is what makes
 the laptop a controller for the VM. **The trap here nearly shipped:** Caddy
 terminates HTTPS and proxies to the hub over loopback, so *every request from
 the internet arrives at the hub from 127.0.0.1* - a bare loopback check would
@@ -704,7 +670,7 @@ on demand), compared in constant time. `test/local-login.test.mjs` encodes
 that: the key works, and no-key, wrong-key and wrong-length all get 401 from
 the same loopback address.
 
-**5. Moving networks re-probes.** The client already raced every known address
+**4. Moving networks re-probes.** The client already raced every known address
 on connect; it now also does so on the browser's `online` event, dropping a
 socket that looks open but reaches nothing. `reachableFromHere` still skips
 `http://` LAN addresses from an HTTPS page - that is the browser's
@@ -807,12 +773,9 @@ add a third delivery path, it must carry the same id.**
   the protocol - so the block was well-formed, but *no ACP agent has yet
   described an image back*. That is the one thing left to prove here.
 - **The PWA, headless Chromium at 390×844**, signed in from `#local=`: the
-  usage panel renders seven accounts named by provider with `· just now`
-  provenance; the session shows **one** user bubble carrying the red square
-  (two before the reducer fix), zero broken images, and the clip in place.
+  session shows **one** user bubble carrying the red square (two before the
+  reducer fix), zero broken images, and the clip in place.
   Screenshots taken at each step.
-- The "no dashboard" path: `available()` against a dead port answers `false`
-  in 11 ms, so the app's re-check costs nothing on a machine like the VM.
 
 ### 2026-09-14
 

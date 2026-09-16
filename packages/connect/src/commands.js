@@ -26,7 +26,6 @@ import { ENGINES } from './engines.js';
 /** Actions helm performs itself. These work in every engine. */
 export const BUILT_IN = [
   { name: 'compact', description: 'Summarise the conversation into a fresh context', source: 'helm' },
-  { name: 'usage', description: 'What this session has cost, and today\'s plan usage', source: 'helm' },
 ];
 
 /** Where each engine reads the owner's own commands from. */

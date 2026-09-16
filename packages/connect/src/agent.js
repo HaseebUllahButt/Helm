@@ -15,7 +15,6 @@ import { listCommands } from './commands.js';
 import { accountKey, modelPrefs, saveModelPrefs, applyModelPrefs, loadSettings } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
-import * as usageApi from './usage.js';
 import { inventory } from './inventory.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
@@ -424,7 +423,6 @@ export class Daemon {
       arch: arch(),
       release: release(),
       runtime: this.runtimeInfo,
-      usage: await usageApi.available(),
       // 'pty' or 'panes': what a terminal here will actually be.
       terminals: await this.sessions.terminalBackend(),
       startedAt: Date.now(),
@@ -652,9 +650,6 @@ export class Daemon {
           }),
         };
       }
-
-      case M.USAGE:           return usageApi.usage();
-      case M.USAGE_HISTORY:   return usageApi.limitHistory(p.steps);
 
       // Nothing to compute: the answer is the round trip itself.
       case M.PING:            return { t: Date.now() };

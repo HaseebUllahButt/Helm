@@ -323,7 +323,7 @@ test('model and effort switch mid-session on the live driver', async () => {
 });
 
 
-test('/usage answers from the log and /compact delegates to the driver', async () => {
+test('/compact delegates to the driver', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
   const sessions = new Sessions(new StubRuntime(), {
@@ -332,14 +332,6 @@ test('/usage answers from the log and /compact delegates to the driver', async (
   });
   const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
   const d = FakeDriver.made.at(-1);
-
-  await sessions.input(s.id, '/usage');
-  assert.ok(!d.sent?.some((t) => t.includes('/usage')), 'the agent never sees the slash command');
-  const log = sessions.history(s.id, {});
-  const usageTurn = log.events.find((e) => e.type === 'turn.start' && e.text === '/usage');
-  assert.ok(usageTurn, 'the command renders as a turn');
-  const body = log.events.find((e) => e.type === 'item.delta' && e.id === `local-${usageTurn.turnId}`);
-  assert.match(body.text, /turns this session/);
 
   await sessions.input(s.id, '/compact focus on auth');
   assert.equal(d.compacted, 'focus on auth');

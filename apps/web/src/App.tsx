@@ -70,19 +70,6 @@ const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', cl
  * so collapse the aliases to accounts and keep the plainest alias of each as
  * the one to launch.
  */
-/**
- * What the usage panel knows. `off` is "there is nothing to ask" (the
- * machine is not online); `absent` is "asked, and this machine runs no
- * usage dashboard". Both used to render as nothing, which is how a panel
- * that was working looked exactly like one that was not.
- */
-type UsageState =
-  | { kind: 'off' }
-  | { kind: 'absent' }
-  | { kind: 'loading' }
-  | { kind: 'ready'; accounts: any[]; fetchedAt?: number | string }
-  | { kind: 'failed'; error: string };
-
 interface Account {
   key: string;
   engine: string;
@@ -320,10 +307,8 @@ function Shell({ client, conn, onSignOut }: {
   const view = stack[stack.length - 1];
 
   // Stable per machine. Handed to EnvView, which lists it as an effect
-  // dependency: a fresh arrow on every render re-ran that effect, which
-  // re-subscribed, re-listed the sessions and blanked the usage panel, and
-  // the listing then re-rendered us - so the panel appeared and vanished
-  // several times a second.
+  // dependency: a fresh arrow on every render would repeatedly re-list the
+  // sessions.
   const reloadEnv = useCallback(() => {
     if (env) loadSessions(env.id);
   }, [loadSessions, env?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -840,7 +825,6 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
   client: Client; env: Environment; wide: boolean; sessions: Session[];
   reload: () => void; onBack: () => void; onBrowse: () => void; onSettings: () => void; onOpen: (s: Session) => void;
 }) {
-  const [usage, setUsage] = useState<UsageState>({ kind: 'off' });
   const [direct, setDirect] = useState(false);
   const [ping, setPing] = useState<number | null>(null);
   const [opening, setOpening] = useState(false);
@@ -875,42 +859,6 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
   useEffect(() => {
     if (env.online) client.openDirect(env.id).catch(() => {});
   }, [client, env.id, env.online]);
-
-  // Kept fresh while you are looking at the machine. The numbers come from a
-  // dashboard on that machine, which can be absent or slow, so every one of
-  // those outcomes gets said out loud rather than rendering an empty gap.
-  useEffect(() => {
-    if (!env.online) { setUsage({ kind: 'off' }); return; }
-    let live = true;
-    // `env.info.usage` is a snapshot: the daemon probes for the dashboard
-    // once, when it attaches to its hub. A dashboard started after that -
-    // which is the normal order, since it is a separate service - would
-    // never appear, so a "no" is re-asked of the machine itself rather than
-    // believed from the roster, and asked again on every refresh.
-    let has = env.info.usage;
-    const tick = async (first: boolean) => {
-      if (first) setUsage((u) => (u.kind === 'ready' ? u : { kind: 'loading' }));
-      if (!has) {
-        try { has = !!((await client.rpc(env.id, 'env.info')) as any)?.usage; }
-        catch { has = false; }
-        if (!live) return;
-        if (!has) { setUsage({ kind: 'absent' }); return; }
-      }
-      try {
-        const u: any = await client.rpc(env.id, 'usage.get');
-        if (live) setUsage({ kind: 'ready', accounts: u.accounts ?? [], fetchedAt: u.fetchedAt });
-      } catch (e: any) {
-        if (!live) return;
-        // Re-probe next time round: a dashboard that has gone away should
-        // settle into "none here", not repeat an error nobody can act on.
-        has = false;
-        setUsage((was) => (was.kind === 'ready' ? was : { kind: 'failed', error: e.message }));
-      }
-    };
-    tick(true);
-    const timer = setInterval(() => tick(false), 60_000);
-    return () => { live = false; clearInterval(timer); };
-  }, [client, env.id, env.online, env.info.usage]);
 
   const openTerminal = async () => {
     setOpening(true); setError('');
@@ -1030,29 +978,6 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
           </div>
         )}
 
-        {usage.kind !== 'off' && (
-          <>
-            <div className="section">
-              usage today
-              {usage.kind === 'ready' && !!ago(usage.fetchedAt) && (
-                <span className="quiet"> · {ago(usage.fetchedAt)}</span>
-              )}
-            </div>
-            {usage.kind === 'loading' && <div className="empty quiet">reading usage…</div>}
-            {usage.kind === 'absent' && (
-              <div className="empty quiet">
-                no usage dashboard on {env.name}
-                <div className="note" style={{ marginTop: 6 }}>numbers come from cc-usage-dashboard on that machine</div>
-              </div>
-            )}
-            {usage.kind === 'failed' && <div className="empty quiet">usage unavailable — {usage.error}</div>}
-            {usage.kind === 'ready' && (
-              usage.accounts.length
-                ? <div className="usage panel">{usage.accounts.map((a) => <UsageRow key={a.id} account={a} />)}</div>
-                : <div className="empty quiet">no accounts reported</div>
-            )}
-          </>
-        )}
         {error && <div className="error">{error}</div>}
       </div></div>
     </>
@@ -1121,32 +1046,6 @@ function StatusChip({ status }: { status: string }) {
   if (status === 'done') return <span className="chip done"><i />done</span>;
   if (status === 'exited') return <span className="chip exited">ended</span>;
   return null;
-}
-
-function UsageRow({ account }: { account: any }) {
-  const w = account.rateLimits?.session ?? account.rateLimits?.windows?.[0];
-  const pct = Math.round(w?.percent ?? w?.pct ?? 0);
-  const cls = pct >= 90 ? 'full' : pct >= 70 ? 'high' : '';
-  // The dashboard calls most accounts "default", so a panel that showed the
-  // label alone was six rows reading "default" and one reading "2". The
-  // provider is the part that tells them apart; the label only earns its
-  // place when it says something the provider does not.
-  const name = [
-    account.provider ?? account.id,
-    account.label && account.label !== 'default' ? account.label : null,
-  ].filter(Boolean).join(' · ');
-  return (
-    <div className="usage-row" title={account.planLabel ? `${name} · ${account.planLabel}` : name}>
-      <span className="label">{name}</span>
-      <span className="cost">${(account.today?.cost ?? 0).toFixed(2)}</span>
-      {w && (
-        <>
-          <span className="meter"><i className={cls} style={{ width: `${Math.min(pct, 100)}%` }} /></span>
-          <span className="cost" style={{ width: 32, textAlign: 'right' }}>{pct}%</span>
-        </>
-      )}
-    </div>
-  );
 }
 
 // ----------------------------------------------------------------- settings
@@ -1639,6 +1538,15 @@ const toolGlyph = (name: string) =>
     : /write|edit|patch|create/i.test(name) ? '✎'
     : /bash|shell|exec|run|command/i.test(name) ? '❯' : '⚙');
 
+function ago(ts: number | null | undefined) {
+  if (!ts || !Number.isFinite(ts)) return '';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 0 || s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
 function Chat({ messages, status }: { messages: Message[] | null; status: string }) {
   const box = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
@@ -1707,23 +1615,4 @@ function Turn({ m }: { m: Message }) {
       {!m.text && !m.tools.length && m.thinking && <div className="act"><span className="aicon">◌</span><span className="alabel">Thinking</span></div>}
     </div>
   );
-}
-
-// -------------------------------------------------------------------- utils
-
-/**
- * How long ago, in words. Takes epoch milliseconds or an ISO timestamp:
- * helm's own events carry a number, but the usage dashboard reports
- * `fetchedAt` as an ISO string, and subtracting that from `Date.now()`
- * rendered the panel's one piece of provenance as "NaNd ago".
- */
-function ago(ts: number | string | undefined | null) {
-  const at = typeof ts === 'string' ? Date.parse(ts) : ts;
-  if (!at || !Number.isFinite(at)) return '';
-  const s = Math.floor((Date.now() - at) / 1000);
-  if (s < 0) return 'just now';
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }

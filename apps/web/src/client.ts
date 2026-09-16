@@ -24,7 +24,6 @@ export interface Environment {
     host?: string;
     platform?: string;
     arch?: string;
-    usage?: boolean;
     /** 'pty' when terminals are helm's own; 'panes' is the slow fallback. */
     terminals?: 'pty' | 'panes';
     runtime?: { version: string };
