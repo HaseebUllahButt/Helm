@@ -715,11 +715,37 @@ Chrome's `127.0.0.1:8787` origin strip, and helm's top bar under it. Reverted,
 along with its `@media (display-mode: window-controls-overlay)` block: a plain
 `standalone` window again.
 
-The other half of that report - "if there is a link, just auto open that
-network" - is already the behaviour and was re-checked: a fresh browser at
-`http://127.0.0.1:8787` signs itself in through `/api/auth/local` and lands on
-the machine list (`2/2 online`), no link screen. That path is loopback-only on
-purpose; see the loopback trap above.
+### The desktop app opened onto a form, with the answer as a link under it
+
+The owner's desktop app is installed from the VM's address, so it lands on the
+*pairing* screen: a code box, a "pair this device" button, and underneath, a
+sentence ending in **"open its own address"** - which is the thing they
+actually wanted, and had to click, every time.
+
+It goes there itself now. When the page is not on loopback and a daemon on
+this computer answers `/api/health`, the login screen replaces itself with
+that address instead of drawing a form nobody should fill in. A link carrying
+a pairing code, or a key from `helm open`, still wins - those are a deliberate
+instruction to pair *here*. There is no loop: the local page takes the
+`isLocal` branch and signs itself in.
+
+Driven from `http://192.168.1.9:8795` (a non-loopback origin, standing in for
+the VM's): within a second and a half the browser was at `127.0.0.1:8787`,
+signed in, showing `2/2 online`.
+
+**What this does not fix, and cannot from inside the page:** an installed PWA
+has one origin in its scope. Sending it to `127.0.0.1` is out of scope, so
+Chrome draws the grey origin strip at the top - which is where that strip in
+the first screenshot came from. The way to be rid of it is to install the
+desktop app *from this machine's own address* rather than the VM's ("Install
+Helm app" in the sidebar, once it has landed there); then it is in scope, with
+no redirect and nothing to click. The VM-hosted install remains the right one
+for a phone, which has no daemon of its own.
+
+A note on why the page cannot just sign itself in where it stands: the daemon
+refuses `/api/auth/local` to a cross-site fetch on purpose (`sec-fetch-site`),
+because Caddy makes every internet request arrive from loopback. Navigating is
+the honest route, not a CORS hole.
 
 ---
 

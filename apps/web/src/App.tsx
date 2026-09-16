@@ -623,14 +623,27 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
       .catch(() => {});
   }, [selfHosted]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The other direction: the app was installed from the VM's public address
-  // but a daemon is also running on this computer - it signs in on its own,
-  // so point there rather than asking for a code.
+  /**
+   * The other direction: the app was installed from the VM's public address
+   * but a daemon is also running on this computer, and that one signs itself
+   * in. This used to be a sentence with a link in it, under a pairing form -
+   * so the answer to "open helm on my desktop" was: read a paragraph, click
+   * the link, every time. It goes there itself now.
+   *
+   * Only when there is nothing else to do: a link with a pairing code in it,
+   * or a key from `helm open`, is a deliberate instruction to pair *here* and
+   * outranks the local daemon. The local page cannot bounce back - it takes
+   * the `isLocal` branch above - so there is no loop to get stuck in.
+   */
   const [localHelm, setLocalHelm] = useState<string | null>(null);
   useEffect(() => {
-    if (isLocal) return;
+    if (isLocal || openedWith.current?.password || autoStarted.current) return;
     fetch('http://127.0.0.1:8787/api/health', { cache: 'no-store' })
-      .then((r) => { if (r.ok) setLocalHelm('http://127.0.0.1:8787'); })
+      .then((r) => {
+        if (!r.ok || autoStarted.current) return;
+        setLocalHelm('http://127.0.0.1:8787');
+        location.replace('http://127.0.0.1:8787/');
+      })
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -653,6 +666,26 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
     if (!secret) { setError('enter the pairing code'); return; }
     await connect(endpoint, secret);
   };
+
+  // Found one on this computer: the redirect is already going. Showing the
+  // pairing form underneath it only invites someone to start typing a code
+  // into a screen that is about to be replaced.
+  if (localHelm) {
+    return (
+      <div className="auth">
+        <div className="auth-card">
+          <div className="auth-brand">
+            <img src="/icon.svg" alt="" />
+            <h1>helm</h1>
+            <p>opening the helm on this computer…</p>
+          </div>
+          <p className="note" style={{ textAlign: 'center' }}>
+            <a href={localHelm}>{localHelm.replace(/^https?:\/\//, '')}</a>
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="auth">
@@ -697,12 +730,6 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
             {busy ? 'pairing…' : 'pair this device'}
           </button>
           {error && <div className="error">{error}</div>}
-          {localHelm && (
-            <p className="note" style={{ marginTop: 14, textAlign: 'center' }}>
-              A helm is running on this computer - it signs in on its own:{' '}
-              <a href={localHelm}>open its own address</a>
-            </p>
-          )}
           <p className="note" style={{ marginTop: 14, textAlign: 'center' }}>
             Run <code>helm link</code> on your VM for a fresh link.
             Pair once; this device stays paired until you remove it.
