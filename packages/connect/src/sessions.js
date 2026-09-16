@@ -46,14 +46,30 @@ const TITLE_RANK = { auto: 1, agent: 2, user: 3 };
 /** A prompt that says nothing about the work the session is for. */
 const GREETING = /^(hi+|hey+|hello+|yo|sup|hiya|howdy|test(ing)?|ping|ok(ay)?|thanks?( you)?|good (morning|afternoon|evening))[.\s!?,]*$/i;
 
+/** A title cut to fit, with the cut said out loud. */
+const clip = (text, max) => (text.length > max ? text.slice(0, max - 1) + '…' : text);
+
+/** A prompt's first non-empty line, unless the line says nothing. */
+const informative = (text) => {
+  const line = String(text ?? '').split('\n').map((l) => l.trim()).find(Boolean);
+  return line && !GREETING.test(line) ? line : null;
+};
+
 /** The first informative line among the sampled prompts, or null. */
 const promptTitle = (samples) => {
   for (const p of samples ?? []) {
-    const line = String(p).split('\n').map((l) => l.trim()).find(Boolean);
-    if (line && !GREETING.test(line)) return line.length > 60 ? line.slice(0, 59) + '…' : line;
+    const line = informative(p);
+    if (line) return clip(line, 60);
   }
   return null;
 };
+
+/**
+ * What a session looks like on the wire: everything but helm's own notes.
+ * Both ways out - `list()` and every `session` event - go through it, so a
+ * note kept for naming a thread never rides along to every paired device.
+ */
+export const wire = ({ promptSample, ...s }) => s;
 
 /**
  * The quick keys above the phone keyboard, as the bytes a terminal expects.
@@ -338,12 +354,12 @@ export class Sessions extends EventEmitter {
 
     for (const s of this.#index.values()) {
       if (s.driver) {
-        out.push({ ...s, archived: !!s.archived, alive: this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
+        out.push({ ...wire(s), archived: !!s.archived, alive: this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
         continue;
       }
       if (s.pty) {
         const alive = this.terminals.has(s.id);
-        out.push({ ...s, alive, status: alive ? 'shell' : 'exited', adopted: false });
+        out.push({ ...wire(s), alive, status: alive ? 'shell' : 'exited', adopted: false });
         continue;
       }
       const pane = live.get(s.paneId);
@@ -356,7 +372,7 @@ export class Sessions extends EventEmitter {
       const status = !pane ? 'exited'
         : s.engine === 'shell' ? 'shell'
         : (pane.status ?? s.status ?? 'unknown');
-      out.push({ ...s, archived: !!s.archived, alive: !!pane, status, cwd: pane?.cwd ?? s.cwd, adopted: false });
+      out.push({ ...wire(s), archived: !!s.archived, alive: !!pane, status, cwd: pane?.cwd ?? s.cwd, adopted: false });
     }
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
@@ -565,6 +581,15 @@ export class Sessions extends EventEmitter {
       if (e.status === 'exited') return;
     }
     if (e.type === 'title') return this.#titled(s, e.title, 'agent');
+    // Every turn has always said what it cost and nothing added them up.
+    // Accumulated on the record rather than summed from the log, which is
+    // trimmed to the last few hundred events - a long thread would start
+    // forgetting what its early turns cost.
+    if (e.type === 'turn.done' && this.#index.has(s.id)) {
+      s.turns = (s.turns ?? 0) + 1;
+      if (e.costUsd > 0) s.costUsd = Math.round(((s.costUsd ?? 0) + e.costUsd) * 1e6) / 1e6;
+      this.#save();
+    }
     if (d.engineSessionId && d.engineSessionId !== s.engineSessionId) {
       s.engineSessionId = d.engineSessionId;
       this.#save();
@@ -582,13 +607,19 @@ export class Sessions extends EventEmitter {
   #prompted(s, text) {
     if (!this.#index.has(s.id)) return;
     s.prompts = (s.prompts ?? 0) + 1;
+    // Only a prompt that says something about the work is worth sampling: a
+    // session that opens "hi", "hello" would otherwise fill the sample with
+    // greetings and never earn a name at all.
     const sample = (s.promptSample ??= []);
-    if (sample.length < TITLE_AFTER) sample.push(String(text).slice(0, 200));
-    if (s.prompts !== TITLE_AFTER) { this.#save(); return; }
-    const agent = s.generatedTitle && !GREETING.test(s.generatedTitle) ? s.generatedTitle : null;
-    const pick = agent ?? promptTitle(s.promptSample);
-    if (pick) return this.#titled(s, pick, agent ? 'agent' : 'auto');
+    if (sample.length < TITLE_AFTER && informative(text)) sample.push(String(text).slice(0, 200));
     this.#save();
+    // The gate opens *at* TITLE_AFTER and stays open: when the first prompts
+    // were all greetings there is nothing to name the session after yet, and
+    // the one that finally says something still deserves to name it.
+    if (s.prompts < TITLE_AFTER) return;
+    const agent = s.generatedTitle || null;
+    const pick = agent ?? promptTitle(s.promptSample);
+    if (pick) this.#titled(s, pick, agent ? 'agent' : 'auto');
   }
 
   /**
@@ -599,14 +630,23 @@ export class Sessions extends EventEmitter {
   #titled(s, title, by) {
     const clean = String(title ?? '').replace(/\s+/g, ' ').trim();
     if (!clean) return;
-    if (by === 'agent' && s.generatedTitle !== clean) {
-      s.generatedTitle = clean;
-      this.#save();
+    if (by === 'agent') {
+      // An ACP agent's first name for a session is a copy of the prompt, and
+      // it keeps reporting one - so "hi" three prompts in would otherwise
+      // rename a session that had already earned something better.
+      if (GREETING.test(clean)) return;
+      if (s.generatedTitle !== clean) {
+        s.generatedTitle = clean;
+        this.#save();
+      }
     }
-    if ((s.prompts ?? 0) < TITLE_AFTER) return;
+    // The gate is about *generated* names being premature. A name the owner
+    // typed is never premature.
+    if (by !== 'user' && (s.prompts ?? 0) < TITLE_AFTER) return;
     if ((TITLE_RANK[by] ?? 0) < (TITLE_RANK[s.titleBy] ?? 0)) return;
-    if (s.title === clean) return;
-    s.title = clean.slice(0, 80);
+    const named = clip(clean, 80);
+    if (s.title === named) return;
+    s.title = named;
     s.titleBy = by;
     this.#save();
     this.emit('session', s);
@@ -974,7 +1014,7 @@ export class Sessions extends EventEmitter {
       // riding on the answer. `start()` returns immediately if it is already
       // running, and `send` would have called it a line later anyway.
       if (images.length) await d.start?.();
-      this.#prompted(s, clean);
+      if (!raw) this.#prompted(s, clean);
       // The driver is the authority on whether this agent can see an image:
       // it is the one that spoke to the CLI. Anything else gets a filename
       // placeholder in the text, which is always safe while lost bytes are
@@ -1085,6 +1125,19 @@ export class Sessions extends EventEmitter {
   }
 
   /** Hide a session from the active list without stopping or deleting it. */
+  /**
+   * The name the owner typed, which outranks anything helm or the agent
+   * came up with and is never overwritten afterwards.
+   */
+  rename(id, title) {
+    const s = this.get(id);
+    if (s.adopted) throw new Error('an external session is named by the program that started it');
+    const clean = String(title ?? '').replace(/\s+/g, ' ').trim();
+    if (!clean) throw new Error('a thread needs a name');
+    this.#titled(s, clean, 'user');
+    return { ok: true, session: wire(s) };
+  }
+
   archive(id, archived = true) {
     const s = this.get(id);
     if (s.adopted) throw new Error('an external session cannot be archived');
@@ -1092,7 +1145,7 @@ export class Sessions extends EventEmitter {
     s.archivedAt = s.archived ? Date.now() : null;
     this.#save();
     this.emit('session', s);
-    return { ok: true, session: s };
+    return { ok: true, session: wire(s) };
   }
 
   /**

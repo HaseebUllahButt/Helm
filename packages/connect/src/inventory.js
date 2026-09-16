@@ -155,6 +155,59 @@ async function claude(home, account) {
   return out;
 }
 
+// ------------------------------------------------------------------- devin
+
+function devin(home, account) {
+  // Devin's CLI keeps a real database like opencode's, one directory deeper:
+  // <XDG_DATA_HOME>/<account dir>/cli/sessions.db. Its clock is seconds, not
+  // the milliseconds everything else here reports.
+  const base = process.env.XDG_DATA_HOME || join(HOME, '.local', 'share');
+  const candidates = [];
+  try {
+    for (const d of readdirSync(base)) {
+      if (d.startsWith('devin')) candidates.push(join(base, d, 'cli', 'sessions.db'));
+    }
+  } catch { /* no XDG data dir here */ }
+
+  const out = [];
+  for (const db of candidates) {
+    if (!existsSync(db)) continue;
+    try {
+      const conn = new DatabaseSync(db, { readOnly: true });
+      // `hidden` is recent enough that a CLI a few versions old lacks it;
+      // select it only if it is there rather than lose the store over a flag.
+      let rows;
+      try {
+        rows = conn.prepare(
+          `SELECT id, title, working_directory, model, last_activity_at, hidden
+             FROM sessions ORDER BY last_activity_at DESC LIMIT ?`
+        ).all(PER_ENGINE);
+      } catch {
+        rows = conn.prepare(
+          `SELECT id, title, working_directory, model, last_activity_at, 0 AS hidden
+             FROM sessions ORDER BY last_activity_at DESC LIMIT ?`
+        ).all(PER_ENGINE);
+      }
+      const acct = `${account}:${basename(join(db, '..', '..'))}`;
+      for (const r of rows) {
+        if (r.hidden) continue;
+        const at = Number(r.last_activity_at) || 0;
+        out.push({
+          engine: 'devin',
+          account: acct,
+          id: r.id,
+          title: r.title || basename(r.working_directory ?? '') || 'devin session',
+          cwd: collapse(r.working_directory ?? HOME),
+          updatedAt: at < 1e12 ? at * 1000 : at,
+          model: r.model,
+        });
+      }
+      conn.close();
+    } catch { /* a locked or half-migrated db is not worth failing over */ }
+  }
+  return out;
+}
+
 // ----------------------------------------------------------------- opencode
 
 function opencode(home, account) {
@@ -216,10 +269,20 @@ export async function inventory(profiles = []) {
     if (p.engine === 'codex') jobs.push(codex(home, p.id));
     else if (p.engine === 'claude') jobs.push(claude(home, p.id));
     else if (p.engine === 'opencode') jobs.push(Promise.resolve(opencode(home, p.id)));
+    else if (p.engine === 'devin') jobs.push(Promise.resolve(devin(home, p.id)));
   }
 
   const all = (await Promise.all(jobs)).flat();
+  // The sqlite readers scan shared data dirs, so a second account of the same
+  // engine returns the same rows; the id, not the account, says which they are.
+  const known = new Set();
   return all
     .filter((s) => s.id)
+    .filter((s) => {
+      const key = `${s.engine}:${s.id}`;
+      if (known.has(key)) return false;
+      known.add(key);
+      return true;
+    })
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }

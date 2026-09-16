@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Markdown } from '../Markdown';
 import type { Change, Item, Turn } from './types';
+import { money, seconds } from '../format';
 
 /**
  * The conversation, live.
@@ -27,8 +28,6 @@ const shortPath = (p = '') => {
   return parts.length > 3 ? '…/' + parts.slice(-2).join('/') : p;
 };
 
-const seconds = (ms?: number) => (ms == null ? '' : ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`);
-const money = (usd?: number) => (usd == null ? '' : usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`);
 
 /**
  * Show text as it arrives, but never all at once: the visible length chases

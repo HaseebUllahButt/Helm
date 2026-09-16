@@ -7,7 +7,10 @@ import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } f
 import {
   Client, login,
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
+  type InventorySession,
 } from './client';
+import { money } from './format';
+import { loadMessages, saveMessages } from './session/logCache';
 
 type Auth = StoredAuth;
 type PairingTarget = { endpoint: string; password: string };
@@ -115,6 +118,38 @@ const shortPath = (p: string) => {
   const parts = p.replace(/\/$/, '').split('/');
   return parts.length > 3 ? '…/' + parts.slice(-2).join('/') : p;
 };
+
+/** `~/x` on the machine and `/home/u/x` on the wire are the same folder. */
+const collapseCwd = (p: string) => p.replace(/^\/home\/[^/]+/, '~');
+
+/** An inventory row wearing the shape a session row draws: external, dead. */
+const foundRow = (x: InventorySession): Session => ({
+  id: `found:${x.engine}:${x.id}`,
+  title: x.title, cwd: x.cwd, engine: x.engine,
+  profileId: '', status: 'idle', adopted: true, alive: false,
+  model: x.model ?? null, updatedAt: x.updatedAt,
+});
+
+/**
+ * The threads a machine's CLIs recorded on their own minus the ones this
+ * screen already shows: helm's own record of the same thread (its
+ * engineSessionId is the CLI's id), or the history file of an agent that is
+ * live right now in the same folder - that one is the live row above, not a
+ * second thread.
+ */
+function dedupeDetected(list: Session[], found: InventorySession[]): InventorySession[] {
+  const own = new Set(list.map((s) => s.engineSessionId).filter(Boolean));
+  const live = list.filter((s) => s.alive);
+  const now = Date.now();
+  return found.filter((x) => {
+    if (own.has(x.id)) return false;
+    if ((x.updatedAt ?? 0) > now - 15 * 60_000 &&
+        live.some((s) => s.engine === x.engine && collapseCwd(s.cwd) === collapseCwd(x.cwd))) {
+      return false;
+    }
+    return true;
+  });
+}
 
 // ---------------------------------------------------------------------- app
 
@@ -293,12 +328,18 @@ function Shell({ client, conn, onSignOut }: {
   }, [loadEnvs, loadSessions, client]);
 
   const liveIds = envs.filter((e) => e.online).map((e) => e.id).join(',');
+  // `conn.online` is a dependency because of what it costs to leave out. The
+  // machine list arrives over HTTP and the session lists go over the socket,
+  // so on a cold open this runs first and every `session.list` in it is
+  // rejected as "not connected" and swallowed - and nothing asked again
+  // until the 15s tick below. Measured on loopback, where the daemon answers
+  // in 3ms: 15 seconds of "asking every machine…" for a 3ms question.
   useEffect(() => {
     const live = liveIds ? liveIds.split(',') : [];
     for (const id of live) { client.subscribe(id); loadSessions(id); }
     const timer = setInterval(() => { for (const id of live) loadSessions(id); }, 15_000);
     return () => clearInterval(timer);
-  }, [liveIds, client, loadSessions]);
+  }, [liveIds, client, loadSessions, conn.online]);
 
   useEffect(() => {
     if (wide && !selected && envs.length) setSelected(envs[0].id);
@@ -319,6 +360,14 @@ function Shell({ client, conn, onSignOut }: {
   };
   const openSession = (envId: string, s: Session) => {
     navigate([{ kind: 'env' }, { kind: 'session', session: s }], envId);
+  };
+  // A session that changed under an open view: refresh the machine's list and
+  // fold the new record into the stack, so the title in the bar and the title
+  // in the history entry behind it do not disagree.
+  const onSessionChanged = (envId: string) => (s: Session) => {
+    loadSessions(envId);
+    restate(nav.current.stack.map((v) => (
+      v.kind === 'session' && v.session.id === s.id ? { kind: 'session', session: { ...v.session, ...s } } : v)));
   };
   const push = (v: MainView) => navigate([...nav.current.stack, v]);
   const back = () => {
@@ -494,17 +543,17 @@ function Shell({ client, conn, onSignOut }: {
             onBack={back}
             onClosed={() => { loadSessions(env.id); back(); }}
             onArchived={() => { loadSessions(env.id); back(); }}
-            onSession={(s) => {
-              loadSessions(env.id);
-              restate(nav.current.stack.map((v) => (v.kind === 'session' && v.session.id === s.id ? { kind: 'session', session: { ...v.session, ...s } } : v)));
-            }}
+            onSession={onSessionChanged(env.id)}
           />
         ) : (
           <SessionView
             key={view.session.id}
-            client={client} env={env} session={view.session} onBack={back}
+            client={client} env={env}
+            session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
+            onBack={back}
             onClosed={() => { loadSessions(env.id); back(); }}
             onArchived={() => { loadSessions(env.id); back(); }}
+            onSession={onSessionChanged(env.id)}
           />
         )}
       </section>
@@ -878,6 +927,21 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
     if (env.online) client.openDirect(env.id).catch(() => {});
   }, [client, env.id, env.online]);
 
+  // Threads the machine's CLIs recorded without helm - devin or opencode run
+  // by hand in a terminal show up here, marked external, instead of the
+  // machine looking like nothing ever happened on it.
+  const [earlier, setEarlier] = useState<InventorySession[]>([]);
+  useEffect(() => {
+    if (!env.online) { setEarlier([]); return; }
+    let live = true;
+    const load = () => client.rpc(env.id, 'session.inventory', {}, 20_000)
+      .then((r: any) => { if (live) setEarlier(r.recent ?? []); })
+      .catch(() => {});
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => { live = false; clearInterval(timer); };
+  }, [client, env.id, env.online]);
+
   const openTerminal = async () => {
     setOpening(true); setError('');
     try {
@@ -906,6 +970,10 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
     ['terminals', sessions.filter((s) => s.pty && s.alive !== false && !s.archived)],
   ];
 
+  // A taste of the machine's own history, capped so a well-used laptop does
+  // not bury the active groups; All sessions has the rest.
+  const recent = dedupeDetected(sessions, earlier).slice(0, 6);
+
   const setArchived = async (s: Session, archived: boolean) => {
     setError('');
     try { await client.rpc(env.id, 'session.archive', { id: s.id, archived }, 20_000); reload(); }
@@ -915,6 +983,12 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
   const deleteSession = async (s: Session) => {
     setError('');
     try { await client.rpc(env.id, 'session.kill', { id: s.id }, 20_000); reload(); }
+    catch (e: any) { setError(e.message); }
+  };
+
+  const setTitle = async (s: Session, title: string) => {
+    setError('');
+    try { await client.rpc(env.id, 'session.title', { id: s.id, title }, 20_000); reload(); }
     catch (e: any) { setError(e.message); }
   };
 
@@ -968,6 +1042,7 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
               {list.map((s) => (
                 <SessionRow
                   key={s.id} s={s} onOpen={() => onOpen(s)}
+                  onRename={(title) => setTitle(s, title)}
                   onArchive={() => setArchived(s, true)}
                   onDelete={() => deleteSession(s)}
                 />
@@ -975,6 +1050,14 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
             </div>
           </div>
         ))}
+        {recent.length > 0 && (
+          <div>
+            <div className="section">earlier</div>
+            <div className="rows">
+              {recent.map((x) => <SessionRow key={`found:${x.engine}:${x.id}`} s={foundRow(x)} />)}
+            </div>
+          </div>
+        )}
         {!agents.length && (
           <div className="empty quiet">
             {archivedCount ? 'no active sessions' : `nothing running on ${env.name}`}
@@ -993,23 +1076,40 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
 }
 
 /**
- * A session in the list with actions to archive or permanently remove it.
+ * Ask for a new name for a thread and hand it over if it is a new one.
+ *
+ * A name typed here outranks the one the session gave itself and is never
+ * overwritten afterwards, which is the whole reason renaming exists: the
+ * generated name is a good guess, and a guess should be correctable.
+ */
+function rename(s: Session, onRename: (title: string) => void) {
+  const next = prompt('Name this thread', s.title)?.trim();
+  if (next && next !== s.title) onRename(next);
+}
+
+/**
+ * A session in the list with actions to rename, archive or permanently
+ * remove it.
  *
  * The row is a div rather than a button because it holds a second button:
  * a conversation you are done with should be manageable from the list, not
  * only from inside it. An agent helm did not start is left alone - helm
  * does not own that process and has no business ending it.
  */
-function SessionRow({ s, onOpen, onArchive, onDelete }: {
-  s: Session; onOpen: () => void; onArchive?: () => void; onDelete?: () => void;
+function SessionRow({ s, onOpen, onRename, onArchive, onDelete }: {
+  s: Session; onOpen?: () => void; onRename?: (title: string) => void;
+  onArchive?: () => void; onDelete?: () => void;
 }) {
   const eng = engineOf(s.engine);
-  const adopted = (s as any).adopted;
+  const adopted = s.adopted;
   const [menu, setMenu] = useState(false);
-  const managed = !adopted && (!!onArchive || !!onDelete);
+  const managed = !adopted && (!!onRename || !!onArchive || !!onDelete);
+  // A thread helm cannot open - one it found in a CLI's history rather than
+  // one it runs - gets no button body: nothing happens on the way in.
+  const Main: any = onOpen ? 'button' : 'div';
   return (
     <div className="row tall rowx">
-      <button className="rowmain" onClick={onOpen}>
+      <Main className="rowmain" onClick={onOpen}>
         <EngineMark engine={eng.cls} />
         <span className="grow">
           <span className="rt">
@@ -1017,11 +1117,13 @@ function SessionRow({ s, onOpen, onArchive, onDelete }: {
             {adopted && <span className="tag">external</span>}
             {s.archived && <span className="tag">archived</span>}
           </span>
-          <span className="rm">{eng.label}{s.model ? ` · ${s.model}` : ''} · {shortPath(s.cwd)}</span>
+          <span className="rm">
+            {[eng.label, s.model, shortPath(s.cwd), money(s.costUsd)].filter(Boolean).join(' · ')}
+          </span>
         </span>
         {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
         <StatusChip status={s.status} />
-      </button>
+      </Main>
       {managed && (
         <>
           <button
@@ -1030,6 +1132,9 @@ function SessionRow({ s, onOpen, onArchive, onDelete }: {
           >⋯</button>
           {menu && (
             <div className="menu row-menu" onClick={(e) => e.stopPropagation()}>
+              {onRename && (
+                <button onClick={() => { setMenu(false); rename(s, onRename); }}>Rename thread</button>
+              )}
               {onArchive && (
                 <button onClick={() => { setMenu(false); onArchive(); }}>
                   {s.archived ? 'Unarchive thread' : 'Archive thread'}
@@ -1066,12 +1171,41 @@ function StatusChip({ status }: { status: string }) {
  * work, so archiving is not "delete it quietly" - it is filed here, where it
  * can be reopened or unarchived. Sessions are sorted by activity within each
  * folder, and folders by their most recent one.
+ *
+ * It needs a search because of what it honestly contains. On a machine that
+ * has been worked at, most rows are terminal panes helm did not start - real
+ * sessions, and not what you came here for - so there is one filter for the
+ * words and one for the noise.
  */
 function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
   client: Client; envs: Environment[]; sessions: Record<string, Session[]>;
   onBack: () => void; onOpen: (envId: string, s: Session) => void; onChanged: (envId: string) => void;
 }) {
   const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [mine, setMine] = useState(false);
+  const [found, setFound] = useState<Record<string, InventorySession[]>>({});
+
+  // What the CLIs on each machine recorded on their own - the sessions helm
+  // never saw because nobody opened them through it. History files rather
+  // than a live feed, so it is polled lazily and only while this screen is up.
+  const envKey = envs.map((e) => `${e.id}:${e.online ? 1 : 0}`).join(',');
+  useEffect(() => {
+    let live = true;
+    const load = () => {
+      for (const e of envs) {
+        if (!e.online) continue;
+        client.rpc(e.id, 'session.inventory', {}, 20_000)
+          .then((r: any) => { if (live) setFound((f) => ({ ...f, [e.id]: r.recent ?? [] })); })
+          .catch(() => {});
+      }
+    };
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => { live = false; clearInterval(timer); };
+    // `envs` is a fresh array every render; the key says what we depend on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, envKey]);
 
   const setArchived = async (envId: string, s: Session, archived: boolean) => {
     setError('');
@@ -1083,14 +1217,29 @@ function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
     try { await client.rpc(envId, 'session.kill', { id: s.id }, 20_000); onChanged(envId); }
     catch (e: any) { setError(e.message); }
   };
+  const setTitle = async (envId: string, s: Session, title: string) => {
+    setError('');
+    try { await client.rpc(envId, 'session.title', { id: s.id, title }, 20_000); onChanged(envId); }
+    catch (e: any) { setError(e.message); }
+  };
 
+  // The folder is part of what you are searching for: "the helm one on the
+  // VM" is a path, not a title.
+  const q = query.trim().toLowerCase();
+  const keep = (s: Session) =>
+    (!mine || !s.adopted) &&
+    (!q || `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q));
+
+  const total = envs.reduce((n, e) =>
+    n + (sessions[e.id]?.length ?? 0) + dedupeDetected(sessions[e.id] ?? [], found[e.id] ?? []).length, 0);
   const groups = envs.map((env) => {
+    const list = sessions[env.id] ?? [];
+    const extras = dedupeDetected(list, found[env.id] ?? []).map(foundRow);
     const byFolder = new Map<string, Session[]>();
-    for (const s of sessions[env.id] ?? []) {
-      const key = s.cwd || '~';
-      const list = byFolder.get(key) ?? [];
-      if (!list.length) byFolder.set(key, list);
-      list.push(s);
+    for (const s of [...list, ...extras].filter(keep)) {
+      const key = collapseCwd(s.cwd || '~');
+      const list = byFolder.get(key);
+      if (list) list.push(s); else byFolder.set(key, [s]);
     }
     const folders = [...byFolder.entries()]
       .map(([cwd, list]): [string, Session[]] =>
@@ -1098,14 +1247,33 @@ function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
       .sort((a, b) => (b[1][0].updatedAt ?? 0) - (a[1][0].updatedAt ?? 0));
     return { env, folders };
   }).filter((g) => g.folders.length > 0);
+  // Every machine is asked for its list on the way in, and that round trip
+  // is long enough to read: "no sessions yet" while they are still arriving
+  // is a wrong answer, not an empty one.
+  const asked = envs.some((e) => sessions[e.id]);
 
   return (
     <>
       <div className="bar">
         <button className="iconbtn back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>All sessions</h1><span className="sub">every thread, grouped by folder</span></div>
+        <div className="titles">
+          <h1>All sessions</h1>
+          <span className="sub">{total ? `${total} thread${total === 1 ? '' : 's'}, grouped by folder` : 'every thread, grouped by folder'}</span>
+        </div>
       </div>
       <div className="scroll"><div className="pad column">
+        <div className="filterbar">
+          <input
+            className="sheetfilter grow" value={query} placeholder="search titles and folders"
+            autoCapitalize="off" autoCorrect="off" autoComplete="off"
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <button
+            className={`pill${mine ? ' on' : ''}`} aria-pressed={mine}
+            title="hide panes helm did not start"
+            onClick={() => setMine((v) => !v)}
+          >helm's</button>
+        </div>
         {groups.map(({ env, folders }) => (
           <div key={env.id}>
             <div className="section">
@@ -1114,11 +1282,14 @@ function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
             </div>
             {folders.map(([cwd, list]) => (
               <div key={cwd}>
-                <div className="foldhead">{cwd.replace(/^\/home\/[^/]+/, '~')}</div>
+                <div className="foldhead">{collapseCwd(cwd)}</div>
                 <div className="rows">
-                  {list.map((s) => (
+                  {list.map((s) => s.id.startsWith('found:') ? (
+                    <SessionRow key={s.id} s={s} />
+                  ) : (
                     <SessionRow
                       key={s.id} s={s} onOpen={() => onOpen(env.id, s)}
+                      onRename={(title) => setTitle(env.id, s, title)}
                       onArchive={() => setArchived(env.id, s, !s.archived)}
                       onDelete={() => deleteSession(env.id, s)}
                     />
@@ -1128,7 +1299,11 @@ function Threads({ client, envs, sessions, onBack, onOpen, onChanged }: {
             ))}
           </div>
         ))}
-        {!groups.length && <div className="empty quiet">no sessions yet</div>}
+        {!groups.length && (
+          <div className="empty quiet">
+            {!asked ? 'asking every machine…' : total ? 'nothing matches' : 'no sessions yet'}
+          </div>
+        )}
         {error && <div className="error">{error}</div>}
       </div></div>
     </>
@@ -1169,16 +1344,17 @@ function EnvSettings({ client, env, onBack, onEdit }: {
           {accounts?.map((a) => {
             const e = engineOf(a.engine);
             const n = a.prefs?.approved?.length ?? 0;
+            // Approving nothing and setting a default is a real state - the
+            // picker stays whole and new sessions still start somewhere - so
+            // the row has to say the default even when there is no short list.
+            const short = n ? `${n} model${n === 1 ? '' : 's'}` : 'all models';
+            const starts = a.prefs?.default ? `starts ${a.prefs.default.replace(/^[^/]+\//, '')}` : '';
             return (
               <button key={a.key} className="row tall" onClick={() => onEdit(a)}>
                 <EngineMark engine={e.cls} />
                 <span className="grow">
                   <span className="rt">{e.label} <span className="dim">· {a.account}</span></span>
-                  <span className="rm">
-                    {n
-                      ? `${n} model${n === 1 ? '' : 's'}${a.prefs?.default ? ` · starts ${a.prefs.default.replace(/^[^/]+\//, '')}` : ''}`
-                      : 'all models'}
-                  </span>
+                  <span className="rm">{[short, starts].filter(Boolean).join(' · ')}</span>
                 </span>
                 <span className="chev">›</span>
               </button>
@@ -1226,7 +1402,9 @@ function ModelPrefsView({ client, env, account, onBack }: {
   const toggle = (m: string) => {
     const next = new Set(approved);
     if (next.has(m)) next.delete(m); else next.add(m);
-    if (def && !next.has(def)) setDef('');
+    // A default has to be something the picker offers - unless the picker
+    // offers everything, which is what an empty list means.
+    if (def && next.size && !next.has(def)) setDef('');
     setApproved(next);
   };
 
@@ -1251,7 +1429,10 @@ function ModelPrefsView({ client, env, account, onBack }: {
   const on = [...all.filter((m) => approved.has(m)), ...[...approved].filter((m) => !all.includes(m))]
     .filter(match);
   const off = all.filter((m) => !approved.has(m)).filter(match);
-  const defaults = all.filter((m) => approved.has(m));
+  // Approving nothing leaves the picker whole, so the default may be any
+  // model the CLI offers: "start me on the big one" is a setting on its own,
+  // and the daemon stores it as one.
+  const defaults = approved.size ? all.filter((m) => approved.has(m)) : [...all];
   // A stored default the CLI stopped offering is still what sessions start
   // with - keep it selectable rather than silently dropping it.
   if (def && !defaults.includes(def)) defaults.push(def);
@@ -1279,7 +1460,7 @@ function ModelPrefsView({ client, env, account, onBack }: {
         {list !== null && (
           <>
             <div className="section">start new sessions with</div>
-            <select value={def} onChange={(e) => setDef(e.target.value)} disabled={!approved.size}>
+            <select value={def} onChange={(e) => setDef(e.target.value)} disabled={!defaults.length}>
               <option value="">the CLI's default</option>
               {defaults.map((m) => <option key={m} value={m}>{list.labels?.[m] ?? m}</option>)}
             </select>
@@ -1511,9 +1692,9 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-function SessionView({ client, env, session, onBack, onClosed, onArchived }: {
+function SessionView({ client, env, session, onBack, onClosed, onArchived, onSession }: {
   client: Client; env: Environment; session: Session;
-  onBack: () => void; onClosed: () => void; onArchived: () => void;
+  onBack: () => void; onClosed: () => void; onArchived: () => void; onSession: (s: Session) => void;
 }) {
   const isShell = session.engine === 'shell';
   const [messages, setMessages] = useState<Message[] | null>(null);
@@ -1524,13 +1705,27 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived }: {
   const [menu, setMenu] = useState(false);
   const eng = engineOf(session.engine);
 
+  // Read back from the CLI's own transcript, so this chat costs a round trip
+  // to say anything at all. Paint the copy on the device first: what you read
+  // last time is a better opening than a blank screen, and the refresh behind
+  // it is usually a second or two.
   const refresh = useCallback(async () => {
     if (isShell) return;
     try {
       const r = await client.rpc<{ messages: Message[] }>(env.id, 'session.messages', { id: session.id }, 15_000);
       setMessages(r.messages);
+      saveMessages(env.id, session.id, r.messages);
     } catch (e: any) { setError(e.message); }
   }, [client, env.id, session.id, isShell]);
+
+  useEffect(() => {
+    if (isShell) return;
+    let stale = false;
+    loadMessages<Message>(env.id, session.id).then((cached) => {
+      if (!stale && cached?.length) setMessages((now) => now ?? cached);
+    });
+    return () => { stale = true; };
+  }, [env.id, session.id, isShell]);
 
   useEffect(() => {
     refresh();
@@ -1573,6 +1768,18 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived }: {
     catch (e: any) { setError(e.message); }
   };
 
+  // Terminals are named by the machine ("Terminal 3") and agents by their
+  // first prompts; both are guesses worth correcting.
+  const renameThread = async () => {
+    setMenu(false);
+    const next = prompt('Name this thread', session.title)?.trim();
+    if (!next || next === session.title) return;
+    try {
+      const r: any = await client.rpc(env.id, 'session.title', { id: session.id, title: next });
+      onSession(r.session);
+    } catch (e: any) { setError(e.message); }
+  };
+
   return (
     <>
       <div className="bar">
@@ -1590,6 +1797,7 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived }: {
         <button className="iconbtn" title="more" onClick={() => setMenu((v) => !v)}>⋯</button>
         {menu && (
           <div className="menu" onClick={() => setMenu(false)}>
+            <button onClick={renameThread}>Rename thread</button>
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
             <button className="destructive" onClick={kill}>Delete thread</button>
           </div>

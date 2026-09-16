@@ -550,6 +550,76 @@ or deleted. The empty state on a machine that holds only archived threads
 says where they went. Archived terminals also stopped listing under
 "terminals".
 
+### The review pass on all of it
+
+Six things, all found reading the three pushes above and all reproduced
+before they were believed.
+
+*The naming gate could shut for good.* It opened *at* the second prompt and
+only then - `s.prompts !== TITLE_AFTER` - so a session that opened "hi",
+"hello" spent its second prompt on nothing and was never offered a name
+again, however much real work followed. The gate now opens at two and stays
+open, and only prompts that say something are sampled. Driven for real: two
+greetings to Claude left the folder name standing, and the third prompt
+("what is 2+2?") named the session.
+
+*A greeting could take a name that was already earned.* An ACP agent keeps
+reporting a title and early ones are a copy of the prompt, so "thanks" three
+prompts in outranked a real name (agent beats auto). Greetings are now
+refused whoever says them, not only when they arrive through the prompts.
+
+*The prompt sample went out on the wire.* Up to 400 characters of what was
+typed, per session, in every `session.list` - which every paired device polls
+every 15 seconds. It is helm's own note for naming the session; it stays on
+the machine now.
+
+*"Start me on Opus" was unreachable.* The daemon has always stored a default
+with an empty approved list, and `applyModelPrefs` keeps the default in the
+picker whether or not it was approved - but the settings screen disabled the
+selector until something was checked, so the one setting most people want
+could not be made. It can now, and the account row says the default even
+when there is no short list.
+
+*Model prefs took whatever a phone sent.* `approved` was written to
+config.json unfiltered, and the daemon reads it back on every session start.
+Names only now, trimmed and deduped.
+
+*"no sessions yet" was a lie for the first few seconds.* All sessions asks
+every machine on the way in, and that round trip is long enough to read. It
+says what it is doing while it waits.
+
+### Then three things on top, and the hole one of them uncovered
+
+**Threads can be renamed.** There was no `session.title` RPC at all, and the
+web never passed a `title` to `session.start` - so `titleBy: 'user'`, the top
+of the ranking the naming work had just built, was unreachable from the phone.
+It is in the ⋯ menu of a row and of a session, agents and terminals alike
+("Terminal 1" is as much a guess as a name taken from two prompts). A name
+typed here outranks anything generated and is never overwritten - proven by
+renaming a live session and then sending it another prompt.
+
+**All sessions has a search.** The screen was honest about what a worked-on
+machine contains and that was the problem: six of eight rows were terminal
+panes helm did not start. One box searches titles *and* folders ("the helm one
+on the VM" is a path, not a title), and one pill hides what helm did not start.
+
+**A thread says what it cost.** Every turn has always printed `4.8s · $0.02`
+and nothing added them up. `turn.done` now accumulates onto the session record
+- not summed from the log, which is trimmed, so a long thread would start
+forgetting its early turns - and the total reads in the session header and in
+every list row. A real three-turn Claude session: `$0.31`.
+
+**The hole: the app waited 15 seconds to ask a 3ms question.** Measured while
+checking the new screen - 12.5s from opening All sessions to seeing a row,
+twice, on loopback. The socket trace says why: the machine list arrives over
+HTTP, the session lists go over the socket, and the effect that lists them
+ran before the socket was connected. Every `session.list` in it was rejected
+as "not connected" and swallowed by `loadSessions`' own `.catch(() => {})`,
+and nothing asked again until the 15-second poll tick. `conn.online` is now a
+dependency of that effect. **12,578ms → 4ms**, and it was never specific to
+the new screen: it was every cold open of the app, including the machine
+screen, on every device.
+
 ---
 
 ## What changed on 2026-09-14

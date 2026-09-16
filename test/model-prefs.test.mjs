@@ -65,6 +65,18 @@ test('prefs save, read back, and clear', async () => {
   assert.equal(modelPrefs(oc), null, 'an empty list and no default stores nothing');
 });
 
+test('what a phone sends is not trusted to be a model name', async () => {
+  const { modelPrefs, saveModelPrefs } = await import('../packages/connect/src/settings.js');
+  const { getProfiles } = await import('../packages/connect/src/profiles.js');
+  const [oc] = await getProfiles();
+  // The prefs arrive over the network and are read back on every session
+  // start, so anything that is not a name is dropped rather than stored.
+  saveModelPrefs(oc, { default: { evil: 1 }, approved: ['zen/kimi', '', null, 42, ' zen/glm ', 'zen/kimi'] });
+  assert.deepEqual(modelPrefs(oc), { default: null, approved: ['zen/kimi', 'zen/glm'] });
+  saveModelPrefs(oc, { default: null, approved: 'not-a-list' });
+  assert.equal(modelPrefs(oc), null);
+});
+
 test('applyModelPrefs trims the picker but keeps the tail in reach', async () => {
   const { applyModelPrefs } = await import('../packages/connect/src/settings.js');
   const list = { default: 'cli-def', models: ['a', 'b', 'c', 'd'] };

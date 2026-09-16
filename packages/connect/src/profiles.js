@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { discoverProfiles } from './discover.js';
 import { ENGINES } from './engines.js';
@@ -71,6 +71,30 @@ export async function getProfiles() {
   if (saved?.profiles?.length) return saved.profiles;
   const { profiles } = await refreshProfiles();
   return profiles;
+}
+
+/**
+ * Whether the saved list is old enough that discovery is worth re-running.
+ * A CLI installed after this machine joined never appears otherwise - the
+ * file is written at join and nothing checks it again until asked to.
+ */
+const PROFILE_TTL_MS = 5 * 60_000;
+export function profilesStale() {
+  try {
+    return Date.now() - statSync(PROFILES_FILE).mtimeMs > PROFILE_TTL_MS;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * getProfiles, but rediscovers when the saved list is old enough to predate
+ * a CLI installed after this machine joined. Anything that answers "what
+ * can this machine run" should ask this, not getProfiles.
+ */
+export async function currentProfiles() {
+  if (profilesStale()) return (await refreshProfiles()).profiles;
+  return getProfiles();
 }
 
 /**

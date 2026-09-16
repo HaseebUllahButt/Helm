@@ -8,7 +8,14 @@ import { loadCached, saveCached } from './logCache';
  *
  * Opening paints instantly from the on-device cache when there is one,
  * then refreshes only what is new in the background - an old chat no
- * longer costs up to 8 relay round-trips before first paint. Loads the
+ * longer costs up to 8 relay round-trips before first paint.
+ *
+ * What is on screen is written back as it streams, not only when the view
+ * closes. A phone does not close views: it is swiped away, or the tab is
+ * evicted while it sits in the background, and React never unmounts - so
+ * anything that arrived since the chat was opened was cached nowhere and
+ * came back over the network. It is saved a beat after the stream goes
+ * quiet, and again the moment the page is hidden. Loads the
  * log once, then applies pushes as they arrive - in sequence order, and
  * if a push ever skips a number (a socket that dropped for a moment) the
  * gap is refetched rather than guessed at. The daemon only pushes while
@@ -25,11 +32,29 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
 
   const publish = useCallback(() => setState({ ...log.current, turns: log.current.turns, pending: [...log.current.pending] }), []);
 
+  const dirty = useRef(false);
+  const writer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const persist = useCallback(() => {
+    if (writer.current) { clearTimeout(writer.current); writer.current = null; }
+    if (!dirty.current) return;
+    dirty.current = false;
     if (log.current.last > 0 && raw.current.length) {
       saveCached(env, sessionId, log.current.last, raw.current).catch(() => {});
     }
   }, [env, sessionId]);
+
+  /**
+   * Save shortly after the stream goes quiet. Debounced because a live turn
+   * is hundreds of deltas a second and each save rewrites the whole array;
+   * short because the window between the last save and a phone killing the
+   * app is exactly what gets lost.
+   */
+  const persistSoon = useCallback(() => {
+    dirty.current = true;
+    if (writer.current) return;
+    writer.current = setTimeout(() => { writer.current = null; persist(); }, 2000);
+  }, [persist]);
 
   const fetchSince = useCallback((since: number) => {
     if (fetching.current) return fetching.current;
@@ -52,6 +77,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
       log.current.loaded = true;
       setError('');
       publish();
+      dirty.current = true;
       persist();
     })()
       .catch((e: any) => setError(e.message))
@@ -83,6 +109,13 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
 
     const renew = setInterval(watch, 25_000);
 
+    // Being hidden is how a chat ends on a phone. The write is asynchronous
+    // and may not finish if the app is killed in the same breath, which is
+    // why the debounce above is the real guarantee and this is the last word.
+    const onHide = () => { if (document.visibilityState === 'hidden') persist(); };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', persist);
+
     const off = client.on((e, kind, payload) => {
       if (stopped) return;
       if (kind === 'session.event' && e === env && payload?.id === sessionId) {
@@ -97,6 +130,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
           apply(log.current, ev);
         }
         publish();
+        persistSoon();
       }
       if (kind === 'connection' && payload?.online) { watch(); fetchSince(log.current.last); }
     });
@@ -104,11 +138,13 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     return () => {
       stopped = true;
       clearInterval(renew);
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', persist);
       off();
       persist();
       client.rpc(env, 'session.unwatch', { id: sessionId }, 5_000).catch(() => {});
     };
-  }, [client, env, sessionId, fetchSince, publish, persist]);
+  }, [client, env, sessionId, fetchSince, publish, persist, persistSoon]);
 
   return { log: state, error, refresh: () => fetchSince(log.current.last) };
 }

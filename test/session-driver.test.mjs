@@ -365,6 +365,52 @@ test('a session names itself after two prompts, not one', async () => {
   await sessions.kill(s.id);
 });
 
+test('greetings never name a session, whoever says them', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-titles-greet')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
+  const d = () => FakeDriver.made.at(-1);
+
+  // Two prompts in and nothing worth a name yet: the gate has opened but
+  // there is nothing behind it, so the folder holds.
+  await sessions.input(s.id, 'hi');
+  await sessions.input(s.id, 'hello');
+  assert.equal(sessions.get(s.id).title, 'proj');
+
+  // The third prompt says something, and names the session even though the
+  // gate opened on the ones that did not.
+  await sessions.input(s.id, 'port the parser to the new lexer');
+  assert.equal(sessions.get(s.id).title, 'port the parser to the new lexer');
+
+  // The agent keeps reporting a name, and early on that name is a copy of
+  // whatever was last typed. A greeting must not take the one just earned.
+  d().push('title', { title: 'hey' });
+  assert.equal(sessions.get(s.id).title, 'port the parser to the new lexer');
+  await sessions.input(s.id, 'thanks');
+  d().push('title', { title: 'thanks' });
+  assert.equal(sessions.get(s.id).title, 'port the parser to the new lexer');
+  await sessions.kill(s.id);
+});
+
+test('the prompt sample stays on the machine', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-titles-wire')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
+  await sessions.input(s.id, 'the whole first paragraph of what I want');
+  const listed = (await sessions.list()).find((x) => x.id === s.id);
+  assert.equal(listed.promptSample, undefined, 'prompts are not shipped to every paired device');
+  assert.equal(sessions.get(s.id).promptSample.length, 1, 'but helm still keeps them to name the session');
+  await sessions.kill(s.id);
+});
+
 test('a name typed at start is never overwritten by a generated one', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
@@ -377,6 +423,49 @@ test('a name typed at start is never overwritten by a generated one', async () =
   await sessions.input(s.id, 'two');
   FakeDriver.made.at(-1).push('title', { title: 'something else entirely' });
   assert.equal(sessions.get(s.id).title, 'build');
+  await sessions.kill(s.id);
+});
+
+test('a name the owner types wins, before and after the gate', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-rename')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
+
+  // Renaming does not wait for the two prompts a *generated* name waits for.
+  sessions.rename(s.id, '  the parser   rewrite  ');
+  assert.equal(sessions.get(s.id).title, 'the parser rewrite', 'squashed, trimmed, taken');
+
+  // And nothing generated takes it back afterwards.
+  await sessions.input(s.id, 'port the parser to the new lexer');
+  await sessions.input(s.id, 'now do the tests');
+  FakeDriver.made.at(-1).push('title', { title: 'Parser and lexer work' });
+  assert.equal(sessions.get(s.id).title, 'the parser rewrite');
+
+  assert.throws(() => sessions.rename(s.id, '   '), /needs a name/);
+  assert.throws(() => sessions.rename('pane:nope:1', 'x'), /external session/);
+  await sessions.kill(s.id);
+});
+
+test('a thread keeps what it has cost', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-cost')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
+  const d = FakeDriver.made.at(-1);
+
+  d.push('turn.done', { turnId: 't1', status: 'ok', costUsd: 0.0712 });
+  d.push('turn.done', { turnId: 't2', status: 'interrupted' });
+  d.push('turn.done', { turnId: 't3', status: 'ok', costUsd: 0.0119 });
+  const listed = (await sessions.list()).find((x) => x.id === s.id);
+  assert.equal(listed.turns, 3, 'an interrupted turn still happened');
+  assert.equal(listed.costUsd, 0.0831, 'and the cents do not drift');
   await sessions.kill(s.id);
 });
 

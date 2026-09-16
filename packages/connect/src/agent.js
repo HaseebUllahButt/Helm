@@ -8,8 +8,8 @@ import {
 } from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
 import { modesFor } from './modes.js';
-import { Sessions } from './sessions.js';
-import { getProfiles, refreshProfiles } from './profiles.js';
+import { Sessions, wire } from './sessions.js';
+import { getProfiles, refreshProfiles, currentProfiles } from './profiles.js';
 import { listModels } from './models.js';
 import { listCommands } from './commands.js';
 import { accountKey, modelPrefs, saveModelPrefs, applyModelPrefs, loadSettings } from './settings.js';
@@ -188,13 +188,13 @@ export class Daemon {
     // Terminals live in their own process, so some of them are still running.
     // Ask which, once, rather than assuming either way.
     this.sessions.adoptTerminals().catch(() => {});
-    this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session }));
+    this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session: wire(session) }));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
     this.sessions.on('exit', (e) => this.#emit(E.SESSION_EXIT, e));
     this.sessions.on('transcript', (ref) => this.#emit(E.SESSION_TRANSCRIPT, ref));
     this.sessions.on('status', ({ session, from, to }) =>
-      this.#emit(E.SESSION_UPDATE, { session, transition: { from, to } })
+      this.#emit(E.SESSION_UPDATE, { session: wire(session), transition: { from, to } })
     );
     this.sessions.on('event', ({ id, event }) => {
       this.#queueEvent(id, event);
@@ -552,9 +552,13 @@ export class Daemon {
       case M.FS_MKDIR:  return fsApi.makeDir(p);
 
       case M.PROFILE_LIST: {
+        // Asked for the list means somebody is looking at what this machine
+        // can run - the one moment a stale answer is a wrong one. Discovery
+        // is cheap enough to redo every few minutes; between those the saved
+        // file answers.
         const profiles = p.refresh
           ? (await refreshProfiles()).profiles
-          : await getProfiles();
+          : await currentProfiles();
         // Each profile carries its account key and model prefs, so the app
         // groups aliases and renders the picker filter with no extra call.
         const cfg = loadSettings();
@@ -618,6 +622,7 @@ export class Daemon {
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
       case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
+      case M.SESSION_TITLE:   return this.sessions.rename(p.id, p.title);
       case M.SESSION_ARCHIVE: return this.sessions.archive(p.id, p.archived !== false);
 
       // Headless agent sessions.
@@ -634,7 +639,7 @@ export class Daemon {
       // Past transcripts from each CLI's own store. Off by default: scanning
       // them is only worth it when you actually want to reopen an old chat.
       case M.SESSION_INVENTORY:
-        return { recent: await inventory(await getProfiles()) };
+        return { recent: await inventory(await currentProfiles()) };
 
       // What `/` offers in this session: helm's own actions plus whatever
       // commands the owner has written for this engine, in this directory.

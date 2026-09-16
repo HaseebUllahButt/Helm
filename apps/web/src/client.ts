@@ -75,6 +75,22 @@ export interface Session {
   adopted?: boolean;
   /** Archived threads stay on the machine but are hidden from active groups. */
   archived?: boolean;
+  /** What the whole thread has cost and how many turns it took, so far. */
+  costUsd?: number;
+  turns?: number;
+  /** The id the CLI itself gave this session; matches inventory rows. */
+  engineSessionId?: string | null;
+}
+
+/** A thread a CLI recorded on its own, whether or not helm started it. */
+export interface InventorySession {
+  engine: string;
+  account: string;
+  id: string;
+  title: string;
+  cwd: string;
+  updatedAt: number;
+  model?: string;
 }
 
 /** A permission mode an engine offers, in words; the daemon knows the flags. */

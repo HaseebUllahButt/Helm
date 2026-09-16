@@ -170,6 +170,24 @@ code, pre, kbd { font-family: var(--mono); }
 .brand img { width: 21px; height: 21px; border-radius: 6px; flex: none; }
 .brand b { font-size: var(--t-body); font-weight: 600; letter-spacing: -0.012em; }
 
+/* An installed desktop app asks for the whole window
+   (display_override: window-controls-overlay) - the grey origin bar is
+   replaced by the page itself, with only the min/max/close buttons floating
+   at the top right. The app's own top bar becomes the drag strip; anything
+   you can press is exempt, and the right edge keeps clear of the controls. */
+@media (display-mode: window-controls-overlay) {
+  .bar { app-region: drag; -webkit-app-region: drag; min-height: max(50px, env(titlebar-area-height)); }
+  .bar button, .bar a, .bar input, .bar select, .menu, .menu button,
+  .bar .conn { app-region: no-drag; -webkit-app-region: no-drag; }
+  /* The overlay controls' width is whatever the draggable area does not
+     reach: everything right of (x + width). */
+  .main .bar, .sidebar.showing .bar {
+    padding-right: calc(100vw - env(titlebar-area-width) - env(titlebar-area-x));
+  }
+  .auth { app-region: drag; -webkit-app-region: drag; }
+  .auth-card { app-region: no-drag; -webkit-app-region: no-drag; }
+}
+
 /* Connection state, as words. Only "offline" is red. */
 .conn {
   display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;
@@ -862,6 +880,17 @@ pre.snippet {
   margin: 0 2px 6px; padding: 8px 10px; width: auto;
   font-size: 14px; border-radius: var(--radius-md);
 }
+
+/* A search box with the filters that belong to it on the same line. */
+.filterbar { display: flex; align-items: center; gap: 6px; }
+.filterbar .sheetfilter { flex: 1; min-width: 0; margin-bottom: 6px; }
+.pill {
+  flex: none; margin-bottom: 6px; padding: 8px 11px;
+  border: 1px solid var(--input); border-radius: var(--radius-md);
+  background: var(--card); color: var(--mutedfg);
+  font-size: 12.5px; font-weight: 500;
+}
+.pill.on { background: var(--accent); color: var(--fg); border-color: transparent; }
 
 /* A row that carries its own action menu: the body opens it. */
 .row.rowx { padding: 0; display: flex; align-items: stretch; gap: 0; position: relative; overflow: visible; }

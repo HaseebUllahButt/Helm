@@ -263,11 +263,14 @@ export async function discoverProfiles() {
     }
   };
 
-  // 1. Engines actually installed on this box.
+  // 1. Engines actually installed on this box. One `command -v` each, asked
+  // at once - they are the same question, not four.
   const installed = {};
-  for (const engine of Object.values(ENGINES)) {
-    if (!engine.bin) continue;
-    const path = await which(engine.bin);
+  const paths = await Promise.all(
+    Object.values(ENGINES).map((e) => (e.bin ? which(e.bin) : null))
+  );
+  for (const [i, engine] of Object.values(ENGINES).entries()) {
+    const path = paths[i];
     if (!path) continue;
     installed[engine.id] = path;
 

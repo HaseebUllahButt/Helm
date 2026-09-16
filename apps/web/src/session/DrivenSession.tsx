@@ -6,6 +6,7 @@ import { EngineMark } from '../EngineMark';
 import { PermissionSheet } from './PermissionSheet';
 import { Controls, type Kind } from './Controls';
 import { Transcript } from './Transcript';
+import { money } from '../format';
 import { useSessionLog } from './useSessionLog';
 import type { Decision } from './types';
 
@@ -138,6 +139,18 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
     await call(async () => { await client.rpc(env.id, 'session.archive', { id: session.id, archived: !session.archived }); onArchived(); });
   };
 
+  // The name a session gave itself is a good guess from two prompts; this is
+  // how a guess gets corrected. What is typed here is never overwritten.
+  const rename = async () => {
+    setMenu(null);
+    const next = prompt('Name this thread', session.title)?.trim();
+    if (!next || next === session.title) return;
+    await call(async () => {
+      const r: any = await client.rpc(env.id, 'session.title', { id: session.id, title: next });
+      onSession(r.session);
+    });
+  };
+
   const all = options?.modes ?? [];
   const mode = all.find((m) => m.id === session.mode);
 
@@ -185,7 +198,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
           <h1>{session.title}</h1>
           <span className="sub">
             <EngineMark engine={session.engine} />
-            {engine} · {shortPath(session.cwd)}
+            {[engine, shortPath(session.cwd), money(session.costUsd)].filter(Boolean).join(' · ')}
             {!env.online && <span className="offline"> · offline</span>}
           </span>
         </div>
@@ -193,6 +206,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
         <button className="iconbtn" title="more" onClick={() => setMenu(menu === 'more' ? null : 'more')}>⋯</button>
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
+            <button onClick={rename}>Rename thread</button>
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
             <button className="destructive" onClick={kill}>Delete thread</button>
           </div>

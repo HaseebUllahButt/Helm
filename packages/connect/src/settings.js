@@ -40,9 +40,13 @@ export function modelPrefs(profile, cfg = loadSettings()) {
 export function saveModelPrefs(profile, { default: def = null, approved = [] } = {}) {
   const cfg = loadSettings();
   cfg.models ??= {};
-  const list = approved.filter(Boolean);
-  if (!def && !list.length) delete cfg.models[accountKey(profile)];
-  else cfg.models[accountKey(profile)] = { default: def || null, approved: list };
+  // This arrives over the network from a phone and is read back by the
+  // daemon on every session start, so only model names get in.
+  const name = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  const list = [...new Set((Array.isArray(approved) ? approved : []).map(name).filter(Boolean))];
+  const pick = name(def);
+  if (!pick && !list.length) delete cfg.models[accountKey(profile)];
+  else cfg.models[accountKey(profile)] = { default: pick, approved: list };
   mkdirSync(dirname(CONFIG_FILE), { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify({ version: 1, ...cfg }, null, 2), { mode: 0o600 });
   return modelPrefs(profile, cfg);
