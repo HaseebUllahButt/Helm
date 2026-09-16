@@ -1572,12 +1572,21 @@ add a third delivery path, it must carry the same id.**
 
 ## Known bad, and not yet fixed
 
-1. **Push has never reached a real device.** The encryption is checked
-   against RFC 8291's own worked example, and the normal laptop → VM hub →
-   subscribed phone topology is covered against a stub push service, but no
-   Apple or Google endpoint has been handed one. This is thirty seconds to
-   settle: open the app on the phone, "notify this device" in the sidebar,
-   then let a session ask for permission.
+1. ~~**Push has never reached a real device.**~~ **This was wrong, and was
+   wrong for two days.** Checked properly on 2026-09-17: the VM's hub holds a
+   real FCM subscription (`push_subs`, label "Linux armv81", registered
+   2026-09-15T17:57Z), a send through helm's own `fanOut` was accepted by
+   Google today (1 of 1), and the hub's journal shows it firing for real work
+   twice on the 16th - `[helm] push: told 1 device that Helm · devin needs
+   you`. Push works.
+
+   Two lessons worth more than the entry. **`push.json` holds only the VAPID
+   keypair; the subscriptions are in `hub.sqlite`** (`push_subs`) - looking in
+   the file and finding `subscriptions: 0` is how this got restated as fact a
+   third time. And this is the *second* correction to this same item: it
+   already carried a note that "a real phone has never opened this" had been
+   wrong for a day. **Check `push_subs` and the journal before writing
+   anything about push.**
 2. **The touch-facing work has only been driven in headless Chromium** at
    390×844 — the `/` palette against a software keyboard, and predictive
    echo, which above 60ms is exactly what a phone on cellular runs.
