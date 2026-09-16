@@ -75,6 +75,8 @@ export interface Session {
   adopted?: boolean;
   /** Archived threads stay on the machine but are hidden from active groups. */
   archived?: boolean;
+  /** The network's own agent: one per machine, opened from the sidebar. */
+  brain?: boolean;
   /** What the whole thread has cost and how many turns it took, so far. */
   costUsd?: number;
   turns?: number;

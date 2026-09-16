@@ -273,7 +273,24 @@ function ItemView({ item, byParent }: { item: Item; byParent: Map<string, Item[]
 
 // ------------------------------------------------------------------- turns
 
+/**
+ * What helm put in front of what the owner typed, split back off it.
+ *
+ * The brain gets a line of network state prepended to every message, because
+ * it is asked about machines rather than about the folder it is sitting in.
+ * That line was really sent and really in the model's context, so hiding it
+ * would be a lie - but it is helm talking, not the owner, and in their own
+ * bubble in their own words it reads as though they typed it. It gets its
+ * own quiet line instead.
+ */
+const HELM_NOTE = /^(\[helm [^\]\n]*\])\n\n([\s\S]*)$/;
+function splitNote(text?: string): { note?: string; text?: string } {
+  const m = text ? HELM_NOTE.exec(text) : null;
+  return m ? { note: m[1], text: m[2] } : { text };
+}
+
 function TurnView({ turn, working, blocked }: { turn: Turn; working: boolean; blocked: boolean }) {
+  const said = splitNote(turn.text);
   const d = turn.done;
   // Subagent children hang off their spawn card; a missing parent renders flat.
   const ids = new Set(turn.items.map((i) => i.id));
@@ -289,7 +306,8 @@ function TurnView({ turn, working, blocked }: { turn: Turn; working: boolean; bl
     <>
       {(turn.text || turn.attachments?.length) && (
         <div className="turn user"><div className="bubble">
-          {turn.text}
+          {said.note && <span className="turn-note">{said.note}</span>}
+          {said.text}
           {turn.attachments?.map((a, i) => (a.data
             // A blob the log has swept past still has its name, and saying
             // so beats a browser's broken-image glyph.

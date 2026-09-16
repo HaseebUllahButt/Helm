@@ -217,6 +217,7 @@ export function App() {
 type MainView =
   | { kind: 'env' }
   | { kind: 'threads'; search?: boolean }
+  | { kind: 'brain' }
   | { kind: 'browse'; path?: string }
   | { kind: 'start'; cwd: string }
   | { kind: 'settings' }
@@ -268,10 +269,11 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   /** Same place, fresher snapshot: session records change under a view. */
-  const restate = (next: MainView[]) => {
-    nav.current = { ...nav.current, stack: next };
+  const restate = (next: MainView[], sel = nav.current.selected) => {
+    nav.current = { ...nav.current, stack: next, selected: sel };
     setStack(next);
-    history.replaceState({ helm: 1, depth: nav.current.depth, stack: next, selected: nav.current.selected }, '');
+    setSelected(sel);
+    history.replaceState({ helm: 1, depth: nav.current.depth, stack: next, selected: sel }, '');
   };
 
   /**
@@ -395,8 +397,27 @@ function Shell({ client, conn, onSignOut }: {
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => s.engine !== 'shell' && !s.archived);
 
+  // The brain, wherever it is. There is at most one per machine and in
+  // practice one per network, on the machine that is always up.
+  const brain = (() => {
+    for (const e of envs) {
+      const s = (sessions[e.id] ?? []).find((x) => x.brain);
+      if (s) return { env: e, s };
+    }
+    return null;
+  })();
+
+  // Straight into the thread when it exists; otherwise the screen that
+  // starts one, which is only ever seen once per network.
+  const openBrain = () => {
+    if (brain) navigate([{ kind: 'brain' }, { kind: 'session', session: brain.s }], brain.env.id);
+    else navigate([{ kind: 'brain' }]);
+  };
   const blocked = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
-  const showMain = wide || !!selected || view.kind === 'threads';
+  // On a phone the two panes are one screen at a time, and a view that does
+  // not belong to a machine has nothing to select - so it has to say so here
+  // or it renders behind the sidebar and the tap looks like it did nothing.
+  const showMain = wide || !!selected || view.kind === 'threads' || view.kind === 'brain';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -481,6 +502,16 @@ function Shell({ client, conn, onSignOut }: {
                 </span>
                 <span className="chev">›</span>
               </button>
+              {/* The brain is one thread for the whole network rather than one
+                  per folder, so it belongs here rather than under a machine:
+                  the point of it is not having to pick one. */}
+              <button className="row" onClick={openBrain}>
+                <span className="grow">
+                  <span className="rt">Brain{brain && <span className="tag">{brain.s.status === 'blocked' ? 'needs you' : brain.env.name}</span>}</span>
+                  <span className="rm">{brain ? `${engineOf(brain.s.engine).label}${brain.s.model ? ` · ${brain.s.model}` : ''}` : 'one agent, the whole network'}</span>
+                </span>
+                <span className="chev">›</span>
+              </button>
               {/* All sessions has had a search box since it shipped, two taps
                   down and below the fold on a phone - which is the same as not
                   having one. This is that screen with the cursor already in the
@@ -519,7 +550,15 @@ function Shell({ client, conn, onSignOut }: {
       </aside>
 
       <section className={`main${showMain ? ' showing' : ''}`}>
-        {view.kind === 'threads' ? (
+        {view.kind === 'brain' ? (
+          <BrainView
+            client={client} envs={envs} onBack={back}
+            // Replaces this screen rather than stacking on it: starting the
+            // brain happens once per network, and going back to a form that
+            // offers to start the thing you just started is nonsense.
+            onStarted={(envId, s) => { loadSessions(envId); restate([{ kind: 'session', session: s }], envId); }}
+          />
+        ) : view.kind === 'threads' ? (
           <Threads
             client={client} envs={envs} sessions={sessions} onBack={back}
             search={view.search}
@@ -1318,6 +1357,111 @@ function StatusChip({ status }: { status: string }) {
   if (status === 'done') return <span className="chip done"><i />done</span>;
   if (status === 'exited') return <span className="chip exited">ended</span>;
   return null;
+}
+
+// -------------------------------------------------------------------- brain
+
+/**
+ * Starting the network's own agent, which happens once.
+ *
+ * The brain is an ordinary driven session - same events, same permission
+ * cards, same model picker - marked so helm can find it again and put the
+ * state of the network in front of what you type. What it does *not* have is
+ * a folder: it is asked about machines, not files, and its hands are the
+ * `helm` CLI through its own shell. That is why any engine with a headless
+ * driver can be the brain, and why changing which one is a model change
+ * rather than a rebuild.
+ */
+function BrainView({ client, envs, onBack, onStarted }: {
+  client: Client; envs: Environment[]; onBack: () => void;
+  onStarted: (envId: string, s: Session) => void;
+}) {
+  const online = envs.filter((e) => e.online);
+  const [envId, setEnvId] = useState(online[0]?.id ?? '');
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!envId) return;
+    setAccounts(null); setError('');
+    client.rpc(envId, 'profile.list')
+      .then((r: any) => setAccounts(accountsFrom(r.profiles)))
+      .catch((e) => setError(e.message));
+  }, [client, envId]);
+
+  const start = async (a: Account) => {
+    setBusy(a.key); setError('');
+    try {
+      const r = await client.rpc<{ session: Session }>(envId, 'brain.open', { profileId: a.profile.id }, 60_000);
+      onStarted(envId, r.session);
+    } catch (e: any) { setError(e.message); setBusy(''); }
+  };
+
+  return (
+    <>
+      <div className="bar">
+        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <div className="titles">
+          <h1>Brain</h1>
+          <span className="sub">one agent for the whole network</span>
+        </div>
+      </div>
+      <div className="scroll"><div className="pad column">
+        <p className="note">
+          The brain sees every machine and every running session, and acts on
+          them through the <code>helm</code> command - so it can answer "what
+          is waiting on me", read a thread on another machine, or start one.
+          It runs on the machine you pick here; anything it does elsewhere it
+          does by talking to that machine.
+        </p>
+
+        {online.length > 1 && (
+          <>
+            <div className="section">runs on</div>
+            <div className="filterbar">
+              {online.map((e) => (
+                <button
+                  key={e.id} className={`pill${e.id === envId ? ' on' : ''}`}
+                  aria-pressed={e.id === envId} onClick={() => setEnvId(e.id)}
+                >{e.name}</button>
+              ))}
+            </div>
+            <p className="note">
+              Best on a machine that is always up, so the brain is there when
+              your laptop is not.
+            </p>
+          </>
+        )}
+
+        <div className="section">its brain</div>
+        {!accounts && !error && <div className="empty quiet">asking {envs.find((e) => e.id === envId)?.name ?? 'the machine'}…</div>}
+        <div className="rows">
+          {(accounts ?? []).map((a) => (
+            <button key={a.key} className="row tall" disabled={!!busy} onClick={() => start(a)}>
+              <EngineMark engine={engineOf(a.engine).cls} />
+              <span className="grow">
+                <span className="rt">{engineOf(a.engine).label}</span>
+                <span className="rm">
+                  {[a.account, a.prefs?.default].filter(Boolean).join(' · ')}
+                </span>
+              </span>
+              {busy === a.key ? <span className="chip working"><i />starting</span> : <span className="chev">›</span>}
+            </button>
+          ))}
+        </div>
+        {accounts && !accounts.length && (
+          <div className="empty quiet">
+            no agent accounts on that machine
+            <div className="note" style={{ marginTop: 6 }}>the brain needs a CLI helm can drive headless</div>
+          </div>
+        )}
+        {!online.length && <div className="empty quiet">no machine is online</div>}
+        <p className="note">You can change which model it thinks with afterwards, in the thread.</p>
+        {error && <div className="error">{error}</div>}
+      </div></div>
+    </>
+  );
 }
 
 // ------------------------------------------------------------------ threads
