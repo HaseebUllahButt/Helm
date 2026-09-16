@@ -105,6 +105,8 @@ export const M = {
   BRAIN_DIGEST: 'brain.digest',    // {} -> { name, sessions[] }  this machine's line in the digest
   BRAIN_OPEN: 'brain.open',        // { profileId?, model?, mode? } -> { session }  start or resume it
   BRAIN_SNAPSHOT: 'brain.snapshot',// {} -> { text, snapshot }  the whole network as the brain reads it
+  // Speech to text, on a machine that holds the key rather than on the device.
+  VOICE_TRANSCRIBE: 'voice.transcribe', // { audio(base64), mime? } -> { text }
   SESSION_COMMANDS: 'session.commands',   // { id } -> { commands: [{name, description, source}] }
   SESSION_RESUME: 'session.resume',// { engine, account, id, cwd } -> { session }
   SESSION_ADOPT: 'session.adopt',  // { paneId } -> { session }  take over a pane

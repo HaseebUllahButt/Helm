@@ -22,6 +22,7 @@ import { lanAddresses } from './net-addr.js';
 import { describe as describeAsk } from './notify.js';
 import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
 import { hubRpc } from './hub-client.js';
+import { transcribe, canTranscribe } from './voice.js';
 
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30_000;
@@ -495,6 +496,10 @@ export class Daemon {
       runtime: this.runtimeInfo,
       // 'pty' or 'panes': what a terminal here will actually be.
       terminals: await this.sessions.terminalBackend(),
+      // Whether this machine can turn a recording into words. The composer
+      // only offers a microphone when something in the network can, so a
+      // button that could not possibly work is never drawn.
+      voice: canTranscribe(),
       startedAt: Date.now(),
     };
   }
@@ -765,6 +770,10 @@ export class Daemon {
         await this.sessions.input(session.id, brief(this.name), { raw: true });
         return { session: wire(this.sessions.get(session.id)), created: true };
       }
+
+      // The device records; the machine holding the key does the rest, so no
+      // phone ever has to be trusted with one.
+      case M.VOICE_TRANSCRIBE: return transcribe({ audio: p.audio, mime: p.mime, prompt: p.prompt });
 
       // Nothing to compute: the answer is the round trip itself.
       case M.PING:            return { t: Date.now() };
