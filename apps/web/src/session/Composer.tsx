@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { IMAGE_ACCEPT, looksLikeImage } from './image';
+import { useDictation } from './voice';
+
+const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
 export const QUICK: { label: string; key: string }[] = [
   { label: 'yes', key: 'y' }, { label: 'no', key: 'n' },
@@ -13,7 +16,7 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, onTranscribe }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
@@ -30,6 +33,12 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   onAttachUnsupported?: () => void;
   /** What `/` offers here: helm's own actions plus the owner's own commands. */
   commands?: { name: string; description?: string; source?: string }[];
+  /**
+   * Turn a recording into text on a machine that holds a Groq key. Absent
+   * when no machine in the network has one, and then there is no microphone:
+   * a button that cannot work should not be drawn.
+   */
+  onTranscribe?: (audio: string, mime: string) => Promise<string>;
 }) {
   const [keys, setKeys] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -59,6 +68,36 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   useEffect(() => { if (!draft.startsWith('/')) setDismissed(false); }, [draft]);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * Speaking instead of typing. What comes back is appended to the draft
+   * rather than sent: dictation mishears, and a prompt you cannot read before
+   * it goes to an agent with edit rights is not a feature. It also means you
+   * can say the hard half and type the path.
+   */
+  const dictation = useDictation({
+    transcribe: onTranscribe ?? (async () => ''),
+    onText: (text) => {
+      setDraft(draftRef.current ? `${draftRef.current.replace(/\s*$/, '')} ${text}` : text);
+      ref.current?.focus();
+    },
+  });
+  // The hook's callback is made once; without this it would append to the
+  // draft as it was when the microphone was opened, losing anything typed
+  // while the words were coming back.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  // Super+D belongs to the compositor on this desktop (see `helm dictate`),
+  // so the in-app shortcut is one a browser actually receives.
+  useEffect(() => {
+    if (!onTranscribe) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.code === 'Space') { e.preventDefault(); dictation.toggle(); }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onTranscribe, dictation]);
 
   /**
    * Images arriving by paste or drop. Both routes land here so they cannot
@@ -166,6 +205,39 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                   </svg>
                 </button>
               </>
+            )}
+            {onTranscribe && dictation.state !== 'unsupported' && (
+              <button
+                className={`ctl icon mic${dictation.state === 'recording' ? ' rec' : ''}`}
+                onClick={dictation.toggle}
+                disabled={dictation.state === 'working'}
+                title={dictation.state === 'recording' ? 'stop and transcribe' : 'speak a prompt (ctrl+shift+space)'}
+                aria-label={dictation.state === 'recording' ? 'stop recording' : 'speak a prompt'}
+                aria-pressed={dictation.state === 'recording'}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="9" y="2.5" width="6" height="11" rx="3" />
+                  <path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21" />
+                </svg>
+              </button>
+            )}
+            {dictation.state === 'recording' && (
+              <span className="attach-status rec">
+                {fmtSeconds(dictation.seconds)}
+                {/* Whether the microphone is hearing anything, while there is
+                    still time to do something about it. Recording a muted mic
+                    for thirty seconds and being told afterwards is the failure
+                    this is here to prevent. */}
+                <span className="level" aria-hidden="true">
+                  <i style={{ transform: `scaleX(${Math.min(1, dictation.level * 6)})` }} />
+                </span>
+                tap to stop
+              </span>
+            )}
+            {dictation.state === 'working' && <span className="attach-status">transcribing…</span>}
+            {dictation.error && (
+              <button className="attach-status bad" onClick={dictation.clearError} title="dismiss">{dictation.error}</button>
             )}
             {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>⌨ keys</button>}
             {preparing && <span className="attach-status">compressing…</span>}

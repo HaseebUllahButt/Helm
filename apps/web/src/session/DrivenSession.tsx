@@ -19,9 +19,11 @@ const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split(
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
-export function DrivenSession({ client, env, session, onBack, onClosed, onArchived, onSession }: {
+export function DrivenSession({ client, env, session, onBack, onClosed, onArchived, onSession, onTranscribe }: {
   client: Client; env: Environment; session: Session;
   onBack: () => void; onClosed: () => void; onArchived: () => void; onSession: (s: Session) => void;
+  /** Absent when no machine in the network holds a Groq key. */
+  onTranscribe?: (audio: string, mime: string) => Promise<string>;
 }) {
   const { log, error: logError } = useSessionLog(client, env.id, session.id);
   const [draft, setDraft] = useState('');
@@ -229,6 +231,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
       />
 
       <Composer
+        onTranscribe={onTranscribe}
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
         engine={engine} keys={false} waiting={!!pending} danger={mode?.danger}
         foot={controls.chips} canAttach={canAttach} preparing={preparingImages > 0}

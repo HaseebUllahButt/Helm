@@ -961,3 +961,24 @@ pre.snippet {
   opacity: 0.75; white-space: pre-wrap;
 }
 
+/* Speaking a prompt. The microphone is a control like the paperclip until it
+   is live, and then it is the loudest thing in the composer - a recording you
+   have forgotten about is the failure worth designing against. */
+.ctl.mic.rec {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+}
+.ctl.mic.rec svg { animation: micpulse 1.6s ease-in-out infinite; }
+.attach-status.rec { color: var(--amber); font-variant-numeric: tabular-nums; }
+.attach-status.bad { color: var(--red); }
+@keyframes micpulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.45 } }
+@media (prefers-reduced-motion: reduce) { .ctl.mic.rec svg { animation: none; } }
+.attach-status.rec { display: inline-flex; align-items: center; gap: 7px; }
+.attach-status .level {
+  display: inline-block; width: 34px; height: 3px; border-radius: 2px;
+  background: color-mix(in srgb, var(--amber) 22%, transparent); overflow: hidden;
+}
+.attach-status .level i {
+  display: block; width: 100%; height: 100%; background: var(--amber);
+  transform-origin: left; transition: transform 0.08s linear;
+}

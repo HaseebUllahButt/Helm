@@ -26,6 +26,8 @@ export interface Environment {
     arch?: string;
     /** 'pty' when terminals are helm's own; 'panes' is the slow fallback. */
     terminals?: 'pty' | 'panes';
+    /** This machine holds a Groq key, so it can transcribe what you say. */
+    voice?: boolean;
     runtime?: { version: string };
   };
 }

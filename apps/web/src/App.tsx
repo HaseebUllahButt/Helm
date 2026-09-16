@@ -397,6 +397,35 @@ function Shell({ client, conn, onSignOut }: {
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => s.engine !== 'shell' && !s.archived);
 
+  /**
+   * Turning a recording into words, on whichever machine can.
+   *
+   * The key lives on a machine, never on this device, so the device's job is
+   * to find a machine that has one. The session's own machine first - it is
+   * already connected and probably nearest - then any other that is online
+   * and says it can. That fallback is not hypothetical: the owner's VM is the
+   * always-on machine and its Groq key is the one that was expired, so the
+   * laptop is what answers.
+   */
+  const voiceEnvs = envs.filter((e) => e.online && e.info.voice);
+  const transcribeVia = (preferred?: string) => {
+    const order = [
+      ...voiceEnvs.filter((e) => e.id === preferred),
+      ...voiceEnvs.filter((e) => e.id !== preferred),
+    ];
+    if (!order.length) return undefined;
+    return async (audio: string, mime: string) => {
+      let last = '';
+      for (const e of order) {
+        try {
+          const r = await client.rpc<{ text: string }>(e.id, 'voice.transcribe', { audio, mime }, 60_000);
+          return r.text;
+        } catch (err: any) { last = err?.message ?? 'transcription failed'; }
+      }
+      throw new Error(last || 'no machine could transcribe that');
+    };
+  };
+
   // The brain, wherever it is. There is at most one per machine and in
   // practice one per network, on the machine that is always up.
   const brain = (() => {
@@ -605,7 +634,7 @@ function Shell({ client, conn, onSignOut }: {
         ) : view.session.driver ? (
           <DrivenSession
             key={view.session.id}
-            client={client} env={env}
+            client={client} env={env} onTranscribe={transcribeVia(env.id)}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onClosed={() => { loadSessions(env.id); back(); }}
@@ -615,7 +644,7 @@ function Shell({ client, conn, onSignOut }: {
         ) : (
           <SessionView
             key={view.session.id}
-            client={client} env={env}
+            client={client} env={env} onTranscribe={transcribeVia(env.id)}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onClosed={() => { loadSessions(env.id); back(); }}
@@ -2052,9 +2081,11 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-function SessionView({ client, env, session, onBack, onClosed, onArchived, onSession }: {
+function SessionView({ client, env, session, onBack, onClosed, onArchived, onSession, onTranscribe }: {
   client: Client; env: Environment; session: Session;
   onBack: () => void; onClosed: () => void; onArchived: () => void; onSession: (s: Session) => void;
+  /** Absent when no machine in the network holds a Groq key. */
+  onTranscribe?: (audio: string, mime: string) => Promise<string>;
 }) {
   const isShell = session.engine === 'shell';
   const [messages, setMessages] = useState<Message[] | null>(null);
@@ -2172,6 +2203,7 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
 
       {!raw && (
         <Composer
+          onTranscribe={onTranscribe}
           draft={draft} setDraft={setDraft} onSend={send} onKey={key}
           waiting={status === 'blocked'} engine={eng.label}
         />
