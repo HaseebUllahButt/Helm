@@ -1,6 +1,6 @@
 # Handoff
 
-State of helm as of 2026-09-15, evening, for whoever picks this up next.
+State of helm as of 2026-09-16, evening, for whoever picks this up next.
 
 Read `README.md` first for what the thing is and how it connects. This file
 is the part that is not obvious from the code: **what it is trying to be**,
@@ -11,8 +11,8 @@ If you only read three sections, read **"What this is for"** (the bar the
 rest exists to hit), **"Start here"** (what is running right now), and **"The
 network, and why it is the whole latency story"** — that last one is not
 about helm's code at all, and it explains most of what anyone has ever
-complained about feeling slow. Every latency number in this file was
-measured on 2026-09-15; none of them are estimates unless they say so.
+complained about feeling slow. Every latency number in this file was measured
+on the day its section is dated; none are estimates unless they say so.
 
 ---
 
@@ -87,14 +87,16 @@ is where that knowledge already lives.
 
 ## Start here: the network is up and both machines are current
 
-As of 2026-09-15 the network is rebuilt and running: `helm status` on the
-laptop reports **2 machines, 3 controllers**, network `076f00e81990`, with the
-VM reachable at `https://130-210-33-163.sslip.io`. (The paragraph that used to
-live here said nothing was running - that was true on the evening of the 14th
-and is not true now.)
+As of 2026-09-16 the network is running: `helm status` on the laptop reports
+**2 machines, 8 controllers**, network `076f00e81990`, with the VM reachable
+at `https://130-210-33-163.sslip.io`. (The paragraph that used to live here
+said nothing was running - that was true on the evening of the 14th and has
+not been true since.)
 
-**Both machines were upgraded through the day** and are on the same commit
-as `main`. One thing outside the repo changed too: the laptop's Tailscale now
+**Both machines are on `main`** and were upgraded several times through the
+16th; at the end of that day both served the same bundle as a local build,
+which is the check worth repeating - a deploy that restarts the service but
+serves an old `dist` looks exactly like a working one. One thing outside the repo changed too: the laptop's Tailscale now
 has `--exit-node-allow-lan-access` on (see "The network" below, and do not
 undo it by accident — the flag clears the exit node if passed alone).
 
@@ -294,7 +296,7 @@ the report that started the latency work came from that phone. **Check
 `helm devices` before writing anything about what has or has not been
 tried.**
 
-## What changed today (2026-09-15)
+## What changed on 2026-09-15
 
 A short pass: make image attachments actually work everywhere they can.
 
@@ -524,7 +526,13 @@ perhaps half the time. publish moved to 18961.
 
 ## What changed on 2026-09-16
 
-Three things, all about the session list being worth reading.
+A long day, in four movements: the session list became worth reading, a review
+pass took the new code apart, three caches turned out to be broken or missing,
+and the desktop app and the palette got the pass they had been owed. Each
+section below is one push; each was driven against the real machines before it
+was believed, and both machines were upgraded as it went.
+
+The first three, all about the session list.
 
 **Sessions name themselves, after two prompts.** ACP agents already report
 the title they chose (`session_info_update`); the driver ignored it. It is
@@ -541,8 +549,9 @@ pending name in sessions.json, so the rule survives restarts.
 **All sessions, one screen.** A "sessions" section in the sidebar opens a
 view listing every session on every machine, grouped by folder - the place to
 answer "what was running where". Rows have the same actions as the machine
-screen (open, archive/unarchive, delete); external panes are tagged, not
-manageable.
+screen (open, archive/unarchive, delete). *(External panes were tagged and not
+manageable when this shipped; that changed the same day - see "Everything in
+the list is the owner's to get rid of" below.)*
 
 **Archived left the machine screen.** It used to list them under their own
 section; now they only appear in All sessions, where they can be unarchived
@@ -742,68 +751,6 @@ Helm app" in the sidebar, once it has landed there); then it is in scope, with
 no redirect and nothing to click. The VM-hosted install remains the right one
 for a phone, which has no daemon of its own.
 
-### The model catalogue: the slowest read in the app, remembered
-
-"Do you cache this stuff?" - pointed at the Models screen. Half: the daemon
-held a catalogue for sixty seconds in memory (`models.js`), and the app held
-nothing at all. So opening the screen twice in an afternoon spawned the CLI
-twice, and for opencode that is a process enumerating three dozen models while
-a phone waits on the other end of a relay. It is why that RPC carries a 45
-second timeout and the screen has an "asking the CLI for its models…" state.
-
-Now: the device remembers what it last heard (`modelCache.ts`, in the `kv`
-store beside the pairing) and paints it immediately, with the machine's answer
-replacing it when it lands - the same shape as the chat cache. The daemon's
-own hold went from one minute to ten, because a catalogue changes when a CLI
-is upgraded or its config is edited and neither is urgent to notice.
-
-Measured on the real daemon, opencode's 36 models: **4,973ms to a list on
-screen with nothing remembered, 107ms with.** Both pickers use it - the
-session's model sheet as well as the settings editor - so the model chip in a
-session header stops reading "default" until a CLI has been spawned.
-
-### A quieter palette, and a wheel that reads at 20px
-
-The owner's words were "the UI still looks vibecoded, mute the green neon".
-Screenshotting the two main screens at 390x844 said what that meant:
-
-- **Three neon dots on the first screen.** `--emerald` at full chroma was the
-  brightest thing on a near-black page, and it was spent on *online* - the
-  state a machine is in almost always. Now `oklch(0.74 0.068 165)`, a sage
-  that says "alive" without being the first thing you see. Amber, which means
-  "a session is waiting for you", is the loudest colour again, which is what
-  the sheet's own comment says it should be.
-- **The settings button was a full-colour cyan gear.** `⚙` is U+2699 and most
-  systems render it from the emoji font, so the quietest button on the bar
-  came out brighter than anything else. It is an inline SVG now.
-- **Nine engine marks in nine saturated vendor colours** read as a bag of
-  sweets. Each is at about two thirds its shipped chroma and the tiles behind
-  them went from 14-16% to 10-11%: still recognisable at 26px, no longer a
-  competition.
-- **Every row was an outlined card.** Nine bordered rectangles down a screen
-  compete with their own contents; the fill alone says "row" and the hairline
-  comes back on hover.
-- **"New session" was a full-width tinted banner** above the list it belongs
-  to. It is now a row: the same height, the same left edge, and a `+` where
-  each row keeps its engine mark, so its label starts on the same line as
-  every title underneath it.
-- **`external` was the first thing an ellipsis ate.** The tag lived inside the
-  truncating title, so on a long name the one word saying what the row was
-  disappeared. The title truncates; the tags beside it do not.
-- **opencode rows showed a wall of JSON** where the model goes - it stores
-  `model` as `{"id":…,"providerID":…,"variant":…}` and the inventory reader
-  passed it through whole.
-
-**The logo.** The old mark was a neon gradient wheel with eight spokes and
-eight handles: at 32px it was a green asterisk, and at 20px in the sidebar it
-was mush. Four shapes were drawn and rendered at 20/32/48/128 to look at
-rather than to imagine - ring-and-nubs read as a sun, ring-and-dots as a
-camera aperture, four spokes as a crosshair. Six spokes with six handles is
-the one that reads as a ship's wheel at every size. One muted colour
-(`#c2c6d4`), no gradient, on a `#131317` tile with a hairline. Every asset was
-regenerated from it, including a maskable icon whose mark is pulled in to 78%
-so a circular mask cannot clip the handles.
-
 ### `helm app`, and the icon that was somebody else's
 
 The desktop app is a command now: `helm app` writes a desktop entry pointed at
@@ -872,6 +819,67 @@ A note on why the page cannot just sign itself in where it stands: the daemon
 refuses `/api/auth/local` to a cross-site fetch on purpose (`sec-fetch-site`),
 because Caddy makes every internet request arrive from loopback. Navigating is
 the honest route, not a CORS hole.
+### The model catalogue: the slowest read in the app, remembered
+
+"Do you cache this stuff?" - pointed at the Models screen. Half: the daemon
+held a catalogue for sixty seconds in memory (`models.js`), and the app held
+nothing at all. So opening the screen twice in an afternoon spawned the CLI
+twice, and for opencode that is a process enumerating three dozen models while
+a phone waits on the other end of a relay. It is why that RPC carries a 45
+second timeout and the screen has an "asking the CLI for its models…" state.
+
+Now: the device remembers what it last heard (`modelCache.ts`, in the `kv`
+store beside the pairing) and paints it immediately, with the machine's answer
+replacing it when it lands - the same shape as the chat cache. The daemon's
+own hold went from one minute to ten, because a catalogue changes when a CLI
+is upgraded or its config is edited and neither is urgent to notice.
+
+Measured on the real daemon, opencode's 36 models: **4,973ms to a list on
+screen with nothing remembered, 107ms with.** Both pickers use it - the
+session's model sheet as well as the settings editor - so the model chip in a
+session header stops reading "default" until a CLI has been spawned.
+
+### A quieter palette, and a wheel that reads at 20px
+
+The owner's words were "the UI still looks vibecoded, mute the green neon".
+Screenshotting the two main screens at 390x844 said what that meant:
+
+- **Three neon dots on the first screen.** `--emerald` at full chroma was the
+  brightest thing on a near-black page, and it was spent on *online* - the
+  state a machine is in almost always. Now `oklch(0.74 0.068 165)`, a sage
+  that says "alive" without being the first thing you see. Amber, which means
+  "a session is waiting for you", is the loudest colour again, which is what
+  the sheet's own comment says it should be.
+- **The settings button was a full-colour cyan gear.** `⚙` is U+2699 and most
+  systems render it from the emoji font, so the quietest button on the bar
+  came out brighter than anything else. It is an inline SVG now.
+- **Nine engine marks in nine saturated vendor colours** read as a bag of
+  sweets. Each is at about two thirds its shipped chroma and the tiles behind
+  them went from 14-16% to 10-11%: still recognisable at 26px, no longer a
+  competition.
+- **Every row was an outlined card.** Nine bordered rectangles down a screen
+  compete with their own contents; the fill alone says "row" and the hairline
+  comes back on hover.
+- **"New session" was a full-width tinted banner** above the list it belongs
+  to. It is now a row: the same height, the same left edge, and a `+` where
+  each row keeps its engine mark, so its label starts on the same line as
+  every title underneath it.
+- **`external` was the first thing an ellipsis ate.** The tag lived inside the
+  truncating title, so on a long name the one word saying what the row was
+  disappeared. The title truncates; the tags beside it do not.
+- **opencode rows showed a wall of JSON** where the model goes - it stores
+  `model` as `{"id":…,"providerID":…,"variant":…}` and the inventory reader
+  passed it through whole.
+
+**The logo.** The old mark was a neon gradient wheel with eight spokes and
+eight handles: at 32px it was a green asterisk, and at 20px in the sidebar it
+was mush. Four shapes were drawn and rendered at 20/32/48/128 to look at
+rather than to imagine - ring-and-nubs read as a sun, ring-and-dots as a
+camera aperture, four spokes as a crosshair. Six spokes with six handles is
+the one that reads as a ship's wheel at every size. One muted colour
+(`#c2c6d4`), no gradient, on a `#131317` tile with a hairline. Every asset was
+regenerated from it, including a maskable icon whose mark is pulled in to 78%
+so a circular mask cannot clip the handles.
 
 ---
 
@@ -1078,6 +1086,42 @@ add a third delivery path, it must carry the same id.**
 
 ## Verified by running it
 
+### 2026-09-16
+
+- `npm run check` green at every push: types, production build, **117** node
+  tests (90 the day before), `network.sh`.
+- **Session naming driven against a real Claude session** in a sandbox daemon:
+  two greetings left the folder name standing, the third prompt named the
+  thread, a rename held through another prompt, and `sessions.json` showed
+  `titleBy: user` with the prompt sample kept on the machine.
+- **The herdr-pane chat driven by building the situation it needs** -
+  `workspace.create` + `agent.start` put a real `claude` TUI in a pane helm had
+  not started, its trust prompt answered with `Down`/`Enter`. The app adopted
+  it, cached its messages, and reopening painted the reply **4ms after the
+  tap**. The pane was closed afterwards by its workspace id.
+- **Caches proved by breaking them.** The chat cache: `v1 stores=kv` with a
+  two-turn chat open on screen, then `v2 stores=kv,session-logs` with the
+  device still paired. Endpoints: a signed-in device's stored addresses
+  overwritten with three dead ones - the old build sat on `offline`, the new
+  one reloaded to the machine list and had dropped all three, while
+  `http://localhost:8787`, which answers but is not advertised, was kept.
+- **Numbers, all measured on this laptop, not estimated:**
+  cold open of All sessions **12,578ms → 4ms**; a chat painting from the
+  device **4ms** after the tap; the model catalogue **4,973ms → 107ms**;
+  `session.list` answered by the daemon in **3ms** while the app was taking 15
+  seconds to ask for it.
+- **The desktop app driven from a non-loopback origin** (`192.168.1.9:8795`,
+  standing in for the VM's): a second and a half later the browser was at
+  `127.0.0.1:8787`, signed in, `2/2 online`. `helm app` then verified through
+  `desktop-file-validate`, `Gtk.IconTheme.lookup_icon` and `gtk-launch`.
+- **The look judged from screenshots, not from the CSS**: both main screens
+  captured at 390x844 before and after, and four logo candidates rendered at
+  20/32/48/128 to be looked at.
+- **Deployed to both machines after every push**, each time checking that the
+  public HTTPS address and the laptop served the same bundle hash as the local
+  build - and, for the caching work, that the fix was actually in the shipped
+  JavaScript.
+
 ### 2026-09-15
 
 - `npm run check` green: types, production build, **90** node tests,
@@ -1174,6 +1218,23 @@ add a third delivery path, it must carry the same id.**
 6. **herdr's own answer is ~100ms** for a pane listing, which is now cached
    rather than fixed. If adopted panes ever start feeling stale, that cache
    (`LIVE_TTL_MS`) is why.
+7. **An installed PWA cannot be sent to another origin without the grey bar.**
+   The app installed from the VM's address now redirects itself to the helm on
+   this computer, which is out of its scope, so Chrome draws its origin strip
+   over the top. Nothing in the page can prevent that; installing the desktop
+   app from the machine's own address (`helm app`) is the way round it, and
+   the VM-hosted install stays right for a phone.
+8. **An installed app keeps yesterday's icon and CSS until it is reopened.**
+   The service worker holds the shell, so a deploy that changes the look does
+   not show until the window is closed and opened again - which made "the logo
+   did not change" look like a failed deploy twice on 2026-09-16. Check what
+   the machine *serves* (`curl -s <addr>/icon.svg`) before believing the
+   screen.
+9. **The model catalogue can be ten minutes stale**, by choice - `models.js`
+   holds it that long and the device paints its own copy first. Upgrade a CLI
+   or edit its config and the new model will not appear immediately. There is
+   no "refresh" in the app yet; reopening after the hold expires is all there
+   is.
 
 ## The machines themselves
 
@@ -1245,9 +1306,24 @@ revocations one-way.
 
 See "Known bad, and not yet fixed" above — that list is the backlog, in the
 order the owner will notice it. The opencode driver and images in messages
-have since been built (`opencode acp`, and images across all four engines).
-Beyond the backlog: a file viewer over Claude's `read_file` control request,
-and "the brain" (cross-machine summaries and dispatch) as v2.
+have since been built (`opencode acp`, and images across all four engines),
+and so, on 2026-09-16, have renaming a thread, searching All sessions, a
+per-thread cost, and a desktop entry (`helm app`).
+
+Four things were proposed that day and not built, in the order they were
+ranked:
+
+1. **Machine-side defaults for mode and effort, not just the model.** `Start`
+   says it out loud: the model default lives on the machine where every device
+   agrees, while the permission mode, thinking effort and auto flag live in
+   *this phone's* localStorage. The same argument the model-prefs work made,
+   applied to the other three.
+2. **Offline machines are silently missing from "every thread".** Session
+   lists load only for machines that are online, so a sleeping one contributes
+   nothing to a screen that claims to list everything. Cache the last list per
+   machine and show it dimmed with "last seen 3h ago".
+3. A **file viewer** over Claude's `read_file` control request.
+4. **"The brain"** — cross-machine summaries and dispatch — as v2.
 
 ---
 
@@ -1260,9 +1336,19 @@ npm run check     # + tsc and the production web build
 
 Driver tests replay the recorded fixtures through `test/fake-cli.mjs`;
 `events.test.mjs` covers the log; `session-driver.test.mjs` runs `Sessions`
-with a fake driver; `session-stale.test.mjs` covers the dead-pane status;
+with a fake driver (naming, renaming, cost, and what may be done to rows helm
+does not own); `session-stale.test.mjs` covers the dead-pane status;
 `emit-once.test.mjs` encodes the duplicate-push guard; `modes.test.mjs` keeps
-the two codex sandbox spellings agreeing.
+the two codex sandbox spellings agreeing; `model-prefs.test.mjs` covers the
+per-account picker and refuses anything that is not a model name;
+`inventory.test.mjs` reads each CLI's own history, including opencode storing
+its model as JSON; `desktop-entry.test.mjs` writes `helm app`'s launcher into
+a temp `XDG_DATA_HOME`, so running the suite never touches a real desktop.
+
+**The web has no test runner**, which is why so much of this file is
+measurements taken from a browser instead. Anything that only shows up on
+screen - a cache that never worked, an endpoint list that had evicted the
+address serving the page - was found by driving the real app, not by a test.
 
 **Seeing it work** needs a running network (see the top of this file) plus
 headless Chromium over CDP. For work that should not touch the real network,
