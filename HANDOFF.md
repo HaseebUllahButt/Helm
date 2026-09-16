@@ -302,6 +302,46 @@ Archived threads got a place to be, searching them got a way in, the network
 got a brain, voice prompting landed, T3 left the tree - and then four things
 the owner found by using it on a phone, three of which were real bugs.
 
+### The app, after a day of using it on a phone
+
+Three things the owner asked for once the brain was real.
+
+**The brain is one, and tapping it lands in it.** It was showing the account
+picker instead, for a real reason: the app only knows a brain exists once
+every machine has answered `session.list`, and on a cold open that is a second
+or two where the honest answer to "is there a brain?" is "not yet". The device
+now writes down where its brain is (`brainStore`), so the answer is immediate.
+The remembered record is only a signpost - enough for the header to draw - and
+the live record replaces it the moment the machine's list arrives.
+
+**A gear inside the conversation** leads to what the brain is made of, which
+is the only sensible place for it: the brain has no folder to go back to and
+no siblings to compare it against. That screen is the picker and the settings
+at once, because they are the same question asked at different times. Changing
+the model is a live change to the running session. Changing which account the
+brain *is* ends the thread and everything it has learned, so it is a separate
+action that says so and asks first.
+
+**Projects in the sidebar.** machine → directory → session is how work is
+started; it is not how anyone thinks about it afterwards. You think "the helm
+one", and that lives in a directory which may well exist on two machines. So
+every thread is also grouped by folder, across machines, newest first - each a
+fold with the machine on the row and amber on the header when something inside
+is waiting on you.
+
+*Built from `session.list` by choice, not by omission.* It therefore shows
+live and helm-known threads, and not the full history All sessions digs out of
+each engine's own store - that would mean an inventory fetch on every sidebar
+render. The owner was asked and chose cheap. Do not "fix" this without asking
+again.
+
+**History folds, live work does not.** A machine that has been worked at is
+mostly past - one here lists 182 threads, six of them helm's - and printing it
+all pushed the running work off the top of a phone screen, which inverts what
+the screen is for. Every group folds except `needs you`, `working` and `idle`.
+A session waiting on a person is never behind a tap, and a closed fold still
+shows its count and goes amber when it holds something that needs answering.
+
 ### Found by using it: the laptop said its own VM was offline
 
 **Symptom.** "laptop helm isnt picking up vm". The phone was fine.
