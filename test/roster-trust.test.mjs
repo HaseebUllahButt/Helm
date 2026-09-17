@@ -132,6 +132,28 @@ test('the names and labels this machine authors survive its own checks', () => {
   assert.equal(N.rosterHash(mine), N.rosterHash(N.sanitizeRoster(mine)));
 });
 
+test('a name typed into the app is one every machine will accept back', () => {
+  // The rename path. A name is refused rather than repaired, because the
+  // person typing it is there to be told - and because a name the roster or
+  // the ssh files would rewrite is a record its author keeps re-sending and
+  // every peer keeps rewriting, which is gossip that never converges.
+  for (const bad of ['', '   ', '-vm', '.', 'my laptop', "Haseeb's", 'a\nb', 'x'.repeat(65)]) {
+    assert.equal(N.machineName(bad), null, `should refuse ${JSON.stringify(bad)}`);
+  }
+  assert.equal(N.machineName('  vm-2.home '), 'vm-2.home');
+
+  const net = N.createNetwork({ name: 'before', port: 8787 });
+  N.describeSelf(net, { name: N.machineName('vm-2.home') });
+  const mine = N.roster(N.loadNetwork());
+  assert.equal(mine.machines[net.self].name, 'vm-2.home');
+  assert.equal(N.rosterHash(mine), N.rosterHash(N.sanitizeRoster(mine)));
+
+  // And the other half of what the name is for: it reaches the ssh config as
+  // itself, so `ssh vm-2.home` resolves back to this machine at the hub.
+  applyPeers([{ id: 'aa11bb22cc33', name: 'vm-2.home', pubkey: machine().pubkey, sshUser: 'haseeb', sshPort: 22 }]);
+  assert.match(readFileSync(join(root, 'ssh', 'config'), 'utf8'), /^Host vm-2\.home$/m);
+});
+
 // --------------------------------------------------------------- ssh files
 
 test('a hostile peer cannot write a line of its own into the ssh files', () => {

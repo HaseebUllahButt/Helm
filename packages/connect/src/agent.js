@@ -4,7 +4,7 @@ import { connect as tcpConnect } from 'node:net';
 import { T, M, E } from '@helm/protocol';
 import {
   loadNetwork, machineToken, mergeRoster, allEndpoints, describeSelf,
-  roster as rosterOf, rosterHash,
+  roster as rosterOf, rosterHash, machineName, NAME_RULE,
 } from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
 import { modesFor } from './modes.js';
@@ -179,7 +179,12 @@ export class Daemon {
     this.advertised = advertised ?? [];
     this.advertiseLan = advertiseLan;
     this.id = net.self;
-    this.name = name || net.machines[net.self]?.name || hostname();
+    // The roster wins over `--name`, which only ever named a machine that was
+    // new to the network (`createNetwork` and `joinNetwork` take it there).
+    // It has to: a name changed from the app is written to the roster, and a
+    // service unit that still carries the `--name` it was installed with
+    // would otherwise undo that rename on every restart.
+    this.name = net.machines[net.self]?.name || name || hostname();
     this.token = machineToken(net);
   }
 
@@ -649,6 +654,40 @@ export class Daemon {
     switch (method) {
       case M.ENV_INFO:
         return { ...(await this.describe()), name: this.name };
+
+      /**
+       * What this machine is called, changed from the app.
+       *
+       * It is an RPC to the machine being renamed rather than an edit at
+       * whichever hub the phone reached, because a machine's roster record
+       * has exactly one author: `mergeRoster` drops everyone else's version
+       * of us. A name written anywhere else would spread to every machine
+       * except this one, and the two halves of the network would then
+       * disagree forever - fingerprints never matching, full rosters traded
+       * every tick, which is the one failure the gossip design is built to
+       * avoid.
+       */
+      case M.ENV_RENAME: {
+        const name = machineName(p.name);
+        if (!name) throw new Error(`a machine name is ${NAME_RULE}`);
+
+        const net = loadNetwork() ?? this.net;
+        // Names address machines: `ssh laptop`, `helm brain laptop`. Two of
+        // them called the same thing makes both ambiguous, and the CLI
+        // resolves by name before it resolves by id.
+        const taken = Object.values(net.machines).find(
+          (m) => m.id !== this.id && String(m.name).toLowerCase() === name.toLowerCase()
+        );
+        if (taken) throw new Error(`"${name}" is already another machine in this network`);
+
+        this.name = name;
+        this.net = describeSelf(net, { name });
+        // Now, rather than at the next reconcile: the phone that asked is
+        // waiting to see it, and every other machine has the old name in its
+        // ssh config until the hub redistributes the roster.
+        this.broadcastFrame(T.ROSTER, { roster: rosterOf(this.net) });
+        return { id: this.id, name };
+      }
 
       case M.FS_LIST:   return fsApi.list(p.path);
       case M.FS_ROOTS:  return fsApi.roots();

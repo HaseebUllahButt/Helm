@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
@@ -6,7 +6,7 @@ import { EngineMark } from './EngineMark';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import {
-  Client, login,
+  Client, login, validMachineName, MACHINE_NAME_RULE,
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
   type InventorySession,
 } from './client';
@@ -370,7 +370,10 @@ function Shell({ client, conn, onSignOut }: {
     return client.on((e, kind, payload) => {
       if (kind === 'presence') {
         if (e && payload?.env) {
-          setEnvs((list) => list.map((m) => (m.id === e ? { ...m, online: !!payload.online } : m)));
+          // The name travels with presence, and a rename is the one thing
+          // that changes it: a machine renamed from another phone lands here.
+          setEnvs((list) => list.map((m) => (
+            m.id === e ? { ...m, online: !!payload.online, name: payload.name ?? m.name } : m)));
         } else loadEnvs();
       }
       if (kind === 'connection' && payload.online) loadEnvs();
@@ -702,6 +705,7 @@ function Shell({ client, conn, onSignOut }: {
         ) : view.kind === 'settings' ? (
           <EnvSettings
             client={client} env={env} onBack={back}
+            onRenamed={loadEnvs}
             onEdit={(account) => push({ kind: 'models', account })}
           />
         ) : view.kind === 'models' ? (
@@ -1747,13 +1751,95 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
 // ----------------------------------------------------------------- settings
 
 /**
- * Per-machine settings. Today: for each account on the machine, which models
- * the picker offers and which one a new session starts with. The prefs live
- * in the machine's ~/.helm/config.json, so they follow the machine and apply
- * no matter which device asks.
+ * What a machine is called, changed from here.
+ *
+ * The name is not decoration: it is what the machine list, the brain, the
+ * CLI (`helm brain laptop`) and `ssh laptop` all address it by, which is why
+ * it is held to what an ssh Host alias can hold rather than quietly rewritten
+ * into something ssh can reach and the app never shows.
+ *
+ * Only the machine itself may write its own name - every other copy of that
+ * record loses - so this is an RPC to it, and it is off while it is offline
+ * rather than queued into a change that would never land.
  */
-function EnvSettings({ client, env, onBack, onEdit }: {
+function MachineName({ client, env, onRenamed }: {
+  client: Client; env: Environment; onRenamed: () => void;
+}) {
+  const [name, setName] = useState(env.name);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState('');
+
+  // Renamed from another phone, or by the machine itself: the field follows
+  // what the machine says it is called rather than arguing with it.
+  useEffect(() => { setName(env.name); }, [env.name]);
+
+  const next = name.trim();
+  const changed = next !== env.name;
+  const ok = validMachineName(next);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!changed || !ok || !env.online) return;
+    setBusy(true); setError(''); setDone(false);
+    try {
+      const r = await client.renameMachine(env.id, next);
+      setName(r.name);
+      setDone(true);
+      // The machine list, the bar above and every other screen holding this
+      // machine's name read from one place; refresh it.
+      onRenamed();
+    } catch (err: any) {
+      setError(err.message);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <form onSubmit={save}>
+      <input
+        className="field" value={name} disabled={!env.online || busy}
+        autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
+        aria-label="machine name"
+        onChange={(e) => { setName(e.target.value); setDone(false); setError(''); }}
+      />
+      <button className="primary big" disabled={!env.online || busy || !changed || !ok}>
+        {busy ? 'renaming…' : 'Rename this machine'}
+      </button>
+      {!env.online && (
+        <div className="banner warn">
+          This machine is offline. A machine writes its own name, so the
+          rename has to wait until it is back.
+        </div>
+      )}
+      <p className="note">
+        {changed && !ok
+          ? `A name is ${MACHINE_NAME_RULE}.`
+          // "Renamed" under "this machine is offline" is two answers to the
+          // same question; the banner is the one that matters now.
+          : done && env.online
+            ? `Renamed. Every machine and device in this network calls it ${env.name} now.`
+            // A machine that joined under a hostname with a space or an
+            // apostrophe in it keeps that name - nothing rewrites a record
+            // behind its owner's back - but ssh cannot reach it under one.
+            : !validMachineName(env.name)
+              ? <>The name every screen shows. ssh cannot use this one: rename it to
+                  {' '}{MACHINE_NAME_RULE} and <code>ssh {env.name.replace(/[^A-Za-z0-9._-]/g, '')}</code> works.</>
+              : <>The name every screen shows, and the one ssh answers to: <code>ssh {env.name}</code></>}
+      </p>
+      {error && <div className="error">{error}</div>}
+    </form>
+  );
+}
+
+/**
+ * Per-machine settings: what the machine is called, and for each account on
+ * it, which models the picker offers and which one a new session starts with.
+ * The prefs live in the machine's ~/.helm/config.json and the name lives in
+ * its roster record, so both follow the machine no matter which device asks.
+ */
+function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
   client: Client; env: Environment; onBack: () => void; onEdit: (a: Account) => void;
+  onRenamed: () => void;
 }) {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [error, setError] = useState('');
@@ -1771,6 +1857,9 @@ function EnvSettings({ client, env, onBack, onEdit }: {
         <div className="titles"><h1>Settings</h1><span className="sub">{env.name}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
+        <div className="section">name</div>
+        <MachineName client={client} env={env} onRenamed={onRenamed} />
+
         <div className="section">models</div>
         {accounts === null && !error && <div className="empty quiet">looking for agents…</div>}
         {accounts?.length === 0 && <div className="empty quiet">no agents on {env.name}</div>}

@@ -306,7 +306,9 @@ A long day. Four ways into the same list of threads became one screen per
 machine, archived threads got a place to be, searching them got a way in,
 the network got a brain - and then one per machine - voice prompting landed,
 T3 left the tree, the type went up half a step, and a chat that could not be
-opened at all turned out to be three decisions about how much helm sends. Then the owner used it on a phone and found five more
+opened at all turned out to be three decisions about how much helm sends.
+Machines can also be renamed from the app now, which the two machines both
+called `haseeb` had been asking for. Then the owner used it on a phone and found five more
 things: the laptop calling its own VM offline, external sessions that could be
 listed and not opened, an icon three days stale, a terminal that produced
 nothing, and push notifications that turned out to have been working all along
@@ -906,6 +908,18 @@ Sandboxed daemon, real `claudea`/`claude-p` profiles, headless Chromium at
   by tapping an account, landing in the session with `brain: true`.
 - Archived fold and search: both screens, unarchive from inside the fold,
   opening an archived thread from it, and search across machines.
+- **Renaming, on two sandboxed machines** (`home` on 8790, `laptop` joined on
+  8791): `laptop` → `thinkpad-x1` from the phone screen; the other machine's
+  roster *and* its `~/.ssh/config` said `Host thinkpad-x1` seconds later.
+  `my laptop` left the button disabled and printed the rule; `home` came back
+  *"already another machine in this network"*. A second browser tab, watching
+  and not renaming, went from `thinkpad-x1` to `x1.carbon` on its own. The
+  machine serving the page renamed itself (`home` → `vm.home`), which is the
+  path where hub and daemon share one `network.json` and the hub learns
+  nothing new. Restarting that machine with the **old `--name laptop` still on
+  its command line** kept the new name - the reason the constructor now reads
+  the roster first. A machine that was offline through a rename learned it on
+  reconnect.
 
 `test/brain.test.mjs` is 15 tests: the derived line's ordering, folding deltas
 back into sentences, the offline machine surviving a refresh, the prepended
@@ -1127,6 +1141,57 @@ which is how a phone is used.
 the whole log, hydrated, every image in it rebuilt from disk - to read the
 last line of text beside them, for every session, every 45 seconds a brain is
 alive. It reads the raw tail now.
+
+### Machines can be renamed from the app
+
+The owner's network has two machines both called `haseeb`, because that is
+what `hostname` said on the day each of them joined, and nothing has ever been
+able to change it since. A name is not decoration here: it is the row you tap,
+the word the brain uses for "where", how the CLI addresses a machine
+(`helm brain laptop`), and the ssh Host alias `ssh laptop` resolves through.
+
+So the machine's settings screen (the sliders in its bar) now opens with a
+**name** field. Type, tap **Rename this machine**, and the machine list, the
+bar above it, the other phones watching, the other machines' rosters and their
+`~/.ssh/config` all follow within a tick.
+
+**Where the rename is written is the whole design.** A machine's roster record
+has exactly one author - itself. `mergeRoster` drops everyone else's version of
+us (`if (id === net.self) continue`), which is what stops a hub's stale view
+from overwriting our own addresses. The consequence for renaming: a name
+written *anywhere but on the machine it describes* reaches every machine in
+the network **except** that one, and the two halves then disagree forever -
+fingerprints never matching, full rosters traded every tick, which is the one
+failure the gossip design exists to avoid. So the rename is an RPC
+(`env.rename`) to the machine being renamed, it calls `describeSelf` like every
+other self-description, and the screen is **off while that machine is offline**
+rather than pretending an edit landed.
+
+Three smaller decisions:
+
+- **The name is held to what an ssh alias can hold** - a letter or number
+  first, then letters, numbers, dots, dashes, underscores. `ssh.js`'s
+  `aliasOf` strips a name down to exactly that set before writing
+  `~/.ssh/config`, and the hub resolves a tunnel back to a machine by *name*,
+  so anything outside it is a name the app shows and ssh cannot reach.
+  Refused with the rule, not silently rewritten: the person typing is right
+  there to be told. Nothing rewrites an existing record - a machine that
+  joined as `Haseeb's laptop` keeps that name until someone changes it, and
+  the field says ssh cannot use it.
+- **A name another machine already has is refused**, because names address
+  machines and the CLI resolves by name before it resolves by id. Two
+  `haseeb`s is exactly the state that prompted this.
+- **`--name` no longer wins over the roster on start.** It never wrote the
+  roster after the first day (`createNetwork`/`joinNetwork` take it there and
+  nothing else did), so all it did was make the log line and the brain's
+  header disagree with the app. Now the roster is read first - which it has to
+  be, or a service unit still carrying the `--name` it was installed with
+  would undo a rename on every restart.
+
+The relay got one change: when a merge changes a machine's name it sends a
+presence frame, so a phone that is *watching* rather than renaming updates
+without a reload. Presence already carried the name and the web app was
+throwing it away.
 
 ### Left for next time
 

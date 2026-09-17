@@ -1028,6 +1028,19 @@ export class Client {
     });
   }
 
+  /**
+   * Change what a machine is called.
+   *
+   * Deliberately an RPC to that machine rather than a call to the hub: a
+   * machine's roster record has one author, itself, and a name written
+   * anywhere else reaches every machine in the network except the one it
+   * describes. So a machine that is not connected cannot be renamed, and the
+   * screen says so rather than pretending the edit landed.
+   */
+  renameMachine(env: string, name: string) {
+    return this.rpc<{ id: string; name: string }>(env, 'env.rename', { name }, 15_000);
+  }
+
   removeMachine(id: string) { return this.http(`/api/machines/${id}`, { method: 'DELETE' }); }
   removeDevice(id: string) { return this.http(`/api/devices/${id}`, { method: 'DELETE' }); }
 
@@ -1049,6 +1062,20 @@ export class Client {
     });
   }
 }
+
+/**
+ * What a machine may be called, checked here so the form can say so before
+ * the round trip. The daemon checks the same thing and is the one that
+ * decides; this is the copy that makes the button honest.
+ *
+ * The rule itself is in `@helm/protocol/network` (`machineName`), where the
+ * reason for it lives: a machine's name is also its ssh Host alias.
+ */
+export const MACHINE_NAME_RULE =
+  'a letter or number first, then letters, numbers, dots, dashes or underscores';
+
+export const validMachineName = (value: string) =>
+  /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value.trim());
 
 export interface Device {
   id: string;

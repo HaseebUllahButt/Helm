@@ -72,6 +72,9 @@ export const T = {
 
 export const M = {
   ENV_INFO: 'env.info',            // {} -> { host, os, arch, uptime, engines }
+  // Renaming goes to the machine being renamed, never to the hub the phone
+  // happened to reach: a machine's roster record has exactly one author.
+  ENV_RENAME: 'env.rename',        // { name } -> { id, name }
   FS_LIST: 'fs.list',              // { path } -> { path, parent, entries[] }
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }

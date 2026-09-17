@@ -84,6 +84,28 @@ const cleanName = (value, fallback = 'machine') => {
   return once || fallback;
 };
 
+/**
+ * A name somebody typed, held to what a machine name has to be.
+ *
+ * Stricter than what the roster will accept, and deliberately so. A machine's
+ * name is also its ssh Host alias: `ssh laptop` works because `ssh.js` writes
+ * the name into `~/.ssh/config` and the hub resolves it back to a machine by
+ * name when the tunnel opens. `aliasOf` there strips a name down to this same
+ * character set, so a name outside it is one the app would show and ssh could
+ * not reach. Typed names are refused rather than quietly rewritten, because
+ * the person typing is right there to be told.
+ *
+ * Nothing rewrites an existing record to this: a machine that joined under a
+ * hostname with an apostrophe in it keeps the name it has.
+ */
+export const NAME_RULE =
+  'a letter or number first, then letters, numbers, dots, dashes or underscores';
+
+export const machineName = (value) => {
+  const clean = String(value ?? '').trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(clean) ? clean : null;
+};
+
 /** Start a brand new network with this machine as its first member. */
 export function createNetwork({ name = hostname(), port = 8787 } = {}) {
   const id = newDeviceId();

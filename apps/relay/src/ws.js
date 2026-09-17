@@ -117,11 +117,19 @@ export function createWsLayer() {
         }
 
         // The real thing. Merging may reveal a revocation we had not seen.
+        const named = new Map(Object.entries(net.machines).map(([id, m]) => [id, m.name]));
         if (mergeRoster(net, msg.roster)) {
           // Anyone the merge just revoked loses their live sockets now, not
           // whenever the next heartbeat sweep happens to run.
           for (const id of Object.keys(loadNetwork()?.revoked ?? {})) kick(id);
           broadcastPeers();
+          // A machine renamed from the app: every phone watching this hub is
+          // showing the old name until it happens to reload the list, which
+          // it does on presence and on reconnect and otherwise never. This is
+          // the moment we learn, so it is the moment to say so.
+          for (const [id, m] of Object.entries(loadNetwork()?.machines ?? {})) {
+            if (named.has(id) && named.get(id) !== m.name) notifyPresence(id, online.has(id));
+          }
         } else if (rosterHash(msg.roster) !== rosterHash(net)) {
           // Nothing to learn from theirs, yet we still disagree - so we know
           // something they do not. Send it, once.
