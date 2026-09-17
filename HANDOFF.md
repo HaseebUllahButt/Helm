@@ -312,6 +312,68 @@ tried.**
 
 ## What changed on 2026-09-17
 
+**The usage screen landed, and the cache question got an answer nobody
+expected.** helm has always known what a thread cost - `turn.done` carries it
+and `sessions.js` accumulates it - but that is one scalar per session, over an
+event log trimmed to its last 2000 events. A long thread starts forgetting what
+its early turns cost, and nothing added up across threads at all.
+
+`packages/usage` reads the complete version instead: every CLI records its own
+token usage next to its transcripts, and `inventory.js` already walks those
+same trees for session titles. Rollups are keyed by `(date, model, folder)` and
+hold **raw token counts, priced at read time** - so a rate corrected in
+`pricing.js` reaches an archived session whose file will never change again.
+Rates are date-aware because they move: Sonnet 5 had introductory pricing until
+2026-09-01, Codex re-cut its card on 2026-07-30.
+
+`usage.report` answers pre-aggregated. **78KB** on this machine's real history,
+against the gigabytes of transcript behind it - `events.js` already learned
+what an unbudgeted reply does over the hub, and that lesson cost a chat nobody
+could open.
+
+**Scanning is incremental and the index is persisted.** 1.8GB of Codex rollouts
+and a 1GB Devin database on this machine: **7.6s cold, 24ms warm, 0 bytes
+read.** A file that grew is read from where the last scan stopped - at the last
+complete newline, never the stat size, because a log being appended to can be
+stat'ed mid-line and that record would be lost for good.
+
+**The cache question, measured rather than assumed.** The ask was to make helm
+hit the CLI prompt caches harder so the quota goes further. It mostly does not
+depend on us:
+
+```text
+Claude   100.0% hit rate, and the 1h TTL on 100% of cache writes already
+Codex     97.1% hit rate, zero mid-session model switches
+```
+
+Of 20.1M cache writes (deduped), 18.4% are mid-session re-writes - but only
+**three turns, 0.53M tokens**, correlate with anything helm controls, which is
+the model and effort chips in the composer. The API docs confirm both
+invalidate the messages cache. At Opus-5 write rates that is about **$3 across
+the entire history**; the other 15 re-writes changed nothing helm sets and are
+almost certainly Claude Code's own context compaction. So no fix was built for
+a $3 problem. The screen shows the hit rate and what caching saved instead, so
+a regression would be visible rather than inferred.
+
+**Two bugs the screenshots found and the types did not.** `showMain` was
+`wide || !!selected`, so usage across every machine - which belongs to no
+machine - rendered into a pane that never slid into view on a phone. And the
+window chip narrowed the headline while the breakdown under it stayed all-time:
+`claude-opus-5` read $990 under a "7 days" chip. The window is applied at the
+source now, so every number on the screen describes the same span.
+
+**On the charts.** helm's per-engine colours were run through a CVD validator
+before being used as fills, and they **fail**: Codex and OpenCode are DeltaE 6.1
+apart, which is hard to separate with full colour vision, never mind without.
+They stay as identity dots beside text labels, where they work. Nothing on the
+screen needs categorical colour anyway - cost-per-day is one series and the
+breakdown is a magnitude comparison, so length carries the reading and there is
+no legend to get wrong. The bar hue was checked at 5.39:1 against the card.
+
+---
+
+## What changed earlier on 2026-09-17
+
 A long day. Four ways into the same list of threads became one screen per
 machine, archived threads got a place to be, searching them got a way in,
 the network got a brain - and then one per machine - voice prompting landed,
@@ -2037,6 +2099,20 @@ add a third delivery path, it must carry the same id.**
 ---
 
 ## Verified by running it
+
+### 2026-09-17 (usage)
+
+- `npm run check` green: types, production build, node tests (**17** new in
+  `test/usage.test.mjs`), `network.sh`.
+- **The screen driven in a real `helm up` at 390x844** over CDP, not reasoned
+  about: the global view, the per-machine drill-down from the meter on a
+  machine's own bar, and the Folder facet (`github/helm`, $739.34 of the
+  7-day spend). Both layout bugs above were found this way and nothing else.
+- **The reader run against the real stores**: 15 profiles collapsing to 6
+  accounts, $2,129.82 API-equivalent over 8.7B tokens and 55,409 turns, and
+  an alias pointed at an already-counted home changing the total by nothing.
+- **Cold/warm measured on the same 2.2GB**: 7,641ms then 24ms, `bytesRead: 0`.
+
 
 ### 2026-09-16
 
