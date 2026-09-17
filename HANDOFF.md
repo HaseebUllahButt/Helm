@@ -93,10 +93,20 @@ and both hubs reporting both machines online. (The paragraph that used to live
 here said nothing was running - that was true on the evening of the 14th and
 has not been true since.)
 
-**Both machines are on `main` at the same commit** and were deployed twice on
-the 17th; both serve the identical bundle. That is the check worth repeating -
+**Both machines are on `main` at the same commit** and were deployed three
+times on the 17th - the last of them `0bb1d8a`, the rename screen - and both
+serve the identical bundle (`index-BHaJWTU1.js`, confirmed from the VM's
+public address and the laptop's loopback). That is the check worth repeating -
 a deploy that restarts the service but serves an old `dist` looks exactly like
 a working one, so compare what each machine *serves*, not what it has pulled.
+
+**The roster still holds two machines called `haseeb`** (`e7e5e8`, online, and
+`8727e3`). Renaming either is now a phone tap - machine → sliders → name - and
+worth doing, because the CLI resolves a name before an id and both of those
+answer to the same word. Note the one edge the rename rule creates: a name
+another machine already holds is refused, so the *second* `haseeb` cannot be
+renamed into anything the first still holds, and there is no way to swap two
+names directly - give one of them a new name first.
 
 There is a **brain** on the VM (Codex), started by the owner. Push
 notifications **work** and have delivered real "needs you" alerts to the
@@ -1192,6 +1202,13 @@ The relay got one change: when a merge changes a machine's name it sends a
 presence frame, so a phone that is *watching* rather than renaming updates
 without a reload. Presence already carried the name and the web app was
 throwing it away.
+
+**Live on both machines** as `0bb1d8a`. Proved against the VM's public address
+without touching the roster: `env.rename` with a name the rule refuses came
+back with the rule, from the real daemon on `vpn-arm`. (A rename to a machine's
+*own* current name is accepted and does nothing - `describeSelf` moves no
+timestamp when nothing changed - which is why the button is disabled until the
+field differs.)
 
 ### Left for next time
 
