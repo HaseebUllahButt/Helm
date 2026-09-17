@@ -302,7 +302,8 @@ tried.**
 
 ## What changed on 2026-09-17
 
-A long day. Archived threads got a place to be, searching them got a way in,
+A long day. Four ways into the same list of threads became one screen per
+machine, archived threads got a place to be, searching them got a way in,
 the network got a brain, voice prompting landed, and T3 left the tree. Then
 the owner used it on a phone and found five more things: the laptop calling
 its own VM offline, external sessions that could be listed and not opened, an
@@ -313,6 +314,84 @@ Everything here is on `main` and deployed to both machines. The sections below
 are roughly in the order they happened; the two worth reading first are
 "Found by using it" and "Terminals on the VM", because both are lessons about
 believing a measurement.
+
+### Four screens became one, per machine, and a week long
+
+The owner, on the phone, at the end of the day: *"the screen UX is ass, all
+threads, search threads and projects is just one thing combine them and only
+show these per environment plz i dont wanna see every single session and also,
+limit sessions to all from last week only"*.
+
+They were right, and the count makes it obvious. The same list of threads had
+grown four entrances: **projects** (a fold per folder in the sidebar, across
+every machine), **All sessions** (every thread on every machine, grouped by
+folder), **Search threads** (All sessions with the cursor in the box) and the
+**machine screen** (the same threads again, grouped by status). Each was added
+to fix a real complaint and each was a reasonable answer to it; together they
+were four answers to "where is that thread".
+
+There is now one: **the machine screen.** Pick a machine, and it holds the
+search box, the groups, and the projects.
+
+- `Threads` (the All sessions screen) is deleted, and with it the `threads`
+  view and the two sidebar rows into it. The sidebar's `projects` section is
+  gone too. What is left in the sidebar is: needs you, machines, the brain,
+  this device — four sections, none of them a wall of threads.
+- On a machine screen, **needs you** and **working** stay pinned open at the
+  top, because a session waiting on a person is the reason this app exists.
+- Everything else is **folded under its project** — idle, finished and the
+  machine's own CLI history all at once. Those used to be three folds that
+  asked you to know which one a thread had fallen into; a project is a thing
+  you can name before you go looking for it.
+- **Every project fold starts closed, including the newest one.** The first
+  cut opened the most recent project, and on the laptop that opened HELM with
+  19 rows in it — a wall between the owner and the next project's name, which
+  is the thing this change exists to remove. (It also defeated the guard that
+  was supposed to keep a big folder shut: the folder is small on first paint
+  and grows when `session.inventory` answers, and by then the `Fold` is
+  already mounted open.)
+- **A week is the window**, on everything but what is alive: a session that is
+  blocked, working, or has a process behind it shows however old its record
+  says it is. Everything older is one fold, "older / before this week". It is
+  a fold and not a cut on purpose - "it is not here" and "it is one tap down"
+  are different answers and only one of them is true.
+
+**The thing that made the first version worse, not better.** Dumping the
+machine's CLI history into the project groups produced **51 folder rows**, of
+which 40-odd were scratch directories from helm's own past test runs —
+`/tmp/helm-record-x3sjxG`, `/tmp/acp-opencode-BdzfWx`, and so on. `session.
+inventory` returns up to 40 threads *per engine*, and on this laptop almost
+all of them are from this week, so the week filter did nothing about it.
+
+The rule that fixed it: **the folders come from helm's own threads, and the
+machine's history joins folders that already exist rather than opening new
+ones.** A thread you ran by hand in a project you actually work in belongs
+with that project; a one-off in a scratch directory goes to one fold,
+"elsewhere on this machine", newest first and capped at 8 — uncapped the
+moment anyone types in the search box, because then the cap is the only thing
+between them and what they are looking for.
+
+Same laptop, same data, after: **4 project folds + 3 closed folds.** The whole
+machine screen is seven lines and fits in the top third of a phone.
+
+**Verified by running it** (sandboxed daemon on 8812, real `claudea` profile,
+PWA at 390×844 in headless Chromium, with `~/.helm/sessions.json` copied in
+and salted with backdated threads):
+
+- sidebar: needs you / machines / network / this device, and nothing else
+- machine screen: `~ 29`, `HELM 19`, `AITINK 4`, `T3-APP 1`, `elsewhere on
+  this machine 8 (8 of 119)`, `older 18 before this week`, `archived 1`
+- search "aitink" → the AITINK fold and the archived fold both open, five rows
+- search "helm-record" → "elsewhere" opens with all 5 matches, cap gone
+- search "zzznope" → "nothing matches / titles, folders and engines, on this
+  machine"
+- a real Claude session asked to write outside its cwd → **NEEDS YOU** at the
+  top of the machine screen with "waiting"; the next prompt → **WORKING**
+
+**What went with it.** All sessions had a `helm's` pill that hid panes helm did
+not start. Nothing on the machine screen replaces it; the week and the
+"elsewhere" fold do most of what it was for. If the owner misses it, it is a
+two-line filter on `mine`.
 
 ### The app, after a day of using it on a phone
 
@@ -751,8 +830,9 @@ microphone capture outright - so it is the owner's to try.
 - `helm brain` puts the brain on the roster's `vm` if there is one, else this
   machine. There is no way to move one, and no second one is prevented across
   *different* machines - `brainSession()` is per machine.
-- The machine screen's search and All sessions' search are two boxes over the
-  same words. One of them should probably win.
+- ~~The machine screen's search and All sessions' search are two boxes over
+  the same words.~~ Settled on the 17th: the machine screen won and All
+  sessions is gone. See "Four screens became one".
 - **Replace the VM's Groq key.** `/home/ubuntu/sangi/creds/groq-key.txt` is
   rejected by Groq and is mode 664. Until then the laptop does every
   transcription, so dictation stops working when the laptop sleeps - which is
@@ -760,13 +840,13 @@ microphone capture outright - so it is the owner's to try.
 - **Restart the terminal host when the daemon is upgraded**, and version the
   handshake between them. See the terminal section above: nothing today makes
   those two agree, and when they disagree a terminal is silently dead.
-- **All sessions still under-reports a sleeping machine.** The brain's
-  `snapshot.json` already holds what each machine last said; that screen could
-  read it and show an offline machine dimmed with "last seen 3h ago", which is
-  what the backlog asked for and the brain got.
-- **The projects sidebar is `session.list` only, by choice** - live and
-  helm-known threads, not the full CLI history. Asked and answered on the
-  17th: cheap beats complete here. Do not change it without asking again.
+- **A sleeping machine's screen is empty, not remembered.** `session.list`
+  only runs for machines that are online, so opening an offline laptop shows
+  nothing at all - and now that its threads are nowhere else, that is the only
+  place they were. The brain's `snapshot.json` already holds what each machine
+  last said; the machine screen could read it and show the list dimmed with
+  "last seen 3h ago". This is the same backlog item that used to be about All
+  sessions, and deleting that screen made it matter more, not less.
 
 ---
 
@@ -1799,9 +1879,9 @@ per-thread cost, and a desktop entry (`helm app`).
 Of the four things proposed that day and not built, two were done on the
 17th: **the brain** (which was ranked last, as v2) and, because the brain
 could not be honest without it, **offline machines in the network-wide
-picture** — though only in the brain's digest, via `snapshot.json`. The web's
-All sessions screen still loads lists for online machines only, so that screen
-still under-reports a sleeping laptop. It could now read the same snapshot.
+picture** — though only in the brain's digest, via `snapshot.json`. The web
+still loads session lists for online machines only, so a sleeping laptop's
+screen is blank. It could now read the same snapshot.
 
 Still wanted:
 
@@ -1810,8 +1890,10 @@ Still wanted:
    agrees, while the permission mode, thinking effort and auto flag live in
    *this phone's* localStorage. The same argument the model-prefs work made,
    applied to the other three.
-2. **All sessions should show offline machines too**, from the snapshot the
-   brain already keeps, dimmed with "last seen 3h ago".
+2. **A machine screen should show an offline machine's threads too**, from
+   the snapshot the brain already keeps, dimmed with "last seen 3h ago".
+   (Written when this was All sessions' job; that screen is gone and the
+   machine screen inherited it.)
 3. A **file viewer** over Claude's `read_file` control request.
 4. **`helm run <machine> <cmd>`** — the brain reaches other machines only by
    spawning or talking to a session on them, which is the right default and

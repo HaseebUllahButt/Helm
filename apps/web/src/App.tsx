@@ -140,17 +140,28 @@ function accountsFrom(profiles: Profile[]): Account[] {
 const projectName = (cwd: string) => cwd.split('/').filter(Boolean).pop() || cwd;
 const projectNote = (cwd: string) => (projectName(cwd) === cwd ? undefined : cwd);
 
-/**
- * Groups that stay open on a machine screen. Everything else folds: a machine
- * that has been worked at is mostly history, and a wall of it is what pushed
- * the live work off the top of a phone screen.
- */
-const OPEN_GROUPS = new Set(['needs you', 'working', 'idle']);
-
 const shortPath = (p: string) => {
   const parts = p.replace(/\/$/, '').split('/');
   return parts.length > 3 ? '…/' + parts.slice(-2).join('/') : p;
 };
+
+const byRecent = (a: Session, b: Session) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+
+/**
+ * How far back a machine screen looks, and what the window does not apply to.
+ *
+ * A machine that has been worked at for months answers `session.list` with
+ * months of threads, and every one of them used to be on the screen. Almost
+ * none of them are what anyone came for: the work you are in the middle of
+ * happened this week. Anything alive, working, or waiting on a person is
+ * exempt however old its record says it is - a session that is running is
+ * current by definition, and hiding one behind a fold is the one mistake this
+ * app cannot make.
+ */
+const WEEK = 7 * 24 * 60 * 60_000;
+const thisWeek = (s: Session) =>
+  s.alive === true || s.status === 'blocked' || s.status === 'working' ||
+  (s.updatedAt ?? 0) >= Date.now() - WEEK;
 
 /** `~/x` on the machine and `/home/u/x` on the wire are the same folder. */
 const collapseCwd = (p: string) => p.replace(/^\/home\/[^/]+/, '~');
@@ -240,7 +251,6 @@ export function App() {
 
 type MainView =
   | { kind: 'env' }
-  | { kind: 'threads'; search?: boolean }
   | { kind: 'brain' }
   | { kind: 'browse'; path?: string }
   | { kind: 'start'; cwd: string }
@@ -501,36 +511,6 @@ function Shell({ client, conn, onSignOut }: {
     ? { env: envs.find((e) => e.id === remembered.envId) ?? { id: remembered.envId, name: 'its machine', online: false, lastSeen: null, info: {} } as Environment, s: remembered.session }
     : null);
 
-  /**
-   * The network by project rather than by machine.
-   *
-   * machine -> directory -> session is how work is *started*; it is not how
-   * anyone thinks about it afterwards. You think "the helm one" and "the T3
-   * one", and those live in a directory that may well exist on two machines.
-   * So the sidebar also groups every thread by its folder, across machines,
-   * newest project first.
-   *
-   * Collapsed, because this is a list of everything: it should be a thing you
-   * open when you are looking for a project, not a wall between you and the
-   * machines above it.
-   */
-  const projects = (() => {
-    const by = new Map<string, { cwd: string; rows: { env: Environment; s: Session }[]; at: number }>();
-    for (const e of envs) {
-      for (const s of sessions[e.id] ?? []) {
-        if (s.archived) continue;
-        const cwd = collapseCwd(s.cwd || '~');
-        const g = by.get(cwd) ?? { cwd, rows: [], at: 0 };
-        g.rows.push({ env: e, s });
-        g.at = Math.max(g.at, s.updatedAt ?? 0);
-        by.set(cwd, g);
-      }
-    }
-    return [...by.values()]
-      .map((g) => ({ ...g, rows: g.rows.sort((a, b) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0)) }))
-      .sort((a, b) => b.at - a.at);
-  })();
-
   /** Straight into the conversation. The picker is for when there is none. */
   const openBrain = () => {
     if (brain) navigate([{ kind: 'session', session: brain.s }], brain.env.id);
@@ -542,7 +522,7 @@ function Shell({ client, conn, onSignOut }: {
   // On a phone the two panes are one screen at a time, and a view that does
   // not belong to a machine has nothing to select - so it has to say so here
   // or it renders behind the sidebar and the tap looks like it did nothing.
-  const showMain = wide || !!selected || view.kind === 'threads' || view.kind === 'brain';
+  const showMain = wide || !!selected || view.kind === 'brain';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -618,61 +598,15 @@ function Shell({ client, conn, onSignOut }: {
               {!envs.length && !error && <div className="empty quiet">no machines yet</div>}
             </div>
 
-            {projects.length > 0 && (
-              <>
-                <div className="section">projects</div>
-                {projects.map((g) => (
-                  <Fold
-                    key={g.cwd}
-                    title={projectName(g.cwd)}
-                    count={g.rows.length}
-                    note={projectNote(g.cwd)}
-                    attention={g.rows.some(({ s }) => s.status === 'blocked')}
-                  >
-                    <div className="rows">
-                      {g.rows.map(({ env: e, s }) => (
-                        <button key={`${e.id}:${s.id}`} className="row" onClick={() => openSession(e.id, s)}>
-                          <span className={`sdot ${s.status}`} />
-                          <span className="grow">
-                            <span className="rt">{s.title}</span>
-                            <span className="rm">{[e.name, engineOf(s.engine).label, money(s.costUsd)].filter(Boolean).join(' · ')}</span>
-                          </span>
-                          <span className="chev">›</span>
-                        </button>
-                      ))}
-                    </div>
-                  </Fold>
-                ))}
-              </>
-            )}
-
-            <div className="section">sessions</div>
+            {/* The brain is one thread for the whole network rather than
+                one per machine, so it belongs here rather than inside one:
+                the point of it is not having to pick a machine first. */}
+            <div className="section">network</div>
             <div className="rows">
-              <button className="row" onClick={() => navigate([{ kind: 'threads' }])}>
-                <span className="grow">
-                  <span className="rt">All sessions</span>
-                  <span className="rm">every thread, grouped by folder</span>
-                </span>
-                <span className="chev">›</span>
-              </button>
-              {/* The brain is one thread for the whole network rather than one
-                  per folder, so it belongs here rather than under a machine:
-                  the point of it is not having to pick one. */}
               <button className="row" onClick={openBrain}>
                 <span className="grow">
                   <span className="rt">Brain{brain && <span className="tag">{brain.s.status === 'blocked' ? 'needs you' : brain.env.name}</span>}</span>
                   <span className="rm">{brain ? `${engineOf(brain.s.engine).label}${brain.s.model ? ` · ${brain.s.model}` : ''}` : 'one agent, the whole network'}</span>
-                </span>
-                <span className="chev">›</span>
-              </button>
-              {/* All sessions has had a search box since it shipped, two taps
-                  down and below the fold on a phone - which is the same as not
-                  having one. This is that screen with the cursor already in the
-                  box, from the only screen the app always shows. */}
-              <button className="row" onClick={() => navigate([{ kind: 'threads', search: true }])}>
-                <span className="grow">
-                  <span className="rt">Search threads</span>
-                  <span className="rm">titles and folders, every machine</span>
                 </span>
                 <span className="chev">›</span>
               </button>
@@ -716,14 +650,6 @@ function Shell({ client, conn, onSignOut }: {
               restate([{ kind: 'session', session: s }], envId);
             }}
             onReplaced={() => { if (brain) loadSessions(brain.env.id); }}
-          />
-        ) : view.kind === 'threads' ? (
-          <Threads
-            client={client} envs={envs} sessions={sessions} onBack={back}
-            search={view.search}
-            onResume={resumeFound} resuming={resuming}
-            onOpen={(envId, s) => navigate([{ kind: 'threads' }, { kind: 'session', session: s }], envId)}
-            onChanged={loadSessions}
           />
         ) : !env ? (
           <div className="scroll"><div className="pad">
@@ -1223,38 +1149,82 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
     finally { setOpening(false); }
   };
 
-  // The same words a search on All sessions matches, so that looking for a
-  // thread does not depend on which screen you happen to be standing on.
+  // One box for the whole screen. The folder is part of what you are looking
+  // for - "the helm one on codex" is a path and an engine, not a title - so
+  // all three are what the words are matched against.
   const q = query.trim().toLowerCase();
   const hit = (s: Session) =>
     !q || `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q);
 
-  const agents = sessions.filter((s) => s.engine !== 'shell' && !s.archived && hit(s));
-  const groups: [string, Session[]][] = [
-    ['needs you', agents.filter((s) => s.status === 'blocked')],
-    ['working', agents.filter((s) => s.status === 'working')],
-    ['idle', agents.filter((s) => !['blocked', 'working', 'exited'].includes(s.status))],
-    ['finished', agents.filter((s) => s.status === 'exited')],
-    ['terminals', sessions.filter((s) => s.pty && s.alive !== false && !s.archived && hit(s))],
-  ];
-
-  // A taste of the machine's own history, capped so a well-used laptop does
-  // not bury the active groups; All sessions has the rest. Filtered before
-  // the cap, or a search would only ever look at the six most recent.
+  // Threads this machine's CLIs recorded without helm, beside helm's own.
   const detected = dedupeDetected(sessions, earlier);
-  const recent = detected.filter((x) => !x.archived).map(foundRow).filter(hit).slice(0, 6);
+  const external = detected.map(foundRow);
+  const rows = [...sessions, ...external];
+
+  const live = (s: Session) => s.engine !== 'shell' && !s.archived && hit(s);
+  const mine = sessions.filter(live);
+  const blocked = mine.filter((s) => s.status === 'blocked').sort(byRecent);
+  const working = mine.filter((s) => s.status === 'working').sort(byRecent);
+
+  /**
+   * Everything else by the folder it ran in, newest folder first.
+   *
+   * After "needs you" and "working" there is only one question left about a
+   * thread, and it is which project it belongs to - not whether it exited.
+   * idle, finished and the machine's own history were three folds asking you
+   * to know which one a thread had fallen into; a project is a thing you can
+   * name before you go looking for it.
+   *
+   * The folders come from helm's own threads, and the machine's history joins
+   * the ones that already exist rather than opening new ones. That line is
+   * what keeps this list short enough to read: a laptop's CLI history is
+   * mostly one-off runs in scratch directories - `/tmp/helm-record-x3sjxG`
+   * and forty more like it - and letting each of those name a project put
+   * fifty folder rows between the owner and their five real ones. A thread in
+   * a project you actually work in belongs with that project; the rest are
+   * history, and history is one fold below.
+   */
+  const rest = mine.filter((s) => s.status !== 'blocked' && s.status !== 'working');
+  const strays: Session[] = [];
+  const folders = (() => {
+    const by = new Map<string, Session[]>();
+    for (const s of rest.filter(thisWeek)) {
+      const key = collapseCwd(s.cwd || '~');
+      const list = by.get(key);
+      if (list) list.push(s); else by.set(key, [s]);
+    }
+    for (const x of external.filter((s) => !s.archived && hit(s) && thisWeek(s))) {
+      const list = by.get(collapseCwd(x.cwd || '~'));
+      if (list) list.push(x); else strays.push(x);
+    }
+    return [...by.entries()]
+      .map(([cwd, list]): [string, Session[]] => [cwd, [...list].sort(byRecent)])
+      .sort((a, b) => (b[1][0].updatedAt ?? 0) - (a[1][0].updatedAt ?? 0));
+  })();
+
+  // Threads from this week in folders helm has never started anything in,
+  // newest first and capped - until someone types, and then the cap is the
+  // thing standing between them and what they are looking for.
+  strays.sort(byRecent);
+  const elsewhere = q ? strays : strays.slice(0, 8);
+
+  // Everything either side of the week, in one flat list rather than a second
+  // set of folders: what is in here is, by definition, not what you are
+  // working on. It has to stay reachable, though - "it is not here" and "it
+  // is one tap down" are different answers and only one of them is true.
+  const older = [...rest, ...external.filter((s) => !s.archived && hit(s))]
+    .filter((s) => !thisWeek(s)).sort(byRecent);
+
+  // A shell is not a thread and does not belong in a project group: you open
+  // one to type at the machine, and what you want is the one you left open.
+  const terminals = sessions.filter((s) => s.pty && s.alive !== false && !s.archived && hit(s)).sort(byRecent);
 
   // Archived threads are on the machine they were archived on, folded away.
-  // They used to be on All sessions and nowhere else, which made "where did
-  // that thread go" a question with a two-screen answer.
-  const filed = [
-    ...sessions.filter((s) => s.archived),
-    ...detected.filter((x) => x.archived).map(foundRow),
-  ].filter(hit).sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  const filed = rows.filter((s) => s.archived && hit(s)).sort(byRecent);
 
   // Enough on this machine that finding one by eye is work. The box stays
   // once something is typed in it, however few rows the typing leaves.
-  const searchable = sessions.length + detected.length > 5 || !!q;
+  const searchable = rows.length > 5 || !!q;
 
   const setArchived = async (s: Session, archived: boolean) => {
     setError('');
@@ -1277,6 +1247,31 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
     try { await client.rpc(env.id, 'session.title', { id: s.id, title }, 20_000); reload(); }
     catch (e: any) { setError(e.message); }
   };
+
+  /**
+   * One row, wherever it is standing.
+   *
+   * A thread helm started opens; a thread a CLI recorded on its own has no
+   * process behind it, so opening it means asking the machine to resume the
+   * conversation first - and it cannot be renamed, because the name is the
+   * CLI's. Everything on this screen is now mixed into the same groups, so
+   * that difference has to live in the row rather than in the group it is in.
+   */
+  const row = (s: Session) => s.id.startsWith('found:') ? (
+    <SessionRow
+      key={s.id} s={s} busy={resuming === s.id}
+      onOpen={env.online ? () => onResume(s) : undefined}
+      onArchive={() => setArchived(s, !s.archived)}
+      onDelete={() => deleteSession(s)}
+    />
+  ) : (
+    <SessionRow
+      key={s.id} s={s} onOpen={() => onOpen(s)}
+      onRename={(t) => setTitle(s, t)}
+      onArchive={() => setArchived(s, !s.archived)}
+      onDelete={() => deleteSession(s)}
+    />
+  );
 
   return (
     <>
@@ -1333,79 +1328,71 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
 
         {/* A session waiting on a person is the reason this app exists, so
             that group is never behind a tap; nor is what is running right
-            now. The rest of a worked-at machine is history, and history is
-            folded - which is what makes the top of the screen readable on a
-            phone at all. */}
-        {groups.map(([title, list]) => list.length > 0 && (
-          OPEN_GROUPS.has(title) ? (
-            <div key={title}>
-              <div className={`section${title === 'needs you' ? ' attention' : ''}`}>{title}</div>
-              <div className="rows">
-                {list.map((s) => (
-                  <SessionRow
-                    key={s.id} s={s} onOpen={() => onOpen(s)}
-                    onRename={(t) => setTitle(s, t)}
-                    onArchive={() => setArchived(s, true)}
-                    onDelete={() => deleteSession(s)}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : (
-            <Fold key={title} title={title} count={list.length} openWhen={!!q}>
-              <div className="rows">
-                {list.map((s) => (
-                  <SessionRow
-                    key={s.id} s={s} onOpen={() => onOpen(s)}
-                    onRename={(t) => setTitle(s, t)}
-                    onArchive={() => setArchived(s, true)}
-                    onDelete={() => deleteSession(s)}
-                  />
-                ))}
-              </div>
-            </Fold>
-          )
-        ))}
-        {recent.length > 0 && (
-          <Fold title="earlier" count={recent.length} openWhen={!!q}>
-            <div className="rows">
-              {recent.map((row) => (
-                <SessionRow
-                  key={row.id} s={row} busy={resuming === row.id}
-                  onOpen={env.online ? () => onResume(row) : undefined}
-                  onArchive={() => setArchived(row, true)}
-                  onDelete={() => deleteSession(row)}
-                />
-              ))}
-            </div>
-          </Fold>
-        )}
-        <Fold title="archived" count={filed.length} openWhen={!!q}>
-          <div className="rows">
-            {filed.map((s) => (
-              <SessionRow
-                key={s.id} s={s} busy={resuming === s.id}
-                onOpen={s.id.startsWith('found:')
-                  ? (env.online ? () => onResume(s) : undefined)
-                  : () => onOpen(s)}
-                onArchive={() => setArchived(s, false)}
-                onDelete={() => deleteSession(s)}
-              />
-            ))}
+            now. Everything else is filed under its project, folded, which is
+            what makes the top of the screen readable on a phone at all. */}
+        {blocked.length > 0 && (
+          <div>
+            <div className="section attention">needs you</div>
+            <div className="rows">{blocked.map(row)}</div>
           </div>
+        )}
+        {working.length > 0 && (
+          <div>
+            <div className="section">working</div>
+            <div className="rows">{working.map(row)}</div>
+          </div>
+        )}
+
+        {/* Every project folded, including the newest. An open one is a wall
+            of rows before the next folder's name, and which project you want
+            is a question you answer faster from a list of names than by
+            scrolling past the one helm guessed - the guess is also wrong for
+            the folder that is open because 40 CLI history rows landed in it. */}
+        {folders.map(([cwd, list]) => (
+          <Fold
+            key={cwd}
+            title={projectName(cwd)}
+            count={list.length}
+            note={projectNote(cwd)}
+            openWhen={!!q}
+            attention={list.some((s) => s.status === 'blocked')}
+          >
+            <div className="rows">{list.map(row)}</div>
+          </Fold>
+        ))}
+
+        <Fold title="terminals" count={terminals.length} openWhen={!!q}>
+          <div className="rows">{terminals.map(row)}</div>
         </Fold>
-        {/* Nothing to say when the fold above is holding the answer: a
-            search that found an archived thread and only an archived thread
-            is a search that worked, and "nothing matches" underneath the
-            thing that matched is just wrong. */}
-        {!agents.length && !recent.length && !(q && filed.length) && (
+        {/* This week, but in folders nothing was ever started in from here:
+            a CLI run by hand in a scratch directory. Worth keeping, not worth
+            a project of its own. */}
+        <Fold
+          title="elsewhere on this machine" count={elsewhere.length}
+          note={strays.length > elsewhere.length ? `${elsewhere.length} of ${strays.length}` : undefined}
+          openWhen={!!q}
+        >
+          <div className="rows">{elsewhere.map(row)}</div>
+        </Fold>
+        <Fold title="older" count={older.length} note="before this week" openWhen={!!q}>
+          <div className="rows">{older.map(row)}</div>
+        </Fold>
+        <Fold title="archived" count={filed.length} openWhen={!!q}>
+          <div className="rows">{filed.map(row)}</div>
+        </Fold>
+        {/* Nothing to say when a fold above is holding the answer: a search
+            that found an archived thread and only an archived thread is a
+            search that worked, and "nothing matches" underneath the thing
+            that matched is just wrong. */}
+        {!blocked.length && !working.length && !folders.length &&
+          !(q && (filed.length || older.length || elsewhere.length || terminals.length)) && (
           <div className="empty quiet">
-            {q ? 'nothing matches' : filed.length ? 'no active sessions' : `nothing running on ${env.name}`}
+            {q ? 'nothing matches' : older.length || filed.length || strays.length ? 'nothing from this week' : `nothing running on ${env.name}`}
             <div className="note" style={{ marginTop: 6 }}>
               {q
-                ? 'All sessions searches every machine'
-                : filed.length
-                  ? `${filed.length} archived thread${filed.length === 1 ? '' : 's'}, folded below`
+                ? 'titles, folders and engines, on this machine'
+                : older.length || filed.length || strays.length
+                  ? 'older threads are folded below'
                   : 'pick a folder, then an agent'}
             </div>
           </div>
@@ -1733,215 +1720,6 @@ function BrainView({ client, envs, brain, onBack, onStarted, onReplaced }: {
               </button>
             </div>
           </>
-        )}
-        {error && <div className="error">{error}</div>}
-      </div></div>
-    </>
-  );
-}
-
-// ------------------------------------------------------------------ threads
-
-/**
- * Every session on every machine, grouped by the folder it runs in.
- *
- * Sessions are sorted by activity within each folder, and folders by their
- * most recent one. Archived threads are folded away at the bottom rather
- * than tagged in place: archiving is not "delete it quietly", but it is not
- * "keep showing it either". A search opens the fold, so a thread is findable
- * by name whether or not you remember filing it.
- *
- * It needs a search because of what it honestly contains. On a machine that
- * has been worked at, most rows are terminal panes helm did not start - real
- * sessions, and not what you came here for - so there is one filter for the
- * words and one for the noise.
- */
-function Threads({ client, envs, sessions, search, onBack, onOpen, onChanged, onResume, resuming }: {
-  client: Client; envs: Environment[]; sessions: Record<string, Session[]>; search?: boolean;
-  onBack: () => void; onOpen: (envId: string, s: Session) => void; onChanged: (envId: string) => void;
-  /** Continue a conversation a CLI recorded on its own; starts the engine. */
-  onResume: (envId: string, s: Session) => void;
-  resuming: string | null;
-}) {
-  const [error, setError] = useState('');
-  const [query, setQuery] = useState('');
-  const [mine, setMine] = useState(false);
-  const [found, setFound] = useState<Record<string, InventorySession[]>>({});
-
-  // What the CLIs on each machine recorded on their own - the sessions helm
-  // never saw because nobody opened them through it. History files rather
-  // than a live feed, so it is polled lazily and only while this screen is up.
-  const envKey = envs.map((e) => `${e.id}:${e.online ? 1 : 0}`).join(',');
-  useEffect(() => {
-    let live = true;
-    const load = () => {
-      for (const e of envs) {
-        if (!e.online) continue;
-        client.rpc(e.id, 'session.inventory', {}, 20_000)
-          .then((r: any) => { if (live) setFound((f) => ({ ...f, [e.id]: r.recent ?? [] })); })
-          .catch(() => {});
-      }
-    };
-    load();
-    const timer = setInterval(load, 60_000);
-    return () => { live = false; clearInterval(timer); };
-    // `envs` is a fresh array every render; the key says what we depend on.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, envKey]);
-
-  // A row helm does not own is filed on the machine, not here, so both of
-  // these refresh the list that produced it as well as the session list.
-  const refresh = (envId: string) => {
-    onChanged(envId);
-    client.rpc(envId, 'session.inventory', {}, 20_000)
-      .then((r: any) => setFound((f) => ({ ...f, [envId]: r.recent ?? [] })))
-      .catch(() => {});
-  };
-  const setArchived = async (envId: string, s: Session, archived: boolean) => {
-    setError('');
-    try { await client.rpc(envId, 'session.archive', { id: s.id, archived }, 20_000); refresh(envId); }
-    catch (e: any) { setError(e.message); }
-  };
-  const deleteSession = async (envId: string, s: Session) => {
-    setError('');
-    try { await client.rpc(envId, 'session.kill', { id: s.id }, 20_000); refresh(envId); }
-    catch (e: any) { setError(e.message); }
-  };
-  const setTitle = async (envId: string, s: Session, title: string) => {
-    setError('');
-    try { await client.rpc(envId, 'session.title', { id: s.id, title }, 20_000); onChanged(envId); }
-    catch (e: any) { setError(e.message); }
-  };
-
-  // The folder is part of what you are searching for: "the helm one on the
-  // VM" is a path, not a title.
-  const q = query.trim().toLowerCase();
-  const matches = (s: Session) =>
-    (!mine || !s.adopted) &&
-    (!q || `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q));
-  // Archived threads used to sit in the folders with everything else, tagged
-  // and otherwise indistinguishable, which made the screen longer for no gain
-  // - the whole point of archiving one is that it is not what you are looking
-  // at. They are counted and folded away at the bottom instead.
-  const keep = (s: Session) => !s.archived && matches(s);
-  const byRecent = (a: Session, b: Session) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-
-  const total = envs.reduce((n, e) =>
-    n + (sessions[e.id]?.length ?? 0) + dedupeDetected(sessions[e.id] ?? [], found[e.id] ?? []).length, 0);
-  const groups = envs.map((env) => {
-    const list = sessions[env.id] ?? [];
-    const extras = dedupeDetected(list, found[env.id] ?? []).map(foundRow);
-    const byFolder = new Map<string, Session[]>();
-    for (const s of [...list, ...extras].filter(keep)) {
-      const key = collapseCwd(s.cwd || '~');
-      const list = byFolder.get(key);
-      if (list) list.push(s); else byFolder.set(key, [s]);
-    }
-    const folders = [...byFolder.entries()]
-      .map(([cwd, list]): [string, Session[]] =>
-        [cwd, [...list].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))])
-      .sort((a, b) => (b[1][0].updatedAt ?? 0) - (a[1][0].updatedAt ?? 0));
-    return { env, folders };
-  }).filter((g) => g.folders.length > 0);
-  const filed = envs.map((env) => {
-    const list = sessions[env.id] ?? [];
-    const extras = dedupeDetected(list, found[env.id] ?? []).map(foundRow);
-    return { env, list: [...list, ...extras].filter((x) => x.archived && matches(x)).sort(byRecent) };
-  }).filter((g) => g.list.length > 0);
-  const filedCount = filed.reduce((n, g) => n + g.list.length, 0);
-  // Every machine is asked for its list on the way in, and that round trip
-  // is long enough to read: "no sessions yet" while they are still arriving
-  // is a wrong answer, not an empty one.
-  const asked = envs.some((e) => sessions[e.id]);
-
-  return (
-    <>
-      <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
-        <div className="titles">
-          <h1>All sessions</h1>
-          <span className="sub">{total ? `${total} thread${total === 1 ? '' : 's'}, grouped by folder` : 'every thread, grouped by folder'}</span>
-        </div>
-      </div>
-      <div className="scroll"><div className="pad column">
-        <div className="filterbar">
-          <input
-            className="sheetfilter grow" value={query} placeholder="search titles and folders"
-            autoCapitalize="off" autoCorrect="off" autoComplete="off" autoFocus={search}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <button
-            className={`pill${mine ? ' on' : ''}`} aria-pressed={mine}
-            title="hide panes helm did not start"
-            onClick={() => setMine((v) => !v)}
-          >helm's</button>
-        </div>
-        {groups.map(({ env, folders }) => (
-          <div key={env.id}>
-            <div className="section">
-              {env.name}
-              {!env.online && <span className="quiet"> · offline</span>}
-            </div>
-            {folders.map(([cwd, list]) => (
-              <Fold
-                key={cwd}
-                title={projectName(collapseCwd(cwd))}
-                count={list.length}
-                note={projectNote(collapseCwd(cwd))}
-                openWhen={!!q}
-                attention={list.some((s) => s.status === 'blocked')}
-              >
-                <div className="rows">
-                  {list.map((s) => s.id.startsWith('found:') ? (
-                    // Nothing is running behind this row, so opening it means
-                    // asking the machine to resume the conversation first.
-                    <SessionRow
-                      key={s.id} s={s} busy={resuming === s.id}
-                      onOpen={env.online ? () => onResume(env.id, s) : undefined}
-                      onArchive={() => setArchived(env.id, s, !s.archived)}
-                      onDelete={() => deleteSession(env.id, s)}
-                    />
-                  ) : (
-                    <SessionRow
-                      key={s.id} s={s} onOpen={() => onOpen(env.id, s)}
-                      onRename={(title) => setTitle(env.id, s, title)}
-                      onArchive={() => setArchived(env.id, s, !s.archived)}
-                      onDelete={() => deleteSession(env.id, s)}
-                    />
-                  ))}
-                </div>
-              </Fold>
-            ))}
-          </div>
-        ))}
-        <Fold title="archived" count={filedCount} openWhen={!!q}>
-          {filed.map(({ env, list }) => (
-            <div key={env.id}>
-              <div className="foldhead">{env.name}</div>
-              <div className="rows">
-                {list.map((s) => s.id.startsWith('found:') ? (
-                  <SessionRow
-                    key={s.id} s={s} busy={resuming === s.id}
-                    onOpen={env.online ? () => onResume(env.id, s) : undefined}
-                    onArchive={() => setArchived(env.id, s, false)}
-                    onDelete={() => deleteSession(env.id, s)}
-                  />
-                ) : (
-                  <SessionRow
-                    key={s.id} s={s} onOpen={() => onOpen(env.id, s)}
-                    onRename={(title) => setTitle(env.id, s, title)}
-                    onArchive={() => setArchived(env.id, s, false)}
-                    onDelete={() => deleteSession(env.id, s)}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </Fold>
-        {!groups.length && !filedCount && (
-          <div className="empty quiet">
-            {!asked ? 'asking every machine…' : total ? 'nothing matches' : 'no sessions yet'}
-          </div>
         )}
         {error && <div className="error">{error}</div>}
       </div></div>
