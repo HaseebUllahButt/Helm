@@ -399,6 +399,31 @@ layer that consumes it, not in the roster. The same reasoning is why
 this machine writes has to be one every other machine will accept back
 unchanged, and `--name` and a browser's `label` were both unbounded.
 
+#### Where the sixteen controllers came from
+
+Pruning the roster turned up the thing that filled it. A page served from
+`127.0.0.1` signs itself in with the local key (`App.tsx`, the `/api/auth/local`
+effect), and `issueDevice` minted a **brand new durable device every time**.
+Every fresh browser profile, every cleared site-data, every headless-Chromium
+verification run, and every tab whose token a revocation had just cut - one
+more permanent credential in a roster that gossips to the whole network, all
+labelled `web` or `Linux Chrome` and impossible to tell apart. Sixteen in three
+days. Revoking one made the browser re-pair and mint another, so the cleanup
+undid itself while it ran.
+
+A local sign-in is not a device joining the network. It is this machine saying
+who it is, to a hub running on it, proved with a key that sits next to the
+network key - so it should be idempotent, and now is: the hub remembers which
+device it issued (`local_device` in `hub.sqlite`) and re-mints a token for that
+same id. Three fresh browser profiles against a real hub now produce one
+device, verified by running it.
+
+Re-issuing is safe exactly here and nowhere else: the caller has proved it
+holds the local key, so it is handed nothing it could not mint itself.
+`deviceToken` returns null for an id that has been removed, so pruning the
+local device is not a lockout - the next page load issues a fresh one - and a
+revoked token stays revoked.
+
 #### What was left alone, deliberately
 
 **A controller can still mint an invite**, and an invite carries the network

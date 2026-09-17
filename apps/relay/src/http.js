@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { q, now, newId, newInviteCode } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, issueDevice, revoke,
-  authenticate, allEndpoints, localKey,
+  authenticate, allEndpoints, localKey, deviceToken,
 } from '@helm/protocol/network';
 import { ROLE } from '@helm/protocol/identity';
 
@@ -276,7 +276,23 @@ export function makeHttpHandler({ online, kick }) {
       // from the internet also arrives from 127.0.0.1 - and the key alone
       // would travel further than this machine.
       if (body.local && isLoopback(req) && safeEqual(body.local, localKey())) {
-        const { id, token } = issueDevice(net, body.label || 'this machine');
+        // One credential for this machine's own browsers, not one per page
+        // load. Every fresh profile, every cleared site-data and every token
+        // this hub cut used to leave another permanent device in a roster that
+        // gossips to the whole network, and no way to tell which was live.
+        //
+        // Re-issuing is safe precisely here: the caller proved it holds the
+        // local key, and anyone who can read that can read the network key
+        // beside it, so this hands back nothing they could not mint. If the
+        // remembered device has since been removed, `deviceToken` says so and
+        // a new one is issued - which is what makes pruning stick rather than
+        // locking the owner out of their own machine.
+        const remembered = q.localDeviceGet.get()?.device_id;
+        const existing = remembered ? deviceToken(net, remembered) : null;
+        const { id, token } = existing
+          ? { id: remembered, token: existing }
+          : issueDevice(net, body.label || 'this machine');
+        if (!existing) q.localDeviceSet.run(id);
         return json(res, 200, {
           token, deviceId: id, network: net.id, endpoints: allEndpoints(net), local: true,
         });

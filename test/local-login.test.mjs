@@ -66,6 +66,54 @@ test('a browser on this machine signs in with the local key, and nothing else do
   assert.equal((await paired.json()).local, undefined);
 });
 
+test('this machine keeps one browser credential, not one per page load', async (t) => {
+  const PORT3 = PORT + 2;
+  const dir3 = mkdtempSync(join(tmpdir(), 'helm-local-once-'));
+  process.env.HELM_DIR = dir3;
+  t.after(() => rmSync(dir3, { recursive: true, force: true }));
+
+  const N = await import('@helm/protocol/network');
+  const { startRelay } = await import('@helm/relay');
+  N.createNetwork({ name: 'laptop', port: PORT3 });
+  const hub = await startRelay({ port: PORT3, host: '127.0.0.1', dbFile: join(dir3, 'hub.sqlite') });
+  t.after(() => hub.stop());
+
+  const signIn = (label) =>
+    login({ local: N.localKey(), label }, PORT3).then((r) => r.json());
+
+  // Three page loads with empty storage: a new browser profile, a cleared
+  // site, a tab whose token this hub had just cut. Each used to leave another
+  // permanent device behind - sixteen of them accumulated in three days.
+  const first = await signIn('this machine');
+  const second = await signIn('Linux Chrome');
+  const third = await signIn('web');
+
+  assert.equal(second.deviceId, first.deviceId);
+  assert.equal(third.deviceId, first.deviceId);
+  assert.equal(Object.keys(N.loadNetwork().devices).length, 1);
+
+  // Each answer is a working token, not just the same id.
+  for (const issued of [first, second, third]) {
+    const res = await fetch(`http://127.0.0.1:${PORT3}/api/network`, {
+      headers: { authorization: `Bearer ${issued.token}` },
+    });
+    assert.equal(res.status, 200);
+  }
+
+  // Removing it is not a lockout: the next load issues a fresh one, which is
+  // what lets the owner prune without cutting themselves off their own box.
+  N.revoke(N.loadNetwork(), first.deviceId);
+  const after = await signIn('this machine');
+  assert.notEqual(after.deviceId, first.deviceId);
+  assert.equal(Object.keys(N.loadNetwork().devices).length, 1);
+
+  // ...and the removed one stays removed.
+  const dead = await fetch(`http://127.0.0.1:${PORT3}/api/network`, {
+    headers: { authorization: `Bearer ${first.token}` },
+  });
+  assert.equal(dead.status, 401);
+});
+
 test('the page this machine serves can fetch the local key; a proxied or foreign request cannot', async (t) => {
   const PORT2 = PORT + 1;
 

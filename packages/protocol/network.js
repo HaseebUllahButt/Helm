@@ -152,6 +152,20 @@ export function issueDevice(net, label = 'device') {
 }
 
 /**
+ * Another token for a device that is already a member.
+ *
+ * Not the same thing as adding one: the credential is derived from the network
+ * key and the id, so re-issuing is how a caller that can already prove it is
+ * this machine gets a working token back without leaving a second permanent
+ * member behind. Returns null if that id is no longer anyone, so a caller
+ * cannot revive something the owner removed.
+ */
+export function deviceToken(net, id) {
+  if (!net.devices[id] || net.revoked[id]) return null;
+  return mintToken(net.key, { net: net.id, sub: id, role: ROLE.DEVICE });
+}
+
+/**
  * Is this token allowed in right now?
  *
  * Signature first (cheap, and settles whether the bearer knows the key at

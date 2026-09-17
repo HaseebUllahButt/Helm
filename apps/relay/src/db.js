@@ -67,6 +67,23 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS digests_env_time ON digests(env_id, created_at DESC);
 
+  -- The one device credential this machine's own browsers share.
+  --
+  -- A local sign-in is not a new device joining the network - it is this
+  -- machine saying who it is, to a hub running on it, proved with a key that
+  -- sits next to the network key itself. Minting a fresh durable device for
+  -- every page load turned that into an ever-growing pile of permanent
+  -- credentials nobody could tell apart: sixteen of them in three days, one
+  -- per browser profile and one more every time a token was cut. Remembering
+  -- which one was issued makes it idempotent.
+  --
+  -- Local, like everything else here: deleting this file costs the machine one
+  -- re-pair of its own browser, which happens by itself on the next load.
+  CREATE TABLE IF NOT EXISTS local_device (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    device_id TEXT NOT NULL
+  );
+
   -- Where to reach a device when the app is closed. One row per browser that
   -- turned notifications on; the endpoint is the browser vendor's, and the
   -- keys are that browser's, so nothing here is useful to anyone else.
@@ -123,6 +140,12 @@ export const q = {
   authFail: db.prepare('UPDATE auth_state SET failures = ? WHERE id = 1'),
   /** Close the window now, without disturbing anyone already paired. */
   authExpire: db.prepare('UPDATE auth_state SET expires_at = 0 WHERE id = 1'),
+
+  localDeviceGet: db.prepare('SELECT device_id FROM local_device WHERE id = 1'),
+  localDeviceSet: db.prepare(
+    `INSERT INTO local_device (id, device_id) VALUES (1, ?)
+     ON CONFLICT(id) DO UPDATE SET device_id = excluded.device_id`
+  ),
 
   inviteInsert: db.prepare('INSERT INTO invites (code, expires_at, role) VALUES (?, ?, ?)'),
   inviteGet: db.prepare('SELECT * FROM invites WHERE code = ?'),
