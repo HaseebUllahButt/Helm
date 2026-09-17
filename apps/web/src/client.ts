@@ -124,6 +124,59 @@ export interface ModelList {
   modes?: Mode[];
 }
 
+/**
+ * What one machine's agents have spent, as the daemon pre-aggregates it.
+ *
+ * Costs are what the tokens would bill at the published rate on the day they
+ * were spent. On a subscription that is not what you paid - it is the
+ * API-equivalent figure, and the screen says so.
+ */
+export interface UsageTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  total: number;
+  turns: number;
+  costUsd: number;
+  /** Some model in here has no published rate; its tokens count, its cost does not. */
+  unpriced: boolean;
+  /** What the cached reads would have cost as fresh input, less what they did. */
+  cacheSavedUsd: number;
+  /** Writing the cache is billed above the fresh rate; this is that toll. */
+  cacheWritePremiumUsd: number;
+}
+
+export interface UsageGroup extends UsageTotals {
+  engine?: string;
+  account?: string;
+  model?: string;
+  provider?: string;
+  project?: string;
+}
+
+export interface UsageDay extends UsageTotals { date: string }
+
+export interface UsageReport {
+  totals: UsageTotals;
+  daily: UsageDay[];
+  groups: UsageGroup[];
+  accounts: { account: string; engine: string; profileId: string }[];
+  scan: Record<string, number>;
+  at: number;
+}
+
+/** The share of input tokens that came back out of the prompt cache. */
+export const hitRate = (t: Pick<UsageTotals, 'input' | 'cacheRead'>) => {
+  const denom = (t.input || 0) + (t.cacheRead || 0);
+  return denom ? t.cacheRead / denom : 0;
+};
+
+/** What prompt caching actually saved, after the write premium. */
+export const cacheSaved = (t: Pick<UsageTotals, 'cacheSavedUsd' | 'cacheWritePremiumUsd'>) =>
+  (t.cacheSavedUsd || 0) - (t.cacheWritePremiumUsd || 0);
+
 export interface DirEntry { name: string; path: string; isRepo: boolean; skip: boolean }
 
 export interface Tool { name: string; input: string }
@@ -777,6 +830,16 @@ export class Client {
   subscribe(env: string) {
     this.subscribed.add(env);
     if (this.connected) this.ws!.send(JSON.stringify({ t: 'subscribe', env }));
+  }
+
+  /**
+   * One machine's usage. Slow the first time on a machine with a long history
+   * - it is reading every transcript the CLIs ever wrote - and milliseconds
+   * after that, because the daemon keeps a per-file index. The timeout is
+   * generous for exactly that first call.
+   */
+  usage(env: string, opts: { since?: string; until?: string; by?: string[]; rebuild?: boolean } = {}) {
+    return this.rpc<UsageReport>(env, 'usage.report', opts, 120_000);
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
