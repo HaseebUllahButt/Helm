@@ -26,6 +26,8 @@ import { modeFor } from '../modes.js';
  */
 
 const MAX_OUTPUT = 32_000;
+/** A diff here is whole files, so it needs a tighter cap than output does. */
+const MAX_DIFF = 8_000;
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
 
 // ACP tool kinds -> helm item kinds.
@@ -503,6 +505,21 @@ export class AcpDriver extends Driver {
   }
 
   /** `content` diff entries -> helm's {path, kind, diff} change list. */
+  /**
+   * `content` entries -> the file changes worth showing under a tool card.
+   *
+   * ACP hands over whole files, not hunks: every line of the old one and
+   * every line of the new one. Written out unbounded - which this did until
+   * 2026-09-17 - one edit of a 2000-line file is 140KB, and the same array
+   * rides on the item's start, each update and its done. A devin thread on
+   * the owner's VM reached 6.8MB that way, 95% of it here, and became a chat
+   * that could not be opened over the network at all.
+   *
+   * So a diff is clipped like every other payload a driver produces. What is
+   * cut is the middle of a wall of changed lines, on a screen where it is
+   * behind a fold; what is kept is which file, what kind of change, and
+   * enough of it to recognise.
+   */
   #changes(content) {
     if (!Array.isArray(content)) return [];
     const out = [];
@@ -514,7 +531,7 @@ export class AcpDriver extends Driver {
         ...(c.oldText ? String(c.oldText).replace(/\n$/, '').split('\n').map((l) => '-' + l) : []),
         ...(c.newText ? String(c.newText).replace(/\n$/, '').split('\n').map((l) => '+' + l) : []),
       ].join('\n');
-      out.push({ path: c.path, kind, diff });
+      out.push({ path: c.path, kind, diff: clip(diff, MAX_DIFF) });
     }
     return out;
   }

@@ -21,6 +21,7 @@ import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
 import { describe as describeAsk } from './notify.js';
 import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
+import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { transcribe, canTranscribe } from './voice.js';
 
@@ -437,7 +438,9 @@ export class Daemon {
   #queueEvent(id, event) {
     if (!this.sessions.watching(id)) return;
     if (!this.#eventQueue.has(id)) this.#eventQueue.set(id, []);
-    this.#eventQueue.get(id).push(event);
+    // The same cap a fetched reply gets: a 140KB edit is no cheaper to push
+    // than it was to send, and a phone reading it live is the same phone.
+    this.#eventQueue.get(id).push(forWire(event));
     if (!this.#eventFlush) {
       this.#eventFlush = setImmediate(() => {
         this.#eventFlush = null;
@@ -701,7 +704,9 @@ export class Daemon {
       case M.SESSION_ARCHIVE: return this.sessions.archive(p.id, p.archived !== false);
 
       // Headless agent sessions.
-      case M.SESSION_EVENTS:  return this.sessions.history(p.id, { since: p.since ?? 0, limit: p.limit ?? 500 });
+      case M.SESSION_EVENTS:  return this.sessions.history(p.id, {
+        since: p.since ?? 0, limit: p.limit ?? 500, tail: p.tail ?? 0, before: p.before ?? 0,
+      });
       case M.SESSION_WATCH:   return this.sessions.watch(p.id);
       case M.SESSION_UNWATCH: return this.sessions.unwatch(p.id);
       case M.SESSION_ANSWER:  return this.sessions.answer(p.id, p.requestId, p.decision ?? {});

@@ -331,7 +331,11 @@ function TurnView({ turn, working, blocked }: { turn: Turn; working: boolean; bl
   );
 }
 
-export function Transcript({ turns, status, loaded, empty }: { turns: Turn[]; status: string; loaded: boolean; empty?: string }) {
+export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier }: {
+  turns: Turn[]; status: string; loaded: boolean; empty?: string;
+  /** The machine holds more of this conversation than is on screen. */
+  earlier?: boolean; loadingEarlier?: boolean; onEarlier?: () => void;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
   const [unread, setUnread] = useState(false);
@@ -360,6 +364,13 @@ export function Transcript({ turns, status, loaded, empty }: { turns: Turn[]; st
     <div className="chat-wrap">
       <div className="chat" ref={box} onScroll={onScroll}>
         <div className="timeline">
+          {/* A chat opens on its last screenful, because that is what you came
+              for; the rest of it is a tap away rather than a wait. */}
+          {loaded && earlier && (
+            <button className="earlier" onClick={onEarlier} disabled={loadingEarlier}>
+              {loadingEarlier ? 'reading…' : 'Earlier in this conversation'}
+            </button>
+          )}
           {!loaded && <p className="placeholder">Loading the conversation…</p>}
           {loaded && turns.length === 0 && <p className="placeholder">{empty ?? 'Send a message to start the conversation.'}</p>}
           {turns.map((t) => <TurnView key={t.id} turn={t} working={working && t === last} blocked={status === 'blocked'} />)}

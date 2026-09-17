@@ -3,12 +3,24 @@ import type { Client } from '../client';
 import { apply, emptyLog, type HelmEvent, type LogState } from './types';
 import { loadCached, saveCached } from './logCache';
 
+/** How much of a conversation an open asks for: the end of it. */
+const TAIL = 300;
+
 /**
  * A live view of one headless session.
  *
  * Opening paints instantly from the on-device cache when there is one,
  * then refreshes only what is new in the background - an old chat no
  * longer costs up to 8 relay round-trips before first paint.
+ *
+ * With no cache it asks for the *tail* rather than paging forward from the
+ * first event. That is the difference between opening a chat and waiting for
+ * one: a devin thread on the owner's VM held 822 events and 6.8MB, and the
+ * old first page - 500 events, oldest first - was 5MB, which took 58 seconds
+ * from the laptop and timed out at 20 on the phone, to render a screenful of
+ * history nobody had asked to see. The machine now budgets a page in bytes
+ * and answers from the end; what came before is counted, and fetched only if
+ * the owner reaches for it.
  *
  * What is on screen is written back as it streams, not only when the view
  * closes. A phone does not close views: it is swiped away, or the tab is
@@ -29,6 +41,18 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
   const [state, setState] = useState<LogState>(log.current);
   const [error, setError] = useState('');
   const fetching = useRef<Promise<void> | null>(null);
+  /**
+   * Whether the machine holds anything before the oldest event on screen.
+   * `firstSeq` is the front of our window; the daemon says where its own log
+   * starts, and the two together answer it for a cached open as well as a
+   * cold one.
+   */
+  const [earlier, setEarlier] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const firstSeq = useRef(0);
+  const noteWindow = useCallback((logFirst?: number) => {
+    setEarlier(!!logFirst && !!firstSeq.current && logFirst < firstSeq.current);
+  }, []);
 
   const publish = useCallback(() => setState({ ...log.current, turns: log.current.turns, pending: [...log.current.pending] }), []);
 
@@ -59,17 +83,25 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
   const fetchSince = useCallback((since: number) => {
     if (fetching.current) return fetching.current;
     fetching.current = (async () => {
-      // Page through: an old chat can hold 2000 events and one reply that
-      // large exceeds the data-channel message limit.
+      // Nothing on screen yet: take the end of the conversation in one
+      // budgeted reply. Otherwise page forward from what we already have,
+      // which is only what happened while this device was away.
+      const cold = since === 0 && !log.current.turns.length;
       let cursor = since;
       for (let pages = 0; pages < 8; pages++) {
         const r = await client
-          .rpc<{ events: HelmEvent[]; pending: any[]; last: number; hasMore?: boolean }>(
-            env, 'session.events', { id: sessionId, since: cursor, limit: 500 }, 20_000);
+          .rpc<{ events: HelmEvent[]; pending: any[]; last: number; hasMore?: boolean; firstSeq?: number; logFirst?: number }>(
+            env, 'session.events',
+            cold && pages === 0
+              ? { id: sessionId, tail: TAIL }
+              : { id: sessionId, since: cursor, limit: 500 },
+            20_000);
         for (const e of r.events) {
           if (e.seq > log.current.last) raw.current.push(e);
           apply(log.current, e);
         }
+        if (cold && pages === 0) firstSeq.current = r.firstSeq ?? r.events[0]?.seq ?? 0;
+        noteWindow(r.logFirst);
         if (r.events.length) cursor = r.events[r.events.length - 1].seq;
         publish();
         if (!r.hasMore) break;
@@ -83,11 +115,45 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
       .catch((e: any) => setError(e.message))
       .finally(() => { fetching.current = null; });
     return fetching.current;
-  }, [client, env, sessionId, publish, persist]);
+  }, [client, env, sessionId, publish, persist, noteWindow]);
+
+  /**
+   * One more window of what came before, newest-first, on request.
+   *
+   * The events land in front of what is already reduced, so the log is rebuilt
+   * from the whole array rather than patched: a turn that was half in the
+   * window has to become whole, and `apply` only ever moves forward.
+   */
+  const loadEarlier = useCallback(async () => {
+    if (loadingEarlier || !firstSeq.current) return;
+    setLoadingEarlier(true);
+    try {
+      const r = await client.rpc<{ events: HelmEvent[]; firstSeq?: number; logFirst?: number }>(
+        env, 'session.events', { id: sessionId, before: firstSeq.current }, 30_000);
+      if (!r.events.length) { setEarlier(false); return; }
+      firstSeq.current = r.firstSeq ?? r.events[0].seq;
+      noteWindow(r.logFirst);
+      raw.current = [...r.events, ...raw.current];
+      const rebuilt = emptyLog();
+      for (const e of raw.current) apply(rebuilt, e);
+      rebuilt.loaded = true;
+      rebuilt.pending = log.current.pending;
+      log.current = rebuilt;
+      publish();
+      dirty.current = true;
+      persist();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }, [client, env, sessionId, loadingEarlier, publish, persist, noteWindow]);
 
   useEffect(() => {
     log.current = emptyLog();
     raw.current = [];
+    firstSeq.current = 0;
+    setEarlier(false);
     setState(log.current);
     let stopped = false;
 
@@ -102,6 +168,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
           apply(log.current, e);
         }
         log.current.loaded = true;
+        firstSeq.current = cached.events[0].seq;
         publish();
       }
       fetchSince(log.current.last);
@@ -146,5 +213,5 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     };
   }, [client, env, sessionId, fetchSince, publish, persist, persistSoon]);
 
-  return { log: state, error, refresh: () => fetchSince(log.current.last) };
+  return { log: state, error, earlier, loadingEarlier, loadEarlier, refresh: () => fetchSince(log.current.last) };
 }

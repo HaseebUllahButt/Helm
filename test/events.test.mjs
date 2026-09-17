@@ -51,3 +51,71 @@ test('only the tail is kept', () => {
   assert.equal(log.append('big', { type: 'turn.done' }).seq, 2501);
   assert.equal(readFileSync(join(dir, 'big.jsonl'), 'utf8').split('\n').filter(Boolean).length, 2001);
 });
+
+// The bug these cover, with its numbers: a devin thread on the owner's VM
+// held 822 events and 6.8MB, 95% of it whole-file diffs repeated on an
+// item's start, its updates and its done. The app asked for "the first 500
+// events" and the honest answer was 5MB - 1.5s on loopback, 58s from the
+// laptop, and a timeout at 20s on the phone. A chat that cannot be opened is
+// worse than a chat with a clipped diff in it.
+
+test('one event is capped before it goes on the wire', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  const huge = 'x'.repeat(200_000);
+  log.append('s', { type: 'turn.start', turnId: 't', text: 'go' });
+  log.append('s', {
+    type: 'item.start', id: 'i1', kind: 'edit', turnId: 't',
+    changes: [{ path: 'a.ts', kind: 'update', diff: huge }],
+    input: { old_string: huge, file_path: 'a.ts' },
+    output: huge,
+  });
+  const [, item] = log.window('s', { tail: 10 }).events;
+  assert.ok(item.changes[0].diff.length < 9_000, 'the diff is clipped');
+  assert.ok(item.changes[0].diff.includes('more characters'), 'and says so');
+  assert.ok(item.input.old_string.length < 5_000, 'so is a huge tool input');
+  assert.ok(item.output.length < 33_000, 'so is output');
+  assert.equal(item.input.file_path, 'a.ts', 'small fields are untouched');
+  // The log itself still has what the driver wrote; only the wire is capped.
+  assert.equal(log.since('s', 0)[1].changes[0].diff.length, 200_000);
+});
+
+test('a page is measured in bytes, and a chat opens on its end', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  // Twelve turns, each carrying ~40KB of text: far more than one page.
+  for (let t = 1; t <= 12; t++) {
+    log.append('s', { type: 'turn.start', turnId: `t${t}`, text: `ask ${t}` });
+    log.append('s', { type: 'item.start', id: `i${t}`, kind: 'text', turnId: `t${t}`, text: 'y'.repeat(40_000) });
+    log.append('s', { type: 'turn.done', turnId: `t${t}`, status: 'ok' });
+  }
+  const page = log.window('s', { tail: 300 });
+  assert.ok(JSON.stringify(page.events).length <= 200_000, 'the reply fits a page');
+  assert.equal(page.events[page.events.length - 1].type, 'turn.done', 'it ends at the end');
+  assert.equal(page.events[0].type, 'turn.start', 'and starts on a whole exchange');
+  assert.equal(page.logFirst, 1, 'the machine says where its log starts');
+  assert.ok(page.firstSeq > page.logFirst, 'so the app knows there is more behind');
+
+  // Walking back from there reaches the beginning and says so.
+  const back = log.window('s', { before: page.firstSeq });
+  assert.ok(back.events.length, 'earlier events come back');
+  assert.ok(back.events[back.events.length - 1].seq < page.firstSeq, 'and they are earlier');
+  assert.equal(log.window('s', { before: back.firstSeq }).logFirst, 1);
+});
+
+test('a short conversation is served whole, from its first event', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  log.append('s', { type: 'turn.start', turnId: 't1', text: 'hi' });
+  log.append('s', { type: 'item.start', id: 'i', kind: 'text', turnId: 't1', text: 'hello' });
+  const w = log.window('s', { tail: 300 });
+  assert.deepEqual(w.events.map((e) => e.seq), [1, 2]);
+  assert.equal(w.firstSeq, w.logFirst, 'nothing is behind it');
+  assert.equal(w.hasMore, false);
+});
+
+test('the digest reads the tail without hydrating what it will not look at', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  for (let i = 1; i <= 500; i++) log.append('s', { type: 'item.delta', id: 'x', text: String(i) });
+  const tail = log.tail('s', 10);
+  assert.equal(tail.length, 10);
+  assert.equal(tail[tail.length - 1].text, '500');
+  assert.equal(log.tail('s', 0).length, 500);
+});

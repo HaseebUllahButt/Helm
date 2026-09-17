@@ -210,7 +210,10 @@ export function localDigest(sessions, events) {
       // "nothing has happened in that session" and is why the test below
       // uses a real EventLog rather than a stand-in that agrees with me.
       if (!String(s.id).startsWith('pane:') && !String(s.id).startsWith('found:')) {
-        try { last = lastLine(events.since(s.id, 0) ?? []); } catch { last = null; }
+        // The tail, raw: `lastLine` reads the last few hundred events and
+        // nothing else, so hydrating every attachment in a long thread - on
+        // every digest, for every session - bought nothing.
+        try { last = lastLine(events.tail?.(s.id, 400) ?? events.since(s.id, 0) ?? []); } catch { last = null; }
       }
       return {
         id: s.id,

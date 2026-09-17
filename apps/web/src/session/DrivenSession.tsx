@@ -27,7 +27,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
   /** Only on the brain: the way to what it is made of. */
   onSettings?: () => void;
 }) {
-  const { log, error: logError } = useSessionLog(client, env.id, session.id);
+  const { log, error: logError, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<{ name: string; mime: string; data: string; url: string }[]>([]);
   const [preparingImages, setPreparingImages] = useState(0);
@@ -241,6 +241,7 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
 
       <Transcript
         turns={log.turns} status={status} loaded={log.loaded}
+        earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
         empty={session.alive === false ? 'This conversation resumes with your next message.' : undefined}
       />
 

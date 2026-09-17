@@ -673,7 +673,10 @@ async function findSession(id) {
 async function printThread() {
   const { env, machine, session } = await findSession(rest[0]);
   const n = Number(flagOf('n', flagOf('tail', 40)));
-  const r = await brainRpc(env, M.SESSION_EVENTS, { id: session.id, since: 0, limit: 4000 });
+  // The tail: this prints the last n lines of a conversation, and a page is
+  // budgeted in bytes now - asking from event 1 would spend it on the oldest
+  // part of a long thread and print none of what was asked for.
+  const r = await brainRpc(env, M.SESSION_EVENTS, { id: session.id, tail: 1000, limit: 1000 });
   console.log(`${machine}  ${session.id}  ${session.title}`);
   console.log(`${session.engine}${session.model ? ` (${session.model})` : ''} in ${session.cwd} - ${session.status}\n`);
   for (const line of readThread(r.events ?? [], { limit: Math.max(1, n) })) console.log(line);

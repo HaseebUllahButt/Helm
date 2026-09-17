@@ -21,6 +21,8 @@ import { expand } from '../paths.js';
 export const CODEX_MIN_VERSION = '0.154.0';
 
 const MAX_OUTPUT = 32_000;
+/** A diff is read in a fold on a phone, and `events.js` caps it there too. */
+const MAX_DIFF = 8_000;
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
 
 // -------------------------------------------------------------- the server
@@ -423,7 +425,7 @@ export class CodexDriver extends Driver {
   }
 
   #changes(changes) {
-    return (changes ?? []).map((c) => ({ path: c.path, kind: c.kind?.type ?? 'update', diff: clip(c.diff, 20_000) }));
+    return (changes ?? []).map((c) => ({ path: c.path, kind: c.kind?.type ?? 'update', diff: clip(c.diff, MAX_DIFF) }));
   }
 
   #onItemStarted(item, turnId, parentId) {

@@ -91,7 +91,7 @@ export const M = {
   SESSION_KEYS: 'session.keys',    // { id, keys[] }  e.g. ["Enter"], ["C-c"]
   SESSION_MESSAGES: 'session.messages', // { id, limit? } -> { messages[], source }
   // Headless agent sessions: the conversation as helm's own event stream.
-  SESSION_EVENTS: 'session.events',   // { id, since? } -> { events[], pending[], last, session }
+  SESSION_EVENTS: 'session.events',   // { id, since?, tail?, before?, limit? } -> { events[], pending[], last, session, hasMore, earlier, firstSeq }
   SESSION_WATCH: 'session.watch',     // { id } -> { ok, last }   start/renew E.SESSION_EVENT pushes
   SESSION_UNWATCH: 'session.unwatch', // { id }
   SESSION_ANSWER: 'session.answer',   // { id, requestId, decision: { option, message?, answers? } }

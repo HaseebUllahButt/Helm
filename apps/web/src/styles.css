@@ -564,6 +564,16 @@ pre.snippet {
   box-shadow: 0 12px 28px -18px rgb(0 0 0 / 80%);
 }
 
+/* What came before the screenful a chat opens on. Quiet: it is a door, not
+   a notice - most of the time the last exchange is all anyone wants. */
+.earlier {
+  align-self: center; margin: 2px 0 14px; padding: 5px 14px; border-radius: 999px;
+  font-size: var(--t-meta); color: var(--mutedfg);
+  background: var(--muted); border: 1px solid var(--line);
+}
+.earlier:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.earlier:disabled { opacity: 0.6; }
+
 /* Rendered markdown, in T3's measure. */
 .md p, .md ul, .md ol, .md blockquote, .md pre { margin: 0.65rem 0; }
 .md > :first-child { margin-top: 0; }

@@ -794,12 +794,33 @@ export class Sessions extends EventEmitter {
     return null;
   }
 
-  history(id, { since = 0, limit = 500 } = {}) {
+  /**
+   * The conversation as a client should see it.
+   *
+   * `tail` is what an app opening a chat asks for - the end of it - and
+   * `before` is how it walks back from there. A plain `since` still pages
+   * forward, which is what a client with a cached log wants: everything that
+   * happened while it was away. Every shape is budgeted in bytes by
+   * `events.window`, so no reply is ever too big to arrive.
+   */
+  history(id, { since = 0, limit = 500, tail = 0, before = 0 } = {}) {
     const s = this.get(id);
     const capped = Math.max(1, Math.min(Number(limit) || 500, 1000));
-    const all = this.events.since(s.id, since);
-    const events = all.slice(0, capped);
-    return { events, pending: this.events.pending(s.id), last: this.events.last(s.id), session: s, hasMore: all.length > events.length };
+    const w = this.events.window(s.id, {
+      since,
+      before,
+      tail: tail ? Math.max(1, Math.min(Number(tail), 1000)) : 0,
+    });
+    const events = w.events.slice(0, capped);
+    return {
+      events,
+      pending: this.events.pending(s.id),
+      last: this.events.last(s.id),
+      session: s,
+      hasMore: w.hasMore || events.length < w.events.length,
+      firstSeq: events[0]?.seq ?? 0,
+      logFirst: w.logFirst,
+    };
   }
 
   /** Say that somebody is looking at this session; pushes flow while renewed. */
