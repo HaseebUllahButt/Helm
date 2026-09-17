@@ -113,6 +113,11 @@ export const M = {
   SESSION_COMMANDS: 'session.commands',   // { id } -> { commands: [{name, description, source}] }
   SESSION_RESUME: 'session.resume',// { engine, account, id, cwd } -> { session }
   SESSION_ADOPT: 'session.adopt',  // { paneId } -> { session }  take over a pane
+  // What this machine's agents have spent, read from what each CLI already
+  // wrote. Pre-aggregated here: a phone over the hub gets day-by-model
+  // buckets, never the gigabytes of transcript behind them.
+  USAGE_REPORT: 'usage.report',    // { since?, until?, by?[], rebuild? } -> { totals, daily[], groups[], accounts[], scan }
+
   // A round trip that does nothing, for measuring what one costs. The
   // terminal needs to know: how it draws depends on how far away you are.
   PING: 'ping',                    // {} -> { t }

@@ -15,7 +15,10 @@ import { listCommands } from './commands.js';
 import { accountKey, modelPrefs, saveModelPrefs, applyModelPrefs, loadSettings } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
+import { join } from 'node:path';
 import { inventory } from './inventory.js';
+import { UsageReader } from '@helm/usage';
+import { HELM_DIR } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
@@ -850,6 +853,25 @@ export class Daemon {
       case M.VOICE_TRANSCRIBE: return transcribe({ audio: p.audio, mime: p.mime, prompt: p.prompt });
 
       // Nothing to compute: the answer is the round trip itself.
+      /**
+       * What this machine's agents have spent.
+       *
+       * Read from each CLI's own records rather than from helm's event log,
+       * which is trimmed to the last couple of thousand events - a long thread
+       * would otherwise start forgetting what its early turns cost. Answered
+       * pre-aggregated: the phone asking may be three network hops away.
+       */
+      case M.USAGE_REPORT: {
+        this.usage ??= new UsageReader({ indexPath: join(HELM_DIR, 'usage-index.json') });
+        const profiles = await currentProfiles();
+        return this.usage.report(profiles, {
+          since: p.since ?? null,
+          until: p.until ?? null,
+          by: Array.isArray(p.by) && p.by.length ? p.by : ['engine', 'model'],
+          rebuild: !!p.rebuild,
+        });
+      }
+
       case M.PING:            return { t: Date.now() };
 
       case M.SSH_INFO:        return sshInfo();
