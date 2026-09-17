@@ -73,6 +73,13 @@ const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', cl
  * from the emoji font - so the quietest button on the bar came out as a
  * full-colour cyan gear, the brightest thing on the screen.
  */
+const Meter = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+    <path d="M5 20V10M12 20V5M19 20v-7" />
+  </svg>
+);
+
 const Sliders = () => (
   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
        strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
@@ -723,6 +730,7 @@ function Shell({ client, conn, onSignOut }: {
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
             onBrowse={() => push({ kind: 'browse' })}
             onSettings={() => push({ kind: 'settings' })}
+            onUsage={() => push({ kind: 'envusage' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
           />
         ) : view.kind === 'envusage' ? (
@@ -1133,9 +1141,10 @@ function InstallPwa() {
 
 // --------------------------------------------------------------- one machine
 
-function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSettings, onOpen, onResume, resuming }: {
+function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSettings, onUsage, onOpen, onResume, resuming }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[];
-  reload: () => void; onBack: () => void; onBrowse: () => void; onSettings: () => void; onOpen: (s: Session) => void;
+  reload: () => void; onBack: () => void; onBrowse: () => void; onSettings: () => void;
+  onUsage: () => void; onOpen: (s: Session) => void;
   /** Continue a conversation a CLI recorded on its own; starts the engine. */
   onResume: (s: Session) => void;
   resuming: string | null;
@@ -1369,6 +1378,7 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
           disabled={!env.online || opening}
           onClick={openTerminal}
         >{env.info.terminals === 'panes' ? '❯!' : '❯_'}</button>
+        <button className="iconbtn" title={`what ${env.name} has cost`} onClick={onUsage}><Meter /></button>
         <button className="iconbtn" title={`${env.name} settings`} onClick={onSettings}><Sliders /></button>
       </div>
 
