@@ -3,6 +3,7 @@ import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
 import { EngineMark } from './EngineMark';
+import { UsageView } from './Usage';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import {
@@ -251,6 +252,10 @@ export function App() {
 
 type MainView =
   | { kind: 'env' }
+  // Every machine summed, or this one on its own. Same screen, same facets -
+  // the question is the same, only the scope changes.
+  | { kind: 'usage' }
+  | { kind: 'envusage' }
   | { kind: 'brain' }
   | { kind: 'browse'; path?: string }
   | { kind: 'start'; cwd: string }
@@ -545,7 +550,9 @@ function Shell({ client, conn, onSignOut }: {
   // On a phone the two panes are one screen at a time: the main pane is shown
   // once a machine is selected, and every view - the brain included - belongs
   // to one.
-  const showMain = wide || !!selected;
+  // Usage across every machine is a main-pane view that belongs to no machine,
+  // so it has to open the main pane on a phone without one being selected.
+  const showMain = wide || !!selected || view.kind === 'usage';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -649,6 +656,17 @@ function Shell({ client, conn, onSignOut }: {
               })}
             </div>
 
+            <div className="section">usage</div>
+            <div className="rows">
+              <button className="row" onClick={() => navigate([{ kind: 'usage' }])}>
+                <span className="grow">
+                  <span className="rt">What it has cost</span>
+                  <span className="rm">tokens, spend and cache across every machine</span>
+                </span>
+                <span className="chev">›</span>
+              </button>
+            </div>
+
             {/* Setup is three things you do once and then never again. As
                 full-width slabs they outweighed the machines above them,
                 which is the wrong way round: they are a footer, so they
@@ -674,7 +692,12 @@ function Shell({ client, conn, onSignOut }: {
       </aside>
 
       <section className={`main${showMain ? ' showing' : ''}`}>
-        {!env ? (
+        {view.kind === 'usage' ? (
+          <UsageView
+            client={client} envs={envs} onBack={back}
+            onPickEnv={(id) => navigate([{ kind: 'env' }, { kind: 'envusage' }], id)}
+          />
+        ) : !env ? (
           <div className="scroll"><div className="pad">
             <div className="empty quiet">select a machine</div>
           </div></div>
@@ -702,6 +725,8 @@ function Shell({ client, conn, onSignOut }: {
             onSettings={() => push({ kind: 'settings' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
           />
+        ) : view.kind === 'envusage' ? (
+          <UsageView key={env.id} client={client} envs={envs} only={env} onBack={back} />
         ) : view.kind === 'settings' ? (
           <EnvSettings
             client={client} env={env} onBack={back}

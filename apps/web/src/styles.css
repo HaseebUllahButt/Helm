@@ -1015,3 +1015,88 @@ pre.snippet {
 /* Threads inside a project read as belonging to it, not as a sibling of the
    heading above them. */
 .side-pad .section.fold + .rows .row { padding-left: 18px; }
+
+/* ------------------------------------------------------------------ usage */
+/* One hue does the work. Every chart on this screen is either a single series
+   (cost per day) or a magnitude comparison (the breakdown), so length carries
+   the reading and colour carries none of it - which is also why there is no
+   legend. helm's per-engine colours stay as identity dots beside a text label,
+   where they belong: as chart fills they fail, Codex and OpenCode being only
+   ΔE 6.1 apart even in normal vision. */
+.usage-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+/* A filter control of its own: `.chip` in helm means a session's status, and
+   `.chip-pick` belongs to the composer. Borrowing either would make the
+   meaning of a colour depend on which screen you were looking at. */
+.usage-chip {
+  padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--muted); color: var(--text-dim);
+  font-size: var(--t-meta); line-height: 1; cursor: pointer;
+  /* A filter is a hit target before it is a label. */
+  min-height: 32px;
+}
+.usage-chip:hover { color: var(--text-80); border-color: var(--line-2); }
+.usage-chip.on {
+  background: color-mix(in oklab, var(--primary) 22%, transparent);
+  border-color: color-mix(in oklab, var(--primary) 45%, transparent);
+  color: var(--text);
+}
+
+.usage-hero { padding: 16px 18px; margin-bottom: 10px; }
+/* The one number the screen leads with. Proportional figures: tabular gives
+   every digit the width of a zero, which reads loose at display sizes. */
+.usage-hero-fig { font-size: 48px; line-height: 1; font-weight: 600; letter-spacing: -0.02em; color: var(--text); }
+.usage-hero-cap { margin-top: 8px; font-size: var(--t-meta); color: var(--text-dim); }
+
+.usage-cache { padding: 14px 18px; margin-bottom: 10px; }
+.usage-cache-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.usage-cache-pct { font-size: 26px; font-weight: 600; color: var(--primary-q); }
+.usage-cache-cap { font-size: var(--t-meta); color: var(--text-dim); }
+/* Meter: the track is a lighter step of the fill's own hue, so the state reads
+   across the whole bar rather than only where it is filled. */
+.usage-meter {
+  margin: 10px 0 8px; height: 8px; border-radius: 999px;
+  background: color-mix(in oklab, var(--primary) 18%, transparent);
+  overflow: hidden;
+}
+.usage-meter span { display: block; height: 100%; border-radius: 999px; background: var(--primary-t); }
+.usage-cache-note { font-size: var(--t-micro); color: var(--text-dim); line-height: 1.55; }
+.usage-cache-note b { color: var(--text-80); font-weight: 600; }
+
+.usage-spend { padding: 14px 18px 10px; margin-bottom: 10px; }
+.usage-spend-head { display: flex; justify-content: space-between; align-items: baseline; }
+.usage-spend-title { font-size: var(--t-meta); color: var(--text-80); }
+.usage-spend-peak { font-size: var(--t-micro); color: var(--text-dim); }
+/* Bars are capped and never fill their slot - the leftover is air. The 2px gap
+   in the surface colour is what separates neighbours; no stroke is drawn. */
+.usage-bars { display: flex; align-items: flex-end; gap: 2px; height: 96px; margin: 12px 0 6px; }
+.usage-bar {
+  flex: 1 1 0; min-width: 0; max-width: 24px;
+  background: color-mix(in oklab, var(--primary-t) 55%, transparent);
+  border-radius: 4px 4px 0 0;   /* rounded data-end, square at the baseline */
+}
+.usage-bar.peak { background: var(--primary-t); }
+.usage-axis { display: flex; justify-content: space-between; font-size: var(--t-micro); color: var(--mutedfg); }
+
+.usage-breakdown { gap: 2px; }
+.usage-brow { padding: 9px 2px 10px; }
+.usage-brow-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.usage-brow-name {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  font-size: var(--t-body); color: var(--text-80);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Columns of numbers align; the hero above does not. */
+.usage-brow-cost { font-size: var(--t-body); color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
+.usage-brow-track { margin: 7px 0 5px; height: 5px; border-radius: 999px; background: var(--muted); overflow: hidden; }
+.usage-brow-track span { display: block; height: 100%; border-radius: 999px; background: var(--primary-t); }
+.usage-brow-meta { font-size: var(--t-micro); color: var(--mutedfg); font-variant-numeric: tabular-nums; }
+.usage-more { font-size: var(--t-micro); padding: 6px 2px; }
+
+.edot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--mutedfg); }
+.edot.claude { background: var(--claude); }
+.edot.codex { background: var(--codex); }
+.edot.opencode { background: var(--opencode); }
+.edot.devin { background: var(--devin); }
+
+.usage-note { flex-direction: column; align-items: flex-start; gap: 3px; margin-top: 14px; }
