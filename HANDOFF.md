@@ -869,6 +869,53 @@ each row landing back in its own thread; the gear inside `lap`'s brain showed
 `lap`'s settings; and deleting `lap`'s brain returned that row to empty while
 `home`'s stayed, in the list and in `localStorage`. Full suite: 138 pass.
 
+### The type, half a step up
+
+*"lets make the UI typography a bit better to be more readable"*. Looked at
+first, on the real phone screens rather than in the sheet: the machine screen
+with a folder open, a transcript, the sidebar. Three things were wrong, and
+none of them was the font.
+
+**The bottom two text colours were under contrast.** `--mutedfg` (#71717a) is
+about 4:1 on this background and `--icon` (#62626b) about 3.4:1, against the
+4.5:1 that text this small needs - and `--mutedfg` is where the *second line
+of every row* is written: engine, model, folder, "3 running", "seen 2h ago".
+They are one step up now (#8c8c96 and #7c7c86), which clears 5.5:1 and still
+sits well below the #f4f4f5 of a title, so the hierarchy that colour carries
+is unchanged.
+
+**The scale was tuned for a desk.** Every step is up by about half a size -
+11/12.5/14/15/15.5 became 11.5/13/14.5/15.5/16.5 - and the leading with it:
+body 1.5 → 1.55, assistant prose 1.62 → 1.65, the owner's own bubble 1.52 →
+1.6, tool output and diffs 1.45 → 1.5. A phone at arm's length in daylight is
+the instrument; it was being typeset for a monitor at 60cm.
+
+**Section labels were the least legible text on the screen and they are the
+navigation.** `HELM 14 ~/dev/me/github/helm` is how you find a thread. They
+were 11px/500 in the dimmest grey with 0.07em tracking, which at that size
+reads as texture. Now --t-micro/600 in `--text-dim` with tracking pulled back
+to 0.055em: still quiet, now a heading.
+
+The rest of the pass was moving the call sites that never adopted the scale
+onto it - about forty of them, 10px to 14px, invented one at a time. They are
+tokens now, so the next adjustment is five numbers rather than fifty.
+
+Two things deliberately left alone: the composer's textarea stays at 16px,
+because anything smaller makes iOS Safari zoom on focus; and `--measure`
+(46rem) is unchanged, so desktop prose still runs a little long - that is a
+layout call, not a type one, and it costs nothing to leave until someone
+minds.
+
+Row titles were briefly 550 and it was too loud - a list of fourteen threads
+in semibold reads as fourteen headlines. Back to 500; the size and the
+brighter second line do the work.
+
+**Verified by looking at it.** Headless Chromium at 390×844 against the real
+network, before and after, on the same four screens - sidebar, machine screen
+with the helm folder open, a transcript with prose and an image, the model
+sheet - plus one pass at 1280×860 to confirm the 300px sidebar still holds
+its rows. 138 tests pass.
+
 ### Left for next time
 
 - **The brain hits a permission card for every `helm` call**, including
