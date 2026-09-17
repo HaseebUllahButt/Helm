@@ -304,11 +304,12 @@ tried.**
 
 A long day. Four ways into the same list of threads became one screen per
 machine, archived threads got a place to be, searching them got a way in,
-the network got a brain, voice prompting landed, and T3 left the tree. Then
-the owner used it on a phone and found five more things: the laptop calling
-its own VM offline, external sessions that could be listed and not opened, an
-icon three days stale, a terminal that produced nothing, and push notifications
-that turned out to have been working all along while this file said otherwise.
+the network got a brain - and then one per machine - voice prompting landed,
+and T3 left the tree. Then the owner used it on a phone and found five more
+things: the laptop calling its own VM offline, external sessions that could be
+listed and not opened, an icon three days stale, a terminal that produced
+nothing, and push notifications that turned out to have been working all along
+while this file said otherwise.
 
 Everything here is on `main` and deployed to both machines. The sections below
 are roughly in the order they happened; the two worth reading first are
@@ -397,8 +398,10 @@ two-line filter on `mine`.
 
 Three things the owner asked for once the brain was real.
 
-**The brain is one, and tapping it lands in it.** It was showing the account
-picker instead, for a real reason: the app only knows a brain exists once
+**The brain is one, and tapping it lands in it.** (Later the same day it
+became one *per machine* - see "One brain per machine" below - and the landing
+is per machine now, for the same reason and by the same mechanism.) It was
+showing the account picker instead, for a real reason: the app only knows a brain exists once
 every machine has answered `session.list`, and on a cold open that is a second
 or two where the honest answer to "is there a brain?" is "not yet". The device
 now writes down where its brain is (`brainStore`), so the answer is immediate.
@@ -629,7 +632,8 @@ terminal; it is a caller of the same RPCs, with no privilege the owner lacks.
 
 **One agent for the whole network rather than one per folder.** That is the
 only thing it adds: a thread that is not tied to a directory, so a question
-about the network has somewhere to be asked.
+about the network has somewhere to be asked. It is one per *machine* - each
+sees the whole network, and lives on the machine it can act from directly.
 
 **It is an ordinary driven session.** Same driver, same event stream, same
 permission cards, same model picker, same cost line, same `--resume`. It is
@@ -818,6 +822,53 @@ silence guards, and `helm dictate` end to end at 1.5s including compression.
 **The microphone button itself is unverified** - headless Chromium refuses
 microphone capture outright - so it is the owner's to try.
 
+### One brain per machine
+
+The owner, looking at the sidebar with one **Brain** row on it: *"okay, there
+should be one brain per machine - right now there is no way to make a brain"*.
+Both halves were true, and the second is the bug: once a brain existed the row
+took you into its thread, and the only path back to a picker was the gear's
+**Start a different brain**, which ends the one you have. A network with a
+brain on the VM had no way to start one on the laptop at all.
+
+Nothing in the daemon had to change. `brainSession()` was already per machine
+and `brain.open` already runs on whichever machine the RPC is addressed to -
+this was only ever the app collapsing the first brain it found into "the
+brain". So the sidebar's **network** section is now **brains**: one row per
+machine, in the same order as the machines above it, each opening that
+machine's thread or, when there is none, the picker that starts it. A machine
+without a brain says "no brain here yet" rather than being invisible, which is
+the whole of the missing way in.
+
+What follows from per machine:
+
+- **The picker no longer picks a machine.** You arrived from a machine's row,
+  so `BrainView` takes one `env` and asks only which account. Its note says
+  which machine this one will run on, and that the always-on machine's brain
+  is the one still there when the laptop is not.
+- **"Start a different brain" is per machine too.** It ends that machine's
+  brain and starts another there; the other machines' brains are untouched.
+- **The device remembers them by machine.** `brainStore` was one record under
+  `helm.brain` and is now a list under `helm.brains`, keyed by machine, with
+  the old single record folded in on first read so an already-paired phone
+  keeps the brain it had. Same reason as before - a cold open should not show
+  the "start one" screen for a brain that exists - but now a machine's list
+  arriving *without* a brain in it also clears that machine's signpost, so a
+  brain ended from a terminal stops being remembered here.
+
+Each brain is told it is one of several: the brief now opens *"You are a brain
+of a helm network … Each machine in the network can have one of these, and you
+are `<name>`'s"*. `helm brain --on <machine>` already did the right thing and
+still defaults to the roster's VM.
+
+**Verified by running it.** Two sandboxed daemons in one network (`home` on
+8791, `lap` on 8792), real profiles, headless Chromium at 390×844 over CDP:
+the brains list showed both machines with `lap` reading "no brain here yet";
+starting Claude on `home` and Codex on `lap` gave two live brains at once,
+each row landing back in its own thread; the gear inside `lap`'s brain showed
+`lap`'s settings; and deleting `lap`'s brain returned that row to empty while
+`home`'s stayed, in the list and in `localStorage`. Full suite: 138 pass.
+
 ### Left for next time
 
 - **The brain hits a permission card for every `helm` call**, including
@@ -828,8 +879,9 @@ microphone capture outright - so it is the owner's to try.
   another machine goes through `helm spawn`/`helm say`. That is the right
   default; a `helm run <machine> <cmd>` is the obvious next verb.
 - `helm brain` puts the brain on the roster's `vm` if there is one, else this
-  machine. There is no way to move one, and no second one is prevented across
-  *different* machines - `brainSession()` is per machine.
+  machine, and `--on <machine>` says otherwise. There is still no way to *move*
+  one: a brain is where it was started, and starting another elsewhere is a
+  second brain rather than the same one relocated.
 - ~~The machine screen's search and All sessions' search are two boxes over
   the same words.~~ Settled on the 17th: the machine screen won and All
   sessions is gone. See "Four screens became one".

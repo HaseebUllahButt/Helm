@@ -4,7 +4,7 @@ import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
 import { EngineMark } from './EngineMark';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
-import { loadBrain, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
+import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import {
   Client, login,
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
@@ -487,42 +487,62 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   /**
-   * The brain, wherever it is. There is at most one per machine and in
-   * practice one per network, on the machine that is always up.
+   * The brains: one per machine, and none until you start one.
    *
-   * The live lists are the truth and the remembered record is the signpost:
-   * without it, the seconds before every machine has answered `session.list`
-   * make "is there a brain?" answer no, and tapping Brain lands on the screen
-   * that offers to create one - which reads as helm having forgotten the
-   * brain you chose. See `brainStore`.
+   * The live lists are the truth and the remembered records are signposts:
+   * without them, the seconds before a machine has answered `session.list`
+   * make "does this machine have a brain?" answer no, and tapping its row
+   * lands on the screen that offers to start one - which reads as helm having
+   * forgotten the brain you chose. A list that has arrived and holds no brain
+   * is an answer, though, so it clears the signpost. See `brainStore`.
    */
-  const live = (() => {
-    for (const e of envs) {
-      const s = (sessions[e.id] ?? []).find((x) => x.brain);
-      if (s) return { env: e, s };
-    }
-    return null;
-  })();
-  const [remembered, setRemembered] = useState<RememberedBrain | null>(loadBrain);
+  const [remembered, setRemembered] = useState<RememberedBrain[]>(loadBrains);
   useEffect(() => {
-    if (live) { saveBrain(live.env.id, live.s); setRemembered({ envId: live.env.id, session: live.s }); }
-  }, [live?.env.id, live?.s.id, live?.s.model]);
-  const brain = live ?? (remembered
-    ? { env: envs.find((e) => e.id === remembered.envId) ?? { id: remembered.envId, name: 'its machine', online: false, lastSeen: null, info: {} } as Environment, s: remembered.session }
-    : null);
+    let next = remembered;
+    for (const e of envs) {
+      const list = sessions[e.id];
+      if (!list) continue; // that machine has not answered yet
+      const s = list.find((x) => x.brain) ?? null;
+      const had = next.find((b) => b.envId === e.id);
+      if (s) {
+        if (had && had.session.id === s.id && had.session.model === s.model
+          && had.session.status === s.status) continue;
+        saveBrain(e.id, s);
+        next = [...next.filter((b) => b.envId !== e.id), { envId: e.id, session: s }];
+      } else if (had) {
+        forgetBrain(e.id);
+        next = next.filter((b) => b.envId !== e.id);
+      }
+    }
+    if (next !== remembered) setRemembered(next);
+  }, [envs, sessions, remembered]);
 
-  /** Straight into the conversation. The picker is for when there is none. */
-  const openBrain = () => {
-    if (brain) navigate([{ kind: 'session', session: brain.s }], brain.env.id);
-    else navigate([{ kind: 'brain' }]);
+  /** This machine's brain, live record if there is one and signpost if not. */
+  const brainOn = (envId: string): Session | null =>
+    (sessions[envId] ?? []).find((s) => s.brain)
+    ?? remembered.find((b) => b.envId === envId)?.session
+    ?? null;
+
+  /** Straight into the conversation. The picker is for a machine with none. */
+  const openBrain = (envId: string) => {
+    const s = brainOn(envId);
+    if (s) navigate([{ kind: 'session', session: s }], envId);
+    else navigate([{ kind: 'brain' }], envId);
   };
-  /** The gear inside the brain: the one way back to what it is made of. */
-  const openBrainSettings = () => navigate([{ kind: 'brain' }], brain?.env.id ?? nav.current.selected);
+  const rememberBrain = (envId: string, s: Session) => {
+    saveBrain(envId, s);
+    setRemembered((prev) => [...prev.filter((b) => b.envId !== envId), { envId, session: s }]);
+  };
+  const dropBrain = (envId: string) => {
+    forgetBrain(envId);
+    setRemembered((prev) => prev.filter((b) => b.envId !== envId));
+  };
+
   const blocked = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
-  // On a phone the two panes are one screen at a time, and a view that does
-  // not belong to a machine has nothing to select - so it has to say so here
-  // or it renders behind the sidebar and the tap looks like it did nothing.
-  const showMain = wide || !!selected || view.kind === 'brain';
+  // On a phone the two panes are one screen at a time: the main pane is shown
+  // once a machine is selected, and every view - the brain included - belongs
+  // to one.
+  const showMain = wide || !!selected;
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -598,18 +618,32 @@ function Shell({ client, conn, onSignOut }: {
               {!envs.length && !error && <div className="empty quiet">no machines yet</div>}
             </div>
 
-            {/* The brain is one thread for the whole network rather than
-                one per machine, so it belongs here rather than inside one:
-                the point of it is not having to pick a machine first. */}
-            <div className="section">network</div>
+            {/* One brain per machine: a thread that is not tied to a
+                folder, on the machine it can act from. They are listed apart
+                from the machines above because you come here for the brain,
+                not for the machine - and a machine with none says so, which
+                is the only way to start one. */}
+            <div className="section">brains</div>
             <div className="rows">
-              <button className="row" onClick={openBrain}>
-                <span className="grow">
-                  <span className="rt">Brain{brain && <span className="tag">{brain.s.status === 'blocked' ? 'needs you' : brain.env.name}</span>}</span>
-                  <span className="rm">{brain ? `${engineOf(brain.s.engine).label}${brain.s.model ? ` · ${brain.s.model}` : ''}` : 'one agent, the whole network'}</span>
-                </span>
-                <span className="chev">›</span>
-              </button>
+              {envs.map((e) => {
+                const s = brainOn(e.id);
+                return (
+                  <button key={e.id} className="row" onClick={() => openBrain(e.id)}>
+                    {/* An empty slot rather than no slot: the rows line up
+                        with each other, and with the machines above. */}
+                    <EngineMark engine={s ? engineOf(s.engine).cls : undefined} />
+                    <span className="grow">
+                      <span className="rt">{e.name}{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
+                      <span className="rm">
+                        {s
+                          ? `${engineOf(s.engine).label}${s.model ? ` · ${s.model}` : ''}`
+                          : e.online ? 'no brain here yet' : 'no brain here yet · offline'}
+                      </span>
+                    </span>
+                    <span className="chev">›</span>
+                  </button>
+                );
+              })}
             </div>
 
             {/* Setup is three things you do once and then never again. As
@@ -637,24 +671,24 @@ function Shell({ client, conn, onSignOut }: {
       </aside>
 
       <section className={`main${showMain ? ' showing' : ''}`}>
-        {view.kind === 'brain' ? (
-          <BrainView
-            client={client} envs={envs} brain={brain} onBack={back}
-            // Replaces this screen rather than stacking on it: choosing a
-            // brain happens once, and going back to a form offering to start
-            // the thing you just started is nonsense.
-            onStarted={(envId, s) => {
-              saveBrain(envId, s);
-              setRemembered({ envId, session: s });
-              loadSessions(envId);
-              restate([{ kind: 'session', session: s }], envId);
-            }}
-            onReplaced={() => { if (brain) loadSessions(brain.env.id); }}
-          />
-        ) : !env ? (
+        {!env ? (
           <div className="scroll"><div className="pad">
             <div className="empty quiet">select a machine</div>
           </div></div>
+        ) : view.kind === 'brain' ? (
+          <BrainView
+            key={env.id}
+            client={client} env={env} brain={brainOn(env.id)} onBack={back}
+            // Replaces this screen rather than stacking on it: choosing a
+            // machine's brain happens once, and going back to a form offering
+            // to start the thing you just started is nonsense.
+            onStarted={(s) => {
+              rememberBrain(env.id, s);
+              loadSessions(env.id);
+              restate([{ kind: 'session', session: s }], env.id);
+            }}
+            onReplaced={() => loadSessions(env.id)}
+          />
         ) : view.kind === 'env' ? (
           <EnvView
             key={env.id}
@@ -695,8 +729,8 @@ function Shell({ client, conn, onSignOut }: {
             client={client} env={env} onTranscribe={transcribeVia(env.id)}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
-            onSettings={openBrainSettings}
-            onClosed={() => { if (view.session.brain) forgetBrain(); loadSessions(env.id); back(); }}
+            onSettings={() => navigate([{ kind: 'brain' }], env.id)}
+            onClosed={() => { if (view.session.brain) dropBrain(env.id); loadSessions(env.id); back(); }}
             onArchived={() => { loadSessions(env.id); back(); }}
             onSession={onSessionChanged(env.id)}
           />
@@ -1544,27 +1578,25 @@ function StatusChip({ status }: { status: string }) {
 // -------------------------------------------------------------------- brain
 
 /**
- * What the brain is made of.
+ * What a machine's brain is made of.
  *
  * Two screens in one, because they are the same question asked at different
- * times. With no brain it asks which account should be one, which happens
- * once per network. With a brain it is that brain's settings - reached by the
- * gear inside the conversation, never by tapping Brain, because tapping Brain
- * should land you in the thread.
+ * times. With no brain on this machine it asks which account should be one,
+ * which happens once per machine. With a brain it is that brain's settings -
+ * reached by the gear inside the conversation, never by tapping the machine's
+ * row under brains, because tapping that should land you in the thread.
  *
  * Changing the model is the thing you might reasonably do; it is a live
  * change to the running session, the same as the chip in the composer.
  * Changing which account or engine the brain *is* means ending the thread and
  * everything it knows, so it is a separate, spelled-out action.
  */
-function BrainView({ client, envs, brain, onBack, onStarted, onReplaced }: {
-  client: Client; envs: Environment[]; brain: { env: Environment; s: Session } | null;
+function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
+  client: Client; env: Environment; brain: Session | null;
   onBack: () => void;
-  onStarted: (envId: string, s: Session) => void;
+  onStarted: (s: Session) => void;
   onReplaced: () => void;
 }) {
-  const online = envs.filter((e) => e.online);
-  const [envId, setEnvId] = useState(brain?.env.id ?? online[0]?.id ?? '');
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [models, setModels] = useState<ModelList | null>(null);
   const [busy, setBusy] = useState('');
@@ -1573,30 +1605,30 @@ function BrainView({ client, envs, brain, onBack, onStarted, onReplaced }: {
   const picking = !brain || replacing;
 
   useEffect(() => {
-    if (!envId || !picking) return;
+    if (!env.online || !picking) return;
     setAccounts(null); setError('');
-    client.rpc(envId, 'profile.list')
+    client.rpc(env.id, 'profile.list')
       .then((r: any) => setAccounts(accountsFrom(r.profiles)))
       .catch((e) => setError(e.message));
-  }, [client, envId, picking]);
+  }, [client, env.id, env.online, picking]);
 
   // What this brain could think with. Asked of the live session, so the list
   // is what the running agent will actually accept.
   useEffect(() => {
-    if (!brain || replacing || !brain.env.online) return;
-    client.rpc(brain.env.id, 'model.list', { profileId: brain.s.profileId, id: brain.s.id })
+    if (!brain || replacing || !env.online) return;
+    client.rpc(env.id, 'model.list', { profileId: brain.profileId, id: brain.id })
       .then((r: any) => setModels(r))
       .catch(() => {});
-  }, [client, brain?.env.id, brain?.s.id, brain?.env.online, replacing]);
+  }, [client, env.id, brain?.id, env.online, replacing]);
 
   const start = async (a: Account) => {
     setBusy(a.key); setError('');
     try {
-      // Replacing means the old thread goes: two brains would each hold half
-      // of what you had told it.
-      if (brain && replacing) await client.rpc(brain.env.id, 'session.kill', { id: brain.s.id }, 30_000);
-      const r = await client.rpc<{ session: Session }>(envId, 'brain.open', { profileId: a.profile.id }, 60_000);
-      onStarted(envId, r.session);
+      // Replacing means the old thread goes: two brains on one machine would
+      // each hold half of what you had told it.
+      if (brain && replacing) await client.rpc(env.id, 'session.kill', { id: brain.id }, 30_000);
+      const r = await client.rpc<{ session: Session }>(env.id, 'brain.open', { profileId: a.profile.id }, 60_000);
+      onStarted(r.session);
     } catch (e: any) { setError(e.message); setBusy(''); }
   };
 
@@ -1604,14 +1636,14 @@ function BrainView({ client, envs, brain, onBack, onStarted, onReplaced }: {
     if (!brain) return;
     setBusy(model); setError('');
     try {
-      await client.rpc(brain.env.id, 'session.model', { id: brain.s.id, model }, 30_000);
+      await client.rpc(env.id, 'session.model', { id: brain.id, model }, 30_000);
       onReplaced();
     } catch (e: any) { setError(e.message); }
     finally { setBusy(''); }
   };
 
   const title = picking ? 'Brain' : 'The brain';
-  const sub = picking ? 'one agent for the whole network' : `${engineOf(brain!.s.engine).label} on ${brain!.env.name}`;
+  const sub = picking ? `on ${env.name}` : `${engineOf(brain!.engine).label} on ${env.name}`;
 
   return (
     <>
@@ -1623,37 +1655,22 @@ function BrainView({ client, envs, brain, onBack, onStarted, onReplaced }: {
         {picking ? (
           <>
             <p className="note">
-              The brain sees every machine and every running session, and acts
+              A brain sees every machine and every running session, and acts
               on them through the <code>helm</code> command - so it can answer
               "what is waiting on me", read a thread on another machine, or
-              start one. It runs on the machine you pick here; anything it does
-              elsewhere it does by talking to that machine.
+              start one. This one runs on {env.name}; anything it does
+              elsewhere it does by talking to that machine. Each machine can
+              have one, and the one on the machine that is always up is the
+              one that is there when your laptop is not.
             </p>
             {replacing && (
               <div className="banner warn">
-                Starting a different brain ends the current one and everything
-                it has learned about your network.
+                Starting a different brain on {env.name} ends the current one
+                and everything it has learned about your network.
               </div>
             )}
-            {online.length > 1 && (
-              <>
-                <div className="section">runs on</div>
-                <div className="filterbar">
-                  {online.map((e) => (
-                    <button
-                      key={e.id} className={`pill${e.id === envId ? ' on' : ''}`}
-                      aria-pressed={e.id === envId} onClick={() => setEnvId(e.id)}
-                    >{e.name}</button>
-                  ))}
-                </div>
-                <p className="note">
-                  Best on a machine that is always up, so the brain is there
-                  when your laptop is not.
-                </p>
-              </>
-            )}
             <div className="section">its brain</div>
-            {!accounts && !error && <div className="empty quiet">asking {envs.find((e) => e.id === envId)?.name ?? 'the machine'}…</div>}
+            {!accounts && !error && env.online && <div className="empty quiet">asking {env.name}…</div>}
             <div className="rows">
               {(accounts ?? []).map((a) => (
                 <button key={a.key} className="row tall" disabled={!!busy} onClick={() => start(a)}>
@@ -1672,7 +1689,7 @@ function BrainView({ client, envs, brain, onBack, onStarted, onReplaced }: {
                 <div className="note" style={{ marginTop: 6 }}>the brain needs a CLI helm can drive headless</div>
               </div>
             )}
-            {!online.length && <div className="empty quiet">no machine is online</div>}
+            {!env.online && <div className="empty quiet">{env.name} is offline</div>}
             {replacing && <button className="row" onClick={() => setReplacing(false)}><span className="grow"><span className="rt">Keep the brain I have</span></span></button>}
           </>
         ) : (
@@ -1680,7 +1697,7 @@ function BrainView({ client, envs, brain, onBack, onStarted, onReplaced }: {
             <div className="section">thinking with</div>
             <div className="rows">
               {(models?.models ?? []).map((m) => {
-                const current = (brain!.s.model ?? models?.default) === m;
+                const current = (brain!.model ?? models?.default) === m;
                 return (
                   <button key={m} className={`row${current ? ' active' : ''}`} disabled={!!busy} onClick={() => setModel(m)}>
                     <span className="grow">
@@ -1691,7 +1708,7 @@ function BrainView({ client, envs, brain, onBack, onStarted, onReplaced }: {
                   </button>
                 );
               })}
-              {!models && <div className="empty quiet">{brain!.env.online ? 'asking the machine…' : `${brain!.env.name} is offline`}</div>}
+              {!models && <div className="empty quiet">{env.online ? 'asking the machine…' : `${env.name} is offline`}</div>}
             </div>
             <p className="note">
               The same picker is in the composer inside the conversation; this
@@ -1701,10 +1718,10 @@ function BrainView({ client, envs, brain, onBack, onStarted, onReplaced }: {
             <div className="section">where it lives</div>
             <div className="rows">
               <div className="row">
-                <EngineMark engine={engineOf(brain!.s.engine).cls} />
+                <EngineMark engine={engineOf(brain!.engine).cls} />
                 <span className="grow">
-                  <span className="rt">{engineOf(brain!.s.engine).label} on {brain!.env.name}</span>
-                  <span className="rm">{[brain!.s.profileId, shortPath(brain!.s.cwd), money(brain!.s.costUsd)].filter(Boolean).join(' · ')}</span>
+                  <span className="rt">{engineOf(brain!.engine).label} on {env.name}</span>
+                  <span className="rm">{[brain!.profileId, shortPath(brain!.cwd), money(brain!.costUsd)].filter(Boolean).join(' · ')}</span>
                 </span>
               </div>
             </div>

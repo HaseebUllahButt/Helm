@@ -72,7 +72,7 @@ const usage = () => {
   helm status                       membership, links and runtime
   helm profiles [--refresh]         the agent profiles found here
 
-  helm brain [--on <machine>]       open the network's own agent (prints how to reach it)
+  helm brain [--on <machine>]       open a machine's own agent (prints how to reach it)
   helm digest [--json]              every machine, folder and running session
   helm thread <id> [-n 40]          the recent conversation of one session
   helm say <id> <text...>           send a prompt into an existing session
@@ -725,7 +725,7 @@ async function openBrain() {
       profileId: account, model: flagOf('model'), mode: flagOf('mode'),
     }, 60_000);
     console.log(`${created ? 'started' : 'resumed'} the brain on ${name}: ${shortId(session.id)} (${session.engine}${session.model ? `, ${session.model}` : ''})`);
-    console.log('open it in the app under "brain", or talk to it here:');
+    console.log('open it in the app under "brains", or talk to it here:');
     console.log(`  helm say ${shortId(session.id)} "what is waiting on me?"`);
   } catch (err) {
     if (!/needs a profileId/.test(err.message)) throw err;

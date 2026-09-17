@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { HELM_DIR } from './paths.js';
 
 /**
- * What the brain knows.
+ * What a brain knows.
  *
- * The brain is one agent for the whole network rather than one per folder, so
- * the first question it raises is the one nobody has a good answer to: how do
+ * A brain is one agent for a whole network rather than one per folder - one
+ * per machine, living on the machine it acts from - so the first question it
+ * raises is the one nobody has a good answer to: how do
  * you give an agent "everything that is going on" without handing it every
  * transcript on every machine? A busy laptop here holds 182 threads. Pasting
  * even their tails into a prompt is both ruinous and useless.
@@ -343,14 +344,14 @@ export function summaryLine(snap, { roster = {}, now = Date.now() } = {}) {
 }
 
 /**
- * What the brain is told once, when its thread is opened.
+ * What a brain is told once, when its thread is opened.
  *
  * It is a first user message rather than a system prompt because helm drives
  * four different CLIs and only some of them take one - and because a message
  * survives `--resume`, so the brain still knows what it is after a restart.
  */
 export function brief(name) {
-  return `You are the brain of a helm network: one agent with a view of every machine in it, rather than one agent per folder.
+  return `You are a brain of a helm network: an agent with a view of every machine in it, rather than one agent per folder. Each machine in the network can have one of these, and you are ${name}'s.
 
 You are running on ${name}. Your tools for the network are the \`helm\` CLI, through your shell:
 
