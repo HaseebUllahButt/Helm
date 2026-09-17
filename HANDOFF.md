@@ -305,7 +305,8 @@ tried.**
 A long day. Four ways into the same list of threads became one screen per
 machine, archived threads got a place to be, searching them got a way in,
 the network got a brain - and then one per machine - voice prompting landed,
-and T3 left the tree. Then the owner used it on a phone and found five more
+T3 left the tree, the type went up half a step, and a chat that could not be
+opened at all turned out to be three decisions about how much helm sends. Then the owner used it on a phone and found five more
 things: the laptop calling its own VM offline, external sessions that could be
 listed and not opened, an icon three days stale, a terminal that produced
 nothing, and push notifications that turned out to have been working all along
@@ -916,6 +917,73 @@ with the helm folder open, a transcript with prose and an image, the model
 sheet - plus one pass at 1280×860 to confirm the 300px sidebar still holds
 its rows. 138 tests pass.
 
+### The chat that could not be opened, and what made every chat slow
+
+*"session.events timed out"* on the devin thread on the VM, found while
+checking something else. It is worth the space because the cause was three
+separate decisions that were each fine alone.
+
+**What was actually there.** 822 events, 6.8MB on disk - and 95% of that in
+one field. The ACP driver builds a file change as the whole old file as `-`
+lines and the whole new file as `+` lines, and wrote it unclipped; the same
+array rides on an item's `start`, each `update` and its `done`. One edit of a
+2000-line file is 140KB, stored three times. Codex's driver had always clipped
+its diffs; this one never had.
+
+**What the app asked for.** The first 500 events, oldest first. For this
+thread that is a 5MB reply: 1.5s on loopback, **58 seconds** from the laptop
+over the hub, against a 20s timeout on the phone. And it was 5MB of the
+*beginning* of a conversation - history you would have to scroll past to reach
+what you opened the chat for.
+
+Three changes, and the third is the one that matters generally:
+
+1. **Diffs are clipped where they are written** (8KB, the same as every other
+   driver payload) **and again on the wire**, because a log on disk outlives
+   the version of helm that wrote it. `forWire` in `events.js` caps diffs,
+   output, errors and oversized tool inputs; live pushes go through it too, so
+   a chat you are watching costs the same as one you fetch.
+2. **A page is measured in bytes, not events** - 128KB, eight data-channel
+   chunks - and attachments are hydrated only for events actually going out.
+   Asking for "500 events" was asking for an unknown number of megabytes.
+3. **A chat opens on its end.** `session.events` takes `tail`, and `before`
+   walks back from there. The daemon reports where its own log starts, so the
+   app knows whether anything is behind what it is showing, and
+   **"Earlier in this conversation"** fetches one window back.
+
+**Two things only driving it found.** The first cut aligned a window *forward*
+to a turn boundary - and this thread is a single turn of 822 events, so every
+event in the window belonged to a turn that had been cut off before it. The
+reducer drops items it has no turn for, so the chat opened blank: faster, and
+empty. A window now carries the turn it lands inside, whole if it fits and
+otherwise its opening line. That leaves a hole in the middle of that turn, so
+the window's *front* is where the unbroken part starts - `history()` was
+overwriting it with `events[0].seq`, which claimed a conversation with a gap
+in it was whole and hid the one control that would have filled it. The front
+is cached on the device too, or a reload forgets the gap. And a cached log
+that reduces to zero turns is treated as a miss, because nothing would ever
+repair it: its `last` is current, so the refresh behind it asks only for what
+is newer. That is also how a device heals from a window an earlier helm cut
+badly.
+
+**Measured, laptop to the VM over the hub:**
+
+| | before | after |
+|---|---|---|
+| that thread, first tap | 20s timeout, an error | **1.74s** |
+| again, cached on the device | — | **58-90ms** |
+| ordinary chats on the laptop | ~50ms | **~50ms** |
+| `helm thread 419924` | 58s | **2.9s** |
+
+A cold open of the whole app is ~4.5s whatever chat you open, and that is page
+load and boot, not the chat: the numbers above are taps inside a running app,
+which is how a phone is used.
+
+**Also:** the digest derived its one line per session from `since(id, 0)` -
+the whole log, hydrated, every image in it rebuilt from disk - to read the
+last line of text beside them, for every session, every 45 seconds a brain is
+alive. It reads the raw tail now.
+
 ### Left for next time
 
 - **The brain hits a permission card for every `helm` call**, including
@@ -932,6 +1000,11 @@ its rows. 138 tests pass.
 - ~~The machine screen's search and All sessions' search are two boxes over
   the same words.~~ Settled on the 17th: the machine screen won and All
   sessions is gone. See "Four screens became one".
+- **The `KEEP = 2000` event log is the wrong unit too.** A log is trimmed by
+  event count, so the devin thread's 822 events are 6.8MB and a chatty one's
+  2000 are 300KB. Now that the wire is capped this only costs disk and a
+  slower first `#open`, but the same argument that fixed the page applies to
+  the file.
 - **Replace the VM's Groq key.** `/home/ubuntu/sangi/creds/groq-key.txt` is
   rejected by Groq and is mode 664. Until then the laptop does every
   transcription, so dictation stops working when the laptop sleeps - which is
