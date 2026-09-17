@@ -372,6 +372,26 @@ no legend to get wrong. The bar hue was checked at 5.39:1 against the card.
 
 ---
 
+**A tap that costs $8 now says so.** Two chips in the composer break the
+provider's prompt-cache prefix - model (caches are model-scoped, no escape
+hatch) and thinking level (invalidates the messages cache on every model) -
+and the whole conversation is written to cache again on the next turn, at
+1.25x fresh input on Claude. It was silent: the turn just came back more
+expensive. A confirmation now quotes the real figure, from the last turn that
+reported a cached size, priced off the same table the daemon uses. Quiet under
+250k cached tokens, because a dialog people learn to dismiss is worse than
+none. Worth about $3 across the whole history, which is the honest size of it.
+
+**And the warning found a real bug on its way in.** `priceBucket` honoured
+Codex's 2026-07-30 re-cut; `cacheRatesFor` took an `asOfDate` and ignored it,
+always answering with today's card. Both feed the same screen - one for what a
+day cost, the other for what caching saved on it - so the spend was dated
+correctly while the saving beside it was not. Understated fivefold on
+gpt-5.6-luna, whose input rate was $1 before the cut and is $0.20 after. Found
+by writing a test that asserted the two dates differed and watching it fail.
+
+---
+
 ## What changed earlier on 2026-09-17
 
 A long day. Four ways into the same list of threads became one screen per
