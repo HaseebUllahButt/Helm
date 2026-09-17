@@ -146,6 +146,15 @@ test('a dated model id resolves to its rate', () => {
   assert.ok(claudeRatesFor('claude-haiku-4-5-20251001', '2026-09-15'), 'the date suffix must be stripped');
 });
 
+test('the cache rate lookup honours the day it is asked about', () => {
+  // priceBucket honoured Codex's 2026-07-30 re-cut and cacheRatesFor did not,
+  // so cache savings on tokens spent before it were understated fivefold.
+  const before = cacheRatesFor('gpt-5.6-luna', 'codex', '2026-07-01');
+  const after = cacheRatesFor('gpt-5.6-luna', 'codex', '2026-09-17');
+  assert.equal(before.input, 1);
+  assert.equal(after.input, 0.2);
+});
+
 test('a model with no published rate is unpriced, never zero', () => {
   assert.equal(priceBucket('claude', 'some-unreleased-model', { input: 1e6 }, '2026-09-15'), null);
   assert.equal(cacheRatesFor('some-unreleased-model', 'claude', '2026-09-15'), null);

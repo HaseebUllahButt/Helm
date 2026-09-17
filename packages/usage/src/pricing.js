@@ -162,8 +162,16 @@ export function cacheRatesFor(modelName, engine, asOfDate) {
       const r = claudeRatesFor(modelName, asOfDate ?? new Date().toISOString().slice(0, 10));
       return r ? { input: r.input, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite } : null;
     }
-    case 'codex':
-      return flat(CODEX_PRICING[String(modelName || '').replace(/-\d{4}-\d{2}-\d{2}$/, '')]);
+    case 'codex': {
+      // The cutover is not decoration: Codex re-cut its card on 2026-07-30,
+      // and this used to answer with today's rate whatever date it was given.
+      // priceBucket honoured it and this did not, so cache savings on tokens
+      // spent before the cut were understated fivefold on gpt-5.6-luna.
+      const key = String(modelName || '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+      const ms = asOfDate ? Date.parse(asOfDate) : NaN;
+      const pre = Number.isFinite(ms) && ms < CODEX_CUTOVER_MS && CODEX_PRICING_PRE_CUT[key];
+      return flat(pre || CODEX_PRICING[key]);
+    }
     case 'antigravity':
       return flat(ANTIGRAVITY_PRICING[normalizeAntigravityModelName(modelName)]);
     default:
