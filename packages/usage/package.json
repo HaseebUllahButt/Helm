@@ -1,0 +1,11 @@
+{
+  "name": "@helm/usage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./pricing": "./src/pricing.js",
+    "./scan-cache": "./src/scan-cache.js"
+  }
+}
