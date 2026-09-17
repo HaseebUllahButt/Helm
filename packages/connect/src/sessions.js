@@ -8,6 +8,7 @@ import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
+import { forWire } from './events.js';
 import { optionArgs } from './models.js';
 import { modelPrefs, accountKey } from './settings.js';
 import { EventLog } from './events.js';
@@ -805,20 +806,30 @@ export class Sessions extends EventEmitter {
    */
   history(id, { since = 0, limit = 500, tail = 0, before = 0 } = {}) {
     const s = this.get(id);
-    const capped = Math.max(1, Math.min(Number(limit) || 500, 1000));
+    const back = tail > 0 || before > 0;
     const w = this.events.window(s.id, {
       since,
       before,
       tail: tail ? Math.max(1, Math.min(Number(tail), 1000)) : 0,
     });
-    const events = w.events.slice(0, capped);
+    // `limit` caps a page read forwards. A window taken from the end is
+    // already bounded by `tail` and by the byte budget, and slicing it here
+    // would cut the newest events off - the ones it was asked for.
+    const capped = Math.max(1, Math.min(Number(limit) || 500, 1000));
+    const events = back ? w.events : w.events.slice(0, capped);
     return {
       events,
-      pending: this.events.pending(s.id),
+      // A pending prompt is an event like any other and can carry a diff to
+      // approve, so it goes through the same cap.
+      pending: this.events.pending(s.id).map(forWire),
       last: this.events.last(s.id),
       session: s,
       hasMore: w.hasMore || events.length < w.events.length,
-      firstSeq: events[0]?.seq ?? 0,
+      // The window's own front, not its first event's: a window that lands
+      // inside a long turn carries that turn's opening line from further
+      // back, and reporting *that* as the front would claim a conversation
+      // with a hole in the middle of it was whole.
+      firstSeq: events.length === w.events.length ? w.firstSeq : (events[0]?.seq ?? 0),
       logFirst: w.logFirst,
     };
   }

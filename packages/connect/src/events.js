@@ -42,10 +42,12 @@ const KEEP = 2000;
  *
  * So a page is measured in bytes rather than events, and a single event is
  * capped before it goes anywhere. A data-channel frame is fragmented at 16KB
- * (see `peer.js`), so 192KB is a dozen chunks: small enough to arrive on a
- * phone link, big enough that paging is not the cost.
+ * (see `peer.js`), so 128KB is eight chunks: about a second over the hop to
+ * the VM, and more than a phone screen holds. What is behind it is one tap
+ * away, which is the right shape - a chat that opens now and can show you
+ * more beats a chat that shows you everything in a minute.
  */
-const MAX_PAGE = 192_000;
+const MAX_PAGE = 128_000;
 /**
  * An ACP diff is the whole old file as `-` lines and the whole new file as
  * `+` lines, so one edit of a 2000-line file is 140KB - and the same array is
@@ -93,16 +95,19 @@ export function forWire(event) {
 }
 
 /**
- * The first index at or after `from` that starts a turn.
+ * The index of the `turn.start` the event at `from` belongs to, or -1.
  *
- * Used to move a window's front edge off a half-turn. `from` 0 is left alone:
- * there is nothing in front of it to have cut, and a short log that simply
- * begins mid-turn should not lose its beginning to tidiness.
+ * A window that begins in the middle of a turn has no question at the top of
+ * it, and - worse - a reducer that attaches items to turns has nothing to
+ * attach them to, so a screenful of tool calls reduces to an empty chat. That
+ * is not theoretical: the first cut of this paged the last 300 events of a
+ * thread whose final turn was longer than that, and the chat opened blank.
  */
-function alignToTurn(events, from) {
-  if (from <= 0) return 0;
-  for (let i = from; i < events.length; i++) if (events[i].type === 'turn.start') return i;
-  return from;
+function turnStartFor(events, from) {
+  for (let i = Math.min(from, events.length - 1); i >= 0; i--) {
+    if (events[i].type === 'turn.start') return i;
+  }
+  return -1;
 }
 
 export class EventLog {
@@ -234,37 +239,51 @@ export class EventLog {
     if (since > 0) list = list.filter((e) => e.seq > since);
 
     const shaped = (e) => forWire(this.#hydrate(id, e));
+    const sizeOf = (e) => JSON.stringify(e).length;
     let events = [];
     let hasMore = false;
+    let contiguous = 0;
 
     if (tail > 0 || before > 0) {
       // The newest end of the window, taken backwards so the budget falls off
-      // the front - the oldest events are the ones to lose, never the last
+      // the front: the oldest events are the ones to lose, never the last
       // thing the agent said.
-      const wanted = tail > 0 ? Math.max(0, list.length - tail) : 0;
-      list = list.slice(alignToTurn(list, wanted));
+      const want = tail > 0 ? tail : Infinity;
       let bytes = 0;
       let front = list.length;
-      for (let i = list.length - 1; i >= 0; i--) {
+      for (let i = list.length - 1; i >= 0 && events.length < want; i--) {
         const e = shaped(list[i]);
-        const n = JSON.stringify(e).length;
+        const n = sizeOf(e);
         // Always at least one: a single event over the budget still has to
         // move, or the client asks forever and never advances.
         if (events.length && bytes + n > maxBytes) break;
         events.unshift(e); bytes += n; front = i;
       }
-      // Something was cut off the front, so start the window on a whole
-      // exchange if one is in reach. No turn start in the window at all means
-      // a long single turn: a fragment beats an empty screen.
-      if (front > 0) {
-        const k = events.findIndex((e) => e.type === 'turn.start');
-        if (k > 0) events.splice(0, k);
+      // Started mid-turn: bring in the turn it belongs to, whole if it fits
+      // and otherwise just its opening line, so what is on screen hangs off
+      // a question rather than off nothing.
+      //
+      // Taking only the opening line leaves a hole in the middle of that
+      // turn, and `firstSeq` keeps pointing at where the unbroken part
+      // starts - so the app still knows to offer what is behind it. Saying
+      // "this is the whole conversation" because its first line happens to be
+      // here would be a lie with a tool call missing in the middle of it.
+      if (front > 0 && events.length && events[0].type !== 'turn.start') {
+        const at = turnStartFor(list, front - 1);
+        if (at >= 0) {
+          const head = list.slice(at, front).map(shaped);
+          const headBytes = head.reduce((n, e) => n + sizeOf(e), 0);
+          if (bytes + headBytes <= maxBytes) { events.unshift(...head); front = at; }
+          else events.unshift(head[0]);
+        }
       }
+      // The front of the unbroken window: what a client may ask "before".
+      contiguous = list[front]?.seq ?? events[0]?.seq ?? 0;
     } else {
       let bytes = 0;
       for (const raw of list) {
         const e = shaped(raw);
-        const n = JSON.stringify(e).length;
+        const n = sizeOf(e);
         if (events.length && bytes + n > maxBytes) { hasMore = true; break; }
         events.push(e); bytes += n;
       }
@@ -273,7 +292,7 @@ export class EventLog {
     return {
       events,
       hasMore,
-      firstSeq: events[0]?.seq ?? 0,
+      firstSeq: contiguous || events[0]?.seq || 0,
       // The oldest event this machine still holds. A client compares it with
       // the front of its own window to know whether there is anything behind
       // what it is showing - one number, true for every shape of request,

@@ -545,3 +545,40 @@ test('terminals are numbered by the machine, not guessed by the app', async () =
   const named = await sessions.start({ cwd: '/tmp', profileId: 'shell', title: 'build' });
   assert.equal(named.title, 'build');
 });
+
+test('a chat asks for its end, and is told what is behind it', async () => {
+  // The test above leaves only a shell profile behind; this one needs the
+  // agent account back.
+  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
+    version: 1,
+    profiles: [{ id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: [], env: {}, source: 'alias' }],
+  }));
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const events = new EventLog(mkdtempSync(join(tmpdir(), 'helm-history-')));
+  const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  events.append(s.id, { type: 'turn.start', turnId: 't1', text: 'one long turn' });
+  for (let i = 0; i < 40; i++) {
+    events.append(s.id, {
+      type: 'item.start', id: `i${i}`, kind: 'edit', turnId: 't1',
+      changes: [{ path: `f${i}.ts`, kind: 'update', diff: 'd'.repeat(30_000) }],
+    });
+  }
+
+  const open = sessions.history(s.id, { tail: 300 });
+  assert.ok(JSON.stringify(open.events).length <= 200_000, 'the reply fits one page');
+  assert.equal(open.events[0].type, 'turn.start', 'and hangs off the turn it is inside');
+  assert.ok(open.firstSeq > open.logFirst, 'the app is told there is more behind it');
+  assert.equal(open.last, events.last(s.id), 'and where the live edge is');
+  assert.ok(open.events[open.events.length - 1].seq === open.last, 'the window ends at the end');
+
+  const back = sessions.history(s.id, { before: open.firstSeq });
+  assert.ok(back.events.length, 'earlier fetches what is behind');
+  assert.ok(back.events[back.events.length - 1].seq < open.firstSeq);
+
+  // Every diff was capped on the way out, whatever the driver wrote.
+  for (const e of open.events) {
+    for (const c of e.changes ?? []) assert.ok(c.diff.length < 9_000, 'diffs are capped on the wire');
+  }
+});

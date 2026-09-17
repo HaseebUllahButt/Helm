@@ -3,8 +3,14 @@ import type { Client } from '../client';
 import { apply, emptyLog, type HelmEvent, type LogState } from './types';
 import { loadCached, saveCached } from './logCache';
 
-/** How much of a conversation an open asks for: the end of it. */
-const TAIL = 300;
+/**
+ * How much of a conversation an open asks for: the end of it.
+ *
+ * The machine budgets the reply in bytes as well, so this is only the count
+ * at which even small events stop being worth fetching. Two hundred is a
+ * handful of turns - more than a phone screen holds, and the rest is a tap.
+ */
+const TAIL = 200;
 
 /**
  * A live view of one headless session.
@@ -64,7 +70,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     if (!dirty.current) return;
     dirty.current = false;
     if (log.current.last > 0 && raw.current.length) {
-      saveCached(env, sessionId, log.current.last, raw.current).catch(() => {});
+      saveCached(env, sessionId, log.current.last, raw.current, firstSeq.current).catch(() => {});
     }
   }, [env, sessionId]);
 
@@ -167,9 +173,20 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
           raw.current.push(e);
           apply(log.current, e);
         }
-        log.current.loaded = true;
-        firstSeq.current = cached.events[0].seq;
-        publish();
+        // A record that reduces to nothing is not a chat, it is a hole: every
+        // event in it belongs to a turn that was cut off before it. Nothing
+        // would ever repair it either, because its `last` is current and the
+        // refresh behind it asks only for what is newer. Treat it as a miss
+        // and take a fresh window, which is also how a device heals from a
+        // window some earlier version of helm cut badly.
+        if (!log.current.turns.length) {
+          log.current = emptyLog();
+          raw.current = [];
+        } else {
+          log.current.loaded = true;
+          firstSeq.current = cached.first || cached.events[0].seq;
+          publish();
+        }
       }
       fetchSince(log.current.last);
     });

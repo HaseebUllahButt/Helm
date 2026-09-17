@@ -50,6 +50,13 @@ interface Record {
   shape: number;
   at: number;
   last?: number;
+  /**
+   * The seq this record's window starts at, which is not always its first
+   * event's: a window that lands inside a long turn carries that turn's
+   * opening line and nothing else from in front of it. Without this the gap
+   * disappears on the next open and the app says a partial chat is whole.
+   */
+  first?: number;
   events?: HelmEvent[];
   messages?: unknown[];
 }
@@ -72,24 +79,26 @@ function trim(events: HelmEvent[]): HelmEvent[] {
 }
 
 /** The stored log for a session, or null on a miss / version skew / any failure. */
-export async function loadCached(env: string, sessionId: string): Promise<{ last: number; events: HelmEvent[] } | null> {
+export async function loadCached(env: string, sessionId: string): Promise<{ last: number; first: number; events: HelmEvent[] } | null> {
   try {
     const rec = await txn<Record | undefined>('session-logs', 'readonly', (s) => s.get(`${env}:${sessionId}`));
     if (!rec || rec.shape !== SHAPE || rec.kind === 'messages' || !Array.isArray(rec.events)) return null;
     // Touch for LRU without rewriting the payload.
     txn('session-logs', 'readwrite', (s) => s.put({ ...rec, at: Date.now() }, rec.key)).catch(() => {});
-    return { last: rec.last ?? 0, events: rec.events };
+    return { last: rec.last ?? 0, first: rec.first ?? rec.events[0]?.seq ?? 0, events: rec.events };
   } catch {
     return null;
   }
 }
 
 /** Replace the stored log. Prunes the least-recently-opened sessions. Never throws. */
-export async function saveCached(env: string, sessionId: string, last: number, events: HelmEvent[]): Promise<void> {
+export async function saveCached(env: string, sessionId: string, last: number, events: HelmEvent[], first = 0): Promise<void> {
   try {
     const key = `${env}:${sessionId}`;
+    const kept = trim(events);
     await txn('session-logs', 'readwrite', (s) => s.put(
-      { key, kind: 'events', shape: SHAPE, at: Date.now(), last, events: trim(events) } satisfies Record, key));
+      { key, kind: 'events', shape: SHAPE, at: Date.now(), last,
+        first: Math.max(first, kept[0]?.seq ?? 0), events: kept } satisfies Record, key));
     await prune(key);
   } catch {
     /* cache is best-effort; the network path still works */

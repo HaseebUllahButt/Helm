@@ -119,3 +119,39 @@ test('the digest reads the tail without hydrating what it will not look at', () 
   assert.equal(tail[tail.length - 1].text, '500');
   assert.equal(log.tail('s', 0).length, 500);
 });
+
+// The blank chat: the first cut of the tail window sliced the last 300
+// events of a thread whose final turn was longer than that, so every event
+// in the window was an item belonging to a turn that had been cut - and a
+// reducer with no turn to hang them on drew an empty conversation.
+test('a window that lands inside a long turn still carries that turn', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  log.append('s', { type: 'turn.start', turnId: 't1', text: 'the question' });
+  for (let i = 0; i < 60; i++) {
+    log.append('s', { type: 'item.start', id: `i${i}`, kind: 'edit', turnId: 't1',
+      changes: [{ path: `f${i}.ts`, kind: 'update', diff: 'd'.repeat(20_000) }] });
+  }
+  const w = log.window('s', { tail: 10 });
+  assert.equal(w.events[0].type, 'turn.start', 'the turn it is inside comes with it');
+  assert.equal(w.events[0].text, 'the question');
+  assert.ok(w.events.length > 1 && w.events.length < 62, 'and only part of the turn');
+  assert.ok(JSON.stringify(w.events).length <= 200_000, 'still within a page');
+});
+
+test('a window that skips the middle of a turn still points at the hole', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  log.append('s', { type: 'turn.start', turnId: 't1', text: 'one long turn' });
+  for (let i = 0; i < 60; i++) {
+    log.append('s', { type: 'item.start', id: `i${i}`, kind: 'edit', turnId: 't1',
+      changes: [{ path: `f${i}.ts`, kind: 'update', diff: 'd'.repeat(20_000) }] });
+  }
+  const w = log.window('s', { tail: 10 });
+  assert.equal(w.events[0].type, 'turn.start');
+  assert.ok(w.firstSeq > w.events[0].seq, 'the front is where the unbroken part starts');
+  assert.ok(w.firstSeq > w.logFirst, 'so the app offers what is behind it');
+
+  // And asking for that fills in from the middle, not from the top again.
+  const back = log.window('s', { before: w.firstSeq });
+  assert.ok(back.events[back.events.length - 1].seq < w.firstSeq);
+  assert.ok(back.events.length > 1);
+});
