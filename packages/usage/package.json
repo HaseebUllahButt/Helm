@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.js",
     "./pricing": "./src/pricing.js",
-    "./scan-cache": "./src/scan-cache.js"
+    "./scan-cache": "./src/scan-cache.js",
+    "./recache": "./src/recache.js"
   }
 }

@@ -6,6 +6,7 @@ import { EngineMark } from '../EngineMark';
 import { PermissionSheet } from './PermissionSheet';
 import { Controls, type Kind } from './Controls';
 import { Transcript } from './Transcript';
+import { recacheCost, recacheWarning } from '@helm/usage/recache';
 import { money } from '../format';
 import { loadModels, saveModels } from '../modelCache';
 import { useSessionLog } from './useSessionLog';
@@ -138,7 +139,18 @@ export function DrivenSession({ client, env, session, onBack, onClosed, onArchiv
     model: 'session.model', effort: 'session.effort',
     mode: 'session.mode', speed: 'session.speed',
   };
+  /**
+   * Model and thinking level are the two that cost something to change here:
+   * both break the provider's prompt-cache prefix, so the whole conversation
+   * is written to cache again on the next turn. Mode and speed do not, and are
+   * not worth a confirmation. Below the threshold in `recache.ts` none of them
+   * are - a short thread costs nothing to re-cache and a dialog would be noise.
+   */
   const pick = (kind: Kind, value: string) => call(async () => {
+    if (kind === 'model' || kind === 'effort') {
+      const cost = recacheCost(log.turns, modelNow, session.engine);
+      if (cost && !confirm(recacheWarning(kind, cost))) return;
+    }
     const r: any = await client.rpc(env.id, RPC[kind], { id: session.id, [kind]: value });
     onSession(r.session);
   });

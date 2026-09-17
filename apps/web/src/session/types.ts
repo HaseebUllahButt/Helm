@@ -68,7 +68,22 @@ export interface Item {
   doneAt?: number;
 }
 
-export interface TurnEnd { status: 'ok' | 'interrupted' | 'error'; costUsd?: number; durationMs?: number; error?: string }
+/**
+ * `usage` is kept because the cached figure is what a mid-thread model or
+ * effort change would throw away: both invalidate the provider's messages
+ * cache, so the whole conversation is written to cache again at the write
+ * rate. Knowing how much is cached is the difference between warning about
+ * that and guessing at it.
+ */
+export interface TurnUsage { input?: number; output?: number; cacheRead?: number }
+
+export interface TurnEnd {
+  status: 'ok' | 'interrupted' | 'error';
+  costUsd?: number;
+  durationMs?: number;
+  error?: string;
+  usage?: TurnUsage;
+}
 
 export interface Turn {
   id: string;
@@ -227,7 +242,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         const shown = turn.items.some((it) => it.kind === 'error' && it.text === e.error);
         turn.done = {
           status: e.status, costUsd: e.costUsd, durationMs: e.durationMs,
-          error: shown ? undefined : e.error,
+          error: shown ? undefined : e.error, usage: e.usage,
         };
       }
       // Anything still streaming in this turn is over too.
