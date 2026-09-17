@@ -15,6 +15,30 @@ const safeEqual = (a, b) => {
 
 const INVITE_TTL_MS = 10 * 60 * 1000;
 
+/** Wrong passwords a login window survives before it is burned. */
+const MAX_PASSWORD_ATTEMPTS = 10;
+
+/**
+ * Invite guesses allowed across all callers, per minute.
+ *
+ * An invite code is 40 bits, so this is not what makes guessing one hopeless;
+ * it is what stops a hub spending its life answering someone who is trying
+ * anyway. Global rather than per-address on purpose: behind Caddy every
+ * request shares one remote address, so a per-address bucket is a global one
+ * that only looks careful.
+ */
+const MAX_JOIN_ATTEMPTS = 30;
+const JOIN_WINDOW_MS = 60 * 1000;
+let joinAttempts = [];
+
+const joinAllowed = () => {
+  const cutoff = now() - JOIN_WINDOW_MS;
+  joinAttempts = joinAttempts.filter((t) => t > cutoff);
+  if (joinAttempts.length >= MAX_JOIN_ATTEMPTS) return false;
+  joinAttempts.push(now());
+  return true;
+};
+
 /**
  * How long a login password stays usable.
  *
@@ -86,13 +110,55 @@ export function isLoopback(req) {
     || addr.startsWith('127.');
 };
 
-const json = (res, code, body) => {
+/**
+ * Which cross-origin pages may read an answer from this hub.
+ *
+ * Something is needed here: a device paired at the VM keeps the VM's origin
+ * while probing every other hub in the network, and those are cross-origin
+ * requests that have to work. `*` was too much, though - it let every page the
+ * owner happens to visit reach this hub, on loopback and across the LAN, and
+ * read what came back.
+ *
+ * So the origin is reflected only when it is somewhere this network actually
+ * lives: loopback, or an address the roster advertises. Deliberately *not*
+ * "whatever host this request was addressed to" - that sounds equivalent and
+ * is not, because in a DNS rebinding attack the browser puts the attacker's
+ * own name in both headers, and a hub comparing them to each other would
+ * agree with itself and let the page straight in.
+ *
+ * Nothing legitimate needs the looser rule: the app only ever learns an
+ * address from the roster, and a page talking to the hub that served it is
+ * same-origin, which asks no permission of anybody. A request with no Origin
+ * at all - curl, the CLI, another daemon - needs no header and gets none;
+ * CORS is a browser rule and nothing else has ever consulted it.
+ */
+function allowedOrigin(req, net) {
+  const origin = req.headers.origin;
+  if (!origin || origin === 'null') return null;
+
+  let host;
+  try { ({ host } = new URL(origin)); } catch { return null; }
+  if (!host) return null;
+
+  if (/^(127\.\d+\.\d+\.\d+|\[::1\]|localhost)(:\d+)?$/.test(host)) return origin;
+
+  for (const endpoint of net ? allEndpoints(net) : []) {
+    try { if (new URL(endpoint).host === host) return origin; } catch { /* not a URL */ }
+  }
+  return null;
+}
+
+const reply = (res, code, body, origin = null) => {
   res.writeHead(code, {
     'content-type': 'application/json',
     'cache-control': 'no-store',
-    'access-control-allow-origin': '*',
-    'access-control-allow-headers': 'content-type, authorization',
-    'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
+    // Origin decides the body's audience, so it decides the cached copy too.
+    vary: 'Origin',
+    ...(origin ? {
+      'access-control-allow-origin': origin,
+      'access-control-allow-headers': 'content-type, authorization',
+      'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
+    } : {}),
     ...SECURITY_HEADERS,
   });
   res.end(JSON.stringify(body));
@@ -154,6 +220,11 @@ export function makeHttpHandler({ online, kick }) {
   return async function handle(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
+
+    // Worked out once and bound into every answer below, so no route can
+    // forget it and quietly go back to answering everyone.
+    const origin = allowedOrigin(req, loadNetwork());
+    const json = (r, code, body) => reply(r, code, body, origin);
 
     if (req.method === 'OPTIONS') return json(res, 204, {});
 
@@ -217,7 +288,25 @@ export function makeHttpHandler({ online, kick }) {
           error: 'the pairing link has expired - run `helm add controller` for a new one',
         });
       }
-      if (body.password !== expected) return json(res, 401, { error: 'bad password' });
+      // Constant-time, like every other secret comparison here: the password
+      // is short-lived but it is still the thing standing between a stranger
+      // and a durable token.
+      if (!safeEqual(body.password ?? '', expected)) {
+        // A window that has been guessed at this many times is being attacked,
+        // not mistyped. Burning it costs the owner one `helm add controller`
+        // and costs an attacker the whole attempt - and unlike a per-address
+        // limit it still works behind Caddy, where every request on earth
+        // arrives from 127.0.0.1 and would share one bucket.
+        const failures = (q.authGet.get()?.failures ?? 0) + 1;
+        q.authFail.run(failures);
+        if (failures >= MAX_PASSWORD_ATTEMPTS) {
+          q.authExpire.run();
+          return json(res, 403, {
+            error: 'too many wrong passwords - that link is dead; run `helm add controller` for a new one',
+          });
+        }
+        return json(res, 401, { error: 'bad password' });
+      }
 
       const { id, token } = issueDevice(net, body.label || 'web');
       return json(res, 200, {
@@ -231,6 +320,10 @@ export function makeHttpHandler({ online, kick }) {
     if (path === '/api/join' && req.method === 'POST') {
       const net = loadNetwork();
       if (!net) return json(res, 503, { error: 'this machine is not in a network yet' });
+
+      if (!joinAllowed()) {
+        return json(res, 429, { error: 'too many join attempts - wait a minute' });
+      }
 
       const body = await readBody(req).catch(() => ({}));
       const code = String(body.code || '').trim().toUpperCase();
@@ -268,7 +361,17 @@ export function makeHttpHandler({ online, kick }) {
 
     // Gossip. A peer posts its roster and gets ours back, so one exchange
     // reconciles both directions.
+    //
+    // Machines only. Replication is something daemons do to each other; a
+    // phone has never had a reason to post a roster, and letting it meant the
+    // weakest credential in the network could write the SSH keys every machine
+    // trusts and the addresses every device dials next. Reading the roster is
+    // a different question, and stays open to anyone in the network via
+    // `/api/network`.
     if (path === '/api/roster' && req.method === 'POST') {
+      if (claims.role !== ROLE.MACHINE) {
+        return json(res, 403, { error: 'only a machine can gossip the roster' });
+      }
       const body = await readBody(req).catch(() => ({}));
       mergeRoster(net, body);
       return json(res, 200, roster(loadNetwork()));

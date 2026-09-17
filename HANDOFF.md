@@ -317,6 +317,125 @@ are roughly in the order they happened; the two worth reading first are
 "Found by using it" and "Terminals on the VM", because both are lessons about
 believing a measurement.
 
+### The security audit: a pairing link was a shell on every machine
+
+The owner asked for a look at what could make the network vulnerable. Six
+things, four of them exploitable from a *controller* token - the credential a
+pairing link hands a phone, the weakest one in the system. All six are fixed,
+with the exploits re-run afterwards to prove it.
+
+The root cause was one idea, repeated. Authentication answered "does this
+token carry a valid signature for this network", and nearly every route took
+that as the whole answer. The `role` claim - `machine` vs `device` - was
+consulted in exactly one place (`server.js`, deciding whether a socket
+registers as an env). So "a controller controls machines, runs nothing", which
+is what the README promises, was not enforced anywhere.
+
+**1. A device token wrote SSH keys onto every machine.** `POST /api/roster`
+took any bearer's roster straight into `mergeRoster`, no role check and no
+field validation. Inject a machine record carrying a `pubkey` and the hub's
+`broadcastPeers` shipped it to every daemon, which called `applyPeers`, which
+wrote it into `~/.ssh/authorized_keys`. The fields went in unescaped, so a
+newline in `name` or `pubkey` also injected lines - and because ssh takes the
+*first* value for a keyword, an injected `ProxyCommand` beat helm's own further
+down the block. `ssh <peername>` would then run the attacker's command.
+
+**2. A device token could brick the network permanently.** Same endpoint,
+`revoked` map. Revocation is one-way, always wins, and gossips. One POST
+removed every machine everywhere, irreversibly.
+
+**3. A device token opened TCP to any port on any machine's loopback.**
+`tunnel-end.js` carried a comment promising "only ports this machine chose to
+expose are allowed" - and nothing imported it. The live path, `agent.js
+#openTunnel`, connected to whatever port the frame named. Every database,
+admin socket and localhost-only server on every machine.
+
+**4. Roster endpoints exfiltrated credentials.** Endpoints were settable the
+same way, and both the phone (`client.ts` probing) and the daemon (`Link`)
+send a bearer token to every address in the roster without validating it.
+
+**5. `access-control-allow-origin: *`** on every API response, so any page the
+owner visited could reach the hub on loopback and across the LAN.
+
+**6. `?token=` still accepted on the WebSocket upgrade**, three lines under the
+comment explaining that the subprotocol trick exists to keep the token out of
+Caddy's access logs. Device tokens do not expire, so one log line was a
+permanent credential.
+
+#### What the fixes are
+
+`mergeRoster` now runs everything through `sanitizeRoster`: field allowlist per
+record type, ids held to hex, no control characters in any string, endpoints
+parsed as credential-free http(s) origins, pubkeys matched against the key
+types OpenSSH actually accepts, and caps on record and endpoint counts.
+`/api/roster` is machines only. `ssh.js` re-checks the same things where the
+line is actually written, and re-emits `type blob` rather than passing a
+comment through. `#openTunnel` consults an allowlist that is ssh and whatever
+`tunnel.ports` in `config.json` adds; `tunnel-end.js` is deleted rather than
+left documenting a guarantee it did not provide. CORS reflects an origin only
+when it is loopback or an address the roster advertises. `?token=` is gone.
+Plus: the password compare is constant-time and a window burns after ten wrong
+guesses, `/api/join` is rate limited, and a WebRTC peer with no device id is
+refused because `dropRevoked` could never close it.
+
+#### The regression this nearly caused, and why it is worth remembering
+
+The first version of `sanitizeRoster` reduced a pubkey to `type blob`,
+dropping the comment, because that is what eventually gets written to
+`authorized_keys`. That is correct at the file and wrong in the roster.
+
+Gossip converges by two machines hashing identical records. Anything the
+receiver normalises is something the author keeps re-sending and the receiver
+keeps rewriting - so the fingerprints never match, and the two trade full
+rosters every tick, forever. Which is precisely the bandwidth `rosterHash`
+exists to save.
+
+It was caught by asking the direct question: author a record on A, merge it on
+B, compare `rosterHash` both sides. `CONVERGED: false`. The rule that came out
+of it, and that `roster-trust.test.mjs` now pins: **sanitising must be identity
+on a well-formed record.** Anything you want to normalise, normalise at the
+layer that consumes it, not in the roster. The same reasoning is why
+`createNetwork` and `issueDevice` now clean the names they author - a record
+this machine writes has to be one every other machine will accept back
+unchanged, and `--name` and a browser's `label` were both unbounded.
+
+#### What was left alone, deliberately
+
+**A controller can still mint an invite**, and an invite carries the network
+key. Gating `/api/invite` on `ROLE.MACHINE` was the obvious next step and it is
+wrong: "Add a computer" is a real button in the app, and the phone is the
+owner's admin console. The role boundary helm actually promises is about
+*running agents*, not about administering the network.
+
+**A pc still binds `0.0.0.0`.** A phone on the same wifi reaching a laptop
+directly is 3ms against hundreds through the VM; that is the whole point of the
+LAN route. The cost is that the hub is plain http on whatever network the
+laptop is currently on, and a device token crosses it in the clear. `helm join`
+now writes `--host` into the unit explicitly so it is visible and one edit
+away, and says so - but this one is *made visible, not closed*. On a network
+you do not trust: `helm up --install --host 127.0.0.1`.
+
+#### Verified by running it
+
+Not just unit tests - the exploits were re-run against the patched code, and
+then the real thing:
+
+- Two real machines (`helm up` + `helm join`), gossiping for real. Rosters
+  converged to an identical hash (`rwscR6hjrtiyiKbh` both sides), B's real
+  ed25519 key and ssh fields survived the sanitiser, and A's
+  `authorized_keys` got `ssh-ed25519 AAAA... # helm:box-b`. The SSH mesh works.
+- The PWA paired through a real `#pair=` link in headless Chromium at 390x844,
+  rendered **2/2 online** with both machines, reported `socket live`, and
+  logged zero network failures. That covers the two handshakes that actually
+  happen now that `?token=` is gone: the subprotocol (web app) and the
+  Authorization header (daemon, CLI).
+- 167 tests pass, `tsc --noEmit` clean, web build clean, `network.sh` green.
+
+Three new test files pin the properties: `roster-trust.test.mjs` (what a roster
+may say, and the convergence identity), `hub-authz.test.mjs` (what a controller
+token may do, CORS including the DNS-rebinding case, the login burn), and
+`tunnel-ports.test.mjs` (the allowlist, and that ssh still gets through).
+
 ### Four screens became one, per machine, and a week long
 
 The owner, on the phone, at the end of the day: *"the screen UX is ass, all
@@ -1915,6 +2034,16 @@ add a third delivery path, it must carry the same id.**
   was written", with the file on disk.
 
 ## Known bad, and not yet fixed
+
+0. **A pc's hub is plain http on whatever network it is joined to.** Bound to
+   `0.0.0.0` on purpose - a phone on the same wifi reaching a laptop directly
+   is 3ms against hundreds through the VM - so a device token crosses an
+   untrusted LAN in the clear. `helm join` now writes `--host` into the unit
+   explicitly and says so, which makes it visible and one edit away, but it
+   does not close it. On a network you do not trust:
+   `helm up --install --host 127.0.0.1`. The real fix is TLS on the LAN hub,
+   which needs a cert story for `192.168.x.y` and does not have one yet.
+   See "The security audit" under 2026-09-17.
 
 1. ~~**Push has never reached a real device.**~~ **This was wrong, and was
    wrong for two days.** Checked properly on 2026-09-17: the VM's hub holds a

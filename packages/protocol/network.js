@@ -70,6 +70,20 @@ export function requireNetwork() {
   return net;
 }
 
+/**
+ * A name that will survive the trip through the roster unchanged.
+ *
+ * Gossip converges by both sides agreeing on a fingerprint, so a record whose
+ * author keeps re-sending something the receiver's checks reject is a pair of
+ * machines that disagree forever, re-exchanging rosters every tick. The fix is
+ * to hold what we author to the same bar we hold everyone else to, here, at
+ * the one point a name enters the roster.
+ */
+const cleanName = (value, fallback = 'machine') => {
+  const once = String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, MAX_TEXT);
+  return once || fallback;
+};
+
 /** Start a brand new network with this machine as its first member. */
 export function createNetwork({ name = hostname(), port = 8787 } = {}) {
   const id = newDeviceId();
@@ -79,7 +93,10 @@ export function createNetwork({ name = hostname(), port = 8787 } = {}) {
     self: id,
     port,
     machines: {
-      [id]: { id, name, endpoints: [], updatedAt: Date.now(), addedAt: Date.now() },
+      [id]: {
+        id, name: cleanName(name, hostname()), endpoints: [],
+        updatedAt: Date.now(), addedAt: Date.now(),
+      },
     },
     devices: {},
     revoked: {},
@@ -89,13 +106,20 @@ export function createNetwork({ name = hostname(), port = 8787 } = {}) {
 /** Join a network we have been handed the key to. */
 export function joinNetwork({ id, key, name = hostname(), port = 8787, machines = {}, devices = {}, revoked = {} }) {
   const self = newDeviceId();
+  // What the inviter handed us is a roster from the network, which is exactly
+  // the thing `mergeRoster` refuses to take on trust; hold it to the same bar.
+  const given = sanitizeRoster({ id, machines, devices, revoked });
   return write({
     id, key, self, port,
     machines: {
-      ...machines,
-      [self]: { id: self, name, endpoints: [], updatedAt: Date.now(), addedAt: Date.now() },
+      ...given.machines,
+      [self]: {
+        id: self, name: cleanName(name, hostname()), endpoints: [],
+        updatedAt: Date.now(), addedAt: Date.now(),
+      },
     },
-    devices, revoked,
+    devices: given.devices,
+    revoked: given.revoked,
   });
 }
 
@@ -109,10 +133,20 @@ export function forgetNetwork() {
 export const machineToken = (net) =>
   mintToken(net.key, { net: net.id, sub: net.self, role: ROLE.MACHINE });
 
-/** A credential for a phone or browser. Durable: only revocation ends it. */
+/**
+ * A credential for a phone or browser. Durable: only revocation ends it.
+ *
+ * The label is whatever the browser called itself in the login body, so it is
+ * cleaned on the way in for the same reason a machine name is: it goes into
+ * the roster, and a record this machine authors must be one every other
+ * machine will accept back unchanged.
+ */
 export function issueDevice(net, label = 'device') {
   const id = newDeviceId();
-  net.devices[id] = { id, label, addedAt: Date.now(), updatedAt: Date.now() };
+  net.devices[id] = {
+    id, label: cleanName(label, 'device').slice(0, 60),
+    addedAt: Date.now(), updatedAt: Date.now(),
+  };
   write(net);
   return { id, token: mintToken(net.key, { net: net.id, sub: id, role: ROLE.DEVICE }) };
 }
@@ -178,14 +212,173 @@ export const roster = (net) => ({
   revoked: net.revoked,
 });
 
+// ------------------------------------------------------- what a peer may say
+//
+// Everything below exists because a roster arrives over the wire from
+// something that has proved membership and nothing more. What it contains is
+// not inert: a machine record carries the SSH public key every other machine
+// writes into its own authorized_keys, and the addresses every device and
+// daemon will next send a bearer token to. An unchecked merge therefore hands
+// whoever holds the weakest credential in the network a shell on all of them.
+//
+// So a record is accepted field by field, and anything unrecognised, oversized
+// or shaped wrong is dropped rather than repaired - a roster is a handful of
+// small records, and there is no legitimate sender of a malformed one.
+
+/** Deliberately generous; a real network is single digits of each. */
+const MAX_RECORDS = 256;
+const MAX_ENDPOINTS = 16;
+const MAX_TEXT = 200;
+const MAX_URL = 255;
+
+/**
+ * How far ahead of us a peer's clock may be and still be believed.
+ *
+ * Records merge last-writer-wins, so a record stamped far in the future can
+ * never be corrected by the machine it purports to describe. A day is well
+ * past any real skew between machines that both hold working TLS.
+ */
+export const MAX_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
+
+const ids = /^[a-f0-9]{1,64}$/;
+const sshUsers = /^[a-z_][a-z0-9_-]{0,31}$/i;
+
+/** The key types OpenSSH actually accepts, and nothing that looks like one. */
+const PUBKEY =
+  /^(ssh-ed25519|ssh-rsa|ssh-dss|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) ([A-Za-z0-9+/]+={0,3})(?: .*)?$/;
+
+/**
+ * One line of printable text, or null.
+ *
+ * Control characters are the whole point of the check: a newline in a machine
+ * name is how a second line arrives in a file that is written one record per
+ * line, which is what `~/.ssh/config` and `authorized_keys` both are.
+ */
+const text = (v, max = MAX_TEXT) =>
+  typeof v === 'string' && v.length > 0 && v.length <= max
+    && !/[\u0000-\u001f\u007f]/.test(v)
+    ? v
+    : null;
+
+/**
+ * An endpoint is an origin something will be dialled at, so it is held to
+ * being exactly that: http(s), no credentials, no path to smuggle anything in.
+ */
+const endpointOf = (v) => {
+  const raw = text(v, MAX_URL);
+  if (!raw) return null;
+  let url;
+  try { url = new URL(raw); } catch { return null; }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  if (url.username || url.password) return null;
+  if (url.hash || url.search) return null;
+  return raw;
+};
+
+/**
+ * The key, checked but kept whole.
+ *
+ * Deliberately *not* reduced to `type blob` here, even though that is what
+ * eventually gets written to a file. Gossip converges by two machines hashing
+ * identical records, so anything normalised on the way in is something the
+ * authoring machine keeps re-sending and this side keeps rewriting: the two
+ * never agree, and they trade full rosters every tick forever - which is the
+ * bandwidth the fingerprint exists to save. Storing what the author wrote,
+ * once it is proved to be a single line holding one real key, is what keeps
+ * the two fingerprints equal. `ssh.js` drops the comment at the point the
+ * line is actually written, which is the layer where it can do harm.
+ */
+const pubkeyOf = (v) => {
+  const raw = text(v, 1024);
+  return raw && PUBKEY.test(raw.trim()) ? raw.trim() : null;
+};
+
+const stampOf = (v, ceiling) =>
+  Number.isFinite(v) && v >= 0 && v <= ceiling ? v : null;
+
+/** Copy `value` onto `out[key]` when it survived its check. */
+const keep = (out, key, value) => { if (value !== null && value !== undefined) out[key] = value; };
+
+function machineRecord(id, their, ceiling) {
+  if (!ids.test(id) || !their || typeof their !== 'object') return null;
+  // A record with no usable stamp cannot take part in last-writer-wins at all.
+  const updatedAt = stampOf(their.updatedAt, ceiling);
+  if (updatedAt === null) return null;
+
+  const out = { id, updatedAt };
+  keep(out, 'name', text(their.name) ?? id.slice(0, 8));
+  keep(out, 'addedAt', stampOf(their.addedAt, ceiling));
+  keep(out, 'pubkey', pubkeyOf(their.pubkey));
+  keep(out, 'sshUser', text(their.sshUser, 32) && sshUsers.test(their.sshUser) ? their.sshUser : null);
+  keep(out, 'sshPort', Number.isInteger(their.sshPort) && their.sshPort > 0 && their.sshPort < 65536
+    ? their.sshPort : null);
+
+  const endpoints = [];
+  for (const e of Array.isArray(their.endpoints) ? their.endpoints : []) {
+    const ok = endpointOf(e);
+    if (ok && !endpoints.includes(ok) && endpoints.length < MAX_ENDPOINTS) endpoints.push(ok);
+  }
+  out.endpoints = endpoints;
+  return out;
+}
+
+function deviceRecord(id, their, ceiling) {
+  if (!ids.test(id) || !their || typeof their !== 'object') return null;
+  const updatedAt = stampOf(their.updatedAt, ceiling);
+  if (updatedAt === null) return null;
+  const out = { id, updatedAt };
+  keep(out, 'label', text(their.label, 60) ?? 'device');
+  keep(out, 'addedAt', stampOf(their.addedAt, ceiling));
+  return out;
+}
+
+/**
+ * Everything in an incoming roster that is worth believing.
+ *
+ * Exported so the shape this accepts can be tested directly, and so a caller
+ * that wants to know what it would keep can ask without merging.
+ */
+export function sanitizeRoster(incoming, { now = Date.now() } = {}) {
+  const ceiling = now + MAX_CLOCK_SKEW_MS;
+  const out = { id: incoming?.id, machines: {}, devices: {}, revoked: {} };
+  if (!incoming || typeof incoming !== 'object') return out;
+
+  const take = (source, build, into) => {
+    let n = 0;
+    for (const [id, their] of Object.entries(source ?? {})) {
+      if (n >= MAX_RECORDS) break;
+      const record = build(id, their, ceiling);
+      if (!record) continue;
+      into[id] = record;
+      n += 1;
+    }
+  };
+  take(incoming.machines, machineRecord, out.machines);
+  take(incoming.devices, deviceRecord, out.devices);
+
+  let n = 0;
+  for (const [id, at] of Object.entries(incoming.revoked ?? {})) {
+    if (n >= MAX_RECORDS) break;
+    if (!ids.test(id)) continue;
+    out.revoked[id] = stampOf(at, ceiling) ?? now;
+    n += 1;
+  }
+  return out;
+}
+
 /**
  * Fold a peer's roster into ours.
  *
  * Returns whether anything actually changed, so callers can skip writing to
  * disk and re-gossiping on the overwhelmingly common no-op exchange.
+ *
+ * What arrives is passed through `sanitizeRoster` first, so the rest of this
+ * function - and everything downstream of it, the SSH mesh especially - is
+ * working with fields that have already been proved to be what they claim.
  */
-export function mergeRoster(net, incoming) {
-  if (!incoming || incoming.id !== net.id) return false;
+export function mergeRoster(net, unchecked) {
+  if (!unchecked || unchecked.id !== net.id) return false;
+  const incoming = sanitizeRoster(unchecked);
   let changed = false;
 
   for (const [id, their] of Object.entries(incoming.machines ?? {})) {

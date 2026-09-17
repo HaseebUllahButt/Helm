@@ -30,7 +30,8 @@ db.exec(`
     id         INTEGER PRIMARY KEY CHECK (id = 1),
     password   TEXT NOT NULL,
     expires_at INTEGER NOT NULL,
-    rotated_at INTEGER NOT NULL
+    rotated_at INTEGER NOT NULL,
+    failures   INTEGER NOT NULL DEFAULT 0
   );
 
   -- Invites let a new machine join the network. Claiming one hands over the
@@ -87,6 +88,9 @@ db.exec(`
 // predates a column needs to be told about it directly.
 for (const [table, column, spec] of [
   ['invites', 'role', "TEXT NOT NULL DEFAULT 'pc'"],
+  // Wrong guesses against the current window, so one that is being attacked
+  // can be burned rather than left standing for its full ten minutes.
+  ['auth_state', 'failures', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {
   const has = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
   if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${spec}`);
@@ -105,14 +109,20 @@ export function newInviteCode() {
 
 export const q = {
   authGet: db.prepare('SELECT * FROM auth_state WHERE id = 1'),
+  // A new window starts with a clean slate: the count belongs to the password
+  // being guessed at, not to the hub.
   authSet: db.prepare(
-    `INSERT INTO auth_state (id, password, expires_at, rotated_at)
-     VALUES (1, ?, ?, ?)
+    `INSERT INTO auth_state (id, password, expires_at, rotated_at, failures)
+     VALUES (1, ?, ?, ?, 0)
      ON CONFLICT(id) DO UPDATE SET
        password = excluded.password,
        expires_at = excluded.expires_at,
-       rotated_at = excluded.rotated_at`
+       rotated_at = excluded.rotated_at,
+       failures = 0`
   ),
+  authFail: db.prepare('UPDATE auth_state SET failures = ? WHERE id = 1'),
+  /** Close the window now, without disturbing anyone already paired. */
+  authExpire: db.prepare('UPDATE auth_state SET expires_at = 0 WHERE id = 1'),
 
   inviteInsert: db.prepare('INSERT INTO invites (code, expires_at, role) VALUES (?, ?, ?)'),
   inviteGet: db.prepare('SELECT * FROM invites WHERE code = ?'),

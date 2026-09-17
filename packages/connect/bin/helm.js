@@ -317,10 +317,28 @@ async function joinCmd() {
   // than serving in the foreground. `--foreground` keeps the old behaviour.
   if (!rest.includes('--foreground')) {
     const { installService } = await import('../src/service.js');
-    const args = rest.includes('--name') ? ['--name', strFlag('name', hostname())] : [];
+    // `--host` is written out rather than left to the default, because what it
+    // means here is worth being able to see and change in one place. A pc
+    // listens on every interface on purpose: a phone on the same wifi reaching
+    // this machine directly is single-digit milliseconds against hundreds
+    // through the VM. The cost is that the hub is plain http on whatever
+    // network this machine is currently joined to, and a device token crosses
+    // it in the clear - so on a network you do not trust, reinstall with
+    // `helm up --install --host 127.0.0.1` and reach this machine through the
+    // VM instead.
+    const host = rest.includes('--host') ? strFlag('host', '0.0.0.0') : '0.0.0.0';
+    const args = [
+      ...(rest.includes('--name') ? ['--name', strFlag('name', hostname())] : []),
+      '--host', host,
+    ];
     const { installed, unit } = await installService({ mode: 'serve', args });
     if (installed) {
       console.log(`  installed ${unit} - this machine stays in the network across reboots.`);
+      if (host === '0.0.0.0') {
+        console.log('  it listens on every interface, so a phone on the same wifi reaches');
+        console.log('  it directly. On an untrusted network, reinstall with:');
+        console.log('    helm up --install --host 127.0.0.1');
+      }
       console.log('\n  Open the app on your phone: it should show this machine online.');
       console.log('  Check with:     helm status');
       console.log('  Watch logs:     journalctl --user -u helm-serve -f');

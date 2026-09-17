@@ -596,13 +596,38 @@ export class Daemon {
   #key = (link, sid) => `${link.id} ${sid}`;
 
   /**
+   * Ports a tunnel may terminate on here.
+   *
+   * A hub is trusted to carry bytes, not to choose which local service they
+   * reach. Without this list, anything holding any credential in the network -
+   * a paired phone included - can ask a machine to connect to any port on its
+   * own loopback interface and get a full duplex byte stream back, which is
+   * every database, admin socket and localhost-only HTTP server on the box.
+   *
+   * The only thing that has ever needed a tunnel is ssh, so that is the whole
+   * list; `tunnel.ports` in ~/.helm/config.json adds to it for anyone who
+   * wants more, deliberately and on the machine itself.
+   */
+  #allowedTunnelPorts() {
+    const extra = loadSettings()?.tunnel?.ports;
+    return [
+      Number(process.env.HELM_SSH_PORT || 22),
+      ...(Array.isArray(extra) ? extra.map(Number) : []),
+    ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
+  }
+
+  /**
    * Terminate a tunnel by connecting to a port on this machine's loopback
    * interface. This is how ssh reaches a box behind NAT: the daemon already
    * holds the outbound connection, so nothing has to accept an inbound one.
    */
   #openTunnel(link, { sid, port }) {
+    const wanted = Number(port) || 22;
+    if (!this.#allowedTunnelPorts().includes(wanted)) {
+      return link.send(T.TUNNEL_CLOSE, { sid, reason: 'port not allowed' });
+    }
     const key = this.#key(link, sid);
-    const sock = tcpConnect({ host: '127.0.0.1', port: port || 22 });
+    const sock = tcpConnect({ host: '127.0.0.1', port: wanted });
     this.#tunnels.set(key, { sock, link });
 
     sock.on('connect', () => link.send(T.TUNNEL_READY, { sid }));

@@ -144,10 +144,15 @@ export async function startRelay({
     // older clients.
     if (url.pathname !== '/helm/ws' && url.pathname !== '/ws') return socket.destroy();
 
+    // Header or subprotocol only. `?token=` used to be accepted here for older
+    // clients, which undid the reason the subprotocol trick exists three lines
+    // above: a query string is exactly what Caddy and every tunnel write to
+    // their access logs, and a device token does not expire, so one log line
+    // is a permanent credential. Nothing has sent one since the web app moved
+    // to the subprotocol and the daemon to the header.
     const token =
       tokenFromProtocols(req.headers['sec-websocket-protocol']) ||
-      clientTokenFrom(req.headers.authorization) ||
-      url.searchParams.get('token'); // older clients; still accepted
+      clientTokenFrom(req.headers.authorization);
     const reject = () => {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();

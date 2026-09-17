@@ -41,7 +41,11 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith('/api/') || url.pathname === '/ws') return;
+  // `/helm/...` is the app's own prefix and carries the same two things the
+  // bare paths do; leaving it out meant the protocol endpoint was only
+  // excluded under one of its two names.
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/helm/')) return;
+  if (url.pathname === '/ws') return;
 
   // Navigations resolve to the app shell: this is a single-page app, so every
   // path is a route rather than a document on disk.

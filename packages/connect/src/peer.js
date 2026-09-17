@@ -84,6 +84,11 @@ export class PeerHub {
 
     if (!peer) {
       if (payload?.type !== 'offer') return; // candidates for a peer we dropped
+      // No device id, no channel. `dropRevoked` can only close what it can
+      // attribute, so a peer created without one would hold a direct route
+      // into this machine that outlives its own removal from the network -
+      // the side door revocation is supposed to shut.
+      if (!device) return;
       peer = this.#create(peerId, link);
     }
     if (link) peer.link = link;
