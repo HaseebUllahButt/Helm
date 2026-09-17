@@ -206,6 +206,42 @@ helm spawn <machine> <folder> <account> "<text>"
 `helm digest` keeps the last answer from every machine, so one that is asleep
 is listed with when it was last seen rather than left out.
 
+## What it costs
+
+Every agent CLI records its own token usage next to its transcripts, and that
+record is the complete one: it covers sessions helm never started, and it
+survives helm's own event log being trimmed. **Usage** in the sidebar reads
+those and adds them up - across every machine, or one machine on its own from
+the meter beside its settings.
+
+```text
+$1.1k        API-equivalent, 7 days · 3.0B tokens · 19,857 turns
+97.7%        of input served from cache — saved $7.6k
+```
+
+The prompt-cache figure is the one worth watching. A cached input token bills
+at a fraction of a fresh one, so on agent sessions - where the same context is
+resent every turn - the hit rate is most of the difference between the bill and
+what it could have been. It is reported after the cache-write premium, because
+writing the cache is billed above the fresh rate.
+
+Break the spend down by **model**, **CLI**, **provider** or **folder**; the
+folder view is usually the one that answers "where did the month go".
+
+Two things the numbers are careful about. Costs are published rates × real
+tokens, which on a subscription is not what you paid - it is what the same work
+would have cost on the API, and the screen says `API-equivalent` rather than
+"spent". A model with no published rate is counted in tokens and reported
+`unpriced`, never costed at zero. And a machine that does not answer is not
+zero: the footer says how many of your machines reported, the same way `helm
+digest` lists a sleeping machine with when it was last seen rather than leaving
+it out.
+
+Reading is incremental. The first pass on a machine with a long history reads
+every transcript its CLIs ever wrote; after that only the bytes a session
+appended are read, and the index survives a daemon restart. On a machine with
+1.8GB of Codex rollouts that is 7.6s once, then about 25ms.
+
 ## Profiles and secrets
 
 Helm reads shell aliases and functions and turns them into profiles. This makes
@@ -235,6 +271,7 @@ users into the same network.
 | `packages/protocol` | membership, credentials, and wire messages |
 | `packages/connect` | daemon, CLI, profiles, SSH, brains, and local runtime |
 | `apps/relay` | the VM home and connection relay |
+| `packages/usage` | what each CLI recorded spending, priced and rolled up |
 | `apps/web` | the mobile PWA and shared interface |
 
 ## Development
