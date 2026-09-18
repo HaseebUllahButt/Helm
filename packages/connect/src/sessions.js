@@ -1143,21 +1143,6 @@ export class Sessions extends EventEmitter {
       // network and lands in the event log and in a CLI's stdin.
       const images = acceptImages(attachments);
 
-      // Emit optimistically so every watcher (desktop + mobile PWA) sees the
-      // image immediately, even before the agent echoes it back. The bytes
-      // go to the blob store and the event keeps a reference, so the same
-      // picture is still there after a restart.
-      if (images.length) {
-        // The `local-` prefix is a contract, not decoration: the agent will
-        // announce this same turn under its own id a second or two later,
-        // and the app adopts a `local-` turn instead of drawing the message
-        // twice (see `apply` in the web's session/types.ts).
-        const turnId = `local-${Date.now()}`;
-        this.events.append(id, {
-          type: 'turn.start', turnId, text: clean,
-          attachments: images.map((a) => this.events.putAttachment(id, a)),
-        });
-      }
       // The brain is asked about a network, not a folder, so what it is
       // told has to include which network and in what state. One line, not
       // the digest: see `summaryLine`.
@@ -1176,25 +1161,60 @@ export class Sessions extends EventEmitter {
       // be naming it after helm rather than after the work.
       if (!raw) this.#prompted(s, clean);
       if (brainLine) clean = `${brainLine}\n\n${clean}`;
+
+      // Emit the turn optimistically so every watcher sees the message the
+      // moment it is sent, not when the agent gets round to echoing it. A
+      // message queued behind a running turn can sit un-announced for
+      // minutes - without this it looks like it was never sent at all. The
+      // text emitted is the final text, helm's note included, because the
+      // echo is matched against it: a `local-` turn is adopted by the real
+      // turn's `turn.start` when the texts agree (see `apply` in the web's
+      // session/types.ts).
+      // `local-` plus a nonce: two sends in the same millisecond are two
+      // turns, and an id shared between them would let one's turn.done
+      // close the other.
+      const turnId = `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      {
+        const event = this.events.append(id, {
+          type: 'turn.start', turnId, text: clean,
+          attachments: images.map((a) => this.events.putAttachment(id, a)),
+        });
+        s.lastSeq = event.seq;
+        this.emit('event', { id, event });
+      }
       // The driver is the authority on whether this agent can see an image:
       // it is the one that spoke to the CLI. Anything else gets a filename
       // placeholder in the text, which is always safe while lost bytes are
       // not - but it says so out loud rather than dropping them silently.
-      if (images.length && driverTakesImages(d)) {
-        await d.sendWithAttachments(clean, images);
-      } else {
-        let msg = clean;
-        if (images.length) {
-          const names = images.map((a) => `[image: ${a.filename || 'image'} - this agent cannot see images]`).join('\n');
-          msg = msg ? `${msg}\n${names}` : names;
-          this.events.append(id, {
-            type: 'error', kind: 'attachment',
-            message: images.length === 1
-              ? `${s.engine} cannot be sent images, so ${images[0].filename || 'the image'} was named but not attached.`
-              : `${s.engine} cannot be sent images, so ${images.length} attachments were named but not sent.`,
-          });
+      try {
+        if (images.length && driverTakesImages(d)) {
+          await d.sendWithAttachments(clean, images);
+        } else {
+          let msg = clean;
+          if (images.length) {
+            const names = images.map((a) => `[image: ${a.filename || 'image'} - this agent cannot see images]`).join('\n');
+            msg = msg ? `${msg}\n${names}` : names;
+            this.events.append(id, {
+              type: 'error', kind: 'attachment',
+              message: images.length === 1
+                ? `${s.engine} cannot be sent images, so ${images[0].filename || 'the image'} was named but not attached.`
+                : `${s.engine} cannot be sent images, so ${images.length} attachments were named but not sent.`,
+            });
+          }
+          await d.send(msg);
         }
-        await d.send(msg);
+      } catch (err) {
+        // The send never reached the agent. The bubble stays - it is what
+        // the owner wrote - but it closes failed rather than hanging as a
+        // message that looks merely unanswered, and the error travels back
+        // to the client so the draft is offered again.
+        const failed = this.events.append(id, {
+          type: 'turn.done', turnId, status: 'error',
+          error: String(err?.message || err),
+        });
+        s.lastSeq = failed.seq;
+        this.emit('event', { id, event: failed });
+        throw err;
       }
       return { ok: true };
     }
@@ -1311,6 +1331,21 @@ export class Sessions extends EventEmitter {
     const clean = String(title ?? '').replace(/\s+/g, ' ').trim();
     if (!clean) throw new Error('a thread needs a name');
     this.#titled(s, clean, 'user');
+    return { ok: true, session: wire(s) };
+  }
+
+  /**
+   * "Ping me when this finishes" - a one-shot flag on the thread. The bell
+   * rings once on the next transition out of `working` (done, interrupted,
+   * errored - any of them counts as finished for the person who asked), then
+   * clears itself: a bell that stays armed would buzz on every later turn
+   * too, which is the fastest way to get it ignored.
+   */
+  setNotifyDone(id, on = true) {
+    const s = this.get(id);
+    s.notifyDone = !!on;
+    if (this.#index.has(id)) this.#save();
+    this.emit('session', s);
     return { ok: true, session: wire(s) };
   }
 
