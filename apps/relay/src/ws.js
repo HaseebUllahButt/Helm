@@ -93,7 +93,12 @@ export function createWsLayer() {
 
       case T.NOTIFY: {
         const payload = msg.payload;
-        if (!payload?.tag || !payload?.title || !isNew(payload.tag)) return;
+        // A `resolve` frame shares the original notification's tag - it is
+        // the "that one is already answered" half of the pair, not a new
+        // notification, so it needs no title and must not be deduped away
+        // by the tag it is closing.
+        if (!payload?.tag || (!payload.resolve && !payload?.title)) return;
+        if (!payload.resolve && !isNew(payload.tag)) return;
         fanOut(q.pushAll.all(), payload, {
           drop: (endpoint) => q.pushDelete.run(endpoint),
           log: (line) => console.error(`[helm] ${line}`),
