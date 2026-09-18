@@ -1,18 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <rect width="512" height="512" rx="116" fill="#131317"/>
   <rect x="1" y="1" width="510" height="510" rx="115" fill="none" stroke="#ffffff" stroke-opacity=".07"/>
-  <g transform="translate(256 256)" stroke="#c2c6d4" fill="none" stroke-linecap="round">
-    <circle r="116" stroke-width="30"/>
-    <g stroke-width="22">
-      <path d="M0 -116V0M0 116V0"/>
-      <path d="M0 -116V0M0 116V0" transform="rotate(60)"/>
-      <path d="M0 -116V0M0 116V0" transform="rotate(120)"/>
-    </g>
-    <g stroke-width="28">
-      <path d="M0 -172V-131M0 172V131"/>
-      <path d="M0 -172V-131M0 172V131" transform="rotate(60)"/>
-      <path d="M0 -172V-131M0 172V131" transform="rotate(120)"/>
-    </g>
-  </g>
-  <circle cx="256" cy="256" r="44" fill="#c2c6d4"/>
+  <!-- a periscope: the conn is where you see and steer things far away.
+       the stem rises out of the water and turns its eye toward you. -->
+  <path fill="#c2c6d4" d="M196 380V176Q196 120 252 120H324A28 28 0 0 1 324 176H252V380Z"/>
+  <circle cx="326" cy="148" r="18" fill="#131317"/>
+  <path d="M104 380H164M268 380H368" stroke="#c2c6d4" fill="none" stroke-linecap="round" stroke-width="30"/>
 </svg>

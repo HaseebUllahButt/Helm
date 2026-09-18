@@ -6,7 +6,7 @@
  * here would mean showing you a session state that is no longer true, which is
  * worse than showing you nothing.
  */
-const CACHE = 'con-shell-v4';
+const CACHE = 'con-shell-v5';
 const SHELL = [
   '/', '/index.html', '/manifest.webmanifest',
   '/icon.svg', '/icon-180.png', '/icon-192.png', '/favicon-32.png',
