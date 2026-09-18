@@ -1608,15 +1608,24 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
    * history, and history is one fold below.
    */
   const rest = mine.filter((s) => s.status !== 'blocked' && s.status !== 'working');
+
+  /* The last few threads sit on top and out of any fold: "what was I doing"
+   * is the most common question this screen answers, and a fold should not
+   * be between it and the answer. Six keeps it a shortcut, not a second
+   * list - anything older is still one tap down, in its group. */
+  const threads = [...rest, ...external.filter((s) => !s.archived && hit(s))].sort(byRecent);
+  const recent = threads.slice(0, 6);
+  const recentIds = new Set(recent.map((s) => s.id));
+
   const strays: Session[] = [];
   const folders = (() => {
     const by = new Map<string, Session[]>();
-    for (const s of rest.filter(thisWeek)) {
+    for (const s of rest.filter((x) => thisWeek(x) && !recentIds.has(x.id))) {
       const key = collapseCwd(s.cwd || '~');
       const list = by.get(key);
       if (list) list.push(s); else by.set(key, [s]);
     }
-    for (const x of external.filter((s) => !s.archived && hit(s) && thisWeek(s))) {
+    for (const x of external.filter((s) => !s.archived && hit(s) && thisWeek(s) && !recentIds.has(s.id))) {
       const list = by.get(collapseCwd(x.cwd || '~'));
       if (list) list.push(x); else strays.push(x);
     }
@@ -1636,7 +1645,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   // working on. It has to stay reachable, though - "it is not here" and "it
   // is one tap down" are different answers and only one of them is true.
   const older = [...rest, ...external.filter((s) => !s.archived && hit(s))]
-    .filter((s) => !thisWeek(s)).sort(byRecent);
+    .filter((s) => !thisWeek(s) && !recentIds.has(s.id)).sort(byRecent);
 
   // A shell is not a thread and does not belong in a project group: you open
   // one to type at the machine, and what you want is the one you left open.
@@ -1823,6 +1832,12 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           <div>
             <div className="section">working</div>
             <div className="rows">{working.map(row)}</div>
+          </div>
+        )}
+        {recent.length > 0 && (
+          <div>
+            <div className="section">recent</div>
+            <div className="rows">{recent.map(row)}</div>
           </div>
         )}
 
