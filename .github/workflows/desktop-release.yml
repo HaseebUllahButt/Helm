@@ -29,9 +29,9 @@ jobs:
       - name: Install dependencies and build the shared app
         run: |
           npm ci
-          npm --workspace @helm/web run build
+          npm --workspace @con/web run build
 
-      - name: Build and publish Helm Desktop
+      - name: Build and publish Con Desktop
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,7 +41,7 @@ jobs:
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
-          releaseName: 'Helm Desktop __VERSION__'
-          releaseBody: 'Download the AppImage or Debian package, open it, and paste the private link from `helm link`.'
+          releaseName: 'Con Desktop __VERSION__'
+          releaseBody: 'Download the AppImage or Debian package, open it, and paste the private link from `con link`.'
           releaseDraft: false
           prerelease: false
