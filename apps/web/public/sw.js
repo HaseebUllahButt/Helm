@@ -86,26 +86,61 @@ self.addEventListener('fetch', (event) => {
 });
 
 /**
+ * Which session each open window is looking at, posted by the app. Kept in
+ * memory only - if the worker restarts and forgets, a push just shows when
+ * it could have been skipped, which is the safe side to forget on.
+ */
+const viewing = new Map();
+self.addEventListener('message', (event) => {
+  const m = event.data;
+  if (m?.type === 'helm:viewing' && event.source?.id) {
+    viewing.set(event.source.id, { envId: m.envId ?? null, sessionId: m.sessionId ?? null });
+  }
+});
+
+/**
  * A push arrives when the app is closed, which is the only time it matters.
  *
  * The payload is helm's own JSON, encrypted end to end - the push service
  * that carried it could not read it. `tag` collapses repeats of the same
  * request, so a retry does not stack three copies of one question on the
  * lock screen, and `renotify` still buzzes for a genuinely new one.
+ *
+ * `resolve` is the other half: the request was already answered somewhere
+ * else, so the "needs you" still sitting on the lock screen is a lie. Close
+ * it by tag rather than showing a second notification about the first.
  */
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { /* not ours */ }
-  const title = data.title || 'A session needs you';
-  event.waitUntil(self.registration.showNotification(title, {
-    body: data.body || '',
-    tag: data.tag || 'helm',
-    renotify: true,
-    requireInteraction: true,
-    icon: '/icon-192.png',
-    badge: '/favicon-32.png',
-    data,
-  }));
+  if (data.resolve) {
+    event.waitUntil(
+      self.registration.getNotifications({ tag: data.tag })
+        .then((ns) => ns.forEach((n) => n.close()))
+    );
+    return;
+  }
+  event.waitUntil((async () => {
+    // Buzzing the phone you are already looking at, about the session you
+    // are already looking at, is pure noise - the sheet on screen is the
+    // notification. Any other session still gets one: the in-app toast is
+    // easy to miss when your thumb is somewhere else.
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of all) {
+      if (!client.focused) continue;
+      const v = viewing.get(client.id);
+      if (v && v.sessionId === data.sessionId && v.envId === data.envId) return;
+    }
+    await self.registration.showNotification(data.title || 'A session needs you', {
+      body: data.body || '',
+      tag: data.tag || 'helm',
+      renotify: true,
+      requireInteraction: true,
+      icon: '/icon-192.png',
+      badge: '/favicon-32.png',
+      data,
+    });
+  })());
 });
 
 /**
