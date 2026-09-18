@@ -29,6 +29,7 @@ export const T = {
   // subscriptions stored there, so phones and sessions may live on
   // different machines without putting push endpoints in the roster.
   NOTIFY: 'notify',         // { payload: { title, body, tag, envId, sessionId } }
+                            //   or { payload: { tag, envId, sessionId, resolve: true } }  close the stale one
 
   // relay -> client, environment presence changed
   PRESENCE: 'presence',     // { env, online, info }
@@ -99,6 +100,7 @@ export const M = {
   SESSION_UNWATCH: 'session.unwatch', // { id }
   SESSION_ANSWER: 'session.answer',   // { id, requestId, decision: { option, message?, answers? } }
   SESSION_INTERRUPT: 'session.interrupt', // { id }
+  SESSION_NOTIFY: 'session.notify',       // { id, on } -> { ok }  ping me when this thread finishes
   SESSION_MODE: 'session.mode',       // { id, mode } -> { session }
   SESSION_MODEL: 'session.model',
   SESSION_EFFORT: 'session.effort',    // { id, effort } -> { session }
