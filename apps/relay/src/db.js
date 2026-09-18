@@ -3,7 +3,7 @@
  *
  * Everything that defines the network - who the machines are, which devices
  * are allowed in, what has been revoked - now lives in the shared roster
- * (`@helm/protocol/network`), because every machine needs a full copy of it.
+ * (`@con/protocol/network`), because every machine needs a full copy of it.
  * What is left here is genuinely local: the login window this hub is offering
  * right now, invites it has issued, a cache of what it last saw each machine
  * reporting, and the digest stream.
@@ -16,7 +16,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-const FILE = process.env.HELM_DB || './helm.sqlite';
+const FILE = process.env.CON_DB || process.env.HELM_DB || './con.sqlite';
 mkdirSync(dirname(FILE), { recursive: true });
 
 export const db = new DatabaseSync(FILE);
@@ -38,7 +38,7 @@ db.exec(`
   -- network key, so they are single-use and short-lived.
   -- role is what the person adding the machine said it was: 'pc' for one that
   -- dials out, 'vm' for one that also becomes a home with its own address.
-  -- Carrying it on the invite is what lets "helm join" be the only command
+  -- Carrying it on the invite is what lets "con join" be the only command
   -- typed on the far machine, whichever kind it is.
   CREATE TABLE IF NOT EXISTS invites (
     code       TEXT PRIMARY KEY,

@@ -1,4 +1,4 @@
-import { send as pushSend } from '@helm/protocol/push';
+import { send as pushSend } from '@con/protocol/push';
 
 /** A request already announced by this hub is not news. */
 const announced = new Set();

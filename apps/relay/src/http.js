@@ -3,8 +3,8 @@ import { q, now, newId, newInviteCode } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, issueDevice, revoke,
   authenticate, allEndpoints, localKey, deviceToken,
-} from '@helm/protocol/network';
-import { ROLE } from '@helm/protocol/identity';
+} from '@con/protocol/network';
+import { ROLE } from '@con/protocol/identity';
 
 /** Compare two secrets without leaking where they first differ. */
 const safeEqual = (a, b) => {
@@ -46,7 +46,7 @@ const joinAllowed = () => {
  * terminal that printed it to the phone that types it; after that the device
  * holds a durable token and never needs it again.
  */
-export const PASSWORD_TTL_MS = Number(process.env.HELM_PASSWORD_TTL_MS || 10 * 60 * 1000);
+export const PASSWORD_TTL_MS = Number(process.env.CON_PASSWORD_TTL_MS || 10 * 60 * 1000);
 const MIN_PASSWORD_TTL_MS = 60 * 1000;
 const MAX_PASSWORD_TTL_MS = 15 * 60 * 1000;
 
@@ -235,7 +235,7 @@ export function makeHttpHandler({ online, kick }) {
       return json(res, 200, { ok: true, network: net?.id ?? null });
     }
 
-    // The local key, for a page this machine itself is serving. `helm open`
+    // The local key, for a page this machine itself is serving. `con open`
     // used to be the only way it reached a browser; this makes opening
     // 127.0.0.1:8787 sign itself in with nothing to type.
     //
@@ -301,7 +301,7 @@ export function makeHttpHandler({ online, kick }) {
       const expected = currentPassword();
       if (!expected) {
         return json(res, 403, {
-          error: 'the pairing link has expired - run `helm add controller` for a new one',
+          error: 'the pairing link has expired - run `con add controller` for a new one',
         });
       }
       // Constant-time, like every other secret comparison here: the password
@@ -309,7 +309,7 @@ export function makeHttpHandler({ online, kick }) {
       // and a durable token.
       if (!safeEqual(body.password ?? '', expected)) {
         // A window that has been guessed at this many times is being attacked,
-        // not mistyped. Burning it costs the owner one `helm add controller`
+        // not mistyped. Burning it costs the owner one `con add controller`
         // and costs an attacker the whole attempt - and unlike a per-address
         // limit it still works behind Caddy, where every request on earth
         // arrives from 127.0.0.1 and would share one bucket.
@@ -318,7 +318,7 @@ export function makeHttpHandler({ online, kick }) {
         if (failures >= MAX_PASSWORD_ATTEMPTS) {
           q.authExpire.run();
           return json(res, 403, {
-            error: 'too many wrong passwords - that link is dead; run `helm add controller` for a new one',
+            error: 'too many wrong passwords - that link is dead; run `con add controller` for a new one',
           });
         }
         return json(res, 401, { error: 'bad password' });
@@ -399,7 +399,7 @@ export function makeHttpHandler({ online, kick }) {
     // the signature against, and it has to be handed out before anything can
     // subscribe.
     if (path === '/api/push/key' && req.method === 'GET') {
-      const { keys } = await import('@helm/protocol/push');
+      const { keys } = await import('@con/protocol/push');
       return json(res, 200, { key: keys().publicKey });
     }
 
@@ -462,7 +462,7 @@ export function makeHttpHandler({ online, kick }) {
       if (!bucket[id]) return json(res, 404, { error: `no such ${kind.slice(0, -1)}` });
       if (id === net.self) {
         return json(res, 409, {
-          error: 'a machine cannot remove itself - do it from another machine, or run `helm leave` here',
+          error: 'a machine cannot remove itself - do it from another machine, or run `con leave` here',
         });
       }
       revoke(net, id);
