@@ -79,6 +79,7 @@ export const M = {
   FS_LIST: 'fs.list',              // { path } -> { path, parent, entries[] }
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }
+  FS_SEARCH: 'fs.search',          // { query } -> { results[], indexed }  every dir under ~, indexed
   PROFILE_LIST: 'profile.list',    // {} -> { profiles[] }
   MODEL_LIST: 'model.list',        // { profileId, id?, all? } -> { default, models[], more?[], prefs?, effort?, efforts? }
   MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[] } -> { prefs }  per-account picker filter
@@ -100,6 +101,7 @@ export const M = {
   SESSION_UNWATCH: 'session.unwatch', // { id }
   SESSION_ANSWER: 'session.answer',   // { id, requestId, decision: { option, message?, answers? } }
   SESSION_INTERRUPT: 'session.interrupt', // { id }
+  SESSION_DEQUEUE: 'session.dequeue',   // { id, turnId } -> { found, text? }  pull a queued message back
   SESSION_NOTIFY: 'session.notify',       // { id, on } -> { ok }  ping me when this thread finishes
   SESSION_MODE: 'session.mode',       // { id, mode } -> { session }
   SESSION_MODEL: 'session.model',

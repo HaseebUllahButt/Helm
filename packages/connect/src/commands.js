@@ -14,7 +14,7 @@ import { ENGINES } from './engines.js';
  * What is real is two kinds of thing:
  *
  *   - helm's own actions, handled by the daemon before the text ever
- *     reaches a CLI (`sessions.js #slash`);
+ *     reaches a CLI (`sessions.js input`);
  *   - the commands the owner has written themselves, which do run headless -
  *     markdown files in the directory each CLI reads them from, either
  *     beside the project or in that account's config home.

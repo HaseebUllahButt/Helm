@@ -1199,6 +1199,11 @@ button.linkish:disabled { color: var(--icon); }
 button.resend { margin-left: 8px; color: var(--primary-q); font-size: var(--t-micro); font-weight: 500; }
 button.resend:hover { color: var(--text); }
 
+/* Withdraw on a message still queued: quieter than resend - it is a maybe,
+   not a failure. */
+button.withdraw { color: var(--mutedfg); font-size: var(--t-micro); font-weight: 500; }
+button.withdraw:hover { color: var(--text); }
+
 /* "edit before allowing": the command or plan becomes a textarea, and the
    way back to what the agent actually asked stays one tap away. */
 .sheet-edit {

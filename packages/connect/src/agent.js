@@ -219,6 +219,9 @@ export class Daemon {
     // Terminals live in their own process, so some of them are still running.
     // Ask which, once, rather than assuming either way.
     this.sessions.adoptTerminals().catch(() => {});
+    // The folder index behind `fs.search`: one background walk now, so the
+    // first query is answered from memory rather than starting the walk then.
+    fsApi.warmIndex?.();
     this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session: wire(session) }));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
@@ -731,6 +734,7 @@ export class Daemon {
       case M.FS_LIST:   return fsApi.list(p.path);
       case M.FS_ROOTS:  return fsApi.roots();
       case M.FS_MKDIR:  return fsApi.makeDir(p);
+      case M.FS_SEARCH: return fsApi.search(p.query);
 
       case M.PROFILE_LIST: {
         // Asked for the list means somebody is looking at what this machine
@@ -814,6 +818,7 @@ export class Daemon {
       case M.SESSION_UNWATCH: return this.sessions.unwatch(p.id);
       case M.SESSION_ANSWER:  return this.sessions.answer(p.id, p.requestId, p.decision ?? {});
       case M.SESSION_INTERRUPT: return this.sessions.interrupt(p.id);
+      case M.SESSION_DEQUEUE:  return this.sessions.dequeue(p.id, p.turnId);
       case M.SESSION_NOTIFY:   return this.sessions.setNotifyDone(p.id, p.on !== false);
       case M.SESSION_MODE:    return this.sessions.setMode(p.id, p.mode);
       case M.SESSION_MODEL:   return this.sessions.setModel(p.id, p.model);

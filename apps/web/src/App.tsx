@@ -2554,10 +2554,14 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
   const [folder, setFolder] = useState('');
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<{ name: string; path: string; repo: boolean }[] | null>(null);
+  const [indexed, setIndexed] = useState(0);
 
   // The folders a session last started in on this machine: a real project
   // is usually nested a few levels under home, and remembering the last few
-  // turns "open it again" into one tap instead of five.
+  // turns "open it again" into one tap instead of five. Three stay on top:
+  // enough to cover "the one I was just in" without becoming a second list.
   const RECENT = `helm-folders:${env.id}`;
   const [recent] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem(RECENT) || '[]'); } catch { return []; }
@@ -2579,6 +2583,19 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
 
   useEffect(() => { load(); }, [load]);
 
+  // The machine indexes its folders once, so a query answered from memory
+  // costs a debounce and a round trip rather than a disk walk per letter.
+  const q = query.trim();
+  useEffect(() => {
+    if (!q) { setHits(null); return; }
+    const t = setTimeout(() => {
+      client.rpc(env.id, 'fs.search', { query: q }, 20_000)
+        .then((r: any) => { setHits(r.results ?? []); setIndexed(r.indexed ?? 0); })
+        .catch((e) => { setHits([]); setError(e.message); });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [q, client, env.id]);
+
   const makeFolder = async () => {
     const name = folder.trim();
     if (!name) return;
@@ -2599,54 +2616,83 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
           Start here
         </button>
 
-        {/* Only on the way in: once you are browsing, the list on screen
-            already says where you are. */}
-        {!path && recent.length > 0 && (
+        <div className="filterbar">
+          <input
+            className="sheetfilter grow" value={query}
+            placeholder={`search folders on ${env.name}`}
+            autoCapitalize="off" autoCorrect="off" autoComplete="off"
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+
+        {q ? (
+          <div className="rows">
+            {(hits ?? []).map((h) => (
+              <button key={h.path} className="row" onClick={() => pick(h.path)}>
+                <span className={`glyph${h.repo ? ' repo' : ''}`}>{h.repo ? '◆' : '▸'}</span>
+                <span className="grow">
+                  <span className="rt">{h.name}</span>
+                  <span className="rm">{h.path}</span>
+                </span>
+                <span className="chev">›</span>
+              </button>
+            ))}
+            {hits === null
+              ? <div className="empty quiet">{indexed ? 'searching…' : 'indexing folders…'}</div>
+              : !hits.length && <div className="empty quiet">nothing matches{indexed ? ` · ${indexed} folders indexed` : ''}</div>}
+          </div>
+        ) : (
           <>
-            <div className="section">recent</div>
+            {/* Only on the way in: once you are browsing, the list on screen
+                already says where you are. */}
+            {!path && recent.length > 0 && (
+              <>
+                <div className="section">recent</div>
+                <div className="rows">
+                  {recent.slice(0, 3).map((p) => (
+                    <button key={p} className="row" onClick={() => pick(p)}>
+                      <span className="glyph repo">◆</span>
+                      <span className="grow">
+                        <span className="rt">{shortPath(p)}</span>
+                        <span className="rm">{p}</span>
+                      </span>
+                      <span className="chev">›</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <div className="section">
+              folders<span className="spacer" />
+              <button className="linkish" onClick={() => setCreating((v) => !v)}>
+                {creating ? 'cancel' : '+ new folder'}
+              </button>
+            </div>
+
+            {creating && (
+              <div className="inline-form">
+                <input
+                  autoFocus value={folder} placeholder="folder name"
+                  onChange={(e) => setFolder(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') makeFolder(); }}
+                />
+                <button className="send" onClick={makeFolder} disabled={!folder.trim()}>↑</button>
+              </div>
+            )}
+
             <div className="rows">
-              {recent.map((p) => (
-                <button key={p} className="row" onClick={() => pick(p)}>
-                  <span className="glyph repo">◆</span>
-                  <span className="grow">
-                    <span className="rt">{shortPath(p)}</span>
-                    <span className="rm">{p}</span>
-                  </span>
+              {entries.map((e) => (
+                <button key={e.path} className="row" onClick={() => onInto(e.path)}>
+                  <span className={`glyph${e.isRepo ? ' repo' : ''}`}>{e.isRepo ? '◆' : '▸'}</span>
+                  <span className="grow"><span className="rt">{e.name}</span></span>
                   <span className="chev">›</span>
                 </button>
               ))}
+              {!entries.length && !error && <div className="empty quiet">no subfolders</div>}
             </div>
           </>
         )}
-
-        <div className="section">
-          folders<span className="spacer" />
-          <button className="linkish" onClick={() => setCreating((v) => !v)}>
-            {creating ? 'cancel' : '+ new folder'}
-          </button>
-        </div>
-
-        {creating && (
-          <div className="inline-form">
-            <input
-              autoFocus value={folder} placeholder="folder name"
-              onChange={(e) => setFolder(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') makeFolder(); }}
-            />
-            <button className="send" onClick={makeFolder} disabled={!folder.trim()}>↑</button>
-          </div>
-        )}
-
-        <div className="rows">
-          {entries.map((e) => (
-            <button key={e.path} className="row" onClick={() => onInto(e.path)}>
-              <span className={`glyph${e.isRepo ? ' repo' : ''}`}>{e.isRepo ? '◆' : '▸'}</span>
-              <span className="grow"><span className="rt">{e.name}</span></span>
-              <span className="chev">›</span>
-            </button>
-          ))}
-          {!entries.length && !error && <div className="empty quiet">no subfolders</div>}
-        </div>
         {error && <div className="error">{error}</div>}
       </div></div>
     </>

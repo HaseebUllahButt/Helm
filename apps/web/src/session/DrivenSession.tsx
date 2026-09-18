@@ -6,7 +6,7 @@ import { MAX_ATTACHMENTS, looksLikeImage, prepareImage } from './image';
 import { EngineMark } from '../EngineMark';
 import { PermissionSheet } from './PermissionSheet';
 import { Controls, type Kind } from './Controls';
-import { Transcript } from './Transcript';
+import { Transcript, splitNote } from './Transcript';
 import { Confirm, TextPrompt } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
@@ -151,6 +151,22 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     const atts = (turn.attachments ?? []).filter((a) => a.data)
       .map((a) => ({ name: a.filename, mime: a.mime, data: a.data!, url: `data:${a.mime};base64,${a.data}` }));
     void sendText(turn.text.trim(), atts);
+  };
+
+  /**
+   * Pull a queued message back before the agent sees it: the daemon drops
+   * it from the queue and closes the bubble, and the words go back into the
+   * draft - behind whatever is already typed there, not over it. helm's own
+   * note is not restored: it was never the owner's typing.
+   */
+  const withdraw = async (turn: Turn) => {
+    try {
+      const r: any = await client.rpc(env.id, 'session.dequeue', { id: session.id, turnId: turn.id });
+      if (r?.found) {
+        const back = splitNote(turn.text).text ?? turn.text;
+        setDraft(draft ? `${draft.replace(/\s*$/, '')}\n${back}` : back);
+      }
+    } catch (e: any) { setError(e.message); }
   };
 
   const answer = (d: Decision) => pending && call(() => client.rpc(env.id, 'session.answer', { id: session.id, requestId: pending.requestId, decision: d }));
@@ -351,7 +367,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       <Transcript
         turns={log.turns} status={status} loaded={log.loaded}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
-        onResend={resend}
+        onResend={resend} onWithdraw={withdraw}
         empty={session.alive === false ? 'This conversation resumes with your next message.' : undefined}
       />
 

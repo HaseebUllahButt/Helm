@@ -586,3 +586,72 @@ test('a chat asks for its end, and is told what is behind it', async () => {
     for (const c of e.changes ?? []) assert.ok(c.diff.length < 9_000, 'diffs are capped on the wire');
   }
 });
+
+test('messages sent mid-turn queue in order; stop and withdraw take theirs with them', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-queue'));
+  const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const d = FakeDriver.made.at(-1);
+
+  await sessions.input(s.id, 'first');
+  assert.deepEqual(d.sent, ['first']);
+  assert.equal(sessions.get(s.id).status, 'working');
+
+  // Two more while the turn runs: tickets, not sends. Their bubbles exist
+  // already - open `local-` turns, which is what "queued" is on screen.
+  await sessions.input(s.id, 'second');
+  await sessions.input(s.id, 'third');
+  assert.deepEqual(d.sent, ['first']);
+  const locals = () => sessions.history(s.id).events
+    .filter((e) => e.type === 'turn.start' && e.turnId.startsWith('local-'));
+  assert.equal(locals().length, 3);
+
+  // The turn settling is what hands the next one over, in the order typed.
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+  await tick(); await tick();
+  assert.deepEqual(d.sent, ['first', 'second']);
+
+  // A prompt blocks the agent: a message typed while it waits queues too,
+  // rather than going to a CLI mid-question - behind the one already waiting.
+  d.ask();
+  await sessions.input(s.id, 'while you were asking');
+  assert.equal(d.sent.length, 2);
+  await sessions.answer(s.id, 'r1', { option: 'allow' });
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+  await tick(); await tick();
+  assert.deepEqual(d.sent, ['first', 'second', 'third']);
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+  await tick(); await tick();
+  assert.deepEqual(d.sent, ['first', 'second', 'third', 'while you were asking']);
+
+  // Withdraw pulls a ticket back before the agent ever sees the message.
+  await sessions.input(s.id, 'fourth');
+  const turnId = locals().at(-1).turnId;
+  const back = sessions.dequeue(s.id, turnId);
+  assert.equal(back.found, true);
+  assert.equal(back.text, 'fourth');
+  assert.equal(sessions.dequeue(s.id, turnId).found, false, 'gone is gone');
+
+  // More tickets, then stop: the queue is part of what stops, so the
+  // interrupt does not fire the next message the moment it lands.
+  await sessions.input(s.id, 'fifth');
+  await sessions.input(s.id, 'sixth');
+  await sessions.interrupt(s.id);
+  assert.equal(d.interrupted, true);
+  d.push('turn.done', { turnId: 't1', status: 'interrupted' });
+  d.push('status', { status: 'idle' });
+  await tick(); await tick();
+  assert.deepEqual(d.sent, ['first', 'second', 'third', 'while you were asking']);
+
+  // The withdrawn and the stopped bubbles all closed, by name.
+  const dones = sessions.history(s.id).events.filter((e) => e.type === 'turn.done' && e.turnId.startsWith('local-'));
+  assert.equal(dones.filter((e) => e.error === 'withdrawn before it was sent').length, 1);
+  assert.equal(dones.filter((e) => e.error === 'stopped before it was sent').length, 2);
+});

@@ -180,6 +180,21 @@ export class Sessions extends EventEmitter {
   #watching = new Map();
   /** external id -> 'archived' | 'removed', for rows helm does not own */
   #marks = new Map();
+  /**
+   * sessionId -> messages accepted but not yet handed to the agent.
+   *
+   * Every CLI queues input typed mid-turn *differently*: claude holds it
+   * internally, codex's app-server refuses a second turn/start outright, and
+   * an ACP agent answers a prompt sent while one is open however it pleases.
+   * So the queue lives here, where it works the same on all four: a message
+   * sent while the agent is working or blocked waits for the turn to end,
+   * then goes out in the order it was typed - what typing into a CLI does.
+   * Memory only: a daemon restart closes the orphaned `local-` turns in
+   * `resume()` rather than promising to send what it no longer can.
+   */
+  #outbox = new Map();
+  /** sessionIds with a `#deliver` in flight - the queue's mutex. */
+  #sending = new Set();
 
   constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost() } = {}) {
     super();
@@ -612,6 +627,11 @@ export class Sessions extends EventEmitter {
         this.emit('session', s);
         this.emit('status', { session: s, from: previous, to: status });
       }
+      // A settled turn is what a queued message waits behind - even when the
+      // turn ended badly. `exited` counts too: delivery respawns the driver,
+      // which is how a queue survives the process dying mid-turn. The pump
+      // reads s.status to know the agent is free, so it runs after it lands.
+      if (status === 'idle') this.#pump(s);
       if (e.status === 'exited') return;
     }
     if (e.type === 'title') return this.#titled(s, e.title, 'agent');
@@ -858,6 +878,21 @@ export class Sessions extends EventEmitter {
   }
 
   async interrupt(id) {
+    // "Stop" stops the queue too, and before the driver is asked: a settled
+    // turn is what wakes the pump, so a stop that left the queue intact
+    // would fire the next message the moment the interrupt landed. Each
+    // waiting bubble closes as interrupted, which is what happened to it.
+    const queued = this.#outbox.get(id) ?? [];
+    this.#outbox.delete(id);
+    for (const item of queued) {
+      const event = this.events.append(id, {
+        type: 'turn.done', turnId: item.turnId, status: 'interrupted',
+        error: 'stopped before it was sent',
+      });
+      this.emit('event', { id, event });
+    }
+    const s = this.#index.get(id);
+    if (s && queued.length) s.lastSeq = this.events.last(id);
     const d = this.#drivers.get(id);
     if (d) await d.interrupt();
     return { ok: true };
@@ -1135,9 +1170,10 @@ export class Sessions extends EventEmitter {
       let clean = text.replace(/\n$/, '');
       // Slash commands are helm's, not the agent's: intercept before the
       // text reaches a CLI that would read them as words in a prompt.
+      let compact = null;
       if (!raw) {
         const slash = /^\/(compact)(?:\s+(.*?))?\s*$/s.exec(text.trim());
-        if (slash) return this.#slash(s, slash[1], (slash[2] ?? '').trim());
+        if (slash) compact = (slash[2] ?? '').trim();
       }
       // What a client sent is not trusted to be sane: it arrives over the
       // network and lands in the event log and in a CLI's stdin.
@@ -1159,22 +1195,26 @@ export class Sessions extends EventEmitter {
       // Sampled before the prefix goes on: the network's state is helm's
       // note to the agent, and naming the thread "[helm 2 machines…]" would
       // be naming it after helm rather than after the work.
-      if (!raw) this.#prompted(s, clean);
+      if (!raw && compact == null) this.#prompted(s, clean);
       if (brainLine) clean = `${brainLine}\n\n${clean}`;
 
-      // Emit the turn optimistically so every watcher sees the message the
-      // moment it is sent, not when the agent gets round to echoing it. A
-      // message queued behind a running turn can sit un-announced for
-      // minutes - without this it looks like it was never sent at all. The
-      // text emitted is the final text, helm's note included, because the
-      // echo is matched against it: a `local-` turn is adopted by the real
-      // turn's `turn.start` when the texts agree (see `apply` in the web's
-      // session/types.ts).
-      // `local-` plus a nonce: two sends in the same millisecond are two
-      // turns, and an id shared between them would let one's turn.done
-      // close the other.
       const turnId = `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-      {
+      if (compact != null) {
+        // `/compact` is a command, not a prompt, so its bubble is a closed
+        // one-liner rather than a turn that waits on the agent's echo.
+        this.#emitLocal(s, turnId, `/compact${compact ? ` ${compact}` : ''}`);
+      } else {
+        // Emit the turn optimistically so every watcher sees the message the
+        // moment it is sent, not when the agent gets round to echoing it. A
+        // message queued behind a running turn can sit un-announced for
+        // minutes - without this it looks like it was never sent at all. The
+        // text emitted is the final text, helm's note included, because the
+        // echo is matched against it: a `local-` turn is adopted by the real
+        // turn's `turn.start` when the texts agree (see `apply` in the web's
+        // session/types.ts).
+        // `local-` plus a nonce: two sends in the same millisecond are two
+        // turns, and an id shared between them would let one's turn.done
+        // close the other.
         const event = this.events.append(id, {
           type: 'turn.start', turnId, text: clean,
           attachments: images.map((a) => this.events.putAttachment(id, a)),
@@ -1182,39 +1222,25 @@ export class Sessions extends EventEmitter {
         s.lastSeq = event.seq;
         this.emit('event', { id, event });
       }
-      // The driver is the authority on whether this agent can see an image:
-      // it is the one that spoke to the CLI. Anything else gets a filename
-      // placeholder in the text, which is always safe while lost bytes are
-      // not - but it says so out loud rather than dropping them silently.
+
+      const item = { turnId, text: clean, images, compact };
+      // Busy is a turn in flight, a prompt waiting on the owner, or a send
+      // still being written. The message takes a ticket and `#pump` hands
+      // it to the agent once the turn settles - the same thing typing into
+      // a busy CLI does, on engines whose own queue would drop it instead.
+      const busy = this.#sending.has(s.id) || s.status === 'working' || s.status === 'blocked';
+      if (busy) {
+        const q = this.#outbox.get(s.id) ?? [];
+        q.push(item);
+        this.#outbox.set(s.id, q);
+        return { ok: true };
+      }
+      this.#sending.add(s.id);
       try {
-        if (images.length && driverTakesImages(d)) {
-          await d.sendWithAttachments(clean, images);
-        } else {
-          let msg = clean;
-          if (images.length) {
-            const names = images.map((a) => `[image: ${a.filename || 'image'} - this agent cannot see images]`).join('\n');
-            msg = msg ? `${msg}\n${names}` : names;
-            this.events.append(id, {
-              type: 'error', kind: 'attachment',
-              message: images.length === 1
-                ? `${s.engine} cannot be sent images, so ${images[0].filename || 'the image'} was named but not attached.`
-                : `${s.engine} cannot be sent images, so ${images.length} attachments were named but not sent.`,
-            });
-          }
-          await d.send(msg);
-        }
-      } catch (err) {
-        // The send never reached the agent. The bubble stays - it is what
-        // the owner wrote - but it closes failed rather than hanging as a
-        // message that looks merely unanswered, and the error travels back
-        // to the client so the draft is offered again.
-        const failed = this.events.append(id, {
-          type: 'turn.done', turnId, status: 'error',
-          error: String(err?.message || err),
-        });
-        s.lastSeq = failed.seq;
-        this.emit('event', { id, event: failed });
-        throw err;
+        await this.#deliver(s, item, d);
+      } finally {
+        this.#sending.delete(s.id);
+        this.#pump(s);
       }
       return { ok: true };
     }
@@ -1227,14 +1253,111 @@ export class Sessions extends EventEmitter {
     return this.runtime.sendText(handle, text);
   }
 
-  /** `/compact [hint]` summarises the conversation into a fresh context. */
-  async #slash(s, cmd, arg) {
-    const turnId = `local-${Date.now().toString(36)}`;
-    const text = `/${cmd}${arg ? ` ${arg}` : ''}`;
-    this.#emitLocal(s, turnId, text);
-    const d = await this.#driver(s);
-    await d.compact(arg);
-    return { ok: true };
+  /**
+   * Hand one message to the agent.
+   *
+   * The driver is the authority on whether this agent can see an image: it
+   * is the one that spoke to the CLI. Anything else gets a filename
+   * placeholder in the text, which is always safe while lost bytes are not -
+   * but it says so out loud rather than dropping them silently.
+   */
+  async #deliver(s, item, d = null) {
+    d ??= await this.#driver(s);
+    try {
+      if (item.compact != null) {
+        await d.compact(item.compact);
+      } else if (item.images.length && driverTakesImages(d)) {
+        await d.sendWithAttachments(item.text, item.images);
+      } else {
+        let msg = item.text;
+        if (item.images.length) {
+          const names = item.images.map((a) => `[image: ${a.filename || 'image'} - this agent cannot see images]`).join('\n');
+          msg = msg ? `${msg}\n${names}` : names;
+          this.events.append(s.id, {
+            type: 'error', kind: 'attachment',
+            message: item.images.length === 1
+              ? `${s.engine} cannot be sent images, so ${item.images[0].filename || 'the image'} was named but not attached.`
+              : `${s.engine} cannot be sent images, so ${item.images.length} attachments were named but not sent.`,
+          });
+        }
+        await d.send(msg);
+      }
+    } catch (err) {
+      // The send never reached the agent. The bubble stays - it is what
+      // the owner wrote - but it closes failed rather than hanging as a
+      // message that looks merely unanswered, and the error travels back
+      // to the client so the draft is offered again.
+      const failed = this.events.append(s.id, {
+        type: 'turn.done', turnId: item.turnId, status: 'error',
+        error: String(err?.message || err),
+      });
+      s.lastSeq = failed.seq;
+      this.emit('event', { id: s.id, event: failed });
+      throw err;
+    }
+  }
+
+  /**
+   * Give the agent the next queued message, if it can take one.
+   *
+   * Called when a turn settles (`#onDriverEvent`) and after every delivery.
+   * Each send is awaited before the next is considered, and the loop stops
+   * as soon as the agent reports itself busy again - which for a real driver
+   * is before `send` even returns, so a queue drains one turn at a time, in
+   * the order the messages were typed.
+   */
+  #pump(s) {
+    if (this.#sending.has(s.id)) return;
+    const q = this.#outbox.get(s.id);
+    if (!q?.length) return;
+    if (s.status === 'working' || s.status === 'blocked') return;
+    this.#sending.add(s.id);
+    (async () => {
+      try {
+        for (;;) {
+          const next = this.#outbox.get(s.id)?.[0];
+          if (!next) break;
+          // A killed session drops what it was holding: its event log is
+          // gone, so there is no turn to close the message against anyway.
+          if (!this.#index.has(s.id)) { this.#outbox.delete(s.id); break; }
+          if (s.status === 'working' || s.status === 'blocked') break;
+          try {
+            await this.#deliver(s, next);
+          } catch {
+            // The turn already failed loudly, with a resend waiting on it.
+            // The queue moves on - a dead agent fails each send on its own
+            // merits rather than eating the rest of the queue silently.
+          }
+          this.#outbox.get(s.id)?.shift();
+        }
+      } finally {
+        this.#sending.delete(s.id);
+      }
+    })();
+  }
+
+  /**
+   * Take back a message still waiting in the queue.
+   *
+   * The CLI version of this is pulling the text back into the input box
+   * before the agent ever sees it: the bubble closes as interrupted - it was
+   * stopped, before it was sent - and the caller gets the words back for the
+   * draft. A turnId the queue no longer holds already went out, so that is
+   * `found: false` rather than an error.
+   */
+  dequeue(id, turnId) {
+    const s = this.get(id);
+    const q = this.#outbox.get(id) ?? [];
+    const i = q.findIndex((x) => x.turnId === turnId);
+    if (i < 0) return { ok: true, found: false };
+    const [item] = q.splice(i, 1);
+    const event = this.events.append(id, {
+      type: 'turn.done', turnId, status: 'interrupted',
+      error: 'withdrawn before it was sent',
+    });
+    s.lastSeq = event.seq;
+    this.emit('event', { id, event });
+    return { ok: true, found: true, text: item.text };
   }
 
   /** A turn helm itself speaks: appended and pushed like any driver event. */
@@ -1286,6 +1409,7 @@ export class Sessions extends EventEmitter {
     if (s.driver) {
       const d = this.#drivers.get(id);
       this.#drivers.delete(id);
+      this.#outbox.delete(id);
       clearTimeout(this.#reapers.get(id));
       if (d) await d.kill();
       this.#index.delete(id);
@@ -1397,8 +1521,17 @@ export class Sessions extends EventEmitter {
       for (const p of this.events.pending(s.id)) {
         this.events.append(s.id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
       }
-      const open = this.events.openTurn(s.id);
-      if (open) this.events.append(s.id, { type: 'turn.done', turnId: open.turnId, status: 'interrupted', error: 'helm restarted' });
+      // Every turn left open died with the previous daemon: a running turn's
+      // agent is gone, and a message still in the queue never sent. Scan the
+      // tail rather than asking `openTurn`, which only finds the last one -
+      // with several queued, each earlier bubble would hang "queued" forever.
+      const tail = this.events.tail(s.id, 0);
+      const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
+      for (const e of tail) {
+        if (e.type !== 'turn.start' || closed.has(e.turnId)) continue;
+        closed.add(e.turnId);
+        this.events.append(s.id, { type: 'turn.done', turnId: e.turnId, status: 'interrupted', error: 'helm restarted' });
+      }
       if (s.status !== 'idle') { s.status = 'idle'; s.updatedAt = Date.now(); }
     }
     this.#save();

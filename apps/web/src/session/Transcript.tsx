@@ -284,7 +284,7 @@ function ItemView({ item, byParent }: { item: Item; byParent: Map<string, Item[]
  * own quiet line instead.
  */
 const HELM_NOTE = /^(\[helm [^\]\n]*\])\n\n([\s\S]*)$/;
-function splitNote(text?: string): { note?: string; text?: string } {
+export function splitNote(text?: string): { note?: string; text?: string } {
   const m = text ? HELM_NOTE.exec(text) : null;
   return m ? { note: m[1], text: m[2] } : { text };
 }
@@ -299,7 +299,7 @@ function clock(ts?: number) {
   return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
 }
 
-function TurnView({ turn, working, blocked, onResend }: { turn: Turn; working: boolean; blocked: boolean; onResend?: (turn: Turn) => void }) {
+function TurnView({ turn, working, blocked, onResend, onWithdraw }: { turn: Turn; working: boolean; blocked: boolean; onResend?: (turn: Turn) => void; onWithdraw?: (turn: Turn) => void }) {
   const said = splitNote(turn.text);
   const d = turn.done;
   // A `local-` turn is one helm posted before the agent echoed it. Until
@@ -334,6 +334,12 @@ function TurnView({ turn, working, blocked, onResend }: { turn: Turn; working: b
           ))}
           <span className="bubble-meta">
             {queued && <span className="tag">queued</span>}
+            {/* Still on helm's side of the wire: the agent has not seen it,
+                so taking it back is possible - and puts the words back in
+                the composer, the way a CLI lets you pull a queued line up. */}
+            {queued && onWithdraw && (
+              <button className="withdraw" onClick={() => onWithdraw(turn)}>withdraw</button>
+            )}
             {clock(turn.at)}
           </span>
         </div></div>
@@ -362,12 +368,14 @@ function TurnView({ turn, working, blocked, onResend }: { turn: Turn; working: b
   );
 }
 
-export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend }: {
+export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw }: {
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
   /** The machine holds more of this conversation than is on screen. */
   earlier?: boolean; loadingEarlier?: boolean; onEarlier?: () => void;
   /** Offered on a turn that ended in an error: send its prompt again. */
   onResend?: (turn: Turn) => void;
+  /** Offered while a message is still queued: take it back into the draft. */
+  onWithdraw?: (turn: Turn) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
@@ -406,7 +414,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
           )}
           {!loaded && <p className="placeholder">Loading the conversation…</p>}
           {loaded && turns.length === 0 && <p className="placeholder">{empty ?? 'Send a message to start the conversation.'}</p>}
-          {turns.map((t) => <TurnView key={t.id} turn={t} working={working && t === last} blocked={status === 'blocked'} onResend={onResend} />)}
+          {turns.map((t) => <TurnView key={t.id} turn={t} working={working && t === last} blocked={status === 'blocked'} onResend={onResend} onWithdraw={onWithdraw} />)}
         </div>
       </div>
       {unread && <button className="jump" onClick={jump}>↓ new</button>}
