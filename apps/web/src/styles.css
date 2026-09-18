@@ -1100,3 +1100,88 @@ pre.snippet {
 .edot.devin { background: var(--devin); }
 
 .usage-note { flex-direction: column; align-items: flex-start; gap: 3px; margin-top: 14px; }
+
+/* ------------------------------------------------------------ new in this pass */
+
+/* helm's own dialogs, standing in for confirm()/prompt(): centred, dimmed
+   behind, dismissed by backdrop tap or Escape. */
+.modal-back {
+  position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  background: rgb(0 0 0 / 55%); backdrop-filter: blur(3px); padding: 20px;
+}
+.modal {
+  width: 100%; max-width: 380px; background: var(--raised); border: 1px solid var(--line-2);
+  border-radius: var(--radius); padding: 16px;
+  box-shadow: 0 24px 72px -20px rgb(0 0 0 / 90%);
+}
+.modal-title { font-size: var(--t-body); font-weight: 600; color: var(--text); margin-bottom: 8px; }
+.modal-body { font-size: var(--t-meta); line-height: 1.55; color: var(--text-dim); margin-bottom: 14px; }
+.modal-input { width: 100%; font-size: var(--t-body); padding: 9px 11px; margin-bottom: 14px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.modal-actions button { width: auto; margin: 0; padding: 8px 16px; font-size: var(--t-body); }
+button.primary.danger { background: color-mix(in srgb, var(--red) 22%, var(--raised)); color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
+
+/* "Another machine needs you" while a session is open. Bottom-centre above
+   the composer, where a thumb already is. */
+.toast {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 76px); transform: translateX(-50%);
+  z-index: 55; display: flex; align-items: center; gap: 10px; width: min(400px, calc(100vw - 28px));
+  padding: 10px 14px; border-radius: var(--radius); text-align: left;
+  background: color-mix(in srgb, var(--amber) 12%, var(--raised));
+  border: 1px solid color-mix(in srgb, var(--amber) 38%, transparent);
+  box-shadow: 0 16px 48px -12px rgb(0 0 0 / 80%);
+  animation: toast-in 0.25s var(--ease);
+}
+@keyframes toast-in { from { opacity: 0; transform: translateX(-50%) translateY(8px); } }
+.toast b { display: block; font-size: var(--t-body); font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toast small { display: block; font-size: var(--t-meta); color: var(--text-dim); }
+.toast .chev { color: var(--amber); font-size: 15px; flex: none; }
+
+/* Pull-to-refresh: a spacer that grows under the finger, then the release
+   hint once it is far enough to count. */
+.pull {
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+  font-size: var(--t-meta); color: var(--mutedfg); flex: none;
+}
+
+/* Select mode: a counter and the one thing you can do to what you picked. */
+.selbar {
+  display: flex; align-items: center; gap: 8px;
+  font-size: var(--t-meta); color: var(--text-dim); padding: 2px 2px 6px;
+}
+.selbar .spacer { flex: 1; }
+button.linkish.on { color: var(--text); }
+button.linkish:disabled { color: var(--icon); }
+
+/* The checkbox a row grows in select mode: a ring until it is picked. */
+.rowmain .check {
+  width: 18px; height: 18px; border-radius: 50%; flex: none;
+  border: 1.5px solid var(--line-2); background: transparent;
+}
+.rowmain .check.on { background: var(--primary-q); border-color: var(--primary-q); box-shadow: inset 0 0 0 3px var(--bg); }
+.row.tall.sel { background: color-mix(in srgb, var(--primary) 8%, var(--card)); border-color: color-mix(in srgb, var(--primary) 45%, transparent); }
+
+/* What an offline machine last said: kept readable, unmistakably not live. */
+.rows.stale .row { opacity: 0.55; }
+
+/* "waiting 12m" on a permission sheet, and the queued tag on a bubble. */
+.tag.waiting { background: color-mix(in srgb, var(--amber) 14%, transparent); color: var(--amber); }
+.turn.user.queued .bubble { opacity: 0.72; }
+.bubble-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: var(--t-micro); color: var(--mutedfg); }
+
+/* Resend on a turn that failed: a link, not a second error. */
+button.resend { margin-left: 8px; color: var(--primary-q); font-size: var(--t-micro); font-weight: 500; }
+button.resend:hover { color: var(--text); }
+
+/* "edit before allowing": the command or plan becomes a textarea, and the
+   way back to what the agent actually asked stays one tap away. */
+.sheet-edit {
+  width: 100%; font-family: var(--mono); font-size: var(--t-meta); line-height: 1.55;
+  padding: 10px 12px; background: var(--bg); border-radius: var(--radius); color: var(--text);
+  resize: vertical; min-height: 3em;
+}
+button.sheet-editlink { align-self: flex-start; color: var(--primary-q); font-size: var(--t-meta); font-weight: 500; padding: 2px 0; }
+button.sheet-editlink:hover { color: var(--text); }
+
+/* The notify-when-done bell: dim until armed, amber once it is. */
+.iconbtn.bell.on { color: var(--amber); }

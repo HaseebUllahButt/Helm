@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
+import { Confirm, TextPrompt } from './Modal';
+import { useNow, waitingSince } from './useNow';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
@@ -9,7 +11,7 @@ import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brai
 import {
   Client, login, validMachineName, MACHINE_NAME_RULE,
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
-  type InventorySession,
+  type InventorySession, type Device,
 } from './client';
 import { money } from './format';
 import { loadModels, saveModels } from './modelCache';
@@ -268,7 +270,40 @@ type MainView =
   | { kind: 'start'; cwd: string }
   | { kind: 'settings' }
   | { kind: 'models'; account: Account }
+  // Which phones and browsers hold a key to this network: pair another, or
+  // stop trusting one.
+  | { kind: 'devices' }
   | { kind: 'session'; session: Session };
+
+/** A request answered elsewhere, or a session that just started waiting -
+    the toast the sidebar cannot show while it is hidden behind a session. */
+interface Toast { envId: string; session: Session; at: number }
+
+/**
+ * An interval that pauses while the page is hidden and catches up the
+ * moment it comes back.
+ *
+ * Every poll in the app - session lists, transcripts, a machine's last
+ * word - used to keep asking while the phone sat in a pocket with the
+ * screen off, on a metered connection that did not care nobody was
+ * looking. A hidden tab needs no fresher answer than the one it has, and
+ * on wake the first tick comes immediately rather than up to `ms` late.
+ * `ms` of null means do not poll at all.
+ */
+function useLiveInterval(ms: number | null, fn: () => void, deps: readonly unknown[] = []) {
+  const ref = useRef(fn);
+  ref.current = fn;
+  useEffect(() => {
+    if (ms == null) return;
+    const tick = () => { if (!document.hidden) ref.current(); };
+    const timer = setInterval(tick, ms);
+    const wake = () => { if (!document.hidden) ref.current(); };
+    document.addEventListener('visibilitychange', wake);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', wake); };
+    // The callback is read through a ref; deps are the caller's own
+    // interests, like any other effect.
+  }, deps); // eslint-disable-line react-hooks/exhaustive-deps
+}
 
 function Shell({ client, conn, onSignOut }: {
   client: Client; conn: { online: boolean; reachable: boolean; error?: string }; onSignOut: () => void;
@@ -280,6 +315,14 @@ function Shell({ client, conn, onSignOut }: {
   const [stack, setStack] = useState<MainView[]>([{ kind: 'env' }]);
   const [error, setError] = useState('');
   const [downSince, setDownSince] = useState<number | null>(null);
+  /** "thread X needs you" while a different session is on screen. */
+  const [toast, setToast] = useState<Toast | null>(null);
+  /** Search every machine's threads from the sidebar, not only the open one. */
+  const [query, setQuery] = useState('');
+  /** Every machine's last-said session list, for the ones that are asleep. */
+  const [snap, setSnap] = useState<{ machines: Record<string, { name: string; at: number; sessions: Session[] }> } | null>(null);
+  /** The one in-app yes/no currently up: unpairing this device. */
+  const [unpairing, setUnpairing] = useState(false);
 
   /**
    * Navigation lives in the browser history, so the phone's back button
@@ -389,7 +432,23 @@ function Shell({ client, conn, onSignOut }: {
         } else loadEnvs();
       }
       if (kind === 'connection' && payload.online) loadEnvs();
-      if (kind === 'session.update' && e) loadSessions(e);
+      if (kind === 'session.update' && e) {
+        loadSessions(e);
+        // A session that just started waiting, on a machine this window is
+        // not looking at, earns a tap-target in front of whatever is open -
+        // on a phone the sidebar that would say so is hidden behind the
+        // session you are in. The sheet inside that session is the notice
+        // for the one you are looking at, so it is not toasted about.
+        const s = payload?.session;
+        if (payload?.transition?.to === 'blocked' && s) {
+          const top = nav.current.stack[nav.current.stack.length - 1];
+          const looking = top?.kind === 'session' && top.session.id === s.id;
+          if (!looking) {
+            setToast({ envId: e, session: s, at: Date.now() });
+            try { navigator.vibrate?.(60); } catch { /* no haptics here */ }
+          }
+        }
+      }
     });
   }, [loadEnvs, loadSessions, client]);
 
@@ -403,9 +462,14 @@ function Shell({ client, conn, onSignOut }: {
   useEffect(() => {
     const live = liveIds ? liveIds.split(',') : [];
     for (const id of live) { client.subscribe(id); loadSessions(id); }
-    const timer = setInterval(() => { for (const id of live) loadSessions(id); }, 15_000);
-    return () => clearInterval(timer);
   }, [liveIds, client, loadSessions, conn.online]);
+  // Status changes arrive pushed, so this list is reconciliation rather
+  // than the live feed - it can afford to be slower than the events that
+  // keep it fresh, and nothing at all while the page is hidden.
+  useLiveInterval(30_000, () => {
+    const live = liveIds ? liveIds.split(',') : [];
+    for (const id of live) loadSessions(id);
+  }, [liveIds, loadSessions]);
 
   useEffect(() => {
     if (wide && !selected && envs.length) setSelected(envs[0].id);
@@ -413,6 +477,69 @@ function Shell({ client, conn, onSignOut }: {
 
   const env = envs.find((e) => e.id === selected) ?? null;
   const view = stack[stack.length - 1];
+
+  /**
+   * Which session this window is looking at, told to the service worker so
+   * a push about it stays silent: the sheet already on screen is the
+   * notification. Posted on every navigation, including the one back to a
+   * list - "looking at nothing" is real information.
+   */
+  useEffect(() => {
+    navigator.serviceWorker?.controller?.postMessage({
+      type: 'helm:viewing',
+      envId: view?.kind === 'session' ? selected : null,
+      sessionId: view?.kind === 'session' ? view.session.id : null,
+    });
+  }, [view, selected]);
+
+  /**
+   * The tab's title answers "is anything waiting" from the app switcher
+   * alone, and names the thread a notification lands on - the one place a
+   * session's name matters outside the app itself.
+   */
+  const blockedCount = envs.reduce((n, e) =>
+    n + (sessions[e.id] ?? []).filter((s) => s.engine !== 'shell' && !s.archived && s.status === 'blocked').length, 0);
+  useEffect(() => {
+    const parts: string[] = [];
+    if (view?.kind === 'session') parts.push(view.session.title);
+    else if (view?.kind === 'env' && env) parts.push(env.name);
+    if (blockedCount) parts.unshift(`${blockedCount} waiting`);
+    if (!conn.online) parts.push('offline');
+    document.title = parts.length ? `${parts.join(' · ')} · helm` : 'helm';
+    return () => { document.title = 'helm'; };
+  }, [view, env?.id, blockedCount, conn.online]);
+
+  // The toast is a glance, not a summons: it dismisses itself rather than
+  // sit over the composer until it is acknowledged.
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 9000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  /**
+   * What an offline machine last said about itself.
+   *
+   * The snapshot is merged on whichever machine answers - usually the
+   * always-on home - so asking any live machine yields every machine's
+   * last-known sessions, timestamped. It is re-read while the app is open
+   * rather than once: a laptop that went to sleep ten minutes ago has a
+   * fresher memory than the file that booted the app.
+   */
+  const firstOnline = envs.find((e) => e.online)?.id;
+  // Its only reader is the "last known" section on a machine that cannot be
+  // asked - when nothing is down, the answer would arrive and be thrown away.
+  const hasOffline = envs.some((e) => !e.online);
+  useEffect(() => {
+    if (!conn.online || !firstOnline || !hasOffline) { setSnap(null); return; }
+    let stale = false;
+    const ask = () => client.rpc<any>(firstOnline, 'brain.snapshot', { cached: true }, 15_000)
+      .then((r) => { if (!stale && r?.snapshot) setSnap(r.snapshot); })
+      .catch(() => {});
+    ask();
+    const timer = setInterval(() => { if (!document.hidden) ask(); }, 60_000);
+    return () => { stale = true; clearInterval(timer); };
+  }, [client, conn.online, firstOnline, hasOffline]);
 
   // Stable per machine. Handed to EnvView, which lists it as an effect
   // dependency: a fresh arrow on every render would repeatedly re-list the
@@ -558,8 +685,9 @@ function Shell({ client, conn, onSignOut }: {
   // once a machine is selected, and every view - the brain included - belongs
   // to one.
   // Usage across every machine is a main-pane view that belongs to no machine,
-  // so it has to open the main pane on a phone without one being selected.
-  const showMain = wide || !!selected || view.kind === 'usage';
+  // so it has to open the main pane on a phone without one being selected -
+  // and what devices hold keys belongs to no machine either.
+  const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'devices';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -588,6 +716,65 @@ function Shell({ client, conn, onSignOut }: {
                 No machine answered for a while. Check the VM, or that this phone has internet.
               </div>
             )}
+
+            {/* "Which machine has the thread about X" is one question, not
+                one per machine. The box searches every live list, and the
+                remembered threads of machines that are asleep. */}
+            <div className="filterbar">
+              <input
+                className="sheetfilter grow" value={query} placeholder="search threads & machines"
+                autoCapitalize="off" autoCorrect="off" autoComplete="off"
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+
+            {(() => {
+              const q = query.trim().toLowerCase();
+              if (!q) return null;
+              const hits = envs.flatMap((e) => {
+                const live = agentsOf(e.id)
+                  .filter((s) => `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q))
+                  .map((s) => ({ e, s, stale: false }));
+                const remembered = !e.online
+                  ? (snap?.machines?.[e.id]?.sessions ?? [])
+                    .filter((s) => `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q))
+                    .map((s) => ({ e, s, stale: true }))
+                  : [];
+                return [...live, ...remembered];
+              }).sort((a, b) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0)).slice(0, 40);
+              const machines = envs.filter((e) => e.name.toLowerCase().includes(q));
+              return (
+                <>
+                  <div className="section">everywhere</div>
+                  <div className="rows">
+                    {machines.map((e) => (
+                      <button key={e.id} className="row" onClick={() => { setQuery(''); openEnv(e.id); }}>
+                        <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+                        <span className="grow"><span className="rt">{e.name}</span><span className="rm">machine</span></span>
+                        <span className="chev">›</span>
+                      </button>
+                    ))}
+                    {hits.map(({ e, s, stale }) => (
+                      <button key={`${e.id}:${s.id}`} className="row tall" onClick={() => {
+                        setQuery('');
+                        if (stale) openEnv(e.id);
+                        else openSession(e.id, s);
+                      }}>
+                        <EngineMark engine={engineOf(s.engine).cls} />
+                        <span className="grow">
+                          <span className="rt">{s.title}{stale && <span className="tag">offline</span>}</span>
+                          <span className="rm">{e.name} · {shortPath(s.cwd)}</span>
+                        </span>
+                        <StatusChip status={s.status} />
+                      </button>
+                    ))}
+                    {!hits.length && !machines.length && <div className="empty quiet">nothing anywhere matches</div>}
+                  </div>
+                </>
+              );
+            })()}
+
+            {!query.trim() && (<>
 
             {blocked.length > 0 && (
               <>
@@ -680,16 +867,23 @@ function Shell({ client, conn, onSignOut }: {
                 look like one. */}
             <div className="section">this device</div>
             <div className="rows">
+              <button className="row" onClick={() => navigate([{ kind: 'devices' }])}>
+                <span className="grow">
+                  <span className="rt">Devices & pairing</span>
+                  <span className="rm">what holds a key to this network</span>
+                </span>
+                <span className="chev">›</span>
+              </button>
               <AddMachine client={client} />
               <Notifications client={client} />
               <InstallPwa />
-              <button className="row destructive" onClick={() => {
-                if (confirm('Unpair this device? You will need a fresh link from `helm link` to sign back in.')) onSignOut();
-              }}>
+              <button className="row destructive" onClick={() => setUnpairing(true)}>
                 <span className="grow"><span className="rt">Unpair this device</span></span>
               </button>
             </div>
             {error && <div className="error">{error}</div>}
+
+            </>)}
           </div>
           <div className="diag">
             <span>{hubHost || 'no hub'}</span>
@@ -704,6 +898,8 @@ function Shell({ client, conn, onSignOut }: {
             client={client} envs={envs} onBack={back}
             onPickEnv={(id) => navigate([{ kind: 'env' }, { kind: 'envusage' }], id)}
           />
+        ) : view.kind === 'devices' ? (
+          <DevicesView client={client} onBack={back} />
         ) : !env ? (
           <div className="scroll"><div className="pad">
             <div className="empty quiet">select a machine</div>
@@ -727,6 +923,8 @@ function Shell({ client, conn, onSignOut }: {
             key={env.id}
             client={client} env={env} wide={wide} onBack={back}
             sessions={sessions[env.id] ?? []} reload={reloadEnv}
+            remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions}
+            rememberedAt={env.online ? undefined : snap?.machines?.[env.id]?.at}
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
             onBrowse={() => push({ kind: 'browse' })}
             onSettings={() => push({ kind: 'settings' })}
@@ -763,7 +961,7 @@ function Shell({ client, conn, onSignOut }: {
         ) : view.session.driver ? (
           <DrivenSession
             key={view.session.id}
-            client={client} env={env} onTranscribe={transcribeVia(env.id)}
+            client={client} env={env} conn={conn} onTranscribe={transcribeVia(env.id)}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
@@ -783,6 +981,32 @@ function Shell({ client, conn, onSignOut }: {
           />
         )}
       </section>
+
+      {/* Another thread started waiting while this one was open. A tap on
+          the toast is the whole journey to answering it. */}
+      {toast && (
+        <button
+          className="toast"
+          onClick={() => { const t = toast; setToast(null); openSession(t.envId, t.session); }}
+        >
+          <i className="sdot blocked" />
+          <span className="grow">
+            <b>{toast.session.title}</b>
+            <small>{envs.find((e) => e.id === toast.envId)?.name ?? 'a machine'} needs you</small>
+          </span>
+          <span className="chev">›</span>
+        </button>
+      )}
+
+      {unpairing && (
+        <Confirm
+          title="Unpair this device?"
+          body="You will need a fresh link from `helm link` to sign back in."
+          confirmLabel="Unpair" danger
+          onCancel={() => setUnpairing(false)}
+          onConfirm={() => { setUnpairing(false); onSignOut(); }}
+        />
+      )}
     </div>
   );
 }
@@ -960,6 +1184,9 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
             Pair once; this device stays paired until you remove it.
           </p>
         </form>
+        {/* The one place "install it" cannot wait for the sidebar: a phone
+            that has not paired yet is exactly the phone this is for. */}
+        <InstallPwa />
       </div>
     </div>
   );
@@ -1141,8 +1368,131 @@ function InstallPwa() {
 
 // --------------------------------------------------------------- one machine
 
-function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSettings, onUsage, onOpen, onResume, resuming }: {
+/**
+ * Every device that holds a key to this network.
+ *
+ * Pairing used to end the moment it happened: the phone that paired was
+ * trusted forever, and trusting another one meant walking back to a
+ * terminal. Here they are listed, named by what they signed in as, and any
+ * of them can be removed or another invited - the device doing the asking
+ * is marked, because "remove the one I am holding" is a question with a
+ * different answer than "remove the old tablet".
+ */
+function DevicesView({ client, onBack }: { client: Client; onBack: () => void }) {
+  const [devices, setDevices] = useState<Device[] | null>(null);
+  const [error, setError] = useState('');
+  const [removing, setRemoving] = useState<Device | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [invite, setInvite] = useState<{ link: string; expiresAt: number } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const now = useNow();
+
+  const load = useCallback(() => {
+    client.devices()
+      .then((r) => setDevices(r.devices))
+      .catch((e) => setError(e.message));
+  }, [client]);
+  useEffect(load, [load]);
+
+  const pair = async () => {
+    setBusy(true); setError('');
+    try {
+      const r = await client.newPassword(10 * 60_000);
+      setInvite({ link: `${client.relay}/#pair=${r.password}`, expiresAt: r.expiresAt });
+    } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  const remove = async () => {
+    const d = removing;
+    if (!d) return;
+    setBusy(true); setError('');
+    try {
+      await client.removeDevice(d.id);
+      setRemoving(null);
+      if (d.self) { onBack(); location.reload(); return; } // this device's own key is gone
+      load();
+    } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <>
+      <div className="bar">
+        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <div className="titles"><h1>Devices</h1><span className="sub">what holds a key to this network</span></div>
+      </div>
+      <div className="scroll"><div className="pad column">
+        {invite ? (
+          <div className="setup-open">
+            <p className="note">
+              Open this link on the device you are pairing. It expires in a
+              few minutes and carries a pairing secret - treat it like a
+              password.
+            </p>
+            <pre className="snippet">{invite.link}</pre>
+            <div className="rows">
+              <button className="row" onClick={async () => {
+                try { await navigator.clipboard.writeText(invite.link); setCopied(true); }
+                catch { setError('could not copy - long-press the link instead'); }
+              }}>
+                <span className="grow"><span className="rt">{copied ? 'copied' : 'Copy link'}</span></span>
+              </button>
+              <button className="row" onClick={() => { setInvite(null); setCopied(false); }}>
+                <span className="grow"><span className="rt">Done</span></span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button className="action" disabled={busy} onClick={pair}>
+            <span className="plus">+</span>{busy ? 'making a link…' : 'Pair another device'}
+          </button>
+        )}
+
+        <div className="section">paired</div>
+        <div className="rows">
+          {devices === null && !error && <div className="empty quiet">asking the hub…</div>}
+          {devices?.map((d) => (
+            <div key={d.id} className="row tall rowx">
+              <div className="rowmain">
+                <span className={`mdot ${d.self ? 'on' : 'off'}`} />
+                <span className="grow">
+                  <span className="rt">{d.label}{d.self && <span className="tag key">this device</span>}</span>
+                  <span className="rm">paired {waitingSince(d.addedAt, now) === 'just now' ? 'just now' : `${waitingSince(d.addedAt, now)} ago`}</span>
+                </span>
+              </div>
+              <button className="rowend" title={`remove ${d.label}`} aria-label={`remove ${d.label}`}
+                onClick={() => setRemoving(d)}>×</button>
+            </div>
+          ))}
+          {devices?.length === 0 && <div className="empty quiet">no devices paired</div>}
+        </div>
+        <p className="note">
+          Removing a device revokes its key everywhere - it asks for a fresh
+          pairing link the next time it opens helm.
+        </p>
+        {error && <div className="error">{error}</div>}
+      </div></div>
+
+      {removing && (
+        <Confirm
+          title={removing.self ? 'Remove this device?' : `Remove ${removing.label}?`}
+          body={removing.self
+            ? 'This is the device you are holding. You will need a fresh link from `helm link` to sign back in.'
+            : 'Its key stops working at once, on every machine in the network.'}
+          confirmLabel="Remove" danger busy={busy}
+          onCancel={() => setRemoving(null)}
+          onConfirm={remove}
+        />
+      )}
+    </>
+  );
+}
+
+function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onBrowse, onSettings, onUsage, onOpen, onResume, resuming }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[];
+  /** What this machine last said it was running, while it cannot be asked. */
+  remembered?: Session[]; rememberedAt?: number;
   reload: () => void; onBack: () => void; onBrowse: () => void; onSettings: () => void;
   onUsage: () => void; onOpen: (s: Session) => void;
   /** Continue a conversation a CLI recorded on its own; starts the engine. */
@@ -1154,6 +1504,13 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
+  /** Filing several threads away at once, rather than one ⋯ at a time. */
+  const [selecting, setSelecting] = useState(false);
+  const [marked, setMarked] = useState<Set<string>>(new Set());
+  const now = useNow();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pullFrom = useRef<number | null>(null);
+  const [pull, setPull] = useState(0);
 
   useEffect(() => {
     client.subscribe(env.id);
@@ -1172,14 +1529,11 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
   // candidates are the same wifi and a millisecond; two `srflx` ones went
   // out to the internet and came back, which is direct in name only.
   const [route, setRoute] = useState<{ local?: string; remote?: string } | null>(null);
-  useEffect(() => {
-    if (!direct) { setRoute(null); return; }
-    let live = true;
-    const look = () => { client.route(env.id).then((r) => { if (live) setRoute(r); }).catch(() => {}); };
-    look();
-    const timer = setInterval(look, 10_000);
-    return () => { live = false; clearInterval(timer); };
-  }, [client, env.id, direct]);
+  const look = useCallback(() => {
+    client.route(env.id).then((r) => setRoute(r)).catch(() => {});
+  }, [client, env.id]);
+  useEffect(() => { if (direct) look(); else setRoute(null); }, [direct, look]);
+  useLiveInterval(direct ? 10_000 : null, look, [look]);
 
   useEffect(() => {
     if (env.online) client.openDirect(env.id).catch(() => {});
@@ -1197,11 +1551,8 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
       .then((r: any) => setEarlier(r.recent ?? []))
       .catch(() => {});
   }, [client, env.id, env.online]);
-  useEffect(() => {
-    reloadEarlier();
-    const timer = setInterval(reloadEarlier, 60_000);
-    return () => clearInterval(timer);
-  }, [reloadEarlier]);
+  useEffect(() => { reloadEarlier(); }, [reloadEarlier]);
+  useLiveInterval(env.online ? 60_000 : null, reloadEarlier, [reloadEarlier, env.online]);
 
   const openTerminal = async () => {
     setOpening(true); setError('');
@@ -1314,6 +1665,22 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
     } catch (e: any) { setError(e.message); }
   };
 
+  // The `found:` pile is mostly threads nobody opens twice, but the ⋯ menu
+  // archives one at a time. Select mode trades the menus for checkboxes and
+  // files them together; a row that fails stays marked so the count of what
+  // is left is honest.
+  const archiveMarked = async () => {
+    setError('');
+    const left = new Set(marked);
+    for (const id of marked) {
+      try { await client.rpc(env.id, 'session.archive', { id, archived: true }, 20_000); left.delete(id); }
+      catch (e: any) { setError(e.message); }
+    }
+    setMarked(left);
+    if (!left.size) setSelecting(false);
+    reload(); reloadEarlier();
+  };
+
   const setTitle = async (s: Session, title: string) => {
     setError('');
     try { await client.rpc(env.id, 'session.title', { id: s.id, title }, 20_000); reload(); }
@@ -1329,16 +1696,24 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
    * CLI's. Everything on this screen is now mixed into the same groups, so
    * that difference has to live in the row rather than in the group it is in.
    */
+  const toggle = (id: string) => setMarked((m) => {
+    const next = new Set(m);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
   const row = (s: Session) => s.id.startsWith('found:') ? (
     <SessionRow
       key={s.id} s={s} busy={resuming === s.id}
-      onOpen={env.online ? () => onResume(s) : undefined}
+      selecting={selecting} marked={marked.has(s.id)} onToggle={() => toggle(s.id)}
+      onOpen={env.online && !selecting ? () => onResume(s) : undefined}
       onArchive={() => setArchived(s, !s.archived)}
       onDelete={() => deleteSession(s)}
     />
   ) : (
     <SessionRow
       key={s.id} s={s} onOpen={() => onOpen(s)}
+      selecting={selecting} marked={marked.has(s.id)} onToggle={() => toggle(s.id)}
       onRename={(t) => setTitle(s, t)}
       onArchive={() => setArchived(s, !s.archived)}
       onDelete={() => deleteSession(s)}
@@ -1382,7 +1757,26 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
         <button className="iconbtn" title={`${env.name} settings`} onClick={onSettings}><Sliders /></button>
       </div>
 
-      <div className="scroll"><div className="pad column">
+      <div
+        className="scroll" ref={scrollRef}
+        // A pull at the top of the list is the gesture everyone already
+        // knows for "check again" - and on a machine that just woke up it
+        // beats waiting for the 15-second tick to notice.
+        onTouchStart={(e) => { pullFrom.current = scrollRef.current?.scrollTop === 0 ? e.touches[0].clientY : null; }}
+        onTouchMove={(e) => {
+          if (pullFrom.current == null) return;
+          setPull(Math.max(0, Math.min(90, e.touches[0].clientY - pullFrom.current)));
+        }}
+        onTouchEnd={() => {
+          if (pull > 70) { reload(); reloadEarlier(); }
+          setPull(0); pullFrom.current = null;
+        }}
+      ><div className="pad column">
+        {pull > 0 && (
+          <div className="pull" style={{ height: pull }}>
+            {pull > 70 ? 'release to refresh' : ''}
+          </div>
+        )}
         {!env.online && <div className="banner warn">this machine is offline</div>}
 
         <button className="action" disabled={!env.online} onClick={onBrowse}>
@@ -1396,6 +1790,22 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
               autoCapitalize="off" autoCorrect="off" autoComplete="off"
               onChange={(e) => setQuery(e.target.value)}
             />
+            {env.online && (
+              <button
+                className={`linkish${selecting ? ' on' : ''}`}
+                onClick={() => { setSelecting((v) => !v); setMarked(new Set()); }}
+              >{selecting ? 'done' : 'select'}</button>
+            )}
+          </div>
+        )}
+
+        {selecting && (
+          <div className="selbar">
+            <span>{marked.size ? `${marked.size} picked` : 'tap threads to pick them'}</span>
+            <span className="spacer" />
+            <button className="linkish" disabled={!marked.size} onClick={archiveMarked}>
+              archive {marked.size || ''}
+            </button>
           </div>
         )}
 
@@ -1429,12 +1839,13 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
             note={projectNote(cwd)}
             openWhen={!!q}
             attention={list.some((s) => s.status === 'blocked')}
+            remember={`${env.id}:${cwd}`}
           >
             <div className="rows">{list.map(row)}</div>
           </Fold>
         ))}
 
-        <Fold title="terminals" count={terminals.length} openWhen={!!q}>
+        <Fold title="terminals" count={terminals.length} openWhen={!!q} remember={`${env.id}:~`}>
           <div className="rows">{terminals.map(row)}</div>
         </Fold>
         {/* This week, but in folders nothing was ever started in from here:
@@ -1444,15 +1855,45 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
           title="elsewhere on this machine" count={elsewhere.length}
           note={strays.length > elsewhere.length ? `${elsewhere.length} of ${strays.length}` : undefined}
           openWhen={!!q}
+          remember={`${env.id}:~elsewhere`}
         >
           <div className="rows">{elsewhere.map(row)}</div>
         </Fold>
-        <Fold title="older" count={older.length} note="before this week" openWhen={!!q}>
+        <Fold title="older" count={older.length} note="before this week" openWhen={!!q} remember={`${env.id}:~older`}>
           <div className="rows">{older.map(row)}</div>
         </Fold>
-        <Fold title="archived" count={filed.length} openWhen={!!q}>
+        <Fold title="archived" count={filed.length} openWhen={!!q} remember={`${env.id}:~archived`}>
           <div className="rows">{filed.map(row)}</div>
         </Fold>
+
+        {/* An offline machine keeps its last word, not a blank page: the
+            threads it said were running, dimmed and dated, with the actions
+            held back because nothing can reach it to carry them out. */}
+        {!env.online && (remembered?.length ?? 0) > 0 && (
+          <>
+            <div className="section">
+              last known{rememberedAt ? ` · seen ${waitingSince(rememberedAt, now)} ago` : ''}
+            </div>
+            <div className="rows stale">
+              {remembered!.map((s) => (
+                <div key={s.id} className="row tall">
+                  <div className="rowmain">
+                    <EngineMark engine={engineOf(s.engine).cls} />
+                    <span className="grow">
+                      <span className="rt"><span className="rt-text">{s.title}</span></span>
+                      <span className="rm">
+                        {[engineOf(s.engine).label, s.model, shortPath(s.cwd)].filter(Boolean).join(' · ')}
+                        {s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
+                      </span>
+                    </span>
+                    <StatusChip status={s.status} at={s.updatedAt} />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="note">as it was when this machine last answered - it may be different now.</p>
+          </>
+        )}
         {/* Nothing to say when a fold above is holding the answer: a search
             that found an archived thread and only an archived thread is a
             search that worked, and "nothing matches" underneath the thing
@@ -1478,18 +1919,6 @@ function EnvView({ client, env, wide, sessions, reload, onBack, onBrowse, onSett
 }
 
 /**
- * Ask for a new name for a thread and hand it over if it is a new one.
- *
- * A name typed here outranks the one the session gave itself and is never
- * overwritten afterwards, which is the whole reason renaming exists: the
- * generated name is a good guess, and a guess should be correctable.
- */
-function rename(s: Session, onRename: (title: string) => void) {
-  const next = prompt('Name this thread', s.title)?.trim();
-  if (next && next !== s.title) onRename(next);
-}
-
-/**
  * A section that can be put away, with what it holds counted on the header.
  *
  * Archived threads are the reason it exists. Filing one away should not mean
@@ -1499,16 +1928,35 @@ function rename(s: Session, onRename: (title: string) => void) {
  * not you remember archiving it - and it stays open afterwards if you closed
  * it yourself, which is the one case where guessing would be rude.
  */
-function Fold({ title, count, note, openWhen = false, defaultOpen = false, attention = false, children }: {
+function Fold({ title, count, note, openWhen = false, defaultOpen = false, attention = false, remember, children }: {
   title: string; count: number; openWhen?: boolean; children: ReactNode;
   /** A word beside the count - a machine name, the newest thread's age. */
   note?: string;
   /** Groups that are the reason you opened the screen start open. */
   defaultOpen?: boolean;
   attention?: boolean;
+  /** Keep the open state across visits, under this key. */
+  remember?: string;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-  useEffect(() => { if (openWhen) setOpen(true); }, [openWhen]);
+  const [open, setOpenRaw] = useState(() => {
+    if (remember) {
+      try {
+        const v = localStorage.getItem(`helm-fold:${remember}`);
+        if (v !== null) return v === '1';
+      } catch { /* storage denied: folds just forget */ }
+    }
+    return defaultOpen;
+  });
+  const setOpen = useCallback((v: boolean | ((p: boolean) => boolean)) => {
+    setOpenRaw((prev) => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      if (remember) {
+        try { localStorage.setItem(`helm-fold:${remember}`, next ? '1' : '0'); } catch { /* full */ }
+      }
+      return next;
+    });
+  }, [remember]);
+  useEffect(() => { if (openWhen) setOpen(true); }, [openWhen, setOpen]);
   if (!count) return null;
   return (
     <div>
@@ -1533,17 +1981,23 @@ function Fold({ title, count, note, openWhen = false, defaultOpen = false, atten
  * only from inside it. An agent helm did not start is left alone - helm
  * does not own that process and has no business ending it.
  */
-function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy }: {
+function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting = false, marked = false, onToggle }: {
   s: Session; onOpen?: () => void; onRename?: (title: string) => void;
   onArchive?: () => void; onDelete?: () => void;
   /** Resuming a past conversation starts a CLI, which takes a moment. */
   busy?: boolean;
+  /** Checkboxes instead of menus: the owner is filing, not opening. */
+  selecting?: boolean;
+  marked?: boolean;
+  onToggle?: () => void;
 }) {
   const eng = engineOf(s.engine);
   const adopted = s.adopted;
   // A thread read out of a CLI's own history rather than run by helm.
   const found = s.id.startsWith('found:');
   const [menu, setMenu] = useState(false);
+  const [naming, setNaming] = useState(false);
+  const [ending, setEnding] = useState(false);
   // Work helm did not start is still the owner's to file away. It used to get
   // no menu at all, which on a machine that has been worked at means most of
   // the list is rows you cannot do anything about.
@@ -1552,63 +2006,87 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy }: {
   // one it runs - gets no button body: nothing happens on the way in.
   const Main: any = onOpen ? 'button' : 'div';
   return (
-    <div className="row tall rowx">
-      <Main className="rowmain" onClick={onOpen}>
-        <EngineMark engine={eng.cls} />
-        <span className="grow">
-          <span className="rt">
-            <span className="rt-text">{s.title}</span>
-            {adopted && <span className="tag">external</span>}
-            {s.archived && <span className="tag">archived</span>}
+    <>
+      <div className={`row tall rowx${marked ? ' sel' : ''}`}>
+        <Main className="rowmain" onClick={selecting ? onToggle : onOpen}>
+          {selecting && <span className={`check${marked ? ' on' : ''}`} />}
+          <EngineMark engine={eng.cls} />
+          <span className="grow">
+            <span className="rt">
+              <span className="rt-text">{s.title}</span>
+              {adopted && <span className="tag">external</span>}
+              {s.archived && <span className="tag">archived</span>}
+            </span>
+            <span className="rm">
+              {[eng.label, s.model, shortPath(s.cwd), money(s.costUsd)].filter(Boolean).join(' · ')}
+            </span>
           </span>
-          <span className="rm">
-            {[eng.label, s.model, shortPath(s.cwd), money(s.costUsd)].filter(Boolean).join(' · ')}
-          </span>
-        </span>
-        {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
-        {busy ? <span className="chip working"><i />opening</span> : <StatusChip status={s.status} />}
-      </Main>
-      {managed && (
-        <>
-          <button
-            className="rowend" title="thread actions" aria-label={`actions for ${s.title}`}
-            onClick={(e) => { e.stopPropagation(); setMenu((open) => !open); }}
-          >⋯</button>
-          {menu && (
-            <div className="menu row-menu" onClick={(e) => e.stopPropagation()}>
-              {onRename && !adopted && (
-                <button onClick={() => { setMenu(false); rename(s, onRename); }}>Rename thread</button>
-              )}
-              {onArchive && (
-                <button onClick={() => { setMenu(false); onArchive(); }}>
-                  {s.archived ? 'Unarchive thread' : 'Archive thread'}
-                </button>
-              )}
-              {onDelete && (
-                <button className="destructive" onClick={() => {
-                  setMenu(false);
-                  // Three different things wear this one menu item, so each
-                  // says what it really does. helm never deletes a CLI's own
-                  // history: that conversation is the owner's, not our record.
-                  const ask = found
-                    ? `Remove "${s.title}" from helm? ${eng.label} keeps the conversation - helm just stops listing it.`
-                    : adopted
-                      ? `Close "${s.title}"? This ends the program running in that pane, which helm did not start.`
-                      : `Delete "${s.title}"? This ends the agent and permanently removes the thread from helm.`;
-                  if (confirm(ask)) onDelete();
-                }}>{found ? 'Remove from helm' : adopted ? 'Close this pane' : 'Delete thread'}</button>
-              )}
-            </div>
-          )}
-        </>
+          {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
+          {busy ? <span className="chip working"><i />opening</span> : <StatusChip status={s.status} at={s.updatedAt} />}
+        </Main>
+        {!selecting && managed && (
+          <>
+            <button
+              className="rowend" title="thread actions" aria-label={`actions for ${s.title}`}
+              onClick={(e) => { e.stopPropagation(); setMenu((open) => !open); }}
+            >⋯</button>
+            {menu && (
+              <div className="menu row-menu" onClick={(e) => e.stopPropagation()}>
+                {onRename && !adopted && (
+                  <button onClick={() => { setMenu(false); setNaming(true); }}>Rename thread</button>
+                )}
+                {onArchive && (
+                  <button onClick={() => { setMenu(false); onArchive(); }}>
+                    {s.archived ? 'Unarchive thread' : 'Archive thread'}
+                  </button>
+                )}
+                {onDelete && (
+                  <button className="destructive" onClick={() => { setMenu(false); setEnding(true); }}>
+                    {found ? 'Remove from helm' : adopted ? 'Close this pane' : 'Delete thread'}
+                  </button>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      {naming && onRename && (
+        <TextPrompt
+          title="Name this thread" value={s.title}
+          onCancel={() => setNaming(false)}
+          onSubmit={(t) => { setNaming(false); if (t !== s.title) onRename(t); }}
+        />
       )}
-    </div>
+      {ending && onDelete && (
+        <Confirm
+          title={found ? `Remove "${s.title}"?` : adopted ? `Close "${s.title}"?` : `Delete "${s.title}"?`}
+          // Three different things wear this one menu item, so each says
+          // what it really does. helm never deletes a CLI's own history:
+          // that conversation is the owner's, not our record.
+          body={found
+            ? `${eng.label} keeps the conversation - helm just stops listing it.`
+            : adopted
+              ? 'This ends the program running in that pane, which helm did not start.'
+              : 'This ends the agent and permanently removes the thread from helm.'}
+          confirmLabel={found ? 'remove' : adopted ? 'close' : 'delete'} danger
+          onCancel={() => setEnding(false)}
+          onConfirm={() => { setEnding(false); onDelete(); }}
+        />
+      )}
+    </>
   );
 }
 
-function StatusChip({ status }: { status: string }) {
-  if (status === 'blocked') return <span className="chip blocked"><i />waiting</span>;
-  if (status === 'working') return <span className="chip working"><i />working</span>;
+function StatusChip({ status, at }: { status: string; at?: number }) {
+  // `at` is when the thread entered this status: "working" gains "14m",
+  // which is the difference between a turn that just started and one that
+  // has been chewing for a while. Under a minute it says nothing - the
+  // word alone is already the whole story.
+  const now = useNow();
+  const ago = at ? waitingSince(at, now) : '';
+  const age = ago && ago !== 'just now' ? ` ${ago}` : '';
+  if (status === 'blocked') return <span className="chip blocked"><i />waiting{age}</span>;
+  if (status === 'working') return <span className="chip working"><i />working{age}</span>;
   if (status === 'done') return <span className="chip done"><i />done</span>;
   if (status === 'exited') return <span className="chip exited">ended</span>;
   return null;
@@ -2068,6 +2546,21 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
   const [creating, setCreating] = useState(false);
   const [folder, setFolder] = useState('');
 
+  // The folders a session last started in on this machine: a real project
+  // is usually nested a few levels under home, and remembering the last few
+  // turns "open it again" into one tap instead of five.
+  const RECENT = `helm-folders:${env.id}`;
+  const [recent] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(RECENT) || '[]'); } catch { return []; }
+  });
+  const pick = (p: string) => {
+    try {
+      const next = [p, ...recent.filter((r) => r !== p)].slice(0, 6);
+      localStorage.setItem(RECENT, JSON.stringify(next));
+    } catch { /* full */ }
+    onPick(p);
+  };
+
   const load = useCallback(() => {
     setError('');
     client.rpc(env.id, 'fs.list', { path: path ?? '~' })
@@ -2093,9 +2586,29 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
         <div className="titles"><h1>Where?</h1><span className="sub">{here}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
-        <button className="primary big" onClick={() => onPick(here)}>
+        <button className="primary big" onClick={() => pick(here)}>
           Start here
         </button>
+
+        {/* Only on the way in: once you are browsing, the list on screen
+            already says where you are. */}
+        {!path && recent.length > 0 && (
+          <>
+            <div className="section">recent</div>
+            <div className="rows">
+              {recent.map((p) => (
+                <button key={p} className="row" onClick={() => pick(p)}>
+                  <span className="glyph repo">◆</span>
+                  <span className="grow">
+                    <span className="rt">{shortPath(p)}</span>
+                    <span className="rm">{p}</span>
+                  </span>
+                  <span className="chev">›</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <div className="section">
           folders<span className="spacer" />
@@ -2268,6 +2781,8 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [raw, setRaw] = useState(isShell);
   const [status, setStatus] = useState(session.status);
+  // When it entered the status it is in, for "working 14m" beside the word.
+  const [statusAt, setStatusAt] = useState(session.updatedAt);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [menu, setMenu] = useState(false);
@@ -2297,17 +2812,22 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
 
   useEffect(() => {
     refresh();
-    const timer = setInterval(refresh, 5_000);
     const off = client.on((e, kind, payload) => {
       if (e !== env.id) return;
       if (kind === 'session.transcript' && payload?.id === session.id) refresh();
       if (kind === 'session.update' && payload.session?.id === session.id) {
         setStatus(payload.session.status);
+        setStatusAt(payload.session.updatedAt ?? Date.now());
         refresh();
       }
     });
-    return () => { clearInterval(timer); off(); };
+    return off;
   }, [client, env.id, session.id, refresh]);
+
+  // The transcript events above are the live stream; the poll is only the
+  // reconciliation for a frame that got lost, so it can be slow - and a
+  // transcript whose process is gone cannot change at all.
+  useLiveInterval(status === 'exited' ? null : 15_000, refresh, [status, refresh]);
 
   const send = async () => {
     const body = draft;
@@ -2324,8 +2844,10 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
     catch (e: any) { setError(e.message); }
   };
 
+  const [killing, setKilling] = useState(false);
+  const [naming, setNaming] = useState(false);
+
   const kill = async () => {
-    if (!confirm(`Delete "${session.title}"? The agent process is closed and the thread is removed from helm.`)) return;
     try { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); }
     catch (e: any) { setError(e.message); }
   };
@@ -2338,10 +2860,8 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
 
   // Terminals are named by the machine ("Terminal 3") and agents by their
   // first prompts; both are guesses worth correcting.
-  const renameThread = async () => {
-    setMenu(false);
-    const next = prompt('Name this thread', session.title)?.trim();
-    if (!next || next === session.title) return;
+  const renameThread = async (next: string) => {
+    if (next === session.title) return;
     try {
       const r: any = await client.rpc(env.id, 'session.title', { id: session.id, title: next });
       onSession(r.session);
@@ -2356,7 +2876,7 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
           <h1>{session.title}</h1>
           <span className="sub">{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''} · {env.name}</span>
         </div>
-        <StatusChip status={status} />
+        <StatusChip status={status} at={statusAt} />
         {!isShell && (
           <button className="iconbtn mono" title={raw ? 'conversation' : 'terminal'} onClick={() => setRaw((v) => !v)}>
             {raw ? '¶' : '❯_'}
@@ -2365,12 +2885,28 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
         <button className="iconbtn" title="more" onClick={() => setMenu((v) => !v)}>⋯</button>
         {menu && (
           <div className="menu" onClick={() => setMenu(false)}>
-            <button onClick={renameThread}>Rename thread</button>
+            <button onClick={() => setNaming(true)}>Rename thread</button>
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
-            <button className="destructive" onClick={kill}>Delete thread</button>
+            <button className="destructive" onClick={() => setKilling(true)}>Delete thread</button>
           </div>
         )}
       </div>
+
+      {naming && (
+        <TextPrompt
+          title="Name this thread" value={session.title}
+          onCancel={() => setNaming(false)} onSubmit={renameThread}
+        />
+      )}
+      {killing && (
+        <Confirm
+          title={`Delete "${session.title}"?`}
+          body="The agent process is closed and the thread is removed from helm."
+          confirmLabel="Delete" danger
+          onCancel={() => setKilling(false)}
+          onConfirm={() => { setKilling(false); kill(); }}
+        />
+      )}
 
       {raw
         ? <Suspense fallback={<div className="xterm-host" />}>
