@@ -1,18 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <rect width="512" height="512" rx="116" fill="#131317"/>
   <rect x="1" y="1" width="510" height="510" rx="115" fill="none" stroke="#ffffff" stroke-opacity=".07"/>
-  <g transform="translate(256 256)" stroke="#c2c6d4" fill="none" stroke-linecap="round">
-    <circle r="116" stroke-width="30"/>
-    <g stroke-width="22">
-      <path d="M0 -116V0M0 116V0"/>
-      <path d="M0 -116V0M0 116V0" transform="rotate(60)"/>
-      <path d="M0 -116V0M0 116V0" transform="rotate(120)"/>
+  <!-- a ship's wheel - the helm itself. knob-ended handles so it reads
+       as a wheel and not a gear; the hub gets an axle hole. -->
+  <g transform="translate(256 256) scale(1.14)">
+    <g stroke="#c2c6d4" fill="none" stroke-linecap="round">
+      <circle r="104" stroke-width="31"/>
+      <g stroke-width="20">
+        <path d="M-104 0H104"/>
+        <path d="M-104 0H104" transform="rotate(60)"/>
+        <path d="M-104 0H104" transform="rotate(120)"/>
+      </g>
+      <g stroke-width="22">
+        <path d="M112 0H150"/>
+        <path d="M112 0H150" transform="rotate(60)"/>
+        <path d="M112 0H150" transform="rotate(120)"/>
+        <path d="M112 0H150" transform="rotate(180)"/>
+        <path d="M112 0H150" transform="rotate(240)"/>
+        <path d="M112 0H150" transform="rotate(300)"/>
+      </g>
     </g>
-    <g stroke-width="28">
-      <path d="M0 -172V-131M0 172V131"/>
-      <path d="M0 -172V-131M0 172V131" transform="rotate(60)"/>
-      <path d="M0 -172V-131M0 172V131" transform="rotate(120)"/>
+    <g fill="#c2c6d4">
+      <circle cx="166" r="16"/>
+      <circle cx="166" r="16" transform="rotate(60)"/>
+      <circle cx="166" r="16" transform="rotate(120)"/>
+      <circle cx="166" r="16" transform="rotate(180)"/>
+      <circle cx="166" r="16" transform="rotate(240)"/>
+      <circle cx="166" r="16" transform="rotate(300)"/>
     </g>
+    <circle r="42" fill="#c2c6d4"/>
+    <circle r="11" fill="#131317"/>
   </g>
-  <circle cx="256" cy="256" r="44" fill="#c2c6d4"/>
 </svg>
