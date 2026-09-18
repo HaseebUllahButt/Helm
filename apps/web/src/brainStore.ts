@@ -9,7 +9,7 @@ import type { Session } from './client';
  * machine has answered `session.list`, and on a cold open that is a second or
  * two during which the honest answer to "is there a brain here?" is "not yet".
  * Tapping a brain in that window used to show the account picker, which reads
- * as con having forgotten the brain you already chose.
+ * as helm having forgotten the brain you already chose.
  *
  * So the device writes them down, keyed by machine. A remembered record is
  * only a signpost: it carries enough of the session for the header to draw,

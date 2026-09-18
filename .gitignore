@@ -3,7 +3,7 @@ dist/
 *.sqlite
 *.sqlite-*
 .env
-.con/
+.helm/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 

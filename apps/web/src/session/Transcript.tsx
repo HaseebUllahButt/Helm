@@ -274,18 +274,18 @@ function ItemView({ item, byParent }: { item: Item; byParent: Map<string, Item[]
 // ------------------------------------------------------------------- turns
 
 /**
- * What con put in front of what the owner typed, split back off it.
+ * What helm put in front of what the owner typed, split back off it.
  *
  * The brain gets a line of network state prepended to every message, because
  * it is asked about machines rather than about the folder it is sitting in.
  * That line was really sent and really in the model's context, so hiding it
- * would be a lie - but it is con talking, not the owner, and in their own
+ * would be a lie - but it is helm talking, not the owner, and in their own
  * bubble in their own words it reads as though they typed it. It gets its
  * own quiet line instead.
  */
-const CON_NOTE = /^(\[con [^\]\n]*\])\n\n([\s\S]*)$/;
+const HELM_NOTE = /^(\[helm [^\]\n]*\])\n\n([\s\S]*)$/;
 function splitNote(text?: string): { note?: string; text?: string } {
-  const m = text ? CON_NOTE.exec(text) : null;
+  const m = text ? HELM_NOTE.exec(text) : null;
   return m ? { note: m[1], text: m[2] } : { text };
 }
 
@@ -302,7 +302,7 @@ function clock(ts?: number) {
 function TurnView({ turn, working, blocked, onResend }: { turn: Turn; working: boolean; blocked: boolean; onResend?: (turn: Turn) => void }) {
   const said = splitNote(turn.text);
   const d = turn.done;
-  // A `local-` turn is one con posted before the agent echoed it. Until
+  // A `local-` turn is one helm posted before the agent echoed it. Until
   // the echo adopts it that is the honest state of the message: written,
   // queued behind whatever the agent is doing, not yet read by it.
   const queued = turn.id.startsWith('local-') && !d && !turn.items.length;

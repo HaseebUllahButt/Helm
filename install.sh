@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 #
-# con installer.
+# helm installer.
 #
 #   curl -fsSL https://raw.githubusercontent.com/HaseebUllahButt/helm/main/install.sh | bash
 #
-# Installs con and everything it needs into your home directory, then tells
+# Installs helm and everything it needs into your home directory, then tells
 # you the one command to run next. Safe to re-run: it updates in place and
 # never touches a network you have already joined.
 #
-# Nothing here needs root. con runs as you, with your agents' credentials,
+# Nothing here needs root. helm runs as you, with your agents' credentials,
 # because that is the whole point of it.
 set -euo pipefail
 
-REPO="${CON_REPO:-${HELM_REPO:-https://github.com/HaseebUllahButt/helm.git}}"
-BRANCH="${CON_BRANCH:-${HELM_BRANCH:-main}}"
-DIR="${CON_INSTALL_DIR:-${HELM_INSTALL_DIR:-$HOME/.con-src}}"
+REPO="${HELM_REPO:-https://github.com/HaseebUllahButt/helm.git}"
+BRANCH="${HELM_BRANCH:-main}"
+DIR="${HELM_INSTALL_DIR:-$HOME/.helm-src}"
 BIN_DIR="$HOME/.local/bin"
 
 say()  { printf '  %s\n' "$*"; }
 step() { printf '\n==> %s\n' "$*"; }
-die()  { printf '\ncon: %s\n' "$*" >&2; exit 1; }
+die()  { printf '\nhelm: %s\n' "$*" >&2; exit 1; }
 
 need() { command -v "$1" >/dev/null 2>&1; }
 
@@ -33,7 +33,7 @@ if need node; then
   NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
   if [ "$NODE_MAJOR" -lt 22 ]; then
     die "node 22 or newer is required (found $(node -v)).
-    con uses node's built-in SQLite, which older versions do not have.
+    helm uses node's built-in SQLite, which older versions do not have.
     https://nodejs.org  or:  curl -fsSL https://fnm.vercel.app/install | bash"
   fi
   say "node $(node -v)"
@@ -42,7 +42,7 @@ else
     https://nodejs.org  or:  curl -fsSL https://fnm.vercel.app/install | bash"
 fi
 
-# herdr owns the terminals con drives. Without it con can talk to your
+# herdr owns the terminals helm drives. Without it helm can talk to your
 # machines but cannot run anything on them, so install it now rather than
 # letting the first session fail.
 if need herdr || [ -x "$BIN_DIR/herdr" ]; then
@@ -54,7 +54,7 @@ fi
 
 # ------------------------------------------------------------------ fetch
 
-step "fetching con"
+step "fetching helm"
 if [ -d "$DIR/.git" ]; then
   git -C "$DIR" fetch --quiet origin "$BRANCH"
   git -C "$DIR" checkout --quiet "$BRANCH"
@@ -72,8 +72,8 @@ step "installing dependencies"
 (cd "$DIR" && npm install --silent --no-fund --no-audit) || die "npm install failed"
 
 step "building the app"
-(cd "$DIR" && npm --workspace @con/web run build --silent) >/dev/null 2>&1 \
-  || die "could not build the web app - run 'npm --workspace @con/web run build' in $DIR to see why"
+(cd "$DIR" && npm --workspace @helm/web run build --silent) >/dev/null 2>&1 \
+  || die "could not build the web app - run 'npm --workspace @helm/web run build' in $DIR to see why"
 say "built apps/web/dist"
 
 # ---------------------------------------------------------------- terminals
@@ -81,7 +81,7 @@ say "built apps/web/dist"
 # The terminal in the app needs a pty, which is a compiled addon. It ships
 # prebuilt binaries, but only up to whatever node ABI was current when it was
 # published - node 26 is ABI 147 and the newest prebuilt is 131 - so on a
-# recent node there is nothing to load and con falls back to reading a herdr
+# recent node there is nothing to load and helm falls back to reading a herdr
 # pane's rendered screen on a timer, which is slow enough to notice.
 #
 # This used to only *report* that, which meant a machine quietly ran on the
@@ -116,24 +116,24 @@ fi
 
 # -------------------------------------------------------------------- link
 
-step "putting con on your PATH"
+step "putting helm on your PATH"
 mkdir -p "$BIN_DIR"
-cat > "$BIN_DIR/con" <<EOF
+cat > "$BIN_DIR/helm" <<EOF
 #!/usr/bin/env bash
-# con needs herdr on PATH, which a non-login shell may not have.
+# helm needs herdr on PATH, which a non-login shell may not have.
 export PATH="\$HOME/.local/bin:\$PATH"
 # Prefer the node this was installed with, but fall back to PATH: a version
 # manager (fnm, nvm) moves the pinned path on every node upgrade, and a shim
 # that dies with "no such file" after one is a broken install.
 NODE_BIN="$(command -v node)"
 [ -x "\$NODE_BIN" ] || NODE_BIN="\$(command -v node)" || {
-  echo "con: node not found - install Node 22+ and re-run the con installer" >&2
+  echo "helm: node not found - install Node 22+ and re-run the helm installer" >&2
   exit 1
 }
-exec "\$NODE_BIN" "$DIR/packages/connect/bin/con.js" "\$@"
+exec "\$NODE_BIN" "$DIR/packages/connect/bin/helm.js" "\$@"
 EOF
-chmod +x "$BIN_DIR/con"
-say "$BIN_DIR/con"
+chmod +x "$BIN_DIR/helm"
+say "$BIN_DIR/helm"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ON_PATH=yes ;;
@@ -146,31 +146,31 @@ printf '\n%s\n' "-------------------------------------------------------------"
 if [ "$ON_PATH" = no ]; then
   say "$BIN_DIR is not on your PATH yet. Add this to your shell rc:"
   printf '\n    export PATH="$HOME/.local/bin:$PATH"\n\n'
-  say "then open a new shell, or run con by its full path below."
+  say "then open a new shell, or run helm by its full path below."
 fi
 
 cat <<'NEXT'
-  con is installed.
+  helm is installed.
 
   On your always-on VM, install Caddy, then run:
 
-    con setup
+    helm setup
 
-  It creates a free HTTPS address from the VM's public IP, installs Con as a
+  It creates a free HTTPS address from the VM's public IP, installs Helm as a
   service, and prints one private link. No website or domain is needed. Open
   that link on your laptop or phone. Keep it private: it can add a new device.
 
   Commands worth remembering:
 
-    con add controller          a link to open on a phone or browser
-    con add pc                  a code for another computer
-    con add vm                  a code for another always-on machine
-    con join <CODE> <VM-URL>    run that on the machine being added
-    con open                    open the app here, already signed in
-    con status                  check your machines
+    helm add controller          a link to open on a phone or browser
+    helm add pc                  a code for another computer
+    helm add vm                  a code for another always-on machine
+    helm join <CODE> <VM-URL>    run that on the machine being added
+    helm open                    open the app here, already signed in
+    helm status                  check your machines
 
   Full VM, HTTPS and phone instructions:
 
-    SETUP.md inside the Con install folder
+    SETUP.md inside the Helm install folder
 NEXT
 printf '%s\n\n' "-------------------------------------------------------------"

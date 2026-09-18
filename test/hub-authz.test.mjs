@@ -16,16 +16,16 @@ import { join } from 'node:path';
  * localhost-only service), and guessing at the login window forever.
  */
 
-const root = mkdtempSync(join(tmpdir(), 'con-authz-'));
-process.env.CON_DIR = root;
-process.env.CON_DB = join(root, 'hub.sqlite');
+const root = mkdtempSync(join(tmpdir(), 'helm-authz-'));
+process.env.HELM_DIR = root;
+process.env.HELM_DB = join(root, 'hub.sqlite');
 
 const PORT = 18788;
 const BASE = `http://127.0.0.1:${PORT}`;
 
-const N = await import('@con/protocol/network');
+const N = await import('@helm/protocol/network');
 const net = N.createNetwork({ name: 'laptop', port: PORT });
-const { startRelay } = await import('@con/relay');
+const { startRelay } = await import('@helm/relay');
 const hub = await startRelay({ port: PORT, dbFile: join(root, 'hub.sqlite'), host: '127.0.0.1' });
 
 const post = (path, body, token, extra = {}) =>

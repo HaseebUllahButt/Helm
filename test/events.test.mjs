@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { EventLog } from '../packages/connect/src/events.js';
 
 test('events are numbered, persisted, and replayable from a sequence number', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'con-events-'));
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-'));
   const log = new EventLog(dir);
   const a = log.append('s1', { type: 'turn.start', text: 'hi' });
   const b = log.append('s1', { type: 'item.delta', id: 'x', text: 'he' });
@@ -23,7 +23,7 @@ test('events are numbered, persisted, and replayable from a sequence number', ()
 });
 
 test('pending permissions are derived from the log', () => {
-  const log = new EventLog(mkdtempSync(join(tmpdir(), 'con-events-')));
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   log.append('s', { type: 'permission.request', requestId: 'r1', kind: 'command' });
   log.append('s', { type: 'permission.request', requestId: 'r2', kind: 'edit' });
   log.append('s', { type: 'permission.resolved', requestId: 'r1', decision: 'allow' });
@@ -31,7 +31,7 @@ test('pending permissions are derived from the log', () => {
 });
 
 test('the open turn is the last turn.start without a turn.done', () => {
-  const log = new EventLog(mkdtempSync(join(tmpdir(), 'con-events-')));
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   assert.equal(log.openTurn('s'), null);
   log.append('s', { type: 'turn.start', turnId: 't1', text: 'a' });
   assert.equal(log.openTurn('s').turnId, 't1');
@@ -40,7 +40,7 @@ test('the open turn is the last turn.start without a turn.done', () => {
 });
 
 test('only the tail is kept', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'con-events-'));
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-'));
   const lines = [];
   for (let i = 1; i <= 2500; i++) lines.push(JSON.stringify({ seq: i, at: 0, type: 'item.delta', id: 'x', text: String(i) }));
   writeFileSync(join(dir, 'big.jsonl'), lines.join('\n') + '\n');
@@ -60,7 +60,7 @@ test('only the tail is kept', () => {
 // worse than a chat with a clipped diff in it.
 
 test('one event is capped before it goes on the wire', () => {
-  const log = new EventLog(mkdtempSync(join(tmpdir(), 'con-events-')));
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   const huge = 'x'.repeat(200_000);
   log.append('s', { type: 'turn.start', turnId: 't', text: 'go' });
   log.append('s', {
@@ -80,7 +80,7 @@ test('one event is capped before it goes on the wire', () => {
 });
 
 test('a page is measured in bytes, and a chat opens on its end', () => {
-  const log = new EventLog(mkdtempSync(join(tmpdir(), 'con-events-')));
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   // Twelve turns, each carrying ~40KB of text: far more than one page.
   for (let t = 1; t <= 12; t++) {
     log.append('s', { type: 'turn.start', turnId: `t${t}`, text: `ask ${t}` });
@@ -102,7 +102,7 @@ test('a page is measured in bytes, and a chat opens on its end', () => {
 });
 
 test('a short conversation is served whole, from its first event', () => {
-  const log = new EventLog(mkdtempSync(join(tmpdir(), 'con-events-')));
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   log.append('s', { type: 'turn.start', turnId: 't1', text: 'hi' });
   log.append('s', { type: 'item.start', id: 'i', kind: 'text', turnId: 't1', text: 'hello' });
   const w = log.window('s', { tail: 300 });
@@ -112,7 +112,7 @@ test('a short conversation is served whole, from its first event', () => {
 });
 
 test('the digest reads the tail without hydrating what it will not look at', () => {
-  const log = new EventLog(mkdtempSync(join(tmpdir(), 'con-events-')));
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   for (let i = 1; i <= 500; i++) log.append('s', { type: 'item.delta', id: 'x', text: String(i) });
   const tail = log.tail('s', 10);
   assert.equal(tail.length, 10);
@@ -125,7 +125,7 @@ test('the digest reads the tail without hydrating what it will not look at', () 
 // in the window was an item belonging to a turn that had been cut - and a
 // reducer with no turn to hang them on drew an empty conversation.
 test('a window that lands inside a long turn still carries that turn', () => {
-  const log = new EventLog(mkdtempSync(join(tmpdir(), 'con-events-')));
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   log.append('s', { type: 'turn.start', turnId: 't1', text: 'the question' });
   for (let i = 0; i < 60; i++) {
     log.append('s', { type: 'item.start', id: `i${i}`, kind: 'edit', turnId: 't1',
@@ -139,7 +139,7 @@ test('a window that lands inside a long turn still carries that turn', () => {
 });
 
 test('a window that skips the middle of a turn still points at the hole', () => {
-  const log = new EventLog(mkdtempSync(join(tmpdir(), 'con-events-')));
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   log.append('s', { type: 'turn.start', turnId: 't1', text: 'one long turn' });
   for (let i = 0; i < 60; i++) {
     log.append('s', { type: 'item.start', id: `i${i}`, kind: 'edit', turnId: 't1',

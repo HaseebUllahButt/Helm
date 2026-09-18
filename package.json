@@ -1,5 +1,5 @@
 {
-  "name": "con-monorepo",
+  "name": "helm-monorepo",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,8 +11,8 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs && bash test/network.sh",
-    "check": "npm exec --workspace @con/web -- tsc --noEmit && npm --workspace @con/web run build && npm test",
-    "web": "npm --workspace @con/web run dev"
+    "check": "npm exec --workspace @helm/web -- tsc --noEmit && npm --workspace @helm/web run build && npm test",
+    "web": "npm --workspace @helm/web run dev"
 
   }
 }

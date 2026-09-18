@@ -8,10 +8,10 @@ import { delimiter } from 'node:path';
 import { HOME } from './paths.js';
 
 const exec = promisify(execFile);
-const AGENT_UNIT = 'con-agent.service';
-const SERVE_UNIT = 'con-serve.service';
+const AGENT_UNIT = 'helm-agent.service';
+const SERVE_UNIT = 'helm-serve.service';
 const unitDir = join(HOME, '.config/systemd/user');
-const binPath = fileURLToPath(new URL('../bin/con.js', import.meta.url));
+const binPath = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
 
 /** Quote one systemd ExecStart/Environment value without involving a shell. */
 export function systemdArg(value) {
@@ -21,7 +21,7 @@ export function systemdArg(value) {
 }
 
 /**
- * Install con as a user service so the machine reconnects on its own after a
+ * Install helm as a user service so the machine reconnects on its own after a
  * reboot. A user unit rather than a system one: it runs as you, with your
  * agents' credentials, and needs no root.
  */
@@ -36,13 +36,13 @@ export async function installService({ mode = 'agent', args = [] } = {}) {
   // because any machine has to be able to answer a phone on its own.
   const command = ['up', ...args];
 
-  if (process.env.CON_NO_SERVICE === '1' || process.env.HELM_NO_SERVICE === '1') {
-    console.log('(skipping service install: CON_NO_SERVICE=1)');
+  if (process.env.HELM_NO_SERVICE === '1') {
+    console.log('(skipping service install: HELM_NO_SERVICE=1)');
     return { installed: false };
   }
   if (platform() !== 'linux') {
     console.log(
-      `\nautomatic service install is Linux-only for now. Run this to keep con up:\n` +
+      `\nautomatic service install is Linux-only for now. Run this to keep helm up:\n` +
       `  ${process.execPath} ${binPath} run\n`
     );
     return { installed: false };
@@ -62,13 +62,13 @@ export async function installService({ mode = 'agent', args = [] } = {}) {
   let herdrBin = '';
   try {
     const { stdout } = await exec('sh', ['-lc', 'command -v herdr']);
-    if (stdout.trim()) herdrBin = `Environment=${systemdArg(`CON_HERDR_BIN=${stdout.trim()}`)}\n`;
+    if (stdout.trim()) herdrBin = `Environment=${systemdArg(`HELM_HERDR_BIN=${stdout.trim()}`)}\n`;
   } catch { /* fall back to PATH lookup at run time */ }
 
   writeFileSync(
     join(unitDir, UNIT),
     `[Unit]
-Description=con ${mode}
+Description=helm ${mode}
 After=network-online.target
 Wants=network-online.target
 
@@ -108,7 +108,7 @@ WantedBy=default.target
 
 export async function uninstallService({ mode = 'agent' } = {}) {
   const UNIT = mode === 'serve' ? SERVE_UNIT : AGENT_UNIT;
-  if (process.env.CON_NO_SERVICE === '1' || process.env.HELM_NO_SERVICE === '1') return { removed: false };
+  if (process.env.HELM_NO_SERVICE === '1') return { removed: false };
   if (platform() !== 'linux') return { removed: false };
   await exec('systemctl', ['--user', 'disable', '--now', UNIT]).catch(() => {});
   const file = join(unitDir, UNIT);

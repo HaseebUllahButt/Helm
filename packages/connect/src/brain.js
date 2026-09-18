@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CON_DIR } from './paths.js';
+import { HELM_DIR } from './paths.js';
 
 /**
  * What a brain knows.
@@ -20,10 +20,10 @@ import { CON_DIR } from './paths.js';
  *      prepended to what the owner types. A hundred threads is a couple of
  *      thousand tokens, so the brain knows the shape of the network without
  *      being asked and without a tool call.
- *   2. Depth on request. `con thread <id>` reads a conversation's tail,
- *      `con digest --json` the whole thing structurally. The brain pulls
+ *   2. Depth on request. `helm thread <id>` reads a conversation's tail,
+ *      `helm digest --json` the whole thing structurally. The brain pulls
  *      what the digest made it curious about.
- *   3. Its hands: `con say`, `con spawn`. Same CLI, so the agent's own
+ *   3. Its hands: `helm say`, `helm spawn`. Same CLI, so the agent's own
  *      Bash tool is the only integration - which is why this works the same
  *      on Claude Code, Codex, opencode and Devin, and why the permission
  *      card you already answer on your phone is the brain's guardrail too.
@@ -38,7 +38,7 @@ import { CON_DIR } from './paths.js';
  * nothing is running there.
  */
 
-const SNAPSHOT = join(CON_DIR, 'snapshot.json');
+const SNAPSHOT = join(HELM_DIR, 'snapshot.json');
 
 /**
  * Enough of a session id to say which one, short enough to type.
@@ -167,7 +167,7 @@ export function lastLine(events = []) {
 }
 
 /**
- * A conversation as lines, for `con thread`.
+ * A conversation as lines, for `helm thread`.
  *
  * The brain reads this with its eyes rather than a parser, so it is prose and
  * tool calls instead of JSON - and it is folded, so a sentence that arrived as
@@ -242,7 +242,7 @@ export function readSnapshot(file = SNAPSHOT) {
 }
 
 export function writeSnapshot(snap, file = SNAPSHOT) {
-  mkdirSync(CON_DIR, { recursive: true, mode: 0o700 });
+  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
   writeFileSync(file, JSON.stringify(snap, null, 2), { mode: 0o600 });
   return snap;
 }
@@ -303,7 +303,7 @@ export function render(snap, { roster = {}, now = Date.now(), limit = 12 } = {})
           JSON.stringify(oneLine(s.title, 60)),
           money(s.costUsd),
           ago(s.updatedAt, now),
-          s.adopted ? '[not started by con]' : '',
+          s.adopted ? '[not started by helm]' : '',
         ].filter(Boolean);
         out.push(`    ${bits.join(' ')}`);
         if (s.last) out.push(`           ${s.last}`);
@@ -325,7 +325,7 @@ export function render(snap, { roster = {}, now = Date.now(), limit = 12 } = {})
  * screenful of machine state in front of every message the owner typed - in
  * the transcript they read as well as in the model's context - and most turns
  * do not need it. A line is enough to tell the brain whether the picture is
- * worth fetching; `con digest` fetches it. Small always, complete on demand.
+ * worth fetching; `helm digest` fetches it. Small always, complete on demand.
  */
 export function summaryLine(snap, { roster = {}, now = Date.now() } = {}) {
   const ids = Object.keys({ ...roster, ...(snap?.machines ?? {}) });
@@ -343,31 +343,31 @@ export function summaryLine(snap, { roster = {}, now = Date.now() } = {}) {
     blocked ? `${blocked} waiting on you` : null,
     working ? `${working} working` : null,
   ].filter(Boolean);
-  return `[con ${when} · ${bits.join(' · ')}]`;
+  return `[helm ${when} · ${bits.join(' · ')}]`;
 }
 
 /**
  * What a brain is told once, when its thread is opened.
  *
- * It is a first user message rather than a system prompt because con drives
+ * It is a first user message rather than a system prompt because helm drives
  * four different CLIs and only some of them take one - and because a message
  * survives `--resume`, so the brain still knows what it is after a restart.
  */
 export function brief(name) {
-  return `You are a brain of a con network: an agent with a view of every machine in it, rather than one agent per folder. Each machine in the network can have one of these, and you are ${name}'s.
+  return `You are a brain of a helm network: an agent with a view of every machine in it, rather than one agent per folder. Each machine in the network can have one of these, and you are ${name}'s.
 
-You are running on ${name}. Your tools for the network are the \`con\` CLI, through your shell:
+You are running on ${name}. Your tools for the network are the \`helm\` CLI, through your shell:
 
-  con digest              every machine, folder, and running session, with what each last did
-  con digest --json       the same, structurally
-  con thread <id>         the recent conversation of one session (-n for more lines)
-  con say <id> <text>     send a prompt into an existing session
-  con spawn <machine> <folder> <account> <text>   start a new session and prompt it
-  con machines            the roster
+  helm digest              every machine, folder, and running session, with what each last did
+  helm digest --json       the same, structurally
+  helm thread <id>         the recent conversation of one session (-n for more lines)
+  helm say <id> <text>     send a prompt into an existing session
+  helm spawn <machine> <folder> <account> <text>   start a new session and prompt it
+  helm machines            the roster
 
-Session ids are the short ids \`con digest\` prints. Ordinary shell commands run on ${name}; to do something on another machine, spawn or talk to a session there.
+Session ids are the short ids \`helm digest\` prints. Ordinary shell commands run on ${name}; to do something on another machine, spawn or talk to a session there.
 
-Every message from the owner is prefixed with a one-line status. Run \`con digest\` when that line, or the question, suggests you need the detail - do not guess at what is running.
+Every message from the owner is prefixed with a one-line status. Run \`helm digest\` when that line, or the question, suggests you need the detail - do not guess at what is running.
 
 You act on this network. Prefer doing the thing over describing it, say plainly what you did, and ask before anything destructive.`;
 }
@@ -375,22 +375,22 @@ You act on this network. Prefer doing the thing over describing it, say plainly 
 // ------------------------------------------------------------------ its hands
 
 /**
- * A `con` on the brain's PATH that is the one running it.
+ * A `helm` on the brain's PATH that is the one running it.
  *
- * The brain's abilities are whatever the `con` it can reach supports, and
- * the `con` on a machine's PATH is the installed one - which is behind the
+ * The brain's abilities are whatever the `helm` it can reach supports, and
+ * the `helm` on a machine's PATH is the installed one - which is behind the
  * daemon whenever a deploy has not happened yet. Driven for real the first
  * time, that showed up as the brain reporting `unknown command "digest"` and
- * then trying to work around it with `con status`, which is a confusing way
+ * then trying to work around it with `helm status`, which is a confusing way
  * to learn that a machine is out of date.
  *
  * So the brain gets its own: a one-line shim, written next to the network
  * key, that runs this daemon's own CLI with this daemon's own node. It cannot
  * be out of step with the code that wrote it.
  */
-export function ensureShim(dir = join(CON_DIR, 'bin')) {
-  const cli = fileURLToPath(new URL('../bin/con.js', import.meta.url));
-  const shim = join(dir, 'con');
+export function ensureShim(dir = join(HELM_DIR, 'bin')) {
+  const cli = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
+  const shim = join(dir, 'helm');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(cli)} "$@"\n`, { mode: 0o700 });
   return dir;

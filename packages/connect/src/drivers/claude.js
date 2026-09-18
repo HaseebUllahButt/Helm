@@ -80,7 +80,7 @@ export class ClaudeDriver extends Driver {
     this.#child = child;
     let stderr = '';
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); if (process.env.CON_DEBUG_DRIVER) process.stderr.write(d); });
+    child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d); });
     readJsonLines(child.stdout, (m) => this.#onMessage(m), (line) => this.log(`claude: ${line.slice(0, 200)}`));
 
     let markReady;
@@ -113,7 +113,7 @@ export class ClaudeDriver extends Driver {
   }
 
   #control(request) {
-    const request_id = `con-${++this.#controlSeq}`;
+    const request_id = `helm-${++this.#controlSeq}`;
     return new Promise((resolve, reject) => {
       this.#controls.set(request_id, resolve);
       try { this.#write({ type: 'control_request', request_id, request }); }
@@ -166,7 +166,7 @@ export class ClaudeDriver extends Driver {
     const raw = req.raw;
     let response;
     if (decision.option === 'deny') {
-      response = { behavior: 'deny', message: decision.message || 'The owner declined this from con.' };
+      response = { behavior: 'deny', message: decision.message || 'The owner declined this from helm.' };
     } else {
       response = { behavior: 'allow' };
       if (decision.option === 'always' && raw.permission_suggestions?.length) {

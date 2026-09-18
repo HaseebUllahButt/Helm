@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { homedir } from 'node:os';
 
 /**
- * Terminals con owns.
+ * Terminals helm owns.
  *
  * The alternative, and what this replaces, was to let herdr own every
  * terminal and read its *rendered screen* back on a timer. That cost a full

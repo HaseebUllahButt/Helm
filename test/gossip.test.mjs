@@ -5,7 +5,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// A revocation typed on a laptop (`con remove`) has to reach the VM's hub,
+// A revocation typed on a laptop (`helm remove`) has to reach the VM's hub,
 // even though the laptop's daemon is the one dialling out and the VM never
 // dials the laptop. The daemon offers a roster hash every tick; when the hub
 // answers with a roster that teaches the daemon nothing, the daemon still has
@@ -14,22 +14,22 @@ import { join } from 'node:path';
 //
 // Needs a real daemon, which needs herdr. Skipped when herdr is not running.
 
-const root = mkdtempSync(join(tmpdir(), 'con-gossip-'));
+const root = mkdtempSync(join(tmpdir(), 'helm-gossip-'));
 const A = join(root, 'A');
 const B = join(root, 'B');
 const PA = 18991;
 const PB = 18992;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-process.env.CON_DIR = B;
-process.env.CON_DB = join(B, 'hub.sqlite');
-process.env.CON_SSH_DIR = join(B, 'ssh');
-process.env.CON_NO_SERVICE = '1';
+process.env.HELM_DIR = B;
+process.env.HELM_DB = join(B, 'hub.sqlite');
+process.env.HELM_SSH_DIR = join(B, 'ssh');
+process.env.HELM_NO_SERVICE = '1';
 
 let herdrRunning = false;
 try {
   herdrRunning = /status:\s*running/.test(
-    execFileSync(process.env.CON_HERDR_BIN || 'herdr', ['status'], { timeout: 5000 }).toString()
+    execFileSync(process.env.HELM_HERDR_BIN || 'herdr', ['status'], { timeout: 5000 }).toString()
   );
 } catch { /* not installed */ }
 
@@ -39,9 +39,9 @@ test('a revocation made on a dialling-out machine reaches the hub it dials', {
 }, async (t) => {
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
-  // Hub A: the "VM", in its own process so it has its own CON_DIR.
+  // Hub A: the "VM", in its own process so it has its own HELM_DIR.
   const hubA = spawn(process.execPath, ['test/hub.mjs', String(PA), 'new'], {
-    env: { ...process.env, CON_DIR: A, CON_DB: join(A, 'hub.sqlite'), NAME: 'vm' },
+    env: { ...process.env, HELM_DIR: A, HELM_DB: join(A, 'hub.sqlite'), NAME: 'vm' },
     stdio: ['ignore', 'ignore', 'inherit'],
   });
   t.after(() => hubA.kill());
@@ -52,15 +52,15 @@ test('a revocation made on a dialling-out machine reaches the hub it dials', {
 
   // Machine B: the "laptop", joined with A's key and knowing A's address.
   const netA = JSON.parse(readFileSync(join(A, 'network.json'), 'utf8'));
-  const N = await import('@con/protocol/network');
+  const N = await import('@helm/protocol/network');
   const machines = { ...netA.machines };
   machines[netA.self] = { ...machines[netA.self], endpoints: [`http://127.0.0.1:${PA}`] };
   N.joinNetwork({
     id: netA.id, key: netA.key, name: 'laptop', port: PB, machines, devices: {}, revoked: {},
   });
 
-  const { startRelay } = await import('@con/relay');
-  const hubB = await startRelay({ port: PB, host: '127.0.0.1', dbFile: process.env.CON_DB });
+  const { startRelay } = await import('@helm/relay');
+  const hubB = await startRelay({ port: PB, host: '127.0.0.1', dbFile: process.env.HELM_DB });
   t.after(() => hubB.stop());
   const { Daemon } = await import('../packages/connect/src/agent.js');
   const daemon = new Daemon({ name: 'laptop', port: PB, advertiseLan: false });
@@ -79,9 +79,9 @@ test('a revocation made on a dialling-out machine reaches the hub it dials', {
 
   // A phone pairs on A. Written into A's roster the way /api/auth/login does.
   const device = JSON.parse(execFileSync(process.env.execPath || 'node', ['-e', `
-    import('@con/protocol/network').then((N) => {
+    import('@helm/protocol/network').then((N) => {
       console.log(JSON.stringify(N.issueDevice(N.loadNetwork(), 'phone')));
-    });`], { env: { ...process.env, CON_DIR: A } }).toString());
+    });`], { env: { ...process.env, HELM_DIR: A } }).toString());
   const phoneOnA = async () => (await fetch(`http://127.0.0.1:${PA}/api/network`, {
     headers: { authorization: `Bearer ${device.token}` },
   })).status;
@@ -91,7 +91,7 @@ test('a revocation made on a dialling-out machine reaches the hub it dials', {
   for (let i = 0; i < 80 && !N.loadNetwork().devices[device.id]; i++) await sleep(250);
   assert.ok(N.loadNetwork().devices[device.id], 'B should learn the device from A');
 
-  // `con remove` on B.
+  // `helm remove` on B.
   N.revoke(N.loadNetwork(), device.id);
 
   // Two full reconcile ticks is more than enough if the gossip is symmetric.

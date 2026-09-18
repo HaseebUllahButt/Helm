@@ -4,11 +4,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// A terminal con owns, against a real shell: bytes go in and come back, the
+// A terminal helm owns, against a real shell: bytes go in and come back, the
 // program is told how big the viewer is, output only travels while somebody
 // is watching, and a reconnecting viewer is replayed rather than left blank.
-process.env.CON_DIR = mkdtempSync(join(tmpdir(), 'con-pty-'));
-process.env.CON_NO_SERVICE = '1';
+process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-pty-'));
+process.env.HELM_NO_SERVICE = '1';
 
 const { Terminals, loadPty } = await import('../packages/connect/src/pty.js');
 
@@ -41,20 +41,20 @@ async function until(fn, ms = 5000) {
 test('a terminal echoes what is typed and replays it to a later viewer', opts, async (t) => {
   const { terms, text } = terminals(t);
 
-  await terms.open('t1', { cwd: process.env.CON_DIR });
+  await terms.open('t1', { cwd: process.env.HELM_DIR });
   terms.view('t1', { cols: 100, rows: 30 });
 
-  terms.write('t1', 'echo con-was-here\r');
-  await until(() => text().includes('con-was-here'));
+  terms.write('t1', 'echo helm-was-here\r');
+  await until(() => text().includes('helm-was-here'));
 
   // A viewer that arrives later gets the scrollback, not an empty screen.
-  assert.match(terms.view('t1'), /con-was-here/);
+  assert.match(terms.view('t1'), /helm-was-here/);
 });
 
 test('the program is told the size the viewer is drawing at', opts, async (t) => {
   const { terms, text } = terminals(t);
 
-  await terms.open('t2', { cwd: process.env.CON_DIR });
+  await terms.open('t2', { cwd: process.env.HELM_DIR });
   terms.view('t2', { cols: 100, rows: 30 });
   terms.resize('t2', 132, 44);
 
@@ -67,7 +67,7 @@ test('the program is told the size the viewer is drawing at', opts, async (t) =>
 test('output does not travel to a viewer that has gone away', opts, async (t) => {
   const { terms, seen, text } = terminals(t);
 
-  await terms.open('t3', { cwd: process.env.CON_DIR });
+  await terms.open('t3', { cwd: process.env.HELM_DIR });
   terms.view('t3');
   terms.write('t3', 'echo watching\r');
   await until(() => text().includes('watching'));
@@ -83,11 +83,11 @@ test('output does not travel to a viewer that has gone away', opts, async (t) =>
 
 test('closing a terminal ends its shell and forgets it', opts, async (t) => {
   const { terms } = terminals(t);
-  await terms.open('t4', { cwd: process.env.CON_DIR });
+  await terms.open('t4', { cwd: process.env.HELM_DIR });
   assert.equal(terms.has('t4'), true);
   terms.close('t4');
   assert.equal(terms.has('t4'), false);
   assert.throws(() => terms.write('t4', 'x'), /ended/);
 });
 
-test.after(() => rmSync(process.env.CON_DIR, { recursive: true, force: true }));
+test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));

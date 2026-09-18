@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
-import { T } from '@con/protocol';
-import { machineToken, allEndpoints } from '@con/protocol/network';
+import { T } from '@helm/protocol';
+import { machineToken, allEndpoints } from '@helm/protocol/network';
 
 /**
  * The CLI talking to machines: one RPC through whichever hub answers.
@@ -29,10 +29,10 @@ export async function hubRpc(net, env, method, params = {}, { timeout = 20_000 }
 }
 
 function rpcVia(hub, token, env, method, params, timeout) {
-  // con's protocol lives at /con/ws now; a hub from before the move still
+  // helm's protocol lives at /helm/ws now; a hub from before the move still
   // answers at /ws, so a transport failure there is worth one retry.
   const base = hub.replace(/^http/, 'ws');
-  return attempt(`${base}/con/ws?role=client`).catch((err) =>
+  return attempt(`${base}/helm/ws?role=client`).catch((err) =>
     err.rpc ? Promise.reject(err) : attempt(`${base}/ws?role=client`));
 
   function attempt(url) {

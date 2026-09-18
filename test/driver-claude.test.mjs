@@ -6,7 +6,7 @@ import { ClaudeDriver } from '../packages/connect/src/drivers/claude.js';
 const make = (name, opts = {}) => {
   const fake = fakeCli('claude', name);
   const driver = new ClaudeDriver({
-    cmd: fake.cmd, env: { CLAUDE_CONFIG_DIR: '/tmp/con-test-claude-home' }, args: [],
+    cmd: fake.cmd, env: { CLAUDE_CONFIG_DIR: '/tmp/helm-test-claude-home' }, args: [],
     cwd: fake.dir, mode: 'default', ...opts,
   });
   return { fake, driver, log: collect(driver) };
@@ -31,15 +31,15 @@ test('argv: headless flags, the account home, and a session id to resume later',
 
 test('plain: text streams in as deltas, then the turn completes with its cost', async () => {
   const { driver, log } = make('plain');
-  await driver.send('Reply with exactly the words: hello from con');
+  await driver.send('Reply with exactly the words: hello from helm');
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
   assert.equal(done.costUsd, 0.016515);
   const turn = log.of('turn.start')[0];
-  assert.equal(turn.text, 'Reply with exactly the words: hello from con');
+  assert.equal(turn.text, 'Reply with exactly the words: hello from helm');
   const text = log.of('item.start').find((e) => e.kind === 'text');
   assert.ok(text, 'a text item started');
-  assert.equal(log.of('item.delta').filter((e) => e.id === text.id).map((e) => e.text).join(''), 'hello from con');
+  assert.equal(log.of('item.delta').filter((e) => e.id === text.id).map((e) => e.text).join(''), 'hello from helm');
   assert.ok(log.of('item.start').some((e) => e.kind === 'thinking'));
   assert.ok(log.of('limits').length, 'rate limit snapshot forwarded');
   assert.deepEqual(log.of('status').map((e) => e.status), ['working', 'idle']);
@@ -54,7 +54,7 @@ test('tool: a Bash call becomes a tool item with streamed input and its output; 
   assert.equal(ask.kind, 'edit');
   assert.equal(ask.tool, 'Write');
   assert.equal(ask.title, 'Write out.txt');
-  assert.equal(ask.detail.path, '/tmp/con-record-9lHsJr/out.txt');
+  assert.equal(ask.detail.path, '/tmp/helm-record-9lHsJr/out.txt');
   assert.deepEqual(ask.options.map((o) => o.role), ['allow', 'allow-always', 'deny']);
   assert.equal(ask.options[1].label, 'Allow all edits this session');
   assert.equal(driver.status, 'blocked');
@@ -62,10 +62,10 @@ test('tool: a Bash call becomes a tool item with streamed input and its output; 
   const bash = log.of('item.start').find((e) => e.kind === 'tool' && e.name === 'Bash');
   assert.ok(bash.id.startsWith('toolu_'));
   const update = log.of('item.update').find((e) => e.id === bash.id && e.input);
-  assert.equal(update.input.command, 'echo con-test');
+  assert.equal(update.input.command, 'echo helm-test');
   const bashDone = log.of('item.done').find((e) => e.id === bash.id);
-  assert.equal(bashDone.output, 'con-test');
-  assert.equal(bashDone.result.stdout, 'con-test');
+  assert.equal(bashDone.output, 'helm-test');
+  assert.equal(bashDone.result.stdout, 'helm-test');
 
   await driver.answer(ask.requestId, { option: 'allow' });
   const done = await log.until((e) => e.type === 'turn.done');
@@ -211,6 +211,6 @@ test('deltas to one item are coalesced into fewer events', async () => {
   const parts = log.of('item.delta').filter((e) => e.id === bash.id);
   // five input_json_delta chunks in the recording; a 2ms replay lands them in one or two frames
   assert.ok(parts.length < 5, `expected coalescing, got ${parts.length} frames`);
-  assert.equal(JSON.parse(parts.map((p) => p.text).join('')).command, 'echo con-test');
+  assert.equal(JSON.parse(parts.map((p) => p.text).join('')).command, 'echo helm-test');
   await driver.kill();
 });

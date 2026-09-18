@@ -15,7 +15,7 @@ const {
 
 // Events are flat and incremental - `{ type, ...fields }`, with a tool's
 // arguments and a model's whole sentence arriving as separate later events -
-// so these fixtures are shaped like the ones in ~/.con/events, not like a
+// so these fixtures are shaped like the ones in ~/.helm/events, not like a
 // convenient summary of them.
 test('lastLine puts an unanswered permission ahead of everything else', () => {
   const line = lastLine([
@@ -45,10 +45,10 @@ test('a finished tool is not a running one', () => {
     { type: 'item.update', id: 'i1', input: { file_path: 'README.md' } },
     { type: 'item.done', id: 'i1', status: 'ok' },
     { type: 'item.start', id: 'i2', kind: 'text', turnId: 't1' },
-    { type: 'item.delta', id: 'i2', text: "It is the guide to con.\nAnything else?" },
+    { type: 'item.delta', id: 'i2', text: "It is the guide to helm.\nAnything else?" },
     { type: 'item.done', id: 'i2', status: 'ok' },
   ]);
-  assert.equal(line, 'It is the guide to con.');
+  assert.equal(line, 'It is the guide to helm.');
 });
 
 test('a sentence that arrived as deltas is one line, not none', () => {
@@ -86,7 +86,7 @@ test('readThread folds deltas back into the sentence they were', () => {
 // came out blank, and the test agreed with the bug. Reading the log is the
 // whole job here, so the log is real.
 test('localDigest reads each session line out of the real event log', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'con-brain-log-'));
+  const dir = mkdtempSync(join(tmpdir(), 'helm-brain-log-'));
   try {
     const log = new EventLog(dir);
     log.append('a1', { type: 'turn.start', turnId: 't1', text: 'renew the cert' });
@@ -104,18 +104,18 @@ test('localDigest reads each session line out of the real event log', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('a pane con did not start contributes no event line', () => {
+test('a pane helm did not start contributes no event line', () => {
   let asked = 0;
   const events = { since: () => { asked += 1; return []; } };
   localDigest([{ id: 'pane:w1:p1', title: 'zsh', cwd: '/w', engine: 'shell', status: 'shell' }], events);
-  assert.equal(asked, 0, 'con has no event log for a pane it does not own');
+  assert.equal(asked, 0, 'helm has no event log for a pane it does not own');
 });
 
 // An offline machine that simply vanishes is the failure that matters here:
 // the brain would report "nothing is running there", which is a wrong answer
 // rather than a missing one.
 test('a machine that did not answer keeps its last known state, dated', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'con-brain-'));
+  const dir = mkdtempSync(join(tmpdir(), 'helm-brain-'));
   const file = join(dir, 'snapshot.json');
   try {
     const t0 = Date.now() - 3 * 3600 * 1000;
@@ -160,11 +160,11 @@ test('the prepended line stays one short line', () => {
 });
 
 test('the shape the transcript splits back off a brain message', () => {
-  // Must match CON_NOTE in apps/web/src/session/Transcript.tsx: one
+  // Must match HELM_NOTE in apps/web/src/session/Transcript.tsx: one
   // bracketed line, then a blank line, then what the owner typed.
   const line = summaryLine({ machines: { a: { sessions: [] } } }, { roster: { a: { online: true } } });
   const message = `${line}\n\nwhat is waiting on me?`;
-  const m = /^(\[con [^\]\n]*\])\n\n([\s\S]*)$/.exec(message);
+  const m = /^(\[helm [^\]\n]*\])\n\n([\s\S]*)$/.exec(message);
   assert.ok(m, 'the web regex has to match what the daemon sends');
   assert.equal(m[2], 'what is waiting on me?');
 });
@@ -183,7 +183,7 @@ test('ago says never rather than guessing', () => {
 test('the brief names the machine and the verbs it is given', () => {
   const b = brief('vm');
   assert.match(b, /running on vm/);
-  for (const verb of ['con digest', 'con thread', 'con say', 'con spawn']) {
+  for (const verb of ['helm digest', 'helm thread', 'helm say', 'helm spawn']) {
     assert.ok(b.includes(verb), `the brief has to mention ${verb}`);
   }
 });

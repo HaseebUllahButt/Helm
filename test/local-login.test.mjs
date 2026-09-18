@@ -12,10 +12,10 @@ import { join } from 'node:path';
 // the hub looking exactly as local as a browser on the box. Being on 127.0.0.1
 // therefore cannot be the credential - the local key, which only this
 // machine's user can read, is.
-const dir = mkdtempSync(join(tmpdir(), 'con-local-login-'));
-process.env.CON_DIR = dir;
-process.env.CON_DB = join(dir, 'hub.sqlite');
-process.env.CON_NO_SERVICE = '1';
+const dir = mkdtempSync(join(tmpdir(), 'helm-local-login-'));
+process.env.HELM_DIR = dir;
+process.env.HELM_DB = join(dir, 'hub.sqlite');
+process.env.HELM_NO_SERVICE = '1';
 
 const PORT = 18974;
 
@@ -29,14 +29,14 @@ const login = (body, port = PORT) =>
 test('a browser on this machine signs in with the local key, and nothing else does', async (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
-  const { createNetwork, localKey } = await import('@con/protocol/network');
-  const { startRelay } = await import('@con/relay');
+  const { createNetwork, localKey } = await import('@helm/protocol/network');
+  const { startRelay } = await import('@helm/relay');
 
   createNetwork({ name: 'test', port: PORT });
-  const hub = await startRelay({ port: PORT, host: '127.0.0.1', dbFile: process.env.CON_DB });
+  const hub = await startRelay({ port: PORT, host: '127.0.0.1', dbFile: process.env.HELM_DB });
   t.after(() => hub.stop());
 
-  // What `con open` puts in the fragment.
+  // What `helm open` puts in the fragment.
   const ok = await login({ local: localKey(), label: 'this machine' });
   assert.equal(ok.status, 200);
   const issued = await ok.json();
@@ -68,12 +68,12 @@ test('a browser on this machine signs in with the local key, and nothing else do
 
 test('this machine keeps one browser credential, not one per page load', async (t) => {
   const PORT3 = PORT + 2;
-  const dir3 = mkdtempSync(join(tmpdir(), 'con-local-once-'));
-  process.env.CON_DIR = dir3;
+  const dir3 = mkdtempSync(join(tmpdir(), 'helm-local-once-'));
+  process.env.HELM_DIR = dir3;
   t.after(() => rmSync(dir3, { recursive: true, force: true }));
 
-  const N = await import('@con/protocol/network');
-  const { startRelay } = await import('@con/relay');
+  const N = await import('@helm/protocol/network');
+  const { startRelay } = await import('@helm/relay');
   N.createNetwork({ name: 'laptop', port: PORT3 });
   const hub = await startRelay({ port: PORT3, host: '127.0.0.1', dbFile: join(dir3, 'hub.sqlite') });
   t.after(() => hub.stop());
@@ -117,8 +117,8 @@ test('this machine keeps one browser credential, not one per page load', async (
 test('the page this machine serves can fetch the local key; a proxied or foreign request cannot', async (t) => {
   const PORT2 = PORT + 1;
 
-  const { createNetwork, localKey } = await import('@con/protocol/network');
-  const { startRelay } = await import('@con/relay');
+  const { createNetwork, localKey } = await import('@helm/protocol/network');
+  const { startRelay } = await import('@helm/relay');
 
   createNetwork({ name: 'test2', port: PORT2 });
   const hub = await startRelay({ port: PORT2, host: '127.0.0.1' });

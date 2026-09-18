@@ -1,10 +1,10 @@
 {
-  "name": "@con/relay",
+  "name": "@helm/relay",
   "version": "0.1.0",
   "type": "module",
   "main": "src/server.js",
   "dependencies": {
-    "@con/protocol": "*",
+    "@helm/protocol": "*",
     "ws": "^8.18.0"
   },
   "exports": {

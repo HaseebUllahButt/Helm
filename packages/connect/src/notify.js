@@ -1,7 +1,7 @@
 /**
  * Telling the owner's phone that something is waiting on them.
  *
- * This is the whole point of con stated in one file: an agent that asks a
+ * This is the whole point of helm stated in one file: an agent that asks a
  * question four minutes in and then sits idle is the problem, and a
  * notification is the only thing that reaches someone who has walked away
  * from the desk with the app closed.
@@ -32,7 +32,7 @@ export function describe(session, event) {
   return {
     title: `${where} · ${engine} needs you`,
     body: ask,
-    tag: `con-${session?.id ?? 'session'}-${event.requestId ?? event.seq ?? ''}`,
+    tag: `helm-${session?.id ?? 'session'}-${event.requestId ?? event.seq ?? ''}`,
     envId: session?.envId ?? null,
     sessionId: session?.id ?? null,
   };

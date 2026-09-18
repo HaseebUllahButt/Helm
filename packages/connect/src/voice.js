@@ -1,34 +1,34 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { HOME, CON_DIR } from './paths.js';
+import { HOME, HELM_DIR } from './paths.js';
 import { loadSettings } from './settings.js';
 
 /**
  * Speaking to an agent instead of typing at it.
  *
- * Typing a prompt on a phone is the friction con exists to remove, so the
+ * Typing a prompt on a phone is the friction helm exists to remove, so the
  * composer has a microphone. The recording is made on the device and the
  * words come back as text; what happens in between is here.
  *
  * **The key never leaves the machine.** A device sends audio to a machine in
  * the network and gets a transcript back - the same bargain as every other
- * credential in con, where a profile references a secret that stays where
+ * credential in helm, where a profile references a secret that stays where
  * the work runs. Nothing about the phone ever holds a Groq key, so a paired
  * device that is lost cannot spend anyone's credit.
  *
  * Transcription is Groq's hosted Whisper, because that is what the owner
  * already uses: `~/.config/groq-api-key` is what their Super+D dictation
- * binding reads, and con reads the same file rather than asking for the key
+ * binding reads, and helm reads the same file rather than asking for the key
  * a second time in a different place.
  */
 
 /** Where a key might be, in the order a machine should prefer them. */
 const KEY_FILES = [
-  join(CON_DIR, 'groq-api-key'),
+  join(HELM_DIR, 'groq-api-key'),
   join(HOME, '.config', 'groq-api-key'),
 ];
 
-const MODEL = process.env.CON_VOICE_MODEL || 'whisper-large-v3-turbo';
+const MODEL = process.env.HELM_VOICE_MODEL || 'whisper-large-v3-turbo';
 const ENDPOINT = 'https://api.groq.com/openai/v1/audio/transcriptions';
 
 /**
@@ -57,7 +57,7 @@ export function groqKey() {
   const configured = loadSettings()?.voice?.keyFile;
   const files = configured ? [configured, ...KEY_FILES] : KEY_FILES;
   for (const file of files) if (existsSync(file)) { const k = read(file); if (k) return k; }
-  return process.env.CON_GROQ_KEY || process.env.GROQ_API_KEY || null;
+  return process.env.HELM_GROQ_KEY || process.env.GROQ_API_KEY || null;
 }
 
 /** Whether this machine can turn speech into text, for `env.info`. */
@@ -85,7 +85,7 @@ export function extensionFor(mime) {
 export async function transcribe({ audio, mime = 'audio/webm', prompt, signal } = {}) {
   const key = groqKey();
   if (!key) {
-    throw Object.assign(new Error('no Groq key on this machine - put one in ~/.con/groq-api-key'), { code: 'no_key' });
+    throw Object.assign(new Error('no Groq key on this machine - put one in ~/.helm/groq-api-key'), { code: 'no_key' });
   }
   const bytes = Buffer.isBuffer(audio) ? audio : Buffer.from(String(audio ?? ''), 'base64');
   if (!bytes.length) throw new Error('no audio');
@@ -99,8 +99,8 @@ export async function transcribe({ audio, mime = 'audio/webm', prompt, signal } 
   form.append('model', MODEL);
   form.append('response_format', 'json');
   // What the speaker is likely to say. Names that Whisper has never heard -
-  // con, herdr, Codex, sslip - come back mangled without it.
-  form.append('prompt', prompt || 'con, herdr, Codex, Claude Code, opencode, Devin, sslip.io, PWA, repo, daemon.');
+  // helm, herdr, Codex, sslip - come back mangled without it.
+  form.append('prompt', prompt || 'helm, herdr, Codex, Claude Code, opencode, Devin, sslip.io, PWA, repo, daemon.');
 
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);

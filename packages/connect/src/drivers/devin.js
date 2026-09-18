@@ -5,7 +5,7 @@ import { modeFor } from '../modes.js';
  * Devin CLI, headless: `devin acp` speaks ACP over stdio.
  *
  * Devin's own session modes are real - Code/Ask/Plan/Bypass map straight
- * onto con's (modes.js `acp`), so permission policy is the agent's and
+ * onto helm's (modes.js `acp`), so permission policy is the agent's and
  * every request reaches the phone. Models are picked with
  * `session/set_config_option` 'model'; there is no separate thinking level -
  * each Devin model bakes it into the name ("…-low", "…-high", "…-fast").

@@ -7,12 +7,12 @@ import { join } from 'node:path';
 import { arch, platform, homedir } from 'node:os';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { CON_DIR } from './paths.js';
+import { HELM_DIR } from './paths.js';
 
 const exec = promisify(execFile);
 
 /**
- * Put a public HTTPS address in front of a locally-served con.
+ * Put a public HTTPS address in front of a locally-served helm.
  *
  * Only needed when no machine in the network has a public address of its own.
  * A router will not give a laptop or a phone one, so without a VM somewhere,
@@ -32,7 +32,7 @@ const exec = promisify(execFile);
  * permanent name on the internet is something somebody has to hold for you.
  */
 
-const BIN_DIR = join(CON_DIR, 'bin');
+const BIN_DIR = join(HELM_DIR, 'bin');
 
 const has = async (bin) => {
   try {
@@ -72,11 +72,11 @@ export const SIGNUP_HELP = `A public address needs one of these:
     2. on this machine:
          ngrok config add-authtoken <your token>
     3. claim your free domain in the ngrok dashboard
-    4. con up --tunnel --domain <that domain>
+    4. helm up --tunnel --domain <that domain>
     Same link forever - safe to add to a phone home screen.
 
   A link right now  (no account, no signup)
-         con up --tunnel --temporary
+         helm up --tunnel --temporary
     Works in seconds. The link CHANGES every restart, so do not
     add it to a home screen - use it to reach this machine today.`;
 
@@ -201,7 +201,7 @@ function ngrokUrl(child, timeoutMs = 40_000) {
 
 /**
  * @param {object}  opts
- * @param {number}  opts.port        the local con port to expose
+ * @param {number}  opts.port        the local helm port to expose
  * @param {string}  [opts.provider]  'auto' | 'ngrok' | 'cloudflared'
  * @param {string}  [opts.domain]    a reserved ngrok domain, if you have one
  * @param {boolean} [opts.temporary] accept an address that changes each run
@@ -263,7 +263,7 @@ export async function openTunnel({ port, provider = 'auto', domain, temporary = 
       `${error || 'cloudflared did not report a public address'}\n` +
       "    Cloudflare's quick tunnels fail intermittently; running it again\n" +
       '    usually works. For a link that does not depend on them, see\n' +
-      '    con up --tunnel --domain <your ngrok domain>'
+      '    helm up --tunnel --domain <your ngrok domain>'
     );
   }
   const live = await waitReachable(url);
@@ -302,7 +302,7 @@ async function waitReachable(url, timeoutMs = 60_000) {
   return false;
 }
 
-const SEEN_FILE = join(CON_DIR, 'tunnel.json');
+const SEEN_FILE = join(HELM_DIR, 'tunnel.json');
 
 /**
  * Is this address one we can rely on tomorrow?
@@ -319,7 +319,7 @@ function rememberUrl(url, provider) {
   const previous = seen[provider];
   const stable = previous === url;
   if (previous !== url) {
-    mkdirSync(CON_DIR, { recursive: true, mode: 0o700 });
+    mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
     writeFileSync(SEEN_FILE, JSON.stringify({ ...seen, [provider]: url }, null, 2));
   }
   return { stable, previous: previous ?? null };

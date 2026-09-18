@@ -1,11 +1,11 @@
 import WebSocket from 'ws';
 import { hostname, platform, arch, release } from 'node:os';
 import { connect as tcpConnect } from 'node:net';
-import { T, M, E } from '@con/protocol';
+import { T, M, E } from '@helm/protocol';
 import {
   loadNetwork, machineToken, mergeRoster, allEndpoints, describeSelf,
   roster as rosterOf, rosterHash, machineName, NAME_RULE,
-} from '@con/protocol/network';
+} from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
 import { modesFor } from './modes.js';
 import { Sessions, wire } from './sessions.js';
@@ -17,8 +17,8 @@ import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
 import { inventory } from './inventory.js';
-import { UsageReader } from '@con/usage';
-import { CON_DIR } from './paths.js';
+import { UsageReader } from '@helm/usage';
+import { HELM_DIR } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
@@ -134,7 +134,7 @@ class Link {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
       this.daemon.onFrame(this, msg).catch((err) =>
-        console.error(`[con] ${this.url}: ${err?.message || err}`)
+        console.error(`[helm] ${this.url}: ${err?.message || err}`)
       );
     });
 
@@ -143,7 +143,7 @@ class Link {
       this.connected = false;
       clearInterval(this.#beat);
       if (this.#stopped) return;
-      if (was) console.log(`[con] lost ${this.url}; retrying`);
+      if (was) console.log(`[helm] lost ${this.url}; retrying`);
       setTimeout(() => this.#open(), this.#backoff).unref?.();
       this.#backoff = Math.min(this.#backoff * 2, RECONNECT_MAX);
     });
@@ -174,7 +174,7 @@ export class Daemon {
     name, port = 8787, extra = [], advertised = [], advertiseLan = true,
   } = {}) {
     const net = loadNetwork();
-    if (!net) throw new Error('this machine is not in a network - run `con up`');
+    if (!net) throw new Error('this machine is not in a network - run `helm up`');
     this.net = net;
     this.port = port;
     this.extra = extra;
@@ -201,7 +201,7 @@ export class Daemon {
       (method, params) => this.dispatch(method, params)
     );
 
-    this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[con] ${m}`) });
+    this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
     // path: a message must not wait on every machine answering. The refresh
@@ -244,7 +244,7 @@ export class Daemon {
       if (event?.type === 'permission.resolved') {
         this.broadcastFrame(T.NOTIFY, {
           payload: {
-            tag: `con-${id}-${event.requestId ?? ''}`,
+            tag: `helm-${id}-${event.requestId ?? ''}`,
             envId: this.id, sessionId: id, resolve: true,
           },
         });
@@ -263,7 +263,7 @@ export class Daemon {
     await this.#tick();
     this.#reconcile = setInterval(
       () => this.#tick().catch((err) =>
-        console.error('[con] reconcile:', err?.message || err)),
+        console.error('[helm] reconcile:', err?.message || err)),
       RECONCILE_MS
     );
     this.#reconcile.unref?.();
@@ -431,7 +431,7 @@ export class Daemon {
   onLinkUp(link) {
     const local = link.url.includes('127.0.0.1');
     console.log(
-      `[con] ${local ? 'serving locally' : `linked to ${link.url}`} as "${this.name}"`
+      `[helm] ${local ? 'serving locally' : `linked to ${link.url}`} as "${this.name}"`
     );
     // Say what we know straight away rather than waiting for the next
     // reconcile tick: this is how a hub learns our addresses, and how a
@@ -528,7 +528,7 @@ export class Daemon {
       payload: {
         title: `${where} · finished`,
         body: `${session.engine ?? 'the agent'} is done`,
-        tag: `con-done-${session.id}-${Date.now()}`,
+        tag: `helm-done-${session.id}-${Date.now()}`,
         envId: this.id, sessionId: session.id,
       },
     });
@@ -649,13 +649,13 @@ export class Daemon {
    * every database, admin socket and localhost-only HTTP server on the box.
    *
    * The only thing that has ever needed a tunnel is ssh, so that is the whole
-   * list; `tunnel.ports` in ~/.con/config.json adds to it for anyone who
+   * list; `tunnel.ports` in ~/.helm/config.json adds to it for anyone who
    * wants more, deliberately and on the machine itself.
    */
   #allowedTunnelPorts() {
     const extra = loadSettings()?.tunnel?.ports;
     return [
-      Number(process.env.CON_SSH_PORT || 22),
+      Number(process.env.HELM_SSH_PORT || 22),
       ...(Array.isArray(extra) ? extra.map(Number) : []),
     ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
   }
@@ -711,7 +711,7 @@ export class Daemon {
         if (!name) throw new Error(`a machine name is ${NAME_RULE}`);
 
         const net = loadNetwork() ?? this.net;
-        // Names address machines: `ssh laptop`, `con brain laptop`. Two of
+        // Names address machines: `ssh laptop`, `helm brain laptop`. Two of
         // them called the same thing makes both ambiguous, and the CLI
         // resolves by name before it resolves by id.
         const taken = Object.values(net.machines).find(
@@ -836,7 +836,7 @@ export class Daemon {
         return { recent };
       }
 
-      // What `/` offers in this session: con's own actions plus whatever
+      // What `/` offers in this session: helm's own actions plus whatever
       // commands the owner has written for this engine, in this directory.
       case M.SESSION_COMMANDS: {
         const s2 = this.sessions.get(p.id);
@@ -877,7 +877,7 @@ export class Daemon {
           title: 'Brain', brain: true,
         });
         // The brief goes in as the first message rather than a system prompt:
-        // con drives four CLIs and not all of them take one, and a message
+        // helm drives four CLIs and not all of them take one, and a message
         // survives `--resume`, so a restarted brain still knows what it is.
         await this.sessions.input(session.id, brief(this.name), { raw: true });
         return { session: wire(this.sessions.get(session.id)), created: true };
@@ -896,13 +896,13 @@ export class Daemon {
       /**
        * What this machine's agents have spent.
        *
-       * Read from each CLI's own records rather than from con's event log,
+       * Read from each CLI's own records rather than from helm's event log,
        * which is trimmed to the last couple of thousand events - a long thread
        * would otherwise start forgetting what its early turns cost. Answered
        * pre-aggregated: the phone asking may be three network hops away.
        */
       case M.USAGE_REPORT: {
-        this.usage ??= new UsageReader({ indexPath: join(CON_DIR, 'usage-index.json') });
+        this.usage ??= new UsageReader({ indexPath: join(HELM_DIR, 'usage-index.json') });
         const profiles = await currentProfiles();
         return this.usage.report(profiles, {
           since: p.since ?? null,

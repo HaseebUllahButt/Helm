@@ -7,9 +7,9 @@ import { FileRollupCache, ResultCache, blankStats, bucketKey } from './scan-cach
  * Reading what each CLI already wrote about what it spent.
  *
  * Every agent CLI records its own token usage next to its transcripts, and
- * that record is the only complete one: it covers sessions con never started,
+ * that record is the only complete one: it covers sessions helm never started,
  * it survives the event log being trimmed, and it is per-account because each
- * account is a different home directory. con already knows where those homes
+ * account is a different home directory. helm already knows where those homes
  * are - `inventory.js` walks the same trees for session titles - so this adds
  * the numbers rather than a new place to find them.
  *

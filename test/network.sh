@@ -10,7 +10,7 @@
 # that has never seen it?
 set -u
 cd "$(dirname "$0")/.."
-S="${TMPDIR:-/tmp}/con-test-$$"
+S="${TMPDIR:-/tmp}/helm-test-$$"
 rm -rf "$S"; mkdir -p "$S/A" "$S/B"
 APID=
 BPID=
@@ -22,12 +22,12 @@ cleanup() {
 fail() { echo "  FAIL  $*"; exit 1; }
 trap cleanup EXIT
 
-A_ENV="CON_DIR=$S/A CON_DB=$S/A/hub.sqlite NAME=laptop"
-B_ENV="CON_DIR=$S/B CON_DB=$S/B/hub.sqlite NAME=vm"
+A_ENV="HELM_DIR=$S/A HELM_DB=$S/A/hub.sqlite NAME=laptop"
+B_ENV="HELM_DIR=$S/B HELM_DB=$S/B/hub.sqlite NAME=vm"
 
-start_a() { env CON_DIR=$S/A CON_DB=$S/A/hub.sqlite NAME=laptop \
+start_a() { env HELM_DIR=$S/A HELM_DB=$S/A/hub.sqlite NAME=laptop \
   node ./test/hub.mjs 8801 new > "$S/a.log" 2>&1 & echo $!; }
-start_b() { env CON_DIR=$S/B CON_DB=$S/B/hub.sqlite NAME=vm \
+start_b() { env HELM_DIR=$S/B HELM_DB=$S/B/hub.sqlite NAME=vm \
   node ./test/hub.mjs 8802 > "$S/b.log" 2>&1 & echo $!; }
 
 wait_up() { for i in $(seq 1 50); do curl -sf "$1/api/health" >/dev/null && return 0; sleep 0.1; done; return 1; }
@@ -39,12 +39,12 @@ printf '%s' "$HEADERS" | grep -qi '^content-security-policy:' \
   || fail 'web app has no content security policy'
 printf '%s' "$HEADERS" | grep -qi '^x-content-type-options: nosniff' \
   || fail 'web app can MIME-sniff content'
-env CON_DIR=$S/A node -e '
-import("@con/protocol/network").then((N) => {
+env HELM_DIR=$S/A node -e '
+import("@helm/protocol/network").then((N) => {
   const net = N.loadNetwork();
   N.describeSelf(net, { endpoints: ["http://127.0.0.1:8801"] });
 });'
-PAIR_OUTPUT=$(env CON_DIR=$S/A node packages/connect/bin/con.js link)
+PAIR_OUTPUT=$(env HELM_DIR=$S/A node packages/connect/bin/helm.js link)
 PAIR_URL=$(printf '%s\n' "$PAIR_OUTPUT" | grep -o 'http[^ ]*#pair=[^ ]*' | head -1)
 PASS_A=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.parse_qs(urllib.parse.urlparse(sys.argv[1]).fragment)["pair"][0])' "$PAIR_URL")
 echo "pairing link: $PAIR_URL"
@@ -69,18 +69,18 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8801/api/network 
 
 echo
 echo "=== 4. machine B joins the network ==="
-# `con add` on its own names the three things that can join rather than
+# `helm add` on its own names the three things that can join rather than
 # guessing; only `add pc` / `add vm` mint a code.
-BARE=$(env CON_DIR=$S/A node packages/connect/bin/con.js add)
+BARE=$(env HELM_DIR=$S/A node packages/connect/bin/helm.js add)
 printf '%s\n' "$BARE" | grep -q '[A-Z2-9]\{4\}-[A-Z2-9]\{4\}' \
-  && fail "bare 'con add' minted an invite instead of asking what to add" \
-  || echo "  PASS  bare 'con add' asks what you are adding"
+  && fail "bare 'helm add' minted an invite instead of asking what to add" \
+  || echo "  PASS  bare 'helm add' asks what you are adding"
 
-ADD_OUTPUT=$(env CON_DIR=$S/A node packages/connect/bin/con.js add pc)
+ADD_OUTPUT=$(env HELM_DIR=$S/A node packages/connect/bin/helm.js add pc)
 INVITE=$(printf '%s\n' "$ADD_OUTPUT" | grep -o '[A-Z2-9]\{4\}-[A-Z2-9]\{4\}' | head -1)
 echo "invite: $INVITE"
-env CON_DIR=$S/B node -e '
-import("@con/protocol/network").then(async (N) => {
+env HELM_DIR=$S/B node -e '
+import("@helm/protocol/network").then(async (N) => {
   const r = await fetch("http://127.0.0.1:8801/api/join", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ code: process.argv[1], name: "vm" }),
@@ -101,8 +101,8 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8802/api/network 
 
 echo
 echo "=== 6. a phone that was NEVER in this network ==="
-FORGED=$(env CON_DIR=$S/A node -e '
-import("@con/protocol/identity").then((I) => {
+FORGED=$(env HELM_DIR=$S/A node -e '
+import("@helm/protocol/identity").then((I) => {
   const k = I.newNetworkKey();
   console.log(I.mintToken(k, { net: "whatever", sub: "attacker", role: "device" }));
 });')
@@ -116,8 +116,8 @@ curl -sf -X DELETE "http://127.0.0.1:8802/api/devices/$DEVID" -H "authorization:
 CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8802/api/network -H "authorization: Bearer $TOKEN")
 echo "  B now: HTTP $CODE (expect 401)"
 # Gossip B's roster to A, the way a daemon link does.
-env CON_DIR=$S/B node -e '
-import("@con/protocol/network").then(async (N) => {
+env HELM_DIR=$S/B node -e '
+import("@helm/protocol/network").then(async (N) => {
   const net = N.loadNetwork();
   const tok = N.mintToken ? null : null;
   const { machineToken } = N;
@@ -134,25 +134,25 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8801/api/network 
                     || fail "A still accepts the removed phone (HTTP $CODE)"
 
 echo
-echo "=== 8. a second always-on VM joins the mesh with 'con setup --join' ==="
+echo "=== 8. a second always-on VM joins the mesh with 'helm setup --join' ==="
 mkdir -p "$S/C"
-ADD2=$(env CON_DIR=$S/A node packages/connect/bin/con.js add vm)
+ADD2=$(env HELM_DIR=$S/A node packages/connect/bin/helm.js add vm)
 INVITE2=$(printf '%s\n' "$ADD2" | grep -o '[A-Z2-9]\{4\}-[A-Z2-9]\{4\}' | head -1)
-# CON_NO_SERVICE=1 stops before the systemd/HTTPS steps; an explicit https
+# HELM_NO_SERVICE=1 stops before the systemd/HTTPS steps; an explicit https
 # home skips Caddy. What we are checking is that setup --join lands this VM in
 # A's existing network rather than founding its own.
-env CON_DIR=$S/C CON_SSH_DIR=$S/C/ssh CON_NO_SERVICE=1 \
-  node packages/connect/bin/con.js setup --join "$INVITE2" \
+env HELM_DIR=$S/C HELM_SSH_DIR=$S/C/ssh HELM_NO_SERVICE=1 \
+  node packages/connect/bin/helm.js setup --join "$INVITE2" \
   --at http://127.0.0.1:8801 https://vm-c.example >/dev/null 2>&1
-A_NET=$(env CON_DIR=$S/A node -e 'import("@con/protocol/network").then(N=>console.log(N.loadNetwork().id))')
-C_NET=$(env CON_DIR=$S/C node -e 'import("@con/protocol/network").then(N=>{const n=N.loadNetwork();console.log(n?n.id:"none")})')
+A_NET=$(env HELM_DIR=$S/A node -e 'import("@helm/protocol/network").then(N=>console.log(N.loadNetwork().id))')
+C_NET=$(env HELM_DIR=$S/C node -e 'import("@helm/protocol/network").then(N=>{const n=N.loadNetwork();console.log(n?n.id:"none")})')
 [ -n "$A_NET" ] && [ "$A_NET" = "$C_NET" ] \
   && echo "  PASS  second VM joined the same mesh ($C_NET)" \
   || fail "second VM did not join A's mesh (A=$A_NET C=$C_NET)"
 
 # The invite said "vm", so the machine that redeemed it knows it is a home and
 # needs no second command to be told so.
-C_ROLE=$(env CON_DIR=$S/C node -e 'import("@con/protocol/network").then(N=>console.log(N.loadNetwork()?.role ?? "none"))')
+C_ROLE=$(env HELM_DIR=$S/C node -e 'import("@helm/protocol/network").then(N=>console.log(N.loadNetwork()?.role ?? "none"))')
 [ "$C_ROLE" = "vm" ] \
   && echo "  PASS  the invite carried its role to the joining machine (vm)" \
   || fail "the joining machine did not learn its role (got $C_ROLE)"

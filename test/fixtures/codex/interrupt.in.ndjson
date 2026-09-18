@@ -1,5 +1,5 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"con","title":"Con","version":"0.0.1"},"capabilities":{"experimentalApi":true}}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"helm","title":"Helm","version":"0.0.1"},"capabilities":{"experimentalApi":true}}}
 {"jsonrpc":"2.0","method":"initialized"}
-{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"/tmp/con-record-plKc1Y","approvalPolicy":"on-request","sandbox":"workspace-write"}}
+{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"/tmp/helm-record-plKc1Y","approvalPolicy":"on-request","sandbox":"workspace-write"}}
 {"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"01a09e7c-9a5f-7472-b36a-7a97c1fef5eb","input":[{"type":"text","text":"Write the numbers from 1 to 300, one per line, with no other text.","text_elements":[]}],"effort":"low"}}
 {"jsonrpc":"2.0","id":4,"method":"turn/interrupt","params":{"threadId":"01a09e7c-9a5f-7472-b36a-7a97c1fef5eb","turnId":"01a09e7c-9ab1-7491-b3b0-3b1affd75fad"}}

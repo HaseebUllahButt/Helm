@@ -5,7 +5,7 @@ import { useNow, waitingSince } from '../useNow';
 import type { Decision, Permission, Question } from './types';
 
 /**
- * The agent stopped to ask. This is the whole reason con exists, so the
+ * The agent stopped to ask. This is the whole reason helm exists, so the
  * question gets the space it needs: what it wants to do, shown plainly, and
  * the answers as buttons. A question with options is rendered as those
  * options; a plan is rendered as the plan.

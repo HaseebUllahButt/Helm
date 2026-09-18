@@ -6,7 +6,7 @@ import { HOME, expand, collapse } from './paths.js';
 import { ENGINES } from './engines.js';
 
 /**
- * Sessions that already exist on this machine, whether or not con started
+ * Sessions that already exist on this machine, whether or not helm started
  * them.
  *
  * The point of the phone is to be a view onto all the work happening across

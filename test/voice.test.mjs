@@ -88,40 +88,40 @@ test('the recorder mime type becomes a filename Groq understands', () => {
 });
 
 test('audio is refused before it is uploaded when it cannot be right', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'con-voice-'));
+  const dir = mkdtempSync(join(tmpdir(), 'helm-voice-'));
   try {
     // A key has to exist, or the size check is never reached.
-    process.env.CON_GROQ_KEY = 'gsk_test_not_a_real_key';
+    process.env.HELM_GROQ_KEY = 'gsk_test_not_a_real_key';
     await assert.rejects(() => transcribe({ audio: '' }), /no audio/);
     const huge = Buffer.alloc(MAX_AUDIO_BYTES + 1);
     await assert.rejects(() => transcribe({ audio: huge }), /the limit is 8MB/);
   } finally {
-    delete process.env.CON_GROQ_KEY;
+    delete process.env.HELM_GROQ_KEY;
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test('a machine with no key says so instead of calling out', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'con-voice-nokey-'));
+  const dir = mkdtempSync(join(tmpdir(), 'helm-voice-nokey-'));
   const home = join(dir, 'home');
   mkdirSync(join(home, '.config'), { recursive: true });
-  const saved = { HOME: process.env.HOME, k1: process.env.GROQ_API_KEY, k2: process.env.CON_GROQ_KEY };
+  const saved = { HOME: process.env.HOME, k1: process.env.GROQ_API_KEY, k2: process.env.HELM_GROQ_KEY };
   try {
     delete process.env.GROQ_API_KEY;
-    delete process.env.CON_GROQ_KEY;
+    delete process.env.HELM_GROQ_KEY;
     // paths.js reads HOME once at import, so this runs in a child.
     const { execFileSync } = await import('node:child_process');
     const out = execFileSync(process.execPath, ['--input-type=module', '-e', `
       const { canTranscribe, transcribe } = await import('${new URL('../packages/connect/src/voice.js', import.meta.url).pathname}');
       console.log('can:', canTranscribe());
       try { await transcribe({ audio: Buffer.from('x') }); } catch (e) { console.log('err:', e.code, e.message); }
-    `], { env: { ...process.env, HOME: home, CON_DIR: join(home, '.con') }, encoding: 'utf8' });
+    `], { env: { ...process.env, HOME: home, HELM_DIR: join(home, '.helm') }, encoding: 'utf8' });
     assert.match(out, /can: false/);
     assert.match(out, /err: no_key/);
   } finally {
     process.env.HOME = saved.HOME;
     if (saved.k1) process.env.GROQ_API_KEY = saved.k1;
-    if (saved.k2) process.env.CON_GROQ_KEY = saved.k2;
+    if (saved.k2) process.env.HELM_GROQ_KEY = saved.k2;
     rmSync(dir, { recursive: true, force: true });
   }
 });

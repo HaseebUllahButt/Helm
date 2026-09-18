@@ -32,7 +32,7 @@ export function saveSecrets(secrets) {
   const existing = readSecrets();
   const merged = { ...existing, ...secrets };
   const body =
-    '# Written by con. Values stay on this machine and are never uploaded.\n' +
+    '# Written by helm. Values stay on this machine and are never uploaded.\n' +
     Object.entries(merged).map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
   write(SECRETS_FILE, body, 0o600);
 }

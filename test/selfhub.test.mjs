@@ -9,22 +9,22 @@ import { join } from 'node:path';
 // the entire single-VM setup. The `role=self` attach is allowed; any other
 // self-attach (a machine that dialled its own public address) is still refused
 // so it cannot start the supersede war invariant #2 guards against.
-const dir = mkdtempSync(join(tmpdir(), 'con-self-'));
-process.env.CON_DIR = dir;
-process.env.CON_DB = join(dir, 'hub.sqlite');
-process.env.CON_NO_SERVICE = '1';
+const dir = mkdtempSync(join(tmpdir(), 'helm-self-'));
+process.env.HELM_DIR = dir;
+process.env.HELM_DB = join(dir, 'hub.sqlite');
+process.env.HELM_NO_SERVICE = '1';
 
 const PORT = 18981;
 
 test('a machine reaches itself through its own hub (role=self allowed, others 409)', async (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
-  const { createNetwork, loadNetwork, machineToken } = await import('@con/protocol/network');
-  const { startRelay } = await import('@con/relay');
+  const { createNetwork, loadNetwork, machineToken } = await import('@helm/protocol/network');
+  const { startRelay } = await import('@helm/relay');
   const { default: WebSocket } = await import('ws');
 
   createNetwork({ name: 'vm', port: PORT });
-  const hub = await startRelay({ port: PORT, host: '127.0.0.1', dbFile: process.env.CON_DB });
+  const hub = await startRelay({ port: PORT, host: '127.0.0.1', dbFile: process.env.HELM_DB });
   t.after(() => hub.stop());
   const token = machineToken(loadNetwork());
   const selfId = loadNetwork().self;

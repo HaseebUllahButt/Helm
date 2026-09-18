@@ -6,16 +6,16 @@ import { join } from 'node:path';
 
 // Terminals outliving the daemon.
 //
-// The shell belongs to a separate host process, so restarting con - which is
+// The shell belongs to a separate host process, so restarting helm - which is
 // what an upgrade does - must leave a running command running and its
 // scrollback intact. That is the whole reason the host exists, so it is worth
 // testing against a real shell rather than a stub.
-const dir = mkdtempSync(join(tmpdir(), 'con-term-host-'));
-process.env.CON_DIR = dir;
-process.env.CON_NO_SERVICE = '1';
+const dir = mkdtempSync(join(tmpdir(), 'helm-term-host-'));
+process.env.HELM_DIR = dir;
+process.env.HELM_NO_SERVICE = '1';
 // systemd-run would put the host in a transient unit that outlives the test
 // run; here the plain detached child is what we want.
-process.env.CON_NO_SYSTEMD_RUN = '1';
+process.env.HELM_NO_SYSTEMD_RUN = '1';
 
 const { TerminalHost, SOCKET_PATH } = await import('../packages/connect/src/terminals.js');
 const { loadPty } = await import('../packages/connect/src/pty.js');

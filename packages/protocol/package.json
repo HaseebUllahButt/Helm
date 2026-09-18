@@ -1,5 +1,5 @@
 {
-  "name": "@con/protocol",
+  "name": "@helm/protocol",
   "version": "0.1.0",
   "type": "module",
   "main": "index.js",

@@ -4,7 +4,7 @@ import {
 } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { CON_DIR } from './network.js';
+import { HELM_DIR } from './network.js';
 
 /**
  * Web push, by hand.
@@ -24,11 +24,11 @@ import { CON_DIR } from './network.js';
  * this file produces the byte-identical body, which is a much better check
  * than "a notification appeared on my phone once".
  *
- * The keys live in ~/.con/push.json and belong to the machine. Losing them
+ * The keys live in ~/.helm/push.json and belong to the machine. Losing them
  * means every device has to re-subscribe, which is a button press.
  */
 
-const KEY_FILE = join(CON_DIR, 'push.json');
+const KEY_FILE = join(HELM_DIR, 'push.json');
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 const unb64 = (s) => Buffer.from(String(s), 'base64url');
@@ -104,7 +104,7 @@ export function encrypt(payload, { p256dh, auth }, { ephemeral, salt } = {}) {
 }
 
 /** The `Authorization: vapid` header for one push service (RFC 8292). */
-export function vapidHeader(endpoint, keys, subject = 'mailto:con@localhost') {
+export function vapidHeader(endpoint, keys, subject = 'mailto:helm@localhost') {
   const { origin } = new URL(endpoint);
   const header = b64url(JSON.stringify({ typ: 'JWT', alg: 'ES256' }));
   const claims = b64url(JSON.stringify({
@@ -135,7 +135,7 @@ export function keys() {
     ])),
     privateKey: b64url(unb64(jwk.d)),
   };
-  mkdirSync(CON_DIR, { recursive: true });
+  mkdirSync(HELM_DIR, { recursive: true });
   writeFileSync(KEY_FILE, JSON.stringify(value, null, 2), { mode: 0o600 });
   return value;
 }

@@ -1,9 +1,9 @@
 import { WebSocketServer } from 'ws';
-import { T, E, PROTOCOL_VERSION } from '@con/protocol';
+import { T, E, PROTOCOL_VERSION } from '@helm/protocol';
 import { q, now, newId } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, rosterHash,
-} from '@con/protocol/network';
+} from '@helm/protocol/network';
 import { fanOut, isNew } from './notify.js';
 
 const HEARTBEAT_MS = 30_000;
@@ -101,9 +101,9 @@ export function createWsLayer() {
         if (!payload.resolve && !isNew(payload.tag)) return;
         fanOut(q.pushAll.all(), payload, {
           drop: (endpoint) => q.pushDelete.run(endpoint),
-          log: (line) => console.error(`[con] ${line}`),
+          log: (line) => console.error(`[helm] ${line}`),
         }).then((sent) => {
-          if (sent) console.log(`[con] push: told ${sent} device${sent === 1 ? '' : 's'} that ${payload.title}`);
+          if (sent) console.log(`[helm] push: told ${sent} device${sent === 1 ? '' : 's'} that ${payload.title}`);
         }).catch(() => {});
         return;
       }
@@ -309,9 +309,9 @@ export function createWsLayer() {
 
   const wss = new WebSocketServer({
     noServer: true,
-    // The web app offers ("con", <token>): answer "con" so the browser
+    // The web app offers ("helm", <token>): answer "helm" so the browser
     // accepts the handshake, without ever echoing the token back.
-    handleProtocols: (protocols) => (protocols.has('con') ? 'con' : false),
+    handleProtocols: (protocols) => (protocols.has('helm') ? 'helm' : false),
   });
 
   wss.on('connection', (sock, req, auth) => {

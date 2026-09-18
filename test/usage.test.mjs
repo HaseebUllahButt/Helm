@@ -11,13 +11,13 @@ const { claudeParser, codexParser } = await import('../packages/usage/src/scanne
 const { claudeRatesFor, priceBucket, cacheRatesFor } =
   await import('../packages/usage/src/pricing.js');
 
-// The usage screen is a bill. Every number on it is derived from files con
+// The usage screen is a bill. Every number on it is derived from files helm
 // does not own and cannot re-read cheaply, so the things worth pinning down are
 // the ones that would be wrong quietly: a resumed scan that double counts, a
 // model that loses its name halfway through a file, a rate that moved, an
 // account reached twice under two names.
 
-const tmp = () => mkdtempSync(join(tmpdir(), 'con-usage-'));
+const tmp = () => mkdtempSync(join(tmpdir(), 'helm-usage-'));
 
 /** One Claude assistant turn, as the CLI writes it. */
 const claudeTurn = (id, date, model, u, cwd = '/work/repo') => JSON.stringify({
@@ -243,7 +243,7 @@ test('two aliases onto one account are counted once', async () => {
   const once = await reader.report(m.profiles, {});
   const twice = await reader.report([
     ...m.profiles,
-    // Same home, different alias - a real shape, since con reads profiles
+    // Same home, different alias - a real shape, since helm reads profiles
     // out of shell aliases and several can point at one login.
     { id: 'claudeb', engine: 'claude', env: { CLAUDE_CONFIG_DIR: m.profiles[0].env.CLAUDE_CONFIG_DIR } },
   ], {});

@@ -11,7 +11,7 @@ export const fixture = (engine, name) => join(HERE, 'fixtures', engine, `${name}
  * Returns the command to spawn and where its stdin is logged.
  */
 export function fakeCli(engine, name) {
-  const dir = mkdtempSync(join(tmpdir(), `con-fake-${engine}-`));
+  const dir = mkdtempSync(join(tmpdir(), `helm-fake-${engine}-`));
   const cmd = join(dir, engine);
   const stdin = join(dir, 'stdin.ndjson');
   writeFileSync(cmd, `#!/bin/sh\nFAKE_FIXTURE=${JSON.stringify(fixture(engine, name))} FAKE_STDIN=${JSON.stringify(stdin)} exec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(HERE, 'fake-cli.mjs'))} ${engine} "$@"\n`);

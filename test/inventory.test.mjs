@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-// Inventory reads real stores under CON_DIR/XDG_DATA_HOME; point both at
+// Inventory reads real stores under HELM_DIR/XDG_DATA_HOME; point both at
 // scratch before the modules that resolve them load.
-process.env.CON_DIR = mkdtempSync(join(tmpdir(), 'con-inv-'));
-const XDG = mkdtempSync(join(tmpdir(), 'con-xdg-'));
+process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-inv-'));
+const XDG = mkdtempSync(join(tmpdir(), 'helm-xdg-'));
 process.env.XDG_DATA_HOME = XDG;
 
 const SECONDS = Math.floor(Date.now() / 1000);
@@ -72,7 +72,7 @@ test('a profiles file fresh from join answers; an old one is stale', async () =>
   // A fresh file is trusted: currentProfiles must not rediscover over it.
   assert.deepEqual((await currentProfiles()).map((p) => p.id), ['kept']);
 
-  const file = join(process.env.CON_DIR, 'profiles.json');
+  const file = join(process.env.HELM_DIR, 'profiles.json');
   const old = new Date(Date.now() - 10 * 60_000);
   utimesSync(file, old, old);
   assert.equal(profilesStale(), true);

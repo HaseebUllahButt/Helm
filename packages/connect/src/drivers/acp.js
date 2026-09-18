@@ -15,10 +15,10 @@ import { modeFor } from '../modes.js';
  * Everything engine-specific lives in `spec`, set by the subclass:
  *   args()          argv after the binary ('acp', '--cwd', ...)
  *   min             the CLI version this driver was written against
- *   acpMode(mode)   a con mode's value for configId 'mode' (or null)
+ *   acpMode(mode)   a helm mode's value for configId 'mode' (or null)
  *   effortId        configId that carries thinking level ('effort'), if any
  *
- * con's own permission modes may be wider than what the agent's modes
+ * helm's own permission modes may be wider than what the agent's modes
  * express; a mode with `autoAllow` in modes.js is enforced here by answering
  * matching requests itself instead of showing them on the phone.
  *
@@ -30,7 +30,7 @@ const MAX_OUTPUT = 32_000;
 const MAX_DIFF = 8_000;
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
 
-// ACP tool kinds -> con item kinds.
+// ACP tool kinds -> helm item kinds.
 const KIND = { execute: 'command', edit: 'edit', delete: 'edit', move: 'edit' };
 
 // ACP has no subagent tool kind. The spawn arrives as a tool call named for
@@ -101,7 +101,7 @@ export class AcpDriver extends Driver {
     this.#child = child;
     let stderr = '';
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); if (process.env.CON_DEBUG_DRIVER) process.stderr.write(d); });
+    child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d); });
     readJsonLines(child.stdout, (m) => this.#onMessage(m), (line) => this.log(`${this.engine}: ${line.slice(0, 200)}`));
 
     this.#exited = new Promise((resolve) => {
@@ -127,7 +127,7 @@ export class AcpDriver extends Driver {
     const init = await this.#call('initialize', {
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: 'con', title: 'Con', version: '0.1.0' },
+      clientInfo: { name: 'helm', title: 'Helm', version: '0.1.0' },
     });
     if (init.error) {
       this.push('error', { message: `${this.engine} initialize failed: ${init.error.message}`, kind: 'init' });
@@ -195,7 +195,7 @@ export class AcpDriver extends Driver {
   }
 
   #call(method, params) {
-    const id = `con-${++this.#seq}`;
+    const id = `helm-${++this.#seq}`;
     return new Promise((resolve) => {
       this.#calls.set(id, resolve);
       try { this.#write({ jsonrpc: '2.0', id, method, params }); }
@@ -369,7 +369,7 @@ export class AcpDriver extends Driver {
   /** A request from the agent. Permissions are the only ones we answer. */
   #onRequest(m) {
     if (m.method === 'session/request_permission') return this.#onPermission(m);
-    try { this.#write({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: `con does not serve ${m.method}` } }); } catch { /* gone */ }
+    try { this.#write({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: `helm does not serve ${m.method}` } }); } catch { /* gone */ }
   }
 
   #onUpdate(p) {
@@ -504,7 +504,7 @@ export class AcpDriver extends Driver {
     return parts.join('\n');
   }
 
-  /** `content` diff entries -> con's {path, kind, diff} change list. */
+  /** `content` diff entries -> helm's {path, kind, diff} change list. */
   /**
    * `content` entries -> the file changes worth showing under a tool card.
    *
@@ -566,7 +566,7 @@ export class AcpDriver extends Driver {
       : kind === 'edit' ? { changes: item.changes ?? [] }
       : clip(JSON.stringify(p.toolCall?.rawInput ?? p.toolCall ?? {}, null, 2), 4000);
 
-    // The mode may let con answer this itself; then the phone never sees it.
+    // The mode may let helm answer this itself; then the phone never sees it.
     const auto = modeFor(this.engine, this.mode)?.autoAllow;
     const allowId = options.find((o) => o.kind === 'allow_once')?.optionId;
     if (allowId && (auto === 'all' || (Array.isArray(auto) && auto.includes(kind)))) {

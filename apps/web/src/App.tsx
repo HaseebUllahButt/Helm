@@ -142,9 +142,9 @@ function accountsFrom(profiles: Profile[]): Account[] {
 /**
  * A folder's short name, and the path only when it says something extra.
  *
- * The last segment is what anyone calls a project - "con", "t3-app" - but it
- * is not unique: `~/dev/me/github/con` and `~/Con` are two different
- * projects that would both be called "con". The full path goes beside it,
+ * The last segment is what anyone calls a project - "helm", "t3-app" - but it
+ * is not unique: `~/dev/me/github/helm` and `~/Helm` are two different
+ * projects that would both be called "helm". The full path goes beside it,
  * except where it would just repeat the name back ("~" under "~").
  */
 const projectName = (cwd: string) => cwd.split('/').filter(Boolean).pop() || cwd;
@@ -192,7 +192,7 @@ const foundRow = (x: InventorySession): Session => ({
 
 /**
  * The threads a machine's CLIs recorded on their own minus the ones this
- * screen already shows: con's own record of the same thread (its
+ * screen already shows: helm's own record of the same thread (its
  * engineSessionId is the CLI's id), or the history file of an agent that is
  * live right now in the same folder - that one is the live row above, not a
  * second thread.
@@ -238,7 +238,7 @@ export function App() {
       if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints });
       if (kind === 'unauthorized') {
         clearAuth();
-        setNotice('This device is no longer in the network. Pair it again with a fresh link from `con link`.');
+        setNotice('This device is no longer in the network. Pair it again with a fresh link from `helm link`.');
         setAuth(null); setClient(null);
       }
     });
@@ -336,10 +336,10 @@ function Shell({ client, conn, onSignOut }: {
     { stack: [{ kind: 'env' }], selected: null, depth: 0 });
 
   useEffect(() => {
-    history.replaceState({ con: 1, ...nav.current }, '');
+    history.replaceState({ helm: 1, ...nav.current }, '');
     const onPop = (e: PopStateEvent) => {
       const s = e.state;
-      if (!s?.con) return;
+      if (!s?.helm) return;
       nav.current = { stack: s.stack, selected: s.selected, depth: s.depth };
       setStack(s.stack);
       setSelected(s.selected);
@@ -354,7 +354,7 @@ function Shell({ client, conn, onSignOut }: {
     nav.current = { stack: next, selected: sel, depth };
     setStack(next);
     setSelected(sel);
-    history.pushState({ con: 1, depth, stack: next, selected: sel }, '');
+    history.pushState({ helm: 1, depth, stack: next, selected: sel }, '');
   };
 
   /** Same place, fresher snapshot: session records change under a view. */
@@ -362,7 +362,7 @@ function Shell({ client, conn, onSignOut }: {
     nav.current = { ...nav.current, stack: next, selected: sel };
     setStack(next);
     setSelected(sel);
-    history.replaceState({ con: 1, depth: nav.current.depth, stack: next, selected: sel }, '');
+    history.replaceState({ helm: 1, depth: nav.current.depth, stack: next, selected: sel }, '');
   };
 
   /**
@@ -388,7 +388,7 @@ function Shell({ client, conn, onSignOut }: {
       history.replaceState(history.state, '', location.pathname + location.search);
     }
     const onMessage = (e: MessageEvent) => {
-      if (e.data?.type === 'con:open') take(e.data.envId, e.data.sessionId);
+      if (e.data?.type === 'helm:open') take(e.data.envId, e.data.sessionId);
     };
     navigator.serviceWorker?.addEventListener('message', onMessage);
     return () => navigator.serviceWorker?.removeEventListener('message', onMessage);
@@ -486,7 +486,7 @@ function Shell({ client, conn, onSignOut }: {
    */
   useEffect(() => {
     navigator.serviceWorker?.controller?.postMessage({
-      type: 'con:viewing',
+      type: 'helm:viewing',
       envId: view?.kind === 'session' ? selected : null,
       sessionId: view?.kind === 'session' ? view.session.id : null,
     });
@@ -505,8 +505,8 @@ function Shell({ client, conn, onSignOut }: {
     else if (view?.kind === 'env' && env) parts.push(env.name);
     if (blockedCount) parts.unshift(`${blockedCount} waiting`);
     if (!conn.online) parts.push('offline');
-    document.title = parts.length ? `${parts.join(' · ')} · con` : 'con';
-    return () => { document.title = 'con'; };
+    document.title = parts.length ? `${parts.join(' · ')} · helm` : 'helm';
+    return () => { document.title = 'helm'; };
   }, [view, env?.id, blockedCount, conn.online]);
 
   // The toast is a glance, not a summons: it dismisses itself rather than
@@ -589,7 +589,7 @@ function Shell({ client, conn, onSignOut }: {
    * The row came out of a CLI's own history and has no process behind it, so
    * there is nothing to attach to: the machine starts a fresh driven session
    * carrying the old conversation's id, the engine resumes it, and what comes
-   * back is an ordinary con thread. It takes a moment - a CLI is starting -
+   * back is an ordinary helm thread. It takes a moment - a CLI is starting -
    * so the row says so rather than looking ignored.
    */
   const [resuming, setResuming] = useState<string | null>(null);
@@ -634,7 +634,7 @@ function Shell({ client, conn, onSignOut }: {
    * The live lists are the truth and the remembered records are signposts:
    * without them, the seconds before a machine has answered `session.list`
    * make "does this machine have a brain?" answer no, and tapping its row
-   * lands on the screen that offers to start one - which reads as con having
+   * lands on the screen that offers to start one - which reads as helm having
    * forgotten the brain you chose. A list that has arrived and holds no brain
    * is an answer, though, so it clears the signpost. See `brainStore`.
    */
@@ -702,7 +702,7 @@ function Shell({ client, conn, onSignOut }: {
         <div className="bar side">
           <div className="brand">
             <img src="/icon.svg" alt="" />
-            <b>con</b>
+            <b>helm</b>
           </div>
           <span className={`conn ${status}`} title={conn.error || status}>
             <i />{status === 'live' ? `${envs.filter((e) => e.online).length}/${envs.length} online` : status}
@@ -1001,7 +1001,7 @@ function Shell({ client, conn, onSignOut }: {
       {unpairing && (
         <Confirm
           title="Unpair this device?"
-          body="You will need a fresh link from `con link` to sign back in."
+          body="You will need a fresh link from `helm link` to sign back in."
           confirmLabel="Unpair" danger
           onCancel={() => setUnpairing(false)}
           onConfirm={() => { setUnpairing(false); onSignOut(); }}
@@ -1039,7 +1039,7 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
     } finally { setBusy(false); }
   };
 
-  // `con open` puts this machine's own key in the fragment. Nothing to type:
+  // `helm open` puts this machine's own key in the fragment. Nothing to type:
   // the daemon takes it only from loopback and only if it matches the file it
   // came from, so holding it already means holding the network key.
   useEffect(() => {
@@ -1076,21 +1076,21 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
    * The other direction: the app was installed from the VM's public address
    * but a daemon is also running on this computer, and that one signs itself
    * in. This used to be a sentence with a link in it, under a pairing form -
-   * so the answer to "open con on my desktop" was: read a paragraph, click
+   * so the answer to "open helm on my desktop" was: read a paragraph, click
    * the link, every time. It goes there itself now.
    *
    * Only when there is nothing else to do: a link with a pairing code in it,
-   * or a key from `con open`, is a deliberate instruction to pair *here* and
+   * or a key from `helm open`, is a deliberate instruction to pair *here* and
    * outranks the local daemon. The local page cannot bounce back - it takes
    * the `isLocal` branch above - so there is no loop to get stuck in.
    */
-  const [localCon, setLocalCon] = useState<string | null>(null);
+  const [localHelm, setLocalHelm] = useState<string | null>(null);
   useEffect(() => {
     if (isLocal || openedWith.current?.password || autoStarted.current) return;
     fetch('http://127.0.0.1:8787/api/health', { cache: 'no-store' })
       .then((r) => {
         if (!r.ok || autoStarted.current) return;
-        setLocalCon('http://127.0.0.1:8787');
+        setLocalHelm('http://127.0.0.1:8787');
         location.replace('http://127.0.0.1:8787/');
       })
       .catch(() => {});
@@ -1111,7 +1111,7 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!endpoint) { setError('paste the link printed by `con link`'); return; }
+    if (!endpoint) { setError('paste the link printed by `helm link`'); return; }
     if (!secret) { setError('enter the pairing code'); return; }
     await connect(endpoint, secret);
   };
@@ -1119,17 +1119,17 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
   // Found one on this computer: the redirect is already going. Showing the
   // pairing form underneath it only invites someone to start typing a code
   // into a screen that is about to be replaced.
-  if (localCon) {
+  if (localHelm) {
     return (
       <div className="auth">
         <div className="auth-card">
           <div className="auth-brand">
             <img src="/icon.svg" alt="" />
-            <h1>con</h1>
-            <p>opening the con on this computer…</p>
+            <h1>helm</h1>
+            <p>opening the helm on this computer…</p>
           </div>
           <p className="note" style={{ textAlign: 'center' }}>
-            <a href={localCon}>{localCon.replace(/^https?:\/\//, '')}</a>
+            <a href={localHelm}>{localHelm.replace(/^https?:\/\//, '')}</a>
           </p>
         </div>
       </div>
@@ -1141,7 +1141,7 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
       <div className="auth-card">
         <div className="auth-brand">
           <img src="/icon.svg" alt="" />
-          <h1>con</h1>
+          <h1>helm</h1>
           <p>every coding agent, one place</p>
         </div>
 
@@ -1150,15 +1150,15 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
           {selfHosted ? (
             <div className="pair-ticket">
               <span className="mdot on" />
-              <span><b>{location.host}</b><small>your Con home</small></span>
+              <span><b>{location.host}</b><small>your Helm home</small></span>
             </div>
           ) : (
             <>
-              <div className="section">private Con link</div>
+              <div className="section">private Helm link</div>
               <input
                 value={link}
                 onChange={(e) => { setLink(e.target.value); setLinkSecretFailed(false); }}
-                placeholder="https://con.example.com/#pair=…"
+                placeholder="https://helm.example.com/#pair=…"
                 autoCapitalize="off" autoCorrect="off" inputMode="url"
                 autoFocus
               />
@@ -1180,7 +1180,7 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
           </button>
           {error && <div className="error">{error}</div>}
           <p className="note" style={{ marginTop: 14, textAlign: 'center' }}>
-            Run <code>con link</code> on your VM for a fresh link.
+            Run <code>helm link</code> on your VM for a fresh link.
             Pair once; this device stays paired until you remove it.
           </p>
         </form>
@@ -1201,7 +1201,7 @@ function AddMachine({ client }: { client: Client }) {
       {code ? (
         <div className="setup-open">
           <div className="code">{code}</div>
-          <pre className="snippet">con join {code} {client.relay}</pre>
+          <pre className="snippet">helm join {code} {client.relay}</pre>
           <p className="note" style={{ marginTop: 8 }}>
             Run that on the machine you are adding. Expires in 10 minutes and
             carries the network key: treat it like a password.
@@ -1354,7 +1354,7 @@ function InstallPwa() {
           setOffer(null);
         }}>
           <span className="grow">
-            <span className="rt">Install Con app</span>
+            <span className="rt">Install Helm app</span>
             <span className="rm">run it like a native app</span>
           </span>
           <span className="chev">›</span>
@@ -1469,7 +1469,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
         </div>
         <p className="note">
           Removing a device revokes its key everywhere - it asks for a fresh
-          pairing link the next time it opens con.
+          pairing link the next time it opens helm.
         </p>
         {error && <div className="error">{error}</div>}
       </div></div>
@@ -1478,7 +1478,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
         <Confirm
           title={removing.self ? 'Remove this device?' : `Remove ${removing.label}?`}
           body={removing.self
-            ? 'This is the device you are holding. You will need a fresh link from `con link` to sign back in.'
+            ? 'This is the device you are holding. You will need a fresh link from `helm link` to sign back in.'
             : 'Its key stops working at once, on every machine in the network.'}
           confirmLabel="Remove" danger busy={busy}
           onCancel={() => setRemoving(null)}
@@ -1539,7 +1539,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
     if (env.online) client.openDirect(env.id).catch(() => {});
   }, [client, env.id, env.online]);
 
-  // Threads the machine's CLIs recorded without con - devin or opencode run
+  // Threads the machine's CLIs recorded without helm - devin or opencode run
   // by hand in a terminal show up here, marked external, instead of the
   // machine looking like nothing ever happened on it.
   const [earlier, setEarlier] = useState<InventorySession[]>([]);
@@ -1573,13 +1573,13 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   };
 
   // One box for the whole screen. The folder is part of what you are looking
-  // for - "the con one on codex" is a path and an engine, not a title - so
+  // for - "the helm one on codex" is a path and an engine, not a title - so
   // all three are what the words are matched against.
   const q = query.trim().toLowerCase();
   const hit = (s: Session) =>
     !q || `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q);
 
-  // Threads this machine's CLIs recorded without con, beside con's own.
+  // Threads this machine's CLIs recorded without helm, beside helm's own.
   const detected = dedupeDetected(sessions, earlier);
   const external = detected.map(foundRow);
   const rows = [...sessions, ...external];
@@ -1598,10 +1598,10 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
    * to know which one a thread had fallen into; a project is a thing you can
    * name before you go looking for it.
    *
-   * The folders come from con's own threads, and the machine's history joins
+   * The folders come from helm's own threads, and the machine's history joins
    * the ones that already exist rather than opening new ones. That line is
    * what keeps this list short enough to read: a laptop's CLI history is
-   * mostly one-off runs in scratch directories - `/tmp/con-record-x3sjxG`
+   * mostly one-off runs in scratch directories - `/tmp/helm-record-x3sjxG`
    * and forty more like it - and letting each of those name a project put
    * fifty folder rows between the owner and their five real ones. A thread in
    * a project you actually work in belongs with that project; the rest are
@@ -1625,7 +1625,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
       .sort((a, b) => (b[1][0].updatedAt ?? 0) - (a[1][0].updatedAt ?? 0));
   })();
 
-  // Threads from this week in folders con has never started anything in,
+  // Threads from this week in folders helm has never started anything in,
   // newest first and capped - until someone types, and then the cap is the
   // thing standing between them and what they are looking for.
   strays.sort(byRecent);
@@ -1690,7 +1690,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   /**
    * One row, wherever it is standing.
    *
-   * A thread con started opens; a thread a CLI recorded on its own has no
+   * A thread helm started opens; a thread a CLI recorded on its own has no
    * process behind it, so opening it means asking the machine to resume the
    * conversation first - and it cannot be renamed, because the name is the
    * CLI's. Everything on this screen is now mixed into the same groups, so
@@ -1732,13 +1732,13 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
                 ? (route?.local === 'host' && route?.remote === 'host'
                   ? 'direct, same network'
                   : route ? `direct, out and back (${route.local}/${route.remote})` : 'direct connection')
-                : 'via your Con home')
+                : 'via your Helm home')
               : 'offline'}
             {env.online && ping != null && (
               // The number matters because the two routes differ by two
               // orders of magnitude, and a relayed phone that feels broken
               // is usually just far away. Saying so is the difference
-              // between "con is slow" and "this connection is slow".
+              // between "helm is slow" and "this connection is slow".
               <span className={ping > 250 ? 'quiet slow' : 'quiet'}> · {Math.round(ping)}ms</span>
             )}
             {env.info.host && env.info.host !== env.name ? ` \u00b7 ${env.info.host}` : ''}
@@ -1829,7 +1829,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         {/* Every project folded, including the newest. An open one is a wall
             of rows before the next folder's name, and which project you want
             is a question you answer faster from a list of names than by
-            scrolling past the one con guessed - the guess is also wrong for
+            scrolling past the one helm guessed - the guess is also wrong for
             the folder that is open because 40 CLI history rows landed in it. */}
         {folders.map(([cwd, list]) => (
           <Fold
@@ -1978,7 +1978,7 @@ function Fold({ title, count, note, openWhen = false, defaultOpen = false, atten
  *
  * The row is a div rather than a button because it holds a second button:
  * a conversation you are done with should be manageable from the list, not
- * only from inside it. An agent con did not start is left alone - con
+ * only from inside it. An agent helm did not start is left alone - helm
  * does not own that process and has no business ending it.
  */
 function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting = false, marked = false, onToggle }: {
@@ -1993,16 +1993,16 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
 }) {
   const eng = engineOf(s.engine);
   const adopted = s.adopted;
-  // A thread read out of a CLI's own history rather than run by con.
+  // A thread read out of a CLI's own history rather than run by helm.
   const found = s.id.startsWith('found:');
   const [menu, setMenu] = useState(false);
   const [naming, setNaming] = useState(false);
   const [ending, setEnding] = useState(false);
-  // Work con did not start is still the owner's to file away. It used to get
+  // Work helm did not start is still the owner's to file away. It used to get
   // no menu at all, which on a machine that has been worked at means most of
   // the list is rows you cannot do anything about.
   const managed = !!onRename || !!onArchive || !!onDelete;
-  // A thread con cannot open - one it found in a CLI's history rather than
+  // A thread helm cannot open - one it found in a CLI's history rather than
   // one it runs - gets no button body: nothing happens on the way in.
   const Main: any = onOpen ? 'button' : 'div';
   return (
@@ -2042,7 +2042,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
                 )}
                 {onDelete && (
                   <button className="destructive" onClick={() => { setMenu(false); setEnding(true); }}>
-                    {found ? 'Remove from con' : adopted ? 'Close this pane' : 'Delete thread'}
+                    {found ? 'Remove from helm' : adopted ? 'Close this pane' : 'Delete thread'}
                   </button>
                 )}
               </div>
@@ -2061,13 +2061,13 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
         <Confirm
           title={found ? `Remove "${s.title}"?` : adopted ? `Close "${s.title}"?` : `Delete "${s.title}"?`}
           // Three different things wear this one menu item, so each says
-          // what it really does. con never deletes a CLI's own history:
+          // what it really does. helm never deletes a CLI's own history:
           // that conversation is the owner's, not our record.
           body={found
-            ? `${eng.label} keeps the conversation - con just stops listing it.`
+            ? `${eng.label} keeps the conversation - helm just stops listing it.`
             : adopted
-              ? 'This ends the program running in that pane, which con did not start.'
-              : 'This ends the agent and permanently removes the thread from con.'}
+              ? 'This ends the program running in that pane, which helm did not start.'
+              : 'This ends the agent and permanently removes the thread from helm.'}
           confirmLabel={found ? 'remove' : adopted ? 'close' : 'delete'} danger
           onCancel={() => setEnding(false)}
           onConfirm={() => { setEnding(false); onDelete(); }}
@@ -2173,7 +2173,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
           <>
             <p className="note">
               A brain sees every machine and every running session, and acts
-              on them through the <code>con</code> command - so it can answer
+              on them through the <code>helm</code> command - so it can answer
               "what is waiting on me", read a thread on another machine, or
               start one. This one runs on {env.name}; anything it does
               elsewhere it does by talking to that machine. Each machine can
@@ -2203,7 +2203,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
             {accounts && !accounts.length && (
               <div className="empty quiet">
                 no agent accounts on that machine
-                <div className="note" style={{ marginTop: 6 }}>the brain needs a CLI con can drive headless</div>
+                <div className="note" style={{ marginTop: 6 }}>the brain needs a CLI helm can drive headless</div>
               </div>
             )}
             {!env.online && <div className="empty quiet">{env.name} is offline</div>}
@@ -2267,7 +2267,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
  * What a machine is called, changed from here.
  *
  * The name is not decoration: it is what the machine list, the brain, the
- * CLI (`con brain laptop`) and `ssh laptop` all address it by, which is why
+ * CLI (`helm brain laptop`) and `ssh laptop` all address it by, which is why
  * it is held to what an ssh Host alias can hold rather than quietly rewritten
  * into something ssh can reach and the app never shows.
  *
@@ -2347,7 +2347,7 @@ function MachineName({ client, env, onRenamed }: {
 /**
  * Per-machine settings: what the machine is called, and for each account on
  * it, which models the picker offers and which one a new session starts with.
- * The prefs live in the machine's ~/.con/config.json and the name lives in
+ * The prefs live in the machine's ~/.helm/config.json and the name lives in
  * its roster record, so both follow the machine no matter which device asks.
  */
 function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
@@ -2747,7 +2747,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
         {accounts?.length === 0 && (
           <div className="empty quiet">
             no agents on {env.name}
-            <div className="note" style={{ marginTop: 6 }}>install claude, codex, opencode or devin there and run <code>con profiles --refresh</code></div>
+            <div className="note" style={{ marginTop: 6 }}>install claude, codex, opencode or devin there and run <code>helm profiles --refresh</code></div>
           </div>
         )}
 
@@ -2901,7 +2901,7 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
       {killing && (
         <Confirm
           title={`Delete "${session.title}"?`}
-          body="The agent process is closed and the thread is removed from con."
+          body="The agent process is closed and the thread is removed from helm."
           confirmLabel="Delete" danger
           onCancel={() => setKilling(false)}
           onConfirm={() => { setKilling(false); kill(); }}

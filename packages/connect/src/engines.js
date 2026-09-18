@@ -1,7 +1,7 @@
-// What con knows about each agent CLI.
+// What helm knows about each agent CLI.
 //
 // `homeEnv` is the variable that isolates one account from another - this is
-// the hook that makes multi-account work without con ever touching
+// the hook that makes multi-account work without helm ever touching
 // credentials: point the variable at a different directory and you are a
 // different user.
 

@@ -23,7 +23,7 @@ const run = (cmd, args) => new Promise((resolve) => {
  * Is the address we advertise on the local network one we could answer on?
  *
  * A full-tunnel VPN says yes to both questions that matter separately. The
- * interface still holds 192.168.x.y, so con advertises it and a phone on the
+ * interface still holds 192.168.x.y, so helm advertises it and a phone on the
  * same wifi sends packets there - but the machine's *route* for that subnet
  * points into the tunnel, so the replies leave through an exit node in
  * another country and never come back. The pairing fails, WebRTC falls back

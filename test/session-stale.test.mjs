@@ -10,10 +10,10 @@ import { join } from 'node:path';
 // Trusting the remembered status instead is what left a machine that had
 // restarted mid-turn reporting "needs you" for a prompt nobody could answer,
 // permanently at the top of the phone's list.
-process.env.CON_DIR = mkdtempSync(join(tmpdir(), 'con-stale-'));
-process.env.CON_NO_SERVICE = '1';
+process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-stale-'));
+process.env.HELM_NO_SERVICE = '1';
 
-writeFileSync(join(process.env.CON_DIR, 'sessions.json'), JSON.stringify({
+writeFileSync(join(process.env.HELM_DIR, 'sessions.json'), JSON.stringify({
   version: 1,
   sessions: [
     { id: 'gone', paneId: 'p1', engine: 'codex', status: 'working', cwd: '/tmp/a', title: 'Codex', updatedAt: 1 },

@@ -9,10 +9,10 @@ import { join } from 'node:path';
 // owner actually uses, and a default is what a new session starts with.
 // Aliases of one login share the entry because the key is the account, not
 // the profile.
-process.env.CON_DIR = mkdtempSync(join(tmpdir(), 'con-model-prefs-'));
-test.after(() => rmSync(process.env.CON_DIR, { recursive: true, force: true }));
+process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-model-prefs-'));
+test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 
-writeFileSync(join(process.env.CON_DIR, 'profiles.json'), JSON.stringify({
+writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
   version: 1,
   profiles: [
     { id: 'oc', label: 'opencode', engine: 'opencode', cmd: 'opencode', args: [], env: { XDG_CONFIG_HOME: '~/.config' }, source: 'detected' },

@@ -22,20 +22,14 @@ import {
   newNetworkKey, newNetworkId, newDeviceId, mintToken, verifyToken, ROLE,
 } from './identity.js';
 
-// Duplicated from @con/connect's paths rather than imported: the relay reads
+// Duplicated from @helm/connect's paths rather than imported: the relay reads
 // this file too, and it must not have to depend on the package that depends
 // on it.
-// Renamed from helm: an existing ~/.helm keeps working; fresh installs get ~/.con.
-const homeDir = () => {
-  const fresh = join(homedir(), '.con');
-  const legacy = join(homedir(), '.helm');
-  return existsSync(fresh) || !existsSync(legacy) ? fresh : legacy;
-};
-export const CON_DIR = process.env.CON_DIR || process.env.HELM_DIR || homeDir();
-export const NETWORK_FILE = join(CON_DIR, 'network.json');
+export const HELM_DIR = process.env.HELM_DIR || join(homedir(), '.helm');
+export const NETWORK_FILE = join(HELM_DIR, 'network.json');
 
 const write = (net) => {
-  mkdirSync(CON_DIR, { recursive: true, mode: 0o700 });
+  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
   // 0600: the file contains the network key, which is the whole ballgame.
   writeFileSync(NETWORK_FILE, JSON.stringify(net, null, 2), { mode: 0o600 });
   return net;
@@ -46,7 +40,7 @@ export function loadNetwork() {
   try { return JSON.parse(readFileSync(NETWORK_FILE, 'utf8')); } catch { return null; }
 }
 
-const LOCAL_KEY_FILE = join(CON_DIR, 'local.key');
+const LOCAL_KEY_FILE = join(HELM_DIR, 'local.key');
 
 /**
  * The secret that lets a browser *on this machine* sign itself in.
@@ -62,7 +56,7 @@ export function localKey() {
     const v = readFileSync(LOCAL_KEY_FILE, 'utf8').trim();
     if (v) return v;
   }
-  mkdirSync(CON_DIR, { recursive: true, mode: 0o700 });
+  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
   const v = newNetworkKey();
   writeFileSync(LOCAL_KEY_FILE, v, { mode: 0o600 });
   return v;
@@ -72,7 +66,7 @@ export const saveNetwork = write;
 
 export function requireNetwork() {
   const net = loadNetwork();
-  if (!net) throw new Error('this machine is not in a network yet - run `con up`');
+  if (!net) throw new Error('this machine is not in a network yet - run `helm up`');
   return net;
 }
 

@@ -6,7 +6,7 @@ import { HerdrRuntime } from '../packages/connect/src/runtime/herdr-runtime.js';
 // herdr subscriptions are requested with dotted names (`pane.closed`) but the
 // events themselves arrive with underscores (`pane_closed`). Checking the
 // dotted form dropped every agent-status event, which is how "the phone knows
-// an agent is blocked" - the whole point of con - silently stopped working.
+// an agent is blocked" - the whole point of helm - silently stopped working.
 test('delivered herdr events (underscore names) translate to runtime events', () => {
   const stub = new EventEmitter();
   const rt = new HerdrRuntime({ herdr: stub });
@@ -18,7 +18,7 @@ test('delivered herdr events (underscore names) translate to runtime events', ()
     event: 'pane_agent_status_changed',
     data: { pane_id: 'w1:p1', agent_status: 'blocked', agent: 'claude' },
   });
-  // The safety net for panes con did not start: pane_updated carries PaneInfo.
+  // The safety net for panes helm did not start: pane_updated carries PaneInfo.
   stub.emit('event', {
     event: 'pane_updated',
     data: { pane: { pane_id: 'w1:p2', agent_status: 'working' } },

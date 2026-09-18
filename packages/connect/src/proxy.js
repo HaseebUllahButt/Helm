@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
-import { T } from '@con/protocol';
-import { requireNetwork, machineToken, allEndpoints } from '@con/protocol/network';
+import { T } from '@helm/protocol';
+import { requireNetwork, machineToken, allEndpoints } from '@helm/protocol/network';
 
 /**
  * ssh ProxyCommand: bridge stdin/stdout to port 22 on another machine.

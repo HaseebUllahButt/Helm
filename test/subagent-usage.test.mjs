@@ -72,7 +72,7 @@ test('a recorded Claude subagent run reaches the card with its tools and tokens'
 
   const fake = fakeCli('claude', 'subagent');
   const driver = new ClaudeDriver({
-    cmd: fake.cmd, env: { CLAUDE_CONFIG_DIR: '/tmp/con-test-claude-home' },
+    cmd: fake.cmd, env: { CLAUDE_CONFIG_DIR: '/tmp/helm-test-claude-home' },
     args: [], cwd: fake.dir, mode: 'default',
   });
   const log = collect(driver);

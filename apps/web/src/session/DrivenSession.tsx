@@ -9,7 +9,7 @@ import { Controls, type Kind } from './Controls';
 import { Transcript } from './Transcript';
 import { Confirm, TextPrompt } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
-import { recacheCost, recacheWarning } from '@con/usage/recache';
+import { recacheCost, recacheWarning } from '@helm/usage/recache';
 import { money } from '../format';
 import { loadModels, saveModels } from '../modelCache';
 import { useSessionLog } from './useSessionLog';
@@ -19,7 +19,7 @@ const ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Co
 const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split('/').slice(-2).join('/');
 
 /**
- * A headless agent session: the transcript built from con's own events,
+ * A headless agent session: the transcript built from helm's own events,
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
@@ -283,7 +283,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // Last resort only: `model.list` reports the running driver's own answer
   // once there is one, and the catalogue's before that. This is what is left
   // when neither has said anything yet - a brand-new session whose agent has
-  // not started. Every engine con drives takes images, and a wrong "yes"
+  // not started. Every engine helm drives takes images, and a wrong "yes"
   // now ends in a message saying the agent cannot see them, while a wrong
   // "no" means no clip at all on the first message, which is exactly when
   // you want to send a screenshot.
@@ -373,7 +373,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       {ask === 'kill' && (
         <Confirm
           title={`Delete "${session.title}"?`}
-          body="The agent is closed and this conversation is removed from con."
+          body="The agent is closed and this conversation is removed from helm."
           confirmLabel="Delete" danger busy={busy}
           onCancel={() => setAsk(null)}
           onConfirm={async () => {

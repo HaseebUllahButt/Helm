@@ -34,7 +34,7 @@ export async function startRelay({
   openLogin = true,
 } = {}) {
   // The data layer reads its location once, at import; set it before loading.
-  if (dbFile) process.env.CON_DB = dbFile;
+  if (dbFile) process.env.HELM_DB = dbFile;
 
   const http = await import('./http.js');
   const {
@@ -93,26 +93,26 @@ export async function startRelay({
     }
   };
 
-  // `/con/...` is the app's own prefix, kept because clients send it: the
-  // web app opens `/con/ws` and older ones open `/ws`. It used to matter
+  // `/helm/...` is the app's own prefix, kept because clients send it: the
+  // web app opens `/helm/ws` and older ones open `/ws`. It used to matter
   // more - everything outside it belonged to the machine's T3 - and now it
   // is simply stripped.
-  const conPath = (req) => {
-    if (req.url === '/con' || req.url.startsWith('/con/')) {
+  const helmPath = (req) => {
+    if (req.url === '/helm' || req.url.startsWith('/helm/')) {
       req.url = req.url.slice(5) || '/';
       return true;
     }
     return false;
   };
 
-  const routeCon = (req, res) =>
+  const routeHelm = (req, res) =>
     req.url === '/api/version'
       ? version(req, res)
       : req.url.startsWith('/api/')
       ? api(req, res)
       : serveStatic(req, res).then((served) => {
           if (served) return null;
-          // Not an api path and not a file: con's own 404. Falling through
+          // Not an api path and not a file: helm's own 404. Falling through
           // to api() here would 401 an unknown page, which reads as auth, not
           // absence.
           res.writeHead(404, { 'content-type': 'application/json', ...SECURITY_HEADERS });
@@ -121,15 +121,15 @@ export async function startRelay({
         });
 
   const server = createServer((req, res) => {
-    conPath(req);
-    Promise.resolve(routeCon(req, res)).catch((err) => {
+    helmPath(req);
+    Promise.resolve(routeHelm(req, res)).catch((err) => {
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: String(err?.message || err) }));
     });
   });
 
   // Browsers cannot set an Authorization header on a WebSocket, so the web
-  // app smuggles its token through the subprotocol list ("con", <token>).
+  // app smuggles its token through the subprotocol list ("helm", <token>).
   // Reading it here keeps the credential out of Caddy and tunnel access logs,
   // which is where a ?token= query string would end up.
   const tokenFromProtocols = (header) =>
@@ -140,9 +140,9 @@ export async function startRelay({
 
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'http://localhost');
-    // /con/ws is con's protocol by any name; /ws is the same endpoint for
+    // /helm/ws is helm's protocol by any name; /ws is the same endpoint for
     // older clients.
-    if (url.pathname !== '/con/ws' && url.pathname !== '/ws') return socket.destroy();
+    if (url.pathname !== '/helm/ws' && url.pathname !== '/ws') return socket.destroy();
 
     // Header or subprotocol only. `?token=` used to be accepted here for older
     // clients, which undid the reason the subprotocol trick exists three lines
@@ -199,7 +199,7 @@ export async function startRelay({
       );
 
     // A machine attaches as an environment - unless it is asking to drive
-    // one. `con proxy` and the desktop app both use the machine's own
+    // one. `helm proxy` and the desktop app both use the machine's own
     // credential as a client; registering them as the environment would evict
     // the daemon actually serving it.
     if (machine && url.searchParams.get('role') !== 'client'

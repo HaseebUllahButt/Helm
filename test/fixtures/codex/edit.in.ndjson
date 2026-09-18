@@ -1,5 +1,5 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"con","title":"Con","version":"0.0.1"},"capabilities":{"experimentalApi":true}}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"helm","title":"Helm","version":"0.0.1"},"capabilities":{"experimentalApi":true}}}
 {"jsonrpc":"2.0","method":"initialized"}
-{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"/tmp/con-record-wJjiYQ","approvalPolicy":"on-request","sandbox":"read-only"}}
-{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"01a09e7c-4225-7450-968b-246f73068325","input":[{"type":"text","text":"Create a file named con-note.txt containing the single line \"hi\". Then say done.","text_elements":[]}],"effort":"low"}}
+{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"/tmp/helm-record-wJjiYQ","approvalPolicy":"on-request","sandbox":"read-only"}}
+{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"01a09e7c-4225-7450-968b-246f73068325","input":[{"type":"text","text":"Create a file named helm-note.txt containing the single line \"hi\". Then say done.","text_elements":[]}],"effort":"low"}}
 {"jsonrpc":"2.0","id":0,"result":{"decision":"accept"}}

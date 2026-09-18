@@ -3,9 +3,9 @@ import { dirname } from 'node:path';
 import { CONFIG_FILE } from './paths.js';
 
 /**
- * Per-machine settings in ~/.con/config.json. Today that is one thing:
+ * Per-machine settings in ~/.helm/config.json. Today that is one thing:
  * which of an account's (often very long) model list is worth offering, and
- * which model a new session starts with. `con leave` deletes the file along
+ * which model a new session starts with. `helm leave` deletes the file along
  * with the rest of the machine's state.
  *
  * Prefs are keyed by *account*, not profile: several aliases can launch the

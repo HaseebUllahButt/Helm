@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { listCommands, BUILT_IN } from '../packages/connect/src/commands.js';
 
-test('the palette is con\'s own actions plus the commands the owner wrote', () => {
-  const root = mkdtempSync(join(tmpdir(), 'con-cmds-'));
+test('the palette is helm\'s own actions plus the commands the owner wrote', () => {
+  const root = mkdtempSync(join(tmpdir(), 'helm-cmds-'));
   const project = join(root, 'project');
   mkdirSync(join(project, '.claude', 'commands', 'ship'), { recursive: true });
   writeFileSync(join(project, '.claude', 'commands', 'review.md'),
@@ -23,7 +23,7 @@ test('the palette is con\'s own actions plus the commands the owner wrote', () =
   const list = listCommands({ engine: 'claude', cwd: project, home });
   const byName = Object.fromEntries(list.map((c) => [c.name, c]));
 
-  assert.ok(BUILT_IN.every((b) => byName[b.name]), 'con\'s own actions are always offered');
+  assert.ok(BUILT_IN.every((b) => byName[b.name]), 'helm\'s own actions are always offered');
   assert.equal(byName.review.description, 'Review the diff for correctness bugs');
   assert.equal(byName.review.source, 'project');
   // A nested directory is one level of namespace, spelled the way the CLI does.
@@ -39,7 +39,7 @@ test('a machine with no commands directory has a palette, not an error', () => {
 });
 
 test('a project command wins over a personal one of the same name', () => {
-  const root = mkdtempSync(join(tmpdir(), 'con-cmds2-'));
+  const root = mkdtempSync(join(tmpdir(), 'helm-cmds2-'));
   const project = join(root, 'p');
   const home = join(root, 'h');
   mkdirSync(join(project, '.claude', 'commands'), { recursive: true });
@@ -51,8 +51,8 @@ test('a project command wins over a personal one of the same name', () => {
   assert.equal(list.find((c) => c.name === 'ship').description, 'the project one');
 });
 
-test('codex reads prompts, and an engine with none offers only con\'s actions', () => {
-  const root = mkdtempSync(join(tmpdir(), 'con-cmds3-'));
+test('codex reads prompts, and an engine with none offers only helm\'s actions', () => {
+  const root = mkdtempSync(join(tmpdir(), 'helm-cmds3-'));
   mkdirSync(join(root, 'prompts'), { recursive: true });
   writeFileSync(join(root, 'prompts', 'plan.md'), '---\ndescription: Plan before touching anything\n---\n');
   const codex = listCommands({ engine: 'codex', cwd: '/tmp', home: root });
