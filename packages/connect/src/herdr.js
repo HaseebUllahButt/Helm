@@ -14,7 +14,7 @@ export const SOCKET_PATH =
     : join(HOME, '.config/herdr/herdr.sock'));
 
 /**
- * Events helm watches for every pane, without naming one. Per-pane
+ * Events con watches for every pane, without naming one. Per-pane
  * subscriptions (`pane.agent_status_changed`) are added as sessions appear;
  * `pane.updated` carries agent_status too and needs no pane_id, so it is the
  * safety net for panes we did not start ourselves.
@@ -44,7 +44,7 @@ export class Herdr extends EventEmitter {
   #closed = false;
   #paneSocks = new Map();
 
-  constructor({ socketPath = SOCKET_PATH, bin = process.env.HELM_HERDR_BIN || 'herdr' } = {}) {
+  constructor({ socketPath = SOCKET_PATH, bin = process.env.CON_HERDR_BIN || process.env.HELM_HERDR_BIN || 'herdr' } = {}) {
     super();
     this.socketPath = socketPath;
     this.bin = bin;
@@ -88,7 +88,7 @@ export class Herdr extends EventEmitter {
       });
       child.once('error', (err) => {
         const message = err.code === 'ENOENT'
-          ? `herdr executable "${this.bin}" was not found; install herdr or set HELM_HERDR_BIN`
+          ? `herdr executable "${this.bin}" was not found; install herdr or set CON_HERDR_BIN`
           : `could not start herdr executable "${this.bin}": ${err.message}`;
         reject(Object.assign(new Error(message), { cause: err }));
       });

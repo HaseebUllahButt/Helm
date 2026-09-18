@@ -4,26 +4,26 @@ import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { HELM_DIR, KEY_FILE, SSH_DIR, HOME } from './paths.js';
+import { CON_DIR, KEY_FILE, SSH_DIR, HOME } from './paths.js';
 
 const exec = promisify(execFile);
 
-// helm only ever rewrites what is between these markers. Everything you wrote
+// con only ever rewrites what is between these markers. Everything you wrote
 // yourself is left exactly as it was.
-const BEGIN = '# >>> helm managed >>>';
-const END = '# <<< helm managed <<<';
+const BEGIN = '# >>> con managed >>>';
+const END = '# <<< con managed <<<';
 
 // ssh runs ProxyCommand through /bin/sh with a bare environment, so naming the
 // interpreter and script outright is the only thing that reliably works.
-const PROXY = `${process.execPath} ${fileURLToPath(new URL('../bin/helm.js', import.meta.url))} proxy`;
+const PROXY = `${process.execPath} ${fileURLToPath(new URL('../bin/con.js', import.meta.url))} proxy`;
 
 /** Generate this machine's mesh key once. The private half never leaves. */
 async function ensureKey() {
   if (existsSync(KEY_FILE)) return;
-  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
+  mkdirSync(CON_DIR, { recursive: true, mode: 0o700 });
   await exec('ssh-keygen', [
     '-t', 'ed25519', '-N', '', '-q',
-    '-C', `helm@${userInfo().username}`,
+    '-C', `con@${userInfo().username}`,
     '-f', KEY_FILE,
   ]);
   chmodSync(KEY_FILE, 0o600);
@@ -34,18 +34,18 @@ export async function sshInfo() {
   return {
     pubkey: readFileSync(`${KEY_FILE}.pub`, 'utf8').trim(),
     sshUser: userInfo().username,
-    sshPort: Number(process.env.HELM_SSH_PORT || 22),
+    sshPort: Number(process.env.CON_SSH_PORT || 22),
   };
 }
 
-/** Replace helm's block in a file, leaving the rest untouched. */
+/** Replace con's block in a file, leaving the rest untouched. */
 function writeManagedBlock(file, body, mode = 0o600) {
   mkdirSync(SSH_DIR, { recursive: true, mode: 0o700 });
 
   let existing = '';
   if (existsSync(file)) {
     existing = readFileSync(file, 'utf8');
-    const backup = `${file}.helm-backup`;
+    const backup = `${file}.con-backup`;
     if (!existsSync(backup)) copyFileSync(file, backup);
   }
 
@@ -70,7 +70,7 @@ function writeManagedBlock(file, body, mode = 0o600) {
 // with far more authority than "a list of names": one stray newline in a peer
 // name is a second authorized_keys entry, or a ProxyCommand that ssh will run
 // - and ssh takes the *first* value it sees for a keyword, so an injected one
-// wins over helm's own further down the block.
+// wins over con's own further down the block.
 //
 // `mergeRoster` already refuses to store a record that could do this. These
 // checks are the second half of the same rule, applied where the damage would
@@ -118,7 +118,7 @@ const portOf = (value) =>
  * Bring this machine's SSH files in line with the current mesh.
  *
  * Every peer's public key goes into authorized_keys so they can reach us, and
- * every peer gets a Host alias whose ProxyCommand rides helm's own connection
+ * every peer gets a Host alias whose ProxyCommand rides con's own connection
  * - which is why `ssh laptop` works from a box that has no route to it.
  *
  * A peer that does not survive the checks above is skipped, not repaired: it
@@ -135,7 +135,7 @@ export function applyPeers(peers) {
 
   const keys = safe
     .filter((p) => p.pubkey)
-    .map((p) => `${p.pubkey}  # helm:${p.alias}`)
+    .map((p) => `${p.pubkey}  # con:${p.alias}`)
     .join('\n');
 
   writeManagedBlock(join(SSH_DIR, 'authorized_keys'), keys || '# no peers', 0o600);
@@ -150,7 +150,7 @@ export function applyPeers(peers) {
         `  IdentityFile ${KEY_FILE}`,
         `  ProxyCommand ${PROXY} %h`,
         `  StrictHostKeyChecking accept-new`,
-        `  UserKnownHostsFile ${join(HELM_DIR, 'known_hosts')}`,
+        `  UserKnownHostsFile ${join(CON_DIR, 'known_hosts')}`,
       ].join('\n')
     )
     .join('\n\n');

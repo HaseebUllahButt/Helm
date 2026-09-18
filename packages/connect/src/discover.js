@@ -65,7 +65,7 @@ async function shellSymbols() {
       const { stdout } = await exec('bash', args, {
         timeout: 8000,
         maxBuffer: 4 << 20,
-        env: { ...process.env, HELM_DISCOVERY: '1' },
+        env: { ...process.env, CON_DISCOVERY: '1' },
       });
       return stdout;
     } catch (err) {

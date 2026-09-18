@@ -5,8 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 /**
- * helm as a desktop application: its own window, its own icon, opening the
- * helm running on this machine.
+ * con as a desktop application: its own window, its own icon, opening the
+ * con running on this machine.
  *
  * Installing the PWA from the browser looks like the same thing and is not.
  * A phone installs it from the VM's public address, which is right there -
@@ -19,14 +19,14 @@ import { fileURLToPath } from 'node:url';
  */
 
 /**
- * NOT `helm`. Icon lookup goes through the user's theme before it falls back
+ * NOT `con`. Icon lookup goes through the user's theme before it falls back
  * to hicolor, and Papirus - which a lot of people run - ships an unrelated
- * `helm.svg`. Name the icon `helm` and their launcher shows that instead, at
+ * `con.svg`. Name the icon `con` and their launcher shows that instead, at
  * every size, however many copies of ours are installed. This name is nobody
  * else's.
  */
-const ICON = 'helm-app';
-const ENTRY = 'helm-app.desktop';
+const ICON = 'con-app';
+const ENTRY = 'con-app.desktop';
 
 /** Chromium-family browsers take `--app=`; that is what gives a bare window. */
 const BROWSERS = [
@@ -123,14 +123,14 @@ export function installApp({ url, browser, profile = 'Default' }) {
     '[Desktop Entry]',
     'Version=1.0',
     'Type=Application',
-    'Name=helm',
+    'Name=con',
     'GenericName=Coding agents',
-    'Comment=every coding agent, one place - the helm running on this machine',
+    'Comment=every coding agent, one place - the con running on this machine',
     `Exec=${exec}`,
     `Icon=${ICON}`,
     ...(bin ? [`StartupWMClass=${wmClass(url, profile)}`] : []),
     'Categories=Development;',
-    'Keywords=helm;agents;claude;codex;',
+    'Keywords=con;agents;claude;codex;',
     'Terminal=false',
     '',
   ].join('\n');

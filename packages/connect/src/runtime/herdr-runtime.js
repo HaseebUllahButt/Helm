@@ -5,7 +5,7 @@ import { Herdr } from '../herdr.js';
 const LIVE_TTL_MS = 1000;
 
 /**
- * The herdr protocol generation helm was written against. herdr reports this
+ * The herdr protocol generation con was written against. herdr reports this
  * from `ping`; if it ever moves we want a loud, specific failure at startup
  * rather than subtly wrong behaviour halfway through a session.
  */
@@ -22,7 +22,7 @@ export class HerdrRuntime extends EventEmitter {
   }
 
   /**
-   * Normalise herdr's envelope into the runtime-neutral events helm listens
+   * Normalise herdr's envelope into the runtime-neutral events con listens
    * for. Subscriptions are requested with dotted names (`pane.closed`) but
    * herdr DELIVERS them with underscores (`pane_closed`) - checking the
    * dotted form here silently drops every event, which for
@@ -38,7 +38,7 @@ export class HerdrRuntime extends EventEmitter {
       });
       return;
     }
-    // The safety net for panes helm did not start: `pane_updated` carries the
+    // The safety net for panes con did not start: `pane_updated` carries the
     // whole PaneInfo, agent_status included, and needs no per-pane watch.
     if (event === 'pane_updated' && data.pane?.pane_id && data.pane.agent_status) {
       this.emit('status', {
@@ -64,8 +64,8 @@ export class HerdrRuntime extends EventEmitter {
 
     if (pong.protocol !== EXPECTED_PROTOCOL) {
       throw new Error(
-        `herdr speaks protocol ${pong.protocol}, helm expects ${EXPECTED_PROTOCOL}. ` +
-        `Install herdr ${PINNED_VERSION}, or update helm's adapter.`
+        `herdr speaks protocol ${pong.protocol}, con expects ${EXPECTED_PROTOCOL}. ` +
+        `Install herdr ${PINNED_VERSION}, or update con's adapter.`
       );
     }
     this.version = pong.version;
@@ -156,7 +156,7 @@ export class HerdrRuntime extends EventEmitter {
    *
    * So: both questions at once, and the answer is worth holding on to for a
    * moment. Panes do not appear and vanish inside a second, and anything
-   * helm started itself is tracked directly rather than through here.
+   * con started itself is tracked directly rather than through here.
    */
   #liveCache = { at: 0, value: null, inflight: null };
 
@@ -210,7 +210,7 @@ export class HerdrRuntime extends EventEmitter {
 
   /**
    * Agent kinds this runtime can recognise, with the version of the detection
-   * rules behind each. helm surfaces these so a stale manifest is visible
+   * rules behind each. con surfaces these so a stale manifest is visible
    * rather than showing up as an agent whose state never updates.
    */
   async kinds() {

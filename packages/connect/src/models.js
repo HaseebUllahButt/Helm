@@ -9,7 +9,7 @@ const exec = promisify(execFile);
 
 /**
  * Which models a CLI on this machine can run, read from the CLI's own
- * records rather than a list baked into helm that goes stale in a month.
+ * records rather than a list baked into con that goes stale in a month.
  *
  *   codex     `codex debug models`, falling back to a model_catalog.json
  *   claude    the account's .claude.json remembers the last model per project;

@@ -90,7 +90,7 @@ class CodexServer {
         for (const d of this.#drivers.values()) d.push('error', { message: `could not start ${this.cmd}: ${err.message}`, kind: 'spawn' });
       });
       const init = await this.call('initialize', {
-        clientInfo: { name: 'helm', title: 'Helm', version: '0.1.0' },
+        clientInfo: { name: 'con', title: 'Con', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
       if (init.error) throw new Error(`codex initialize failed: ${init.error.message}`);

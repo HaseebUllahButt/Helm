@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { HELM_DIR, expand } from './paths.js';
+import { CON_DIR, expand } from './paths.js';
 import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages } from './transcript.js';
 import { ENGINES } from './engines.js';
@@ -19,7 +19,7 @@ import { DevinDriver } from './drivers/devin.js';
 import { defaultMode, modeFromAuto } from './modes.js';
 import { TerminalHost } from './terminals.js';
 
-const INDEX_FILE = join(HELM_DIR, 'sessions.json');
+const INDEX_FILE = join(CON_DIR, 'sessions.json');
 
 // A pane read costs the runtime ~90ms, so this is close to as fast as the
 // screen can be sampled without the reads piling up on each other.
@@ -67,15 +67,15 @@ const promptTitle = (samples) => {
 };
 
 /**
- * Rows helm does not own: a herdr pane it did not start (`pane:`), and a past
+ * Rows con does not own: a herdr pane it did not start (`pane:`), and a past
  * session read out of a CLI's own history (`found:`). They are real work and
- * belong in the list, but helm has no record of its own to archive or delete -
+ * belong in the list, but con has no record of its own to archive or delete -
  * so what the owner does with one is kept beside the sessions as a mark.
  */
 const EXTERNAL = /^(pane:|found:)/;
 
 /**
- * What a session looks like on the wire: everything but helm's own notes.
+ * What a session looks like on the wire: everything but con's own notes.
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
@@ -104,13 +104,13 @@ const agentName = (profileId) =>
     '-' + randomBytes(2).toString('hex')).slice(0, 32);
 
 /**
- * helm's view of sessions.
+ * con's view of sessions.
  *
  * Two kinds live here. Agent sessions are driven headless (`drivers/`):
- * helm owns the process, and what the agent does arrives as a stream of
+ * con owns the process, and what the agent does arrives as a stream of
  * events kept in `EventLog`. Terminal sessions, and agents someone started
  * at the keyboard, are herdr panes: herdr owns those processes and this
- * class only maps a helm session to the workspace/pane behind it, so that a
+ * class only maps a con session to the workspace/pane behind it, so that a
  * daemon restart reconnects to work that never stopped running.
  */
 /**
@@ -178,7 +178,7 @@ export class Sessions extends EventEmitter {
   #reapers = new Map();
   /** sessionId -> expiry, for event pushes somebody is looking at */
   #watching = new Map();
-  /** external id -> 'archived' | 'removed', for rows helm does not own */
+  /** external id -> 'archived' | 'removed', for rows con does not own */
   #marks = new Map();
 
   constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost() } = {}) {
@@ -205,7 +205,7 @@ export class Sessions extends EventEmitter {
   isDriven(s) { return !!s?.driver; }
 
   /**
-   * What a terminal on this machine will be: helm's own pty, or the slow
+   * What a terminal on this machine will be: con's own pty, or the slow
    * herdr-pane fallback. Answerable with no host running - which is the usual
    * case, since one only starts when a terminal is opened.
    */
@@ -237,7 +237,7 @@ export class Sessions extends EventEmitter {
   }
 
   #save() {
-    mkdirSync(HELM_DIR, { recursive: true });
+    mkdirSync(CON_DIR, { recursive: true });
     writeFileSync(
       INDEX_FILE,
       JSON.stringify({
@@ -346,7 +346,7 @@ export class Sessions extends EventEmitter {
     const out = [];
     const ours = new Set([...this.#index.values()].map((s) => s.paneId));
 
-    // Anything running that helm did not start is still yours, so show it.
+    // Anything running that con did not start is still yours, so show it.
     this.#adopted.clear();
     for (const [paneId, pane] of live) {
       if (ours.has(paneId)) continue;
@@ -416,7 +416,7 @@ export class Sessions extends EventEmitter {
     spec.args = [...spec.args, ...optionArgs(profile.engine, { model, auto, effort })];
     const dir = expand(cwd);
 
-    // A plain shell is a terminal, and helm can run one itself - far better
+    // A plain shell is a terminal, and con can run one itself - far better
     // than borrowing a herdr pane and reading its screen back. Where the pty
     // addon is missing the old path still works, slowly.
     if (spec.plain && await this.terminals.ensure()) {
@@ -468,7 +468,7 @@ export class Sessions extends EventEmitter {
   // ---------------------------------------------------------------- terminals
 
   /**
-   * A terminal helm owns. Unlike a herdr pane it does not outlive the daemon:
+   * A terminal con owns. Unlike a herdr pane it does not outlive the daemon:
    * the shell is our child, so a restart ends it. `list()` reports that
    * honestly as `exited` and the app offers a new one, which is better than
    * reconnecting you to something that is no longer there.
@@ -565,7 +565,7 @@ export class Sessions extends EventEmitter {
     const profile = profiles.find((p) => p.id === s.profileId);
     if (!profile) throw new Error(`the account for this session (${s.profileId}) is gone`);
     const spec = materialize(profile);
-    // The brain's tools are the `helm` command, so which `helm` it finds is
+    // The brain's tools are the `con` command, so which `con` it finds is
     // the whole question. Give it this daemon's own, ahead of the installed
     // one: a machine that has not been upgraded yet would otherwise hand the
     // brain a CLI that does not have the verbs its brief promises.
@@ -713,13 +713,13 @@ export class Sessions extends EventEmitter {
    *
    * A session started at the keyboard - `claude` in a terminal, `codex` in a
    * pane - is listed by `inventory()` and, until now, could only be looked at.
-   * That is the wrong half of the promise: the point of helm is to walk away
+   * That is the wrong half of the promise: the point of con is to walk away
    * from the desk, and the thread you most want on your phone is the one you
    * were just working on.
    *
    * There is no process to attach to; the CLI exited. What this does is start
    * a *new* driven session carrying the old one's id, so the engine resumes
-   * its own conversation - the same `--resume` the CLI would do - and helm
+   * its own conversation - the same `--resume` the CLI would do - and con
    * then owns it like any other thread. `engineSessionId` set before the
    * driver is built is the whole mechanism; every driver already treats a
    * supplied id as "resume this" rather than "start this".
@@ -732,7 +732,7 @@ export class Sessions extends EventEmitter {
   async resumeExternal({ engine, account, id, cwd, title }) {
     if (!id) throw new Error('which conversation?');
     const spec = ENGINES[engine];
-    if (!spec?.driver) throw new Error(`helm cannot drive ${engine} sessions`);
+    if (!spec?.driver) throw new Error(`con cannot drive ${engine} sessions`);
 
     // Already resumed once: hand back the thread rather than making a second
     // one that fights the first for the same conversation.
@@ -931,7 +931,7 @@ export class Sessions extends EventEmitter {
   /**
    * A session record for an id.
    *
-   * Ids prefixed `pane:` refer to work helm did not start - an agent you
+   * Ids prefixed `pane:` refer to work con did not start - an agent you
    * launched at the keyboard. They have no stored record, so we build one from
    * the pane id itself. This is what lets the phone act as a view onto
    * everything running on the machine, not just what it started.
@@ -972,7 +972,7 @@ export class Sessions extends EventEmitter {
       const engine = ENGINES[s.engine];
       if (!engine || engine.plain) return { messages: [], source: null };
 
-      // A session helm started knows its account. One it adopted from the
+      // A session con started knows its account. One it adopted from the
       // keyboard does not - `claudeaa` in a pane looks the same as `claude` -
       // so try every account home this engine has here and take the newest
       // transcript that matches the directory.
@@ -1032,7 +1032,7 @@ export class Sessions extends EventEmitter {
   async attach(id, { lines = 400, ansi = true, cols, rows, renew = false } = {}) {
     const s = this.get(id);
     if (s.driver) throw new Error('a headless session has no terminal');
-    // helm's own terminal needs no polling: the pty pushes as it writes. The
+    // con's own terminal needs no polling: the pty pushes as it writes. The
     // reply is everything worth drawing, and the viewer replaces its screen
     // with it, so a reconnect cannot paint the same bytes twice - which is
     // also why a renewal deliberately returns nothing to draw.
@@ -1133,7 +1133,7 @@ export class Sessions extends EventEmitter {
     const s = this.get(id);
     if (s.driver) {
       let clean = text.replace(/\n$/, '');
-      // Slash commands are helm's, not the agent's: intercept before the
+      // Slash commands are con's, not the agent's: intercept before the
       // text reaches a CLI that would read them as words in a prompt.
       if (!raw) {
         const slash = /^\/(compact)(?:\s+(.*?))?\s*$/s.exec(text.trim());
@@ -1156,9 +1156,9 @@ export class Sessions extends EventEmitter {
       // riding on the answer. `start()` returns immediately if it is already
       // running, and `send` would have called it a line later anyway.
       if (images.length) await d.start?.();
-      // Sampled before the prefix goes on: the network's state is helm's
-      // note to the agent, and naming the thread "[helm 2 machines…]" would
-      // be naming it after helm rather than after the work.
+      // Sampled before the prefix goes on: the network's state is con's
+      // note to the agent, and naming the thread "[con 2 machines…]" would
+      // be naming it after con rather than after the work.
       if (!raw) this.#prompted(s, clean);
       if (brainLine) clean = `${brainLine}\n\n${clean}`;
 
@@ -1166,7 +1166,7 @@ export class Sessions extends EventEmitter {
       // moment it is sent, not when the agent gets round to echoing it. A
       // message queued behind a running turn can sit un-announced for
       // minutes - without this it looks like it was never sent at all. The
-      // text emitted is the final text, helm's note included, because the
+      // text emitted is the final text, con's note included, because the
       // echo is matched against it: a `local-` turn is adopted by the real
       // turn's `turn.start` when the texts agree (see `apply` in the web's
       // session/types.ts).
@@ -1237,7 +1237,7 @@ export class Sessions extends EventEmitter {
     return { ok: true };
   }
 
-  /** A turn helm itself speaks: appended and pushed like any driver event. */
+  /** A turn con itself speaks: appended and pushed like any driver event. */
   #emitLocal(s, turnId, text, body = null) {
     const itemId = `local-${turnId}`;
     const evs = [
@@ -1280,7 +1280,7 @@ export class Sessions extends EventEmitter {
   async kill(id) {
     // A row read out of a CLI's own history: there is no process to stop and
     // nothing of ours to delete. "Delete" here means stop listing it - the
-    // CLI's own transcript is its data, not helm's, and stays where it is.
+    // CLI's own transcript is its data, not con's, and stays where it is.
     if (id.startsWith('found:')) return this.#mark(id, 'removed');
     const s = this.get(id);
     if (s.driver) {
@@ -1309,7 +1309,7 @@ export class Sessions extends EventEmitter {
     return { ok: true };
   }
 
-  /** What the owner has filed away or dismissed among the rows helm does not own. */
+  /** What the owner has filed away or dismissed among the rows con does not own. */
   marks() { return Object.fromEntries(this.#marks); }
 
   #mark(id, state) {
@@ -1322,7 +1322,7 @@ export class Sessions extends EventEmitter {
 
   /** Hide a session from the active list without stopping or deleting it. */
   /**
-   * The name the owner typed, which outranks anything helm or the agent
+   * The name the owner typed, which outranks anything con or the agent
    * came up with and is never overwritten afterwards.
    */
   rename(id, title) {
@@ -1350,7 +1350,7 @@ export class Sessions extends EventEmitter {
   }
 
   archive(id, archived = true) {
-    // Nothing of helm's to write on, so the mark is the record. Archiving one
+    // Nothing of con's to write on, so the mark is the record. Archiving one
     // of these is the only way to get a machine's own terminal panes and a
     // CLI's year of history out of the way without pretending they are gone.
     if (EXTERNAL.test(id)) return this.#mark(id, archived ? 'archived' : null);
@@ -1398,7 +1398,7 @@ export class Sessions extends EventEmitter {
         this.events.append(s.id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
       }
       const open = this.events.openTurn(s.id);
-      if (open) this.events.append(s.id, { type: 'turn.done', turnId: open.turnId, status: 'interrupted', error: 'helm restarted' });
+      if (open) this.events.append(s.id, { type: 'turn.done', turnId: open.turnId, status: 'interrupted', error: 'con restarted' });
       if (s.status !== 'idle') { s.status = 'idle'; s.updatedAt = Date.now(); }
     }
     this.#save();

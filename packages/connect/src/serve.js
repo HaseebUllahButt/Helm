@@ -2,13 +2,13 @@ import { existsSync } from 'node:fs';
 import { join as pathJoin, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname } from 'node:os';
-import { startRelay } from '@helm/relay';
+import { startRelay } from '@con/relay';
 import {
   loadNetwork, saveNetwork, createNetwork, joinNetwork, allEndpoints,
-} from '@helm/protocol/network';
+} from '@con/protocol/network';
 import { Daemon } from './agent.js';
 import { lanAddresses } from './net-addr.js';
-import { HELM_DIR } from './paths.js';
+import { CON_DIR } from './paths.js';
 
 /** Where the built PWA lives when running from a checkout. */
 function findWebRoot() {
@@ -45,17 +45,17 @@ export async function up({
     hub = await startRelay({
       port,
       password,
-      dbFile: pathJoin(HELM_DIR, 'hub.sqlite'),
+      dbFile: pathJoin(CON_DIR, 'hub.sqlite'),
       webRoot,
       host,
     });
   } catch (err) {
     if (err?.code === 'EADDRINUSE') {
       throw new Error(
-        `port ${port} is already in use - helm is probably already running on this machine.\n` +
-        `  check the service:  systemctl --user status helm-serve helm-agent\n` +
-        `  watch its logs:     journalctl --user -u helm-serve -f\n` +
-        `  or pick a port:     helm up --port ${port + 1}`
+        `port ${port} is already in use - con is probably already running on this machine.\n` +
+        `  check the service:  systemctl --user status con-serve con-agent\n` +
+        `  watch its logs:     journalctl --user -u con-serve -f\n` +
+        `  or pick a port:     con up --port ${port + 1}`
       );
     }
     throw err;
@@ -103,7 +103,7 @@ export async function up({
 
   // If the tunnel goes away, stop telling the network it is there.
   tunnelHandle?.onDown?.(() => {
-    console.log('[helm] the tunnel closed - no longer advertising that address');
+    console.log('[con] the tunnel closed - no longer advertising that address');
     daemon.setTunnel(null).catch(() => {});
   });
 
@@ -122,7 +122,7 @@ export async function up({
  */
 export async function join({ code, at, name, port = 8787 }) {
   if (loadNetwork()) {
-    throw new Error('this machine is already in a network - run `helm leave` first');
+    throw new Error('this machine is already in a network - run `con leave` first');
   }
   const base = at.replace(/\/$/, '');
   const res = await fetch(`${base}/api/join`, {
@@ -194,12 +194,12 @@ function report({
 
   if (fresh) {
     console.log(`  Started a new network. "${daemon.name}" is its first machine.`);
-    console.log('  Add a phone with:      helm add controller');
-    console.log('  Add a computer with:   helm add pc\n');
+    console.log('  Add a phone with:      con add controller');
+    console.log('  Add a computer with:   con add pc\n');
   } else {
     console.log(`  ${machines} machine${machines === 1 ? '' : 's'}, ` +
                 `${controllers} controller${controllers === 1 ? '' : 's'} in this network.`);
-    if (!offerLink) console.log('  Open it here with:  helm open');
+    if (!offerLink) console.log('  Open it here with:  con open');
   }
 
   if (lan.length) console.log(`  On this network:   ${lan.join('  ')}`);
@@ -225,7 +225,7 @@ function report({
   } else if (tunnelKind === 'temporary') {
     console.log('\n  ! This link is TEMPORARY. It changes every restart, so');
     console.log('    do not add it to a home screen - use it to reach this');
-    console.log('    machine today. For one worth keeping, see: helm up --help');
+    console.log('    machine today. For one worth keeping, see: con up --help');
   }
   if (tunnelError) {
     console.log(`\n  ! no public address.\n`);
@@ -234,7 +234,7 @@ function report({
     console.log('    from any other machine in the network, and on this network.');
   }
   if (!webRoot) {
-    console.log('\n  ! the web app is not built - run: npm --workspace @helm/web run build');
+    console.log('\n  ! the web app is not built - run: npm --workspace @con/web run build');
   }
 
   if (offerLink) {

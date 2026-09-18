@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 
 /**
- * Drivers run an agent CLI headless and translate what it says into helm's
+ * Drivers run an agent CLI headless and translate what it says into con's
  * one vocabulary of session events. Every driver emits the same events, so
  * the app renders Claude Code and Codex with the same components:
  *
@@ -140,6 +140,6 @@ export async function checkVersion(engine, cmd, env, min, log) {
   const have = await cliVersion(cmd, env);
   if (!have) { log(`${engine}: could not read ${cmd} --version; assuming ${min}`); return; }
   if (semverLess(have, min)) {
-    log(`${engine}: ${cmd} is ${have}; helm's driver was written against ${min}. Expect breakage - upgrade the CLI.`);
+    log(`${engine}: ${cmd} is ${have}; con's driver was written against ${min}. Expect breakage - upgrade the CLI.`);
   }
 }

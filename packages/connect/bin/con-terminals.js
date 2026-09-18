@@ -2,7 +2,7 @@
 /**
  * The terminal host.
  *
- * helm's daemon restarts whenever it is upgraded, and a pty is a child of
+ * con's daemon restarts whenever it is upgraded, and a pty is a child of
  * whoever opened it - so terminals used to die with it, taking a running
  * build or a tailed log with them. This process owns them instead. It does
  * almost nothing: hold ptys, keep their scrollback, and pass bytes over a
@@ -14,7 +14,7 @@
  */
 import { createServer } from 'node:net';
 import { existsSync, unlinkSync, mkdirSync, chmodSync } from 'node:fs';
-import { HELM_DIR } from '../src/paths.js';
+import { CON_DIR } from '../src/paths.js';
 import { Terminals, loadPty, ptyUnavailable } from '../src/pty.js';
 import { SOCKET_PATH } from '../src/terminals.js';
 
@@ -85,7 +85,7 @@ async function handle(msg) {
   }
 }
 
-mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
+mkdirSync(CON_DIR, { recursive: true, mode: 0o700 });
 // A socket left behind by a host that was killed refuses connections; the
 // client unlinks it before spawning us, and this is the second line of
 // defence for the case where two hosts race to start.
@@ -128,7 +128,7 @@ const server = createServer((sock) => {
 
 // Saying why beats dying silently: a client only sees "no host appeared".
 server.on('error', (err) => {
-  console.error(`[helm-terminals] cannot listen on ${SOCKET_PATH}: ${err.message}`);
+  console.error(`[con-terminals] cannot listen on ${SOCKET_PATH}: ${err.message}`);
   process.exit(1);
 });
 

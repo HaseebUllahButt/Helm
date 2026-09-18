@@ -7,19 +7,19 @@ import { argv, exit } from 'node:process';
 import {
   loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, machineToken,
   localKey,
-} from '@helm/protocol/network';
+} from '@con/protocol/network';
 import { refreshProfiles, getProfiles } from '../src/profiles.js';
 import { proxy } from '../src/proxy.js';
 import { createRuntime } from '../src/runtime/index.js';
-import { HELM_DIR } from '../src/paths.js';
-import { M } from '@helm/protocol';
+import { CON_DIR } from '../src/paths.js';
+import { M } from '@con/protocol';
 import { hubRpc } from '../src/hub-client.js';
 import { levelOfWav, SILENCE_RMS } from '../src/voice.js';
 import {
   render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot,
 } from '../src/brain.js';
 
-// Unix pipelines routinely close their read end early (`helm machines |
+// Unix pipelines routinely close their read end early (`con machines |
 // head`). Treat that as successful completion instead of printing an
 // unhandled EPIPE stack trace.
 for (const stream of [process.stdout, process.stderr]) {
@@ -29,60 +29,60 @@ for (const stream of [process.stdout, process.stderr]) {
   });
 }
 
-// A leading flag means no command was given: `helm --port 9000` is the
+// A leading flag means no command was given: `con --port 9000` is the
 // quickstart with an option, not an unknown command.
 const [, , first, ...others] = argv;
 const leadingFlag = first?.startsWith('-') && first !== '-h' && first !== '--help';
 const cmd = leadingFlag ? undefined : first;
 const rest = leadingFlag ? [first, ...others] : others;
 
-const die = (msg) => { console.error(`helm: ${msg}`); exit(1); };
+const die = (msg) => { console.error(`con: ${msg}`); exit(1); };
 
 const usage = () => {
-  console.log(`helm - control your coding agents from anywhere
+  console.log(`con - control your coding agents from anywhere
 
-  helm setup [https-url]             make this always-on VM your Helm home
-  helm open                          open the app here, signed in (no link needed)
-  helm app [--remove]                put helm in this desktop's applications
+  con setup [https-url]             make this always-on VM your Con home
+  con open                          open the app here, signed in (no link needed)
+  con app [--remove]                put con in this desktop's applications
 
-  helm add controller                a phone or browser: controls, runs nothing
-  helm add pc                        a laptop or desktop: runs agents, controls others
-  helm add vm                        another always-on machine, dialled by the rest
-  helm join <CODE> <home-url>        run on the machine being added, whichever kind
+  con add controller                a phone or browser: controls, runs nothing
+  con add pc                        a laptop or desktop: runs agents, controls others
+  con add vm                        another always-on machine, dialled by the rest
+  con join <CODE> <home-url>        run on the machine being added, whichever kind
 
-  helm join <CODE> <home-url> --foreground   ...run in this terminal instead
-  helm status                        show the network and runtime
+  con join <CODE> <home-url> --foreground   ...run in this terminal instead
+  con status                        show the network and runtime
 
-  helm up [--port N] [--tunnel]      run in the foreground
-  helm up --tunnel --domain <d>     permanent public link (needs a free ngrok account)
-  helm up --tunnel --temporary      public link right now, no account (link changes)
-  helm up --advertise <url>         public address others should reach me at
-  helm up --host <address>          local listen address (default 0.0.0.0)
-  helm up --install                 keep it running across reboots
+  con up [--port N] [--tunnel]      run in the foreground
+  con up --tunnel --domain <d>     permanent public link (needs a free ngrok account)
+  con up --tunnel --temporary      public link right now, no account (link changes)
+  con up --advertise <url>         public address others should reach me at
+  con up --host <address>          local listen address (default 0.0.0.0)
+  con up --install                 keep it running across reboots
 
-  helm link [minutes]               same as 'helm add controller'
-  helm join <CODE> --at <url>       long form of 'helm join CODE url'
+  con link [minutes]               same as 'con add controller'
+  con join <CODE> --at <url>       long form of 'con join CODE url'
 
-  helm devices                      controllers that can drive this network
-  helm machines                     machines in this network
-  helm remove <id>                  remove a controller or machine, permanently
-  helm leave                        remove this machine from its network
+  con devices                      controllers that can drive this network
+  con machines                     machines in this network
+  con remove <id>                  remove a controller or machine, permanently
+  con leave                        remove this machine from its network
 
-  helm login [minutes]              new short-lived password for signing in a device
-  helm status                       membership, links and runtime
-  helm profiles [--refresh]         the agent profiles found here
+  con login [minutes]              new short-lived password for signing in a device
+  con status                       membership, links and runtime
+  con profiles [--refresh]         the agent profiles found here
 
-  helm brain [--on <machine>]       open a machine's own agent (prints how to reach it)
-  helm digest [--json]              every machine, folder and running session
-  helm thread <id> [-n 40]          the recent conversation of one session
-  helm say <id> <text...>           send a prompt into an existing session
-  helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
+  con brain [--on <machine>]       open a machine's own agent (prints how to reach it)
+  con digest [--json]              every machine, folder and running session
+  con thread <id> [-n 40]          the recent conversation of one session
+  con say <id> <text...>           send a prompt into an existing session
+  con spawn <machine> <folder> <account> <text...>   start a session and prompt it
 
-  helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
-  helm proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
-  helm service install|uninstall    background service
+  con dictate [--to <id>]          speak: once to start, again to stop and transcribe
+  con proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
+  con service install|uninstall    background service
 
-Only 'helm add controller' prints a link to open; the others print a code to
+Only 'con add controller' prints a link to open; the others print a code to
 type on the machine you are adding. A controller you sign in stays signed in
 until you remove it - passwords are only for adding one, and expire in minutes.
 `);
@@ -133,7 +133,7 @@ async function postToHome(net, path, body = {}) {
       // A body that is not JSON is not an answer, even with a 200 on it.
       // Caddy in front of a hub that is still starting, or any proxy with an
       // interstitial, will hand back HTML - and treating that as `{}` is how
-      // `helm link` once printed `#pair=undefined`, valid for NaN minutes,
+      // `con link` once printed `#pair=undefined`, valid for NaN minutes,
       // instead of saying the home was unreachable and trying the next
       // address.
       const text = await res.text();
@@ -147,8 +147,8 @@ async function postToHome(net, path, body = {}) {
     }
   }
   throw new Error(
-    `your Helm home is not reachable${lastError ? `: ${lastError.message}` : ''}\n` +
-    '  check the VM, then run `helm status`'
+    `your Con home is not reachable${lastError ? `: ${lastError.message}` : ''}\n` +
+    '  check the VM, then run `con status`'
   );
 }
 
@@ -157,7 +157,7 @@ async function printDeviceLink(args = rest) {
   const mins = Number(args[0]);
   const ttlMs = Number.isFinite(mins) && mins > 0 ? mins * 60_000 : undefined;
   const { base, value } = await postToHome(net, '/api/auth/rotate', { ttlMs });
-  if (!value.password) throw new Error('your Helm home did not hand back a password');
+  if (!value.password) throw new Error('your Con home did not hand back a password');
   const pairUrl = `${base}/#pair=${encodeURIComponent(value.password)}`;
   const valid = Math.max(1, Math.round((value.expiresAt - Date.now()) / 60_000));
   console.log(`\n  Open this private link on the phone or browser you are adding:\n`);
@@ -169,7 +169,7 @@ async function printDeviceLink(args = rest) {
 /**
  * The app, on the machine you are sitting at.
  *
- * No pairing link: the local key in ~/.helm signs this browser in, which is
+ * No pairing link: the local key in ~/.con signs this browser in, which is
  * the same trust as being able to read the network key beside it. This is
  * what makes a laptop a controller for every other machine, the VM included.
  */
@@ -183,8 +183,8 @@ async function openApp() {
   child.unref();
 }
 
-/** Point the relay's local database at this machine's helm directory. */
-const useHubDb = () => { process.env.HELM_DB = join(HELM_DIR, 'hub.sqlite'); };
+/** Point the relay's local database at this machine's con directory. */
+const useHubDb = () => { process.env.CON_DB = join(CON_DIR, 'hub.sqlite'); };
 
 const short = (id) => id.slice(0, 8);
 const ago = (t) => {
@@ -204,9 +204,9 @@ async function up() {
     const args = rest.filter((a) => a !== '--install');
     const { installed, unit } = await installService({ mode: 'serve', args });
     if (installed) {
-      console.log(`\n  installed ${unit} - helm now starts on boot.`);
-      console.log('  watch it with:  journalctl --user -u helm-serve -f');
-      console.log('  stop it with:   helm service uninstall --serve\n');
+      console.log(`\n  installed ${unit} - con now starts on boot.`);
+      console.log('  watch it with:  journalctl --user -u con-serve -f');
+      console.log('  stop it with:   con service uninstall --serve\n');
     }
     return;
   }
@@ -234,7 +234,7 @@ async function up() {
 }
 
 /**
- * `helm add <what>`.
+ * `con add <what>`.
  *
  * Three things can join, and they are different enough that naming them is
  * the whole point: a controller is a screen with no agents on it, a pc runs
@@ -252,9 +252,9 @@ async function add() {
   }
 
   console.log('\n  What are you adding?\n');
-  console.log('    helm add controller    a phone or browser - controls machines, runs nothing');
-  console.log('    helm add pc            a laptop or desktop - runs agents, and controls others');
-  console.log('    helm add vm            an always-on machine - runs agents, and others dial it\n');
+  console.log('    con add controller    a phone or browser - controls machines, runs nothing');
+  console.log('    con add pc            a laptop or desktop - runs agents, and controls others');
+  console.log('    con add vm            an always-on machine - runs agents, and others dial it\n');
   if (what) console.log(`  ("${what}" is none of those.)\n`);
 }
 
@@ -263,7 +263,7 @@ async function inviteMachine(role) {
   const { base: where, value } = await postToHome(net, '/api/invite', { role });
   const { code } = value;
   console.log(`\n  On the ${role === 'vm' ? 'VM' : 'computer'} you are adding, run:\n`);
-  console.log(`    helm join ${code} ${where}\n`);
+  console.log(`    con join ${code} ${where}\n`);
   if (role === 'vm') {
     console.log('  It will take its own https address and start serving, so other');
     console.log('  machines can dial it as well as this one.');
@@ -276,10 +276,10 @@ async function inviteMachine(role) {
 
 async function joinCmd() {
   const code = rest.find((a) => !a.startsWith('--'));
-  if (!code) die('an invite code is required: helm join ABCD-1234 --at http://host:8787');
+  if (!code) die('an invite code is required: con join ABCD-1234 --at http://host:8787');
   const codeIndex = rest.indexOf(code);
   const positionalAt = rest[codeIndex + 1]?.startsWith('--') ? null : rest[codeIndex + 1];
-  const at = strFlag('at', positionalAt || process.env.HELM_AT);
+  const at = strFlag('at', positionalAt || process.env.CON_AT);
   if (!at) die('where should I join? pass --at http://host:8787');
 
   // Check the runtime before joining, so a machine that cannot actually run
@@ -303,9 +303,9 @@ async function joinCmd() {
   const net = await joinNet({ code, at, name: strFlag('name', hostname()), port: port() });
   console.log(`\n  joined. ${Object.keys(net.machines).length} machines in this network.`);
 
-  // An invite made with `helm add vm` says so, and a vm is a home: it needs an
+  // An invite made with `con add vm` says so, and a vm is a home: it needs an
   // address of its own and https in front of it, which is the rest of what
-  // `helm setup` does. Nobody has to remember a second command for it.
+  // `con setup` does. Nobody has to remember a second command for it.
   if (net.role === 'vm') {
     console.log('  invited as a vm, so this machine becomes a home as well.\n');
     await setup({ alreadyJoined: true });
@@ -313,7 +313,7 @@ async function joinCmd() {
   }
 
   // A joined machine should stay reachable after this terminal closes, the
-  // same as `helm setup` does for the home - so install the service rather
+  // same as `con setup` does for the home - so install the service rather
   // than serving in the foreground. `--foreground` keeps the old behaviour.
   if (!rest.includes('--foreground')) {
     const { installService } = await import('../src/service.js');
@@ -324,7 +324,7 @@ async function joinCmd() {
     // through the VM. The cost is that the hub is plain http on whatever
     // network this machine is currently joined to, and a device token crosses
     // it in the clear - so on a network you do not trust, reinstall with
-    // `helm up --install --host 127.0.0.1` and reach this machine through the
+    // `con up --install --host 127.0.0.1` and reach this machine through the
     // VM instead.
     const host = rest.includes('--host') ? strFlag('host', '0.0.0.0') : '0.0.0.0';
     const args = [
@@ -337,12 +337,12 @@ async function joinCmd() {
       if (host === '0.0.0.0') {
         console.log('  it listens on every interface, so a phone on the same wifi reaches');
         console.log('  it directly. On an untrusted network, reinstall with:');
-        console.log('    helm up --install --host 127.0.0.1');
+        console.log('    con up --install --host 127.0.0.1');
       }
       console.log('\n  Open the app on your phone: it should show this machine online.');
-      console.log('  Check with:     helm status');
-      console.log('  Watch logs:     journalctl --user -u helm-serve -f');
-      console.log('  Run in front:   helm up  (stop the service first)\n');
+      console.log('  Check with:     con status');
+      console.log('  Watch logs:     journalctl --user -u con-serve -f');
+      console.log('  Run in front:   con up  (stop the service first)\n');
       return;
     }
   }
@@ -356,15 +356,15 @@ async function setup({ alreadyJoined = false } = {}) {
   // positional is still THIS machine's own https address, exactly as when
   // founding a network, so a second VM reads the same way as the first.
   //
-  // `helm join` with a vm invite arrives here having already joined, and only
+  // `con join` with a vm invite arrives here having already joined, and only
   // wants the rest: an address, https in front of it, and the service.
   const joinCode = alreadyJoined || typeof flagOf('join') !== 'string'
     ? null
     : strFlag('join');
   if (!alreadyJoined && rest.includes('--join') && !joinCode) {
-    die('--join needs an invite code: helm setup --join ABCD-1234 --at https://home.example');
+    die('--join needs an invite code: con setup --join ABCD-1234 --at https://home.example');
   }
-  const joinAt = joinCode ? cleanEndpoint(strFlag('at', process.env.HELM_AT)) : null;
+  const joinAt = joinCode ? cleanEndpoint(strFlag('at', process.env.CON_AT)) : null;
   if (joinCode && !joinAt) {
     die('where should I join? pass --at https://your-existing-home');
   }
@@ -378,7 +378,7 @@ async function setup({ alreadyJoined = false } = {}) {
     const next = rest[i + 1];
     if (next && !next.startsWith('--')) flagValues.add(i + 1);
   });
-  // Arriving from `helm join`, the positionals are the invite code and the
+  // Arriving from `con join`, the positionals are the invite code and the
   // home it was redeemed at - neither of which is this machine's own address.
   // Take one only from --advertise there, or work it out below.
   let home = alreadyJoined
@@ -386,7 +386,7 @@ async function setup({ alreadyJoined = false } = {}) {
     : cleanEndpoint(rest.find((a, i) => !a.startsWith('--') && !flagValues.has(i)));
   if (!home) {
     const { configureFreeHttps, detectPublicIpv4, freeHostname } = await import('../src/caddy.js');
-    const ip = process.env.HELM_PUBLIC_IP || await detectPublicIpv4();
+    const ip = process.env.CON_PUBLIC_IP || await detectPublicIpv4();
     const hostname = freeHostname(ip);
     home = `https://${hostname}`;
     console.log(`using free address: ${home}`);
@@ -396,9 +396,9 @@ async function setup({ alreadyJoined = false } = {}) {
   }
   let url;
   try { url = new URL(home); } catch { die(`invalid home address: ${home}`); }
-  if (url.protocol !== 'https:') die('the Helm home address must start with https://');
+  if (url.protocol !== 'https:') die('the Con home address must start with https://');
   if (url.pathname !== '/' || url.search || url.hash) {
-    die('use the home origin only, for example https://helm.example.com');
+    die('use the home origin only, for example https://con.example.com');
   }
 
   // Join the existing mesh before the service starts, so it comes up already
@@ -408,7 +408,7 @@ async function setup({ alreadyJoined = false } = {}) {
     const existing = loadNetwork();
     if (existing) {
       console.log(`already in a network (${existing.id}); re-advertising ${home}.`);
-      console.log('to move this machine to a different mesh, run `helm leave` first.');
+      console.log('to move this machine to a different mesh, run `con leave` first.');
     } else {
       process.stdout.write(`joining the mesh at ${joinAt}... `);
       try {
@@ -431,7 +431,7 @@ async function setup({ alreadyJoined = false } = {}) {
   });
   if (!result.installed) return;
 
-  process.stdout.write('waiting for your Helm home... ');
+  process.stdout.write('waiting for your Con home... ');
   let ready = false;
   for (let i = 0; i < 60; i++) {
     try {
@@ -441,13 +441,13 @@ async function setup({ alreadyJoined = false } = {}) {
         ready = true;
         break;
       }
-    } catch { /* Caddy or helm may still be starting */ }
+    } catch { /* Caddy or con may still be starting */ }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   if (!ready) {
     console.log('not reachable');
     die(`nothing answered at ${home}\n` +
-        '  helm:   journalctl --user -u helm-serve -n 50\n' +
+        '  con:   journalctl --user -u con-serve -n 50\n' +
         '  https:  sudo journalctl -u caddy -n 50   (ports 80 and 443 must be open)');
   }
   console.log('ready');
@@ -468,7 +468,7 @@ function listDevices() {
   const net = requireNetwork();
   const devices = Object.values(net.devices);
   if (!devices.length) {
-    console.log('no devices yet - run `helm login` and sign in from a phone');
+    console.log('no devices yet - run `con login` and sign in from a phone');
     return;
   }
   for (const d of devices) {
@@ -478,14 +478,14 @@ function listDevices() {
 
 // ------------------------------------------------------------------ dictate
 
-const DICTATE_PID = '/tmp/helm-dictate.pid';
-const DICTATE_WAV = '/tmp/helm-dictate.wav';
-const DICTATE_OPUS = '/tmp/helm-dictate.ogg';
+const DICTATE_PID = '/tmp/con-dictate.pid';
+const DICTATE_WAV = '/tmp/con-dictate.wav';
+const DICTATE_OPUS = '/tmp/con-dictate.ogg';
 
 /** Say it on the desktop too, the way the owner's own binding already does. */
 const notify = (body, urgent = false) => {
   try {
-    spawn('notify-send', [...(urgent ? ['-u', 'critical'] : []), 'helm dictate', body], { stdio: 'ignore' }).unref();
+    spawn('notify-send', [...(urgent ? ['-u', 'critical'] : []), 'con dictate', body], { stdio: 'ignore' }).unref();
   } catch { /* no notification daemon: the terminal output is the fallback */ }
 };
 
@@ -590,7 +590,7 @@ async function dictate() {
       return;
     }
     // No destination: the clipboard, which is what the owner's own script
-    // does and what makes this useful in a browser helm does not own.
+    // does and what makes this useful in a browser con does not own.
     try { const c = spawn('wl-copy', ['-t', 'text/plain'], { stdio: ['pipe', 'ignore', 'ignore'] }); c.stdin.end(text); } catch { /* no wayland clipboard */ }
     notify(`in the clipboard (via ${via}): ${text}`);
     console.log(text);
@@ -604,7 +604,7 @@ async function dictate() {
   child.unref();
   writeFileSync(DICTATE_PID, String(child.pid));
   notify(to ? `recording for ${to}… press the key again to send` : 'recording… press the key again to transcribe');
-  console.log(`recording (${rec.cmd}); run \`helm dictate${to ? ` --to ${to}` : ''}\` again to stop`);
+  console.log(`recording (${rec.cmd}); run \`con dictate${to ? ` --to ${to}` : ''}\` again to stop`);
 }
 
 // ------------------------------------------------------------------- brain
@@ -670,7 +670,7 @@ async function printDigest() {
  * never a guess, because guessing here sends a prompt to the wrong agent.
  */
 async function findSession(id) {
-  if (!id) die('which session? `helm digest` lists them');
+  if (!id) die('which session? `con digest` lists them');
   const { snap } = await gather();
   const hits = [];
   for (const [env, entry] of Object.entries(snap.machines ?? {})) {
@@ -680,7 +680,7 @@ async function findSession(id) {
       }
     }
   }
-  if (!hits.length) die(`no session "${id}" - \`helm digest\` lists them`);
+  if (!hits.length) die(`no session "${id}" - \`con digest\` lists them`);
   if (hits.length > 1) {
     die(`"${id}" matches ${hits.length} sessions:\n` +
         hits.map((h) => `  ${h.machine}  ${h.session.id}  ${h.session.title}`).join('\n'));
@@ -699,13 +699,13 @@ async function printThread() {
   console.log(`${session.engine}${session.model ? ` (${session.model})` : ''} in ${session.cwd} - ${session.status}\n`);
   for (const line of readThread(r.events ?? [], { limit: Math.max(1, n) })) console.log(line);
   const open = (r.pending ?? []).length;
-  if (open) console.log(`\n${open} permission request${open === 1 ? '' : 's'} waiting - answer in the app, or with \`helm say\` if it takes words.`);
+  if (open) console.log(`\n${open} permission request${open === 1 ? '' : 's'} waiting - answer in the app, or with \`con say\` if it takes words.`);
 }
 
 async function say() {
   const [id, ...words] = rest.filter((x) => !x.startsWith('--'));
   const text = words.join(' ');
-  if (!text) die('what should it say? `helm say <id> <text>`');
+  if (!text) die('what should it say? `con say <id> <text>`');
   const { env, machine, session } = await findSession(id);
   await brainRpc(env, M.SESSION_INPUT, { id: session.id, data: text });
   console.log(`sent to ${machine} ${shortId(session.id)} (${session.title})`);
@@ -716,7 +716,7 @@ async function spawn_() {
   const [who, folder, account, ...words] = args;
   const text = words.join(' ');
   if (!who || !folder || !account) {
-    die('helm spawn <machine> <folder> <account> <text...>');
+    die('con spawn <machine> <folder> <account> <text...>');
   }
   const env = machineId(who);
   const { profiles } = await brainRpc(env, M.PROFILE_LIST, {});
@@ -747,13 +747,13 @@ async function openBrain() {
     }, 60_000);
     console.log(`${created ? 'started' : 'resumed'} the brain on ${name}: ${shortId(session.id)} (${session.engine}${session.model ? `, ${session.model}` : ''})`);
     console.log('open it in the app under "brains", or talk to it here:');
-    console.log(`  helm say ${shortId(session.id)} "what is waiting on me?"`);
+    console.log(`  con say ${shortId(session.id)} "what is waiting on me?"`);
   } catch (err) {
     if (!/needs a profileId/.test(err.message)) throw err;
     const { profiles } = await brainRpc(env, M.PROFILE_LIST, {});
     const usable = profiles.filter((x) => ['claude', 'codex', 'opencode', 'devin'].includes(x.engine));
-    console.error(`helm: which account should be the brain on ${name}?\n`);
-    for (const x of usable) console.error(`  helm brain --account ${x.id}${' '.repeat(Math.max(1, 22 - x.id.length))}${x.engine}`);
+    console.error(`con: which account should be the brain on ${name}?\n`);
+    for (const x of usable) console.error(`  con brain --account ${x.id}${' '.repeat(Math.max(1, 22 - x.id.length))}${x.engine}`);
     exit(1);
   }
 }
@@ -775,7 +775,7 @@ function listMachines() {
 function remove() {
   const net = requireNetwork();
   const prefix = rest.find((a) => !a.startsWith('--'));
-  if (!prefix) die('which one? run `helm devices` or `helm machines` for ids');
+  if (!prefix) die('which one? run `con devices` or `con machines` for ids');
 
   const all = { ...net.devices, ...net.machines };
   const hits = Object.keys(all).filter((id) => id.startsWith(prefix));
@@ -784,7 +784,7 @@ function remove() {
 
   const [id] = hits;
   if (id === net.self) {
-    die('that is this machine - use `helm leave` to take it out of the network');
+    die('that is this machine - use `con leave` to take it out of the network');
   }
   const label = net.devices[id]?.label ?? net.machines[id]?.name ?? id;
   revoke(net, id);
@@ -798,7 +798,7 @@ async function leave() {
   if (!rest.includes('--yes')) {
     console.log(`this will remove "${net.machines[net.self]?.name}" from its network,`);
     console.log('delete this machine\'s copy of the roster and its key, and stop');
-    console.log('the helm background service if one is installed.');
+    console.log('the con background service if one is installed.');
     console.log('\nre-run with --yes to confirm.');
     return;
   }
@@ -808,13 +808,13 @@ async function leave() {
   await uninstallService({ mode: 'serve' }).catch(() => {});
   await uninstallService({ mode: 'agent' }).catch(() => {});
   forgetNetwork();
-  rmSync(join(HELM_DIR, 'hub.sqlite'), { force: true });
-  rmSync(join(HELM_DIR, 'hub.sqlite-wal'), { force: true });
-  rmSync(join(HELM_DIR, 'hub.sqlite-shm'), { force: true });
-  rmSync(join(HELM_DIR, 'local-relay.sqlite'), { force: true });
-  rmSync(join(HELM_DIR, 'config.json'), { force: true });
-  rmSync(join(HELM_DIR, 'local.json'), { force: true });
-  console.log('left the network. `helm up` will start a fresh one.');
+  rmSync(join(CON_DIR, 'hub.sqlite'), { force: true });
+  rmSync(join(CON_DIR, 'hub.sqlite-wal'), { force: true });
+  rmSync(join(CON_DIR, 'hub.sqlite-shm'), { force: true });
+  rmSync(join(CON_DIR, 'local-relay.sqlite'), { force: true });
+  rmSync(join(CON_DIR, 'config.json'), { force: true });
+  rmSync(join(CON_DIR, 'local.json'), { force: true });
+  console.log('left the network. `con up` will start a fresh one.');
   console.log('other machines will drop this one as they sync.');
 }
 
@@ -847,19 +847,19 @@ try {
       if (rest.includes('--remove') || rest.includes('remove')) {
         const { removed, icons } = removeApp();
         console.log(removed
-          ? `\n  removed the helm desktop entry and ${icons} icon${icons === 1 ? '' : 's'}.\n`
-          : '\n  there was no helm desktop entry here.\n');
+          ? `\n  removed the con desktop entry and ${icons} icon${icons === 1 ? '' : 's'}.\n`
+          : '\n  there was no con desktop entry here.\n');
         break;
       }
       const net = requireNetwork();
       const at = `http://127.0.0.1:${net.port ?? 8787}/`;
       const pick = rest[rest.indexOf('--browser') + 1];
       const r = installApp({ url: at, browser: rest.includes('--browser') ? pick : undefined });
-      console.log(`\n  helm is in your applications, opening ${r.url}`);
+      console.log(`\n  con is in your applications, opening ${r.url}`);
       console.log(r.windowed
         ? `  its own window, through ${r.browser}. It signs itself in; there is nothing to type.`
         : '  no chromium-family browser found, so it opens in your default one.');
-      console.log('  remove it again with:  helm app --remove\n');
+      console.log('  remove it again with:  con app --remove\n');
       break;
     }
 
@@ -889,12 +889,12 @@ try {
       break;
     }
 
-    // Kept for scripts written against the older command. `helm link` is the
+    // Kept for scripts written against the older command. `con link` is the
     // human-facing form because it prints one thing a device can open.
     case 'login': {
       requireNetwork();
       useHubDb();
-      const { rotatePassword, PASSWORD_TTL_MS } = await import('@helm/relay/http');
+      const { rotatePassword, PASSWORD_TTL_MS } = await import('@con/relay/http');
       const mins = Number(rest[0]);
       const { password, expiresAt } = rotatePassword(
         null, Number.isFinite(mins) && mins > 0 ? mins * 60_000 : PASSWORD_TTL_MS
@@ -914,7 +914,7 @@ try {
     }
 
     case 'proxy':
-      if (!rest[0]) die('usage: helm proxy <host>');
+      if (!rest[0]) die('usage: con proxy <host>');
       await proxy(rest[0]);
       break;
 
@@ -933,7 +933,7 @@ try {
 
     case 'status': {
       const net = loadNetwork();
-      if (!net) { console.log('not in a network - run `helm up`'); break; }
+      if (!net) { console.log('not in a network - run `con up`'); break; }
       const me = net.machines[net.self];
       console.log(`network:  ${net.id}`);
       console.log(`machine:  ${me?.name} (${short(net.self)}${net.role ? `, ${net.role}` : ''})`);
@@ -942,17 +942,17 @@ try {
       console.log(`reachable at: ${(me?.endpoints ?? []).join(' ') || '(not advertised yet)'}`);
 
       // A full-tunnel VPN leaves the LAN address on the interface but routes
-      // the subnet into the tunnel, so the address helm advertises is one it
+      // the subnet into the tunnel, so the address con advertises is one it
       // cannot answer on. Nothing else reports this, and the symptom - a
       // phone on the same wifi quietly relaying through the hub instead of
-      // connecting directly - looks like helm being slow.
+      // connecting directly - looks like con being slow.
       const { lanIsRoutable } = await import('../src/net-addr.js');
       const lan = await lanIsRoutable();
       if (lan && !lan.ok) {
         console.log(`
   ! ${lan.address} is advertised for this network, but traffic to it leaves
     over ${lan.via} rather than ${lan.expected}. A device on the same wifi
-    cannot reach this machine directly, so sessions relay through your Helm
+    cannot reach this machine directly, so sessions relay through your Con
     home - which is slower, often by a lot.
 
     Usually a VPN carrying everything. With Tailscale:
@@ -1027,7 +1027,7 @@ try {
       break;
 
     default:
-      console.error(`helm: unknown command "${cmd}"\n`);
+      console.error(`con: unknown command "${cmd}"\n`);
       usage();
       exit(1);
   }

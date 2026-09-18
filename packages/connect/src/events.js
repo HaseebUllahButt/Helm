@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { HELM_DIR } from './paths.js';
+import { CON_DIR } from './paths.js';
 
 /**
  * What happened in a session, in order.
@@ -12,7 +12,7 @@ import { HELM_DIR } from './paths.js';
  * was asleep can ask "everything after 412" instead of re-reading a
  * transcript, and so that a daemon restart does not lose the conversation.
  *
- * One file per session under ~/.helm/events. Only the tail is kept: a
+ * One file per session under ~/.con/events. Only the tail is kept: a
  * session that ran for a week is not something anyone scrolls through on a
  * phone, and the agent's own transcript still has all of it.
  *
@@ -26,7 +26,7 @@ import { HELM_DIR } from './paths.js';
  * session showed the owner's own photo as a broken thumbnail forever.
  */
 
-export const EVENTS_DIR = join(HELM_DIR, 'events');
+export const EVENTS_DIR = join(CON_DIR, 'events');
 const KEEP = 2000;
 
 /**

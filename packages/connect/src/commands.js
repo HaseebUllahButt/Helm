@@ -13,7 +13,7 @@ import { ENGINES } from './engines.js';
  *
  * What is real is two kinds of thing:
  *
- *   - helm's own actions, handled by the daemon before the text ever
+ *   - con's own actions, handled by the daemon before the text ever
  *     reaches a CLI (`sessions.js #slash`);
  *   - the commands the owner has written themselves, which do run headless -
  *     markdown files in the directory each CLI reads them from, either
@@ -23,9 +23,9 @@ import { ENGINES } from './engines.js';
  * the normal case, not an error.
  */
 
-/** Actions helm performs itself. These work in every engine. */
+/** Actions con performs itself. These work in every engine. */
 export const BUILT_IN = [
-  { name: 'compact', description: 'Summarise the conversation into a fresh context', source: 'helm' },
+  { name: 'compact', description: 'Summarise the conversation into a fresh context', source: 'con' },
 ];
 
 /** Where each engine reads the owner's own commands from. */
@@ -86,7 +86,7 @@ function read(dir, source, prefix = '', depth = 0) {
 }
 
 /**
- * The palette for one session. First definition of a name wins, so helm's
+ * The palette for one session. First definition of a name wins, so con's
  * own actions cannot be shadowed by a file - they are intercepted before the
  * CLI sees them either way, and a palette entry that lies about where the
  * text goes would be the worst of both.

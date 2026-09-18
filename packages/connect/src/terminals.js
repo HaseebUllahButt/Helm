@@ -6,27 +6,27 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { HELM_DIR } from './paths.js';
+import { CON_DIR } from './paths.js';
 
 /**
  * Where the host listens.
  *
- * Not inside HELM_DIR, because a unix socket path is capped at about 107
- * bytes by the kernel and a helm directory nested a few levels deep blows
+ * Not inside CON_DIR, because a unix socket path is capped at about 107
+ * bytes by the kernel and a con directory nested a few levels deep blows
  * through that - `listen` then fails with EINVAL and terminals quietly fall
  * back to the slow path. The runtime directory is short and per-user; the
- * name carries a hash of HELM_DIR so a sandboxed daemon never reaches the
+ * name carries a hash of CON_DIR so a sandboxed daemon never reaches the
  * real one's terminals.
  */
 const socketDir = process.env.XDG_RUNTIME_DIR || tmpdir();
-const helmTag = createHash('sha256').update(HELM_DIR).digest('hex').slice(0, 10);
+const conTag = createHash('sha256').update(CON_DIR).digest('hex').slice(0, 10);
 export const SOCKET_PATH =
-  process.env.HELM_TERMINALS_SOCKET || join(socketDir, `helm-terminals-${helmTag}.sock`);
+  process.env.CON_TERMINALS_SOCKET || process.env.HELM_TERMINALS_SOCKET || join(socketDir, `con-terminals-${conTag}.sock`);
 
 /** Where a host that fails to start says why. */
-export const HOST_LOG = join(HELM_DIR, 'terminals.log');
+export const HOST_LOG = join(CON_DIR, 'terminals.log');
 
-const HOST_BIN = fileURLToPath(new URL('../bin/helm-terminals.js', import.meta.url));
+const HOST_BIN = fileURLToPath(new URL('../bin/con-terminals.js', import.meta.url));
 
 /**
  * A host that cannot start says why here rather than into `/dev/null`, which
@@ -34,7 +34,7 @@ const HOST_BIN = fileURLToPath(new URL('../bin/helm-terminals.js', import.meta.u
  */
 function hostLog() {
   try {
-    mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
+    mkdirSync(CON_DIR, { recursive: true, mode: 0o700 });
     return openSync(HOST_LOG, 'a');
   } catch {
     return 'ignore';
@@ -124,7 +124,7 @@ export class TerminalHost extends EventEmitter {
         // The deadline is deliberately *not* unref'd. It was, and that made
         // a connected-but-silent host hang the caller forever: with nothing
         // else holding the loop open, the timer never fired, the promise
-        // never settled, and `helm status` exited on node's unsettled
+        // never settled, and `con status` exited on node's unsettled
         // top-level await warning without ever printing its terminals line.
         // Clearing it on both paths is what keeps a ref'd timer honest.
         const done = (fn, arg) => { clearTimeout(timer); this.off('hello', greeted); fn(arg); };
@@ -203,16 +203,16 @@ export class TerminalHost extends EventEmitter {
     });
 
     const env = {
-      HELM_DIR: process.env.HELM_DIR ?? '',
-      HELM_TERMINALS_SOCKET: process.env.HELM_TERMINALS_SOCKET ?? '',
+      CON_DIR: process.env.CON_DIR ?? '',
+      CON_TERMINALS_SOCKET: process.env.CON_TERMINALS_SOCKET ?? '',
     };
     const passed = Object.entries(env).filter(([, v]) => v);
 
-    const useSystemd = !process.env.HELM_NO_SYSTEMD_RUN && process.env.XDG_RUNTIME_DIR;
+    const useSystemd = !process.env.CON_NO_SYSTEMD_RUN && process.env.XDG_RUNTIME_DIR;
     if (useSystemd) {
       const args = [
         '--user', '--quiet', '--collect',
-        `--unit=helm-terminals-${process.getuid?.() ?? 0}`,
+        `--unit=con-terminals-${process.getuid?.() ?? 0}`,
         ...passed.map(([k, v]) => `--setenv=${k}=${v}`),
         process.execPath, HOST_BIN,
       ];
