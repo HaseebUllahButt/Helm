@@ -261,10 +261,9 @@ export function App() {
 
 type MainView =
   | { kind: 'env' }
-  // Every machine summed, or this one on its own. Same screen, same facets -
-  // the question is the same, only the scope changes.
-  | { kind: 'usage' }
-  | { kind: 'envusage' }
+  // Every machine summed, or one machine's own scope. Same screen, same
+  // facets - the question is the same, only the scope changes.
+  | { kind: 'usage'; envId?: string }
   | { kind: 'brain' }
   | { kind: 'browse'; path?: string }
   | { kind: 'start'; cwd: string }
@@ -894,10 +893,7 @@ function Shell({ client, conn, onSignOut }: {
 
       <section className={`main${showMain ? ' showing' : ''}`}>
         {view.kind === 'usage' ? (
-          <UsageView
-            client={client} envs={envs} onBack={back}
-            onPickEnv={(id) => navigate([{ kind: 'env' }, { kind: 'envusage' }], id)}
-          />
+          <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
         ) : view.kind === 'devices' ? (
           <DevicesView client={client} onBack={back} />
         ) : !env ? (
@@ -928,11 +924,9 @@ function Shell({ client, conn, onSignOut }: {
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
             onBrowse={() => push({ kind: 'browse' })}
             onSettings={() => push({ kind: 'settings' })}
-            onUsage={() => push({ kind: 'envusage' })}
+            onUsage={() => push({ kind: 'usage', envId: env.id })}
             onOpen={(s) => push({ kind: 'session', session: s })}
           />
-        ) : view.kind === 'envusage' ? (
-          <UsageView key={env.id} client={client} envs={envs} only={env} onBack={back} />
         ) : view.kind === 'settings' ? (
           <EnvSettings
             client={client} env={env} onBack={back}

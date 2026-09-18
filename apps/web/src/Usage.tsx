@@ -12,7 +12,7 @@ import { loadUsage, saveUsage, mergeReports, today, daysAgo } from './usageCache
  * what crosses the wire is day-by-model buckets rather than the gigabytes of
  * transcript behind them.
  *
- * Two screens, one component: every machine summed, or one machine on its own.
+ * One screen, two scopes: every machine summed, or one machine on its own.
  * The facets are the same either way, because the question ("where did it go?")
  * is the same.
  */
@@ -30,10 +30,20 @@ const FACETS = [
   { id: 'engine', label: 'CLI' },
   { id: 'provider', label: 'Provider' },
   { id: 'project', label: 'Folder' },
+  { id: 'machine', label: 'Machine' },
 ] as const;
 
 type WindowId = typeof WINDOWS[number]['id'];
 type FacetId = typeof FACETS[number]['id'];
+/** The facets the daemon's own groups can fold onto; machine is a per-report fold. */
+type GroupFacet = Exclude<FacetId, 'machine'>;
+
+/** A group to chart: a daemon fold, or one machine's whole report. */
+interface ChartGroup extends UsageGroup {
+  machine?: string;
+  /** Stable identity where the folded fields would not be. */
+  key?: string;
+}
 
 const money = (n: number) =>
   n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`;
@@ -48,21 +58,28 @@ const shortFolder = (p: string) => {
   return parts.slice(-2).join('/') || p;
 };
 
-export function UsageView({ client, envs, only, onBack, onPickEnv }: {
+export function UsageView({ client, envs, initialEnvId, onBack }: {
   client: Client;
   envs: Environment[];
-  /** One machine, or undefined for every machine summed. */
-  only?: Environment;
+  initialEnvId?: string;
   onBack: () => void;
-  onPickEnv?: (envId: string) => void;
 }) {
-  const targets = only ? [only] : envs;
+  const [scope, setScope] = useState(initialEnvId ?? 'all');
   const [reports, setReports] = useState<Record<string, UsageReport>>({});
   const [remembered, setRemembered] = useState<Record<string, number>>({});
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [win, setWin] = useState<WindowId>('7d');
   const [facet, setFacet] = useState<FacetId>('model');
+
+  // A machine can leave the network while the screen scoped to it is open;
+  // the select is controlled, so the scope falls back to every machine
+  // rather than pointing at an option that no longer exists.
+  useEffect(() => {
+    if (scope !== 'all' && !envs.some((e) => e.id === scope)) setScope('all');
+  }, [scope, envs]);
+  const picked = scope === 'all' ? undefined : envs.find((e) => e.id === scope);
+  const targets = picked ? [picked] : envs;
 
   /**
    * Paint what we had, ask anyway, replace when the answer lands - the same
@@ -96,7 +113,7 @@ export function UsageView({ client, envs, only, onBack, onPickEnv }: {
       fetchReport(env, false);
     }
     return () => { live = false; };
-  }, [only?.id, envs.map((e) => e.id).join(','), win]);
+  }, [scope, envs.map((e) => e.id).join(','), win]);
 
   const answered = targets.filter((e) => reports[e.id]);
   const merged = useMemo(
@@ -107,7 +124,16 @@ export function UsageView({ client, envs, only, onBack, onPickEnv }: {
   // The daemon applied the window, so totals, series and breakdown all
   // describe the same span. Nothing is re-filtered here.
   const scoped = merged.totals;
-  const groups = useMemo(() => groupBy(merged.groups, facet), [merged, facet]);
+  const groups = useMemo<ChartGroup[]>(() => {
+    // Machine is a fold the daemon's groups cannot answer: one slice per
+    // reporting machine, from the totals each one sent.
+    if (facet === 'machine') {
+      return answered
+        .map((e) => ({ ...reports[e.id].totals, machine: e.name, key: e.id }))
+        .sort((a, b) => b.costUsd - a.costUsd);
+    }
+    return groupBy(merged.groups, facet);
+  }, [merged, facet, answered.map((e) => e.id).join(','), Object.values(reports)]);
   const days = merged.daily;
 
   const stale = answered.filter((e) => remembered[e.id]);
@@ -117,11 +143,19 @@ export function UsageView({ client, envs, only, onBack, onPickEnv }: {
     <>
       <div className="bar">
         <button className="back" onClick={onBack}>‹</button>
-        <b>{only ? only.name : 'Usage'}</b>
+        <b>Usage</b>
         {pending.size > 0 && answered.length > 0 && <span className="conn"><i />updating</span>}
       </div>
 
       <div className="scroll"><div className="pad">
+        <label className="usage-scope">
+          <span>Environment</span>
+          <select value={scope} onChange={(e) => setScope(e.target.value)}>
+            <option value="all">All machines</option>
+            {envs.map((env) => <option key={env.id} value={env.id}>{env.name}</option>)}
+          </select>
+        </label>
+
         {loading && <div className="empty quiet">reading what the CLIs recorded…</div>}
 
         {!loading && (
@@ -146,32 +180,7 @@ export function UsageView({ client, envs, only, onBack, onPickEnv }: {
                 </button>
               ))}
             </div>
-            <Breakdown groups={groups} facet={facet} />
-
-            {!only && (
-              <>
-                <div className="section">machines</div>
-                <div className="rows">
-                  {targets.map((e) => {
-                    const r = reports[e.id];
-                    return (
-                      <button key={e.id} className="row" onClick={() => onPickEnv?.(e.id)}>
-                        <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-                        <span className="grow">
-                          <span className="rt">{e.name}</span>
-                          <span className="rm">
-                            {r ? `${money(r.totals.costUsd)} · ${tokens(r.totals.total)} tokens`
-                              : failed[e.id] ? 'could not be read'
-                                : pending.has(e.id) ? 'reading…' : 'no answer yet'}
-                          </span>
-                        </span>
-                        <span className="chev">›</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
-            )}
+            <DonutBreakdown groups={groups} facet={facet} />
 
             <Provenance
               answered={answered.length}
@@ -204,6 +213,16 @@ function Headline({ totals, window }: { totals: UsageTotals; window: string }) {
 }
 
 /**
+ * A share that is not exact must never round up to a whole: 99.96% cached is
+ * not 100%, and a rounded "100%" would claim a rate the raw counts deny.
+ */
+const cachePercent = (rate: number) => {
+  if (rate <= 0) return '0%';
+  if (rate >= 1) return '100%';
+  return `${Math.min(99.9, Math.round(rate * 1000) / 10).toFixed(1)}%`;
+};
+
+/**
  * The prompt cache, as a ratio against its limit: a meter, not a chart. The
  * fill and the track are steps of one hue so the state reads across the bar.
  */
@@ -214,10 +233,13 @@ function CacheCard({ totals }: { totals: UsageTotals }) {
   return (
     <div className="card usage-cache">
       <div className="usage-cache-top">
-        <span className="usage-cache-pct">{(rate * 100).toFixed(1)}%</span>
+        <span className="usage-cache-pct">{cachePercent(rate)}</span>
         <span className="usage-cache-cap">of input served from cache</span>
+        <span className="usage-cache-counts">
+          {totals.cacheRead.toLocaleString()} cached · {totals.input.toLocaleString()} fresh
+        </span>
       </div>
-      <div className="usage-meter" role="img" aria-label={`${(rate * 100).toFixed(0)} percent of input tokens served from cache`}>
+      <div className="usage-meter" role="img" aria-label={`${cachePercent(rate)} of input tokens served from cache`}>
         <span style={{ width: `${Math.min(100, rate * 100)}%` }} />
       </div>
       <div className="usage-cache-note">
@@ -264,40 +286,89 @@ function Spend({ days }: { days: { date: string; costUsd: number; total: number 
 }
 
 /**
- * Magnitude, low to high: length carries the comparison, so every row is the
- * same colour. The engine dot beside the name is identity, and it sits next to
- * a text label rather than standing in for one.
+ * One ring, one dimension. The magnitude is cost; tokens are the fallback
+ * when nothing in the window carried a published rate, because an all-zero
+ * ring would pretend nothing happened. Five named slices at most - past that
+ * a slice is sliver, so the tail folds into Other. Colour only tells slices
+ * apart: every legend row still carries a name, a value and a share, and the
+ * palette stays on helm's own muted hues (the sixth, grey, always lands on
+ * Other because Other is always the sixth slice).
  */
-function Breakdown({ groups, facet }: { groups: UsageGroup[]; facet: FacetId }) {
+const SLICE_COLORS = [
+  'var(--primary-t)', 'var(--sky)', 'var(--devin)',
+  'var(--amber)', 'var(--opencode)', 'var(--mutedfg)',
+];
+
+function DonutBreakdown({ groups, facet }: { groups: ChartGroup[]; facet: FacetId }) {
   if (!groups.length) return <div className="empty quiet">nothing recorded yet</div>;
-  const peak = Math.max(...groups.map((g) => g.costUsd), 0);
-  const shown = groups.slice(0, 12);
+  const priced = groups.some((g) => g.costUsd > 0);
+  const value = (g: ChartGroup) => (priced ? g.costUsd : g.total);
+  const name = (g: ChartGroup) =>
+    facet === 'project' ? shortFolder(g.project || '')
+      : facet === 'machine' ? g.machine || 'unknown'
+        : String((g as any)[facet] || 'unknown');
+
+  const sorted = [...groups].sort((a, b) => value(b) - value(a));
+  const slices = sorted.slice(0, 5).map((g, i) => ({
+    // Two folders can shorten to the same display name, so the key falls
+    // back to position, not text.
+    key: g.key ?? `${i}`,
+    name: name(g),
+    value: value(g),
+  }));
+  const rest = sorted.slice(5);
+  if (rest.length) {
+    slices.push({ key: 'other', name: 'Other', value: rest.reduce((s, g) => s + value(g), 0) });
+  }
+  const total = slices.reduce((s, x) => s + x.value, 0);
+  if (total <= 0) return <div className="empty quiet">nothing recorded yet</div>;
+
+  const fmt = priced ? money : tokens;
+  const share = (v: number) => (v / total) * 100;
+  const facetLabel = FACETS.find((f) => f.id === facet)!.label;
+  const aria = `${facetLabel} share of ${priced ? 'cost' : 'tokens'}: `
+    + slices.map((s) => `${s.name} ${share(s.value).toFixed(1)}%`).join(', ');
+
+  let cumulative = 0;
   return (
-    <div className="rows usage-breakdown">
-      {shown.map((g) => {
-        const name = facet === 'project' ? shortFolder(g.project || '') : (g as any)[facet] || 'unknown';
-        return (
-          <div key={name + (g.engine ?? '')} className="usage-brow">
-            <div className="usage-brow-top">
-              <span className="usage-brow-name">
-                {g.engine && <i className={`edot ${g.engine}`} aria-hidden="true" />}
-                {name}
-              </span>
-              <span className="usage-brow-cost">{money(g.costUsd)}</span>
-            </div>
-            <div className="usage-brow-track">
-              <span style={{ width: `${peak > 0 ? Math.max(1, (g.costUsd / peak) * 100) : 0}%` }} />
-            </div>
-            <div className="usage-brow-meta">
-              {tokens(g.total)} tokens · {(hitRate(g) * 100).toFixed(0)}% cached
-              {g.unpriced ? ' · unpriced' : ''}
-            </div>
+    <div className="card usage-donut-card">
+      <div className="usage-donut-layout">
+        <div className="usage-donut">
+          <svg className="usage-donut-ring" viewBox="0 0 42 42" role="img" aria-label={aria}>
+            <g transform="rotate(-90 21 21)">
+              {slices.map((s, i) => {
+                const pct = share(s.value);
+                const offset = cumulative;
+                cumulative += pct;
+                // pathLength=100 makes dasharray speak in percent; the 0.8
+                // shaved off each slice is the gap between neighbours.
+                return (
+                  <circle
+                    key={s.key} cx="21" cy="21" r="15.9155" fill="none"
+                    stroke={SLICE_COLORS[i]} strokeWidth="5" pathLength={100}
+                    strokeDasharray={`${Math.max(0, pct - 0.8)} ${100 - Math.max(0, pct - 0.8)}`}
+                    strokeDashoffset={-offset}
+                  />
+                );
+              })}
+            </g>
+          </svg>
+          <div className="usage-donut-center">
+            <span className="usage-donut-total">{fmt(total)}</span>
+            <span className="usage-donut-unit">{priced ? 'total cost' : 'total tokens'}</span>
           </div>
-        );
-      })}
-      {groups.length > shown.length && (
-        <div className="quiet usage-more">+{groups.length - shown.length} more</div>
-      )}
+        </div>
+        <ul className="usage-legend">
+          {slices.map((s, i) => (
+            <li className="usage-legend-row" key={s.key}>
+              <span className="usage-legend-dot" style={{ background: SLICE_COLORS[i] }} />
+              <span className="usage-legend-name">{s.name}</span>
+              <span className="usage-legend-value">{fmt(s.value)}</span>
+              <span className="usage-legend-share">{share(s.value).toFixed(1)}%</span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -330,7 +401,7 @@ function Provenance({ answered, total, stale, unpriced, rescanning, onRescan }: 
 }
 
 /** Fold the daemon's groups down to one dimension. */
-function groupBy(groups: UsageGroup[], facet: FacetId): UsageGroup[] {
+function groupBy(groups: UsageGroup[], facet: GroupFacet): UsageGroup[] {
   const out = new Map<string, UsageGroup>();
   for (const g of groups) {
     const k = String((g as any)[facet] ?? '');
