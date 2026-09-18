@@ -1,18 +1,18 @@
-# helm
+# con
 
 Control the coding agents on all your computers from one app on your
 phone.
 
-Every Helm network belongs to its owner. You run it on your own always-on VM;
-there is no Helm cloud account and no dependency on the person who made Helm.
+Every Con network belongs to its owner. You run it on your own always-on VM;
+there is no Con cloud account and no dependency on the person who made Con.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HaseebUllahButt/helm/main/install.sh | bash
-helm setup
+con setup
 ```
 
-`helm setup` detects the VM's public IP, gives it a free address such as
-`https://203-0-113-42.sslip.io`, configures Caddy HTTPS, installs Helm as a
+`con setup` detects the VM's public IP, gives it a free address such as
+`https://203-0-113-42.sslip.io`, configures Caddy HTTPS, installs Con as a
 background process, and prints one private pairing link. No website, domain
 purchase, or DNS account is needed.
 
@@ -21,7 +21,7 @@ purchase, or DNS account is needed.
 
 ## The idea
 
-Coding agents often stop to ask a question. Helm lets you see the question and
+Coding agents often stop to ask a question. Con lets you see the question and
 answer it without returning to the computer running the agent.
 
 The hierarchy is simple:
@@ -35,7 +35,7 @@ session moves to the top.
 
 ## How it connects
 
-Your VM is the **Helm home**. It has one stable HTTPS address and stays online.
+Your VM is the **Con home**. It has one stable HTTPS address and stays online.
 Every other computer connects outward to it, so home routers need no port
 forwarding.
 
@@ -49,31 +49,31 @@ The VM introduces a device to the computer it wants. Session traffic tries a
 direct WebRTC connection first and falls back through the VM when direct
 connection is unavailable.
 
-The VM belongs to the user. Different users run different Helm homes and never
+The VM belongs to the user. Different users run different Con homes and never
 share a database, key, or account.
 
 A network can have **more than one** always-on VM. Each advertises its own
 HTTPS address; every computer dials all of them, and each device attaches to
 whichever home currently reaches the most machines, failing over to another if
-one goes down. Add a second home with `helm setup --join` (below).
+one goes down. Add a second home with `con setup --join` (below).
 
 ## Adding things
 
-`helm setup` makes this VM the home. After that, every command is named for
+`con setup` makes this VM the home. After that, every command is named for
 what you are adding:
 
 ```bash
-helm add controller    a phone or browser: controls machines, runs nothing
-helm add pc            a laptop or desktop: runs agents, and controls others
-helm add vm            another always-on machine, dialled by the rest
+con add controller    a phone or browser: controls machines, runs nothing
+con add pc            a laptop or desktop: runs agents, and controls others
+con add vm            another always-on machine, dialled by the rest
 ```
 
-Only `helm add controller` prints a **link to open**. The other two print a
+Only `con add controller` prints a **link to open**. The other two print a
 **code to type**, and what you type on the machine being added is always the
 same command, whichever kind it is:
 
 ```bash
-helm join ABCD-1234 https://helm.example.com
+con join ABCD-1234 https://con.example.com
 ```
 
 The code remembers which kind you asked for. A pc dials out to the home and
@@ -82,7 +82,7 @@ configures Caddy and starts serving, so the rest of the network can dial it
 too. Controllers already paired need no new link; they simply gain a second
 home to fall back on.
 
-If you already own a domain, run `helm setup https://helm.your-domain.com`
+If you already own a domain, run `con setup https://con.your-domain.com`
 after pointing it at the VM and configuring Caddy.
 
 ### The app on a machine
@@ -91,27 +91,27 @@ A computer that has joined does not need a pairing link to open the app — it
 already holds the network key:
 
 ```bash
-helm open
+con open
 ```
 
 That opens the app on `127.0.0.1`, signed in, showing every machine in the
 network. This is how a laptop drives the VM.
 
-The older `helm up`, `helm invite`, `helm link` and `helm login` commands
+The older `con up`, `con invite`, `con link` and `con login` commands
 remain available for scripts and existing setups.
 
 ### Pair a phone
 
-Run this anywhere that can reach the Helm home:
+Run this anywhere that can reach the Con home:
 
 ```bash
-helm add controller
+con add controller
 ```
 
 It prints one private link such as:
 
 ```text
-https://helm.example.com/#pair=abc123
+https://con.example.com/#pair=abc123
 ```
 
 Open it on the device you want to use. The link expires after ten minutes; the
@@ -119,24 +119,24 @@ paired device stays connected until removed.
 
 ### Add another computer
 
-Install Helm on the new computer. Then run `helm add` on an existing one and
+Install Con on the new computer. Then run `con add` on an existing one and
 copy the command it prints:
 
 ```bash
-helm join ABCD-1234 https://helm.example.com
+con join ABCD-1234 https://con.example.com
 ```
 
-The join code is single-use and expires after ten minutes. `helm join` installs
-Helm as a background service on that computer, so it stays in the network
+The join code is single-use and expires after ten minutes. `con join` installs
+Con as a background service on that computer, so it stays in the network
 after the terminal closes; pass `--foreground` to run it in the terminal instead.
 
 ## Mobile PWA
 
-On Android/Chrome: open the pairing link, pair, then choose **Install Helm
+On Android/Chrome: open the pairing link, pair, then choose **Install Con
 app**. The installed app keeps the pairing.
 
 On iPhone or iPad the order matters, because the installed app gets its own
-storage and does not inherit a pairing made in Safari: open the Helm address,
+storage and does not inherit a pairing made in Safari: open the Con address,
 use **Share → Add to Home Screen** first, then open the installed app and
 paste the pairing link (or type the code) there.
 
@@ -151,7 +151,7 @@ is no separate desktop build to keep in step - one app, one interface.
 
 ## How a session runs
 
-Claude Code and Codex sessions run **headless**: helm starts the CLI in its
+Claude Code and Codex sessions run **headless**: con starts the CLI in its
 streaming mode (`claude -p` with stream-json, `codex app-server`) and turns
 what it says into one stream of events - text as it is written, each tool
 call and its result, every permission prompt with the choices the CLI
@@ -168,7 +168,7 @@ in, so it is never a surprise. Changing it mid-conversation is real, not
 cosmetic: Claude gets `set_permission_mode`, and every Codex turn carries the
 approval policy *and* the sandbox.
 
-Closing helm does not end a conversation: sessions resume on the next message
+Closing con does not end a conversation: sessions resume on the next message
 (`claude --resume`, `codex thread/resume`) under the same account.
 
 Plain terminals, and agents you started at the keyboard, still run in
@@ -176,17 +176,17 @@ Plain terminals, and agents you started at the keyboard, still run in
 
 ## Brains (optional)
 
-Sessions are the main way to use helm: open a machine, pick a folder, start an
+Sessions are the main way to use con: open a machine, pick a folder, start an
 agent and drive it. A brain is an extra thread beside that, for the questions
 that are not about one folder.
 
 ```bash
-helm brain --account claudea            # here, or --on <machine>
+con brain --account claudea            # here, or --on <machine>
 ```
 
 Each machine can have one, and the app lists them under **brains** - a row per
 machine, so a machine without one says so and one tap starts it. A brain sees
-every machine and every running session, and acts on them through the `helm`
+every machine and every running session, and acts on them through the `con`
 command in its own shell - so it can answer "what is waiting on me", read a
 thread on another machine, or start one. It runs on its own machine, which is
 why the one on the always-on machine is the one still there when your laptop
@@ -197,20 +197,20 @@ may do without asking.
 The same verbs work from any terminal in the network:
 
 ```bash
-helm digest                       every machine, folder and running session
-helm thread <id>                  one conversation
-helm say <id> "<text>"            prompt an existing session
-helm spawn <machine> <folder> <account> "<text>"
+con digest                       every machine, folder and running session
+con thread <id>                  one conversation
+con say <id> "<text>"            prompt an existing session
+con spawn <machine> <folder> <account> "<text>"
 ```
 
-`helm digest` keeps the last answer from every machine, so one that is asleep
+`con digest` keeps the last answer from every machine, so one that is asleep
 is listed with when it was last seen rather than left out.
 
 ## What it costs
 
 Every agent CLI records its own token usage next to its transcripts, and that
-record is the complete one: it covers sessions helm never started, and it
-survives helm's own event log being trimmed. **Usage** in the sidebar reads
+record is the complete one: it covers sessions con never started, and it
+survives con's own event log being trimmed. **Usage** in the sidebar reads
 those and adds them up - across every machine, or one machine on its own from
 the meter beside its settings.
 
@@ -233,7 +233,7 @@ tokens, which on a subscription is not what you paid - it is what the same work
 would have cost on the API, and the screen says `API-equivalent` rather than
 "spent". A model with no published rate is counted in tokens and reported
 `unpriced`, never costed at zero. And a machine that does not answer is not
-zero: the footer says how many of your machines reported, the same way `helm
+zero: the footer says how many of your machines reported, the same way `con
 digest` lists a sleeping machine with when it was last seen rather than leaving
 it out.
 
@@ -244,7 +244,7 @@ appended are read, and the index survives a daemon restart. On a machine with
 
 ## Profiles and secrets
 
-Helm reads shell aliases and functions and turns them into profiles. This makes
+Con reads shell aliases and functions and turns them into profiles. This makes
 different Codex, Claude, and OpenCode accounts selectable per session.
 
 Profiles reference secret locations; they do not upload provider credentials.
@@ -252,7 +252,7 @@ Agents and credentials stay on the computer where the work runs.
 
 ## Security model
 
-- Every user owns a separate Helm home.
+- Every user owns a separate Con home.
 - Pairing links last a few minutes.
 - Joined devices remain until explicitly removed. Removal also closes the
   device's live connections, not just its next sign-in.
@@ -261,7 +261,7 @@ Agents and credentials stay on the computer where the work runs.
 - Provider credentials never go to the VM unless the agent itself runs there.
 - Only HTTPS should be exposed publicly; port `8787` stays behind Caddy.
 
-The current design is for one trusted owner per Helm home. Do not put unrelated
+The current design is for one trusted owner per Con home. Do not put unrelated
 users into the same network.
 
 ## Project layout

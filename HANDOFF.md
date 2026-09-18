@@ -1,6 +1,6 @@
 # Handoff
 
-State of helm as of 2026-09-17, for whoever picks this up next.
+State of con as of 2026-09-17, for whoever picks this up next.
 
 Read `README.md` first for what the thing is and how it connects. This file
 is the part that is not obvious from the code: **what it is trying to be**,
@@ -10,7 +10,7 @@ not.
 If you only read three sections, read **"What this is for"** (the bar the
 rest exists to hit), **"Start here"** (what is running right now), and **"The
 network, and why it is the whole latency story"** — that last one is not
-about helm's code at all, and it explains most of what anyone has ever
+about con's code at all, and it explains most of what anyone has ever
 complained about feeling slow. Every latency number in this file was measured
 on the day its section is dated; none are estimates unless they say so.
 
@@ -23,19 +23,19 @@ away, and come back to find it asked a yes/no question four minutes in and has
 been idle ever since. So you end up sitting at the desk babysitting, which
 defeats the point of having an agent at all.
 
-helm exists so that "waiting on the agent" stops meaning "waiting at the desk".
+con exists so that "waiting on the agent" stops meaning "waiting at the desk".
 The owner's phone should be enough to see that something is blocked, read what
 it asked, answer it, and move on.
 
 This is inspired by T3 Code. The owner likes T3's app (per-provider options,
 model picker, permission modes, the feel of watching an agent work) and
 deliberately does **not** want T3's code or apps in the loop: they are slow,
-and depending on them would tie helm's product to someone else's repo and
-license. **helm's own UI, T3's ideas.** The one-day experiment of consuming
+and depending on them would tie con's product to someone else's repo and
+license. **con's own UI, T3's ideas.** The one-day experiment of consuming
 T3 as the UI is parked on branch `t3-network`, not merged.
 
 **Who it is for.** The owner, and people willing to run an always-on VM. Each
-person owns a completely separate Helm home; there is no shared Helm account
+person owns a completely separate Con home; there is no shared Con account
 or hosted dependency. Single trusted owner per network, correctness over
 completeness, no need to defend against an adversary who already owns the
 owner's laptop.
@@ -53,8 +53,8 @@ is where that knowledge already lives.
 
 ### The bar for "good" here
 
-1. **Setup produces one private link.** `helm setup` makes the VM the Helm
-   home; `helm link` prints a short-lived URL. Pair once; a device is in until
+1. **Setup produces one private link.** `con setup` makes the VM the Con
+   home; `con link` prints a short-lived URL. Pair once; a device is in until
    explicitly removed.
 2. **Blocked sessions surface themselves.** A session waiting on input should
    be impossible to miss and one tap from answered.
@@ -69,17 +69,17 @@ is where that knowledge already lives.
 ### Settled, and why — do not relitigate without a reason
 
 - **No Tailscale.** Asked for directly at the start.
-- **VM-centric, not Helm-cloud-centric.**
+- **VM-centric, not Con-cloud-centric.**
 - **Profiles reference secrets, never copy them.**
 - **Passwords are bootstrap credentials, minutes long. Devices are durable.**
 - **No T3 code. No T3 apps.** Design inspiration only (2026-09-14).
 - **Agents run headless through their own protocols; herdr owns terminals.**
-  Until today helm launched each agent's TUI in a herdr pane and spied on it:
+  Until today con launched each agent's TUI in a herdr pane and spied on it:
   the chat re-read the transcript file the CLI writes to disk (finished
   messages only, polled), and a permission prompt was only visible as herdr's
   `blocked` flag, answered by firing `y`/`n` keystrokes blind. That is why the
   screen was dead while the agent worked. The fix is structural, not
-  cosmetic: helm now speaks each CLI's programmatic interface (below) and gets
+  cosmetic: con now speaks each CLI's programmatic interface (below) and gets
   a typed event stream, which is exactly what T3 does. herdr still owns plain
   terminals and read-only "external" agents started at the keyboard.
 
@@ -117,29 +117,29 @@ undo it by accident — the flag clears the exit node if passed alone).
 The loop, whenever you push:
 
 ```bash
-cd ~/.helm-src && ./install.sh && systemctl --user restart helm-serve
+cd ~/.con-src && ./install.sh && systemctl --user restart con-serve
 ```
 
 If the network ever needs rebuilding from nothing, that is:
 
 ```bash
 sshvm                 # or: ssh -i ~/Downloads/misc/.vpn/"ssh-key-2026-08-27 (1).key" ubuntu@130.210.33.163
-helm setup            # mints the key, takes the HTTPS address, installs the service
-helm add              # prints a join code
+con setup            # mints the key, takes the HTTPS address, installs the service
+con add              # prints a join code
 # then on the laptop:
-helm join <CODE> https://130-210-33-163.sslip.io
-helm link             # a URL to open on a phone or browser
+con join <CODE> https://130-210-33-163.sslip.io
+con link             # a URL to open on a phone or browser
 ```
 
-**`helm join` on the laptop is the step that matters.** Pasting a `helm link`
+**`con join` on the laptop is the step that matters.** Pasting a `con link`
 URL into a browser makes that browser a *device*; it does not make the laptop
 a *machine*, and sessions can only run on machines. The owner lost an hour to
 exactly this confusion: the app showed "two" (one machine + one device) and
-read as if the laptop had joined. `helm machines` is the authority.
+read as if the laptop had joined. `con machines` is the authority.
 
 ### Reaching the VM
 
-`~/.helm/id_ed25519` is **helm's** key and is regenerated by `helm setup`, so
+`~/.con/id_ed25519` is **con's** key and is regenerated by `con setup`, so
 an ssh route that worked before a re-setup will stop working. The durable one
 is the owner's shell function:
 
@@ -148,15 +148,15 @@ sshvm() { cd "$HOME/Downloads/misc/.vpn" && ssh -i "ssh-key-2026-08-27 (1).key" 
 ```
 
 Non-interactively, pass that key with `-i` from that directory. The user is
-`ubuntu`; `sudo` is passwordless. The helm service there is a **user** unit,
+`ubuntu`; `sudo` is passwordless. The con service there is a **user** unit,
 so over ssh it needs `export XDG_RUNTIME_DIR=/run/user/$(id -u)` before any
 `systemctl --user`.
 
 ### Deploying
 
-Both machines install from GitHub `main` into `~/.helm-src`. Upgrading either
+Both machines install from GitHub `main` into `~/.con-src`. Upgrading either
 is idempotent — `install.sh` does `fetch` + `reset --hard origin/main` +
-`npm install` + web build — then `systemctl --user restart helm-serve`. So the
+`npm install` + web build — then `systemctl --user restart con-serve`. So the
 loop is: commit, **push**, re-run install on each machine, restart. `reset
 --hard` leaves untracked files, which is why dead `t3.js` / `tunnel-socket.js`
 from the parked experiment still sit in both install dirs; nothing on `main`
@@ -168,7 +168,7 @@ imports them.
 
 ## The network, and why it is the whole latency story
 
-Read this before touching anything that feels slow. Nothing in helm's code
+Read this before touching anything that feels slow. Nothing in con's code
 accounts for most of the latency anyone has complained about; the shape of
 the network does, and that shape is not obvious from any one machine.
 
@@ -176,7 +176,7 @@ the network does, and that shape is not obvious from any one machine.
   phone  ──────────────────────────┐
   (Pakistan, wifi or cellular)     │
                                    ▼
-                          VM / Helm home
+                          VM / Con home
                           Oracle, MUMBAI
                           130-210-33-163.sslip.io
                                    │
@@ -210,10 +210,10 @@ The daemon is not slow. The path is long, and it is long by choice.
 The laptop had `ExitNodeAllowLANAccess: False`, which meant **it could not
 reach its own LAN**: `ip route get 192.168.10.1` came back `dev tailscale0`
 and a ping to its own router got 100% loss. The interface still held
-192.168.10.35, so helm advertised it and a phone on the same wifi sent
+192.168.10.35, so con advertised it and a phone on the same wifi sent
 packets there — and the replies left through New York and never came back.
 ICE lost its one good candidate pair and fell back to relaying through the
-hub, which is the 1.1s. Nothing anywhere said why; it just felt like helm
+hub, which is the 1.1s. Nothing anywhere said why; it just felt like con
 being slow.
 
 Fixed on 2026-09-15 with:
@@ -237,7 +237,7 @@ York, which is the point of the exit node) while `192.168.10.1` routes
   passwordless `tailscale` control. `tailscale set` does not have this
   problem, which is why it is the command to use.
 
-`helm status` now catches the underlying condition itself: it compares the
+`con status` now catches the underlying condition itself: it compares the
 interface holding the advertised LAN address against the interface the
 kernel would really send that subnet out of, and says so when they differ
 (`net-addr.js`, `lanIsRoutable`).
@@ -253,7 +253,7 @@ to `192.168.1.9` inside one session, because the laptop changed wifi
 networks. That cost an hour and produced a confidently wrong conclusion: a
 test against the old address failed, and it was read as "the router has AP
 isolation and blocks phone-to-laptop traffic" when the truth was that the
-address had ceased to exist. `helm status` prints what is actually
+address had ceased to exist. `con status` prints what is actually
 advertised; start there, and check `ip -4 -o addr` before believing any
 result about the LAN.
 
@@ -283,10 +283,10 @@ bulk stay slow. Two things would change it, both declined by the owner on
 
   ```bash
   sudo ip rule add to 130.210.33.163 lookup main priority 5100
-  systemctl --user restart helm-serve
+  systemctl --user restart con-serve
   ```
 
-  Same ~400ms, without giving up the exit node for anything but helm's own
+  Same ~400ms, without giving up the exit node for anything but con's own
   link to the VM. Undo with `ip rule del`; it does not survive a reboot.
   Note that binding a socket to the LAN interface does **not** work as a
   substitute - Tailscale's rules match regardless of source address
@@ -303,17 +303,17 @@ repo can do.
 
 ### The phone is real, and it is the instrument
 
-`helm devices` shows an **Android Chrome paired since 2026-09-14**, and it
+`con devices` shows an **Android Chrome paired since 2026-09-14**, and it
 is what the owner drives sessions from. An earlier version of this file
 claimed "a real phone has never opened this"; that was wrong for a day, and
 the report that started the latency work came from that phone. **Check
-`helm devices` before writing anything about what has or has not been
+`con devices` before writing anything about what has or has not been
 tried.**
 
 ## What changed on 2026-09-17
 
 **The usage screen landed, and the cache question got an answer nobody
-expected.** helm has always known what a thread cost - `turn.done` carries it
+expected.** con has always known what a thread cost - `turn.done` carries it
 and `sessions.js` accumulates it - but that is one scalar per session, over an
 event log trimmed to its last 2000 events. A long thread starts forgetting what
 its early turns cost, and nothing added up across threads at all.
@@ -337,7 +337,7 @@ read.** A file that grew is read from where the last scan stopped - at the last
 complete newline, never the stat size, because a log being appended to can be
 stat'ed mid-line and that record would be lost for good.
 
-**The cache question, measured rather than assumed.** The ask was to make helm
+**The cache question, measured rather than assumed.** The ask was to make con
 hit the CLI prompt caches harder so the quota goes further. It mostly does not
 depend on us:
 
@@ -347,10 +347,10 @@ Codex     97.1% hit rate, zero mid-session model switches
 ```
 
 Of 20.1M cache writes (deduped), 18.4% are mid-session re-writes - but only
-**three turns, 0.53M tokens**, correlate with anything helm controls, which is
+**three turns, 0.53M tokens**, correlate with anything con controls, which is
 the model and effort chips in the composer. The API docs confirm both
 invalidate the messages cache. At Opus-5 write rates that is about **$3 across
-the entire history**; the other 15 re-writes changed nothing helm sets and are
+the entire history**; the other 15 re-writes changed nothing con sets and are
 almost certainly Claude Code's own context compaction. So no fix was built for
 a $3 problem. The screen shows the hit rate and what caching saved instead, so
 a regression would be visible rather than inferred.
@@ -362,7 +362,7 @@ window chip narrowed the headline while the breakdown under it stayed all-time:
 `claude-opus-5` read $990 under a "7 days" chip. The window is applied at the
 source now, so every number on the screen describes the same span.
 
-**On the charts.** helm's per-engine colours were run through a CVD validator
+**On the charts.** con's per-engine colours were run through a CVD validator
 before being used as fills, and they **fail**: Codex and OpenCode are DeltaE 6.1
 apart, which is hard to separate with full colour vision, never mind without.
 They stay as identity dots beside text labels, where they work. Nothing on the
@@ -398,7 +398,7 @@ A long day. Four ways into the same list of threads became one screen per
 machine, archived threads got a place to be, searching them got a way in,
 the network got a brain - and then one per machine - voice prompting landed,
 T3 left the tree, the type went up half a step, and a chat that could not be
-opened at all turned out to be three decisions about how much helm sends.
+opened at all turned out to be three decisions about how much con sends.
 Machines can also be renamed from the app now, which the two machines both
 called `haseeb` had been asking for. Then the owner used it on a phone and found five more
 things: the laptop calling its own VM offline, external sessions that could be
@@ -431,7 +431,7 @@ field validation. Inject a machine record carrying a `pubkey` and the hub's
 `broadcastPeers` shipped it to every daemon, which called `applyPeers`, which
 wrote it into `~/.ssh/authorized_keys`. The fields went in unescaped, so a
 newline in `name` or `pubkey` also injected lines - and because ssh takes the
-*first* value for a keyword, an injected `ProxyCommand` beat helm's own further
+*first* value for a keyword, an injected `ProxyCommand` beat con's own further
 down the block. `ssh <peername>` would then run the attacker's command.
 
 **2. A device token could brick the network permanently.** Same endpoint,
@@ -523,26 +523,26 @@ revoked token stays revoked.
 **A controller can still mint an invite**, and an invite carries the network
 key. Gating `/api/invite` on `ROLE.MACHINE` was the obvious next step and it is
 wrong: "Add a computer" is a real button in the app, and the phone is the
-owner's admin console. The role boundary helm actually promises is about
+owner's admin console. The role boundary con actually promises is about
 *running agents*, not about administering the network.
 
 **A pc still binds `0.0.0.0`.** A phone on the same wifi reaching a laptop
 directly is 3ms against hundreds through the VM; that is the whole point of the
 LAN route. The cost is that the hub is plain http on whatever network the
-laptop is currently on, and a device token crosses it in the clear. `helm join`
+laptop is currently on, and a device token crosses it in the clear. `con join`
 now writes `--host` into the unit explicitly so it is visible and one edit
 away, and says so - but this one is *made visible, not closed*. On a network
-you do not trust: `helm up --install --host 127.0.0.1`.
+you do not trust: `con up --install --host 127.0.0.1`.
 
 #### Verified by running it
 
 Not just unit tests - the exploits were re-run against the patched code, and
 then the real thing:
 
-- Two real machines (`helm up` + `helm join`), gossiping for real. Rosters
+- Two real machines (`con up` + `con join`), gossiping for real. Rosters
   converged to an identical hash (`rwscR6hjrtiyiKbh` both sides), B's real
   ed25519 key and ssh fields survived the sanitiser, and A's
-  `authorized_keys` got `ssh-ed25519 AAAA... # helm:box-b`. The SSH mesh works.
+  `authorized_keys` got `ssh-ed25519 AAAA... # con:box-b`. The SSH mesh works.
 - The PWA paired through a real `#pair=` link in headless Chromium at 390x844,
   rendered **2/2 online** with both machines, reported `socket live`, and
   logged zero network failures. That covers the two handshakes that actually
@@ -584,7 +584,7 @@ search box, the groups, and the projects.
   asked you to know which one a thread had fallen into; a project is a thing
   you can name before you go looking for it.
 - **Every project fold starts closed, including the newest one.** The first
-  cut opened the most recent project, and on the laptop that opened HELM with
+  cut opened the most recent project, and on the laptop that opened CON with
   19 rows in it — a wall between the owner and the next project's name, which
   is the thing this change exists to remove. (It also defeated the guard that
   was supposed to keep a big folder shut: the folder is small on first paint
@@ -598,12 +598,12 @@ search box, the groups, and the projects.
 
 **The thing that made the first version worse, not better.** Dumping the
 machine's CLI history into the project groups produced **51 folder rows**, of
-which 40-odd were scratch directories from helm's own past test runs —
-`/tmp/helm-record-x3sjxG`, `/tmp/acp-opencode-BdzfWx`, and so on. `session.
+which 40-odd were scratch directories from con's own past test runs —
+`/tmp/con-record-x3sjxG`, `/tmp/acp-opencode-BdzfWx`, and so on. `session.
 inventory` returns up to 40 threads *per engine*, and on this laptop almost
 all of them are from this week, so the week filter did nothing about it.
 
-The rule that fixed it: **the folders come from helm's own threads, and the
+The rule that fixed it: **the folders come from con's own threads, and the
 machine's history joins folders that already exist rather than opening new
 ones.** A thread you ran by hand in a project you actually work in belongs
 with that project; a one-off in a scratch directory goes to one fold,
@@ -615,20 +615,20 @@ Same laptop, same data, after: **4 project folds + 3 closed folds.** The whole
 machine screen is seven lines and fits in the top third of a phone.
 
 **Verified by running it** (sandboxed daemon on 8812, real `claudea` profile,
-PWA at 390×844 in headless Chromium, with `~/.helm/sessions.json` copied in
+PWA at 390×844 in headless Chromium, with `~/.con/sessions.json` copied in
 and salted with backdated threads):
 
 - sidebar: needs you / machines / network / this device, and nothing else
-- machine screen: `~ 29`, `HELM 19`, `AITINK 4`, `T3-APP 1`, `elsewhere on
+- machine screen: `~ 29`, `CON 19`, `AITINK 4`, `T3-APP 1`, `elsewhere on
   this machine 8 (8 of 119)`, `older 18 before this week`, `archived 1`
 - search "aitink" → the AITINK fold and the archived fold both open, five rows
-- search "helm-record" → "elsewhere" opens with all 5 matches, cap gone
+- search "con-record" → "elsewhere" opens with all 5 matches, cap gone
 - search "zzznope" → "nothing matches / titles, folders and engines, on this
   machine"
 - a real Claude session asked to write outside its cwd → **NEEDS YOU** at the
   top of the machine screen with "waiting"; the next prompt → **WORKING**
 
-**What went with it.** All sessions had a `helm's` pill that hid panes helm did
+**What went with it.** All sessions had a `con's` pill that hid panes con did
 not start. Nothing on the machine screen replaces it; the week and the
 "elsewhere" fold do most of what it was for. If the owner misses it, it is a
 two-line filter on `mine`.
@@ -656,20 +656,20 @@ brain *is* ends the thread and everything it has learned, so it is a separate
 action that says so and asks first.
 
 **Projects in the sidebar.** machine → directory → session is how work is
-started; it is not how anyone thinks about it afterwards. You think "the helm
+started; it is not how anyone thinks about it afterwards. You think "the con
 one", and that lives in a directory which may well exist on two machines. So
 every thread is also grouped by folder, across machines, newest first - each a
 fold with the machine on the row and amber on the header when something inside
 is waiting on you.
 
 *Built from `session.list` by choice, not by omission.* It therefore shows
-live and helm-known threads, and not the full history All sessions digs out of
+live and con-known threads, and not the full history All sessions digs out of
 each engine's own store - that would mean an inventory fetch on every sidebar
 render. The owner was asked and chose cheap. Do not "fix" this without asking
 again.
 
 **History folds, live work does not.** A machine that has been worked at is
-mostly past - one here lists 182 threads, six of them helm's - and printing it
+mostly past - one here lists 182 threads, six of them con's - and printing it
 all pushed the running work off the top of a phone screen, which inverts what
 the screen is for. Every group folds except `needs you`, `working` and `idle`.
 A session waiting on a person is never behind a tap, and a closed fold still
@@ -677,7 +677,7 @@ shows its count and goes amber when it holds something that needs answering.
 
 ### Found by using it: the laptop said its own VM was offline
 
-**Symptom.** "laptop helm isnt picking up vm". The phone was fine.
+**Symptom.** "laptop con isnt picking up vm". The phone was fine.
 
 **Cause, and it is a good one.** `probeEndpoints` gave every hub 2500ms to
 answer and then took the one that saw the most machines. The owner's laptop is
@@ -715,7 +715,7 @@ implementation, no caller. `session.resume` is now real.
 
 There is no process to attach to - the CLI exited. It starts a *new* driven
 session carrying the old conversation's id, so the engine resumes its own
-transcript exactly as `claude --resume` would, and helm owns it afterwards like
+transcript exactly as `claude --resume` would, and con owns it afterwards like
 any other thread. Every driver already treated a supplied `engineSessionId` as
 "resume this"; what was missing was anything that supplied one.
 
@@ -728,7 +728,7 @@ cannot authenticate and answers nothing - which looks exactly like resume being
 broken, and did, for one round. It now resolves the recorded account to its
 home and takes the alias best able to run it: credentials first, then plainest.
 
-Proven with a conversation helm never touched: `claude -p "Remember this word:
+Proven with a conversation con never touched: `claude -p "Remember this word:
 PELICAN"` in a terminal, then `session.resume` through the daemon, then asking
 the resumed thread what the word was - **"PELICAN"**. Resuming the same
 conversation twice returns the same thread rather than two agents fighting over
@@ -772,7 +772,7 @@ after `install`. Every later deploy left it pointing at hashed bundles that no
 longer exist, so the first open on a bad connection loaded an index.html whose
 scripts all 404 - a blank app, and a deploy that looks like it worked
 everywhere except the phone. A successful navigation now replaces it. `CACHE`
-is `helm-shell-v4`, so the old one is dropped on activate.
+is `con-shell-v4`, so the old one is dropped on activate.
 
 ### Terminals on the VM: fixed by the owner, cause not written down
 
@@ -786,12 +786,12 @@ recurs, start from what was established rather than from the top:
   `packages/connect/src/pty.js` on the VM and writing a command to it returns
   the prompt and the output, 198 bytes of it. So the fault was above the pty.
 - **herdr is irrelevant and also absent.** Plain terminals use the pty;
-  `HELM_HERDR_BIN` points at `~/.local/bin/herdr`, which does not exist.
-- **`systemctl --user restart helm-serve` does not restart the terminal
+  `CON_HERDR_BIN` points at `~/.local/bin/herdr`, which does not exist.
+- **`systemctl --user restart con-serve` does not restart the terminal
   host.** That is deliberate - the host is a separate process precisely so
   shells survive a daemon upgrade - but it means "I restarted it" is not the
   same claim as "the host is current". The host running on the VM had been up
-  since **Sep 14 21:39**, and `helm-terminals.js` was not added until
+  since **Sep 14 21:39**, and `con-terminals.js` was not added until
   `c352547` on **Sep 15**. An upgraded daemon was talking to a host from
   before that file existed.
 
@@ -841,19 +841,19 @@ none of them load-bearing:
 - `t3.js` and `t3-instances.js` (407 lines) - imported by nothing but each other.
 - `apps/relay/src/publish.js` - constructed at startup and consulted on every
   request and upgrade, and inert twice over: `resolve()` bails unless the Host
-  matches `homeHosts(net)`, which reads `HELM_HOME_HOST`, which is set nowhere
+  matches `homeHosts(net)`, which reads `CON_HOME_HOST`, which is set nowhere
   but in its own test; and no daemon has ever advertised `info.t3.port`, so the
   best it could answer was `503`. That second gate is the reason it was inert
   rather than a live bug - without `homeHosts` returning `[]`, a bare request
   to the VM would have resolved to `no-t3` and 503ed instead of serving the
-  PWA, since only `/helm/*` bypassed the proxy.
+  PWA, since only `/con/*` bypassed the proxy.
 - `tunnel-socket.js` (publish's only importer) and `test/publish.test.mjs`
   (publish's only test).
 
 `homeHosts` and `publishedPorts` went with them. What is genuinely lost is the
 per-machine publishing trick - deterministic ports from the roster, WebSockets
 tunnelled as raw bytes through a machine's own link - which is worth
-remembering if helm ever publishes its *own* per-machine surface at the home
+remembering if con ever publishes its *own* per-machine surface at the home
 address. `git show c352547`, and branch `t3-network`, have all of it.
 
 ---
@@ -861,12 +861,12 @@ address. `git show c352547`, and branch `t3-network`, have all of it.
 ### The brain
 
 **An addition, not a replacement.** machine → directory → session is still how
-helm is used: you pick a machine, pick a folder, start an agent there and drive
+con is used: you pick a machine, pick a folder, start an agent there and drive
 it yourself. That is the product, it is unchanged, and it is the right way to
 work when you know which repo you mean. The brain sits beside it for the times
 you do not - "what is waiting on me", "tell that session to try again", a job
 you want done somewhere without deciding where first. Anything the brain can do
-you can do yourself, from the app or from `helm digest`/`say`/`spawn` in a
+you can do yourself, from the app or from `con digest`/`say`/`spawn` in a
 terminal; it is a caller of the same RPCs, with no privilege the owner lacks.
 
 **One agent for the whole network rather than one per folder.** That is the
@@ -880,22 +880,22 @@ marked `brain: true` on the record, started with `cwd: '~'` and titled *Brain*.
 Everything the app already does for a session, it does for this one for free -
 including "change its brain", which is the model chip in the composer.
 
-**Its tools are the `helm` CLI, through its own shell.** This is the decision
+**Its tools are the `con` CLI, through its own shell.** This is the decision
 the rest follows from. The alternative was MCP, which is four different stories
 (a Claude flag, a Codex toml, ACP for the other two) and version-fragile in all
-four. A CLI is one story, works identically on every engine helm drives, and
+four. A CLI is one story, works identically on every engine con drives, and
 its guardrail is the permission card the owner already answers on their phone:
-`Bash(helm say d5b56b "…")` is a card like any other, and the mode chip
+`Bash(con say d5b56b "…")` is a card like any other, and the mode chip
 (`ask`/`edit`/`auto`/`yolo`) is the brain's blast radius.
 
-Five verbs, in `packages/connect/bin/helm.js`:
+Five verbs, in `packages/connect/bin/con.js`:
 
 ```
-helm brain [--account <id>] [--on <machine>]   open it (start or resume)
-helm digest [--json]                           every machine, folder, session
-helm thread <id> [-n 40]                       one conversation, folded
-helm say <id> <text...>                        prompt an existing session
-helm spawn <machine> <folder> <account> <text> start one and prompt it
+con brain [--account <id>] [--on <machine>]   open it (start or resume)
+con digest [--json]                           every machine, folder, session
+con thread <id> [-n 40]                       one conversation, folded
+con say <id> <text...>                        prompt an existing session
+con spawn <machine> <folder> <account> <text> start one and prompt it
 ```
 
 They reach every machine through `hubRpc`, which existed and had no callers.
@@ -909,17 +909,17 @@ built in three layers and **only the first is context**:
 1. **A digest**: one line per live session - machine, folder, engine, model,
    status, cost, age, and what it last did. Archived and finished threads are
    left out. A hundred threads is a couple of thousand tokens.
-2. **Depth on request**: `helm thread <id>` folds a conversation back into
-   prose and tool calls; `helm digest --json` gives it structurally. The brain
+2. **Depth on request**: `con thread <id>` folds a conversation back into
+   prose and tool calls; `con digest --json` gives it structurally. The brain
    pulls what the digest made it curious about.
-3. **Its hands**: `helm say`, `helm spawn`.
+3. **Its hands**: `con say`, `con spawn`.
 
 **Nothing is summarised by a model.** `lastLine` derives each line from the
 tail of the event log a session already writes, ordered by what the owner would
 want first: an unanswered permission beats a running tool beats the last thing
 said. A digest costs one cheap RPC per machine and no tokens.
 
-**What gets prepended is one line, not the digest.** `summaryLine` - `[helm
+**What gets prepended is one line, not the digest.** `summaryLine` - `[con
 2026-09-16 18:00 · 2 machines, 1 offline · 1 waiting on you]` - goes in front
 of every message the owner sends the brain, and that is all: a screenful of
 machine state in front of every message would be a running cost on every turn,
@@ -927,7 +927,7 @@ in the transcript as well as the context. The line tells the brain whether the
 picture is worth fetching. A test asserts it stays under 120 characters with
 40 machines and 800 sessions.
 
-It is really sent, so the app really shows it - but it is helm talking, not the
+It is really sent, so the app really shows it - but it is con talking, not the
 owner, so `Transcript.tsx` splits it back off and renders it as a quiet
 monospace line above the bubble rather than inside it. The regex there and the
 format here are pinned together by a test.
@@ -956,19 +956,19 @@ now uses a real `EventLog` against a temp dir, which is the only version of
 that test that could have failed.
 
 **Events are flat, not `{ type, payload }`.** The first `lastLine` and the
-first `helm thread` both read `e.payload.*` and printed `null` and
+first `con thread` both read `e.payload.*` and printed `null` and
 `[undefined]` against a real session. Events are `{ seq, at, type, ...fields }`
 and incremental: a tool's arguments arrive as `item.delta` and land as
 `item.update`, and a whole sentence from the model is nothing but deltas. Both
 readers now `fold()` the log into items first and then look, which is also why
-`helm thread` prints one line for a sentence instead of forty.
+`con thread` prints one line for a sentence instead of forty.
 
-**The brain called the wrong `helm`.** Driven for real, `helm digest` came back
-`unknown command "digest"` - the `helm` on PATH is the *installed* one, which
+**The brain called the wrong `con`.** Driven for real, `con digest` came back
+`unknown command "digest"` - the `con` on PATH is the *installed* one, which
 is behind the daemon whenever a deploy has not happened yet, and the brain then
-tried to work around it with `helm status`. The brain's abilities are whatever
-`helm` it can reach supports, so it gets its own: `ensureShim()` writes a
-one-line `~/.helm/bin/helm` that runs *this daemon's* CLI with *this daemon's*
+tried to work around it with `con status`. The brain's abilities are whatever
+`con` it can reach supports, so it gets its own: `ensureShim()` writes a
+one-line `~/.con/bin/con` that runs *this daemon's* CLI with *this daemon's*
 node, and a brain session's PATH starts with it. It cannot be out of step with
 the code that wrote it.
 
@@ -981,21 +981,21 @@ machine selected and did not know about `brain`.
 Sandboxed daemon, real `claudea`/`claude-p` profiles, headless Chromium at
 390×844 over CDP.
 
-- `helm digest` end to end: CLI → `hubRpc` → daemon → `sessions.digest()` →
+- `con digest` end to end: CLI → `hubRpc` → daemon → `sessions.digest()` →
   `localDigest` → `render`.
-- `helm spawn vm ~/dev/me/github/helm claudea "…"` started a real Claude
+- `con spawn vm ~/dev/me/github/con claudea "…"` started a real Claude
   session and prompted it; its derived line then read *"It's the user-facing
-  guide to Helm…"* in the next digest.
-- `helm brain` with no account listed the accounts and exited 1; with
+  guide to Con…"* in the next digest.
+- `con brain` with no account listed the accounts and exited 1; with
   `--account claudea` it started, and the brain's **first act was to run
-  `helm digest`** and block on the permission card - which is the design.
-- Approved it: the brain read the network correctly, distinguishing helm's own
+  `con digest`** and block on the permission card - which is the design.
+- Approved it: the brain read the network correctly, distinguishing con's own
   sessions from adopted terminal panes, for $0.04.
 - **The brain drove another agent**: told to ask `d5b56b` for PONG, it ran
-  `helm say d5b56b "Reply with just the word PONG."`, and that thread replied
+  `con say d5b56b "Reply with just the word PONG."`, and that thread replied
   `PONG`.
 - In the app: the **Brain** row in the sidebar with its machine and engine; the
-  thread with three `[helm …]` notes rendered as quiet monospace lines above
+  thread with three `[con …]` notes rendered as quiet monospace lines above
   the owner's bubbles; the start screen at phone width; and starting the brain
   by tapping an account, landing in the session with `brain: true`.
 - Archived fold and search: both screens, unarchive from inside the fold,
@@ -1026,8 +1026,8 @@ working" dead ends came from that. Check which bundle the page actually loaded
 ### Speaking a prompt
 
 Typing a paragraph of instructions on a screen keyboard, into a session that
-is waiting on you, is the exact friction helm exists to remove. So the
-composer has a microphone, and there is `helm dictate` for the keyboard.
+is waiting on you, is the exact friction con exists to remove. So the
+composer has a microphone, and there is `con dictate` for the keyboard.
 
 **The key never leaves the machine.** The device records, a machine
 transcribes, words come back - the same bargain as every other credential
@@ -1044,7 +1044,7 @@ rejected by Groq as "Invalid API Key", and 664 so it is world-readable
 besides). The laptop's key works, so the laptop is what answers. Replacing the
 VM's key is the one outstanding chore here.
 
-**`helm dictate` is the Super+D story.** One verb, toggled, because it is
+**`con dictate` is the Super+D story.** One verb, toggled, because it is
 bound to one key: first press records, second stops and sends. The owner's
 existing binding needed two keys and a paste; `--to` puts the words straight
 into a session on any machine. The recording happens where the microphone is -
@@ -1069,7 +1069,7 @@ through twice.
 
 Verified: real speech through both paths (WAV from `pw-record`, Opus from a
 browser recorder) returning the same words, the RPC round trip, the size and
-silence guards, and `helm dictate` end to end at 1.5s including compression.
+silence guards, and `con dictate` end to end at 1.5s including compression.
 **The microphone button itself is unverified** - headless Chromium refuses
 microphone capture outright - so it is the owner's to try.
 
@@ -1100,7 +1100,7 @@ What follows from per machine:
 - **"Start a different brain" is per machine too.** It ends that machine's
   brain and starts another there; the other machines' brains are untouched.
 - **The device remembers them by machine.** `brainStore` was one record under
-  `helm.brain` and is now a list under `helm.brains`, keyed by machine, with
+  `con.brain` and is now a list under `con.brains`, keyed by machine, with
   the old single record folded in on first read so an already-paired phone
   keeps the brain it had. Same reason as before - a cold open should not show
   the "start one" screen for a brain that exists - but now a machine's list
@@ -1108,8 +1108,8 @@ What follows from per machine:
   brain ended from a terminal stops being remembered here.
 
 Each brain is told it is one of several: the brief now opens *"You are a brain
-of a helm network … Each machine in the network can have one of these, and you
-are `<name>`'s"*. `helm brain --on <machine>` already did the right thing and
+of a con network … Each machine in the network can have one of these, and you
+are `<name>`'s"*. `con brain --on <machine>` already did the right thing and
 still defaults to the roster's VM.
 
 **Verified by running it.** Two sandboxed daemons in one network (`home` on
@@ -1142,7 +1142,7 @@ body 1.5 → 1.55, assistant prose 1.62 → 1.65, the owner's own bubble 1.52 �
 the instrument; it was being typeset for a monitor at 60cm.
 
 **Section labels were the least legible text on the screen and they are the
-navigation.** `HELM 14 ~/dev/me/github/helm` is how you find a thread. They
+navigation.** `CON 14 ~/dev/me/github/con` is how you find a thread. They
 were 11px/500 in the dimmest grey with 0.07em tracking, which at that size
 reads as texture. Now --t-micro/600 in `--text-dim` with tracking pulled back
 to 0.055em: still quiet, now a heading.
@@ -1163,7 +1163,7 @@ brighter second line do the work.
 
 **Verified by looking at it.** Headless Chromium at 390×844 against the real
 network, before and after, on the same four screens - sidebar, machine screen
-with the helm folder open, a transcript with prose and an image, the model
+with the con folder open, a transcript with prose and an image, the model
 sheet - plus one pass at 1280×860 to confirm the 300px sidebar still holds
 its rows. 138 tests pass.
 
@@ -1190,7 +1190,7 @@ Three changes, and the third is the one that matters generally:
 
 1. **Diffs are clipped where they are written** (8KB, the same as every other
    driver payload) **and again on the wire**, because a log on disk outlives
-   the version of helm that wrote it. `forWire` in `events.js` caps diffs,
+   the version of con that wrote it. `forWire` in `events.js` caps diffs,
    output, errors and oversized tool inputs; live pushes go through it too, so
    a chat you are watching costs the same as one you fetch.
 2. **A page is measured in bytes, not events** - 128KB, eight data-channel
@@ -1213,7 +1213,7 @@ in it was whole and hid the one control that would have filled it. The front
 is cached on the device too, or a reload forgets the gap. And a cached log
 that reduces to zero turns is treated as a miss, because nothing would ever
 repair it: its `last` is current, so the refresh behind it asks only for what
-is newer. That is also how a device heals from a window an earlier helm cut
+is newer. That is also how a device heals from a window an earlier con cut
 badly.
 
 **Measured, laptop to the VM over the hub:**
@@ -1223,7 +1223,7 @@ badly.
 | that thread, first tap | 20s timeout, an error | **1.74s** |
 | again, cached on the device | — | **58-90ms** |
 | ordinary chats on the laptop | ~50ms | **~50ms** |
-| `helm thread 419924` | 58s | **2.9s** |
+| `con thread 419924` | 58s | **2.9s** |
 
 A cold open of the whole app is ~4.5s whatever chat you open, and that is page
 load and boot, not the chat: the numbers above are taps inside a running app,
@@ -1240,7 +1240,7 @@ The owner's network has two machines both called `haseeb`, because that is
 what `hostname` said on the day each of them joined, and nothing has ever been
 able to change it since. A name is not decoration here: it is the row you tap,
 the word the brain uses for "where", how the CLI addresses a machine
-(`helm brain laptop`), and the ssh Host alias `ssh laptop` resolves through.
+(`con brain laptop`), and the ssh Host alias `ssh laptop` resolves through.
 
 So the machine's settings screen (the sliders in its bar) now opens with a
 **name** field. Type, tap **Rename this machine**, and the machine list, the
@@ -1294,14 +1294,14 @@ field differs.)
 
 ### Left for next time
 
-- **The brain hits a permission card for every `helm` call**, including
+- **The brain hits a permission card for every `con` call**, including
   read-only ones. Correct by default, and tedious: either start it in `auto`,
-  or teach the driver that `helm digest`/`helm thread` are reads. The card
+  or teach the driver that `con digest`/`con thread` are reads. The card
   offers "always" and Claude remembers it, so this is smaller than it looks.
 - **Only the machine running the brain has a shell for it.** Anything on
-  another machine goes through `helm spawn`/`helm say`. That is the right
-  default; a `helm run <machine> <cmd>` is the obvious next verb.
-- `helm brain` puts the brain on the roster's `vm` if there is one, else this
+  another machine goes through `con spawn`/`con say`. That is the right
+  default; a `con run <machine> <cmd>` is the obvious next verb.
+- `con brain` puts the brain on the roster's `vm` if there is one, else this
   machine, and `--on <machine>` says otherwise. There is still no way to *move*
   one: a brain is where it was started, and starting another elsewhere is a
   second brain rather than the same one relocated.
@@ -1366,7 +1366,7 @@ app offers a clip at all - so the two can no longer disagree. A live driver's
 answer beats the catalogue's guess. When an agent really cannot take images,
 the placeholder says so *and* an `error` event lands in the transcript.
 
-**Images now survive a restart.** The optimistic echo - the turn helm posts
+**Images now survive a restart.** The optimistic echo - the turn con posts
 the moment you hit send, so the picture appears immediately - was writing
 `data.slice(0, 80) + '…'` into the event log and then patching the full bytes
 onto the in-memory object afterwards. Memory was right; the file was not. So
@@ -1378,11 +1378,11 @@ so nothing upstream changed. Blobs are swept when the log's tail moves past
 them, and a blob that is gone renders as a named tile, not a broken image.
 **The base64 the log hands back is byte-identical to what was sent.**
 
-**A message with an image showed up twice.** helm's optimistic turn and the
+**A message with an image showed up twice.** con's optimistic turn and the
 agent's own `turn.start` are the same turn under two ids, and the reducer
 pushed both - one bubble with the picture, one with the reply. The app now
 adopts a `local-` turn when the agent announces the same text. The texts are
-compared **trimmed**: helm strips the trailing newline it sends, the CLI
+compared **trimmed**: con strips the trailing newline it sends, the CLI
 echoes it back with the newline still on. That one character is why the first
 attempt at this fix did nothing.
 
@@ -1407,7 +1407,7 @@ what looked wrong was not.
 **What is real.** A TCP connect from this laptop to the VM is **450-970ms**,
 and an RPC relayed through that hub and back is **1.1 seconds**. The laptop
 egresses through a VPN - its server-reflexive address is a datacentre IP -
-so anything that leaves the machine pays that twice. Nothing helm computes
+so anything that leaves the machine pays that twice. Nothing con computes
 is the problem; the path is.
 
 **What was not real.** The app said `direct connection · 947ms` on a link
@@ -1472,7 +1472,7 @@ pair - but it is why reading a candidate list is confusing the first time.
   subscription-owning-hub path. **Never delivered to a real phone** -
   everything up to the POST is verified against a stub service, but no Apple
   or Google endpoint has seen one, and headless Chromium cannot subscribe.
-- **A `/` palette**, of things that actually run: helm's own actions, plus
+- **A `/` palette**, of things that actually run: con's own actions, plus
   the owner's own command files where each CLI reads them. Deliberately not
   the CLI built-ins - `/help` through `claude -p` returns `ok` in 95ms having
   printed nothing.
@@ -1613,7 +1613,7 @@ refused whoever says them, not only when they arrive through the prompts.
 
 *The prompt sample went out on the wire.* Up to 400 characters of what was
 typed, per session, in every `session.list` - which every paired device polls
-every 15 seconds. It is helm's own note for naming the session; it stays on
+every 15 seconds. It is con's own note for naming the session; it stays on
 the machine now.
 
 *"Start me on Opus" was unreachable.* The daemon has always stored a default
@@ -1643,8 +1643,8 @@ renaming a live session and then sending it another prompt.
 
 **All sessions has a search.** The screen was honest about what a worked-on
 machine contains and that was the problem: six of eight rows were terminal
-panes helm did not start. One box searches titles *and* folders ("the helm one
-on the VM" is a path, not a title), and one pill hides what helm did not start.
+panes con did not start. One box searches titles *and* folders ("the con one
+on the VM" is a path, not a title), and one pill hides what con did not start.
 
 **A thread says what it cost.** Every turn has always printed `4.8s · $0.02`
 and nothing added them up. `turn.done` now accumulates onto the session record
@@ -1707,7 +1707,7 @@ asked at all.
 
 Both chat views were driven, which for the herdr one meant building the
 situation it needs: `workspace.create` + `agent.start` put a real `claude` TUI
-in a pane helm had not started, answered its trust prompt with `Down`/`Enter`,
+in a pane con had not started, answered its trust prompt with `Down`/`Enter`,
 and prompted it - then the app adopted it as an external session. First open
 wrote `msg:<env>:pane:w12:p1` with two messages; reopening rendered the reply
 **4ms after the tap** with no assistant turn on screen beforehand. The pane was
@@ -1718,27 +1718,27 @@ owner's.
 
 ### Everything in the list is the owner's to get rid of
 
-A machine that has been worked at is mostly rows helm did not start: a real
-one here listed **182 threads**, of which six were helm's. The rest are the
+A machine that has been worked at is mostly rows con did not start: a real
+one here listed **182 threads**, of which six were con's. The rest are the
 terminal panes herdr holds and every session each CLI has ever recorded on
 this machine - which is the point of reading those histories, but they arrived
 with no menu at all. `managed` was `!adopted`, so the only threads that could
-be archived or deleted were the ones helm ran.
+be archived or deleted were the ones con ran.
 
 Now every row has the menu, and the three kinds say what they actually do:
 
-- **A thread helm ran** - rename, archive, *Delete thread* (ends the agent,
+- **A thread con ran** - rename, archive, *Delete thread* (ends the agent,
   removes the thread), as before.
-- **A pane helm did not start** - archive, or *Close this pane*, which is
-  honest about ending a program helm did not start. `session.kill` already
+- **A pane con did not start** - archive, or *Close this pane*, which is
+  honest about ending a program con did not start. `session.kill` already
   closed the pane; the app simply never offered it.
-- **A session found in a CLI's own history** - archive, or *Remove from helm*,
-  which stops helm listing it and touches nothing else. **helm does not delete
-  a CLI's transcript.** That conversation is the owner's data, not helm's
+- **A session found in a CLI's own history** - archive, or *Remove from con*,
+  which stops con listing it and touches nothing else. **con does not delete
+  a CLI's transcript.** That conversation is the owner's data, not con's
   record, and a menu item that quietly erased a year of Codex history would be
   the wrong kind of surprise.
 
-There is no record of helm's to write on for either external kind, so the
+There is no record of con's to write on for either external kind, so the
 answer is a mark kept beside the sessions in `sessions.json` (`external: {
 "found:codex:<id>": "removed" }`). `list()` applies marks to panes and
 `session.inventory` applies them to the histories, so the machine remembers
@@ -1754,7 +1754,7 @@ gone after a reload.
 
 `display_override: ["window-controls-overlay"]` landed this morning and the
 result on the owner's desktop was three stacked bars - the app's own titlebar,
-Chrome's `127.0.0.1:8787` origin strip, and helm's top bar under it. Reverted,
+Chrome's `127.0.0.1:8787` origin strip, and con's top bar under it. Reverted,
 along with its `@media (display-mode: window-controls-overlay)` block: a plain
 `standalone` window again.
 
@@ -1768,7 +1768,7 @@ actually wanted, and had to click, every time.
 It goes there itself now. When the page is not on loopback and a daemon on
 this computer answers `/api/health`, the login screen replaces itself with
 that address instead of drawing a form nobody should fill in. A link carrying
-a pairing code, or a key from `helm open`, still wins - those are a deliberate
+a pairing code, or a key from `con open`, still wins - those are a deliberate
 instruction to pair *here*. There is no loop: the local page takes the
 `isLocal` branch and signs itself in.
 
@@ -1781,23 +1781,23 @@ has one origin in its scope. Sending it to `127.0.0.1` is out of scope, so
 Chrome draws the grey origin strip at the top - which is where that strip in
 the first screenshot came from. The way to be rid of it is to install the
 desktop app *from this machine's own address* rather than the VM's ("Install
-Helm app" in the sidebar, once it has landed there); then it is in scope, with
+Con app" in the sidebar, once it has landed there); then it is in scope, with
 no redirect and nothing to click. The VM-hosted install remains the right one
 for a phone, which has no daemon of its own.
 
-### `helm app`, and the icon that was somebody else's
+### `con app`, and the icon that was somebody else's
 
-The desktop app is a command now: `helm app` writes a desktop entry pointed at
+The desktop app is a command now: `con app` writes a desktop entry pointed at
 `http://127.0.0.1:<port>`, opened through a chromium-family browser with
 `--app=` so it gets a bare window - no tab strip, no origin bar - and the local
-key signs it in with nothing to type. `helm app --remove` takes it and its
-icons away again. Linux only, like `helm service`; elsewhere it says so.
+key signs it in with nothing to type. `con app --remove` takes it and its
+icons away again. Linux only, like `con service`; elsewhere it says so.
 
-**The icon must not be called `helm`.** Icon lookup goes through the user's
+**The icon must not be called `con`.** Icon lookup goes through the user's
 theme before it falls back to hicolor, and Papirus - which this machine runs -
-ships an unrelated `helm.svg`. Installing ours as `helm` at eight sizes
+ships an unrelated `con.svg`. Installing ours as `con` at eight sizes
 changed nothing: the launcher kept drawing Papirus's blue circle, because the
-active theme is searched first and it had a `helm`. The name is `helm-app`,
+active theme is searched first and it had a `con`. The name is `con-app`,
 which nobody else claims, and `Gtk.IconTheme.lookup_icon` confirms it resolves
 to ours at 32, 48 and 128.
 
@@ -1929,7 +1929,7 @@ owner using it and finding it wanting.
 vocabulary (`turn.start`, `item.start/delta/update/done`,
 `permission.request/resolved`, `turn.done`, `status`, `limits`, `error`), with
 a 50 ms per-item delta coalescer and a version check. `events.js` keeps a
-per-session append-only log under `~/.helm/events/<id>.jsonl` with sequence
+per-session append-only log under `~/.con/events/<id>.jsonl` with sequence
 numbers, so a phone that was asleep asks for "everything after 412" and a
 daemon restart loses nothing. The app renders that stream: prose typed in with
 a caret, folded thinking, tool and command cards, per-file diffs, and a
@@ -1937,7 +1937,7 @@ permission sheet carrying the CLI's own options.
 
 The protocol details that recordings settled (not guessed) are in
 `test/fixtures/` and the tests that replay them. Re-record after a CLI upgrade
-with `HELM_PROFILE=claudea node scripts/record-driver.mjs claude|codex`.
+with `CON_PROFILE=claudea node scripts/record-driver.mjs claude|codex`.
 
 ### Afternoon: the session became the place you are
 
@@ -1952,7 +1952,7 @@ frozen, the UI was cramped, and the terminal typed everything twice.
   the child is ended and comes back on `--resume`, losing the process and not
   the conversation. Speed is codex's service tier — what its TUI calls
   `/fast` — and appears only for models whose catalogue entry has one.
-- **codex offered one model on the VM.** helm read
+- **codex offered one model on the VM.** con read
   `~/.codex/model_catalog.json`, which only the TUI writes, so a machine that
   had only ever run headless had no such file and the list collapsed to the
   default in `config.toml`. It now asks `codex debug models`, which answers
@@ -1976,8 +1976,8 @@ Six complaints from using it, which came down to four causes. This pass shared
 a working copy with another agent's opencode/devin/acp driver work; both
 landed together in the merge that brought them to main.
 
-**1. helm owns the terminal now (`packages/connect/src/pty.js`).** The old one
-was a herdr pane that helm *screen-scraped*: `attach()` polled `pane.read` for
+**1. con owns the terminal now (`packages/connect/src/pty.js`).** The old one
+was a herdr pane that con *screen-scraped*: `attach()` polled `pane.read` for
 400 rendered lines every 120ms, diffed the text, and pushed either an append
 or - whenever the new screen was not a prefix of the old, which is every
 full-screen program - the **entire screen** with `reset: true`. Each keystroke
@@ -1985,14 +1985,14 @@ was its own RPC into herdr, which "answers one request per connection and then
 hangs up", so every character opened a fresh unix socket. Echo had to wait for
 the next poll.
 
-It is now a pty helm spawns, raw bytes both ways, coalesced into ~16ms frames,
+It is now a pty con spawns, raw bytes both ways, coalesced into ~16ms frames,
 with a 256KB scrollback ring for reconnects. `session.resize` was declared in
 the protocol and implemented nowhere; it works now, so the program renders for
 the phone's width instead of being reflowed into it. **Measured: 18ms echo,
 steady, against 120ms of polling latency alone before.**
 
 This also explains the junk at the prompt. There were **two emulators in
-series** - herdr rendered the pty into a screen, helm re-serialised that screen
+series** - herdr rendered the pty into a screen, con re-serialised that screen
 as ANSI, and xterm rendered it again *and answered control queries inside it*
 (device attributes, cursor position), sending those answers back as keystrokes.
 One pty, one emulator, no phantom input.
@@ -2000,15 +2000,15 @@ One pty, one emulator, no phantom input.
 `node-pty` was already a dependency and imported nowhere. It is a compiled
 addon: the VM's Node 22 has a prebuilt binary, this laptop's Node 26 does not
 and built from source (gcc/make/python3, all present). **If it will not load,
-helm falls back to the old herdr path rather than refusing to run** - so a
+con falls back to the old herdr path rather than refusing to run** - so a
 machine without build tools still works, slowly.
 
 The `❯_` button used to reuse *any* shell session it found, including herdr
-panes helm merely adopted - during testing it dropped me into the owner's real
-shell in `~/dev/me/aitink` and typed into it. It now reuses only helm's own
+panes con merely adopted - during testing it dropped me into the owner's real
+shell in `~/dev/me/aitink` and typed into it. It now reuses only con's own
 terminals.
 
-**Terminals outlive the daemon** (`bin/helm-terminals.js`,
+**Terminals outlive the daemon** (`bin/con-terminals.js`,
 `src/terminals.js`). A pty belongs to whoever opened it, so holding them in the
 daemon meant an upgrade killed your build. A small host process owns them
 instead; the daemon talks to it over a unix socket and reconnects after a
@@ -2020,13 +2020,13 @@ looked optional and was not:
   service started - a plain detached child included. The host is started with
   `systemd-run --user` (a detached child is the fallback where there is no
   systemd).
-- **The socket cannot live in `HELM_DIR`.** A unix socket path is capped near
-  107 bytes and a deep helm directory exceeds it: `listen` fails `EINVAL` and
+- **The socket cannot live in `CON_DIR`.** A unix socket path is capped near
+  107 bytes and a deep con directory exceeds it: `listen` fails `EINVAL` and
   terminals fall back to the slow path with no sign of why. It is
-  `$XDG_RUNTIME_DIR/helm-terminals-<hash of HELM_DIR>.sock` - short, per-user,
+  `$XDG_RUNTIME_DIR/con-terminals-<hash of CON_DIR>.sock` - short, per-user,
   and per-directory so a sandboxed daemon never reaches the real one's
   terminals.
-- **A host that fails says so.** Its output goes to `~/.helm/terminals.log`,
+- **A host that fails says so.** Its output goes to `~/.con/terminals.log`,
   not `/dev/null`, which is how the EINVAL above stayed hidden for an hour.
 
 The host exits once it holds nothing and nobody is attached, and immediately if
@@ -2038,16 +2038,16 @@ tick-$i; sleep 1; done`, daemon killed, new daemon started - the session came
 back `alive=true pty=true`, replayed 29 ticks of scrollback, and went on to
 print tick-30, 31, 32.
 
-**When there is no pty at all**, helm still runs and still falls back to herdr
+**When there is no pty at all**, con still runs and still falls back to herdr
 panes - but it is no longer silent about it. `install.sh` checks and prints the
-package to install, `helm status` says `terminals: own pty` or `herdr panes
+package to install, `con status` says `terminals: own pty` or `herdr panes
 (slow)` with the reason, and the app's terminal button reads `❯!` with a
 tooltip saying why.
 
 **2. Three commands printed a link; now each is named for what it adds.**
-`helm add controller | pc | vm`, and bare `helm add` lists the three rather
+`con add controller | pc | vm`, and bare `con add` lists the three rather
 than guessing. Only `controller` prints a link to **open**; `pc` and `vm` print
-a code to **type**, and the far machine always runs the same `helm join <code>
+a code to **type**, and the far machine always runs the same `con join <code>
 <url>` - the invite carries its role (`invites.role` in the hub db), so a vm
 additionally claims its address, configures Caddy and serves, with no second
 command to remember. The serve banner no longer prints a password on every
@@ -2055,12 +2055,12 @@ start, only when the network has no controllers yet or on `--link`; that was
 what made `setup`, `join` and a plain restart all look like they were handing
 you a link.
 
-**3. `helm open` signs the app in on the machine itself**, which is what makes
+**3. `con open` signs the app in on the machine itself**, which is what makes
 the laptop a controller for the VM. **The trap here nearly shipped:** Caddy
 terminates HTTPS and proxies to the hub over loopback, so *every request from
 the internet arrives at the hub from 127.0.0.1* - a bare loopback check would
 have handed a device token to anyone who could reach the public URL. It
-requires loopback **and** the local key from `~/.helm/local.key` (0600, minted
+requires loopback **and** the local key from `~/.con/local.key` (0600, minted
 on demand), compared in constant time. `test/local-login.test.mjs` encodes
 that: the key works, and no-key, wrong-key and wrong-length all get 401 from
 the same loopback address.
@@ -2069,7 +2069,7 @@ the same loopback address.
 on connect; it now also does so on the browser's `online` event, dropping a
 socket that looks open but reaches nothing. `reachableFromHere` still skips
 `http://` LAN addresses from an HTTPS page - that is the browser's
-mixed-content rule, not helm's, and `helm open` sidesteps it on loopback.
+mixed-content rule, not con's, and `con open` sidesteps it on loopback.
 
 Verified by running it, not by reading: sandboxed daemon, real shell, the PWA
 in headless Chromium at 390x844. Signed in from `#local=` with no pairing
@@ -2087,7 +2087,7 @@ already shows and says only that the turn failed.
 
 The model chip said "model". Neither CLI is given a model unless one is
 chosen, but both announce what they started with in their init message and
-helm was dropping it. The daemon keeps it as `engineModel`/`engineEffort` -
+con was dropping it. The daemon keeps it as `engineModel`/`engineEffort` -
 reported, not chosen, so it never becomes an argument on the next launch -
 and the session view now listens for `session.update`, which it never did,
 so a record changing underneath it (the CLI reporting its model, another
@@ -2124,9 +2124,9 @@ add a third delivery path, it must carry the same id.**
 
 - `npm run check` green: types, production build, node tests (**17** new in
   `test/usage.test.mjs`), `network.sh`.
-- **The screen driven in a real `helm up` at 390x844** over CDP, not reasoned
+- **The screen driven in a real `con up` at 390x844** over CDP, not reasoned
   about: the global view, the per-machine drill-down from the meter on a
-  machine's own bar, and the Folder facet (`github/helm`, $739.34 of the
+  machine's own bar, and the Folder facet (`github/con`, $739.34 of the
   7-day spend). Both layout bugs above were found this way and nothing else.
 - **The reader run against the real stores**: 15 profiles collapsing to 6
   accounts, $2,129.82 API-equivalent over 8.7B tokens and 55,409 turns, and
@@ -2143,7 +2143,7 @@ add a third delivery path, it must carry the same id.**
   thread, a rename held through another prompt, and `sessions.json` showed
   `titleBy: user` with the prompt sample kept on the machine.
 - **The herdr-pane chat driven by building the situation it needs** -
-  `workspace.create` + `agent.start` put a real `claude` TUI in a pane helm had
+  `workspace.create` + `agent.start` put a real `claude` TUI in a pane con had
   not started, its trust prompt answered with `Down`/`Enter`. The app adopted
   it, cached its messages, and reopening painted the reply **4ms after the
   tap**. The pane was closed afterwards by its workspace id.
@@ -2160,7 +2160,7 @@ add a third delivery path, it must carry the same id.**
   seconds to ask for it.
 - **The desktop app driven from a non-loopback origin** (`192.168.1.9:8795`,
   standing in for the VM's): a second and a half later the browser was at
-  `127.0.0.1:8787`, signed in, `2/2 online`. `helm app` then verified through
+  `127.0.0.1:8787`, signed in, `2/2 online`. `con app` then verified through
   `desktop-file-validate`, `Gtk.IconTheme.lookup_icon` and `gtk-launch`.
 - **The look judged from screenshots, not from the CSS**: both main screens
   captured at 390x844 before and after, and four logo candidates rendered at
@@ -2194,7 +2194,7 @@ add a third delivery path, it must carry the same id.**
   and a `read -s` prompt showed nothing while all seven characters reached
   the shell.
 - **The terminals are fast again on this laptop.** node 26 is ABI 147 and
-  node-pty ships binaries up to 131, so there was nothing to load and helm
+  node-pty ships binaries up to 131, so there was nothing to load and con
   had quietly been on the slow herdr-pane path since the last upgrade;
   `install.sh` builds the addon now instead of only reporting it missing.
 - **The laptop can reach its own LAN again**, which is the thing that should
@@ -2241,19 +2241,19 @@ add a third delivery path, it must carry the same id.**
 0. **A pc's hub is plain http on whatever network it is joined to.** Bound to
    `0.0.0.0` on purpose - a phone on the same wifi reaching a laptop directly
    is 3ms against hundreds through the VM - so a device token crosses an
-   untrusted LAN in the clear. `helm join` now writes `--host` into the unit
+   untrusted LAN in the clear. `con join` now writes `--host` into the unit
    explicitly and says so, which makes it visible and one edit away, but it
    does not close it. On a network you do not trust:
-   `helm up --install --host 127.0.0.1`. The real fix is TLS on the LAN hub,
+   `con up --install --host 127.0.0.1`. The real fix is TLS on the LAN hub,
    which needs a cert story for `192.168.x.y` and does not have one yet.
    See "The security audit" under 2026-09-17.
 
 1. ~~**Push has never reached a real device.**~~ **This was wrong, and was
    wrong for two days.** Checked properly on 2026-09-17: the VM's hub holds a
    real FCM subscription (`push_subs`, label "Linux armv81", registered
-   2026-09-15T17:57Z), a send through helm's own `fanOut` was accepted by
+   2026-09-15T17:57Z), a send through con's own `fanOut` was accepted by
    Google today (1 of 1), and the hub's journal shows it firing for real work
-   twice on the 16th - `[helm] push: told 1 device that Helm · devin needs
+   twice on the 16th - `[con] push: told 1 device that Con · devin needs
    you`. Push works.
 
    Two lessons worth more than the entry. **`push.json` holds only the VAPID
@@ -2268,13 +2268,13 @@ add a third delivery path, it must carry the same id.**
    echo, which above 60ms is exactly what a phone on cellular runs.
 
    *(An earlier version of this list said "a real phone has never opened
-   this". That was wrong and had been wrong for a day: `helm devices` shows
+   this". That was wrong and had been wrong for a day: `con devices` shows
    an Android Chrome paired since 2026-09-14, and the complaint that started
    the latency work — "mobile to laptop terminal latency is ass" — came from
-   it. Check `helm devices` before repeating anything in this section.)*
+   it. Check `con devices` before repeating anything in this section.)*
 3. **Devin got the image and named the colour wrong.** It answered
    "Turquoise circle" to a red square with a white circle - shape right,
-   colour wrong, and it read no files that turn. helm's side is clean: the
+   colour wrong, and it read no files that turn. con's side is clean: the
    JPEG on disk is 64×64 with corner `(254,0,0)`, and those are the exact
    bytes handed to the driver. Worth one more look with a different picture
    before deciding whose problem it is.
@@ -2286,10 +2286,10 @@ add a third delivery path, it must carry the same id.**
    rather than fixed. If adopted panes ever start feeling stale, that cache
    (`LIVE_TTL_MS`) is why.
 7. **An installed PWA cannot be sent to another origin without the grey bar.**
-   The app installed from the VM's address now redirects itself to the helm on
+   The app installed from the VM's address now redirects itself to the con on
    this computer, which is out of its scope, so Chrome draws its origin strip
    over the top. Nothing in the page can prevent that; installing the desktop
-   app from the machine's own address (`helm app`) is the way round it, and
+   app from the machine's own address (`con app`) is the way round it, and
    the VM-hosted install stays right for a phone.
 8. **An installed app keeps yesterday's icon and CSS until it is reopened.**
    The service worker holds the shell, so a deploy that changes the look does
@@ -2297,9 +2297,9 @@ add a third delivery path, it must carry the same id.**
    did not change" look like a failed deploy twice on 2026-09-16. Check what
    the machine *serves* (`curl -s <addr>/icon.svg`) before believing the
    screen.
-9. **The brain asks permission for every `helm` call**, reads included.
+9. **The brain asks permission for every `con` call**, reads included.
    Correct by default and tedious in practice: start it in `auto`, or answer
-   "always" once on `helm digest`. See "The brain" under 2026-09-17.
+   "always" once on `con digest`. See "The brain" under 2026-09-17.
 10. **The model catalogue can be ten minutes stale**, by choice - `models.js`
    holds it that long and the device paints its own copy first. Upgrade a CLI
    or edit its config and the new model will not appear immediately. There is
@@ -2308,11 +2308,11 @@ add a third delivery path, it must carry the same id.**
 
 ## The machines themselves
 
-Both run Linux with helm in `~/.helm-src`. Kept across the wash:
+Both run Linux with con in `~/.con-src`. Kept across the wash:
 `profiles.json` on both, `secrets.env` on the laptop, and the ssh keys.
 
 - **The laptop is on Tailscale behind a New York exit node**, which is the
-  single biggest thing shaping how helm feels — see "The network, and why it
+  single biggest thing shaping how con feels — see "The network, and why it
   is the whole latency story". `--exit-node-allow-lan-access` is **on** as of
   2026-09-15; it was off, and that was why a phone on the same wifi relayed
   everything through Mumbai. Do not change exit-node settings with
@@ -2320,7 +2320,7 @@ Both run Linux with helm in `~/.helm-src`. Kept across the wash:
   the LAN-access flag clears the exit node.
 - **node 26 on the laptop has no prebuilt `node-pty`** (ABI 147; the package
   ships up to 131), so it is compiled from source. `install.sh` does that
-  now. If terminals ever feel like they are polling again, `helm status` says
+  now. If terminals ever feel like they are polling again, `con status` says
   `own pty` or `herdr panes (slow)` and which.
 
 - **The owner's default `~/.claude` login is expired** — "OAuth session expired
@@ -2339,7 +2339,7 @@ Both run Linux with helm in `~/.helm-src`. Kept across the wash:
 - The VM's `~/.bashrc` had been mangled (every blank line and most `fi`/`esac`
   stripped); rebuilt from `/etc/skel/.bashrc` with the owner's tail preserved.
   Original at `~/.bashrc.before-fix`.
-- **Not helm's, left running deliberately:** a python3 "Agent Mailbox" on
+- **Not con's, left running deliberately:** a python3 "Agent Mailbox" on
   `0.0.0.0:8765` with an unauthenticated `POST /inbound`, published to the
   internet by a stray `cloudflared tunnel` since 2026-09-13. The owner has been
   told twice. Do not kill it without asking.
@@ -2349,7 +2349,7 @@ Both run Linux with helm in `~/.helm-src`. Kept across the wash:
 ## The architecture, in one page
 
 A **network** is a set of machines plus the devices allowed to drive them,
-sharing one secret key. The always-on VM is the **Helm home**; several homes
+sharing one secret key. The always-on VM is the **Con home**; several homes
 can coexist. A token is an HMAC claim signed with the network key
 (`packages/protocol/identity.js`), so every joined machine can verify a paired
 device offline.
@@ -2378,7 +2378,7 @@ See "Known bad, and not yet fixed" above — that list is the backlog, in the
 order the owner will notice it. The opencode driver and images in messages
 have since been built (`opencode acp`, and images across all four engines),
 and so, on 2026-09-16, have renaming a thread, searching All sessions, a
-per-thread cost, and a desktop entry (`helm app`).
+per-thread cost, and a desktop entry (`con app`).
 
 Of the four things proposed that day and not built, two were done on the
 17th: **the brain** (which was ranked last, as v2) and, because the brain
@@ -2399,7 +2399,7 @@ Still wanted:
    (Written when this was All sessions' job; that screen is gone and the
    machine screen inherited it.)
 3. A **file viewer** over Claude's `read_file` control request.
-4. **`helm run <machine> <cmd>`** — the brain reaches other machines only by
+4. **`con run <machine> <cmd>`** — the brain reaches other machines only by
    spawning or talking to a session on them, which is the right default and
    sometimes the long way round.
 
@@ -2414,13 +2414,13 @@ npm run check     # + tsc and the production web build
 
 Driver tests replay the recorded fixtures through `test/fake-cli.mjs`;
 `events.test.mjs` covers the log; `session-driver.test.mjs` runs `Sessions`
-with a fake driver (naming, renaming, cost, and what may be done to rows helm
+with a fake driver (naming, renaming, cost, and what may be done to rows con
 does not own); `session-stale.test.mjs` covers the dead-pane status;
 `emit-once.test.mjs` encodes the duplicate-push guard; `modes.test.mjs` keeps
 the two codex sandbox spellings agreeing; `model-prefs.test.mjs` covers the
 per-account picker and refuses anything that is not a model name;
 `inventory.test.mjs` reads each CLI's own history, including opencode storing
-its model as JSON; `desktop-entry.test.mjs` writes `helm app`'s launcher into
+its model as JSON; `desktop-entry.test.mjs` writes `con app`'s launcher into
 a temp `XDG_DATA_HOME`, so running the suite never touches a real desktop;
 `voice.test.mjs` covers what silence sounds like, the WAV chunk walk, and the
 filename Groq needs to pick a decoder; `brain.test.mjs` covers the digest — the derived line's ordering, folding
@@ -2438,20 +2438,20 @@ headless Chromium over CDP. For work that should not touch the real network,
 run a sandboxed daemon instead:
 
 ```
-HELM_DIR=<tmp>/helm HELM_SSH_DIR=<tmp>/ssh HELM_NO_SERVICE=1 \
-  node packages/connect/bin/helm.js up --port 8790 --host 127.0.0.1 --name home
+CON_DIR=<tmp>/con CON_SSH_DIR=<tmp>/ssh CON_NO_SERVICE=1 \
+  node packages/connect/bin/con.js up --port 8790 --host 127.0.0.1 --name home
 ```
 
-Copy the real `~/.helm/profiles.json` and `secrets.env` into that `HELM_DIR`
+Copy the real `~/.con/profiles.json` and `secrets.env` into that `CON_DIR`
 so real accounts are selectable, and put scratch repos under `~` so the folder
 browser reaches them.
 
 Three things that repeatedly saved time:
 
 - **A scriptable client beats a browser** for asking "is the daemon wrong, or
-  the UI?". `POST /api/auth/login` with a `helm link`/`helm login` password
+  the UI?". `POST /api/auth/login` with a `con link`/`con login` password
   returns a bearer token; RPCs then go over `ws://<hub>/ws` with subprotocol
-  `['helm', token]`, as `{t:'rpc', id, env, method, params}`. That is how the
+  `['con', token]`, as `{t:'rpc', id, env, method, params}`. That is how the
   double-typing was bisected: send **one** `session.input`, read the pane back
   with `session.attach`, and see that the pane gained one character while the
   browser drew two. There is no HTTP RPC endpoint; it is all over the socket.
