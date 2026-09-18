@@ -224,12 +224,31 @@ export class Daemon {
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
     this.sessions.on('exit', (e) => this.#emit(E.SESSION_EXIT, e));
     this.sessions.on('transcript', (ref) => this.#emit(E.SESSION_TRANSCRIPT, ref));
-    this.sessions.on('status', ({ session, from, to }) =>
-      this.#emit(E.SESSION_UPDATE, { session: wire(session), transition: { from, to } })
-    );
+    this.sessions.on('status', ({ session, from, to }) => {
+      this.#emit(E.SESSION_UPDATE, { session: wire(session), transition: { from, to } });
+      // The bell rings when the thread settles back to idle, not when it
+      // pauses to ask: "ping me when it's done" means finished - a thread
+      // that is merely blocked has its own notification already. Done,
+      // interrupted and errored all land on idle, so any of them rings it.
+      if (session.notifyDone && to === 'idle' && from !== 'idle') {
+        this.#notifyDone(session);
+        this.sessions.setNotifyDone(session.id, false);
+      }
+    });
     this.sessions.on('event', ({ id, event }) => {
       this.#queueEvent(id, event);
       if (event?.type === 'permission.request') this.#notify(id, event);
+      // The matching "needs you" is stale the moment anyone answers - on
+      // this device, another, or the CLI itself. Hubs pass `resolve` through
+      // to the service worker, which closes the notification by its tag.
+      if (event?.type === 'permission.resolved') {
+        this.broadcastFrame(T.NOTIFY, {
+          payload: {
+            tag: `helm-${id}-${event.requestId ?? ''}`,
+            envId: this.id, sessionId: id, resolve: true,
+          },
+        });
+      }
     });
 
     // Kept warm only while there is a brain to read it. A network with no
@@ -496,6 +515,23 @@ export class Daemon {
     // The hub that accepted the phone's subscription is the one that can
     // deliver it; a laptop's own local hub normally has no subscriptions.
     this.broadcastFrame(T.NOTIFY, { payload });
+  }
+
+  /**
+   * The "ping me when it finishes" bell going off. Deliberately plainer than
+   * `describeAsk` - there is nothing to decide, so the notification carries
+   * the thread's name and that it finished, nothing more.
+   */
+  #notifyDone(session) {
+    const where = session.title || session.cwd?.split('/').pop() || 'a session';
+    this.broadcastFrame(T.NOTIFY, {
+      payload: {
+        title: `${where} · finished`,
+        body: `${session.engine ?? 'the agent'} is done`,
+        tag: `helm-done-${session.id}-${Date.now()}`,
+        envId: this.id, sessionId: session.id,
+      },
+    });
   }
 
   async describe() {
@@ -778,6 +814,7 @@ export class Daemon {
       case M.SESSION_UNWATCH: return this.sessions.unwatch(p.id);
       case M.SESSION_ANSWER:  return this.sessions.answer(p.id, p.requestId, p.decision ?? {});
       case M.SESSION_INTERRUPT: return this.sessions.interrupt(p.id);
+      case M.SESSION_NOTIFY:   return this.sessions.setNotifyDone(p.id, p.on !== false);
       case M.SESSION_MODE:    return this.sessions.setMode(p.id, p.mode);
       case M.SESSION_MODEL:   return this.sessions.setModel(p.id, p.model);
       case M.SESSION_EFFORT:  return this.sessions.setEffort(p.id, p.effort);
@@ -818,7 +855,10 @@ export class Daemon {
       case M.BRAIN_DIGEST:    return { name: this.name, ...(await this.sessions.digest()) };
 
       case M.BRAIN_SNAPSHOT: {
-        const snap = await this.refreshSnapshot();
+        // `cached` serves the picture this machine already had - the app uses
+        // it to draw an offline machine's last-known threads without waiting
+        // for a refresh that only proves the machine is still down.
+        const snap = p.cached ? readSnapshot() : await this.refreshSnapshot();
         return { text: render(snap, { roster: this.rosterState(snap) }), snapshot: snap };
       }
 
