@@ -71,6 +71,20 @@ export function UsageView({ client, envs, only, onBack, onPickEnv }: {
    * the hub that is not a wait anyone should watch.
    */
   const since = WINDOWS.find((w) => w.id === win)!.from();
+
+  const fetchReport = (env: Environment, rebuild: boolean) => {
+    setPending((p) => new Set(p).add(env.id));
+    client.usage(env.id, { since: since || undefined, by: ['engine', 'model', 'provider', 'project'], rebuild })
+      .then((report) => {
+        setReports((r) => ({ ...r, [env.id]: report }));
+        setRemembered((r) => { const { [env.id]: _drop, ...rest } = r; return rest; });
+        setFailed((f) => { const { [env.id]: _gone, ...rest } = f; return rest; });
+        saveUsage(env.id, report, win);
+      })
+      .catch((e) => setFailed((f) => ({ ...f, [env.id]: String(e?.message || e) })))
+      .finally(() => setPending((p) => { const n = new Set(p); n.delete(env.id); return n; }));
+  };
+
   useEffect(() => {
     let live = true;
     for (const env of targets) {
@@ -79,17 +93,7 @@ export function UsageView({ client, envs, only, onBack, onPickEnv }: {
         setReports((r) => (r[env.id] ? r : { ...r, [env.id]: hit.report }));
         setRemembered((r) => ({ ...r, [env.id]: hit.at }));
       });
-      setPending((p) => new Set(p).add(env.id));
-      client.usage(env.id, { since: since || undefined, by: ['engine', 'model', 'provider', 'project'] })
-        .then((report) => {
-          if (!live) return;
-          setReports((r) => ({ ...r, [env.id]: report }));
-          setRemembered((r) => { const { [env.id]: _drop, ...rest } = r; return rest; });
-          setFailed((f) => { const { [env.id]: _gone, ...rest } = f; return rest; });
-          saveUsage(env.id, report, win);
-        })
-        .catch((e) => { if (live) setFailed((f) => ({ ...f, [env.id]: String(e?.message || e) })); })
-        .finally(() => { if (live) setPending((p) => { const n = new Set(p); n.delete(env.id); return n; }); });
+      fetchReport(env, false);
     }
     return () => { live = false; };
   }, [only?.id, envs.map((e) => e.id).join(','), win]);
@@ -174,6 +178,8 @@ export function UsageView({ client, envs, only, onBack, onPickEnv }: {
               total={targets.length}
               stale={stale.length}
               unpriced={scoped.unpriced}
+              rescanning={pending.size > 0}
+              onRescan={() => targets.forEach((e) => fetchReport(e, true))}
             />
           </>
         )}
@@ -296,9 +302,10 @@ function Breakdown({ groups, facet }: { groups: UsageGroup[]; facet: FacetId }) 
   );
 }
 
-/** What the number on screen is, and is not. */
-function Provenance({ answered, total, stale, unpriced }: {
+/** What the number on screen is, and is not - plus the way to count it again. */
+function Provenance({ answered, total, stale, unpriced, rescanning, onRescan }: {
   answered: number; total: number; stale: number; unpriced: boolean;
+  rescanning: boolean; onRescan: () => void;
 }) {
   return (
     <div className="diag usage-note">
@@ -312,6 +319,12 @@ function Provenance({ answered, total, stale, unpriced }: {
         costs are published rates × real tokens
         {unpriced ? ' · some models have no published rate and are counted in tokens only' : ''}
       </span>
+      {/* The daemon aggregates what it already read; a rescan re-reads the
+          transcripts, so it is the answer to "that cannot be right" rather
+          than a refresh button. */}
+      <button className="linkish" disabled={rescanning} onClick={onRescan}>
+        {rescanning ? 'rescanning…' : 'rescan the transcripts'}
+      </button>
     </div>
   );
 }
