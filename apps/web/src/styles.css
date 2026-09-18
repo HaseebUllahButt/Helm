@@ -1017,12 +1017,11 @@ pre.snippet {
 .side-pad .section.fold + .rows .row { padding-left: 18px; }
 
 /* ------------------------------------------------------------------ usage */
-/* One hue does the work. Every chart on this screen is either a single series
-   (cost per day) or a magnitude comparison (the breakdown), so length carries
-   the reading and colour carries none of it - which is also why there is no
-   legend. helm's per-engine colours stay as identity dots beside a text label,
-   where they belong: as chart fills they fail, Codex and OpenCode being only
-   ΔE 6.1 apart even in normal vision. */
+/* One hue does the work wherever a single series is plotted (cost per day,
+   the cache meter). The breakdown ring is the exception: a donut has no
+   length to compare, so hue separates the slices - but only as a second cue,
+   beside a legend row that carries the name, the value and the share in text.
+   The palette stays on helm's own muted hues. */
 .usage-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
 /* A filter control of its own: `.chip` in helm means a session's status, and
    `.chip-pick` belongs to the composer. Borrowing either would make the
@@ -1042,6 +1041,16 @@ pre.snippet {
   color: var(--text);
 }
 
+/* The scope picker is one field, not a form - it stays the width a machine
+   name needs rather than claiming the whole column. */
+.usage-scope { display: block; max-width: 280px; margin: 0 0 14px; }
+.usage-scope > span {
+  display: block; margin-bottom: 5px;
+  font-size: var(--t-micro); font-weight: 600; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: 0.055em;
+}
+.usage-scope select { font-size: var(--t-body); padding: 8px 36px 8px 12px; }
+
 .usage-hero { padding: 16px 18px; margin-bottom: 10px; }
 /* The one number the screen leads with. Proportional figures: tabular gives
    every digit the width of a zero, which reads loose at display sizes. */
@@ -1052,6 +1061,7 @@ pre.snippet {
 .usage-cache-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .usage-cache-pct { font-size: 26px; font-weight: 600; color: var(--primary-q); }
 .usage-cache-cap { font-size: var(--t-meta); color: var(--text-dim); }
+.usage-cache-counts { font-size: var(--t-micro); color: var(--mutedfg); font-variant-numeric: tabular-nums; }
 /* Meter: the track is a lighter step of the fill's own hue, so the state reads
    across the whole bar rather than only where it is filled. */
 .usage-meter {
@@ -1078,26 +1088,42 @@ pre.snippet {
 .usage-bar.peak { background: var(--primary-t); }
 .usage-axis { display: flex; justify-content: space-between; font-size: var(--t-micro); color: var(--mutedfg); }
 
-.usage-breakdown { gap: 2px; }
-.usage-brow { padding: 9px 2px 10px; }
-.usage-brow-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-.usage-brow-name {
-  display: flex; align-items: center; gap: 7px; min-width: 0;
-  font-size: var(--t-body); color: var(--text-80);
+/* The breakdown ring: six slices at most, and the card is one compact grid -
+   ring on the left, legend beside it. On a phone the grid collapses to a
+   centred ring over a full-width legend. */
+.usage-donut-card { padding: 16px 18px; margin-bottom: 10px; }
+.usage-donut-layout {
+  display: grid; grid-template-columns: auto minmax(0, 1fr);
+  gap: 20px; align-items: center;
+}
+.usage-donut { position: relative; width: 144px; height: 144px; flex: none; }
+.usage-donut-ring { display: block; width: 100%; height: 100%; }
+.usage-donut-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2px; text-align: center;
+}
+.usage-donut-total { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
+.usage-donut-unit { font-size: var(--t-micro); color: var(--text-dim); }
+.usage-legend {
+  list-style: none; margin: 0; padding: 0; min-width: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.usage-legend-row {
+  display: flex; align-items: baseline; gap: 8px; min-width: 0;
+  font-size: var(--t-meta);
+}
+.usage-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; align-self: center; }
+.usage-legend-name {
+  flex: 1; min-width: 0; color: var(--text-80);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* Columns of numbers align; the hero above does not. */
-.usage-brow-cost { font-size: var(--t-body); color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
-.usage-brow-track { margin: 7px 0 5px; height: 5px; border-radius: 999px; background: var(--muted); overflow: hidden; }
-.usage-brow-track span { display: block; height: 100%; border-radius: 999px; background: var(--primary-t); }
-.usage-brow-meta { font-size: var(--t-micro); color: var(--mutedfg); font-variant-numeric: tabular-nums; }
-.usage-more { font-size: var(--t-micro); padding: 6px 2px; }
+.usage-legend-value { flex: none; color: var(--text); font-variant-numeric: tabular-nums; }
+.usage-legend-share { flex: none; font-size: var(--t-micro); color: var(--mutedfg); font-variant-numeric: tabular-nums; }
 
-.edot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--mutedfg); }
-.edot.claude { background: var(--claude); }
-.edot.codex { background: var(--codex); }
-.edot.opencode { background: var(--opencode); }
-.edot.devin { background: var(--devin); }
+@media (max-width: 560px) {
+  .usage-donut-layout { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+  .usage-legend { width: 100%; }
+}
 
 .usage-note { flex-direction: column; align-items: flex-start; gap: 3px; margin-top: 14px; }
 
