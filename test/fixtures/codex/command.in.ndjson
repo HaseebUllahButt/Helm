@@ -1,5 +1,5 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"helm","title":"Helm","version":"0.0.1"},"capabilities":{"experimentalApi":true}}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"con","title":"Con","version":"0.0.1"},"capabilities":{"experimentalApi":true}}}
 {"jsonrpc":"2.0","method":"initialized"}
-{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"/tmp/helm-record-PxRvXD","approvalPolicy":"untrusted","sandbox":"workspace-write"}}
-{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"01a09e7b-981a-75b3-a352-e78b5dbedb79","input":[{"type":"text","text":"Run the shell command `echo helm-test` and tell me its output. Do nothing else.","text_elements":[]}],"effort":"low"}}
+{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"/tmp/con-record-PxRvXD","approvalPolicy":"untrusted","sandbox":"workspace-write"}}
+{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"01a09e7b-981a-75b3-a352-e78b5dbedb79","input":[{"type":"text","text":"Run the shell command `echo con-test` and tell me its output. Do nothing else.","text_elements":[]}],"effort":"low"}}
 {"jsonrpc":"2.0","id":0,"result":{"decision":"accept"}}

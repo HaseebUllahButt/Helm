@@ -4,14 +4,14 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// `helm app` writes a desktop entry and icons for the machine's own address.
+// `con app` writes a desktop entry and icons for the machine's own address.
 // Everything lands under XDG_DATA_HOME, so this runs against a temp one and
 // never touches the desktop of whoever is running the tests.
-const HOME = mkdtempSync(join(tmpdir(), 'helm-desktop-'));
+const HOME = mkdtempSync(join(tmpdir(), 'con-desktop-'));
 process.env.XDG_DATA_HOME = HOME;
 test.after(() => rmSync(HOME, { recursive: true, force: true }));
 
-const entry = () => join(HOME, 'applications', 'helm-app.desktop');
+const entry = () => join(HOME, 'applications', 'con-app.desktop');
 
 test('the entry points at this machine and names an icon nobody else claims', async (t) => {
   const { installApp } = await import('../packages/connect/src/desktop.js');
@@ -20,19 +20,19 @@ test('the entry points at this machine and names an icon nobody else claims', as
   const r = installApp({ url: 'http://127.0.0.1:8787/' });
   const text = readFileSync(entry(), 'utf8');
 
-  assert.match(text, /^Name=helm$/m);
+  assert.match(text, /^Name=con$/m);
   assert.match(text, /^Exec=.*http:\/\/127\.0\.0\.1:8787\//m);
-  // Not `Icon=helm`: the user's icon theme is searched before hicolor, and
-  // Papirus ships an unrelated helm.svg that would win every time.
-  assert.match(text, /^Icon=helm-app$/m);
-  assert.doesNotMatch(text, /^Icon=helm$/m);
+  // Not `Icon=con`: the user's icon theme is searched before hicolor, and
+  // Papirus ships an unrelated con.svg that would win every time.
+  assert.match(text, /^Icon=con-app$/m);
+  assert.doesNotMatch(text, /^Icon=con$/m);
 
   // The icon has to exist at a size the launcher will look for, under that
   // same name, or the entry falls back to a generic square.
   assert.ok(r.icons > 0, 'some icons were installed');
   const sizes = readdirSync(join(HOME, 'icons', 'hicolor'));
   assert.ok(sizes.includes('512x512'), 'a large raster icon');
-  assert.ok(existsSync(join(HOME, 'icons', 'hicolor', '512x512', 'apps', 'helm-app.png')));
+  assert.ok(existsSync(join(HOME, 'icons', 'hicolor', '512x512', 'apps', 'con-app.png')));
 });
 
 test('a windowed entry only claims to be one when it can be', async (t) => {
@@ -57,6 +57,6 @@ test('removing it takes the icons with it', async (t) => {
   assert.equal(gone.removed, true);
   assert.ok(gone.icons > 0);
   assert.equal(existsSync(entry()), false);
-  assert.equal(existsSync(join(HOME, 'icons', 'hicolor', '512x512', 'apps', 'helm-app.png')), false);
+  assert.equal(existsSync(join(HOME, 'icons', 'hicolor', '512x512', 'apps', 'con-app.png')), false);
   assert.equal(removeApp().removed, false, 'removing twice is not an error');
 });

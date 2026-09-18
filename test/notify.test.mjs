@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-notify-'));
+process.env.CON_DIR = mkdtempSync(join(tmpdir(), 'con-notify-'));
 
 const { describe: describeAsk } = await import('../packages/connect/src/notify.js');
 const { fanOut, isNew, forget } = await import('../apps/relay/src/notify.js');
@@ -68,7 +68,7 @@ test('the notification says which session, and what it is asking', () => {
   );
   assert.equal(n.title, 'aitink · codex needs you');
   assert.equal(n.body, 'run rm -rf build');
-  assert.equal(n.tag, 'helm-s1-r7');
+  assert.equal(n.tag, 'con-s1-r7');
   // The tap has to land on the session that asked, so both halves travel.
   assert.equal(n.envId, 'env1');
   assert.equal(n.sessionId, 's1');

@@ -21,11 +21,11 @@ import { join } from 'node:path';
  * every tick forever.
  */
 
-const root = mkdtempSync(join(tmpdir(), 'helm-roster-'));
-process.env.HELM_DIR = join(root, 'helm');
-process.env.HELM_SSH_DIR = join(root, 'ssh');
+const root = mkdtempSync(join(tmpdir(), 'con-roster-'));
+process.env.CON_DIR = join(root, 'con');
+process.env.CON_SSH_DIR = join(root, 'ssh');
 
-const N = await import('@helm/protocol/network');
+const N = await import('@con/protocol/network');
 const { applyPeers } = await import('../packages/connect/src/ssh.js');
 
 test.after(() => rmSync(root, { recursive: true, force: true }));
@@ -34,7 +34,7 @@ const machine = (over = {}) => ({
   id: 'aa11bb22cc33',
   name: 'vm-c',
   endpoints: ['https://1-2-3-4.sslip.io'],
-  pubkey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIREALKEY helm@haseeb',
+  pubkey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIREALKEY con@haseeb',
   sshUser: 'haseeb',
   sshPort: 22,
   updatedAt: Date.now(),
@@ -49,7 +49,7 @@ const only = (over) => N.sanitizeRoster({
 test('an ordinary machine record survives intact', () => {
   const kept = only({});
   assert.equal(kept.name, 'vm-c');
-  assert.equal(kept.pubkey, 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIREALKEY helm@haseeb');
+  assert.equal(kept.pubkey, 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIREALKEY con@haseeb');
   assert.deepEqual(kept.endpoints, ['https://1-2-3-4.sslip.io']);
   assert.equal(kept.sshUser, 'haseeb');
   assert.equal(kept.sshPort, 22);
@@ -164,25 +164,25 @@ test('a hostile peer cannot write a line of its own into the ssh files', () => {
       pubkey: 'ssh-ed25519 AAAAATTACKER a@b\nssh-rsa AAAASMUGGLED c@d',
       sshUser: 'root', sshPort: 22,
     },
-    { id: 'aa11bb22cc33', name: 'vm-c', pubkey: 'ssh-ed25519 AAAAREAL helm@haseeb', sshUser: 'haseeb', sshPort: 22 },
+    { id: 'aa11bb22cc33', name: 'vm-c', pubkey: 'ssh-ed25519 AAAAREAL con@haseeb', sshUser: 'haseeb', sshPort: 22 },
   ]);
 
   const keys = readFileSync(join(root, 'ssh', 'authorized_keys'), 'utf8');
   assert.doesNotMatch(keys, /SMUGGLED|ATTACKER/);
-  assert.match(keys, /ssh-ed25519 AAAAREAL {2}# helm:vm-c/);
+  assert.match(keys, /ssh-ed25519 AAAAREAL {2}# con:vm-c/);
   // The comment is dropped at the file, whatever travelled with the key.
-  assert.doesNotMatch(keys, /helm@haseeb/);
+  assert.doesNotMatch(keys, /con@haseeb/);
 
   const config = readFileSync(join(root, 'ssh', 'config'), 'utf8');
   assert.doesNotMatch(config, /\/bin\/sh/);
-  // helm's own ProxyCommand is the only one, for each of the two hosts.
+  // con's own ProxyCommand is the only one, for each of the two hosts.
   assert.equal(config.match(/^\s*ProxyCommand /gm).length, 2);
   assert.match(config, /^Host vm-c$/m);
 });
 
 test('a real peer list is written exactly as before', () => {
   const { peers } = applyPeers([
-    { id: 'aa11bb22cc33', name: 'vm-c', pubkey: 'ssh-ed25519 AAAAREAL helm@haseeb', sshUser: 'haseeb', sshPort: 2222 },
+    { id: 'aa11bb22cc33', name: 'vm-c', pubkey: 'ssh-ed25519 AAAAREAL con@haseeb', sshUser: 'haseeb', sshPort: 2222 },
   ]);
   assert.equal(peers, 1);
   const config = readFileSync(join(root, 'ssh', 'config'), 'utf8');

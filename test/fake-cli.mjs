@@ -69,7 +69,7 @@ if (kind === 'claude') {
     }
     if (m.type === 'control_response') {
       // The CLI acknowledges our permission answers with a control_response
-      // of its own; those just print. A response to a request helm sent (an
+      // of its own; those just print. A response to a request con sent (an
       // interrupt receipt) waits for the test to send that request.
       if (asked.has(m.response?.request_id)) { out(m); continue; }
       const req = await next((x) => x.type === 'control_request');

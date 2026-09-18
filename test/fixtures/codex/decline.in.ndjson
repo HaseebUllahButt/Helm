@@ -1,5 +1,5 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"helm","title":"Helm","version":"0.0.1"},"capabilities":{"experimentalApi":true}}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"con","title":"Con","version":"0.0.1"},"capabilities":{"experimentalApi":true}}}
 {"jsonrpc":"2.0","method":"initialized"}
-{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"/tmp/helm-record-2X5PAp","approvalPolicy":"untrusted","sandbox":"workspace-write"}}
-{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"01a09e7b-ea03-71a3-8f2f-d29b16cc414d","input":[{"type":"text","text":"Run the shell command `echo helm-test` and tell me its output. If it is declined, say so in one line.","text_elements":[]}],"effort":"low"}}
+{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"/tmp/con-record-2X5PAp","approvalPolicy":"untrusted","sandbox":"workspace-write"}}
+{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"01a09e7b-ea03-71a3-8f2f-d29b16cc414d","input":[{"type":"text","text":"Run the shell command `echo con-test` and tell me its output. If it is declined, say so in one line.","text_elements":[]}],"effort":"low"}}
 {"jsonrpc":"2.0","id":0,"result":{"decision":"decline"}}

@@ -9,11 +9,11 @@
 //
 //   node scripts/record-driver.mjs claude                    # all claude cases
 //   node scripts/record-driver.mjs codex command             # one codex case
-//   HELM_PROFILE=claudea node scripts/record-driver.mjs claude
+//   CON_PROFILE=claudea node scripts/record-driver.mjs claude
 //
-// The CLI is launched the way helm launches it: through a helm profile
+// The CLI is launched the way con launches it: through a con profile
 // (`materialize`), so the account, its home directory and its credential
-// are the real ones. HELM_PROFILE picks the profile; it defaults to the
+// are the real ones. CON_PROFILE picks the profile; it defaults to the
 // engine's plain profile.
 //
 // Everything runs in a throwaway directory. Home paths are scrubbed to `~`
@@ -34,9 +34,9 @@ const HOME = homedir();
 const scrub = (line) => line.split(HOME).join('~');
 
 function launcher(engine) {
-  const id = process.env.HELM_PROFILE ?? engine;
+  const id = process.env.CON_PROFILE ?? engine;
   const profile = (loadProfiles()?.profiles ?? []).find((p) => p.id === id);
-  if (!profile) throw new Error(`no helm profile '${id}'; run helm profiles`);
+  if (!profile) throw new Error(`no con profile '${id}'; run con profiles`);
   const spec = materialize(profile);
   console.log(`using profile ${id} (${spec.cmd}, env ${Object.keys(spec.env).join(',') || 'none'})`);
   return { cmd: spec.cmd, env: spec.env };
@@ -92,8 +92,8 @@ class Wire {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const scratch = () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-record-'));
-  writeFileSync(join(dir, 'README.md'), '# scratch\n\nhelm recording fixture.\n');
+  const dir = mkdtempSync(join(tmpdir(), 'con-record-'));
+  writeFileSync(join(dir, 'README.md'), '# scratch\n\ncon recording fixture.\n');
   return dir;
 };
 
@@ -134,7 +134,7 @@ async function claudeCase(name, c) {
     }
     if (c.interrupt && !interrupted && m.type === 'stream_event' && m.event?.type === 'content_block_delta') {
       interrupted = true;
-      setTimeout(() => w.send({ type: 'control_request', request_id: 'helm-int-1', request: { subtype: 'interrupt', cancel_queued: true } }), 300);
+      setTimeout(() => w.send({ type: 'control_request', request_id: 'con-int-1', request: { subtype: 'interrupt', cancel_queued: true } }), 300);
     }
   });
   w.send(userMsg(c.prompt));
@@ -145,11 +145,11 @@ async function claudeCase(name, c) {
 }
 
 const CLAUDE_CASES = {
-  plain: { prompt: 'Reply with exactly the words: hello from helm', answer: () => ({ behavior: 'deny', message: 'no tools in this test' }) },
+  plain: { prompt: 'Reply with exactly the words: hello from con', answer: () => ({ behavior: 'deny', message: 'no tools in this test' }) },
   // `echo` is on Claude Code's built-in safe list and never prompts in default
   // mode; a Write does, and comes with a permission_suggestions setMode.
   tool: {
-    prompt: 'Use the Bash tool to run `echo helm-test`, then use the Write tool to save its output to a file named out.txt in this directory. Then say done in one line.',
+    prompt: 'Use the Bash tool to run `echo con-test`, then use the Write tool to save its output to a file named out.txt in this directory. Then say done in one line.',
     answer: () => ({ behavior: 'allow' }),
   },
   deny: {
@@ -207,7 +207,7 @@ async function codexCase(name, c) {
       setTimeout(() => call('turn/interrupt', { threadId, turnId }), 300);
     }
   });
-  await call('initialize', { clientInfo: { name: 'helm', title: 'Helm', version: '0.0.1' }, capabilities: { experimentalApi: true } });
+  await call('initialize', { clientInfo: { name: 'con', title: 'Con', version: '0.0.1' }, capabilities: { experimentalApi: true } });
   w.send({ jsonrpc: '2.0', method: 'initialized' });
   const started = await call('thread/start', {
     cwd, approvalPolicy: c.approvalPolicy ?? 'on-request', sandbox: c.sandbox ?? 'workspace-write',
@@ -225,20 +225,20 @@ async function codexCase(name, c) {
 }
 
 const CODEX_CASES = {
-  plain: { prompt: 'Reply with exactly the words: hello from helm', answer: () => ({ decision: 'decline' }) },
+  plain: { prompt: 'Reply with exactly the words: hello from con', answer: () => ({ decision: 'decline' }) },
   command: {
     approvalPolicy: 'untrusted',
-    prompt: 'Run the shell command `echo helm-test` and tell me its output. Do nothing else.',
+    prompt: 'Run the shell command `echo con-test` and tell me its output. Do nothing else.',
     answer: (method, p) => (method === 'item/commandExecution/requestApproval' ? { decision: 'accept' } : { decision: 'decline' }),
   },
   decline: {
     approvalPolicy: 'untrusted',
-    prompt: 'Run the shell command `echo helm-test` and tell me its output. If it is declined, say so in one line.',
+    prompt: 'Run the shell command `echo con-test` and tell me its output. If it is declined, say so in one line.',
     answer: () => ({ decision: 'decline' }),
   },
   edit: {
     approvalPolicy: 'on-request', sandbox: 'read-only',
-    prompt: 'Create a file named helm-note.txt containing the single line "hi". Then say done.',
+    prompt: 'Create a file named con-note.txt containing the single line "hi". Then say done.',
     answer: (method) => (method === 'item/fileChange/requestApproval' ? { decision: 'accept' } : { decision: 'accept' }),
   },
   interrupt: {
@@ -281,7 +281,7 @@ async function acpCase(engine, name, c) {
   await call('initialize', {
     protocolVersion: 1,
     clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-    clientInfo: { name: 'helm', title: 'Helm', version: '0.1.0' },
+    clientInfo: { name: 'con', title: 'Con', version: '0.1.0' },
   });
   const created = await call('session/new', { cwd, mcpServers: [] });
   if (!created.result) throw new Error(`session/new failed: ${JSON.stringify(created.error)}`);
@@ -308,7 +308,7 @@ const rejectOnce = (_method, p) => {
 };
 
 const DEVIN_CASES = {
-  plain: { acpMode: 'accept-edits', prompt: 'Reply with exactly the words: hello from helm', answer: rejectOnce },
+  plain: { acpMode: 'accept-edits', prompt: 'Reply with exactly the words: hello from con', answer: rejectOnce },
   // A write inside the session directory runs free in accept-edits; a
   // network call is what stops to ask.
   command: {
@@ -332,10 +332,10 @@ const DEVIN_CASES = {
 // test/fixtures/opencode is written by hand from the observed handshake.
 // With a provider configured: `node scripts/record-driver.mjs opencode`.
 const OPENCODE_CASES = {
-  plain: { acpMode: 'build', prompt: 'Reply with exactly the words: hello from helm', answer: rejectOnce },
+  plain: { acpMode: 'build', prompt: 'Reply with exactly the words: hello from con', answer: rejectOnce },
   command: {
     acpMode: 'build',
-    prompt: 'Run the shell command `echo helm-test` exactly once, then say done.',
+    prompt: 'Run the shell command `echo con-test` exactly once, then say done.',
     answer: (method, p) => (method === 'session/request_permission' ? allowOnce(method, p) : rejectOnce(method, p)),
   },
 };

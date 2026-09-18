@@ -5,10 +5,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const dir = mkdtempSync(join(tmpdir(), 'helm-notification-route-'));
-process.env.HELM_DIR = dir;
-process.env.HELM_DB = join(dir, 'hub.sqlite');
-process.env.HELM_NO_SERVICE = '1';
+const dir = mkdtempSync(join(tmpdir(), 'con-notification-route-'));
+process.env.CON_DIR = dir;
+process.env.CON_DB = join(dir, 'hub.sqlite');
+process.env.CON_NO_SERVICE = '1';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -27,10 +27,10 @@ test('a remote machine hands notifications to the hub that owns the phone subscr
   await new Promise((resolve) => pushService.listen(0, '127.0.0.1', resolve));
   t.after(() => pushService.close());
 
-  const { createNetwork, loadNetwork, machineToken } = await import('@helm/protocol/network');
-  const { T } = await import('@helm/protocol');
+  const { createNetwork, loadNetwork, machineToken } = await import('@con/protocol/network');
+  const { T } = await import('@con/protocol');
   const { q } = await import('../apps/relay/src/db.js');
-  const { startRelay } = await import('@helm/relay');
+  const { startRelay } = await import('@con/relay');
   const { default: WebSocket } = await import('ws');
 
   createNetwork({ name: 'home', port: 8787 });
@@ -41,12 +41,12 @@ test('a remote machine hands notifications to the hub that owns the phone subscr
     'BTBZMqHH6r4Tts7J_aSIgg', 'phone', Date.now(),
   );
 
-  const hub = await startRelay({ port: 0, host: '127.0.0.1', dbFile: process.env.HELM_DB, openLogin: false });
+  const hub = await startRelay({ port: 0, host: '127.0.0.1', dbFile: process.env.CON_DB, openLogin: false });
   t.after(() => { for (const socket of hub.online.values()) socket.terminate(); hub.stop(); });
   const port = hub.server.address().port;
   const net = loadNetwork();
 
-  const machine = new WebSocket(`ws://127.0.0.1:${port}/helm/ws?name=laptop&role=self`, {
+  const machine = new WebSocket(`ws://127.0.0.1:${port}/con/ws?name=laptop&role=self`, {
     headers: { authorization: `Bearer ${machineToken(net)}` },
   });
   t.after(() => machine.close());
@@ -56,9 +56,9 @@ test('a remote machine hands notifications to the hub that owns the phone subscr
   });
 
   const payload = {
-    title: 'helm · codex needs you',
+    title: 'con · codex needs you',
     body: 'Allow this command?',
-    tag: 'helm-session-1-request-1',
+    tag: 'con-session-1-request-1',
     envId: 'machine-1',
     sessionId: 'session-1',
   };

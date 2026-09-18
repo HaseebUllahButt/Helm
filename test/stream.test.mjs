@@ -9,7 +9,7 @@ import { join } from 'node:path';
 // trips through the hub per redraw. Now the daemon watches the pane itself and
 // pushes only what changed. This checks the push: an append arrives as a
 // delta, a redraw arrives as a reset, and nothing is sent when nothing moved.
-process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-stream-'));
+process.env.CON_DIR = mkdtempSync(join(tmpdir(), 'con-stream-'));
 
 class StubRuntime extends EventEmitter {
   screen = 'line one\n';
@@ -20,7 +20,7 @@ class StubRuntime extends EventEmitter {
 }
 
 test('an attached session pushes screen deltas, resets on redraw, and is quiet when idle', async (t) => {
-  t.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
+  t.after(() => rmSync(process.env.CON_DIR, { recursive: true, force: true }));
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const rt = new StubRuntime();
   const sessions = new Sessions(rt);

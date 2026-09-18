@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
-import { T } from '@helm/protocol';
+import { T } from '@con/protocol';
 
 /**
  * Which local services a tunnel may reach.
@@ -18,10 +18,10 @@ import { T } from '@helm/protocol';
  * ssh is the only thing that has ever needed a tunnel, so ssh is the list.
  */
 
-const root = mkdtempSync(join(tmpdir(), 'helm-tunnel-'));
-process.env.HELM_DIR = join(root, 'helm');
+const root = mkdtempSync(join(tmpdir(), 'con-tunnel-'));
+process.env.CON_DIR = join(root, 'con');
 
-const N = await import('@helm/protocol/network');
+const N = await import('@con/protocol/network');
 N.createNetwork({ name: 'laptop', port: 18787 });
 const { Daemon } = await import('../packages/connect/src/agent.js');
 
@@ -48,7 +48,7 @@ test('ssh still gets through', async () => {
   // close and the test proves nothing.
   const sshd = createServer((c) => c.end());
   await new Promise((r) => sshd.listen(22022, '127.0.0.1', r));
-  process.env.HELM_SSH_PORT = '22022';
+  process.env.CON_SSH_PORT = '22022';
 
   const daemon = new Daemon({ port: 18787 });
   const { settled, sent } = await ask(daemon, 22022);
@@ -57,13 +57,13 @@ test('ssh still gets through', async () => {
   assert.notEqual(settled()?.reason, 'port not allowed');
   assert.ok(sent.some((f) => f.t === T.TUNNEL_READY), 'the connection was made');
 
-  delete process.env.HELM_SSH_PORT;
+  delete process.env.CON_SSH_PORT;
   sshd.close();
 });
 
 test('a port named in config.json is allowed, and only from there', async () => {
   writeFileSync(
-    join(root, 'helm', 'config.json'),
+    join(root, 'con', 'config.json'),
     JSON.stringify({ version: 1, tunnel: { ports: [9418] } })
   );
   const daemon = new Daemon({ port: 18787 });

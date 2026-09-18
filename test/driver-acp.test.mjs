@@ -22,14 +22,14 @@ const make = (engine, name, opts = {}) => {
 for (const engine of ['devin', 'opencode']) {
   test(`${engine}: initialize, session/new, set mode, prompt; text streams as deltas`, async () => {
     const { driver, log, fake } = make(engine, 'plain');
-    await driver.send('Reply with exactly the words: hello from helm');
+    await driver.send('Reply with exactly the words: hello from con');
     const done = await log.until((e) => e.type === 'turn.done');
     assert.equal(done.status, 'ok');
     assert.ok(driver.engineSessionId, 'the ACP session id is remembered for resume');
     const text = log.of('item.start').find((e) => e.kind === 'text');
     assert.equal(
       log.of('item.delta').filter((e) => e.id === text.id).map((e) => e.text).join('').replace(/\s+$/, ''),
-      'hello from helm'
+      'hello from con'
     );
     assert.deepEqual(log.of('status').map((e) => e.status), ['working', 'idle']);
 
@@ -41,7 +41,7 @@ for (const engine of ['devin', 'opencode']) {
     assert.equal(modeCall.params.value, engine === 'devin' ? 'accept-edits' : 'build');
     const prompt = sent.find((l) => l.method === 'session/prompt');
     assert.equal(prompt.params.sessionId, driver.engineSessionId);
-    assert.deepEqual(prompt.params.prompt, [{ type: 'text', text: 'Reply with exactly the words: hello from helm' }]);
+    assert.deepEqual(prompt.params.prompt, [{ type: 'text', text: 'Reply with exactly the words: hello from con' }]);
     await driver.kill();
   });
 
@@ -55,7 +55,7 @@ for (const engine of ['devin', 'opencode']) {
     const cmd = log.of('item.start').find((e) => e.kind === 'command');
     assert.ok(cmd, 'the command item started before the ask');
     assert.equal(ask.itemId, cmd.id);
-    assert.match(String(ask.detail), /echo helm-test|curl/);
+    assert.match(String(ask.detail), /echo con-test|curl/);
 
     await driver.answer(ask.requestId, { option: 'allow' });
     const done = await log.until((e) => e.type === 'turn.done');
@@ -86,13 +86,13 @@ for (const engine of ['devin', 'opencode']) {
   });
 }
 
-test('devin: the session names itself and the title reaches helm', async () => {
+test('devin: the session names itself and the title reaches con', async () => {
   const { driver, log } = make('devin', 'plain');
-  await driver.send('Reply with exactly the words: hello from helm');
+  await driver.send('Reply with exactly the words: hello from con');
   await log.until((e) => e.type === 'turn.done');
   const titled = log.of('title');
   assert.equal(titled.length, 1);
-  assert.equal(titled[0].title, 'Reply with exactly the words: hello from helm');
+  assert.equal(titled[0].title, 'Reply with exactly the words: hello from con');
   await driver.kill();
 });
 

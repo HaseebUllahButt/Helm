@@ -17,25 +17,25 @@ const make = (name, opts = {}) => {
 
 test('plain: initialize, thread/start, turn/start; text streams as deltas', async () => {
   const { driver, log, fake } = make('plain');
-  await driver.send('Reply with exactly the words: hello from helm');
+  await driver.send('Reply with exactly the words: hello from con');
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
   assert.equal(done.usage.output, 7);
   assert.equal(driver.threadId, '01a09e7a-960e-79e2-b7c8-8fc714c00f2a');
   assert.equal(driver.engineSessionId, driver.threadId);
   const text = log.of('item.start').find((e) => e.kind === 'text');
-  assert.equal(log.of('item.delta').filter((e) => e.id === text.id).map((e) => e.text).join(''), 'hello from helm');
+  assert.equal(log.of('item.delta').filter((e) => e.id === text.id).map((e) => e.text).join(''), 'hello from con');
   assert.ok(log.of('limits').some((e) => e.codex?.primary?.usedPercent === 1));
   assert.deepEqual(log.of('status').map((e) => e.status), ['working', 'idle']);
 
   const sent = fake.stdinLines();
   assert.equal(sent[0].method, 'initialize');
-  assert.deepEqual(sent[0].params.clientInfo.name, 'helm');
+  assert.deepEqual(sent[0].params.clientInfo.name, 'con');
   assert.equal(sent[1].method, 'initialized');
   assert.equal(sent[2].method, 'thread/start');
   assert.deepEqual(sent[2].params, { cwd: fake.dir, approvalPolicy: 'on-request', sandbox: 'workspace-write' });
   assert.equal(sent[3].method, 'turn/start');
-  assert.deepEqual(sent[3].params.input, [{ type: 'text', text: 'Reply with exactly the words: hello from helm', text_elements: [] }]);
+  assert.deepEqual(sent[3].params.input, [{ type: 'text', text: 'Reply with exactly the words: hello from con', text_elements: [] }]);
   assert.equal(sent[3].params.effort, 'low');
   // The sandbox rides every turn, not just thread/start: that is what makes a
   // mode changed mid-session real rather than cosmetic.
@@ -49,12 +49,12 @@ test('command: a command item with an approval request; accept runs it and the o
   await driver.send('run echo');
   const ask = await log.until((e) => e.type === 'permission.request');
   assert.equal(ask.kind, 'command');
-  assert.equal(ask.detail, 'echo helm-test');
+  assert.equal(ask.detail, 'echo con-test');
   assert.deepEqual(ask.options.map((o) => o.role), ['allow', 'allow-always', 'deny']);
   assert.equal(ask.options[1].label, 'Always allow echo');
   assert.equal(driver.status, 'blocked');
   const cmd = log.of('item.start').find((e) => e.kind === 'command');
-  assert.equal(cmd.command, 'echo helm-test');
+  assert.equal(cmd.command, 'echo con-test');
   assert.equal(ask.itemId, cmd.id);
 
   await driver.answer(ask.requestId, { option: 'allow' });
@@ -62,7 +62,7 @@ test('command: a command item with an approval request; accept runs it and the o
   assert.equal(done.status, 'ok');
   const cmdDone = log.of('item.done').find((e) => e.id === cmd.id);
   assert.equal(cmdDone.status, 'ok');
-  assert.equal(cmdDone.output, 'helm-test\n');
+  assert.equal(cmdDone.output, 'con-test\n');
   assert.equal(cmdDone.exitCode, 0);
   const reply = fake.stdinLines().find((l) => l.id !== undefined && 'result' in l);
   assert.deepEqual(reply.result, { decision: 'accept' });
@@ -91,8 +91,8 @@ test('edit: a file change carries its diff and asks; accept applies it', async (
   await driver.send('create a file');
   const ask = await log.until((e) => e.type === 'permission.request');
   assert.equal(ask.kind, 'edit');
-  assert.equal(ask.title, 'Change helm-note.txt');
-  assert.deepEqual(ask.detail.changes, [{ path: '/tmp/helm-record-wJjiYQ/helm-note.txt', kind: 'add', diff: 'hi\n' }]);
+  assert.equal(ask.title, 'Change con-note.txt');
+  assert.deepEqual(ask.detail.changes, [{ path: '/tmp/con-record-wJjiYQ/con-note.txt', kind: 'add', diff: 'hi\n' }]);
   await driver.answer(ask.requestId, { option: 'allow' });
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');

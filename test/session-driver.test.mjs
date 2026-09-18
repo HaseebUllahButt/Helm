@@ -9,13 +9,13 @@ import { join } from 'node:path';
 // to a driver, its events land in the log with sequence numbers, pushes flow
 // only while watched, a pending prompt survives the driver, and a kill
 // removes everything.
-process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-session-driver-'));
-process.env.HELM_NO_SERVICE = '1';
+process.env.CON_DIR = mkdtempSync(join(tmpdir(), 'con-session-driver-'));
+process.env.CON_NO_SERVICE = '1';
 
 // A profile for the fakes to be started from, for every test in the file -
 // the first test's cleanup must not take it away from the rest.
-test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
+test.after(() => rmSync(process.env.CON_DIR, { recursive: true, force: true }));
+writeFileSync(join(process.env.CON_DIR, 'profiles.json'), JSON.stringify({
   version: 1,
   profiles: [{ id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: ['--model', 'x'], env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' }, source: 'alias' }],
 }));
@@ -71,7 +71,7 @@ class FakeDriver extends EventEmitter {
 test('a headless session: start, stream, watch, prompt, resume, kill', async (t) => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
-  const events = new EventLog(join(process.env.HELM_DIR, 'events'));
+  const events = new EventLog(join(process.env.CON_DIR, 'events'));
   const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
 
   const updates = [];
@@ -97,7 +97,7 @@ test('a headless session: start, stream, watch, prompt, resume, kill', async (t)
   await sessions.input(s.id, 'hi\n');
   assert.deepEqual(d.sent, ['hi']);
   const h = sessions.history(s.id);
-  // The first turn.start is helm's own optimistic `local-` turn, posted the
+  // The first turn.start is con's own optimistic `local-` turn, posted the
   // moment the message is sent; the second is the agent echoing it back
   // under its own id once it picks the message up.
   assert.deepEqual(h.events.map((e) => e.type), ['turn.start', 'status', 'turn.start', 'item.start', 'item.delta']);
@@ -200,8 +200,8 @@ test('the model the CLI reports is kept, so the app can name what is running', a
 
 test('images ride the driver when it implements the verb, else a placeholder', async () => {
   const { mkdirSync } = await import('node:fs');
-  mkdirSync(process.env.HELM_DIR, { recursive: true });
-  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
+  mkdirSync(process.env.CON_DIR, { recursive: true });
+  writeFileSync(join(process.env.CON_DIR, 'profiles.json'), JSON.stringify({
     version: 1,
     profiles: [{ id: 'claudea', label: 'Claude', engine: 'claude', cmd: 'claude', args: [], env: {}, source: 'alias' }],
   }));
@@ -210,7 +210,7 @@ test('images ride the driver when it implements the verb, else a placeholder', a
 
   // A driver without sendWithAttachments: the model gets words, not bytes.
   const plain = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-plain')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-plain')),
     makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
   });
   const s1 = await plain.start({ cwd: '/tmp', profileId: 'claudea' });
@@ -227,7 +227,7 @@ test('images ride the driver when it implements the verb, else a placeholder', a
     async sendWithAttachments(text, attachments) { this.gotAttachments = { text, attachments }; }
   }
   const rich = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-rich')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-rich')),
     makeDriver: (engine, opts) => new ImageDriver({ engine, ...opts }),
   });
   const s2 = await rich.start({ cwd: '/tmp', profileId: 'claudea' });
@@ -244,7 +244,7 @@ test('images ride the driver when it implements the verb, else a placeholder', a
     acceptsImages() { return false; }
   }
   const blind = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-blind')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-blind')),
     makeDriver: (engine, opts) => new BlindDriver({ engine, ...opts }),
   });
   const s3 = await blind.start({ cwd: '/tmp', profileId: 'claudea' });
@@ -264,7 +264,7 @@ test('images ride the driver when it implements the verb, else a placeholder', a
     acceptsImages() { return this.#up; }
   }
   const late = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-late')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-late')),
     makeDriver: (engine, opts) => new LateDriver({ engine, ...opts }),
   });
   const s4 = await late.start({ cwd: '/tmp', profileId: 'claudea' });
@@ -275,15 +275,15 @@ test('images ride the driver when it implements the verb, else a placeholder', a
 
 test('an attached image survives a restart, and nonsense is refused', async () => {
   const { mkdirSync } = await import('node:fs');
-  mkdirSync(process.env.HELM_DIR, { recursive: true });
-  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
+  mkdirSync(process.env.CON_DIR, { recursive: true });
+  writeFileSync(join(process.env.CON_DIR, 'profiles.json'), JSON.stringify({
     version: 1,
     profiles: [{ id: 'claudea', label: 'Claude', engine: 'claude', cmd: 'claude', args: [], env: {}, source: 'alias' }],
   }));
   const { Sessions, acceptImages } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
 
-  const dir = join(process.env.HELM_DIR, 'events-durable');
+  const dir = join(process.env.CON_DIR, 'events-durable');
   const data = 'iVBORw0KGgo=';
   const sessions = new Sessions(new StubRuntime(), {
     events: new EventLog(dir),
@@ -331,7 +331,7 @@ test('/compact delegates to the driver', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
   const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-slash')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-slash')),
     makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
   });
   const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
@@ -346,7 +346,7 @@ test('a session names itself after two prompts, not one', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
   const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-titles')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-titles')),
     makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
   });
   const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
@@ -373,7 +373,7 @@ test('greetings never name a session, whoever says them', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
   const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-titles-greet')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-titles-greet')),
     makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
   });
   const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
@@ -404,14 +404,14 @@ test('the prompt sample stays on the machine', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
   const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-titles-wire')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-titles-wire')),
     makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
   });
   const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
   await sessions.input(s.id, 'the whole first paragraph of what I want');
   const listed = (await sessions.list()).find((x) => x.id === s.id);
   assert.equal(listed.promptSample, undefined, 'prompts are not shipped to every paired device');
-  assert.equal(sessions.get(s.id).promptSample.length, 1, 'but helm still keeps them to name the session');
+  assert.equal(sessions.get(s.id).promptSample.length, 1, 'but con still keeps them to name the session');
   await sessions.kill(s.id);
 });
 
@@ -419,7 +419,7 @@ test('a name typed at start is never overwritten by a generated one', async () =
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
   const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-titles-user')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-titles-user')),
     makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
   });
   const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea', title: 'build' });
@@ -434,7 +434,7 @@ test('a name the owner types wins, before and after the gate', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
   const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-rename')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-rename')),
     makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
   });
   const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
@@ -458,7 +458,7 @@ test('a thread keeps what it has cost', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
   const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-cost')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-cost')),
     makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
   });
   const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
@@ -473,10 +473,10 @@ test('a thread keeps what it has cost', async () => {
   await sessions.kill(s.id);
 });
 
-test('work helm did not start can be filed away or struck off', async () => {
+test('work con did not start can be filed away or struck off', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
-  // A machine with a pane helm never started, which is what the runtime
+  // A machine with a pane con never started, which is what the runtime
   // reports for anything the owner opened at the keyboard.
   class WithPane extends StubRuntime {
     async listLive() {
@@ -484,7 +484,7 @@ test('work helm did not start can be filed away or struck off', async () => {
     }
   }
   const sessions = new Sessions(new WithPane(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-external')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-external')),
     makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
   });
 
@@ -513,8 +513,8 @@ test('work helm did not start can be filed away or struck off', async () => {
 
 test('terminals are numbered by the machine, not guessed by the app', async () => {
   const { mkdirSync } = await import('node:fs');
-  mkdirSync(process.env.HELM_DIR, { recursive: true });
-  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
+  mkdirSync(process.env.CON_DIR, { recursive: true });
+  writeFileSync(join(process.env.CON_DIR, 'profiles.json'), JSON.stringify({
     version: 1,
     profiles: [{ id: 'shell', label: 'Shell', engine: 'shell', cmd: '/bin/sh', args: [], env: {}, source: 'builtin' }],
   }));
@@ -530,7 +530,7 @@ test('terminals are numbered by the machine, not guessed by the app', async () =
     adopt: async () => [],
   });
   const sessions = new Sessions(new StubRuntime(), {
-    events: new EventLog(join(process.env.HELM_DIR, 'events-term')),
+    events: new EventLog(join(process.env.CON_DIR, 'events-term')),
     terminals,
   });
 
@@ -553,13 +553,13 @@ test('terminals are numbered by the machine, not guessed by the app', async () =
 test('a chat asks for its end, and is told what is behind it', async () => {
   // The test above leaves only a shell profile behind; this one needs the
   // agent account back.
-  writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
+  writeFileSync(join(process.env.CON_DIR, 'profiles.json'), JSON.stringify({
     version: 1,
     profiles: [{ id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: [], env: {}, source: 'alias' }],
   }));
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
-  const events = new EventLog(mkdtempSync(join(tmpdir(), 'helm-history-')));
+  const events = new EventLog(mkdtempSync(join(tmpdir(), 'con-history-')));
   const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
   const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
   events.append(s.id, { type: 'turn.start', turnId: 't1', text: 'one long turn' });

@@ -1,4 +1,4 @@
-{"jsonrpc":"2.0","id":"rec-1","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"helm","title":"Helm","version":"0.1.0"}}}
-{"jsonrpc":"2.0","id":"rec-2","method":"session/new","params":{"cwd":"/tmp/helm-record-7KZQQn","mcpServers":[]}}
+{"jsonrpc":"2.0","id":"rec-1","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"con","title":"Con","version":"0.1.0"}}}
+{"jsonrpc":"2.0","id":"rec-2","method":"session/new","params":{"cwd":"/tmp/con-record-7KZQQn","mcpServers":[]}}
 {"jsonrpc":"2.0","id":"rec-3","method":"session/set_config_option","params":{"sessionId":"orange-eyeliner","configId":"mode","value":"accept-edits"}}
-{"jsonrpc":"2.0","id":"rec-4","method":"session/prompt","params":{"sessionId":"orange-eyeliner","prompt":[{"type":"text","text":"Reply with exactly the words: hello from helm"}]}}
+{"jsonrpc":"2.0","id":"rec-4","method":"session/prompt","params":{"sessionId":"orange-eyeliner","prompt":[{"type":"text","text":"Reply with exactly the words: hello from con"}]}}
