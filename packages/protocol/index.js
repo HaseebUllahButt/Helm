@@ -94,7 +94,7 @@ export const M = {
   DIGEST_LIST: 'digest.list',      // { limit? } -> { digests[] }
   SESSION_KEYS: 'session.keys',    // { id, keys[] }  e.g. ["Enter"], ["C-c"]
   SESSION_MESSAGES: 'session.messages', // { id, limit? } -> { messages[], source }
-  // Headless agent sessions: the conversation as helm's own event stream.
+  // Headless agent sessions: the conversation as con's own event stream.
   SESSION_EVENTS: 'session.events',   // { id, since?, tail?, before?, limit? } -> { events[], pending[], last, session, hasMore, earlier, firstSeq }
   SESSION_WATCH: 'session.watch',     // { id } -> { ok, last }   start/renew E.SESSION_EVENT pushes
   SESSION_UNWATCH: 'session.unwatch', // { id }
@@ -132,7 +132,7 @@ export const M = {
 export const E = {
   // Terminal output, pushed while a viewer is attached.
   //
-  // From a pty helm owns this is the raw byte stream, appended as it arrives.
+  // From a pty con owns this is the raw byte stream, appended as it arrives.
   // From a herdr pane it is the *rendered screen*, sampled: `reset` then means
   // the program redrew and `text` replaces everything rather than being
   // appended.
