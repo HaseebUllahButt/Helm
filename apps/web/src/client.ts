@@ -549,8 +549,9 @@ export class Client {
     };
     ping();
     // Often enough that the window fills while you are still looking at the
-    // machine you just opened, and cheap: the reply is a timestamp.
-    const timer = setInterval(ping, 3_000);
+    // machine you just opened, and cheap: the reply is a timestamp. Skipped
+    // while hidden - a latency nobody can see is not worth a radio wake-up.
+    const timer = setInterval(() => { if (!document.hidden) ping(); }, 3_000);
     this.rttTimers.set(env, timer);
     return () => this.unwatchLatency(env);
   }
@@ -587,7 +588,7 @@ export class Client {
   private startPresencePoll() {
     if (this.presencePoll) return;
     this.presencePoll = setInterval(() => {
-      if (this.connected || this.closed) return;
+      if (this.connected || this.closed || document.hidden) return;
       this.environments()
         .then((r) => {
           for (const env of r.environments) {
