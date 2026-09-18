@@ -122,6 +122,8 @@ export interface Permission {
   defaultTo: 'allow' | 'deny';
   allowEdit?: boolean;
   seq: number;
+  /** When the request was raised - "waiting 12m" is computed from it. */
+  at?: number;
 }
 
 /** What the person chose; the driver turns it into the CLI's wire shape. */
@@ -167,20 +169,32 @@ export function apply(state: LogState, e: HelmEvent): void {
   switch (e.type) {
     case 'turn.start': {
       const id = e.turnId ?? String(e.seq);
-      // helm posts the owner's message the moment it is sent, so an image
-      // appears at once instead of after the agent gets round to echoing
-      // it. The agent then announces the same turn under its own id -
-      // seconds later, and without the attachment. Adopting the local turn
-      // rather than pushing a second one is what keeps a message with a
-      // picture on it from showing up twice, once with and once without.
-      const open = state.turns[state.turns.length - 1];
-      // Compared trimmed: helm strips the trailing newline off what it
-      // sends, and the CLI echoes the prompt back with it still attached.
-      if (open && open.id.startsWith('local-') && !open.items.length && !open.done
-          && open.text.trim() === (e.text ?? '').trim()) {
-        open.id = id;
-        return;
+      // helm posts the owner's message the moment it is sent, so it shows
+      // at once instead of when the agent gets round to echoing it - a
+      // message queued behind a running turn can wait minutes for that.
+      // The agent then announces the same turn under its own id, without
+      // the attachment. Adopting the local turn rather than pushing a
+      // second one is what keeps a message from showing up twice.
+      //
+      // The scan is backwards and not just at the tail: with two queued
+      // messages the first echo arrives while the second is still the last
+      // turn, so only looking at the end duplicated every queued send.
+      // The oldest still-open match takes it, so two identical queued
+      // messages stay in the order they were sent.
+      const echo = (e.text ?? '').trim();
+      let open: Turn | undefined;
+      for (let i = 0; i < state.turns.length; i++) {
+        const t = state.turns[i];
+        if (!t.id.startsWith('local-') || t.items.length || t.done) continue;
+        // Compared trimmed: helm strips the trailing newline off what it
+        // sends, and the CLI echoes the prompt back with it still attached.
+        // A prefix match covers the one case where the text sent and the
+        // text echoed differ on purpose: an agent that cannot see images
+        // gets their names appended before the send.
+        const mine = t.text.trim();
+        if (mine === echo || (mine && echo.startsWith(mine + '\n'))) { open = t; break; }
       }
+      if (open) { open.id = id; return; }
       state.turns.push({ id, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [] });
       return;
     }
@@ -224,7 +238,7 @@ export function apply(state: LogState, e: HelmEvent): void {
     }
     case 'permission.request':
       if (!state.pending.some((p) => p.requestId === e.requestId)) {
-        const { type: _t, at: _a, ...rest } = e;
+        const { type: _t, ...rest } = e;
         state.pending.push(rest as Permission);
       }
       return;

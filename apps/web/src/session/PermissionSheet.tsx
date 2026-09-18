@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Markdown } from '../Markdown';
 import { ChangeList, Diff } from './Transcript';
+import { useNow, waitingSince } from '../useNow';
 import type { Decision, Permission, Question } from './types';
 
 /**
@@ -13,7 +14,14 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
   permission: Permission; onAnswer: (d: Decision) => void; busy: boolean;
 }) {
   const [note, setNote] = useState('');
-  const answer = (option: Decision['option']) => onAnswer({ option, message: option === 'deny' && note.trim() ? note.trim() : undefined });
+  // "Edit it, then allow" - for the kinds the driver said take an updated
+  // input (a command, a plan). The textarea starts on what the agent asked,
+  // and the button says what actually happens: allow *this* version.
+  const [editing, setEditing] = useState(false);
+  const [edited, setEdited] = useState('');
+  const now = useNow();
+  const answer = (option: Decision['option'], updatedInput?: any) =>
+    onAnswer({ option, message: note.trim() || undefined, ...(updatedInput ? { updatedInput } : {}) });
 
   if (p.kind === 'question') return <QuestionSheet permission={p} onAnswer={onAnswer} busy={busy} />;
 
@@ -22,6 +30,15 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
   const deny = p.options.find((o) => o.role === 'deny');
   const denyFirst = p.defaultTo === 'deny';
 
+  // What an edit would change, in the driver's own shape: the CLI's tool
+  // input with the one editable field swapped for what was typed.
+  const editable = p.allowEdit && (p.kind === 'command' || p.kind === 'plan');
+  const original = String(p.detail ?? '');
+  const updatedInput = () => p.kind === 'command'
+    ? { ...(typeof p.input === 'object' && p.input ? p.input : {}), command: edited }
+    : { plan: edited };
+  const changed = editing && edited.trim() !== original.trim();
+
   return (
     <div className={`sheet ${p.kind}`}>
       <div className="sheet-head">
@@ -29,19 +46,43 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
         <b>{p.title}</b>
         {p.tool && p.kind !== 'plan' && <span className="tag">{p.tool}</span>}
         {p.parentId && <span className="tag">subagent</span>}
+        {p.at && <span className="tag waiting">waiting {waitingSince(p.at, now)}</span>}
       </div>
       {p.reason && <div className="sheet-reason">{p.reason}</div>}
       <div className="sheet-body">
-        {p.kind === 'command' && <pre className="sheet-cmd">❯ {String(p.detail ?? '')}</pre>}
-        {p.kind === 'plan' && <Markdown text={String(p.detail ?? '')} className="prose plan" />}
+        {p.kind === 'command' && !editing && <pre className="sheet-cmd">❯ {original}</pre>}
+        {p.kind === 'plan' && !editing && <Markdown text={original} className="prose plan" />}
+        {editing && (
+          <textarea
+            className="sheet-edit" value={edited} autoFocus
+            onChange={(e) => setEdited(e.target.value)}
+            rows={Math.min(14, Math.max(3, edited.split('\n').length + 1))}
+          />
+        )}
         {p.kind === 'edit' && <EditDetail detail={p.detail} />}
         {p.kind === 'tool' && p.detail && <pre className="sheet-json">{typeof p.detail === 'string' ? p.detail : JSON.stringify(p.detail, null, 2)}</pre>}
       </div>
-      {p.kind === 'plan' && (
-        <input className="sheet-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="What should change? (optional, sent with “Keep planning”)" />
+      {editable && !editing && (
+        <button className="sheet-editlink" onClick={() => { setEdited(original); setEditing(true); }}>
+          edit before {p.kind === 'plan' ? 'approving' : 'allowing'}
+        </button>
       )}
+      {editing && (
+        <button className="sheet-editlink" onClick={() => setEditing(false)}>back to the original</button>
+      )}
+      {/* "No, do it differently" is the most common answer to a permission
+          prompt - every denial takes a reason, not only plans. */}
+      <input
+        className="sheet-note" value={note} onChange={(e) => setNote(e.target.value)}
+        placeholder={p.kind === 'plan' ? 'What should change? (optional, sent with “Keep planning”)' : 'Say why, or what to do instead (optional, sent with deny)'}
+      />
       <div className={`sheet-actions${denyFirst ? ' deny-first' : ''}`}>
-        {allow && <button className="primary" disabled={busy} onClick={() => answer('allow')}>{allow.label}</button>}
+        {allow && changed && (
+          <button className="primary" disabled={busy || !edited.trim()} onClick={() => answer('allow', updatedInput())}>
+            {p.kind === 'plan' ? 'Approve edited plan' : 'Allow edited command'}
+          </button>
+        )}
+        {allow && !changed && <button className="primary" disabled={busy} onClick={() => answer('allow')}>{allow.label}</button>}
         {always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{always.label}</button>}
         {deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{deny.label}</button>}
       </div>
@@ -91,6 +132,7 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
   const questions = p.questions ?? [];
   const [picked, setPicked] = useState<Record<string, string[]>>({});
   const [other, setOther] = useState<Record<string, string>>({});
+  const now = useNow();
   const key = (q: Question) => q.question;
 
   const toggle = (q: Question, label: string) => {
@@ -112,7 +154,10 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
 
   return (
     <div className="sheet question">
-      <div className="sheet-head"><i className="sdot blocked" /><b>{p.title}</b></div>
+      <div className="sheet-head">
+        <i className="sdot blocked" /><b>{p.title}</b>
+        {p.at && <span className="tag waiting">waiting {waitingSince(p.at, now)}</span>}
+      </div>
       <div className="sheet-body">
         {questions.map((q) => (
           <div key={key(q)} className="q">

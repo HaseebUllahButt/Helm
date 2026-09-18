@@ -289,9 +289,27 @@ function splitNote(text?: string): { note?: string; text?: string } {
   return m ? { note: m[1], text: m[2] } : { text };
 }
 
-function TurnView({ turn, working, blocked }: { turn: Turn; working: boolean; blocked: boolean }) {
+/** How long ago a bubble was sent, in the transcript's own quiet type. */
+function clock(ts?: number) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
+function TurnView({ turn, working, blocked, onResend }: { turn: Turn; working: boolean; blocked: boolean; onResend?: (turn: Turn) => void }) {
   const said = splitNote(turn.text);
   const d = turn.done;
+  // A `local-` turn is one helm posted before the agent echoed it. Until
+  // the echo adopts it that is the honest state of the message: written,
+  // queued behind whatever the agent is doing, not yet read by it.
+  const queued = turn.id.startsWith('local-') && !d && !turn.items.length;
+  // Any turn that ended in an error - whether the message never reached the
+  // agent or the turn it became died - is worth offering again: the words
+  // are already written, retyping them is the part nobody wants.
+  const failed = d?.status === 'error' && !!turn.text;
   // Subagent children hang off their spawn card; a missing parent renders flat.
   const ids = new Set(turn.items.map((i) => i.id));
   const byParent = new Map<string, Item[]>();
@@ -305,7 +323,7 @@ function TurnView({ turn, working, blocked }: { turn: Turn; working: boolean; bl
   return (
     <>
       {(turn.text || turn.attachments?.length) && (
-        <div className="turn user"><div className="bubble">
+        <div className={`turn user${queued ? ' queued' : ''}`}><div className="bubble">
           {said.note && <span className="turn-note">{said.note}</span>}
           {said.text}
           {turn.attachments?.map((a, i) => (a.data
@@ -314,6 +332,10 @@ function TurnView({ turn, working, blocked }: { turn: Turn; working: boolean; bl
             ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={a.filename} loading="lazy" />
             : <span key={i} className="turn-image-gone" title={a.filename}>🖼 {a.filename || 'image'} — no longer stored</span>
           ))}
+          <span className="bubble-meta">
+            {queued && <span className="tag">queued</span>}
+            {clock(turn.at)}
+          </span>
         </div></div>
       )}
       <div className="turn assistant">
@@ -324,17 +346,28 @@ function TurnView({ turn, working, blocked }: { turn: Turn; working: boolean; bl
             : <div className="working"><span className="shine">Working…</span></div>
         )}
         {d && (d.status === 'interrupted' ? <div className="turn-meta">stopped</div>
-          : d.status === 'error' ? <div className="turn-meta bad">{d.error || 'the turn failed'}</div>
+          : d.status === 'error' ? (
+            <div className="turn-meta bad">
+              {d.error || 'the turn failed'}
+              {failed && onResend && (
+                // A message that never reached the agent deserves a way to
+                // try again that does not start with retyping it.
+                <button className="resend" onClick={() => onResend(turn)}>resend</button>
+              )}
+            </div>
+          )
           : (d.durationMs || d.costUsd) ? <div className="turn-meta">{[seconds(d.durationMs), money(d.costUsd)].filter(Boolean).join(' · ')}</div> : null)}
       </div>
     </>
   );
 }
 
-export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier }: {
+export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend }: {
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
   /** The machine holds more of this conversation than is on screen. */
   earlier?: boolean; loadingEarlier?: boolean; onEarlier?: () => void;
+  /** Offered on a turn that ended in an error: send its prompt again. */
+  onResend?: (turn: Turn) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
@@ -373,7 +406,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
           )}
           {!loaded && <p className="placeholder">Loading the conversation…</p>}
           {loaded && turns.length === 0 && <p className="placeholder">{empty ?? 'Send a message to start the conversation.'}</p>}
-          {turns.map((t) => <TurnView key={t.id} turn={t} working={working && t === last} blocked={status === 'blocked'} />)}
+          {turns.map((t) => <TurnView key={t.id} turn={t} working={working && t === last} blocked={status === 'blocked'} onResend={onResend} />)}
         </div>
       </div>
       {unread && <button className="jump" onClick={jump}>↓ new</button>}
