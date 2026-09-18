@@ -1532,7 +1532,17 @@ export class Sessions extends EventEmitter {
         closed.add(e.turnId);
         this.events.append(s.id, { type: 'turn.done', turnId: e.turnId, status: 'interrupted', error: 'helm restarted' });
       }
-      if (s.status !== 'idle') { s.status = 'idle'; s.updatedAt = Date.now(); }
+      if (s.status !== 'idle') {
+        s.status = 'idle';
+        s.updatedAt = Date.now();
+        // The log is what a viewer replays for status: closing the turns
+        // above without recording the settle leaves the last `working`
+        // standing, and the session reads as busy until the next turn.
+        const event = this.events.append(s.id, { type: 'status', status: 'idle' });
+        s.lastSeq = event.seq;
+        this.emit('event', { id: s.id, event });
+        this.emit('session', s);
+      }
     }
     this.#save();
   }

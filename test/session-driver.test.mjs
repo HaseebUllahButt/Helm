@@ -169,6 +169,36 @@ test('a daemon restart lists a driven session as idle and resumable', async (t) 
   t.after(() => again.kill(s.id));
 });
 
+test('a restart writes the settle into the log, so the chat stops drawing "working"', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-restart-status');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  await sessions.input(s.id, 'do a thing');
+  assert.equal(sessions.get(s.id).status, 'working');
+
+  // The daemon dies mid-turn: the next one opens the same record and log.
+  const again = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  again.resume();
+  assert.equal(again.get(s.id).status, 'idle');
+
+  // The phone draws status from the log, not the record - if the last status
+  // event still said "working", the chat would spin until the next turn.
+  const log = again.history(s.id).events;
+  assert.equal(log.filter((e) => e.type === 'status').at(-1).status, 'idle');
+  const open = log
+    .filter((e) => e.type === 'turn.start')
+    .filter((e) => !log.some((d) => d.type === 'turn.done' && d.turnId === e.turnId));
+  assert.equal(open.length, 0, 'no turn left open');
+});
+
 test('the model the CLI reports is kept, so the app can name what is running', async () => {
   // Neither CLI takes a model unless one is chosen, but both announce what
   // they started with. Without keeping it the chip has nothing to show but
