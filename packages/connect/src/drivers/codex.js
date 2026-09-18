@@ -242,12 +242,18 @@ export class CodexDriver extends Driver {
       ...(this.effort ? { effort: this.effort } : {}),
       ...(this.speed ? { serviceTier: this.speed } : {}),
     };
+    const wasWorking = this.status === 'working';
     if (!this.pending.size) this.push('status', { status: 'working' });
     const res = await this.#server.call('turn/start', params);
     if (res.error) {
       this.push('error', { message: res.error.message, kind: 'turn' });
-      this.push('status', { status: 'idle' });
-      return;
+      // Only unwind the status this call set: when a turn was already
+      // running, "idle" would be a lie - that turn is still going, and its
+      // own completion is what says otherwise.
+      if (!wasWorking) this.push('status', { status: 'idle' });
+      // The send failed, and the caller's optimistic turn has to know it:
+      // returning quietly leaves a message that looks sent but was not.
+      throw new Error(res.error.message);
     }
     this.#turnId = res.result.turn.id;
     this.push('turn.start', { turnId: this.#turnId, text });
@@ -278,12 +284,13 @@ export class CodexDriver extends Driver {
       ...(this.effort ? { effort: this.effort } : {}),
       ...(this.speed ? { serviceTier: this.speed } : {}),
     };
+    const wasWorking = this.status === 'working';
     if (!this.pending.size) this.push('status', { status: 'working' });
     const res = await this.#server.call('turn/start', params);
     if (res.error) {
       this.push('error', { message: res.error.message, kind: 'turn' });
-      this.push('status', { status: 'idle' });
-      return;
+      if (!wasWorking) this.push('status', { status: 'idle' });
+      throw new Error(res.error.message);
     }
     this.#turnId = res.result.turn.id;
     this.push('turn.start', { turnId: this.#turnId, text });
