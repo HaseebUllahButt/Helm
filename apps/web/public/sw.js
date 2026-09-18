@@ -1,12 +1,12 @@
 /**
- * helm service worker.
+ * con service worker.
  *
  * The shell is cached so the app opens instantly and survives a dead network;
  * everything that talks to a machine is left alone. Caching an API response
  * here would mean showing you a session state that is no longer true, which is
  * worse than showing you nothing.
  */
-const CACHE = 'helm-shell-v4';
+const CACHE = 'con-shell-v4';
 const SHELL = [
   '/', '/index.html', '/manifest.webmanifest',
   '/icon.svg', '/icon-180.png', '/icon-192.png', '/favicon-32.png',
@@ -41,10 +41,10 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  // `/helm/...` is the app's own prefix and carries the same two things the
+  // `/con/...` is the app's own prefix and carries the same two things the
   // bare paths do; leaving it out meant the protocol endpoint was only
   // excluded under one of its two names.
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/helm/')) return;
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/con/')) return;
   if (url.pathname === '/ws') return;
 
   // Navigations resolve to the app shell: this is a single-page app, so every
@@ -93,7 +93,7 @@ self.addEventListener('fetch', (event) => {
 const viewing = new Map();
 self.addEventListener('message', (event) => {
   const m = event.data;
-  if (m?.type === 'helm:viewing' && event.source?.id) {
+  if (m?.type === 'con:viewing' && event.source?.id) {
     viewing.set(event.source.id, { envId: m.envId ?? null, sessionId: m.sessionId ?? null });
   }
 });
@@ -101,7 +101,7 @@ self.addEventListener('message', (event) => {
 /**
  * A push arrives when the app is closed, which is the only time it matters.
  *
- * The payload is helm's own JSON, encrypted end to end - the push service
+ * The payload is con's own JSON, encrypted end to end - the push service
  * that carried it could not read it. `tag` collapses repeats of the same
  * request, so a retry does not stack three copies of one question on the
  * lock screen, and `renotify` still buzzes for a genuinely new one.
@@ -133,7 +133,7 @@ self.addEventListener('push', (event) => {
     }
     await self.registration.showNotification(data.title || 'A session needs you', {
       body: data.body || '',
-      tag: data.tag || 'helm',
+      tag: data.tag || 'con',
       renotify: true,
       requireInteraction: true,
       icon: '/icon-192.png',
@@ -156,7 +156,7 @@ self.addEventListener('notificationclick', (event) => {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of all) {
       if (new URL(client.url).origin !== self.location.origin) continue;
-      client.postMessage({ type: 'helm:open', envId, sessionId });
+      client.postMessage({ type: 'con:open', envId, sessionId });
       return client.focus();
     }
     return self.clients.openWindow(target);

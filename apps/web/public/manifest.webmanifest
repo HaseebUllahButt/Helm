@@ -1,6 +1,6 @@
 {
-  "name": "helm",
-  "short_name": "helm",
+  "name": "con",
+  "short_name": "con",
   "description": "Control your coding agents on every machine you own.",
   "start_url": "/",
   "scope": "/",

@@ -24,7 +24,7 @@ export interface Environment {
     host?: string;
     platform?: string;
     arch?: string;
-    /** 'pty' when terminals are helm's own; 'panes' is the slow fallback. */
+    /** 'pty' when terminals are con's own; 'panes' is the slow fallback. */
     terminals?: 'pty' | 'panes';
     /** This machine holds a Groq key, so it can transcribe what you say. */
     voice?: boolean;
@@ -63,7 +63,7 @@ export interface Session {
   updatedAt?: number;
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;
-  /** Set on a terminal helm owns: a pty, not a herdr pane. */
+  /** Set on a terminal con owns: a pty, not a herdr pane. */
   pty?: boolean;
   model?: string | null;
   /** What the CLI said it actually started with, when nothing was picked. */
@@ -90,7 +90,7 @@ export interface Session {
   account?: string;
 }
 
-/** A thread a CLI recorded on its own, whether or not helm started it. */
+/** A thread a CLI recorded on its own, whether or not con started it. */
 export interface InventorySession {
   engine: string;
   account: string;
@@ -303,7 +303,7 @@ export async function pickEndpoint(
 /**
  * Probe every address at once. Besides the winner, report whether the
  * machines that did answer all refused the token: that is not "offline", it
- * is "this device is no longer in the network" - after `helm remove`, or a
+ * is "this device is no longer in the network" - after `con remove`, or a
  * network rebuilt from scratch - and retrying forever is the wrong response.
  */
 export async function probeEndpoints(
@@ -697,8 +697,8 @@ export class Client {
       const url = `${hub.replace(/^http/, 'ws')}/ws`;
       // The token rides in the WebSocket subprotocol list rather than the
       // query string, so it never lands in Caddy or tunnel access logs. The
-      // server answers with the plain "helm" protocol.
-      const ws = new WebSocket(url, ['helm', this.token]);
+      // server answers with the plain "con" protocol.
+      const ws = new WebSocket(url, ['con', this.token]);
       this.ws = ws;
 
       ws.onopen = () => {
@@ -894,7 +894,7 @@ export class Client {
    * fails everything keeps working over the relay - which is correct, and was
    * also the end of it. Nothing ever tried again. So a phone that failed to
    * pair once stayed relayed for the life of the page: walk in the door,
-   * swap from cellular to the same wifi as the laptop, and helm would still
+   * swap from cellular to the same wifi as the laptop, and con would still
    * be going through a hub on another continent. The owner's phone did
    * exactly this for a day.
    *
@@ -936,7 +936,7 @@ export class Client {
     if (this.peers.has(env) || !this.connected) { this.retryDirect(env); return; }
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    const channel = pc.createDataChannel('helm', { ordered: true });
+    const channel = pc.createDataChannel('con', { ordered: true });
     const peer: Peer = { pc, channel, ready: false, fragments: new Map() };
     this.peers.set(env, peer);
 
@@ -1134,7 +1134,7 @@ export class Client {
  * the round trip. The daemon checks the same thing and is the one that
  * decides; this is the copy that makes the button honest.
  *
- * The rule itself is in `@helm/protocol/network` (`machineName`), where the
+ * The rule itself is in `@con/protocol/network` (`machineName`), where the
  * reason for it lives: a machine's name is also its ssh Host alias.
  */
 export const MACHINE_NAME_RULE =
@@ -1162,9 +1162,9 @@ export interface Device {
 /**
  * Sign in to a machine.
  *
- * Normally that means a pairing password from `helm add controller`. On the
- * machine itself, `helm open` supplies its local key instead - the daemon
- * accepts it only from loopback, and only if it matches the file in ~/.helm
+ * Normally that means a pairing password from `con add controller`. On the
+ * machine itself, `con open` supplies its local key instead - the daemon
+ * accepts it only from loopback, and only if it matches the file in ~/.con
  * that just handed it to us.
  */
 export async function login(endpoint: string, password: string, local?: string) {

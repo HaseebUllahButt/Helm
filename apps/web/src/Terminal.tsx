@@ -9,7 +9,7 @@ import type { Client } from './client';
  * Attaching says how big we are drawing and gets back everything worth
  * showing; after that the daemon pushes output as it happens (`session.data`).
  *
- * Two kinds of session arrive here. helm's own terminals are a pty, so the
+ * Two kinds of session arrive here. con's own terminals are a pty, so the
  * pushes are the raw byte stream and every one is an append - and because the
  * program is told our size, it renders for this screen instead of being
  * reflowed into it. A herdr pane (an agent someone started at the keyboard)

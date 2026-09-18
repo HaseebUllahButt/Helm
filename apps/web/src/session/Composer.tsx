@@ -31,7 +31,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   preparing?: boolean;
   /** Called when images arrive but this agent cannot see them. */
   onAttachUnsupported?: () => void;
-  /** What `/` offers here: helm's own actions plus the owner's own commands. */
+  /** What `/` offers here: con's own actions plus the owner's own commands. */
   commands?: { name: string; description?: string; source?: string }[];
   /**
    * Turn a recording into text on a machine that holds a Groq key. Absent
@@ -88,7 +88,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   const draftRef = useRef(draft);
   draftRef.current = draft;
 
-  // Super+D belongs to the compositor on this desktop (see `helm dictate`),
+  // Super+D belongs to the compositor on this desktop (see `con dictate`),
   // so the in-app shortcut is one a browser actually receives.
   useEffect(() => {
     if (!onTranscribe) return;

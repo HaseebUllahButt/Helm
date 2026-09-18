@@ -1,7 +1,7 @@
 /**
  * One database, opened in one place.
  *
- * `helm` used to be opened twice: the pairing store (`store.ts`) and the chat
+ * `con` used to be opened twice: the pairing store (`store.ts`) and the chat
  * cache (`session/logCache.ts`) each called `indexedDB.open('helm', 1)` and
  * each created only its own object store in `onupgradeneeded`. Whichever ran
  * first created the database; the second one opened the same version, so its

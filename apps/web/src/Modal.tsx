@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
 /**
- * helm's own confirm/ask sheets.
+ * con's own confirm/ask sheets.
  *
  * `window.confirm` and `window.prompt` are gone from the app on purpose:
  * they render in the browser's chrome rather than the app's, iOS can

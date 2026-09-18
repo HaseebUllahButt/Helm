@@ -1,7 +1,7 @@
 /**
  * The vendor mark for each agent.
  *
- * These are the real, single-colour logo shapes rather than Helm-made
+ * These are the real, single-colour logo shapes rather than Con-made
  * approximations. They stay inline so the PWA never waits on a third-party
  * asset, and `currentColor` lets the existing restrained engine palette work
  * in every place the mark appears.

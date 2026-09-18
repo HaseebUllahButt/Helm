@@ -178,7 +178,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
         // would ever repair it either, because its `last` is current and the
         // refresh behind it asks only for what is newer. Treat it as a miss
         // and take a fresh window, which is also how a device heals from a
-        // window some earlier version of helm cut badly.
+        // window some earlier version of con cut badly.
         if (!log.current.turns.length) {
           log.current = emptyLog();
           raw.current = [];

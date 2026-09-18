@@ -6,7 +6,7 @@ import { loadUsage, saveUsage, mergeReports, today, daysAgo } from './usageCache
 /**
  * What the agents on this network have cost.
  *
- * Read from what each CLI already wrote, not from helm's own event log - that
+ * Read from what each CLI already wrote, not from con's own event log - that
  * is trimmed to the last couple of thousand events, so a long thread would
  * start forgetting what its early turns cost. The daemon pre-aggregates, so
  * what crosses the wire is day-by-model buckets rather than the gigabytes of

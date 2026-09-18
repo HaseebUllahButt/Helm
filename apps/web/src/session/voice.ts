@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  *
  * Nothing about this is specific to the phone, but the phone is why it exists.
  * Typing a paragraph of instructions on a screen keyboard, in a session that
- * is waiting on you, is the exact friction helm was built to remove.
+ * is waiting on you, is the exact friction con was built to remove.
  */
 
 /**
@@ -63,8 +63,8 @@ export const MAX_SECONDS = 180;
 export type DictationState = 'idle' | 'recording' | 'working' | 'unsupported';
 
 /**
- * `getUserMedia` exists only in a secure context, which for helm means the
- * VM's https address or `helm open` on loopback - both of which qualify. A
+ * `getUserMedia` exists only in a secure context, which for con means the
+ * VM's https address or `con open` on loopback - both of which qualify. A
  * machine reached over plain http on a LAN address does not, and there the
  * microphone is simply absent rather than broken.
  */

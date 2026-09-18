@@ -1,7 +1,7 @@
 @import '@xterm/xterm/css/xterm.css';
 
 /* ===========================================================================
-   helm
+   con
    Neutral near-black canvas, surfaces only a few percent lighter than the
    background, hairline borders, one indigo primary. Colour is rationed:
    amber means "act now", sky means "in motion" (and only sky pulses),
@@ -977,8 +977,8 @@ pre.snippet {
 }
 @media (prefers-reduced-motion: reduce) { .section.fold .caret { transition: none; } }
 
-/* The line helm prepends to a brain message: really sent, so really shown -
-   but it is helm talking, not the owner, so it does not wear their voice. */
+/* The line con prepends to a brain message: really sent, so really shown -
+   but it is con talking, not the owner, so it does not wear their voice. */
 .turn.user .turn-note {
   display: block; margin-bottom: 6px;
   font: 500 11px var(--mono); color: var(--mutedfg);
@@ -1020,11 +1020,11 @@ pre.snippet {
 /* One hue does the work. Every chart on this screen is either a single series
    (cost per day) or a magnitude comparison (the breakdown), so length carries
    the reading and colour carries none of it - which is also why there is no
-   legend. helm's per-engine colours stay as identity dots beside a text label,
+   legend. con's per-engine colours stay as identity dots beside a text label,
    where they belong: as chart fills they fail, Codex and OpenCode being only
    ΔE 6.1 apart even in normal vision. */
 .usage-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
-/* A filter control of its own: `.chip` in helm means a session's status, and
+/* A filter control of its own: `.chip` in con means a session's status, and
    `.chip-pick` belongs to the composer. Borrowing either would make the
    meaning of a colour depend on which screen you were looking at. */
 .usage-chip {
@@ -1103,7 +1103,7 @@ pre.snippet {
 
 /* ------------------------------------------------------------ new in this pass */
 
-/* helm's own dialogs, standing in for confirm()/prompt(): centred, dimmed
+/* con's own dialogs, standing in for confirm()/prompt(): centred, dimmed
    behind, dismissed by backdrop tap or Escape. */
 .modal-back {
   position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;

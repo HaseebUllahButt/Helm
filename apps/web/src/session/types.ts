@@ -1,5 +1,5 @@
 /**
- * The conversation as the app sees it, reduced from helm's session events.
+ * The conversation as the app sees it, reduced from con's session events.
  *
  * A driver turns an agent's own protocol into a small vocabulary of events
  * (see packages/connect/src/drivers/index.js); this is the state those
@@ -169,7 +169,7 @@ export function apply(state: LogState, e: HelmEvent): void {
   switch (e.type) {
     case 'turn.start': {
       const id = e.turnId ?? String(e.seq);
-      // helm posts the owner's message the moment it is sent, so it shows
+      // con posts the owner's message the moment it is sent, so it shows
       // at once instead of when the agent gets round to echoing it - a
       // message queued behind a running turn can wait minutes for that.
       // The agent then announces the same turn under its own id, without
@@ -186,7 +186,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       for (let i = 0; i < state.turns.length; i++) {
         const t = state.turns[i];
         if (!t.id.startsWith('local-') || t.items.length || t.done) continue;
-        // Compared trimmed: helm strips the trailing newline off what it
+        // Compared trimmed: con strips the trailing newline off what it
         // sends, and the CLI echoes the prompt back with it still attached.
         // A prefix match covers the one case where the text sent and the
         // text echoed differ on purpose: an agent that cannot see images

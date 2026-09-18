@@ -4,10 +4,10 @@ import react from '@vitejs/plugin-react';
 /**
  * Three chunks by intent, not by accident:
  *   - `react`, which changes only when the framework is upgraded, so a phone
- *     that has it keeps it across every helm deploy;
+ *     that has it keeps it across every con deploy;
  *   - `md` and the terminal, which split themselves out through the dynamic
  *     imports in Markdown.tsx and App.tsx;
- *   - everything else, which is helm itself.
+ *   - everything else, which is con itself.
  * The point is the first paint: signing in and picking a machine should not
  * wait on a syntax highlighter or a terminal emulator.
  */

@@ -1,5 +1,5 @@
 /**
- * How helm says numbers. Money and duration appear per turn, per thread and
+ * How con says numbers. Money and duration appear per turn, per thread and
  * in the session list, and they have to agree everywhere: a turn that reads
  * `$0.02` must not roll up into a thread that reads `0.0243`.
  */
