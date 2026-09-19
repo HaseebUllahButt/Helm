@@ -1012,6 +1012,26 @@ pre.snippet {
 }
 .section.fold.attention { color: var(--amber); }
 
+.fold-toggle {
+  display: flex; align-items: center; gap: 8px;
+  flex: 1; min-width: 0; margin: 0; padding: 0;
+  background: none; border: 0; color: inherit;
+  font: inherit; text-transform: inherit; letter-spacing: inherit; text-align: left;
+}
+.fold-actions {
+  position: relative; flex: none; margin-left: auto;
+  display: flex; align-items: center; gap: 2px;
+}
+.foldbtn {
+  min-width: 32px; min-height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; color: var(--icon); font-size: 15px; line-height: 1;
+  text-transform: none; letter-spacing: 0;
+}
+.foldbtn:hover:not(:disabled) { color: var(--text); background: var(--accent); }
+.foldbtn:disabled { opacity: 0.35; }
+.fold-actions .menu { right: 0; top: calc(100% - 2px); }
+
 /* Threads inside a project read as belonging to it, not as a sibling of the
    heading above them. */
 .side-pad .section.fold + .rows .row { padding-left: 18px; }

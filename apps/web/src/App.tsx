@@ -11,7 +11,7 @@ import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brai
 import {
   Client, login, validMachineName, MACHINE_NAME_RULE,
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
-  type InventorySession, type Device,
+  type InventorySession, type Device, type Project,
 } from './client';
 import { money } from './format';
 import { loadModels, saveModels } from './modelCache';
@@ -147,8 +147,10 @@ function accountsFrom(profiles: Profile[]): Account[] {
  * projects that would both be called "helm". The full path goes beside it,
  * except where it would just repeat the name back ("~" under "~").
  */
-const projectName = (cwd: string) => cwd.split('/').filter(Boolean).pop() || cwd;
-const projectNote = (cwd: string) => (projectName(cwd) === cwd ? undefined : cwd);
+const projectNote = (cwd: string) => {
+  const name = cwd.split('/').filter(Boolean).pop() || cwd;
+  return name === cwd ? undefined : cwd;
+};
 
 const shortPath = (p: string) => {
   const parts = p.replace(/\/$/, '').split('/');
@@ -175,6 +177,8 @@ const thisWeek = (s: Session) =>
 
 /** `~/x` on the machine and `/home/u/x` on the wire are the same folder. */
 const collapseCwd = (p: string) => p.replace(/^\/home\/[^/]+/, '~');
+
+const sameDir = (a: string, b: string) => collapseCwd(a) === collapseCwd(b);
 
 /** An inventory row wearing the shape a session row draws: external, dead. */
 const foundRow = (x: InventorySession): Session => ({
@@ -922,7 +926,8 @@ function Shell({ client, conn, onSignOut }: {
             remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions}
             rememberedAt={env.online ? undefined : snap?.machines?.[env.id]?.at}
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
-            onBrowse={() => push({ kind: 'browse' })}
+            onAddProject={() => push({ kind: 'browse' })}
+            onStart={(cwd) => push({ kind: 'start', cwd })}
             onSettings={() => push({ kind: 'settings' })}
             onUsage={() => push({ kind: 'usage', envId: env.id })}
             onOpen={(s) => push({ kind: 'session', session: s })}
@@ -938,8 +943,12 @@ function Shell({ client, conn, onSignOut }: {
         ) : view.kind === 'browse' ? (
           <Browse
             client={client} env={env} path={view.path} onBack={back}
+            title="Add project" action="Add this project"
             onInto={(path) => push({ kind: 'browse', path })}
-            onPick={(cwd) => push({ kind: 'start', cwd })}
+            onPick={async (cwd) => {
+              await client.rpc<{ project: Project }>(env.id, 'project.save', { path: cwd }, 20_000);
+              restate([{ kind: 'env' }]);
+            }}
           />
         ) : view.kind === 'start' ? (
           <Start
@@ -1483,11 +1492,12 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   );
 }
 
-function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onBrowse, onSettings, onUsage, onOpen, onResume, resuming }: {
+function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onAddProject, onStart, onSettings, onUsage, onOpen, onResume, resuming }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[];
   /** What this machine last said it was running, while it cannot be asked. */
   remembered?: Session[]; rememberedAt?: number;
-  reload: () => void; onBack: () => void; onBrowse: () => void; onSettings: () => void;
+  reload: () => void; onBack: () => void; onAddProject: () => void; onStart: (cwd: string) => void;
+  onSettings: () => void;
   onUsage: () => void; onOpen: (s: Session) => void;
   /** Continue a conversation a CLI recorded on its own; starts the engine. */
   onResume: (s: Session) => void;
@@ -1548,6 +1558,19 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   useEffect(() => { reloadEarlier(); }, [reloadEarlier]);
   useLiveInterval(env.online ? 60_000 : null, reloadEarlier, [reloadEarlier, env.online]);
 
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [renaming, setRenaming] = useState<Project | null>(null);
+  const [removing, setRemoving] = useState<Project | null>(null);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const reloadProjects = useCallback(() => {
+    if (!env.online) { setProjects([]); return; }
+    client.rpc<{ projects: Project[] }>(env.id, 'project.list', {}, 20_000)
+      .then((r) => setProjects(r.projects ?? []))
+      .catch((e) => setError(e.message));
+  }, [client, env.id, env.online]);
+  const projectCwds = sessions.filter((s) => s.engine !== 'shell').map((s) => s.cwd ?? '').sort().join('\n');
+  useEffect(() => { reloadProjects(); }, [reloadProjects, projectCwds]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const openTerminal = async () => {
     setOpening(true); setError('');
     try {
@@ -1583,63 +1606,34 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const blocked = mine.filter((s) => s.status === 'blocked').sort(byRecent);
   const working = mine.filter((s) => s.status === 'working').sort(byRecent);
 
-  /**
-   * Everything else by the folder it ran in, newest folder first.
-   *
-   * After "needs you" and "working" there is only one question left about a
-   * thread, and it is which project it belongs to - not whether it exited.
-   * idle, finished and the machine's own history were three folds asking you
-   * to know which one a thread had fallen into; a project is a thing you can
-   * name before you go looking for it.
-   *
-   * The folders come from helm's own threads, and the machine's history joins
-   * the ones that already exist rather than opening new ones. That line is
-   * what keeps this list short enough to read: a laptop's CLI history is
-   * mostly one-off runs in scratch directories - `/tmp/helm-record-x3sjxG`
-   * and forty more like it - and letting each of those name a project put
-   * fifty folder rows between the owner and their five real ones. A thread in
-   * a project you actually work in belongs with that project; the rest are
-   * history, and history is one fold below.
-   */
   const rest = mine.filter((s) => s.status !== 'blocked' && s.status !== 'working');
+  const externalLive = external.filter((s) => !s.archived && hit(s));
 
-  /* The last few threads sit on top and out of any fold: "what was I doing"
-   * is the most common question this screen answers, and a fold should not
-   * be between it and the answer. Six keeps it a shortcut, not a second
-   * list - anything older is still one tap down, in its group. */
-  const threads = [...rest, ...external.filter((s) => !s.archived && hit(s))].sort(byRecent);
-  const recent = threads.slice(0, 6);
-  const recentIds = new Set(recent.map((s) => s.id));
-
-  const strays: Session[] = [];
-  const folders = (() => {
-    const by = new Map<string, Session[]>();
-    for (const s of rest.filter((x) => thisWeek(x) && !recentIds.has(x.id))) {
-      const key = collapseCwd(s.cwd || '~');
-      const list = by.get(key);
-      if (list) list.push(s); else by.set(key, [s]);
-    }
-    for (const x of external.filter((s) => !s.archived && hit(s) && thisWeek(s) && !recentIds.has(s.id))) {
-      const list = by.get(collapseCwd(x.cwd || '~'));
-      if (list) list.push(x); else strays.push(x);
-    }
-    return [...by.entries()]
-      .map(([cwd, list]): [string, Session[]] => [cwd, [...list].sort(byRecent)])
-      .sort((a, b) => (b[1][0].updatedAt ?? 0) - (a[1][0].updatedAt ?? 0));
-  })();
+  const projectFolds = projects
+    .map((p) => ({
+      project: p,
+      list: [
+        ...rest.filter((s) => sameDir(s.cwd || '~', p.path)),
+        ...externalLive.filter((s) => sameDir(s.cwd || '~', p.path)),
+      ].sort(byRecent),
+    }))
+    .filter(({ project: p, list }) =>
+      !q || list.length > 0 || `${p.title} ${p.path}`.toLowerCase().includes(q));
+  const inProject = new Set(projectFolds.flatMap(({ list }) => list.map((s) => s.id)));
 
   // Threads from this week in folders helm has never started anything in,
   // newest first and capped - until someone types, and then the cap is the
   // thing standing between them and what they are looking for.
-  strays.sort(byRecent);
+  const strays = [...rest, ...externalLive]
+    .filter((s) => !inProject.has(s.id) && thisWeek(s)).sort(byRecent);
   const elsewhere = q ? strays : strays.slice(0, 8);
 
   // Everything either side of the week, in one flat list rather than a second
   // set of folders: what is in here is, by definition, not what you are
   // working on. It has to stay reachable, though - "it is not here" and "it
   // is one tap down" are different answers and only one of them is true.
-  const older = [...rest, ...external.filter((s) => !s.archived && hit(s))]
-    .filter((s) => !thisWeek(s) && !recentIds.has(s.id)).sort(byRecent);
+  const older = [...rest, ...externalLive]
+    .filter((s) => !inProject.has(s.id) && !thisWeek(s)).sort(byRecent);
 
   // A shell is not a thread and does not belong in a project group: you open
   // one to type at the machine, and what you want is the one you left open.
@@ -1688,6 +1682,27 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
     setError('');
     try { await client.rpc(env.id, 'session.title', { id: s.id, title }, 20_000); reload(); }
     catch (e: any) { setError(e.message); }
+  };
+
+  const renameProject = async (p: Project, title: string) => {
+    setProjectBusy(true); setError('');
+    try {
+      await client.rpc(env.id, 'project.save', { path: p.path, title }, 20_000);
+      reloadProjects();
+    } catch (e: any) { setError(e.message); }
+    finally { setProjectBusy(false); }
+  };
+
+  const removeProject = async () => {
+    const p = removing;
+    if (!p) return;
+    setProjectBusy(true); setError('');
+    try {
+      await client.rpc(env.id, 'project.remove', { path: p.path }, 20_000);
+      setRemoving(null);
+      reloadProjects();
+    } catch (e: any) { setRemoving(null); setError(e.message); }
+    finally { setProjectBusy(false); }
   };
 
   /**
@@ -1771,7 +1786,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           setPull(Math.max(0, Math.min(90, e.touches[0].clientY - pullFrom.current)));
         }}
         onTouchEnd={() => {
-          if (pull > 70) { reload(); reloadEarlier(); }
+          if (pull > 70) { reload(); reloadEarlier(); reloadProjects(); }
           setPull(0); pullFrom.current = null;
         }}
       ><div className="pad column">
@@ -1782,8 +1797,8 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         )}
         {!env.online && <div className="banner warn">this machine is offline</div>}
 
-        <button className="action" disabled={!env.online} onClick={onBrowse}>
-          <span className="plus">+</span>New session
+        <button className="action" disabled={!env.online} onClick={onAddProject}>
+          <span className="plus">+</span>Add project
         </button>
 
         {searchable && (
@@ -1828,29 +1843,36 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             <div className="rows">{working.map(row)}</div>
           </div>
         )}
-        {recent.length > 0 && (
-          <div>
-            <div className="section">recent</div>
-            <div className="rows">{recent.map(row)}</div>
-          </div>
-        )}
-
-        {/* Every project folded, including the newest. An open one is a wall
-            of rows before the next folder's name, and which project you want
-            is a question you answer faster from a list of names than by
-            scrolling past the one helm guessed - the guess is also wrong for
-            the folder that is open because 40 CLI history rows landed in it. */}
-        {folders.map(([cwd, list]) => (
+        {projectFolds.map(({ project: p, list }) => (
           <Fold
-            key={cwd}
-            title={projectName(cwd)}
+            key={p.path}
+            title={p.title}
             count={list.length}
-            note={projectNote(cwd)}
+            note={projectNote(p.path)}
             openWhen={!!q}
-            attention={list.some((s) => s.status === 'blocked')}
-            remember={`${env.id}:${cwd}`}
+            remember={`${env.id}:${p.path}`}
+            showEmpty
+            actions={(
+              <ProjectActions
+                title={p.title}
+                onStart={() => onStart(p.path)}
+                onRename={() => setRenaming(p)}
+                onRemove={() => setRemoving(p)}
+              />
+            )}
           >
-            <div className="rows">{list.map(row)}</div>
+            {list.length ? (
+              <div className="rows">{list.map(row)}</div>
+            ) : (
+              <div className="empty quiet">
+                no threads here yet
+                <div className="note" style={{ marginTop: 6 }}>
+                  <button className="linkish" disabled={!env.online} onClick={() => onStart(p.path)}>
+                    + New thread
+                  </button>
+                </div>
+              </div>
+            )}
           </Fold>
         ))}
 
@@ -1907,7 +1929,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             that found an archived thread and only an archived thread is a
             search that worked, and "nothing matches" underneath the thing
             that matched is just wrong. */}
-        {!blocked.length && !working.length && !folders.length &&
+        {!blocked.length && !working.length && !projectFolds.length &&
           !(q && (filed.length || older.length || elsewhere.length || terminals.length)) && (
           <div className="empty quiet">
             {q ? 'nothing matches' : older.length || filed.length || strays.length ? 'nothing from this week' : `nothing running on ${env.name}`}
@@ -1923,6 +1945,27 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
 
         {error && <div className="error">{error}</div>}
       </div></div>
+
+      {renaming && (
+        <TextPrompt
+          title="Name this project" value={renaming.title} busy={projectBusy}
+          onCancel={() => setRenaming(null)}
+          onSubmit={(t) => {
+            const p = renaming;
+            setRenaming(null);
+            if (t !== p.title) renameProject(p, t);
+          }}
+        />
+      )}
+      {removing && (
+        <Confirm
+          title={`Remove "${removing.title}"?`}
+          body="Projects with threads must be emptied first. Removing it never deletes files."
+          confirmLabel="Remove" danger busy={projectBusy}
+          onCancel={() => setRemoving(null)}
+          onConfirm={removeProject}
+        />
+      )}
     </>
   );
 }
@@ -1937,7 +1980,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
  * not you remember archiving it - and it stays open afterwards if you closed
  * it yourself, which is the one case where guessing would be rude.
  */
-function Fold({ title, count, note, openWhen = false, defaultOpen = false, attention = false, remember, children }: {
+function Fold({ title, count, note, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, children }: {
   title: string; count: number; openWhen?: boolean; children: ReactNode;
   /** A word beside the count - a machine name, the newest thread's age. */
   note?: string;
@@ -1946,6 +1989,8 @@ function Fold({ title, count, note, openWhen = false, defaultOpen = false, atten
   attention?: boolean;
   /** Keep the open state across visits, under this key. */
   remember?: string;
+  showEmpty?: boolean;
+  actions?: ReactNode;
 }) {
   const [open, setOpenRaw] = useState(() => {
     if (remember) {
@@ -1966,18 +2011,47 @@ function Fold({ title, count, note, openWhen = false, defaultOpen = false, atten
     });
   }, [remember]);
   useEffect(() => { if (openWhen) setOpen(true); }, [openWhen, setOpen]);
-  if (!count) return null;
+  if (!count && !showEmpty) return null;
   return (
     <div>
-      <button
-        className={`section fold${open ? ' open' : ''}${attention ? ' attention' : ''}`} aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className="caret">›</span>{title}<span className="count">{count}</span>
-        {note && <span className="note-inline">{note}</span>}
-      </button>
+      <div className={`section fold${open ? ' open' : ''}${attention ? ' attention' : ''}`}>
+        <button
+          className="fold-toggle" aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className="caret">›</span>{title}<span className="count">{count}</span>
+          {note && <span className="note-inline">{note}</span>}
+        </button>
+        {actions && <span className="fold-actions">{actions}</span>}
+      </div>
       {open && children}
     </div>
+  );
+}
+
+function ProjectActions({ title, onStart, onRename, onRemove }: {
+  title: string; onStart: () => void; onRename: () => void; onRemove: () => void;
+}) {
+  const [menu, setMenu] = useState(false);
+  return (
+    <>
+      <button
+        type="button" className="foldbtn"
+        title={`new thread in ${title}`} aria-label={`new thread in ${title}`}
+        onClick={onStart}
+      >+</button>
+      <button
+        type="button" className="foldbtn"
+        title={`actions for ${title}`} aria-label={`actions for ${title}`}
+        onClick={() => setMenu((v) => !v)}
+      >⋯</button>
+      {menu && (
+        <div className="menu">
+          <button onClick={() => { setMenu(false); onRename(); }}>Rename project</button>
+          <button className="destructive" onClick={() => { setMenu(false); onRemove(); }}>Remove project</button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -2545,13 +2619,14 @@ function ModelPrefsView({ client, env, account, onBack }: {
 
 // ----------------------------------------------------------------- browsing
 
-function Browse({ client, env, path, onBack, onInto, onPick }: {
-  client: Client; env: Environment; path?: string;
-  onBack: () => void; onInto: (p: string) => void; onPick: (p: string) => void;
+function Browse({ client, env, path, title = 'Where?', action = 'Start here', onBack, onInto, onPick }: {
+  client: Client; env: Environment; path?: string; title?: string; action?: string;
+  onBack: () => void; onInto: (p: string) => void; onPick: (p: string) => void | Promise<void>;
 }) {
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [here, setHere] = useState(path ?? '~');
   const [error, setError] = useState('');
+  const [picking, setPicking] = useState(false);
   const [creating, setCreating] = useState(false);
   const [folder, setFolder] = useState('');
   const [query, setQuery] = useState('');
@@ -2566,12 +2641,15 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
   const [recent] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem(RECENT) || '[]'); } catch { return []; }
   });
-  const pick = (p: string) => {
+  const pick = async (p: string) => {
     try {
       const next = [p, ...recent.filter((r) => r !== p)].slice(0, 6);
       localStorage.setItem(RECENT, JSON.stringify(next));
     } catch { /* full */ }
-    onPick(p);
+    setError(''); setPicking(true);
+    try { await onPick(p); }
+    catch (e: any) { setError(e.message); }
+    finally { setPicking(false); }
   };
 
   const load = useCallback(() => {
@@ -2609,11 +2687,11 @@ function Browse({ client, env, path, onBack, onInto, onPick }: {
     <>
       <div className="bar">
         <button className="iconbtn back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>Where?</h1><span className="sub">{here}</span></div>
+        <div className="titles"><h1>{title}</h1><span className="sub">{here}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
-        <button className="primary big" onClick={() => pick(here)}>
-          Start here
+        <button className="primary big" disabled={picking} onClick={() => pick(here)}>
+          {picking ? 'working…' : action}
         </button>
 
         <div className="filterbar">

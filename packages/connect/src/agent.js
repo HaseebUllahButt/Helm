@@ -12,13 +12,13 @@ import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles } from './profiles.js';
 import { listModels } from './models.js';
 import { listCommands } from './commands.js';
-import { accountKey, modelPrefs, saveModelPrefs, applyModelPrefs, loadSettings } from './settings.js';
+import { accountKey, modelPrefs, saveModelPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
 import { inventory } from './inventory.js';
 import { UsageReader } from '@helm/usage';
-import { HELM_DIR } from './paths.js';
+import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
@@ -735,6 +735,37 @@ export class Daemon {
       case M.FS_ROOTS:  return fsApi.roots();
       case M.FS_MKDIR:  return fsApi.makeDir(p);
       case M.FS_SEARCH: return fsApi.search(p.query);
+
+      case M.PROJECT_LIST: {
+        const byPath = new Map(listProjects().map((x) => [x.path, x]));
+        for (const s of await this.sessions.list()) {
+          if (s.engine === 'shell' || !s.cwd) continue;
+          try {
+            const found = await fsApi.project(s.cwd);
+            if (!byPath.has(found.path)) byPath.set(found.path, found);
+          } catch {}
+        }
+        return { projects: [...byPath.values()].sort((a, b) => a.title.localeCompare(b.title)) };
+      }
+
+      case M.PROJECT_SAVE: {
+        const project = await fsApi.project(p.path);
+        const title = String(p.title ?? '').trim();
+        if (title) project.title = title;
+        return { project: saveProject(project) };
+      }
+
+      case M.PROJECT_REMOVE: {
+        const path = fsApi.projectPath(p.path);
+        for (const s of await this.sessions.list()) {
+          if (s.engine === 'shell' || !s.cwd) continue;
+          let cwd = collapse(expand(s.cwd));
+          try { cwd = (await fsApi.project(s.cwd)).path; } catch {}
+          if (cwd === path) throw new Error('delete or move this project’s threads before removing it');
+        }
+        removeProject(path);
+        return { ok: true };
+      }
 
       case M.PROFILE_LIST: {
         // Asked for the list means somebody is looking at what this machine

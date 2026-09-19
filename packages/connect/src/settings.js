@@ -47,9 +47,37 @@ export function saveModelPrefs(profile, { default: def = null, approved = [] } =
   const pick = name(def);
   if (!pick && !list.length) delete cfg.models[accountKey(profile)];
   else cfg.models[accountKey(profile)] = { default: pick, approved: list };
+  writeSettings(cfg);
+  return modelPrefs(profile, cfg);
+}
+
+function writeSettings(cfg) {
   mkdirSync(dirname(CONFIG_FILE), { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify({ version: 1, ...cfg }, null, 2), { mode: 0o600 });
-  return modelPrefs(profile, cfg);
+}
+
+export function listProjects(cfg = loadSettings()) {
+  return Array.isArray(cfg.projects)
+    ? cfg.projects.filter((p) => p?.path).map((p) => ({ path: p.path, title: p.title || p.path.split('/').pop() || p.path }))
+    : [];
+}
+
+export function saveProject(project) {
+  const cfg = loadSettings();
+  const projects = listProjects(cfg);
+  const next = { path: project.path, title: project.title || project.path.split('/').pop() || project.path };
+  const index = projects.findIndex((p) => p.path === next.path);
+  if (index === -1) projects.push(next); else projects[index] = next;
+  cfg.projects = projects;
+  writeSettings(cfg);
+  return next;
+}
+
+export function removeProject(path) {
+  const cfg = loadSettings();
+  cfg.projects = listProjects(cfg).filter((p) => p.path !== path);
+  writeSettings(cfg);
+  return true;
 }
 
 /**

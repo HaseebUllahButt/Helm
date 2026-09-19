@@ -194,12 +194,13 @@ export class TerminalHost extends EventEmitter {
    */
   async #spawnHost() {
     const ready = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('the terminal host did not start')), START_TIMEOUT_MS);
-      timer.unref?.();
       const poll = setInterval(() => {
         if (existsSync(SOCKET_PATH)) { clearInterval(poll); clearTimeout(timer); resolve(); }
       }, 100);
-      poll.unref?.();
+      const timer = setTimeout(() => {
+        clearInterval(poll);
+        reject(new Error('the terminal host did not start'));
+      }, START_TIMEOUT_MS);
     });
 
     const env = {

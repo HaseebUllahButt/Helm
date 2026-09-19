@@ -80,6 +80,9 @@ export const M = {
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }
   FS_SEARCH: 'fs.search',          // { query } -> { results[], indexed }  every dir under ~, indexed
+  PROJECT_LIST: 'project.list',
+  PROJECT_SAVE: 'project.save',
+  PROJECT_REMOVE: 'project.remove',
   PROFILE_LIST: 'profile.list',    // {} -> { profiles[] }
   MODEL_LIST: 'model.list',        // { profileId, id?, all? } -> { default, models[], more?[], prefs?, effort?, efforts? }
   MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[] } -> { prefs }  per-account picker filter

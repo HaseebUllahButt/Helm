@@ -1,6 +1,6 @@
 import { readdir, stat, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename, resolve } from 'node:path';
 import { HOME, expand, collapse } from './paths.js';
 
 const SKIP = new Set([
@@ -53,6 +53,18 @@ export async function makeDir({ path, name }) {
   // the index's next scheduled walk.
   if (indexAt) indexDirs.push({ name: clean, path: collapse(full), repo: false });
   return { path: collapse(full) };
+}
+
+export function projectPath(path) {
+  return collapse(resolve(expand(path)));
+}
+
+export async function project(path) {
+  const normalized = projectPath(path);
+  const full = expand(normalized);
+  const info = await stat(full);
+  if (!info.isDirectory()) throw new Error('a project must be a directory');
+  return { path: normalized, title: basename(full) || full };
 }
 
 /**

@@ -181,6 +181,8 @@ export const cacheSaved = (t: Pick<UsageTotals, 'cacheSavedUsd' | 'cacheWritePre
 
 export interface DirEntry { name: string; path: string; isRepo: boolean; skip: boolean }
 
+export interface Project { path: string; title: string }
+
 export interface Tool { name: string; input: string }
 export interface Message {
   role: 'user' | 'assistant';
