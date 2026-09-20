@@ -70,7 +70,10 @@ export const SECURITY_HEADERS = {
   ].join('; '),
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
-  'permissions-policy': 'camera=(), microphone=(), geolocation=()',
+  // The composer's dictation mic needs getUserMedia, which an empty
+  // microphone policy would forbid even to this page itself - (self) keeps
+  // it for the app and denies it to anything it embeds.
+  'permissions-policy': 'camera=(), microphone=(self), geolocation=()',
 };
 
 /**
