@@ -60,6 +60,8 @@ export class AcpDriver extends Driver {
   #loading = false;
   /** latest configOptions the agent advertised (model/mode/effort pickers) */
   #options = [];
+  /** Slash commands advertised by the ACP agent for this session. */
+  #commands = [];
   /**
    * Whether this agent said it can take images in a prompt. ACP agents
    * differ - opencode's answer follows the provider behind the model, Devin
@@ -88,6 +90,11 @@ export class AcpDriver extends Driver {
       efforts: (effort?.options ?? []).map((o) => o.value).filter(Boolean),
       current: model?.currentValue ?? null,
     };
+  }
+
+  async availableCommands() {
+    await this.start();
+    return this.#commands;
   }
 
   async start() {
@@ -375,6 +382,16 @@ export class AcpDriver extends Driver {
   #onUpdate(p) {
     const u = p?.update;
     if (!u) return;
+    if (u.sessionUpdate === 'available_commands_update') {
+      this.#commands = (u.availableCommands ?? [])
+        .filter((command) => command?.name)
+        .map((command) => ({
+          name: command.name,
+          description: command.description,
+          source: this.engine,
+        }));
+      return;
+    }
     if (this.#loading) {
       // A replayed transcript is history the event log already holds; the
       // pickers are still worth taking.
@@ -399,7 +416,7 @@ export class AcpDriver extends Driver {
         if (title) this.push('title', { title });
         return;
       }
-      default: return; // user_message_chunk, current_mode_update, commands
+      default: return; // user_message_chunk, current_mode_update
     }
   }
 

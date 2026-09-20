@@ -269,6 +269,7 @@ type MainView =
   // facets - the question is the same, only the scope changes.
   | { kind: 'usage'; envId?: string }
   | { kind: 'brain' }
+  | { kind: 'new'; path?: string }
   | { kind: 'browse'; path?: string }
   | { kind: 'start'; cwd: string }
   | { kind: 'settings' }
@@ -954,6 +955,7 @@ function Shell({ client, conn, onSignOut }: {
             remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions}
             rememberedAt={env.online ? undefined : snap?.machines?.[env.id]?.at}
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
+            onNewSession={() => push({ kind: 'new' })}
             onAddProject={() => push({ kind: 'browse' })}
             onStart={(cwd) => push({ kind: 'start', cwd })}
             onSettings={() => push({ kind: 'settings' })}
@@ -968,6 +970,13 @@ function Shell({ client, conn, onSignOut }: {
           />
         ) : view.kind === 'models' ? (
           <ModelPrefsView client={client} env={env} account={view.account} onBack={back} />
+        ) : view.kind === 'new' ? (
+          <Browse
+            client={client} env={env} path={view.path} onBack={back}
+            title="New session" action="Choose this folder"
+            onInto={(path) => push({ kind: 'new', path })}
+            onPick={(cwd) => push({ kind: 'start', cwd })}
+          />
         ) : view.kind === 'browse' ? (
           <Browse
             client={client} env={env} path={view.path} onBack={back}
@@ -1520,11 +1529,11 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   );
 }
 
-function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onAddProject, onStart, onSettings, onUsage, onOpen, onResume, resuming }: {
+function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onStart, onSettings, onUsage, onOpen, onResume, resuming }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[];
   /** What this machine last said it was running, while it cannot be asked. */
   remembered?: Session[]; rememberedAt?: number;
-  reload: () => void; onBack: () => void; onAddProject: () => void; onStart: (cwd: string) => void;
+  reload: () => void; onBack: () => void; onNewSession: () => void; onAddProject: () => void; onStart: (cwd: string) => void;
   onSettings: () => void;
   onUsage: () => void; onOpen: (s: Session) => void;
   /** Continue a conversation a CLI recorded on its own; starts the engine. */
@@ -1828,9 +1837,15 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         )}
         {!env.online && <div className="banner warn">this machine is offline</div>}
 
-        <button className="action" disabled={!env.online} onClick={onAddProject}>
-          <span className="plus">+</span>Add project
+        <button className="action" disabled={!env.online} onClick={onNewSession}>
+          <span className="plus">+</span>New session
         </button>
+
+        {env.online && (
+          <div className="note" style={{ textAlign: 'center', marginTop: -6 }}>
+            <button className="linkish" onClick={onAddProject}>Add a project shortcut</button>
+          </div>
+        )}
 
         {searchable && (
           <div className="filterbar">
@@ -3086,6 +3101,7 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
           onTranscribe={onTranscribe}
           draft={draft} setDraft={setDraft} onSend={send} onKey={key}
           waiting={status === 'blocked'} engine={eng.label}
+          history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
         />
       )}
       {error && <div className="error floating">{error}</div>}

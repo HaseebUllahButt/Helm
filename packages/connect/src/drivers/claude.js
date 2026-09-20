@@ -50,6 +50,8 @@ export class ClaudeDriver extends Driver {
   #turnId = null;
   #interrupting = false;
   #capabilities = new Set();
+  /** Commands advertised by this exact Claude Code process at init. */
+  #commands = [];
   /** request_id -> resolve, for control requests we sent */
   #controls = new Map();
   #controlSeq = 0;
@@ -133,6 +135,12 @@ export class ClaudeDriver extends Driver {
     // A message sent while a prompt is open is queued behind it; the agent
     // is still waiting on the person until that prompt is answered.
     if (!this.pending.size) this.push('status', { status: 'working' });
+  }
+
+  async availableCommands() {
+    await this.start();
+    await this.#ready;
+    return this.#commands;
   }
 
   /**
@@ -264,6 +272,9 @@ export class ClaudeDriver extends Driver {
     if (m.subtype === 'init') {
       this.engineSessionId = m.session_id ?? this.engineSessionId;
       this.#capabilities = new Set(m.capabilities ?? []);
+      this.#commands = (m.slash_commands ?? [])
+        .filter((name) => typeof name === 'string' && name)
+        .map((name) => ({ name, source: 'Claude' }));
       this.info = { model: m.model, permissionMode: m.permissionMode, version: m.claude_code_version, effort: m.effort };
       this.emit('init', this.info);
       return;

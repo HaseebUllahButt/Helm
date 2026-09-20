@@ -80,6 +80,8 @@ export class Driver extends EventEmitter {
   // default that quietly dropped them made every attachment vanish.
   async start() { throw new Error('not implemented'); }
   async send(_text) { throw new Error('not implemented'); }
+  /** Slash commands the live CLI says this particular session supports. */
+  async availableCommands() { return []; }
   // Summarise the conversation so far into a fresh context window. The
   // default speaks the /compact both CLIs understand as user text.
   async compact(hint) { return this.send('/compact' + (hint ? ` ${hint}` : '')); }

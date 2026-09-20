@@ -884,11 +884,13 @@ export class Daemon {
         const s2 = this.sessions.get(p.id);
         const profile = (await getProfiles()).find((x) => x.id === s2.profileId);
         const engine = ENGINES[s2.engine];
+        const available = await this.sessions.commands(p.id);
         return {
           commands: listCommands({
             engine: s2.engine,
             cwd: s2.cwd,
             home: profile?.env?.[engine?.homeEnv] ?? engine?.defaultHome,
+            available,
           }),
         };
       }

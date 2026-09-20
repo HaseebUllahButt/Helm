@@ -219,6 +219,14 @@ export class Sessions extends EventEmitter {
 
   isDriven(s) { return !!s?.driver; }
 
+  /** Ask the live CLI what slash commands it accepts in this session. */
+  async commands(id) {
+    const s = this.get(id);
+    if (!s.driver) return [];
+    const driver = await this.#driver(s);
+    return driver.availableCommands?.() ?? [];
+  }
+
   /**
    * What a terminal on this machine will be: helm's own pty, or the slow
    * herdr-pane fallback. Answerable with no host running - which is the usual
@@ -1175,8 +1183,9 @@ export class Sessions extends EventEmitter {
     }
     if (s.driver) {
       let clean = text.replace(/\n$/, '');
-      // Slash commands are helm's, not the agent's: intercept before the
-      // text reaches a CLI that would read them as words in a prompt.
+      // Helm-owned commands are intercepted here. Commands advertised by
+      // the agent continue to the driver, which is the only component that
+      // knows their version-specific semantics.
       let compact = null;
       if (!raw) {
         const slash = /^\/(compact)(?:\s+(.*?))?\s*$/s.exec(text.trim());

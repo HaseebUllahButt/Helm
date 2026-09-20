@@ -42,6 +42,11 @@ for (const engine of ['devin', 'opencode']) {
     const prompt = sent.find((l) => l.method === 'session/prompt');
     assert.equal(prompt.params.sessionId, driver.engineSessionId);
     assert.deepEqual(prompt.params.prompt, [{ type: 'text', text: 'Reply with exactly the words: hello from helm' }]);
+    if (engine === 'devin') {
+      const commands = await driver.availableCommands();
+      assert.ok(commands.some((command) => command.name === 'status'));
+      assert.ok(commands.some((command) => command.name === 'compact'));
+    }
     await driver.kill();
   });
 

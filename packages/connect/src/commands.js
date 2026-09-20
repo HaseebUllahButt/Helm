@@ -6,15 +6,12 @@ import { ENGINES } from './engines.js';
 /**
  * What you can type after a `/`.
  *
- * Deliberately **not** the CLI's built-ins. `/help` and `/status` through
- * `claude -p` come back `ok` in about 95ms having printed nothing: they are
- * TUI-local and do nothing headless. Offering them would be a palette of
- * things that quietly fail, which is worse than no palette.
- *
- * What is real is two kinds of thing:
+ * What is real is three kinds of thing:
  *
  *   - helm's own actions, handled by the daemon before the text ever
  *     reaches a CLI (`sessions.js input`);
+ *   - commands advertised by the live CLI/ACP session. This matters because
+ *     the supported set changes with CLI versions, plugins and skills;
  *   - the commands the owner has written themselves, which do run headless -
  *     markdown files in the directory each CLI reads them from, either
  *     beside the project or in that account's config home.
@@ -91,18 +88,26 @@ function read(dir, source, prefix = '', depth = 0) {
  * CLI sees them either way, and a palette entry that lies about where the
  * text goes would be the worst of both.
  */
-export function listCommands({ engine, cwd, home }) {
-  const seen = new Set();
+export function listCommands({ engine, cwd, home, available = [] }) {
+  const seen = new Map();
   const out = [];
   const take = (list) => {
     for (const c of list) {
-      if (!c.name || seen.has(c.name)) continue;
-      seen.add(c.name);
+      if (!c.name) continue;
+      const existing = seen.get(c.name);
+      if (existing) {
+        // A file often has the useful description while the CLI only sends
+        // a name. Keep the winning source, but enrich an otherwise bare row.
+        if (!existing.description && c.description) existing.description = c.description;
+        continue;
+      }
+      seen.set(c.name, c);
       out.push(c);
     }
   };
   take(BUILT_IN);
   const dirs = directories(engine, cwd ?? '~', home);
   dirs.forEach((dir, i) => take(read(dir, i === 0 && engine === 'claude' ? 'project' : 'yours')));
+  take(available);
   return out;
 }

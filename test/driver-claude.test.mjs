@@ -43,6 +43,9 @@ test('plain: text streams in as deltas, then the turn completes with its cost', 
   assert.ok(log.of('item.start').some((e) => e.kind === 'thinking'));
   assert.ok(log.of('limits').length, 'rate limit snapshot forwarded');
   assert.deepEqual(log.of('status').map((e) => e.status), ['working', 'idle']);
+  const commands = await driver.availableCommands();
+  assert.ok(commands.some((command) => command.name === 'compact'));
+  assert.ok(commands.some((command) => command.name === 'code-review'));
   await driver.kill();
   assert.equal(log.of('status').pop().status, 'exited');
 });

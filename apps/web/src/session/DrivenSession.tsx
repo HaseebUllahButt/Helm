@@ -379,6 +379,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
         commands={commands}
+        history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
       >
         {controls.sheet}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}

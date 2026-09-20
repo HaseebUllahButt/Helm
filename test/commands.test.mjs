@@ -62,3 +62,16 @@ test('codex reads prompts, and an engine with none offers only helm\'s actions',
     BUILT_IN.map((c) => c.name),
   );
 });
+
+test('commands advertised by the live CLI join the palette without duplicates', () => {
+  const list = listCommands({
+    engine: 'devin', cwd: '/tmp', home: '/nowhere',
+    available: [
+      { name: 'status', description: 'Check authentication status', source: 'devin' },
+      { name: 'compact', description: 'Agent compact', source: 'devin' },
+    ],
+  });
+  assert.equal(list.find((c) => c.name === 'status').description, 'Check authentication status');
+  assert.equal(list.filter((c) => c.name === 'compact').length, 1);
+  assert.equal(list.find((c) => c.name === 'compact').source, 'helm');
+});

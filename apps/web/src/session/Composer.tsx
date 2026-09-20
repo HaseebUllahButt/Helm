@@ -16,7 +16,7 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, onTranscribe }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], onTranscribe }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
@@ -33,6 +33,8 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   onAttachUnsupported?: () => void;
   /** What `/` offers here: helm's own actions plus the owner's own commands. */
   commands?: { name: string; description?: string; source?: string }[];
+  /** Earlier prompts, oldest first, for shell-style Up/Down recall. */
+  history?: string[];
   /**
    * Turn a recording into text on a machine that holds a Groq key. Absent
    * when no machine in the network has one, and then there is no microphone:
@@ -44,6 +46,8 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   const [dragging, setDragging] = useState(false);
   const [pick, setPick] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const historyAt = useRef<number | null>(null);
+  const historyDraft = useRef('');
 
   /**
    * The palette opens while the whole message is still just a command being
@@ -57,6 +61,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   const open = matches.length > 0;
   const chosen = matches[Math.min(pick, matches.length - 1)];
   const complete = (name: string) => {
+    historyAt.current = null;
     setDraft(`/${name} `);
     setDismissed(true);
     ref.current?.focus();
@@ -68,6 +73,55 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   useEffect(() => { if (!draft.startsWith('/')) setDismissed(false); }, [draft]);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * Recall prompts without stealing arrow keys from a multi-line draft. Up
+   * starts history only on the first line; Down advances only on the last.
+   * The text being written before recall is restored after the newest item.
+   */
+  const recall = (direction: -1 | 1, el: HTMLTextAreaElement) => {
+    const items = history.filter((item) => item.trim());
+    if (!items.length || el.selectionStart !== el.selectionEnd) return false;
+    const caret = el.selectionStart;
+    if (direction < 0 && draft.slice(0, caret).includes('\n')) return false;
+    if (direction > 0 && draft.slice(caret).includes('\n')) return false;
+
+    let at = historyAt.current;
+    let next: string;
+    if (direction < 0) {
+      if (at == null) {
+        historyDraft.current = draft;
+        at = items.length - 1;
+      } else {
+        at = Math.max(0, at - 1);
+      }
+      next = items[at];
+      historyAt.current = at;
+    } else {
+      if (at == null) return false;
+      if (at < items.length - 1) {
+        at += 1;
+        next = items[at];
+        historyAt.current = at;
+      } else {
+        next = historyDraft.current;
+        historyAt.current = null;
+      }
+    }
+    setDraft(next);
+    requestAnimationFrame(() => {
+      const end = ref.current?.value.length ?? 0;
+      ref.current?.focus();
+      ref.current?.setSelectionRange(end, end);
+    });
+    return true;
+  };
+
+  const submit = () => {
+    historyAt.current = null;
+    historyDraft.current = '';
+    onSend();
+  };
 
   // Opening a conversation means typing into it. Focus after the composer is
   // mounted as well as marking the field autofocus, so restored chats and
@@ -179,7 +233,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
           <textarea
             ref={ref} rows={1} value={draft} autoFocus
             placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => { historyAt.current = null; setDraft(e.target.value); }}
             onPaste={(e) => { if (take(e.clipboardData?.files)) e.preventDefault(); }}
             onKeyDown={(e) => {
               if (open) {
@@ -195,7 +249,13 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                   return;
                 }
               }
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
+              if (!e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowUp' && recall(-1, e.currentTarget)) {
+                e.preventDefault(); return;
+              }
+              if (!e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowDown' && recall(1, e.currentTarget)) {
+                e.preventDefault(); return;
+              }
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
             }}
           />
           {foot && <div className="slab-controls">{foot}</div>}
@@ -255,7 +315,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>
               </button>
             )}
-            <button className="send" onClick={onSend} disabled={preparing || (!draft.trim() && !attachments?.length)} title="send">
+            <button className="send" onClick={submit} disabled={preparing || (!draft.trim() && !attachments?.length)} title="send">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </div>
