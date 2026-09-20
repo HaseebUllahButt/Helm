@@ -69,6 +69,14 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // Opening a conversation means typing into it. Focus after the composer is
+  // mounted as well as marking the field autofocus, so restored chats and
+  // browser-history navigation land in the same useful place.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => ref.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
   /**
    * Speaking instead of typing. What comes back is appended to the draft
    * rather than sent: dictation mishears, and a prompt you cannot read before
@@ -169,7 +177,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             </div>
           )}
           <textarea
-            ref={ref} rows={1} value={draft}
+            ref={ref} rows={1} value={draft} autoFocus
             placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={(e) => { if (take(e.clipboardData?.files)) e.preventDefault(); }}

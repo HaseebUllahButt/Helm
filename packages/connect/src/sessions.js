@@ -1166,6 +1166,13 @@ export class Sessions extends EventEmitter {
    */
   async input(id, text, { raw = false, attachments = [] } = {}) {
     const s = this.get(id);
+    // Mark the chat synchronously, before starting/resuming a driver can
+    // yield. A user can send and immediately navigate back; the navigation's
+    // discard request must never overtake that first message and erase it.
+    if (!raw && s.engine !== 'shell' && !s.hasInput) {
+      s.hasInput = true;
+      this.#save();
+    }
     if (s.driver) {
       let clean = text.replace(/\n$/, '');
       // Slash commands are helm's, not the agent's: intercept before the
@@ -1431,6 +1438,25 @@ export class Sessions extends EventEmitter {
       this.#save();
     }
     return { ok: true };
+  }
+
+  /**
+   * Remove a chat that was opened but never used.
+   *
+   * This check belongs on the machine, not in the browser: another device
+   * may have sent the first prompt after this device last refreshed its
+   * session record. Navigation can therefore ask unconditionally and the
+   * authoritative input marker makes the operation harmless once the chat
+   * contains anything. Brains and terminals are persistent entry points,
+   * not throwaway chats, and are deliberately excluded.
+   */
+  async discardEmpty(id) {
+    const s = this.#index.get(id);
+    if (!s || s.brain || s.engine === 'shell' || s.pty || s.hasInput || (s.prompts ?? 0) > 0) {
+      return { ok: true, discarded: false };
+    }
+    await this.kill(id);
+    return { ok: true, discarded: true };
   }
 
   /** What the owner has filed away or dismissed among the rows helm does not own. */

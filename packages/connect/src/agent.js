@@ -316,6 +316,11 @@ export class Daemon {
     clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
     for (const link of this.#links.values()) link.stop();
+    // A locally terminated tunnel is a live socket even after every hub link
+    // is gone. Close those too, or stopping the daemon can leave connections
+    // (and the process that owns them) alive indefinitely.
+    for (const { sock } of this.#tunnels.values()) sock.destroy();
+    this.#tunnels.clear();
     this.peers?.stop();
     this.runtime?.stop();
     // Headless agents die with the daemon; their sessions resume on demand.
@@ -838,6 +843,7 @@ export class Daemon {
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
       case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
+      case M.SESSION_DISCARD_EMPTY: return this.sessions.discardEmpty(p.id);
       case M.SESSION_TITLE:   return this.sessions.rename(p.id, p.title);
       case M.SESSION_ARCHIVE: return this.sessions.archive(p.id, p.archived !== false);
 

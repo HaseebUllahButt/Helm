@@ -338,21 +338,47 @@ function Shell({ client, conn, onSignOut }: {
   const nav = useRef<{ stack: MainView[]; selected: string | null; depth: number }>(
     { stack: [{ kind: 'env' }], selected: null, depth: 0 });
 
+  /**
+   * Leaving an unused chat should not leave an empty row behind. The machine
+   * re-checks that no input has reached the chat, so a send from another
+   * device between our last refresh and this navigation can never be lost.
+   */
+  const discardEmpty = useCallback((from: typeof nav.current, to?: MainView[]) => {
+    const current = from.stack[from.stack.length - 1];
+    const next = to?.[to.length - 1];
+    if (current?.kind !== 'session' || current.session.brain || current.session.engine === 'shell') return;
+    if (next?.kind === 'session' && next.session.id === current.session.id) return;
+    const envId = from.selected;
+    if (!envId) return;
+    client.rpc<{ discarded: boolean }>(envId, 'session.discard-empty', { id: current.session.id }, 10_000)
+      .then((r) => {
+        if (r.discarded) {
+          setSessions((all) => ({
+            ...all,
+            [envId]: (all[envId] ?? []).filter((s) => s.id !== current.session.id),
+          }));
+        }
+      })
+      .catch(() => { /* offline: the still-empty chat remains recoverable */ });
+  }, [client]);
+
   useEffect(() => {
     history.replaceState({ helm: 1, ...nav.current }, '');
     const onPop = (e: PopStateEvent) => {
       const s = e.state;
       if (!s?.helm) return;
+      discardEmpty(nav.current, s.stack);
       nav.current = { stack: s.stack, selected: s.selected, depth: s.depth };
       setStack(s.stack);
       setSelected(s.selected);
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
-  }, []);
+  }, [discardEmpty]);
 
   /** A real move: new view, new history entry, phone-back returns from it. */
   const navigate = (next: MainView[], sel = nav.current.selected) => {
+    discardEmpty(nav.current, next);
     const depth = nav.current.depth + 1;
     nav.current = { stack: next, selected: sel, depth };
     setStack(next);
@@ -796,62 +822,64 @@ function Shell({ client, conn, onSignOut }: {
               </>
             )}
 
-            <div className="section">machines</div>
-            <div className="rows cards">
-              {envs.map((e) => {
-                const list = agentsOf(e.id);
-                const working = list.filter((s) => s.status === 'working').length;
-                const waiting = list.filter((s) => s.status === 'blocked').length;
-                return (
-                  <button
-                    key={e.id}
-                    className={`row tall${e.id === selected && wide ? ' active' : ''}`}
-                    onClick={() => openEnv(e.id)}
-                  >
-                    <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-                    <span className="grow">
-                      <span className="rt">{e.name}</span>
-                      <span className="rm">
-                        {e.online
-                          ? (list.length ? `${list.length} running${working ? `, ${working} working` : ''}` : 'idle')
-                          : e.lastSeen ? `seen ${ago(e.lastSeen)}` : 'never connected'}
+            <Fold title="machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
+              <div className="rows cards">
+                {envs.map((e) => {
+                  const list = agentsOf(e.id);
+                  const working = list.filter((s) => s.status === 'working').length;
+                  const waiting = list.filter((s) => s.status === 'blocked').length;
+                  return (
+                    <button
+                      key={e.id}
+                      className={`row tall${e.id === selected && wide ? ' active' : ''}`}
+                      onClick={() => openEnv(e.id)}
+                    >
+                      <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+                      <span className="grow">
+                        <span className="rt">{e.name}</span>
+                        <span className="rm">
+                          {e.online
+                            ? (list.length ? `${list.length} running${working ? `, ${working} working` : ''}` : 'idle')
+                            : e.lastSeen ? `seen ${ago(e.lastSeen)}` : 'never connected'}
+                        </span>
                       </span>
-                    </span>
-                    {waiting > 0 && <span className="badge">{waiting}</span>}
-                    <span className="chev">›</span>
-                  </button>
-                );
-              })}
-              {!envs.length && !error && <div className="empty quiet">no machines yet</div>}
-            </div>
+                      {waiting > 0 && <span className="badge">{waiting}</span>}
+                      <span className="chev">›</span>
+                    </button>
+                  );
+                })}
+                {!envs.length && !error && <div className="empty quiet">no machines yet</div>}
+              </div>
+            </Fold>
 
             {/* One brain per machine: a thread that is not tied to a
                 folder, on the machine it can act from. They are listed apart
                 from the machines above because you come here for the brain,
                 not for the machine - and a machine with none says so, which
                 is the only way to start one. */}
-            <div className="section">brains</div>
-            <div className="rows">
-              {envs.map((e) => {
-                const s = brainOn(e.id);
-                return (
-                  <button key={e.id} className="row" onClick={() => openBrain(e.id)}>
-                    {/* An empty slot rather than no slot: the rows line up
-                        with each other, and with the machines above. */}
-                    <EngineMark engine={s ? engineOf(s.engine).cls : undefined} />
-                    <span className="grow">
-                      <span className="rt">{e.name}{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
-                      <span className="rm">
-                        {s
-                          ? `${engineOf(s.engine).label}${s.model ? ` · ${s.model}` : ''}`
-                          : e.online ? 'no brain here yet' : 'no brain here yet · offline'}
+            <Fold title="brains" count={envs.length} defaultOpen remember="sidebar:brains" showEmpty>
+              <div className="rows">
+                {envs.map((e) => {
+                  const s = brainOn(e.id);
+                  return (
+                    <button key={e.id} className="row" onClick={() => openBrain(e.id)}>
+                      {/* An empty slot rather than no slot: the rows line up
+                          with each other, and with the machines above. */}
+                      <EngineMark engine={s ? engineOf(s.engine).cls : undefined} />
+                      <span className="grow">
+                        <span className="rt">{e.name}{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
+                        <span className="rm">
+                          {s
+                            ? `${engineOf(s.engine).label}${s.model ? ` · ${s.model}` : ''}`
+                            : e.online ? 'no brain here yet' : 'no brain here yet · offline'}
+                        </span>
                       </span>
-                    </span>
-                    <span className="chev">›</span>
-                  </button>
-                );
-              })}
-            </div>
+                      <span className="chev">›</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Fold>
 
             <div className="section">usage</div>
             <div className="rows">
@@ -1601,7 +1629,10 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   // Threads this machine's CLIs recorded without helm, beside helm's own.
   const detected = dedupeDetected(sessions, earlier);
   const external = detected.map(foundRow);
-  const rows = [...sessions, ...external];
+  // A terminal is reached through the machine's terminal button and kept
+  // alive for that button to reopen. It is not a chat and should never be
+  // recorded in the thread, archive or search lists.
+  const rows = [...sessions.filter((s) => s.engine !== 'shell'), ...external];
 
   const live = (s: Session) => s.engine !== 'shell' && !s.archived && hit(s);
   const mine = sessions.filter(live);
@@ -1638,10 +1669,6 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   // is one tap down" are different answers and only one of them is true.
   const older = [...rest, ...externalLive]
     .filter((s) => !inProject.has(s.id) && !recentIds.has(s.id) && !thisWeek(s)).sort(byRecent);
-
-  // A shell is not a thread and does not belong in a project group: you open
-  // one to type at the machine, and what you want is the one you left open.
-  const terminals = sessions.filter((s) => s.pty && s.alive !== false && !s.archived && hit(s)).sort(byRecent);
 
   // Archived threads are on the machine they were archived on, folded away.
   const filed = rows.filter((s) => s.archived && hit(s)).sort(byRecent);
@@ -1886,9 +1913,6 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           </Fold>
         ))}
 
-        <Fold title="terminals" count={terminals.length} openWhen={!!q} remember={`${env.id}:~`}>
-          <div className="rows">{terminals.map(row)}</div>
-        </Fold>
         {/* This week, but in folders nothing was ever started in from here:
             a CLI run by hand in a scratch directory. Worth keeping, not worth
             a project of its own. */}
@@ -1940,7 +1964,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             search that worked, and "nothing matches" underneath the thing
             that matched is just wrong. */}
         {!blocked.length && !working.length && !projectFolds.length &&
-          !(q && (filed.length || older.length || elsewhere.length || terminals.length)) && (
+          !(q && (filed.length || older.length || elsewhere.length)) && (
           <div className="empty quiet">
             {q ? 'nothing matches' : older.length || filed.length || strays.length ? 'nothing from this week' : `nothing running on ${env.name}`}
             <div className="note" style={{ marginTop: 6 }}>

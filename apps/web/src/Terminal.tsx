@@ -41,6 +41,20 @@ export function Terminal({ client, env, sessionId }: {
     xterm.open(host.current);
     try { fit.fit(); } catch { /* not laid out yet */ }
 
+    // xterm turns a wheel gesture into Up/Down keypresses when the active
+    // buffer has nothing to scroll. At a shell prompt those bytes are input,
+    // not scrolling, and can become history navigation or visible escape
+    // characters. Only let xterm handle the wheel when real scrollback exists;
+    // full-screen alternate buffers never have browser-owned scrollback.
+    xterm.attachCustomWheelEventHandler((event) => {
+      const buffer = xterm.buffer.active;
+      if (buffer.type === 'alternate' || buffer.baseY === 0) {
+        event.preventDefault();
+        return false;
+      }
+      return true;
+    });
+
     let seen = '';
     let stopped = false;
     let isPty = false;

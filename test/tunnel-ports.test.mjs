@@ -71,10 +71,12 @@ test('a port named in config.json is allowed, and only from there', async () => 
   assert.equal((await ask(daemon, 9419)).settled()?.reason, 'port not allowed');
 });
 
-test('a frame with no port at all still means ssh', async () => {
+test('a frame with no port at all still means ssh', async (t) => {
   const daemon = new Daemon({ port: 18787 });
-  // Nothing is listening on 22 here, so what comes back is a connection
-  // error - which is the proof it was allowed through to try.
+  // Some test machines run sshd and some do not. Either outcome proves the
+  // port was allowed; always stop the daemon so a successful connection does
+  // not keep the test process alive.
+  t.after(() => daemon.stop());
   const { sent } = await ask(daemon, undefined);
   await new Promise((r) => setTimeout(r, 200));
   const close = sent.find((f) => f.t === T.TUNNEL_CLOSE);

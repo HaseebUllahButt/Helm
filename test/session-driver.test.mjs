@@ -156,6 +156,29 @@ test('a headless session: start, stream, watch, prompt, resume, kill', async (t)
   assert.equal(events.since(s.id, 0).length, 0);
 });
 
+test('discardEmpty only removes unused ordinary chats', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+
+  const empty = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  assert.deepEqual(await sessions.discardEmpty(empty.id), { ok: true, discarded: true });
+  assert.throws(() => sessions.get(empty.id), /unknown session/);
+
+  const used = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  // Sending and immediately leaving is the important race: input marks the
+  // session before driver work can yield to the discard request.
+  const sending = sessions.input(used.id, 'keep this');
+  assert.deepEqual(await sessions.discardEmpty(used.id), { ok: true, discarded: false });
+  await sending;
+  assert.equal(sessions.get(used.id).prompts, 1);
+
+  const brain = await sessions.start({ cwd: '/tmp', profileId: 'claudea', brain: true });
+  assert.deepEqual(await sessions.discardEmpty(brain.id), { ok: true, discarded: false });
+
+  await sessions.kill(used.id);
+  await sessions.kill(brain.id);
+});
+
 test('a daemon restart lists a driven session as idle and resumable', async (t) => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
