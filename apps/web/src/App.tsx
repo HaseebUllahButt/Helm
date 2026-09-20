@@ -1574,13 +1574,15 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const openTerminal = async () => {
     setOpening(true); setError('');
     try {
-      // Always a fresh shell: an earlier terminal is something to go back to,
-      // not something to be dropped into - it lists under "terminals" below,
-      // where it can be reopened or closed.
-      //
-      // Unnamed on purpose. Numbering them here meant counting a list that
-      // might not have caught up, and opening two quickly named both of them
-      // "Terminal 1"; the machine knows what it already has.
+      // A machine has one terminal to return to until that shell ends. Only
+      // then does opening the terminal create its replacement.
+      const existing = sessions
+        .filter((s) => s.engine === 'shell' && !s.archived && s.alive !== false)
+        .sort(byRecent)[0];
+      if (existing) {
+        onOpen(existing);
+        return;
+      }
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start',
         { cwd: '~', profileId: 'shell' }, 45_000);
       reload();
@@ -1608,13 +1610,15 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
 
   const rest = mine.filter((s) => s.status !== 'blocked' && s.status !== 'working');
   const externalLive = external.filter((s) => !s.archived && hit(s));
+  const recent = [...rest, ...externalLive].sort(byRecent).slice(0, 3);
+  const recentIds = new Set(recent.map((s) => s.id));
 
   const projectFolds = projects
     .map((p) => ({
       project: p,
       list: [
-        ...rest.filter((s) => sameDir(s.cwd || '~', p.path)),
-        ...externalLive.filter((s) => sameDir(s.cwd || '~', p.path)),
+        ...rest.filter((s) => !recentIds.has(s.id) && sameDir(s.cwd || '~', p.path)),
+        ...externalLive.filter((s) => !recentIds.has(s.id) && sameDir(s.cwd || '~', p.path)),
       ].sort(byRecent),
     }))
     .filter(({ project: p, list }) =>
@@ -1625,7 +1629,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   // newest first and capped - until someone types, and then the cap is the
   // thing standing between them and what they are looking for.
   const strays = [...rest, ...externalLive]
-    .filter((s) => !inProject.has(s.id) && thisWeek(s)).sort(byRecent);
+    .filter((s) => !inProject.has(s.id) && !recentIds.has(s.id) && thisWeek(s)).sort(byRecent);
   const elsewhere = q ? strays : strays.slice(0, 8);
 
   // Everything either side of the week, in one flat list rather than a second
@@ -1633,7 +1637,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   // working on. It has to stay reachable, though - "it is not here" and "it
   // is one tap down" are different answers and only one of them is true.
   const older = [...rest, ...externalLive]
-    .filter((s) => !inProject.has(s.id) && !thisWeek(s)).sort(byRecent);
+    .filter((s) => !inProject.has(s.id) && !recentIds.has(s.id) && !thisWeek(s)).sort(byRecent);
 
   // A shell is not a thread and does not belong in a project group: you open
   // one to type at the machine, and what you want is the one you left open.
@@ -1841,6 +1845,12 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           <div>
             <div className="section">working</div>
             <div className="rows">{working.map(row)}</div>
+          </div>
+        )}
+        {recent.length > 0 && (
+          <div>
+            <div className="section">recent</div>
+            <div className="rows">{recent.map(row)}</div>
           </div>
         )}
         {projectFolds.map(({ project: p, list }) => (

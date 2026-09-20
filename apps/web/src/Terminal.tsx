@@ -186,6 +186,10 @@ export function Terminal({ client, env, sessionId }: {
       lastSent = data;
       client.rpc(env, 'session.input', { id: sessionId, data, raw: true }, 10_000).catch(() => {});
     });
+    const selected = xterm.onSelectionChange(() => {
+      const text = xterm.getSelection();
+      if (text) navigator.clipboard?.writeText(text).catch(() => {});
+    });
 
     // How far away this machine is, which is what decides whether to guess.
     const stopLatency = client.watchLatency(env);
@@ -222,6 +226,7 @@ export function Terminal({ client, env, sessionId }: {
       stopLatency();
       off();
       typed.dispose();
+      selected.dispose();
       resized.dispose();
       window.removeEventListener('resize', onResize);
       client.rpc(env, 'session.detach', { id: sessionId }, 5_000).catch(() => {});
