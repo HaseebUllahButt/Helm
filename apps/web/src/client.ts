@@ -50,6 +50,8 @@ export interface Profile {
   /** Account key every alias of the same login shares, from the daemon. */
   account?: string;
   prefs?: ModelPrefs | null;
+  /** Session-start defaults stored on the machine, shared by every device. */
+  defaults?: { effort?: string; mode?: string; speed?: string } | null;
 }
 
 export interface Session {
@@ -82,7 +84,7 @@ export interface Session {
   /** What the whole thread has cost and how many turns it took, so far. */
   costUsd?: number;
   turns?: number;
-  /** "Ping me when it finishes" is armed; clears itself when it rings. */
+  /** Whether this thread announces each completed turn. */
   notifyDone?: boolean;
   /** The id the CLI itself gave this session; matches inventory rows. */
   engineSessionId?: string | null;

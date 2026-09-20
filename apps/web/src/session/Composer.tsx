@@ -48,6 +48,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   const [dismissed, setDismissed] = useState(false);
   const historyAt = useRef<number | null>(null);
   const historyDraft = useRef('');
+  const paletteRef = useRef<HTMLDivElement>(null);
 
   /**
    * The palette opens while the whole message is still just a command being
@@ -56,7 +57,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
    */
   const typing = /^\/(\S*)$/.exec(draft);
   const matches = (!dismissed && typing && commands?.length)
-    ? commands.filter((c) => c.name.toLowerCase().startsWith(typing[1].toLowerCase())).slice(0, 8)
+    ? commands.filter((c) => c.name.toLowerCase().startsWith(typing[1].toLowerCase()))
     : [];
   const open = matches.length > 0;
   const chosen = matches[Math.min(pick, matches.length - 1)];
@@ -71,6 +72,12 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   // the palette for the next `/`.
   useEffect(() => { setPick(0); }, [draft]);
   useEffect(() => { if (!draft.startsWith('/')) setDismissed(false); }, [draft]);
+  // Keep keyboard navigation usable when a CLI exposes dozens (or hundreds)
+  // of commands. The list owns its scroll; the page and composer stay put.
+  useEffect(() => {
+    paletteRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [pick, open]);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -203,7 +210,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
           onDrop={(e) => { setDragging(false); if (take(e.dataTransfer?.files)) e.preventDefault(); }}
         >
           {open && (
-            <div className="palette" role="listbox">
+            <div className="palette" role="listbox" ref={paletteRef}>
               {matches.map((c, i) => (
                 <button
                   key={c.name}

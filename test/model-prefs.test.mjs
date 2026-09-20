@@ -65,6 +65,17 @@ test('prefs save, read back, and clear', async () => {
   assert.equal(modelPrefs(oc), null, 'an empty list and no default stores nothing');
 });
 
+test('session defaults are shared by account aliases and can be cleared', async () => {
+  const { startPrefs, saveStartPrefs } = await import('../packages/connect/src/settings.js');
+  const { getProfiles } = await import('../packages/connect/src/profiles.js');
+  const [oc, ocWork] = await getProfiles();
+  assert.equal(startPrefs(oc), null);
+  saveStartPrefs(oc, { effort: ' high ', mode: 'edit', speed: 'fast', ignored: 'nope' });
+  assert.deepEqual(startPrefs(ocWork), { effort: 'high', mode: 'edit', speed: 'fast' });
+  saveStartPrefs(ocWork, { effort: null, mode: '', speed: 42 });
+  assert.equal(startPrefs(oc), null);
+});
+
 test('what a phone sends is not trusted to be a model name', async () => {
   const { modelPrefs, saveModelPrefs } = await import('../packages/connect/src/settings.js');
   const { getProfiles } = await import('../packages/connect/src/profiles.js');
@@ -116,4 +127,25 @@ test('a new session starts with the account default; a pick always wins', async 
 
   const s3 = await sessions.start({ cwd: '/tmp', profileId: 'dv' });
   assert.equal(s3.model, null, 'an account with no prefs starts as before');
+});
+
+test('a new session uses machine-held CLI defaults and starts notifications on', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { saveStartPrefs } = await import('../packages/connect/src/settings.js');
+  const { getProfiles } = await import('../packages/connect/src/profiles.js');
+  const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  const [oc] = await getProfiles();
+  saveStartPrefs(oc, { effort: 'high', mode: 'edit', speed: 'fast' });
+
+  const inherited = await sessions.start({ cwd: '/tmp', profileId: 'oc' });
+  assert.equal(inherited.effort, 'high');
+  assert.equal(inherited.mode, 'edit');
+  assert.equal(inherited.speed, 'fast');
+  assert.equal(inherited.notifyDone, true);
+  assert.equal(FakeDriver.made.at(-1).speed, 'fast');
+
+  const picked = await sessions.start({ cwd: '/tmp', profileId: 'oc', effort: 'low', mode: 'plan', speed: 'normal' });
+  assert.equal(picked.effort, 'low');
+  assert.equal(picked.mode, 'plan');
+  assert.equal(picked.speed, 'normal');
 });

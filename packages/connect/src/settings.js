@@ -3,10 +3,10 @@ import { dirname } from 'node:path';
 import { CONFIG_FILE } from './paths.js';
 
 /**
- * Per-machine settings in ~/.helm/config.json. Today that is one thing:
- * which of an account's (often very long) model list is worth offering, and
- * which model a new session starts with. `helm leave` deletes the file along
- * with the rest of the machine's state.
+ * Per-machine settings in ~/.helm/config.json: which of an account's (often
+ * very long) model list is worth offering, plus the model, thinking level,
+ * permission mode and speed a new session starts with. `helm leave` deletes
+ * the file along with the rest of the machine's state.
  *
  * Prefs are keyed by *account*, not profile: several aliases can launch the
  * same login, and they must share one list. The key is exactly what the
@@ -31,6 +31,33 @@ export function modelPrefs(profile, cfg = loadSettings()) {
   return p && (p.default || p.approved?.length)
     ? { default: p.default ?? null, approved: p.approved ?? [] }
     : null;
+}
+
+/** Defaults used when this account starts a session, on every paired device. */
+export function startPrefs(profile, cfg = loadSettings()) {
+  const p = cfg?.starts?.[accountKey(profile)];
+  if (!p) return null;
+  const out = {};
+  for (const key of ['effort', 'mode', 'speed']) {
+    if (typeof p[key] === 'string' && p[key].trim()) out[key] = p[key].trim();
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** Replace the non-model start defaults for one account. */
+export function saveStartPrefs(profile, values = {}) {
+  const cfg = loadSettings();
+  cfg.starts ??= {};
+  const clean = {};
+  for (const key of ['effort', 'mode', 'speed']) {
+    const value = typeof values[key] === 'string' ? values[key].trim() : '';
+    if (value) clean[key] = value;
+  }
+  const key = accountKey(profile);
+  if (Object.keys(clean).length) cfg.starts[key] = clean;
+  else delete cfg.starts[key];
+  writeSettings(cfg);
+  return startPrefs(profile, cfg);
 }
 
 /**

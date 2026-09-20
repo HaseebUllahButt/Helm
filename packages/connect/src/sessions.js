@@ -10,7 +10,7 @@ import { ENGINES } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
 import { optionArgs } from './models.js';
-import { modelPrefs, accountKey } from './settings.js';
+import { modelPrefs, startPrefs, accountKey } from './settings.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver } from './drivers/codex.js';
@@ -254,7 +254,12 @@ export class Sessions extends EventEmitter {
     if (!existsSync(INDEX_FILE)) return;
     try {
       const raw = JSON.parse(readFileSync(INDEX_FILE, 'utf8'));
-      for (const s of raw.sessions || []) this.#index.set(s.id, s);
+      for (const s of raw.sessions || []) {
+        // Completion notifications are the normal behaviour for driven
+        // threads. Preserve an explicit opt-out from an older client.
+        if (s.driver && s.notifyDone == null) s.notifyDone = true;
+        this.#index.set(s.id, s);
+      }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
     } catch { /* a corrupt index must not stop the daemon booting */ }
   }
@@ -423,14 +428,18 @@ export class Sessions extends EventEmitter {
     return out.sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 
-  async start({ cwd, profileId, title, model, auto, effort, mode, brain = false }) {
+  async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false }) {
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
     // The account's configured default is what a new session starts with; a
     // model chosen up front always wins.
     if (!model) model = modelPrefs(profile)?.default ?? null;
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, auto, brain });
+    const defaults = startPrefs(profile) ?? {};
+    if (!effort) effort = defaults.effort ?? null;
+    if (!mode) mode = defaults.mode ?? null;
+    if (!speed) speed = defaults.speed ?? null;
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -545,7 +554,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, profile, title, model, effort, mode, auto, brain = false, engineSessionId = null }) {
+  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null }) {
     const dir = expand(cwd);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -555,6 +564,7 @@ export class Sessions extends EventEmitter {
       model: model || null,
       effort: effort || null,
       mode: mode || (auto != null ? modeFromAuto(profile.engine, auto) : defaultMode(profile.engine)),
+      speed: speed || null,
       cwd: dir,
       title: title || `${dir.split('/').pop() || dir}`,
       titleBy: title ? 'user' : null,
@@ -562,6 +572,7 @@ export class Sessions extends EventEmitter {
       // permission cards - marked so that it can be found again and so that
       // `input` knows to put the network's state in front of what is typed.
       brain: brain || undefined,
+      notifyDone: true,
       status: 'idle',
       // Set when picking up a conversation the CLI already has: the driver
       // reads this as "resume", not "start".
@@ -1494,11 +1505,8 @@ export class Sessions extends EventEmitter {
   }
 
   /**
-   * "Ping me when this finishes" - a one-shot flag on the thread. The bell
-   * rings once on the next transition out of `working` (done, interrupted,
-   * errored - any of them counts as finished for the person who asked), then
-   * clears itself: a bell that stays armed would buzz on every later turn
-   * too, which is the fastest way to get it ignored.
+   * Whether this thread should announce completed turns. Driven sessions are
+   * born on; the owner can silence an individual thread from its header.
    */
   setNotifyDone(id, on = true) {
     const s = this.get(id);

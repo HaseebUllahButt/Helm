@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Terminal as Xterm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type { Client } from './client';
@@ -20,6 +20,8 @@ export function Terminal({ client, env, sessionId }: {
   client: Client; env: string; sessionId: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!host.current) return;
@@ -202,7 +204,12 @@ export function Terminal({ client, env, sessionId }: {
     });
     const selected = xterm.onSelectionChange(() => {
       const text = xterm.getSelection();
-      if (text) navigator.clipboard?.writeText(text).catch(() => {});
+      if (text) navigator.clipboard?.writeText(text).then(() => {
+        if (stopped) return;
+        setCopied(true);
+        if (copiedTimer.current) clearTimeout(copiedTimer.current);
+        copiedTimer.current = setTimeout(() => setCopied(false), 1100);
+      }).catch(() => {});
     });
 
     // How far away this machine is, which is what decides whether to guess.
@@ -237,6 +244,7 @@ export function Terminal({ client, env, sessionId }: {
       stopped = true;
       clearInterval(renew);
       clearInterval(staleGuess);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
       stopLatency();
       off();
       typed.dispose();
@@ -248,5 +256,10 @@ export function Terminal({ client, env, sessionId }: {
     };
   }, [client, env, sessionId]);
 
-  return <div className="xterm-host" ref={host} />;
+  return (
+    <div className="terminal-wrap">
+      <div className="xterm-host" ref={host} />
+      {copied && <div className="terminal-copied" role="status">Copied</div>}
+    </div>
+  );
 }

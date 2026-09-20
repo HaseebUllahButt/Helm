@@ -84,10 +84,11 @@ export const M = {
   PROJECT_SAVE: 'project.save',
   PROJECT_REMOVE: 'project.remove',
   PROFILE_LIST: 'profile.list',    // {} -> { profiles[] }
+  PROFILE_DEFAULTS: 'profile.defaults', // { profileId, effort?, mode?, speed? } -> { defaults }
   MODEL_LIST: 'model.list',        // { profileId, id?, all? } -> { default, models[], more?[], prefs?, effort?, efforts? }
   MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[] } -> { prefs }  per-account picker filter
   SESSION_LIST: 'session.list',    // {} -> { sessions[] }
-  SESSION_START: 'session.start',  // { cwd, profileId, model?, auto?, effort?, title? } -> { session }
+  SESSION_START: 'session.start',  // { cwd, profileId, model?, effort?, mode?, speed?, title? } -> { session }
   SESSION_ATTACH: 'session.attach',// { id, cols, rows } -> { session, scrollback }
   SESSION_DETACH: 'session.detach',// { id }
   SESSION_INPUT: 'session.input',  // { id, data }

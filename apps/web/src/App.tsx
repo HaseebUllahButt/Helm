@@ -106,6 +106,7 @@ interface Account {
   profile: Profile;
   aliases: string[];
   prefs?: ModelPrefs | null;
+  defaults?: { effort?: string; mode?: string; speed?: string } | null;
 }
 
 function accountsFrom(profiles: Profile[]): Account[] {
@@ -123,6 +124,7 @@ function accountsFrom(profiles: Profile[]): Account[] {
     if (existing) {
       existing.aliases.push(p.id);
       existing.prefs ??= p.prefs;
+      existing.defaults ??= p.defaults;
       // Fewest arguments = the plainest way to launch this account.
       if ((p.args ?? []).length < (existing.profile.args ?? []).length) existing.profile = p;
       continue;
@@ -131,7 +133,7 @@ function accountsFrom(profiles: Profile[]): Account[] {
       key, engine: p.engine,
       account: suffix || 'default',
       token: (p.envFrom ?? []).some((k) => /TOKEN|KEY/i.test(k)),
-      profile: p, aliases: [p.id], prefs: p.prefs,
+      profile: p, aliases: [p.id], prefs: p.prefs, defaults: p.defaults,
     });
   }
   const order = ['claude', 'codex', 'opencode', 'devin'];
@@ -273,6 +275,7 @@ type MainView =
   | { kind: 'browse'; path?: string }
   | { kind: 'start'; cwd: string }
   | { kind: 'settings' }
+  | { kind: 'network-settings' }
   | { kind: 'models'; account: Account }
   // Which phones and browsers hold a key to this network: pair another, or
   // stop trusting one.
@@ -327,6 +330,13 @@ function Shell({ client, conn, onSignOut }: {
   const [snap, setSnap] = useState<{ machines: Record<string, { name: string; at: number; sessions: Session[] }> } | null>(null);
   /** The one in-app yes/no currently up: unpairing this device. */
   const [unpairing, setUnpairing] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('helm.sidebar-collapsed') === '1'; } catch { return false; }
+  });
+  const collapseSidebar = (collapsed: boolean) => {
+    setSidebarCollapsed(collapsed);
+    try { localStorage.setItem('helm.sidebar-collapsed', collapsed ? '1' : '0'); } catch { /* full */ }
+  };
 
   /**
    * Navigation lives in the browser history, so the phone's back button
@@ -717,7 +727,7 @@ function Shell({ client, conn, onSignOut }: {
   // Usage across every machine is a main-pane view that belongs to no machine,
   // so it has to open the main pane on a phone without one being selected -
   // and what devices hold keys belongs to no machine either.
-  const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'devices';
+  const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'devices' || view.kind === 'network-settings';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -728,7 +738,7 @@ function Shell({ client, conn, onSignOut }: {
 
   return (
     <div className="shell">
-      <aside className={`sidebar${!showMain ? ' showing' : ''}`}>
+      <aside className={`sidebar${!showMain ? ' showing' : ''}${wide && sidebarCollapsed ? ' collapsed' : ''}`}>
         <div className="bar side">
           <div className="brand">
             <img src="/icon.svg" alt="" />
@@ -736,6 +746,18 @@ function Shell({ client, conn, onSignOut }: {
           </div>
           <span className={`conn ${status}`} title={conn.error || status}>
             <i />{status === 'live' ? `${envs.filter((e) => e.online).length}/${envs.length} online` : status}
+          </span>
+          <span className="side-tools">
+            <button
+              className="iconbtn settings-toggle" title="CLI defaults on every machine" aria-label="CLI settings"
+              onClick={() => navigate([{ kind: 'network-settings' }])}
+            ><Sliders /></button>
+            <button
+              className="iconbtn collapse-toggle"
+              title={sidebarCollapsed ? 'expand sidebar' : 'collapse sidebar'}
+              aria-label={sidebarCollapsed ? 'expand sidebar' : 'collapse sidebar'}
+              onClick={() => collapseSidebar(!sidebarCollapsed)}
+            >{sidebarCollapsed ? '›' : '‹'}</button>
           </span>
         </div>
 
@@ -929,6 +951,13 @@ function Shell({ client, conn, onSignOut }: {
           <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
         ) : view.kind === 'devices' ? (
           <DevicesView client={client} onBack={back} />
+        ) : view.kind === 'network-settings' ? (
+          <NetworkSettings
+            client={client} envs={envs} onBack={back}
+            onOpen={(envId, account) => navigate([
+              { kind: 'env' }, { kind: 'settings' }, { kind: 'models', account },
+            ], envId)}
+          />
         ) : !env ? (
           <div className="scroll"><div className="pad">
             <div className="empty quiet">select a machine</div>
@@ -1288,10 +1317,29 @@ function Notifications({ client }: { client: Client }) {
     if (!able || location.protocol !== 'https:') { setState('unsupported'); return; }
     if (Notification.permission === 'denied') { setState('blocked'); return; }
     navigator.serviceWorker.ready
-      .then((reg) => reg.pushManager.getSubscription())
+      .then(async (reg) => {
+        const existing = await reg.pushManager.getSubscription();
+        if (existing) return existing;
+        // Browsers only let the permission prompt happen on a click. Once a
+        // person has already granted it, however, restore the subscription
+        // automatically so notifications remain on by default after a
+        // browser reset or service-worker replacement.
+        if (Notification.permission !== 'granted') return null;
+        const { key } = await client.pushKey();
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: base64urlToBytes(key),
+        });
+        await client.pushSubscribe({
+          endpoint: sub.endpoint,
+          keys: (sub.toJSON() as any).keys,
+          label: navigator.platform || 'this device',
+        });
+        return sub;
+      })
       .then((sub) => setState(sub ? 'on' : 'off'))
       .catch(() => setState('off'));
-  }, []);
+  }, [client]);
 
   const enable = async () => {
     setBusy(true); setError('');
@@ -1342,7 +1390,7 @@ function Notifications({ client }: { client: Client }) {
         <button className="row" disabled={busy} onClick={state === 'on' ? disable : enable}>
           <span className="grow">
             <span className="rt">Notify this device</span>
-            <span className="rm">when a session needs you</span>
+            <span className="rm">when a session needs you or finishes</span>
           </span>
           <span className={`tag${state === 'on' ? ' key' : ''}`}>
             {busy ? '\u2026' : state === 'on' ? 'on' : 'off'}
@@ -2476,6 +2524,77 @@ function MachineName({ client, env, onRenamed }: {
   );
 }
 
+const startSummary = (a: Account) => {
+  const values = [
+    a.prefs?.default?.replace(/^[^/]+\//, ''),
+    a.defaults?.effort,
+    a.defaults?.mode,
+    a.defaults?.speed,
+  ].filter(Boolean);
+  return values.length ? `starts ${values.join(' · ')}` : "starts with the CLI's defaults";
+};
+
+/** One place to inspect every machine's account defaults. */
+function NetworkSettings({ client, envs, onBack, onOpen }: {
+  client: Client; envs: Environment[]; onBack: () => void; onOpen: (envId: string, account: Account) => void;
+}) {
+  const [accounts, setAccounts] = useState<Record<string, Account[]>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let stale = false;
+    for (const env of envs.filter((e) => e.online)) {
+      client.rpc(env.id, 'profile.list')
+        .then((r: any) => { if (!stale) setAccounts((all) => ({ ...all, [env.id]: accountsFrom(r.profiles) })); })
+        .catch((e) => { if (!stale) setErrors((all) => ({ ...all, [env.id]: e.message })); });
+    }
+    return () => { stale = true; };
+  }, [client, envs.map((e) => `${e.id}:${e.online}`).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <>
+      <div className="bar">
+        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <div className="titles"><h1>CLI defaults</h1><span className="sub">all machines</span></div>
+      </div>
+      <div className="scroll"><div className="pad column">
+        <p className="note">
+          These defaults live on each machine, so a session started from any paired device uses the same model,
+          thinking, permissions and speed.
+        </p>
+        {envs.map((env) => {
+          const list = accounts[env.id];
+          return (
+            <div key={env.id}>
+              <div className="section">{env.name}</div>
+              <div className="rows">
+                {!env.online ? (
+                  <div className="empty quiet">offline — its saved defaults will appear when it reconnects</div>
+                ) : errors[env.id] ? (
+                  <div className="empty quiet">{errors[env.id]}</div>
+                ) : !list ? (
+                  <div className="empty quiet">looking for agents…</div>
+                ) : list.length === 0 ? (
+                  <div className="empty quiet">no supported CLIs found</div>
+                ) : list.map((a) => (
+                  <button key={a.key} className="row tall" onClick={() => onOpen(env.id, a)}>
+                    <EngineMark engine={engineOf(a.engine).cls} />
+                    <span className="grow">
+                      <span className="rt">{engineOf(a.engine).label} <span className="dim">· {a.account}</span></span>
+                      <span className="rm">{startSummary(a)}</span>
+                    </span>
+                    <span className="chev">›</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div></div>
+    </>
+  );
+}
+
 /**
  * Per-machine settings: what the machine is called, and for each account on
  * it, which models the picker offers and which one a new session starts with.
@@ -2505,7 +2624,7 @@ function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
         <div className="section">name</div>
         <MachineName client={client} env={env} onRenamed={onRenamed} />
 
-        <div className="section">models</div>
+        <div className="section">CLI accounts</div>
         {accounts === null && !error && <div className="empty quiet">looking for agents…</div>}
         {accounts?.length === 0 && <div className="empty quiet">no agents on {env.name}</div>}
         <div className="rows">
@@ -2516,7 +2635,7 @@ function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
             // picker stays whole and new sessions still start somewhere - so
             // the row has to say the default even when there is no short list.
             const short = n ? `${n} model${n === 1 ? '' : 's'}` : 'all models';
-            const starts = a.prefs?.default ? `starts ${a.prefs.default.replace(/^[^/]+\//, '')}` : '';
+            const starts = startSummary(a);
             return (
               <button key={a.key} className="row tall" onClick={() => onEdit(a)}>
                 <EngineMark engine={e.cls} />
@@ -2531,8 +2650,8 @@ function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
         </div>
         <p className="note">
           The checked models are what the model picker offers; everything else
-          stays one tap away under “more”. The default is what a new session
-          starts with.
+          stays one tap away under “more”. Start defaults apply from every
+          paired device.
         </p>
         {error && <div className="error">{error}</div>}
       </div></div>
@@ -2552,6 +2671,9 @@ function ModelPrefsView({ client, env, account, onBack }: {
   const [list, setList] = useState<ModelList | null>(null);
   const [approved, setApproved] = useState<Set<string>>(new Set());
   const [def, setDef] = useState('');
+  const [effort, setEffort] = useState(account.defaults?.effort ?? '');
+  const [mode, setMode] = useState(account.defaults?.mode ?? '');
+  const [speed, setSpeed] = useState(account.defaults?.speed ?? '');
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -2587,11 +2709,19 @@ function ModelPrefsView({ client, env, account, onBack }: {
   const save = async () => {
     setBusy(true); setError('');
     try {
-      await client.rpc(env.id, 'model.prefs', {
-        profileId: account.profile.id,
-        default: def || null,
-        approved: [...approved],
-      }, 20_000);
+      await Promise.all([
+        client.rpc(env.id, 'model.prefs', {
+          profileId: account.profile.id,
+          default: def || null,
+          approved: [...approved],
+        }, 20_000),
+        client.rpc(env.id, 'profile.defaults', {
+          profileId: account.profile.id,
+          effort: effort || null,
+          mode: mode || null,
+          speed: speed || null,
+        }, 20_000),
+      ]);
       onBack();
     } catch (e: any) { setError(e.message); setBusy(false); }
   };
@@ -2612,6 +2742,17 @@ function ModelPrefsView({ client, env, account, onBack }: {
   // A stored default the CLI stopped offering is still what sessions start
   // with - keep it selectable rather than silently dropping it.
   if (def && !defaults.includes(def)) defaults.push(def);
+  const selectedModel = def || list?.default || list?.models?.[0] || '';
+  const efforts = [...new Set([
+    ...(list?.effortsByModel?.[selectedModel] ?? list?.efforts ?? []),
+    ...(effort ? [effort] : []),
+  ])];
+  const speeds = [...new Set([
+    ...(list?.speedByModel?.[selectedModel] ?? list?.speeds ?? []),
+    ...(speed ? [speed] : []),
+  ])];
+  const modes = [...(list?.modes ?? [])];
+  if (mode && !modes.some((m) => m.id === mode)) modes.push({ id: mode, label: mode });
 
   const row = (m: string, checked: boolean) => (
     <button key={m} className={`row tall${checked ? ' active' : ''}`} onClick={() => toggle(m)}>
@@ -2628,7 +2769,7 @@ function ModelPrefsView({ client, env, account, onBack }: {
     <>
       <div className="bar">
         <button className="iconbtn back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>Models</h1><span className="sub">{eng.label} · {account.account} · {env.name}</span></div>
+        <div className="titles"><h1>CLI defaults</h1><span className="sub">{eng.label} · {account.account} · {env.name}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
         {list === null && !error && <div className="empty quiet">asking the CLI for its models…</div>}
@@ -2640,6 +2781,30 @@ function ModelPrefsView({ client, env, account, onBack }: {
               <option value="">the CLI's default</option>
               {defaults.map((m) => <option key={m} value={m}>{list.labels?.[m] ?? m}</option>)}
             </select>
+            {efforts.length > 0 && (
+              <label className="field-label">Thinking
+                <select value={effort} onChange={(e) => setEffort(e.target.value)}>
+                  <option value="">the CLI's default</option>
+                  {efforts.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </label>
+            )}
+            {modes.length > 0 && (
+              <label className="field-label">Permissions
+                <select value={mode} onChange={(e) => setMode(e.target.value)}>
+                  <option value="">the CLI's default</option>
+                  {modes.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+                </select>
+              </label>
+            )}
+            {speeds.length > 0 && (
+              <label className="field-label">Speed
+                <select value={speed} onChange={(e) => setSpeed(e.target.value)}>
+                  <option value="">normal</option>
+                  {speeds.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </label>
+            )}
 
             <div className="section">in the picker</div>
             <input
@@ -2829,7 +2994,7 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
 // -------------------------------------------------------------------- start
 
 const PREFS = 'helm.prefs';
-type Prefs = Record<string, { model?: string; auto?: boolean; effort?: string; account?: string; mode?: string }>;
+type Prefs = Record<string, { account?: string }>;
 const loadPrefs = (): Prefs => { try { return JSON.parse(localStorage.getItem(PREFS) || '{}'); } catch { return {}; } };
 const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* full */ } };
 
@@ -2851,8 +3016,8 @@ function Start({ client, env, cwd, onBack, onStarted }: {
   const [key, setKey] = useState<string>('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
-  const [auto, setAuto] = useState(false);
   const [mode, setMode] = useState('');
+  const [speed, setSpeed] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const prefs = useRef(loadPrefs());
@@ -2870,16 +3035,14 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 
   const account = accounts?.find((a) => a.key === key) ?? null;
 
-  // What this account ran with last time. The session can change all of it,
-  // so these are a starting point, not a question. A default configured on
-  // the machine outranks what this device merely remembers.
+  // The defaults belong to the machine/account, not this browser, so opening
+  // the same picker from a phone or laptop starts the same CLI configuration.
   useEffect(() => {
     if (!account) return;
-    const p = prefs.current[account.key] ?? {};
-    setModel(account.prefs?.default ?? p.model ?? '');
-    setEffort(p.effort ?? '');
-    setAuto(p.auto ?? false);
-    setMode(p.mode ?? '');
+    setModel(account.prefs?.default ?? '');
+    setEffort(account.defaults?.effort ?? '');
+    setMode(account.defaults?.mode ?? '');
+    setSpeed(account.defaults?.speed ?? '');
   }, [account?.key]);
 
   const start = async () => {
@@ -2888,13 +3051,13 @@ function Start({ client, env, cwd, onBack, onStarted }: {
     prefs.current = {
       ...prefs.current,
       [env.id]: { account: account.key },
-      [account.key]: { model, effort, auto, mode },
     };
     savePrefs(prefs.current);
     try {
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start', {
         cwd, profileId: account.profile.id,
-        model: model || undefined, effort: effort || undefined, auto, mode: mode || undefined,
+        model: model || undefined, effort: effort || undefined,
+        mode: mode || undefined, speed: speed || undefined,
       }, 70_000);
       onStarted(r.session);
     } catch (e: any) { setError(e.message); setBusy(false); }

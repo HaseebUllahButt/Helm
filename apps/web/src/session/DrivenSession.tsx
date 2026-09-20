@@ -227,7 +227,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   };
 
   // "Ping me when it finishes": one ring, once, the next time the thread
-  // settles - then the bell unarms itself rather than buzzing every turn.
+  // settles. New sessions start enabled; the owner can silence this thread.
   const toggleNotify = () => call(async () => {
     const r: any = await client.rpc(env.id, 'session.notify', { id: session.id, on: !session.notifyDone });
     onSession(r.session);
@@ -321,13 +321,13 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           </span>
         </div>
         {chip(status)}
-        {/* "Tell me when it lands": armed until the thread next goes idle,
-            then it rings once and clears. The daemon holds the flag, so it
-            is the same on every device and survives this one closing. */}
+        {/* Completion notifications are on for new threads. The daemon holds
+            the preference, so it is the same on every device and survives
+            this one closing. */}
         <button
           className={`iconbtn bell${session.notifyDone ? ' on' : ''}`}
-          title={session.notifyDone ? 'will ping when it finishes - tap to cancel' : 'ping me when it finishes'}
-          aria-label={session.notifyDone ? 'cancel finish notification' : 'notify when this finishes'}
+          title={session.notifyDone ? 'completion notifications on — tap to turn off' : 'completion notifications off — tap to turn on'}
+          aria-label={session.notifyDone ? 'turn completion notifications off' : 'turn completion notifications on'}
           aria-pressed={!!session.notifyDone}
           onClick={toggleNotify}
         >

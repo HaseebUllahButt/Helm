@@ -12,7 +12,7 @@ import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles } from './profiles.js';
 import { listModels } from './models.js';
 import { listCommands } from './commands.js';
-import { accountKey, modelPrefs, saveModelPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
+import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
@@ -230,12 +230,11 @@ export class Daemon {
     this.sessions.on('status', ({ session, from, to }) => {
       this.#emit(E.SESSION_UPDATE, { session: wire(session), transition: { from, to } });
       // The bell rings when the thread settles back to idle, not when it
-      // pauses to ask: "ping me when it's done" means finished - a thread
+      // pauses to ask: a completion notification means finished - a thread
       // that is merely blocked has its own notification already. Done,
       // interrupted and errored all land on idle, so any of them rings it.
       if (session.notifyDone && to === 'idle' && from !== 'idle') {
         this.#notifyDone(session);
-        this.sessions.setNotifyDone(session.id, false);
       }
     });
     this.sessions.on('event', ({ id, event }) => {
@@ -526,7 +525,7 @@ export class Daemon {
   }
 
   /**
-   * The "ping me when it finishes" bell going off. Deliberately plainer than
+   * A completion bell going off. Deliberately plainer than
    * `describeAsk` - there is nothing to decide, so the notification carries
    * the thread's name and that it finished, nothing more.
    */
@@ -784,8 +783,16 @@ export class Daemon {
         // groups aliases and renders the picker filter with no extra call.
         const cfg = loadSettings();
         return {
-          profiles: profiles.map((x) => ({ ...x, account: accountKey(x), prefs: modelPrefs(x, cfg) })),
+          profiles: profiles.map((x) => ({
+            ...x, account: accountKey(x), prefs: modelPrefs(x, cfg), defaults: startPrefs(x, cfg),
+          })),
         };
+      }
+
+      case M.PROFILE_DEFAULTS: {
+        const profile = (await getProfiles()).find((x) => x.id === p.profileId);
+        if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
+        return { ok: true, defaults: saveStartPrefs(profile, p) };
       }
 
       case M.MODEL_LIST: {
