@@ -217,6 +217,14 @@ function dedupeDetected(list: Session[], found: InventorySession[]): InventorySe
   });
 }
 
+/**
+ * The WhatsApp agent keeps one opencode thread per chat, titled
+ * `whatsapp-<jid>`, and it talks often enough to fill "recent" with its own
+ * plumbing. Those stay in the folds and search below - the slots that answer
+ * "lately" are for threads a person was in.
+ */
+const botThread = (s: Session) => /^whatsapp-/i.test(s.title);
+
 // ---------------------------------------------------------------------- app
 
 export function App() {
@@ -1698,7 +1706,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
 
   const rest = mine.filter((s) => s.status !== 'blocked' && s.status !== 'working');
   const externalLive = external.filter((s) => !s.archived && hit(s));
-  const recent = [...rest, ...externalLive].sort(byRecent).slice(0, 3);
+  const recent = [...rest, ...externalLive].filter((s) => !botThread(s)).sort(byRecent).slice(0, 3);
   const recentIds = new Set(recent.map((s) => s.id));
 
   const projectFolds = projects
