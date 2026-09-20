@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { fakeCli, collect } from './helpers.mjs';
-import { CodexDriver } from '../packages/connect/src/drivers/codex.js';
+import { CodexDriver, CODEX_COMMANDS } from '../packages/connect/src/drivers/codex.js';
 
 // One app-server is shared per account home; every test gets its own so the
 // fake replays the right recording.
@@ -14,6 +14,22 @@ const make = (name, opts = {}) => {
   });
   return { fake, driver, log: collect(driver) };
 };
+
+test('codex exposes the commands Helm can execute through app-server', async () => {
+  const driver = new CodexDriver({ cmd: 'codex', env: {}, cwd: '/x', mode: 'ask' });
+  assert.deepEqual(await driver.availableCommands(), CODEX_COMMANDS);
+  assert.ok(CODEX_COMMANDS.length > 10);
+});
+
+test('/pwd is handled locally as a completed command turn', async () => {
+  const { driver, log, fake } = make('plain');
+  await driver.send('/pwd');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.equal(log.of('item.delta').map((e) => e.text).join(''), fake.dir);
+  assert.equal(fake.stdinLines().some((line) => line.method === 'turn/start'), false);
+  await driver.kill();
+});
 
 test('plain: initialize, thread/start, turn/start; text streams as deltas', async () => {
   const { driver, log, fake } = make('plain');

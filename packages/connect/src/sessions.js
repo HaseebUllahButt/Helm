@@ -632,6 +632,17 @@ export class Sessions extends EventEmitter {
 
   #onDriverEvent(s, d, e) {
     if (this.#drivers.get(s.id) !== d && e.type !== 'status') return;
+    // Slash commands such as /model and /permissions change the same live
+    // driver settings as the composer's pickers. Persist them here so every
+    // connected client and the next resumed process sees the same choice.
+    if (e.type === 'settings') {
+      for (const key of ['model', 'effort', 'mode', 'speed']) {
+        if (Object.hasOwn(e, key)) s[key] = e[key] || null;
+      }
+      if (this.#index.has(s.id)) this.#save();
+      this.emit('session', s);
+      return;
+    }
     if (e.type === 'status') {
       // A closed process is not a closed conversation: the next message
       // resumes it. Only an explicit kill removes the session.

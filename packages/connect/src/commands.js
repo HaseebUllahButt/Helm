@@ -106,8 +106,12 @@ export function listCommands({ engine, cwd, home, available = [] }) {
     }
   };
   take(BUILT_IN);
+  // Codex built-ins are implemented by Helm because app-server does not
+  // advertise or expand the TUI's slash commands. They must keep precedence
+  // over a prompt file with the same name, just as they do in Codex's TUI.
+  if (engine === 'codex') take(available);
   const dirs = directories(engine, cwd ?? '~', home);
   dirs.forEach((dir, i) => take(read(dir, i === 0 && engine === 'claude' ? 'project' : 'yours')));
-  take(available);
+  if (engine !== 'codex') take(available);
   return out;
 }

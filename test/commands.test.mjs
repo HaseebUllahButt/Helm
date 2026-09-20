@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { listCommands, BUILT_IN } from '../packages/connect/src/commands.js';
+import { CODEX_COMMANDS } from '../packages/connect/src/drivers/codex.js';
 
 test('the palette is helm\'s own actions plus the commands the owner wrote', () => {
   const root = mkdtempSync(join(tmpdir(), 'helm-cmds-'));
@@ -74,4 +75,14 @@ test('commands advertised by the live CLI join the palette without duplicates', 
   assert.equal(list.find((c) => c.name === 'status').description, 'Check authentication status');
   assert.equal(list.filter((c) => c.name === 'compact').length, 1);
   assert.equal(list.find((c) => c.name === 'compact').source, 'helm');
+});
+
+test('codex has a real app-server command palette instead of only compact', () => {
+  const list = listCommands({
+    engine: 'codex', cwd: '/tmp', home: '/nowhere', available: CODEX_COMMANDS,
+  });
+  for (const name of ['compact', 'model', 'permissions', 'review', 'status', 'diff', 'skills', 'mcp', 'apps', 'plugins', 'usage']) {
+    assert.ok(list.some((c) => c.name === name), `/${name} is offered`);
+  }
+  assert.equal(list.filter((c) => c.name === 'compact').length, 1);
 });

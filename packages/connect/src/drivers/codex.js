@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { Driver, readJsonLines, checkVersion } from './index.js';
@@ -24,6 +24,47 @@ const MAX_OUTPUT = 32_000;
 /** A diff is read in a fold on a phone, and `events.js` caps it there too. */
 const MAX_DIFF = 8_000;
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
+
+/**
+ * Codex's slash commands live in its TUI, not in app-server. Unlike Claude
+ * and ACP, app-server therefore has no "available commands" notification for
+ * us to relay. These are the commands Helm can perform faithfully through
+ * app-server (or locally for read-only workspace facts). Terminal-only UI
+ * actions such as /theme, /copy and /quit deliberately do not pretend to
+ * exist in a web conversation.
+ */
+export const CODEX_COMMANDS = [
+  { name: 'help', description: 'Show the commands available in this chat', source: 'codex' },
+  { name: 'model', description: 'List models, or switch with /model <id>', source: 'codex' },
+  { name: 'permissions', description: 'Show permissions, or switch ask, edit, full, or readonly', source: 'codex' },
+  { name: 'fast', description: 'Toggle fast mode, or use /fast on|off', source: 'codex' },
+  { name: 'review', description: 'Review uncommitted changes, or add custom instructions', source: 'codex' },
+  { name: 'rename', description: 'Rename this conversation with /rename <title>', source: 'codex' },
+  { name: 'status', description: 'Show this Codex session configuration', source: 'codex' },
+  { name: 'usage', description: 'Show current account usage limits', source: 'codex' },
+  { name: 'diff', description: 'Show uncommitted changes in this workspace', source: 'codex' },
+  { name: 'skills', description: 'List skills available in this workspace', source: 'codex' },
+  { name: 'mcp', description: 'List configured MCP servers and their status', source: 'codex' },
+  { name: 'apps', description: 'List apps available to Codex', source: 'codex' },
+  { name: 'plugins', description: 'List installed Codex plugins', source: 'codex' },
+  { name: 'pwd', description: 'Show the current working directory', source: 'codex' },
+  { name: 'cwd', description: 'Show the current working directory', source: 'codex' },
+];
+
+const commandNames = new Set(CODEX_COMMANDS.map((c) => c.name));
+const slashCommand = (text) => {
+  const m = /^\/(\S+)(?:\s+([\s\S]*?))?\s*$/.exec(text.trim());
+  return m && commandNames.has(m[1].toLowerCase())
+    ? { name: m[1].toLowerCase(), args: (m[2] ?? '').trim() }
+    : null;
+};
+
+const runFile = (file, args, options = {}) => new Promise((resolve, reject) => {
+  execFile(file, args, { timeout: 15_000, maxBuffer: MAX_OUTPUT * 4, ...options }, (err, stdout, stderr) => {
+    if (err && !stdout && !stderr) return reject(err);
+    resolve({ stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), code: err?.code ?? 0 });
+  });
+});
 
 // -------------------------------------------------------------- the server
 
@@ -226,6 +267,8 @@ export class CodexDriver extends Driver {
   // ----------------------------------------------------------------- verbs
 
   async send(text) {
+    const command = slashCommand(text);
+    if (command) return this.#runSlash(text, command);
     await this.start();
     // Per-turn overrides stick to the thread, so a mode or model changed
     // mid-session takes effect on the next message - the sandbox included,
@@ -257,6 +300,159 @@ export class CodexDriver extends Driver {
     }
     this.#turnId = res.result.turn.id;
     this.push('turn.start', { turnId: this.#turnId, text });
+  }
+
+  /** app-server does not advertise these: they are client-side in Codex TUI. */
+  async availableCommands() { return CODEX_COMMANDS; }
+
+  /** Native compaction, rather than sending the string `/compact` as a prompt. */
+  async compact() {
+    await this.start();
+    const res = await this.#server.call('thread/compact/start', { threadId: this.threadId });
+    if (res.error) throw new Error(res.error.message);
+  }
+
+  /**
+   * Give client-side Codex commands the same event shape as an ordinary turn,
+   * so the optimistic message posted by Sessions is adopted instead of being
+   * duplicated. /review is special: it starts a real app-server turn, whose
+   * subsequent item and completion notifications finish this visible turn.
+   */
+  async #runSlash(text, { name, args }) {
+    await this.start();
+    const commandTurn = `command-${randomUUID()}`;
+    this.push('status', { status: 'working' });
+    this.push('turn.start', { turnId: commandTurn, text });
+
+    if (name === 'review') {
+      const target = args ? { type: 'custom', instructions: args } : { type: 'uncommittedChanges' };
+      const res = await this.#server.call('review/start', { threadId: this.threadId, target });
+      if (res.error) {
+        this.push('turn.done', { turnId: commandTurn, status: 'error', error: res.error.message });
+        this.push('status', { status: 'idle' });
+        throw new Error(res.error.message);
+      }
+      this.#turnId = res.result.turn.id;
+      return;
+    }
+
+    try {
+      const body = await this.#slashResult(name, args);
+      const itemId = `command-result-${randomUUID()}`;
+      this.push('item.start', { id: itemId, turnId: commandTurn, kind: 'text' });
+      this.push('item.delta', { id: itemId, text: body || 'Done.' });
+      this.push('item.done', { id: itemId, status: 'ok' });
+      this.push('turn.done', { turnId: commandTurn, status: 'ok' });
+    } catch (err) {
+      const message = String(err?.message || err);
+      this.push('error', { message, kind: 'command' });
+      this.push('turn.done', { turnId: commandTurn, status: 'error', error: message });
+      throw err;
+    } finally {
+      this.push('status', { status: 'idle' });
+    }
+  }
+
+  async #call(method, params = {}) {
+    const res = await this.#server.call(method, params);
+    if (res.error) {
+      // A proxy can occasionally return an HTML challenge page. Keep that
+      // out of a chat transcript while retaining the useful first sentence.
+      const message = String(res.error.message ?? 'Codex command failed')
+        .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      throw new Error(clip(message, 500));
+    }
+    return res.result;
+  }
+
+  async #slashResult(name, args) {
+    switch (name) {
+      case 'help':
+        return CODEX_COMMANDS.map((c) => `/${c.name} — ${c.description}`).join('\n');
+      case 'pwd':
+      case 'cwd':
+        return this.cwd;
+      case 'status':
+        return [
+          `Model: ${this.model || this.info?.model || 'default'}`,
+          `Thinking: ${this.effort || 'default'}`,
+          `Permissions: ${this.mode || 'ask'}`,
+          `Speed: ${this.speed || 'normal'}`,
+          `Folder: ${this.cwd}`,
+          `Thread: ${this.threadId}`,
+        ].join('\n');
+      case 'model': {
+        if (args) {
+          await this.setModel(args);
+          this.push('settings', { model: this.model });
+          return `Model set to ${this.model}.`;
+        }
+        const result = await this.#call('model/list', {});
+        return (result.data ?? []).map((m) => `${m.id}${m.isDefault ? ' (default)' : ''} — ${m.description || m.displayName}`).join('\n') || 'No models reported.';
+      }
+      case 'permissions': {
+        const modes = ['ask', 'edit', 'full', 'readonly'];
+        if (!args) return `Current: ${this.mode || 'ask'}\nAvailable: ${modes.join(', ')}`;
+        const picked = args.toLowerCase();
+        if (!modes.includes(picked)) throw new Error(`Unknown permissions mode "${args}". Use ${modes.join(', ')}.`);
+        await this.setMode(picked);
+        this.push('settings', { mode: this.mode });
+        return `Permissions set to ${picked}.`;
+      }
+      case 'fast': {
+        const value = args.toLowerCase();
+        if (value && !['on', 'off', 'fast', 'normal'].includes(value)) throw new Error('Use /fast, /fast on, or /fast off.');
+        const speed = value === 'off' || value === 'normal' ? null : value === 'on' || value === 'fast' ? 'fast' : (this.speed === 'fast' ? null : 'fast');
+        await this.setSpeed(speed);
+        this.push('settings', { speed: this.speed });
+        return `Fast mode ${this.speed === 'fast' ? 'on' : 'off'}.`;
+      }
+      case 'rename': {
+        if (!args) throw new Error('Give the conversation a name: /rename <title>');
+        await this.#call('thread/name/set', { threadId: this.threadId, name: args });
+        this.push('title', { title: args });
+        return `Renamed to ${args}.`;
+      }
+      case 'skills': {
+        const result = await this.#call('skills/list', { cwds: [this.cwd] });
+        const skills = (result.data ?? []).flatMap((entry) => entry.skills ?? []);
+        return skills.map((s) => `${s.enabled ? '●' : '○'} ${s.name} — ${s.description}`).join('\n') || 'No skills found.';
+      }
+      case 'mcp': {
+        const result = await this.#call('mcpServerStatus/list', { threadId: this.threadId });
+        return (result.data ?? []).map((s) => {
+          const state = typeof s.runtimeStatus === 'string' ? s.runtimeStatus : (s.runtimeStatus?.type ?? (s.toolsError ? 'error' : 'configured'));
+          return `${s.name} — ${state}${s.toolsError ? `: ${s.toolsError}` : ''}`;
+        }).join('\n') || 'No MCP servers configured.';
+      }
+      case 'apps': {
+        const result = await this.#call('app/list', { threadId: this.threadId });
+        return (result.data ?? []).map((a) => `${a.name || a.displayName || a.id}${a.description ? ` — ${a.description}` : ''}`).join('\n') || 'No apps available.';
+      }
+      case 'plugins': {
+        const result = await this.#call('plugin/list', { cwds: [this.cwd] });
+        const plugins = (result.marketplaces ?? []).flatMap((m) => m.plugins ?? []).filter((p) => p.installed);
+        return plugins.map((p) => `${p.name || p.id}${p.version ? ` ${p.version}` : ''}`).join('\n') || 'No plugins installed.';
+      }
+      case 'usage': {
+        const result = await this.#call('account/rateLimits/read', null);
+        const limits = result.rateLimitsByLimitId ? Object.values(result.rateLimitsByLimitId) : [result.rateLimits];
+        const rows = limits.filter(Boolean).flatMap((limit) => [limit.primary, limit.secondary].filter(Boolean).map((w, i) => {
+          const label = limit.limitName || limit.limitId || 'Codex';
+          const reset = w.resetsAt ? `, resets ${new Date(w.resetsAt * 1000).toLocaleString()}` : '';
+          return `${label}${i ? ' (secondary)' : ''}: ${w.usedPercent ?? 0}% used${reset}`;
+        }));
+        return rows.join('\n') || 'Usage information is unavailable.';
+      }
+      case 'diff': {
+        const status = await runFile('git', ['-C', this.cwd, 'status', '--short']);
+        const diff = await runFile('git', ['-C', this.cwd, 'diff', '--no-ext-diff', '--stat', '--patch']);
+        const text = [status.stdout.trim() && `Status:\n${status.stdout.trim()}`, diff.stdout.trim()].filter(Boolean).join('\n\n');
+        return clip(text || 'Working tree clean.');
+      }
+      default:
+        throw new Error(`Unsupported Codex command: /${name}`);
+    }
   }
 
   /**
