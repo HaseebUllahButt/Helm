@@ -69,7 +69,7 @@ step "installing dependencies"
 # Dev dependencies included on purpose: the web app is built from source here,
 # and vite lives in devDependencies. Skipping them gets you a working daemon
 # and no app to point a phone at.
-(cd "$DIR" && npm install --silent --no-fund --no-audit) || die "npm install failed"
+(cd "$DIR" && npm install --include=dev --silent --no-fund --no-audit) || die "npm install failed"
 
 step "building the app"
 (cd "$DIR" && npm --workspace @helm/web run build --silent) >/dev/null 2>&1 \
