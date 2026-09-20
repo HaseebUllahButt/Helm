@@ -219,9 +219,9 @@ function dedupeDetected(list: Session[], found: InventorySession[]): InventorySe
 
 /**
  * The WhatsApp agent keeps one opencode thread per chat, titled
- * `whatsapp-<jid>`, and it talks often enough to fill "recent" with its own
- * plumbing. Those stay in the folds and search below - the slots that answer
- * "lately" are for threads a person was in.
+ * `whatsapp-<jid>`, and it talks often enough to fill this screen with its
+ * own plumbing. They are the bot's threads, not yours, so none of the lists
+ * below show them.
  */
 const botThread = (s: Session) => /^whatsapp-/i.test(s.title);
 
@@ -1693,7 +1693,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
 
   // Threads this machine's CLIs recorded without helm, beside helm's own.
   const detected = dedupeDetected(sessions, earlier);
-  const external = detected.map(foundRow);
+  const external = detected.map(foundRow).filter((s) => !botThread(s));
   // A terminal is reached through the machine's terminal button and kept
   // alive for that button to reopen. It is not a chat and should never be
   // recorded in the thread, archive or search lists.
