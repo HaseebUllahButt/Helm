@@ -70,8 +70,18 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // What `/` offers. Read from the machine because that is where the
   // commands are: files beside the project, or in that account's config.
   useEffect(() => {
-    client.rpc<{ commands: typeof commands }>(env.id, 'session.commands', { id: session.id }, 20_000)
-      .then((r) => setCommands(r.commands ?? [])).catch(() => setCommands([]));
+    let stale = false;
+    const load = () => client.rpc<{ commands: typeof commands }>(env.id, 'session.commands', { id: session.id }, 20_000)
+      .then((r) => { if (!stale) setCommands(r.commands ?? []); })
+      .catch(() => { if (!stale) setCommands([]); });
+    void load();
+    // A daemon upgrade can add commands while this conversation remains
+    // open. Refresh after either the hub reconnects or this machine's direct
+    // route comes back, so `/` changes without requiring a page reload.
+    const off = client.on((e, kind, payload: any) => {
+      if ((kind === 'connection' && payload?.online) || (e === env.id && kind === 'transport' && payload?.direct)) void load();
+    });
+    return () => { stale = true; off(); };
   }, [client, env.id, session.id]);
 
   // The record changes without us asking: the CLI reports which model it
