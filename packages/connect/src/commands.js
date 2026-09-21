@@ -25,6 +25,10 @@ export const BUILT_IN = [
   { name: 'compact', description: 'Summarise the conversation into a fresh context', source: 'helm' },
 ];
 
+const DEVIN_BUILT_IN = [
+  { name: 'usage', description: 'Show session usage', source: 'devin' },
+];
+
 /**
  * Where each engine reads the owner's own commands from. Each entry says
  * how its files look (`skills` marks Devin's one-directory-per-command
@@ -140,6 +144,7 @@ export function listCommands({ engine, cwd, home, available = [] }) {
     }
   };
   take(BUILT_IN);
+  if (engine === 'devin') take(DEVIN_BUILT_IN);
   // Codex built-ins are implemented by Helm because app-server does not
   // advertise or expand the TUI's slash commands. They must keep precedence
   // over a prompt file with the same name, just as they do in Codex's TUI.

@@ -59,7 +59,7 @@ test('codex reads prompts, and an engine with none offers only helm\'s actions',
   const codex = listCommands({ engine: 'codex', cwd: '/tmp', home: root });
   assert.equal(codex.find((c) => c.name === 'plan').description, 'Plan before touching anything');
   assert.deepEqual(
-    listCommands({ engine: 'devin', cwd: '/tmp', home: root }).map((c) => c.name),
+    listCommands({ engine: 'opencode', cwd: '/tmp', home: root }).map((c) => c.name),
     BUILT_IN.map((c) => c.name),
   );
 });
