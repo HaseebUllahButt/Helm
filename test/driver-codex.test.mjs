@@ -46,14 +46,28 @@ test('/usage views format the account activity API as Markdown', () => {
   assert.match(summary, /\*\*Today:\*\* [\d,]+ tokens/);
   assert.match(summary, /\*\*Last 7 days:\*\* 600 tokens/);
   assert.match(summary, /`\/usage daily`/);
+  // The quota card leads /usage, like the TUI's status card: the window is
+  // named for its length and the bar fills to the percent used.
+  const now = Date.now();
   const limits = formatRateLimits({ rateLimits: {
-    limitId: 'codex', primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1789947078 },
-  } });
+    limitId: 'codex',
+    primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: now / 1000 + 5 * 3600 },
+    secondary: { usedPercent: 30, windowDurationMins: 10080, resetsAt: now / 1000 + 4 * 86400 },
+    credits: { hasCredits: true, unlimited: false, balance: '42.50' },
+    planType: 'pro',
+  } }, { now });
   assert.match(limits, /### Limits/);
-  assert.match(limits, /- \*\*codex\*\* — 42% used · 300m window · resets .* UTC/);
+  assert.match(limits, /\*\*5h limit\*\* `█{8}░{12}` 42% used · resets in \d+h \d+m/);
+  assert.match(limits, /\*\*Weekly limit\*\* `█{6}░{14}` 30% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-][\d:]+\)/);
+  assert.match(limits, /\*\*Credits:\*\* 42\\\.50/);
+  assert.match(limits, /\*\*Plan:\*\* Pro/);
   // A provider-supplied label cannot smuggle markup into the report.
-  assert.match(formatRateLimits({ rateLimits: { limitName: 'co*dex', primary: { usedPercent: 1 } } }),
-    /\*\*co\\\*dex\*\*/);
+  const two = formatRateLimits({ rateLimitsByLimitId: {
+    'co*dex': { limitId: 'co*dex', primary: { usedPercent: 1 } },
+    'gpt': { limitId: 'gpt', primary: { usedPercent: 2 } },
+  } }, { now });
+  assert.match(two, /\*co\\\*dex\*/);
+  assert.match(two, /\*gpt\*/);
 });
 
 test('/pwd is handled locally as a completed command turn', async () => {
@@ -75,11 +89,25 @@ test('informational slash commands do not clear an active turn status', async ()
 
   const commandDone = log.of('turn.done').find((e) => String(e.turnId).startsWith('command-'));
   assert.equal(commandDone.status, 'ok');
-  assert.equal(driver.status, 'working', 'the model turn still owns the status and Stop control');
-  assert.deepEqual(log.of('status').map((e) => e.status), ['working']);
   assert.equal(fake.stdinLines().filter((line) => line.method === 'turn/start').length, 1);
 
+  // The status card carries the live account reads: the signed-in account
+  // and the quota bars the TUI's /status draws.
+  const item = log.of('item.start').find((e) => e.kind === 'text' && String(e.turnId).startsWith('command-'));
+  const body = log.of('item.delta').filter((e) => e.id === item.id).map((e) => e.text).join('');
+  assert.match(body, /### Session status/);
+  assert.match(body, /\*\*Account:\*\* dev@example\\\.com \(Pro\)/);
+  assert.match(body, /\*\*5h limit\*\* `█+░+` 12% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-][\d:]+\)/);
+  assert.match(body, /\*\*Weekly limit\*\* `█+░+` 30% used/);
+  assert.match(body, /\*\*Credits:\*\* 42\\\.50/);
+  const calls = fake.stdinLines().map((l) => l.method);
+  assert.ok(calls.includes('account/read'));
+  assert.ok(calls.includes('account/rateLimits/read'));
+
   await log.until((e) => e.type === 'turn.done' && !String(e.turnId).startsWith('command-'));
+  // The command emitted no status of its own: every status on the log is
+  // the model turn's, so the Stop control stayed with it.
+  assert.deepEqual(log.of('status').map((e) => e.status), ['working', 'idle']);
   await driver.kill();
 });
 

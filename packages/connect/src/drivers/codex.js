@@ -5,6 +5,7 @@ import { Driver, readJsonLines, checkVersion } from './index.js';
 import { modeFor } from '../modes.js';
 import { expand } from '../paths.js';
 import { codexSessionState } from '../transcript.js';
+import { formatReset, planName, quotaBar, windowLabel } from '../quota.js';
 
 /**
  * Codex, headless.
@@ -41,8 +42,8 @@ export const CODEX_COMMANDS = [
   { name: 'fast', description: 'Toggle fast mode, or use /fast on|off', source: 'codex' },
   { name: 'review', description: 'Review uncommitted changes, or add custom instructions', source: 'codex' },
   { name: 'rename', description: 'Rename this conversation with /rename <title>', source: 'codex' },
-  { name: 'status', description: 'Show this Codex session configuration', source: 'codex' },
-  { name: 'usage', description: 'Show account usage; accepts daily, weekly, or cumulative', source: 'codex' },
+  { name: 'status', description: 'Show session settings and account quota', source: 'codex' },
+  { name: 'usage', description: 'Show account quota and token activity; accepts daily, weekly, or cumulative', source: 'codex' },
   { name: 'diff', description: 'Show uncommitted changes in this workspace', source: 'codex' },
   { name: 'skills', description: 'List skills available in this workspace', source: 'codex' },
   { name: 'mcp', description: 'List configured MCP servers and their status', source: 'codex' },
@@ -88,11 +89,6 @@ const runFile = (file, args, options = {}) => new Promise((resolve, reject) => {
 });
 
 const number = (value) => Number(value ?? 0).toLocaleString('en-US');
-const utcDate = (seconds) => {
-  if (!seconds) return '';
-  const d = new Date(Number(seconds) * 1000);
-  return Number.isNaN(d.getTime()) ? '' : d.toISOString().replace('T', ' ').replace(/:\d\d\.000Z$/, ' UTC');
-};
 
 // Command answers render through the transcript's Markdown, so whatever a
 // provider or API hands back is escaped while the labels stay markup.
@@ -106,23 +102,47 @@ function sandboxName(policy) {
   return policy.type ?? 'default';
 }
 
-/** The compact limit block shared by `/status` and `/usage`. */
-export function formatRateLimits(result) {
+/**
+ * The quota card shared by `/status` and `/usage` - the same bars Codex's
+ * own status card draws: the 5-hour bucket, the weekly bucket, then
+ * credits and plan. `result` is an `account/rateLimits/read` response, or
+ * a bare RateLimitSnapshot from the rolling `account/rateLimits/updated`
+ * notification.
+ */
+export function formatRateLimits(result, { now = Date.now() } = {}) {
   if (!result) return '';
-  const limits = result.rateLimitsByLimitId
-    ? Object.values(result.rateLimitsByLimitId)
-    : [result.rateLimits];
-  const rows = limits.filter(Boolean).flatMap((limit) => {
-    const label = limit.limitName || limit.limitId || limit.limit_name || limit.limit_id || 'Codex';
-    return [limit.primary, limit.secondary].filter(Boolean).map((w, i) => {
-      const minutes = w.windowDurationMins ?? w.window_minutes;
-      const resetAt = w.resetsAt ?? w.resets_at;
-      const window = minutes ? ` · ${minutes >= 1440 ? `${number(minutes / 1440)}d` : `${number(minutes)}m`} window` : '';
-      const reset = utcDate(resetAt);
-      return `- **${mdEscape(`${label}${i ? ' secondary' : ''}`)}** — ${w.usedPercent ?? w.used_percent ?? 0}% used${window}${reset ? ` · resets ${reset}` : ''}`;
-    });
-  });
-  return rows.length ? `### Limits\n\n${rows.join('\n')}` : '';
+  const byLimitId = result.rateLimitsByLimitId;
+  const snapshots = byLimitId && Object.keys(byLimitId).length
+    ? Object.values(byLimitId)
+    : [result.rateLimits ?? (result.primary || result.secondary || result.credits ? result : null)];
+  const sections = [];
+  const many = snapshots.filter(Boolean).length > 1;
+  for (const snap of snapshots.filter(Boolean)) {
+    const lines = [];
+    const line = (label, w) => {
+      const used = Math.round(w.usedPercent ?? w.used_percent ?? 0);
+      const reset = formatReset(w.resetsAt ?? w.resets_at, now);
+      return `**${mdEscape(label)}** ${quotaBar(used)} ${used}% used${reset ? ` · resets ${reset}` : ''}`;
+    };
+    if (snap.primary) lines.push(line(windowLabel(snap.primary, 'Primary limit'), snap.primary));
+    if (snap.secondary) lines.push(line(windowLabel(snap.secondary, 'Secondary limit'), snap.secondary));
+    if (snap.individualLimit) {
+      const spend = snap.individualLimit;
+      const used = 100 - (Number(spend.remainingPercent ?? spend.remaining_percent) || 0);
+      const reset = formatReset(spend.resetsAt ?? spend.resets_at, now);
+      const amounts = spend.limit ? ` (${mdEscape(spend.used ?? '0')} of ${mdEscape(spend.limit)})` : '';
+      lines.push(`**Spend limit** ${quotaBar(used)} ${used}% used${amounts}${reset ? ` · resets ${reset}` : ''}`);
+    }
+    if (snap.credits?.hasCredits ?? snap.credits?.has_credits) {
+      const c = snap.credits;
+      lines.push(`**Credits:** ${c.unlimited ? 'unlimited' : mdEscape(c.balance ?? 'unknown')}`);
+    }
+    if (snap.planType ?? snap.plan_type) lines.push(`**Plan:** ${mdEscape(planName(snap.planType ?? snap.plan_type))}`);
+    if (!lines.length) continue;
+    const name = snap.limitName || snap.limitId || snap.limit_name || snap.limit_id;
+    sections.push(many && name ? `*${mdEscape(name)}*  \n${lines.join('  \n')}` : lines.join('  \n'));
+  }
+  return sections.length ? `### Limits\n\n${sections.join('\n\n')}` : '';
 }
 
 const day = (date) => new Date(`${date}T00:00:00Z`);
@@ -167,7 +187,10 @@ export function formatAccountUsage(result, view = '', rateLimits = null) {
       `**Longest streak:** ${summary.longestStreakDays == null ? 'unavailable' : `${number(summary.longestStreakDays)} days`}`,
     ].join('  \n')}`;
   }
+  // Quota first: that is what /usage means in the TUI. The token activity
+  // is the breakdown underneath it.
   return [
+    ...(limits ? [limits, ''] : []),
     '### Account usage',
     '',
     [
@@ -175,7 +198,6 @@ export function formatAccountUsage(result, view = '', rateLimits = null) {
       `**Last 7 days:** ${number(sevenDay)} tokens`,
       `**Lifetime:** ${summary.lifetimeTokens == null ? 'unavailable' : number(summary.lifetimeTokens)} tokens`,
     ].join('  \n'),
-    ...(limits ? ['', limits] : []),
     '',
     '*Views:* `/usage daily` · `/usage weekly` · `/usage cumulative`',
   ].join('\n');
@@ -377,7 +399,11 @@ export class CodexDriver extends Driver {
     server.attach(this);
     this.#rolloutState = await codexSessionState(this.transcript);
     this.#usage = this.#rolloutState.usage ?? this.#usage;
-    this.#rateLimits = this.#rolloutState.rateLimits ?? this.#rateLimits;
+    // A rateLimits/updated notification may already have arrived; the
+    // rollout's tail-of-turn snapshot is the fallback, not the fresher read.
+    if (!this.#rateLimits && this.#rolloutState.rateLimits) {
+      this.#rateLimits = { rateLimits: this.#rolloutState.rateLimits };
+    }
     this.info = {
       model: res.result.model ?? res.result.thread?.model ?? this.#rolloutState.settings?.model,
       effort: res.result.reasoningEffort ?? res.result.thread?.reasoningEffort ?? this.#rolloutState.settings?.effort,
@@ -536,8 +562,21 @@ export class CodexDriver extends Driver {
         const context = last?.totalTokens != null && window
           ? `${number(last.totalTokens)} / ${number(window)} tokens (${Math.max(0, Math.round((1 - last.totalTokens / window) * 100))}% left)`
           : 'unavailable until the first model turn';
-        this.#rateLimits = this.#rolloutState.rateLimits ?? this.#rateLimits;
-        const limits = formatRateLimits(this.#rateLimits && { rateLimits: this.#rateLimits });
+        // Live account reads are what the TUI's status card shows - quota
+        // and the signed-in account. Older app-servers may lack them, and
+        // the rollout's snapshot is the fallback either way.
+        const account = await this.#call('account/read', {}).catch(() => null);
+        const live = await this.#call('account/rateLimits/read', null).catch(() => null);
+        if (live) this.#rateLimits = live;
+        else if (!this.#rateLimits && this.#rolloutState.rateLimits) {
+          this.#rateLimits = { rateLimits: this.#rolloutState.rateLimits };
+        }
+        const limits = formatRateLimits(this.#rateLimits);
+        const acct = account?.account;
+        const accountLine = !acct ? null
+          : acct.type === 'chatgpt'
+            ? `${mdEscape(acct.email ?? 'ChatGPT')}${acct.planType ? ` (${mdEscape(planName(acct.planType))})` : ''}`
+            : acct.type === 'apiKey' ? 'API key' : mdEscape(acct.type);
         return [
           '### Session status',
           '',
@@ -549,6 +588,7 @@ export class CodexDriver extends Driver {
             `**Speed:** ${mdEscape(this.speed || settings.serviceTier || 'normal')}`,
             `**Folder:** ${mdCode(this.cwd || settings.cwd)}`,
             `**Thread:** ${mdCode(this.threadId)}`,
+            ...(accountLine ? [`**Account:** ${accountLine}`] : []),
             ...(this.info?.cliVersion ? [`**Codex:** ${mdEscape(this.info.cliVersion)}`] : []),
             `**Context:** ${context}`,
             ...(total?.totalTokens != null ? [`**Turn tokens:** ${number(total.totalTokens)}`] : []),
@@ -843,7 +883,21 @@ export class CodexDriver extends Driver {
   }
 
   onRateLimits(rateLimits) {
-    this.#rateLimits = rateLimits ?? this.#rateLimits;
+    if (rateLimits) {
+      // A rolling update is sparse - nulls in it do not clear what the last
+      // account/rateLimits/read said - so it merges into the snapshot helm
+      // holds rather than replacing it.
+      const sparse = Object.fromEntries(Object.entries(rateLimits).filter(([, v]) => v != null));
+      const prev = this.#rateLimits ?? {};
+      const key = sparse.limitId;
+      this.#rateLimits = {
+        ...prev,
+        rateLimits: { ...(prev.rateLimits ?? {}), ...sparse },
+        ...(key && prev.rateLimitsByLimitId?.[key]
+          ? { rateLimitsByLimitId: { ...prev.rateLimitsByLimitId, [key]: { ...prev.rateLimitsByLimitId[key], ...sparse } } }
+          : {}),
+      };
+    }
     this.push('limits', { codex: rateLimits });
   }
 
