@@ -106,17 +106,42 @@ export const machineName = (value) => {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(clean) ? clean : null;
 };
 
-/** Start a brand new network with this machine as its first member. */
+/**
+ * What a machine is for. The set is closed because the word travels in the
+ * roster: every machine has to mean the same thing by it, and there is no
+ * version negotiation on a gossiped record.
+ *
+ * A 'pc' runs agents and dials out to the rest. A 'vm' does that and is also
+ * a home - it holds an https address the others can be dialled at. A 'nas'
+ * is storage for the network: the same hub and daemon as a pc, flagged so
+ * the rest of the network knows it is a machine that stays reachable.
+ *
+ * A controller is deliberately not here. It is not a fourth kind of machine:
+ * it holds a device token rather than the network key, runs no daemon and
+ * cannot become a machine, so no value of `kind` ever names it.
+ */
+export const MACHINE_KINDS = ['pc', 'vm', 'nas'];
+export const machineKind = (v) => (MACHINE_KINDS.includes(v) ? v : null);
+
+/**
+ * Start a brand new network with this machine as its first member.
+ *
+ * The founder is the network's home - it is the machine everything else is
+ * added from - so it starts life designated 'vm', both on the roster record
+ * every peer will see and in `role`, the local note of the same fact that a
+ * joined machine gets from its invite.
+ */
 export function createNetwork({ name = hostname(), port = 8787 } = {}) {
   const id = newDeviceId();
   return write({
     id: newNetworkId(),
     key: newNetworkKey(),
     self: id,
+    role: 'vm',
     port,
     machines: {
       [id]: {
-        id, name: cleanName(name, hostname()), endpoints: [],
+        id, name: cleanName(name, hostname()), kind: 'vm', endpoints: [],
         updatedAt: Date.now(), addedAt: Date.now(),
       },
     },
@@ -343,6 +368,10 @@ function machineRecord(id, their, ceiling) {
 
   const out = { id, updatedAt };
   keep(out, 'name', text(their.name) ?? id.slice(0, 8));
+  // Optional: records written before kinds existed carry none, and stay
+  // valid - but a value that is not a real kind is dropped like any other
+  // field the sender cannot vouch for.
+  keep(out, 'kind', machineKind(their.kind));
   keep(out, 'addedAt', stampOf(their.addedAt, ceiling));
   keep(out, 'pubkey', pubkeyOf(their.pubkey));
   keep(out, 'sshUser', text(their.sshUser, 32) && sshUsers.test(their.sshUser) ? their.sshUser : null);

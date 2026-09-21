@@ -6,13 +6,13 @@ import { spawn, execFileSync } from 'node:child_process';
 import { argv, exit } from 'node:process';
 import {
   loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, machineToken,
-  localKey,
+  localKey, describeSelf, saveNetwork, machineKind, MACHINE_KINDS,
 } from '@helm/protocol/network';
 import { refreshProfiles, getProfiles } from '../src/profiles.js';
 import { proxy } from '../src/proxy.js';
 import { createRuntime } from '../src/runtime/index.js';
 import { HELM_DIR } from '../src/paths.js';
-import { M } from '@helm/protocol';
+import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { hubRpc } from '../src/hub-client.js';
 import { levelOfWav, SILENCE_RMS } from '../src/voice.js';
 import {
@@ -48,6 +48,7 @@ const usage = () => {
   helm add controller                a phone or browser: controls, runs nothing
   helm add pc                        a laptop or desktop: runs agents, controls others
   helm add vm                        another always-on machine, dialled by the rest
+  helm add nas                       storage for the network: a machine that stays reachable
   helm join <CODE> <home-url>        run on the machine being added, whichever kind
 
   helm join <CODE> <home-url> --foreground   ...run in this terminal instead
@@ -65,6 +66,7 @@ const usage = () => {
 
   helm devices                      controllers that can drive this network
   helm machines                     machines in this network
+  helm redesignate [machine] <kind> what a machine is for: pc, vm or nas
   helm remove <id>                  remove a controller or machine, permanently
   helm leave                        remove this machine from its network
 
@@ -198,6 +200,23 @@ const ago = (t) => {
 
 // ---------------------------------------------------------------- commands
 
+/**
+ * The one shape a Helm home address may take: a bare https origin.
+ *
+ * https is not optional - the app is installed to home screens and
+ * notifications only exist behind a real certificate - and a path or query
+ * is never part of the answer, so both are refused rather than silently
+ * carried along. Shared by `helm setup` and `helm redesignate vm`.
+ */
+function checkHome(home) {
+  let url;
+  try { url = new URL(home); } catch { die(`invalid home address: ${home}`); }
+  if (url.protocol !== 'https:') die('the Helm home address must start with https://');
+  if (url.pathname !== '/' || url.search || url.hash) {
+    die('use the home origin only, for example https://helm.example.com');
+  }
+}
+
 async function up() {
   if (rest.includes('--install')) {
     const { installService } = await import('../src/service.js');
@@ -236,25 +255,29 @@ async function up() {
 /**
  * `helm add <what>`.
  *
- * Three things can join, and they are different enough that naming them is
+ * Four things can join, and they are different enough that naming them is
  * the whole point: a controller is a screen with no agents on it, a pc runs
- * agents and drives others, a vm runs agents and is somewhere to dial. Only a
- * controller gets a link to open; the machines get a code to type.
+ * agents and drives others, a vm also is somewhere to dial, a nas is the
+ * same machine flagged as the network's storage - reachable, like a vm, but
+ * dialling out like a pc. Only a controller gets a link to open; the
+ * machines get a code to type.
+ *
+ * CONTROLLER_WORDS comes from the protocol: the set means the same thing in
+ * `helm redesignate`, where a controller is refused rather than invited.
  */
-const CONTROLLER_WORDS = ['controller', 'mobile', 'phone', 'browser', 'device'];
+const MACHINE_WORDS = { pc: 'pc', laptop: 'pc', vm: 'vm', nas: 'nas', storage: 'nas' };
 
 async function add() {
   const what = (rest.find((a) => !a.startsWith('--')) || '').toLowerCase();
 
   if (CONTROLLER_WORDS.includes(what)) return printDeviceLink(rest.slice(1));
-  if (what === 'pc' || what === 'laptop' || what === 'vm') {
-    return inviteMachine(what === 'vm' ? 'vm' : 'pc');
-  }
+  if (MACHINE_WORDS[what]) return inviteMachine(MACHINE_WORDS[what]);
 
   console.log('\n  What are you adding?\n');
   console.log('    helm add controller    a phone or browser - controls machines, runs nothing');
   console.log('    helm add pc            a laptop or desktop - runs agents, and controls others');
-  console.log('    helm add vm            an always-on machine - runs agents, and others dial it\n');
+  console.log('    helm add vm            an always-on machine - runs agents, and others dial it');
+  console.log('    helm add nas           storage for the network - a machine that stays reachable\n');
   if (what) console.log(`  ("${what}" is none of those.)\n`);
 }
 
@@ -262,11 +285,15 @@ async function inviteMachine(role) {
   const net = requireNetwork();
   const { base: where, value } = await postToHome(net, '/api/invite', { role });
   const { code } = value;
-  console.log(`\n  On the ${role === 'vm' ? 'VM' : 'computer'} you are adding, run:\n`);
+  console.log(`\n  On the ${role === 'vm' ? 'VM' : role === 'nas' ? 'NAS' : 'computer'} you are adding, run:\n`);
   console.log(`    helm join ${code} ${where}\n`);
   if (role === 'vm') {
     console.log('  It will take its own https address and start serving, so other');
     console.log('  machines can dial it as well as this one.');
+  } else if (role === 'nas') {
+    console.log('  It will dial this home like a pc - it needs no https address of');
+    console.log('  its own. The rest of the network will see it flagged as the');
+    console.log('  network\'s storage: a machine that stays reachable.');
   } else {
     console.log('  It will dial this home; it needs no address of its own.');
   }
@@ -385,21 +412,16 @@ async function setup({ alreadyJoined = false } = {}) {
     ? cleanEndpoint(strFlag('advertise'))
     : cleanEndpoint(rest.find((a, i) => !a.startsWith('--') && !flagValues.has(i)));
   if (!home) {
-    const { configureFreeHttps, detectPublicIpv4, freeHostname } = await import('../src/caddy.js');
-    const ip = process.env.HELM_PUBLIC_IP || await detectPublicIpv4();
-    const hostname = freeHostname(ip);
-    home = `https://${hostname}`;
-    console.log(`using free address: ${home}`);
-    console.log('no website, domain purchase, or DNS setup is needed.');
-    console.log('configuring HTTPS with Caddy (sudo may ask for your password)...');
-    await configureFreeHttps(hostname, port());
+    const { claimFreeHttps } = await import('../src/caddy.js');
+    home = await claimFreeHttps(port(), {
+      found: (hostname) => {
+        console.log(`using free address: https://${hostname}`);
+        console.log('no website, domain purchase, or DNS setup is needed.');
+        console.log('configuring HTTPS with Caddy (sudo may ask for your password)...');
+      },
+    });
   }
-  let url;
-  try { url = new URL(home); } catch { die(`invalid home address: ${home}`); }
-  if (url.protocol !== 'https:') die('the Helm home address must start with https://');
-  if (url.pathname !== '/' || url.search || url.hash) {
-    die('use the home origin only, for example https://helm.example.com');
-  }
+  checkHome(home);
 
   // Join the existing mesh before the service starts, so it comes up already
   // holding the shared key rather than founding a network of its own. Skipped
@@ -451,6 +473,19 @@ async function setup({ alreadyJoined = false } = {}) {
         '  https:  sudo journalctl -u caddy -n 50   (ports 80 and 443 must be open)');
   }
   console.log('ready');
+
+  // The thing `helm setup` means: this machine is the network's home. Say so
+  // on its record too - it answers "what is this machine for" the same way
+  // the address above answers "where is it", and a network founded before
+  // kinds existed learns it here without a separate command.
+  {
+    const net = loadNetwork();
+    if (net) {
+      net.role = 'vm';
+      describeSelf(net, { kind: 'vm' });
+      saveNetwork(net);
+    }
+  }
 
   if (joinCode) {
     const net = loadNetwork();
@@ -631,7 +666,9 @@ function machineId(who) {
 /** The home machine: where a brain lives unless told otherwise. */
 function brainHome() {
   const net = requireNetwork();
-  const vm = Object.values(net.machines ?? {}).find((m) => m.role === 'vm' && m.id !== net.self);
+  // `kind` is the field the roster actually carries; `role` was looked for
+  // here once and is only ever written locally, so it never found anything.
+  const vm = Object.values(net.machines ?? {}).find((m) => m.kind === 'vm' && m.id !== net.self);
   return flagOf('on') ? machineId(flagOf('on')) : (vm?.id ?? net.self);
 }
 
@@ -758,12 +795,171 @@ async function openBrain() {
   }
 }
 
+// ------------------------------------------------------------ redesignate
+
+const KIND_LIST = MACHINE_KINDS.join(', ');
+
+/**
+ * `helm redesignate [machine] <kind>` - what a machine is for, changed.
+ *
+ * The kind lives on the machine's own roster record, which only the machine
+ * may write - so a remote target is asked through its daemon, and even this
+ * machine is asked that way first when its daemon is up: the running daemon
+ * holds the advertised addresses and the service arguments the change
+ * touches. Writing the record here is the fallback for when it is down.
+ */
+async function redesignate() {
+  const args = rest.filter((a) => !a.startsWith('--'));
+  const net = requireNetwork();
+  if (args.length < 1 || args.length > 2) {
+    die(`usage: helm redesignate [machine] <${KIND_LIST}>`);
+  }
+  const [who, given] = args.length === 2 ? args : [null, args[0]];
+  const kind = String(given ?? '').toLowerCase();
+
+  // A controller is not a fourth kind and can never become one - nor can a
+  // machine be redesignated into one. It holds a device token, runs no
+  // daemon, and has nothing to change. The answer is a refusal rather than
+  // an error, because it is a guarantee, not a failure.
+  if (CONTROLLER_WORDS.includes(kind)) die(CONTROLLER_REFUSAL);
+  if (!machineKind(kind)) {
+    // One word that is not a kind reads like a member with the kind
+    // forgotten; name the mistake when the word names a member.
+    const want = String(given ?? '').toLowerCase();
+    if (Object.keys(net.devices ?? {}).some((id) => id.startsWith(want))) die(CONTROLLER_REFUSAL);
+    const member = Object.values(net.machines ?? {}).find((m) =>
+      m.id.startsWith(want) || m.name.toLowerCase() === want || m.name.toLowerCase().startsWith(want));
+    die(member
+      ? `"${given}" is a machine - say what it becomes: helm redesignate ${given} <${KIND_LIST}>`
+      : `a machine's kind is one of: ${KIND_LIST}`);
+  }
+
+  if (who) {
+    const want = who.toLowerCase();
+    const isDevice = Object.keys(net.devices ?? {}).some((id) => id === who || id.startsWith(want))
+      || Object.values(net.devices ?? {}).some((d) => String(d.label).toLowerCase().startsWith(want));
+    if (isDevice) die(CONTROLLER_REFUSAL);
+  }
+
+  const target = who ? machineId(who) : net.self;
+  const remote = target !== net.self;
+  const record = net.machines[target];
+  const from = (remote ? record?.kind : record?.kind ?? net.role) ?? 'pc';
+  if (from === kind && record?.kind === kind) {
+    console.log(`\n  ${record?.name ?? target} is already a ${kind}.\n`);
+    return;
+  }
+
+  // Becoming the vm needs an https address before anything is written, so a
+  // failure there leaves the machine exactly what it was. For this machine
+  // it is claimed here - sudo can ask for a password, which a remote daemon
+  // cannot do - and the ready address is handed over. A remote machine
+  // claims its own (its daemon runs the same code); --advertise instead
+  // says the https already exists, whichever side it is for.
+  let home = cleanEndpoint(strFlag('advertise')) || null;
+  if (home) checkHome(home);
+  if (kind === 'vm' && !remote && !home) {
+    home = record?.endpoints?.find((e) => e.startsWith('https://'))
+      ?? await claimFreeHome();
+  }
+  const params = { kind, ...(home ? { address: home } : {}) };
+
+  if (remote) {
+    const r = await askKind(net, target, params).catch((err) => {
+      if (/unknown method/.test(err.message)) {
+        die(`${record?.name ?? target} runs an older helm that cannot be redesignated - update it first`);
+      }
+      throw err;
+    });
+    reportKind(record?.name ?? target, r);
+    return;
+  }
+
+  const r = await askKind(net, net.self, params).catch((err) => {
+    // Unreachable, or a daemon from before kinds existed: either way the
+    // file-level path below lands the change, and the running daemon picks
+    // it up on its next publish - it re-reads the roster every tick.
+    if (/could not reach|timed out|unknown method/.test(err.message)) return null;
+    throw err;
+  });
+  if (r) { reportKind(record?.name ?? net.self, r); return; }
+  await redesignateLocally(net, kind, { from, home });
+}
+
+/** Ask a machine's daemon to redesignate itself. */
+async function askKind(net, target, params) {
+  return hubRpc(net, target, M.MACHINE_SET_KIND, params, { timeout: 120_000 });
+}
+
+function reportKind(name, r) {
+  console.log(r.changed
+    ? `\n  ${name} is now a ${r.kind}${r.from && r.from !== r.kind ? ` (was ${r.from})` : ''}.`
+    : `\n  ${name} is already a ${r.kind}.`);
+  for (const note of r.notes ?? []) console.log(`  ${note}`);
+  console.log('');
+}
+
+/** Claim this machine's free https address, saying so before sudo asks. */
+async function claimFreeHome() {
+  const { claimFreeHttps } = await import('../src/caddy.js');
+  console.log('\n  claiming a free https address for this machine...');
+  return claimFreeHttps(port(), {
+    found: (hostname) => {
+      console.log(`  using free address: https://${hostname}`);
+      console.log('  configuring HTTPS with Caddy (sudo may ask for your password)...');
+    },
+  });
+}
+
+/**
+ * The file-level half of `redesignate`, for when this machine's own daemon
+ * cannot be asked: write the record, keep the local note in step, and make
+ * the installed service agree so the change survives a reboot. When the
+ * daemon is up it does all of this itself - and republishes its live
+ * endpoint set - so this only runs when nothing answered.
+ */
+async function redesignateLocally(net, kind, { from, home }) {
+  const me = net.machines[net.self] ?? {};
+  const fields = { kind };
+  if (kind === 'vm') {
+    fields.endpoints = [home, ...(me.endpoints ?? []).filter((e) => e !== home)];
+  } else if (from === 'vm') {
+    // The advertised https address is what made it a home; anything http is
+    // a LAN address that stays true of a pc or a nas.
+    fields.endpoints = (me.endpoints ?? []).filter((e) => !e.startsWith('https://'));
+  }
+  net.role = kind;
+  describeSelf(net, fields);
+  saveNetwork(net);
+
+  const { installService } = await import('../src/service.js');
+  if (kind === 'vm') {
+    const r = await installService({
+      mode: 'serve', args: ['--advertise', home, '--host', '127.0.0.1'],
+    });
+    console.log(`\n  this machine is now a vm, serving ${home}.`);
+    if (!r.installed) {
+      console.log('  (no service was installed - `helm up --install` keeps it across reboots)');
+    }
+  } else {
+    if (from === 'vm') {
+      await installService({ mode: 'serve', args: ['--host', '0.0.0.0'] });
+      console.log('\n  the old https address is no longer advertised; its Caddy site');
+      console.log('  can be removed by hand:');
+      console.log('    sudo rm /etc/caddy/helm.caddy && sudo systemctl reload caddy');
+    }
+    console.log(`\n  this machine is now a ${kind}.`);
+  }
+  console.log('  every machine in the network sees the new kind as it syncs.\n');
+}
+
 function listMachines() {
   const net = requireNetwork();
   for (const m of Object.values(net.machines)) {
     const self = m.id === net.self ? ' (this machine)' : '';
+    const kind = m.kind ?? '?';
     const where = (m.endpoints ?? []).join(' ') || 'no address advertised';
-    console.log(`${short(m.id)}  ${m.name.padEnd(16)} ${where}${self}`);
+    console.log(`${short(m.id)}  ${m.name.padEnd(16)} ${kind.padEnd(3)}  ${where}${self}`);
   }
 }
 
@@ -875,6 +1071,10 @@ try {
       listMachines();
       break;
 
+    case 'redesignate':
+      await redesignate();
+      break;
+
     case 'remove':
     case 'revoke':
       remove();
@@ -935,8 +1135,11 @@ try {
       const net = loadNetwork();
       if (!net) { console.log('not in a network - run `helm up`'); break; }
       const me = net.machines[net.self];
+      // What this machine is for: the roster record's word for it, falling
+      // back to the local note a join left behind before records had one.
+      const kind = me?.kind ?? net.role;
       console.log(`network:  ${net.id}`);
-      console.log(`machine:  ${me?.name} (${short(net.self)}${net.role ? `, ${net.role}` : ''})`);
+      console.log(`machine:  ${me?.name} (${short(net.self)}${kind ? `, ${kind}` : ''})`);
       console.log(`members:  ${Object.keys(net.machines).length} machines, ` +
                   `${Object.keys(net.devices).length} controllers`);
       console.log(`reachable at: ${(me?.endpoints ?? []).join(' ') || '(not advertised yet)'}`);

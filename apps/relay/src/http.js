@@ -209,6 +209,8 @@ export function listMachines(online) {
     return {
       id: m.id,
       name: m.name,
+      // What the machine is for; absent on records from before kinds existed.
+      kind: m.kind ?? null,
       self: m.id === net.self,
       online: online.has(m.id),
       lastSeen: cached?.last_seen ?? null,
@@ -440,7 +442,10 @@ export function makeHttpHandler({ online, kick }) {
     if (path === '/api/invite' && req.method === 'POST') {
       q.inviteSweep.run(now());
       const body = await readBody(req).catch(() => ({}));
-      const role = body.role === 'vm' ? 'vm' : 'pc';
+      // The kind the inviter says the machine will be. Anything outside the
+      // set quietly becomes 'pc', the kind with no extra duties - an invite
+      // must never mint something the network does not have a meaning for.
+      const role = ['vm', 'nas'].includes(body.role) ? body.role : 'pc';
       const code = newInviteCode();
       const expiresAt = now() + INVITE_TTL_MS;
       q.inviteInsert.run(code, expiresAt, role);

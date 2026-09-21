@@ -1,10 +1,11 @@
 import WebSocket from 'ws';
 import { hostname, platform, arch, release } from 'node:os';
 import { connect as tcpConnect } from 'node:net';
-import { T, M, E } from '@helm/protocol';
+import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import {
   loadNetwork, machineToken, mergeRoster, allEndpoints, describeSelf,
-  roster as rosterOf, rosterHash, machineName, NAME_RULE,
+  roster as rosterOf, rosterHash, machineName, NAME_RULE, machineKind,
+  MACHINE_KINDS, saveNetwork,
 } from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
 import { modesFor } from './modes.js';
@@ -435,6 +436,108 @@ export class Daemon {
     return this.setExtra(url ? [...fixed, url] : fixed);
   }
 
+  /**
+   * Change what this machine is for.
+   *
+   * `kind` lives on this machine's own roster record, which has exactly one
+   * author - so this is only ever asked of the machine itself, never written
+   * at whichever hub the caller happened to reach. The set is closed (pc,
+   * vm, nas) and a controller is refused outright rather than mapped into
+   * it: a controller is not a kind of machine, it is a device - it runs
+   * nothing and cannot become one.
+   *
+   * pc and nas are a record change only; the flag is what the rest of the
+   * network reads. Becoming the vm is real work: an https address has to be
+   * claimed before anything is written, so a failure there leaves the
+   * machine exactly what it was rather than half a home. Leaving vm is the
+   * reverse - the advertised https endpoint comes off the record and out of
+   * the service arguments, while the Caddy site behind it is left for the
+   * owner to remove by hand: helm wrote it, but a file under /etc is not
+   * ours to delete.
+   */
+  async setMachineKind(kind, { address } = {}) {
+    if (CONTROLLER_WORDS.includes(String(kind))) throw new Error(CONTROLLER_REFUSAL);
+    if (!machineKind(kind)) {
+      throw new Error(`a machine's kind is one of: ${MACHINE_KINDS.join(', ')}`);
+    }
+
+    let home = null;
+    if (address) {
+      // A caller may hand over an https address it has already configured;
+      // held to the same origin-only shape `helm setup` insists on.
+      let url;
+      try { url = new URL(address); } catch { throw new Error(`invalid address: ${address}`); }
+      if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash) {
+        throw new Error('a machine address is a bare https origin, e.g. https://helm.example.com');
+      }
+      home = url.origin;
+    }
+
+    const net = loadNetwork() ?? this.net;
+    const from = net.machines[this.id]?.kind ?? net.role ?? 'pc';
+    const notes = [];
+
+    // The service change stops this process when this daemon is the one
+    // systemd is running, so it is deferred until the answer is on the
+    // wire. A daemon running in a terminal is not restarted: the flags it
+    // was started with are the owner's to change, and the note says so.
+    const underService = Boolean(process.env.INVOCATION_ID);
+    const reinstall = (args) => {
+      if (!underService) {
+        notes.push('not running as the installed service - ' +
+          'restart `helm up` with the new flags to keep the change');
+        return;
+      }
+      setTimeout(async () => {
+        const { installService } = await import('./service.js');
+        await installService({ mode: 'serve', args })
+          .catch((err) => console.error(`[helm] service after redesignate: ${err?.message || err}`));
+      }, 1500);
+    };
+
+    if (from === kind) {
+      // Still write it: the record and the local note can each be missing
+      // the value the other already has, and a no-op here is cheap.
+      net.role = kind;
+      this.net = describeSelf(net, { kind });
+      saveNetwork(this.net);
+      return { id: this.id, kind, from, changed: false, notes };
+    }
+
+    if (kind === 'vm') {
+      // Claim the address first, before anything is written: if https
+      // cannot be set up the machine stays what it was.
+      home ??= this.advertised.find((e) => e.startsWith('https://'))
+        ?? await (await import('./caddy.js')).claimFreeHttps(this.port);
+      if (!this.advertised.includes(home)) this.advertised.push(home);
+      if (!this.extra.includes(home)) this.extra.push(home);
+      // --host 127.0.0.1: behind Caddy only this machine itself should answer.
+      reinstall(['--advertise', home, '--host', '127.0.0.1']);
+      notes.push(`serving ${home} as a home for the network`);
+    } else if (from === 'vm') {
+      // The advertised https address is what made it the home. Tunnels and
+      // LAN addresses stay - they are still true of a pc or a nas.
+      const drop = new Set(this.advertised.filter((e) => e.startsWith('https://')));
+      this.advertised = this.advertised.filter((e) => !drop.has(e));
+      this.extra = this.extra.filter((e) => !drop.has(e));
+      reinstall(['--host', '0.0.0.0']);
+      notes.push('its Caddy site can be removed by hand: ' +
+        'sudo rm /etc/caddy/helm.caddy && sudo systemctl reload caddy');
+    }
+
+    // Publish the new endpoint set before the kind lands, so the record
+    // never says "vm" while still advertising a dead address or vice versa.
+    await this.#publishSelf();
+    const fresh = loadNetwork() ?? net;
+    fresh.role = kind;
+    this.net = describeSelf(fresh, { kind });
+    saveNetwork(this.net);
+    // Now rather than at the next reconcile: the caller is waiting on the
+    // answer, and every other machine holds the old word until this lands.
+    this.broadcastFrame(T.ROSTER, { roster: rosterOf(this.net) });
+    return { id: this.id, kind, from, changed: true, notes };
+  }
+
   onLinkUp(link) {
     const local = link.url.includes('127.0.0.1');
     console.log(
@@ -735,6 +838,18 @@ export class Daemon {
         return { id: this.id, name };
       }
 
+      /**
+       * What this machine is for, changed by asking the machine itself.
+       *
+       * Same authorship rule as the name above: `kind` lives on this
+       * machine's own roster record, so a CLI or app redesignating a machine
+       * asks its daemon - a hub that answered the phone is never asked to
+       * write it. pc and nas are a record change; becoming the vm claims an
+       * https address first, and failing that fails the whole change.
+       */
+      case M.MACHINE_SET_KIND:
+        return this.setMachineKind(String(p.kind ?? '').toLowerCase(), { address: p.address });
+
       case M.FS_LIST:   return fsApi.list(p.path);
       case M.FS_ROOTS:  return fsApi.roots();
       case M.FS_MKDIR:  return fsApi.makeDir(p);
@@ -863,6 +978,7 @@ export class Daemon {
       case M.SESSION_ANSWER:  return this.sessions.answer(p.id, p.requestId, p.decision ?? {});
       case M.SESSION_INTERRUPT: return this.sessions.interrupt(p.id);
       case M.SESSION_DEQUEUE:  return this.sessions.dequeue(p.id, p.turnId);
+      case M.SESSION_SEND_NOW: return this.sessions.sendNow(p.id, p.turnId);
       case M.SESSION_NOTIFY:   return this.sessions.setNotifyDone(p.id, p.on !== false);
       case M.SESSION_MODE:    return this.sessions.setMode(p.id, p.mode);
       case M.SESSION_MODEL:   return this.sessions.setModel(p.id, p.model);
@@ -880,7 +996,11 @@ export class Daemon {
         for (const x of await inventory(await currentProfiles())) {
           const mark = marks[`found:${x.engine}:${x.id}`];
           if (mark === 'removed') continue;
-          recent.push(mark === 'archived' ? { ...x, archived: true } : x);
+          // Transcript paths are machine-private. The app only needs the
+          // ownership signal; opening the row asks Sessions to resolve the
+          // path again on the machine.
+          const { transcript, writerPid, ...publicRow } = x;
+          recent.push(mark === 'archived' ? { ...publicRow, archived: true } : publicRow);
         }
         return { recent };
       }

@@ -71,11 +71,25 @@ export const T = {
 // ------------------------------------------------------------- daemon methods
 // Methods a client may invoke on an environment's daemon.
 
+// Words that mean "a controller" - a phone or browser driving the machines.
+// A controller is not a fourth machine kind and can never become one, or be
+// redesignated: it holds a device token rather than the network key, runs no
+// daemon, and a machine without a daemon is unreachable by design. The
+// refusal is worded as a guarantee, not an error code, because the person
+// asking should be sure of it.
+export const CONTROLLER_WORDS = ['controller', 'mobile', 'phone', 'browser', 'device'];
+export const CONTROLLER_REFUSAL =
+  'a controller can never be anything else - it runs nothing; ' +
+  'remove it and add a machine instead';
+
 export const M = {
   ENV_INFO: 'env.info',            // {} -> { host, os, arch, uptime, engines }
   // Renaming goes to the machine being renamed, never to the hub the phone
   // happened to reach: a machine's roster record has exactly one author.
   ENV_RENAME: 'env.rename',        // { name } -> { id, name }
+  // What a machine is for ('pc' | 'vm' | 'nas'), asked of the machine itself
+  // for the same reason as a rename: `kind` lives on its own roster record.
+  MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }
   FS_LIST: 'fs.list',              // { path } -> { path, parent, entries[] }
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }
@@ -107,6 +121,7 @@ export const M = {
   SESSION_ANSWER: 'session.answer',   // { id, requestId, decision: { option, message?, answers? } }
   SESSION_INTERRUPT: 'session.interrupt', // { id }
   SESSION_DEQUEUE: 'session.dequeue',   // { id, turnId } -> { found, text? }  pull a queued message back
+  SESSION_SEND_NOW: 'session.send-now', // { id, turnId } -> { found, sent }  steer a queued message into the live turn
   SESSION_NOTIFY: 'session.notify',       // { id, on } -> { ok }  ping me when this thread finishes
   SESSION_MODE: 'session.mode',       // { id, mode } -> { session }
   SESSION_MODEL: 'session.model',

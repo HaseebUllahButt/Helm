@@ -28,6 +28,28 @@ export async function detectPublicIpv4(fetchImpl = fetch) {
   throw new Error(`could not find this VM's public IPv4 address`);
 }
 
+/**
+ * Claim one of the free sslip.io names for this machine and put https for it
+ * in front of the hub's port.
+ *
+ * The name is derived from the public IPv4 the internet already sees, so it
+ * needs no account, no DNS setup and no purchase - the trade is that the name
+ * moves when the address does. `found` fires once the name is known and
+ * before Caddy is touched, so a CLI can say what it is about to claim before
+ * sudo asks for a password.
+ *
+ * Throws rather than returning a partial result: a machine that is becoming
+ * the network's home must either get a working https address or stay exactly
+ * what it was - there is no half-configured state worth keeping.
+ */
+export async function claimFreeHttps(port = 8787, { found } = {}) {
+  const ip = process.env.HELM_PUBLIC_IP || await detectPublicIpv4();
+  const host = freeHostname(ip);
+  found?.(host);
+  await configureFreeHttps(host, port);
+  return `https://${host}`;
+}
+
 async function privilegedRead(path) {
   try { return await readFile(path, 'utf8'); }
   catch {

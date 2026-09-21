@@ -5,6 +5,7 @@ import { hostname } from 'node:os';
 import { startRelay } from '@helm/relay';
 import {
   loadNetwork, saveNetwork, createNetwork, joinNetwork, allEndpoints,
+  describeSelf, machineKind,
 } from '@helm/protocol/network';
 import { Daemon } from './agent.js';
 import { lanAddresses } from './net-addr.js';
@@ -149,8 +150,13 @@ export async function join({ code, at, name, port = 8787 }) {
   }
 
   // What it was invited as travels with the code, so the far end does not
-  // have to be told a second time which kind of machine it is.
-  net.role = role === 'vm' ? 'vm' : 'pc';
+  // have to be told a second time which kind of machine it is. `role` is the
+  // local note of it; `kind` is the same fact on our own roster record, which
+  // only this machine may write - so it goes through describeSelf rather
+  // than being poked into the file.
+  const kind = machineKind(role) ?? 'pc';
+  net.role = kind;
+  describeSelf(net, { kind });
   saveNetwork(net);
 
   return net;
