@@ -1,5 +1,6 @@
 import { AcpDriver } from './acp.js';
 import { modeFor } from '../modes.js';
+import { devinUsageReport } from '../devin-usage.js';
 
 /**
  * Devin CLI, headless: `devin acp` speaks ACP over stdio.
@@ -16,12 +17,14 @@ import { modeFor } from '../modes.js';
 export const DEVIN_MIN_VERSION = '3000.10.0';
 
 /**
- * `devin acp` advertises /session-stats but no /usage - that spelling only
- * exists in the standalone CLI. helm offers /usage anyway and rewrites it
- * on the wire (spec.mapPrompt); it sits in the fallback list and in
- * extraCommands so it is offered whichever list wins.
+ * `devin acp` advertises /session-stats but has no /usage at all - over ACP
+ * it answers "Unknown command". In the standalone CLI /usage is the account
+ * quota card, a TUI feature that calls the seat-management API rather than
+ * the session. helm answers it locally (spec.localCommand) with the same
+ * GetUserStatus read, so it works while a turn runs; /session-stats stays
+ * the real ACP command for the per-session numbers.
  */
-const DEVIN_USAGE = { name: 'usage', description: 'Show session usage', source: 'devin' };
+const DEVIN_USAGE = { name: 'usage', description: 'Show account quota and usage', source: 'devin' };
 
 /**
  * What `/` can mean in a devin session when the agent never said so itself.
@@ -65,7 +68,18 @@ export class DevinDriver extends AcpDriver {
       effortId: null,
       fallbackCommands: DEVIN_COMMANDS,
       extraCommands: [DEVIN_USAGE],
-      mapPrompt: (text) => /^\/usage\s*$/i.test(text) ? '/session-stats' : text,
+      localCommand: (driver, text) =>
+        /^\/usage\s*$/i.test(String(text).trim())
+          ? () => devinUsageReport({
+              transcript: driver.transcript,
+              engineSessionId: driver.engineSessionId,
+              env: driver.env,
+              fetchStatus: driver.fetchStatus,
+              version: DEVIN_MIN_VERSION,
+            })
+          : null,
     }, opts);
+    // Tests inject fetchStatus so no call ever leaves the machine.
+    if (opts?.fetchStatus) this.fetchStatus = opts.fetchStatus;
   }
 }

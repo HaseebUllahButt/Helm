@@ -26,7 +26,7 @@ export const BUILT_IN = [
 ];
 
 const DEVIN_BUILT_IN = [
-  { name: 'usage', description: 'Show session usage', source: 'devin' },
+  { name: 'usage', description: 'Show account quota and usage', source: 'devin' },
 ];
 
 /**

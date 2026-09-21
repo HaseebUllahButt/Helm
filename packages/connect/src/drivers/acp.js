@@ -22,6 +22,9 @@ import { modeFor, modesFor } from '../modes.js';
  *                     agent never advertises (devin's /usage)
  *   mapPrompt(text)   the wire text for what the owner typed, when a command
  *                     spelling is really an alias for another
+ *   localCommand(driver, text)  null, or () => Promise<markdown> for a
+ *                     command helm answers itself - devin's /usage reads the
+ *                     account quota API, which `devin acp` never exposes
  *
  * helm's own permission modes may be wider than what the agent's modes
  * express; a mode with `autoAllow` in modes.js is enforced here by answering
@@ -257,6 +260,8 @@ export class AcpDriver extends Driver {
   // ----------------------------------------------------------------- verbs
 
   async send(text) {
+    const local = this.spec.localCommand?.(this, text);
+    if (local) return this.#localCommand(text, local);
     await this.start();
     if (!this.engineSessionId || !this.#child) {
       this.push('error', { message: `${this.engine} has no session; it never finished starting`, kind: 'init' });
@@ -278,6 +283,35 @@ export class AcpDriver extends Driver {
     }).then((res) => this.#turnDone(turnId, res));
   }
 
+  /**
+   * A command helm answers without the agent. It emits the same events as
+   * a turn so the optimistic message is adopted rather than duplicated,
+   * and it never starts or touches the agent process - a session that has
+   * not spun up yet can still show its quota.
+   */
+  async #localCommand(text, run) {
+    const turnId = `command-${randomUUID()}`;
+    this.push('turn.start', { turnId, text });
+    try {
+      const body = await run();
+      const itemId = `command-result-${randomUUID()}`;
+      this.push('item.start', { id: itemId, turnId, kind: 'text' });
+      this.push('item.delta', { id: itemId, text: body || 'Done.' });
+      this.push('item.done', { id: itemId, status: 'ok' });
+      this.push('turn.done', { turnId, status: 'ok' });
+    } catch (err) {
+      const message = String(err?.message || err);
+      this.push('error', { message, kind: 'command' });
+      this.push('turn.done', { turnId, status: 'error', error: message });
+      throw err;
+    }
+  }
+
+  /** A local command is a read: it runs beside a live turn, never queued. */
+  canRunWhileBusy(text) {
+    return !!this.spec.localCommand?.(this, text);
+  }
+
   /** What `initialize` advertised; false until the agent has answered. */
   acceptsImages() { return this.#imagePrompts; }
 
@@ -288,6 +322,8 @@ export class AcpDriver extends Driver {
    * not be allowed to read. Anything without image bytes is skipped.
    */
   async sendWithAttachments(text, attachments) {
+    const local = this.spec.localCommand?.(this, text);
+    if (local) return this.#localCommand(text, local);
     await this.start();
     if (!this.engineSessionId || !this.#child) {
       this.push('error', { message: `${this.engine} has no session; it never finished starting`, kind: 'init' });

@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
 import { DevinDriver, DEVIN_COMMANDS } from '../packages/connect/src/drivers/devin.js';
 import { OpencodeDriver } from '../packages/connect/src/drivers/opencode.js';
@@ -74,13 +77,36 @@ test('devin: advertised commands win over the static fallback', async () => {
   await driver.kill();
 });
 
-test('devin: /usage is what the owner typed, /session-stats is what the wire gets', async () => {
-  const { driver, log, fake } = make('plain');
+test('devin: /usage answers locally - the quota card, not an ACP prompt', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'helm-devin-usage-'));
+  const account = join(root, 'devin');
+  mkdirSync(join(account, 'cli'), { recursive: true });
+  writeFileSync(join(account, 'credentials.toml'),
+    'windsurf_api_key = "devin-session-token$test"\napi_server_url = "https://server.codeium.com"\n');
+  const { driver, log, fake } = make('plain', {
+    env: { XDG_DATA_HOME: root },
+    fetchStatus: async () => ({
+      planStatus: {
+        planInfo: { planName: 'Pro', billingStrategy: 'BILLING_STRATEGY_QUOTA' },
+        dailyQuotaRemainingPercent: 95,
+        weeklyQuotaRemainingPercent: 79,
+        dailyQuotaResetAtUnix: String(Math.floor(Date.now() / 1000) + 20 * 3600),
+        weeklyQuotaResetAtUnix: String(Math.floor(Date.now() / 1000) + 5 * 86400),
+      },
+    }),
+  });
+  assert.equal(driver.canRunWhileBusy('/usage'), true, 'a read does not wait on a live turn');
   await driver.send('/usage');
-  await log.until((e) => e.type === 'turn.done');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
   assert.equal(log.of('turn.start')[0].text, '/usage', 'the bubble keeps the spelling that was typed');
-  const prompt = fake.stdinLines().find((l) => l.method === 'session/prompt');
-  assert.deepEqual(prompt.params.prompt, [{ type: 'text', text: '/session-stats' }]);
+  const body = log.of('item.delta').map((e) => e.text).join('');
+  assert.match(body, /### Usage/);
+  assert.match(body, /\*\*Daily\*\* `█░{19}` 5% used · resets in \d+h \d+m/);
+  assert.match(body, /\*\*Weekly\*\* `████░{16}` 21% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-][\d:]+\)/);
+  assert.match(body, /\*No quota consumed yet in this session\.\*/);
+  // The whole point: ACP never hears about it - not even the process spawn.
+  assert.equal(fake.stdinLines().length, 0);
   await driver.kill();
 });
 

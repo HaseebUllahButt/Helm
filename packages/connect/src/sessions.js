@@ -16,6 +16,7 @@ import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver, canInspectExternalCodex } from './drivers/codex.js';
 import { OpencodeDriver } from './drivers/opencode.js';
 import { DevinDriver } from './drivers/devin.js';
+import { devinUsageReport } from './devin-usage.js';
 import { defaultMode, modeFromAuto } from './modes.js';
 import { TerminalHost } from './terminals.js';
 import { inventory } from './inventory.js';
@@ -1408,13 +1409,10 @@ export class Sessions extends EventEmitter {
     const s = this.get(id);
     if (s.external) {
       await this.#importExternalTranscript(s);
-      const portableInfo = !raw && !attachments.length && s.engine !== 'codex' && /^\/(?:status|usage)\s*$/i.test(text.trim());
+      const portableInfo = !raw && !attachments.length ? await this.#providerInfo(s, text, true) : null;
       if (portableInfo) {
         const turnId = `local-${randomBytes(6).toString('hex')}`;
-        const body = await sessionSnapshot({
-          engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, cwd: s.cwd, monitored: true,
-        });
-        this.#emitLocal(s, turnId, text.trim(), body);
+        this.#emitLocal(s, turnId, text.trim(), portableInfo);
         return { ok: true };
       }
       const inspectOnly = !raw && !attachments.length && s.engine === 'codex' && canInspectExternalCodex(text);
@@ -1447,13 +1445,13 @@ export class Sessions extends EventEmitter {
     // /status and /usage can be answered from that provider's persisted
     // record without spending a model turn. Codex has its richer app-server
     // implementation, including account rate limits, so it is left alone.
-    if (!raw && !attachments.length && s.externalSource && s.engine !== 'codex' && /^\/(?:status|usage)\s*$/i.test(text.trim())) {
-      const turnId = `local-${randomBytes(6).toString('hex')}`;
-      const body = await sessionSnapshot({
-        engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, cwd: s.cwd, monitored: false,
-      });
-      this.#emitLocal(s, turnId, text.trim(), body);
-      return { ok: true };
+    if (!raw && !attachments.length && s.externalSource) {
+      const body = await this.#providerInfo(s, text, false);
+      if (body) {
+        const turnId = `local-${randomBytes(6).toString('hex')}`;
+        this.#emitLocal(s, turnId, text.trim(), body);
+        return { ok: true };
+      }
     }
     // Mark the chat synchronously, before starting/resuming a driver can
     // yield. A user can send and immediately navigate back; the navigation's
@@ -1565,6 +1563,30 @@ export class Sessions extends EventEmitter {
       return this.runtime.sendPrompt(handle, text);
     }
     return this.runtime.sendText(handle, text);
+  }
+
+  /**
+   * The markdown a /status or /usage answers with for a session whose CLI
+   * is not under helm's driver - an external session being monitored, or a
+   * historical one. Devin's /usage is its quota card, fetched live the way
+   * the TUI fetches it; everything else is the transcript snapshot. Null
+   * means "not an info command" - the caller keeps going down input's path.
+   */
+  async #providerInfo(s, text, monitored) {
+    const m = /^\/(status|usage)\s*$/i.exec(text.trim());
+    if (!m || s.engine === 'codex') return null;
+    if (s.engine === 'devin' && m[1].toLowerCase() === 'usage') {
+      const profile = (await getProfiles()).find((p) => p.id === s.profileId);
+      const env = profile ? materialize(profile).env : {};
+      try {
+        return await devinUsageReport({ transcript: s.transcript, engineSessionId: s.engineSessionId, env });
+      } catch (err) {
+        return `*${String(err?.message || err)}*`;
+      }
+    }
+    return sessionSnapshot({
+      engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, cwd: s.cwd, monitored,
+    });
   }
 
   /**

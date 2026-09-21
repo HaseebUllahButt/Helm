@@ -93,5 +93,5 @@ test('devin /usage is in the palette before the driver advertises anything', () 
   const usage = list.filter((c) => c.name === 'usage');
   assert.equal(usage.length, 1);
   assert.equal(usage[0].source, 'devin');
-  assert.equal(usage[0].description, 'Show session usage');
+  assert.equal(usage[0].description, 'Show account quota and usage');
 });
