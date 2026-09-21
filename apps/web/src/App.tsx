@@ -182,11 +182,12 @@ const collapseCwd = (p: string) => p.replace(/^\/home\/[^/]+/, '~');
 
 const sameDir = (a: string, b: string) => collapseCwd(a) === collapseCwd(b);
 
-/** An inventory row wearing the shape a session row draws: external, dead. */
+/** An inventory row wearing the shape a session row draws. */
 const foundRow = (x: InventorySession): Session => ({
   id: `found:${x.engine}:${x.id}`,
   title: x.title, cwd: x.cwd, engine: x.engine,
-  profileId: '', status: 'idle', adopted: true, alive: false,
+  profileId: '', status: 'idle', adopted: true, alive: !!x.active,
+  externalActive: !!x.active,
   archived: !!x.archived,
   model: x.model ?? null, updatedAt: x.updatedAt,
   // What `session.resume` needs to pick the conversation back up: the CLI's
@@ -810,7 +811,7 @@ function Shell({ client, conn, onSignOut }: {
                     {machines.map((e) => (
                       <button key={e.id} className="row" onClick={() => { setQuery(''); openEnv(e.id); }}>
                         <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-                        <span className="grow"><span className="rt">{e.name}</span><span className="rm">machine</span></span>
+                        <span className="grow"><span className="rt">{e.name}</span><span className="rm">{e.kind ?? 'machine'}</span></span>
                         <span className="chev">›</span>
                       </button>
                     ))}
@@ -867,7 +868,7 @@ function Shell({ client, conn, onSignOut }: {
                     >
                       <span className={`mdot ${e.online ? 'on' : 'off'}`} />
                       <span className="grow">
-                        <span className="rt">{e.name}</span>
+                        <span className="rt">{e.name}{e.kind && <span className="tag">{e.kind}</span>}</span>
                         <span className="rm">
                           {e.online
                             ? (list.length ? `${list.length} running${working ? `, ${working} working` : ''}` : 'idle')
@@ -1804,11 +1805,9 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   /**
    * One row, wherever it is standing.
    *
-   * A thread helm started opens; a thread a CLI recorded on its own has no
-   * process behind it, so opening it means asking the machine to resume the
-   * conversation first - and it cannot be renamed, because the name is the
-   * CLI's. Everything on this screen is now mixed into the same groups, so
-   * that difference has to live in the row rather than in the group it is in.
+   * A thread helm started opens. An inactive history row resumes first; an
+   * active one becomes a live transcript monitor and hands off to Helm once
+   * the external CLI releases its writer lock.
    */
   const toggle = (id: string) => setMarked((m) => {
     const next = new Set(m);
@@ -1856,6 +1855,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
               <span className={ping > 250 ? 'quiet slow' : 'quiet'}> · {Math.round(ping)}ms</span>
             )}
             {env.info.host && env.info.host !== env.name ? ` \u00b7 ${env.info.host}` : ''}
+            {env.kind ? ` \u00b7 ${env.kind}` : ''}
           </span>
         </div>
         <button
@@ -2210,7 +2210,9 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
             </span>
           </span>
           {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
-          {busy ? <span className="chip working"><i />opening</span> : <StatusChip status={s.status} at={s.updatedAt} />}
+          {busy ? <span className="chip working"><i />opening</span>
+            : s.externalActive ? <span className="chip working"><i />live</span>
+            : <StatusChip status={s.status} at={s.updatedAt} />}
         </Main>
         {!selecting && managed && (
           <>
@@ -2532,6 +2534,72 @@ function MachineName({ client, env, onRenamed }: {
   );
 }
 
+/**
+ * What a machine is for: pc, vm or nas.
+ *
+ * Same authorship rule as the name above - the machine writes its own
+ * record - so this is an RPC to it and it is off while offline. The choices
+ * are deliberately only the three machine kinds: a controller is not a
+ * fourth one and can never become one, which is why it appears nowhere here.
+ * Becoming the vm claims an https address on the machine, and leaving it
+ * stops advertising that address; pc and nas differ only in what the rest
+ * of the network should expect of the machine.
+ */
+function MachineKind({ client, env, onChanged }: {
+  client: Client; env: Environment; onChanged: () => void;
+}) {
+  const KINDS = [
+    { id: 'pc' as const, hint: 'runs agents, and controls others' },
+    { id: 'vm' as const, hint: 'a home the others dial - takes an https address and serves it' },
+    { id: 'nas' as const, hint: 'storage for the network - stays reachable' },
+  ];
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+
+  const pick = async (kind: 'pc' | 'vm' | 'nas') => {
+    if (kind === env.kind || busy) return;
+    setBusy(kind); setError('');
+    try {
+      await client.setMachineKind(env.id, kind);
+      // The machine list reads the roster record the machine just wrote.
+      onChanged();
+    } catch (e: any) {
+      setError(e.message);
+    } finally { setBusy(''); }
+  };
+
+  return (
+    <>
+      <div className="rows">
+        {KINDS.map((k) => (
+          <button key={k.id} className="row tall" disabled={!env.online || !!busy}
+            onClick={() => pick(k.id)}>
+            <span className="grow">
+              <span className="rt">
+                {k.id}{env.kind === k.id && <span className="tag key">current</span>}
+              </span>
+              <span className="rm">{k.hint}</span>
+            </span>
+            {busy === k.id ? <span className="chip working"><i />changing</span> : <span className="chev">›</span>}
+          </button>
+        ))}
+      </div>
+      <p className="note">
+        A vm takes an https address and serves it; leaving it stops
+        advertising that address. The flag is what the rest of the network
+        sees - a controller is never a choice here, because it runs nothing.
+      </p>
+      {!env.online && (
+        <div className="banner warn">
+          This machine is offline. A machine writes its own record, so the
+          change has to wait until it is back.
+        </div>
+      )}
+      {error && <div className="error">{error}</div>}
+    </>
+  );
+}
+
 const startSummary = (a: Account) => {
   const values = [
     a.prefs?.default?.replace(/^[^/]+\//, ''),
@@ -2631,6 +2699,9 @@ function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
       <div className="scroll"><div className="pad column">
         <div className="section">name</div>
         <MachineName client={client} env={env} onRenamed={onRenamed} />
+
+        <div className="section">kind</div>
+        <MachineKind client={client} env={env} onChanged={onRenamed} />
 
         <div className="section">CLI accounts</div>
         {accounts === null && !error && <div className="empty quiet">looking for agents…</div>}
@@ -3131,6 +3202,7 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
   onTranscribe?: (audio: string, mime: string) => Promise<string>;
 }) {
   const isShell = session.engine === 'shell';
+  const isExternal = !!session.external;
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [raw, setRaw] = useState(isShell);
   const [status, setStatus] = useState(session.status);
@@ -3230,7 +3302,7 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
           <span className="sub">{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''} · {env.name}</span>
         </div>
         <StatusChip status={status} at={statusAt} />
-        {!isShell && (
+        {!isShell && !isExternal && (
           <button className="iconbtn mono" title={raw ? 'conversation' : 'terminal'} onClick={() => setRaw((v) => !v)}>
             {raw ? '¶' : '❯_'}
           </button>

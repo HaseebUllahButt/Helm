@@ -18,6 +18,8 @@ export type Status = 'idle' | 'working' | 'blocked' | 'done' | 'shell' | 'exited
 export interface Environment {
   id: string;
   name: string;
+  /** What the machine is for; absent on records from before kinds existed. */
+  kind?: 'pc' | 'vm' | 'nas';
   online: boolean;
   lastSeen: number | null;
   info: {
@@ -90,6 +92,10 @@ export interface Session {
   engineSessionId?: string | null;
   /** On a row read from a CLI's history: the account it was recorded under. */
   account?: string;
+  /** A CLI outside Helm currently owns this monitored thread. */
+  externalActive?: boolean;
+  /** This is a transcript monitor which can become driven after handoff. */
+  external?: boolean;
 }
 
 /** A thread a CLI recorded on its own, whether or not helm started it. */
@@ -101,6 +107,8 @@ export interface InventorySession {
   cwd: string;
   updatedAt: number;
   model?: string;
+  /** The CLI still has the thread's single writer lock. */
+  active?: boolean;
   /** Filed away by the owner; the machine remembers, so every device agrees. */
   archived?: boolean;
 }
@@ -1109,6 +1117,20 @@ export class Client {
    */
   renameMachine(env: string, name: string) {
     return this.rpc<{ id: string; name: string }>(env, 'env.rename', { name }, 15_000);
+  }
+
+  /**
+   * What a machine is for, changed by asking the machine itself.
+   *
+   * Same authorship rule as the name: `kind` lives on the machine's own
+   * roster record, which only it may write, so this is an RPC to it rather
+   * than an edit at whatever hub answered. Becoming the vm can take a
+   * moment - the machine claims an https address before it answers.
+   */
+  setMachineKind(env: string, kind: 'pc' | 'vm' | 'nas') {
+    return this.rpc<{ id: string; kind: string; from?: string; changed: boolean; notes?: string[] }>(
+      env, 'machine.set_kind', { kind }, 90_000
+    );
   }
 
   removeMachine(id: string) { return this.http(`/api/machines/${id}`, { method: 'DELETE' }); }
