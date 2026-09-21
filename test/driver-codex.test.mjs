@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { fakeCli, collect } from './helpers.mjs';
-import { CodexDriver, CODEX_COMMANDS } from '../packages/connect/src/drivers/codex.js';
+import { CodexDriver, CODEX_COMMANDS, formatAccountUsage, formatRateLimits } from '../packages/connect/src/drivers/codex.js';
 
 // One app-server is shared per account home; every test gets its own so the
 // fake replays the right recording.
@@ -21,13 +21,65 @@ test('codex exposes the commands Helm can execute through app-server', async () 
   assert.ok(CODEX_COMMANDS.length > 10);
 });
 
+test('/usage views format the account activity API as Markdown', () => {
+  const activity = {
+    summary: { lifetimeTokens: 123456, peakDailyTokens: 4000, currentStreakDays: 3, longestStreakDays: 8 },
+    dailyUsageBuckets: [
+      { startDate: '2026-09-14', tokens: 100 },
+      { startDate: '2026-09-15', tokens: 200 },
+      { startDate: '2026-09-20', tokens: 300 },
+    ],
+  };
+  const daily = formatAccountUsage(activity, 'daily');
+  assert.match(daily, /### Daily token activity/);
+  assert.match(daily, /\| Date \| Tokens \|/);
+  assert.match(daily, /\| 2026-09-20 \| 300 \|/);
+  const weekly = formatAccountUsage(activity, 'weekly');
+  assert.match(weekly, /### Weekly token activity/);
+  assert.match(weekly, /\| Week starting \| Tokens \|/);
+  assert.match(weekly, /\| 2026-09-14 \| 600 \|/);
+  const cumulative = formatAccountUsage(activity, 'cumulative');
+  assert.match(cumulative, /### Cumulative usage/);
+  assert.match(cumulative, /\*\*Lifetime tokens:\*\* 123,456/);
+  const summary = formatAccountUsage(activity);
+  assert.match(summary, /### Account usage/);
+  assert.match(summary, /\*\*Today:\*\* [\d,]+ tokens/);
+  assert.match(summary, /\*\*Last 7 days:\*\* 600 tokens/);
+  assert.match(summary, /`\/usage daily`/);
+  const limits = formatRateLimits({ rateLimits: {
+    limitId: 'codex', primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1789947078 },
+  } });
+  assert.match(limits, /### Limits/);
+  assert.match(limits, /- \*\*codex\*\* — 42% used · 300m window · resets .* UTC/);
+  // A provider-supplied label cannot smuggle markup into the report.
+  assert.match(formatRateLimits({ rateLimits: { limitName: 'co*dex', primary: { usedPercent: 1 } } }),
+    /\*\*co\\\*dex\*\*/);
+});
+
 test('/pwd is handled locally as a completed command turn', async () => {
   const { driver, log, fake } = make('plain');
   await driver.send('/pwd');
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
-  assert.equal(log.of('item.delta').map((e) => e.text).join(''), fake.dir);
+  const body = log.of('item.delta').map((e) => e.text).join('');
+  assert.equal(body, `**Current directory:** \`${fake.dir}\``);
   assert.equal(fake.stdinLines().some((line) => line.method === 'turn/start'), false);
+  await driver.kill();
+});
+
+test('informational slash commands do not clear an active turn status', async () => {
+  const { driver, log, fake } = make('plain');
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'status' && e.status === 'working');
+  await driver.send('/status');
+
+  const commandDone = log.of('turn.done').find((e) => String(e.turnId).startsWith('command-'));
+  assert.equal(commandDone.status, 'ok');
+  assert.equal(driver.status, 'working', 'the model turn still owns the status and Stop control');
+  assert.deepEqual(log.of('status').map((e) => e.status), ['working']);
+  assert.equal(fake.stdinLines().filter((line) => line.method === 'turn/start').length, 1);
+
+  await log.until((e) => e.type === 'turn.done' && !String(e.turnId).startsWith('command-'));
   await driver.kill();
 });
 

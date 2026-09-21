@@ -1,5 +1,5 @@
 import { readdir, stat, open } from 'node:fs/promises';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readlinkSync, readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { HOME, expand, collapse } from './paths.js';
@@ -46,6 +46,52 @@ async function headLines(path, wanted = 1, cap = 1 << 20) {
 
 const parse = (line) => { try { return JSON.parse(line); } catch { return null; } };
 
+/** The process holding a rollout open, when this OS exposes process fds. */
+function writerPid(path) {
+  let pids;
+  try { pids = readdirSync('/proc').filter((x) => /^\d+$/.test(x)); } catch { return null; }
+  for (const pid of pids) {
+    const dir = `/proc/${pid}/fd`;
+    let fds;
+    try { fds = readdirSync(dir); } catch { continue; }
+    for (const fd of fds) {
+      try { if (readlinkSync(join(dir, fd)) === path) return Number(pid); } catch { /* fd closed */ }
+    }
+  }
+  return null;
+}
+
+/**
+ * Interactive CLIs that can own a session without Helm knowing about them.
+ *
+ * Database-backed agents do not keep a session-specific file descriptor like
+ * Codex and Claude do. On Linux the safe identity is instead the executable,
+ * its working directory, and the fact that it is the interactive command (not
+ * an ACP child, one-shot run, or shared server). Inventory assigns such a
+ * process only to the newest session in that directory.
+ */
+function interactiveProcesses(engine) {
+  const out = new Map();
+  let pids;
+  try { pids = readdirSync('/proc').filter((x) => /^\d+$/.test(x)); } catch { return out; }
+  for (const pid of pids) {
+    try {
+      const argv = readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
+      const at = argv.findIndex((x) => {
+        const name = basename(x);
+        return name === engine || name.startsWith(`${engine}.`);
+      });
+      if (at < 0) continue;
+      const sub = argv[at + 1];
+      if (engine === 'opencode' && ['acp', 'serve', 'run', 'stats', 'api', 'service'].includes(sub)) continue;
+      if (engine === 'devin' && sub === 'acp') continue;
+      const cwd = readlinkSync(`/proc/${pid}/cwd`);
+      if (!out.has(cwd)) out.set(cwd, Number(pid));
+    } catch { /* process exited or belongs to another user */ }
+  }
+  return out;
+}
+
 /** Newest files first, capped - we never want to stat an entire history. */
 async function newest(dir, filter, limit) {
   const out = [];
@@ -68,7 +114,8 @@ async function newest(dir, filter, limit) {
 // -------------------------------------------------------------------- codex
 
 async function codex(home, account) {
-  const root = join(expand(home), 'sessions');
+  const codexHome = expand(home);
+  const root = join(codexHome, 'sessions');
   if (!existsSync(root)) return [];
 
   // The index carries human titles; the rollouts carry the working directory.
@@ -96,6 +143,7 @@ async function codex(home, account) {
       const meta = parse((await headLines(f.path, 1))[0]);
       if (meta?.type !== 'session_meta') continue;
       const p = meta.payload ?? {};
+      const active = existsSync(join(codexHome, 'thread-writer-locks', `${p.session_id ?? p.id}.lock`));
       out.push({
         engine: 'codex',
         account,
@@ -103,6 +151,12 @@ async function codex(home, account) {
         title: titles.get(p.session_id) || basename(p.cwd ?? '') || 'codex session',
         cwd: collapse(p.cwd ?? HOME),
         updatedAt: f.mtime,
+        // Kept machine-side by the inventory RPC. Sessions uses the exact
+        // file to monitor a CLI that still owns this thread; guessing the
+        // newest transcript in the folder can select an unrelated chat.
+        transcript: f.path,
+        active,
+        writerPid: active ? writerPid(f.path) : null,
       });
     } catch { /* not a rollout we understand */ }
   }
@@ -142,6 +196,7 @@ async function claude(home, account) {
     // A sidechain file is a subagent's transcript, not a session you resume.
     if (sidechain || !cwd) continue;
 
+    const pid = writerPid(f.path);
     out.push({
       engine: 'claude',
       account,
@@ -149,6 +204,9 @@ async function claude(home, account) {
       title: title.replace(/\s+/g, ' ').slice(0, 90) || basename(cwd),
       cwd: collapse(cwd),
       updatedAt: f.mtime,
+      transcript: f.path,
+      active: !!pid,
+      writerPid: pid,
     });
     if (out.length >= PER_ENGINE) break;
   }
@@ -170,6 +228,8 @@ function devin(home, account) {
   } catch { /* no XDG data dir here */ }
 
   const out = [];
+  const active = interactiveProcesses('devin');
+  const claimed = new Set();
   for (const db of candidates) {
     if (!existsSync(db)) continue;
     try {
@@ -192,14 +252,21 @@ function devin(home, account) {
       for (const r of rows) {
         if (r.hidden) continue;
         const at = Number(r.last_activity_at) || 0;
+        const cwd = r.working_directory ?? HOME;
+        const pid = active.get(cwd);
+        const isActive = !!pid && !claimed.has(cwd);
+        if (isActive) claimed.add(cwd);
         out.push({
           engine: 'devin',
           account: acct,
           id: r.id,
           title: r.title || basename(r.working_directory ?? '') || 'devin session',
-          cwd: collapse(r.working_directory ?? HOME),
+          cwd: collapse(cwd),
           updatedAt: at < 1e12 ? at * 1000 : at,
           model: r.model,
+          transcript: db,
+          active: isActive,
+          writerPid: isActive ? pid : null,
         });
       }
       conn.close();
@@ -233,23 +300,42 @@ function opencode(home, account) {
   } catch { /* no XDG data dir here */ }
 
   const out = [];
+  const active = interactiveProcesses('opencode');
+  const claimed = new Set();
   for (const db of candidates) {
     if (!existsSync(db)) continue;
     try {
       const conn = new DatabaseSync(db, { readOnly: true });
-      const rows = conn.prepare(
-        `SELECT id, title, directory, time_updated, agent, model
-           FROM session ORDER BY time_updated DESC LIMIT ?`
-      ).all(PER_ENGINE);
+      let rows;
+      try {
+        rows = conn.prepare(
+          `SELECT id, title, directory, time_updated, agent, model
+             FROM session ORDER BY time_updated DESC LIMIT ?`
+        ).all(PER_ENGINE);
+      } catch {
+        // OpenCode 2 stores model/agent in message.data and keeps aggregate
+        // token columns on session. Inventory only needs the stable fields.
+        rows = conn.prepare(
+          `SELECT id, title, directory, time_updated, NULL AS agent, NULL AS model
+             FROM session ORDER BY time_updated DESC LIMIT ?`
+        ).all(PER_ENGINE);
+      }
       for (const r of rows) {
+        const cwd = r.directory ?? HOME;
+        const pid = active.get(cwd);
+        const isActive = !!pid && !claimed.has(cwd);
+        if (isActive) claimed.add(cwd);
         out.push({
           engine: 'opencode',
           account: `${account}:${basename(join(db, '..'))}`,
           id: r.id,
           title: r.title || 'opencode session',
-          cwd: collapse(r.directory ?? HOME),
+          cwd: collapse(cwd),
           updatedAt: Number(r.time_updated) || 0,
           model: opencodeModel(r.model),
+          transcript: db,
+          active: isActive,
+          writerPid: isActive ? pid : null,
         });
       }
       conn.close();

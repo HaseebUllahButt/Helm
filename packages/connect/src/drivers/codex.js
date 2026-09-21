@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { Driver, readJsonLines, checkVersion } from './index.js';
 import { modeFor } from '../modes.js';
 import { expand } from '../paths.js';
+import { codexSessionState } from '../transcript.js';
 
 /**
  * Codex, headless.
@@ -41,7 +42,7 @@ export const CODEX_COMMANDS = [
   { name: 'review', description: 'Review uncommitted changes, or add custom instructions', source: 'codex' },
   { name: 'rename', description: 'Rename this conversation with /rename <title>', source: 'codex' },
   { name: 'status', description: 'Show this Codex session configuration', source: 'codex' },
-  { name: 'usage', description: 'Show current account usage limits', source: 'codex' },
+  { name: 'usage', description: 'Show account usage; accepts daily, weekly, or cumulative', source: 'codex' },
   { name: 'diff', description: 'Show uncommitted changes in this workspace', source: 'codex' },
   { name: 'skills', description: 'List skills available in this workspace', source: 'codex' },
   { name: 'mcp', description: 'List configured MCP servers and their status', source: 'codex' },
@@ -52,6 +53,13 @@ export const CODEX_COMMANDS = [
 ];
 
 const commandNames = new Set(CODEX_COMMANDS.map((c) => c.name));
+const SIDEBAND_COMMANDS = new Set([
+  'help', 'status', 'usage', 'diff', 'skills', 'mcp', 'apps', 'plugins', 'pwd', 'cwd',
+]);
+const sidebandCommand = (command) => !!command && (
+  SIDEBAND_COMMANDS.has(command.name) ||
+  (!command.args && (command.name === 'model' || command.name === 'permissions'))
+);
 const slashCommand = (text) => {
   const m = /^\/(\S+)(?:\s+([\s\S]*?))?\s*$/.exec(text.trim());
   return m && commandNames.has(m[1].toLowerCase())
@@ -59,12 +67,119 @@ const slashCommand = (text) => {
     : null;
 };
 
+const EXTERNAL_INSPECTION_COMMANDS = new Set([
+  'help', 'status', 'usage', 'diff', 'skills', 'plugins', 'pwd', 'cwd',
+]);
+
+/** Commands that can be answered without acquiring the thread's writer. */
+export function canInspectExternalCodex(text) {
+  const command = slashCommand(text);
+  return !!command && (
+    EXTERNAL_INSPECTION_COMMANDS.has(command.name) ||
+    (!command.args && (command.name === 'model' || command.name === 'permissions'))
+  );
+}
+
 const runFile = (file, args, options = {}) => new Promise((resolve, reject) => {
   execFile(file, args, { timeout: 15_000, maxBuffer: MAX_OUTPUT * 4, ...options }, (err, stdout, stderr) => {
     if (err && !stdout && !stderr) return reject(err);
     resolve({ stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), code: err?.code ?? 0 });
   });
 });
+
+const number = (value) => Number(value ?? 0).toLocaleString('en-US');
+const utcDate = (seconds) => {
+  if (!seconds) return '';
+  const d = new Date(Number(seconds) * 1000);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString().replace('T', ' ').replace(/:\d\d\.000Z$/, ' UTC');
+};
+
+// Command answers render through the transcript's Markdown, so whatever a
+// provider or API hands back is escaped while the labels stay markup.
+const mdEscape = (value) => String(value ?? '').replace(/([\\`*_{}\[\]()<>#+.!|])/g, '\\$1');
+const mdCode = (value) => `\`${String(value ?? '').replace(/`/g, '\\`')}\``;
+const mdLines = (title, lines) => `### ${title}\n\n${lines.map((line) => `- ${line}`).join('\n')}`;
+
+function sandboxName(policy) {
+  if (!policy) return 'default';
+  if (typeof policy === 'string') return policy;
+  return policy.type ?? 'default';
+}
+
+/** The compact limit block shared by `/status` and `/usage`. */
+export function formatRateLimits(result) {
+  if (!result) return '';
+  const limits = result.rateLimitsByLimitId
+    ? Object.values(result.rateLimitsByLimitId)
+    : [result.rateLimits];
+  const rows = limits.filter(Boolean).flatMap((limit) => {
+    const label = limit.limitName || limit.limitId || limit.limit_name || limit.limit_id || 'Codex';
+    return [limit.primary, limit.secondary].filter(Boolean).map((w, i) => {
+      const minutes = w.windowDurationMins ?? w.window_minutes;
+      const resetAt = w.resetsAt ?? w.resets_at;
+      const window = minutes ? ` · ${minutes >= 1440 ? `${number(minutes / 1440)}d` : `${number(minutes)}m`} window` : '';
+      const reset = utcDate(resetAt);
+      return `- **${mdEscape(`${label}${i ? ' secondary' : ''}`)}** — ${w.usedPercent ?? w.used_percent ?? 0}% used${window}${reset ? ` · resets ${reset}` : ''}`;
+    });
+  });
+  return rows.length ? `### Limits\n\n${rows.join('\n')}` : '';
+}
+
+const day = (date) => new Date(`${date}T00:00:00Z`);
+const isoDay = (date) => date.toISOString().slice(0, 10);
+
+/** Format the account activity returned by app-server's `account/usage/read`. */
+export function formatAccountUsage(result, view = '', rateLimits = null) {
+  const buckets = [...(result?.dailyUsageBuckets ?? [])]
+    .filter((x) => x?.startDate && Number.isFinite(Number(x.tokens)))
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const summary = result?.summary ?? {};
+  const recent = buckets.slice(-14);
+  const today = new Date().toISOString().slice(0, 10);
+  const todayTokens = buckets.find((x) => x.startDate === today)?.tokens ?? 0;
+  const sevenDay = buckets.slice(-7).reduce((sum, x) => sum + Number(x.tokens), 0);
+  const limits = formatRateLimits(rateLimits);
+
+  if (view === 'daily') {
+    return recent.length
+      ? `### Daily token activity\n\n| Date | Tokens |\n| --- | --- |\n${recent.map((x) => `| ${x.startDate} | ${number(x.tokens)} |`).join('\n')}`
+      : 'Daily token activity is unavailable.';
+  }
+  if (view === 'weekly') {
+    const weeks = new Map();
+    for (const bucket of buckets) {
+      const d = day(bucket.startDate);
+      const monday = new Date(d);
+      monday.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+      const key = isoDay(monday);
+      weeks.set(key, (weeks.get(key) ?? 0) + Number(bucket.tokens));
+    }
+    const rows = [...weeks].slice(-12);
+    return rows.length
+      ? `### Weekly token activity\n\n| Week starting | Tokens |\n| --- | --- |\n${rows.map(([date, tokens]) => `| ${date} | ${number(tokens)} |`).join('\n')}`
+      : 'Weekly token activity is unavailable.';
+  }
+  if (view === 'cumulative') {
+    return `### Cumulative usage\n\n${[
+      `**Lifetime tokens:** ${summary.lifetimeTokens == null ? 'unavailable' : number(summary.lifetimeTokens)}`,
+      `**Peak day:** ${summary.peakDailyTokens == null ? 'unavailable' : number(summary.peakDailyTokens)}`,
+      `**Current streak:** ${summary.currentStreakDays == null ? 'unavailable' : `${number(summary.currentStreakDays)} days`}`,
+      `**Longest streak:** ${summary.longestStreakDays == null ? 'unavailable' : `${number(summary.longestStreakDays)} days`}`,
+    ].join('  \n')}`;
+  }
+  return [
+    '### Account usage',
+    '',
+    [
+      `**Today:** ${number(todayTokens)} tokens`,
+      `**Last 7 days:** ${number(sevenDay)} tokens`,
+      `**Lifetime:** ${summary.lifetimeTokens == null ? 'unavailable' : number(summary.lifetimeTokens)} tokens`,
+    ].join('  \n'),
+    ...(limits ? ['', limits] : []),
+    '',
+    '*Views:* `/usage daily` · `/usage weekly` · `/usage cumulative`',
+  ].join('\n');
+}
 
 // -------------------------------------------------------------- the server
 
@@ -93,7 +208,12 @@ class CodexServer {
     return servers.get(key);
   }
 
-  attach(driver) { this.#drivers.set(driver.threadId, driver); }
+  attach(driver) {
+    // A fresh driver connects before thread/start gives it an id. Replace its
+    // temporary null registration once the server returns the real thread.
+    for (const [threadId, existing] of this.#drivers) if (existing === driver) this.#drivers.delete(threadId);
+    this.#drivers.set(driver.threadId, driver);
+  }
   detach(driver) {
     this.#drivers.delete(driver.threadId);
     for (const [tid, d] of this.#aliases) if (d === driver) this.#aliases.delete(tid);
@@ -182,7 +302,7 @@ class CodexServer {
       const threadId = m.params?.threadId;
       if (threadId) this.#route(threadId)?.onNotification(m.method, m.params);
       else if (m.method === 'account/rateLimits/updated') {
-        for (const d of this.#drivers.values()) d.push('limits', { codex: m.params?.rateLimits });
+        for (const d of this.#drivers.values()) d.onRateLimits(m.params?.rateLimits);
       }
     }
   }
@@ -213,8 +333,11 @@ function childStep(item) {
 
 export class CodexDriver extends Driver {
   #server = null;
+  #started = false;
   #turnId = null;
   #usage = null;
+  #rateLimits = null;
+  #rolloutState = null;
   #interrupting = false;
   /** itemId -> what we know about it (kind, changes) */
   #items = new Map();
@@ -228,6 +351,7 @@ export class CodexDriver extends Driver {
   constructor(opts) {
     super({ engine: 'codex', ...opts });
     this.threadId = this.engineSessionId ?? null;
+    this.monitorOnly = !!opts.monitorOnly;
   }
 
   #policy() {
@@ -240,9 +364,8 @@ export class CodexDriver extends Driver {
   }
 
   async start() {
-    if (this.#server) return;
-    const server = CodexServer.for(this.cmd, this.env, this.log);
-    await server.ensure();
+    if (this.#started) return;
+    const server = await this.#connectOnly();
     const { approvalPolicy, sandbox } = this.#policy();
     const common = { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}) };
     const res = this.threadId
@@ -251,11 +374,33 @@ export class CodexDriver extends Driver {
     if (res.error) throw new Error(`codex ${this.threadId ? 'resume' : 'start'} failed: ${res.error.message}`);
     this.threadId = res.result.thread.id;
     this.engineSessionId = this.threadId;
-    this.info = { model: res.result.model ?? res.result.thread?.model, approvalPolicy, sandbox };
-    this.#server = server;
     server.attach(this);
+    this.#rolloutState = await codexSessionState(this.transcript);
+    this.#usage = this.#rolloutState.usage ?? this.#usage;
+    this.#rateLimits = this.#rolloutState.rateLimits ?? this.#rateLimits;
+    this.info = {
+      model: res.result.model ?? res.result.thread?.model ?? this.#rolloutState.settings?.model,
+      effort: res.result.reasoningEffort ?? res.result.thread?.reasoningEffort ?? this.#rolloutState.settings?.effort,
+      approvalPolicy: res.result.approvalPolicy ?? approvalPolicy,
+      sandbox: res.result.sandbox ?? sandbox,
+      cliVersion: res.result.thread?.cliVersion ?? this.#rolloutState.cliVersion,
+    };
+    this.#started = true;
     this.emit('init', this.info);
   }
+
+  /** Initialize app-server for account reads without resuming the thread. */
+  async #connectOnly() {
+    if (this.#server) return this.#server;
+    const server = CodexServer.for(this.cmd, this.env, this.log);
+    await server.ensure();
+    this.#server = server;
+    server.attach(this);
+    return server;
+  }
+
+  /** Called after Sessions has safely released the external writer. */
+  enableWriting() { this.monitorOnly = false; }
 
   serverExited(code, stderr) {
     this.#server = null;
@@ -268,7 +413,7 @@ export class CodexDriver extends Driver {
 
   async send(text) {
     const command = slashCommand(text);
-    if (command) return this.#runSlash(text, command);
+    if (command) return this.#runSlash(text, command, { sideband: sidebandCommand(command) });
     await this.start();
     // Per-turn overrides stick to the thread, so a mode or model changed
     // mid-session takes effect on the next message - the sandbox included,
@@ -305,6 +450,11 @@ export class CodexDriver extends Driver {
   /** app-server does not advertise these: they are client-side in Codex TUI. */
   async availableCommands() { return CODEX_COMMANDS; }
 
+  canRunWhileBusy(text) {
+    const command = slashCommand(text);
+    return sidebandCommand(command);
+  }
+
   /** Native compaction, rather than sending the string `/compact` as a prompt. */
   async compact() {
     await this.start();
@@ -318,10 +468,11 @@ export class CodexDriver extends Driver {
    * duplicated. /review is special: it starts a real app-server turn, whose
    * subsequent item and completion notifications finish this visible turn.
    */
-  async #runSlash(text, { name, args }) {
-    await this.start();
+  async #runSlash(text, { name, args }, { sideband = false } = {}) {
+    if (this.monitorOnly && sideband) await this.#connectOnly();
+    else await this.start();
     const commandTurn = `command-${randomUUID()}`;
-    this.push('status', { status: 'working' });
+    if (!sideband) this.push('status', { status: 'working' });
     this.push('turn.start', { turnId: commandTurn, text });
 
     if (name === 'review') {
@@ -349,7 +500,7 @@ export class CodexDriver extends Driver {
       this.push('turn.done', { turnId: commandTurn, status: 'error', error: message });
       throw err;
     } finally {
-      this.push('status', { status: 'idle' });
+      if (!sideband) this.push('status', { status: 'idle' });
     }
   }
 
@@ -368,36 +519,62 @@ export class CodexDriver extends Driver {
   async #slashResult(name, args) {
     switch (name) {
       case 'help':
-        return CODEX_COMMANDS.map((c) => `/${c.name} — ${c.description}`).join('\n');
+        return mdLines('Available commands',
+          CODEX_COMMANDS.map((c) => `${mdCode(`/${c.name}`)} — ${mdEscape(c.description)}`));
       case 'pwd':
       case 'cwd':
-        return this.cwd;
-      case 'status':
+        return `**Current directory:** ${mdCode(this.cwd)}`;
+      case 'status': {
+        // Refresh the rollout in case the external CLI wrote another token
+        // count immediately before releasing its writer lock.
+        this.#rolloutState = await codexSessionState(this.transcript);
+        if (this.#rolloutState.usage) this.#usage = this.#rolloutState.usage;
+        const settings = this.#rolloutState.settings ?? {};
+        const last = this.#usage?.last;
+        const total = this.#usage?.total;
+        const window = this.#usage?.modelContextWindow;
+        const context = last?.totalTokens != null && window
+          ? `${number(last.totalTokens)} / ${number(window)} tokens (${Math.max(0, Math.round((1 - last.totalTokens / window) * 100))}% left)`
+          : 'unavailable until the first model turn';
+        this.#rateLimits = this.#rolloutState.rateLimits ?? this.#rateLimits;
+        const limits = formatRateLimits(this.#rateLimits && { rateLimits: this.#rateLimits });
         return [
-          `Model: ${this.model || this.info?.model || 'default'}`,
-          `Thinking: ${this.effort || 'default'}`,
-          `Permissions: ${this.mode || 'ask'}`,
-          `Speed: ${this.speed || 'normal'}`,
-          `Folder: ${this.cwd}`,
-          `Thread: ${this.threadId}`,
+          '### Session status',
+          '',
+          [
+            `**Model:** ${mdEscape(this.model || this.info?.model || settings.model || 'default')}`,
+            `**Thinking:** ${mdEscape(this.effort || this.info?.effort || settings.effort || 'default')}`,
+            `**Permissions:** ${mdEscape(this.mode || settings.permissionProfile?.name || settings.approvalPolicy || 'ask')}`,
+            `**Sandbox:** ${mdEscape(sandboxName(this.info?.sandbox ?? settings.sandboxPolicy))}`,
+            `**Speed:** ${mdEscape(this.speed || settings.serviceTier || 'normal')}`,
+            `**Folder:** ${mdCode(this.cwd || settings.cwd)}`,
+            `**Thread:** ${mdCode(this.threadId)}`,
+            ...(this.info?.cliVersion ? [`**Codex:** ${mdEscape(this.info.cliVersion)}`] : []),
+            `**Context:** ${context}`,
+            ...(total?.totalTokens != null ? [`**Turn tokens:** ${number(total.totalTokens)}`] : []),
+          ].join('  \n'),
+          ...(limits ? ['', limits] : []),
         ].join('\n');
+      }
       case 'model': {
         if (args) {
           await this.setModel(args);
           this.push('settings', { model: this.model });
-          return `Model set to ${this.model}.`;
+          return `**Model:** set to ${mdCode(this.model)}.`;
         }
         const result = await this.#call('model/list', {});
-        return (result.data ?? []).map((m) => `${m.id}${m.isDefault ? ' (default)' : ''} — ${m.description || m.displayName}`).join('\n') || 'No models reported.';
+        const models = (result.data ?? []).map((m) =>
+          `${mdCode(m.id)}${m.isDefault ? ' **default**' : ''} — ${mdEscape(m.description || m.displayName)}`);
+        return models.length ? mdLines('Models', models) : 'No models reported.';
       }
       case 'permissions': {
         const modes = ['ask', 'edit', 'full', 'readonly'];
-        if (!args) return `Current: ${this.mode || 'ask'}\nAvailable: ${modes.join(', ')}`;
+        if (!args) return `### Permissions\n\n**Current:** ${mdEscape(this.mode || 'ask')}  \n**Available:** ${modes.map(mdEscape).join(', ')}`;
         const picked = args.toLowerCase();
         if (!modes.includes(picked)) throw new Error(`Unknown permissions mode "${args}". Use ${modes.join(', ')}.`);
         await this.setMode(picked);
         this.push('settings', { mode: this.mode });
-        return `Permissions set to ${picked}.`;
+        return `**Permissions:** set to ${mdCode(picked)}.`;
       }
       case 'fast': {
         const value = args.toLowerCase();
@@ -405,50 +582,63 @@ export class CodexDriver extends Driver {
         const speed = value === 'off' || value === 'normal' ? null : value === 'on' || value === 'fast' ? 'fast' : (this.speed === 'fast' ? null : 'fast');
         await this.setSpeed(speed);
         this.push('settings', { speed: this.speed });
-        return `Fast mode ${this.speed === 'fast' ? 'on' : 'off'}.`;
+        return `**Fast mode:** ${this.speed === 'fast' ? 'on' : 'off'}.`;
       }
       case 'rename': {
         if (!args) throw new Error('Give the conversation a name: /rename <title>');
         await this.#call('thread/name/set', { threadId: this.threadId, name: args });
         this.push('title', { title: args });
-        return `Renamed to ${args}.`;
+        return `**Renamed:** ${mdEscape(args)}.`;
       }
       case 'skills': {
         const result = await this.#call('skills/list', { cwds: [this.cwd] });
         const skills = (result.data ?? []).flatMap((entry) => entry.skills ?? []);
-        return skills.map((s) => `${s.enabled ? '●' : '○'} ${s.name} — ${s.description}`).join('\n') || 'No skills found.';
+        return skills.length
+          ? mdLines('Skills', skills.map((s) => `**${mdEscape(s.name)}** ${s.enabled ? 'enabled' : 'disabled'} — ${mdEscape(s.description)}`))
+          : 'No skills found.';
       }
       case 'mcp': {
         const result = await this.#call('mcpServerStatus/list', { threadId: this.threadId });
-        return (result.data ?? []).map((s) => {
+        const rows = (result.data ?? []).map((s) => {
           const state = typeof s.runtimeStatus === 'string' ? s.runtimeStatus : (s.runtimeStatus?.type ?? (s.toolsError ? 'error' : 'configured'));
-          return `${s.name} — ${state}${s.toolsError ? `: ${s.toolsError}` : ''}`;
-        }).join('\n') || 'No MCP servers configured.';
+          return `**${mdEscape(s.name)}** — ${mdEscape(state)}${s.toolsError ? `: ${mdEscape(s.toolsError)}` : ''}`;
+        });
+        return rows.length ? mdLines('MCP servers', rows) : 'No MCP servers configured.';
       }
       case 'apps': {
         const result = await this.#call('app/list', { threadId: this.threadId });
-        return (result.data ?? []).map((a) => `${a.name || a.displayName || a.id}${a.description ? ` — ${a.description}` : ''}`).join('\n') || 'No apps available.';
+        const rows = (result.data ?? []).map((a) =>
+          `**${mdEscape(a.name || a.displayName || a.id)}**${a.description ? ` — ${mdEscape(a.description)}` : ''}`);
+        return rows.length ? mdLines('Apps', rows) : 'No apps available.';
       }
       case 'plugins': {
         const result = await this.#call('plugin/list', { cwds: [this.cwd] });
         const plugins = (result.marketplaces ?? []).flatMap((m) => m.plugins ?? []).filter((p) => p.installed);
-        return plugins.map((p) => `${p.name || p.id}${p.version ? ` ${p.version}` : ''}`).join('\n') || 'No plugins installed.';
+        return plugins.length
+          ? mdLines('Plugins', plugins.map((p) => `**${mdEscape(p.name || p.id)}**${p.version ? ` ${mdEscape(p.version)}` : ''}`))
+          : 'No plugins installed.';
       }
       case 'usage': {
-        const result = await this.#call('account/rateLimits/read', null);
-        const limits = result.rateLimitsByLimitId ? Object.values(result.rateLimitsByLimitId) : [result.rateLimits];
-        const rows = limits.filter(Boolean).flatMap((limit) => [limit.primary, limit.secondary].filter(Boolean).map((w, i) => {
-          const label = limit.limitName || limit.limitId || 'Codex';
-          const reset = w.resetsAt ? `, resets ${new Date(w.resetsAt * 1000).toLocaleString()}` : '';
-          return `${label}${i ? ' (secondary)' : ''}: ${w.usedPercent ?? 0}% used${reset}`;
-        }));
-        return rows.join('\n') || 'Usage information is unavailable.';
+        const view = args.toLowerCase();
+        if (view && !['daily', 'weekly', 'cumulative'].includes(view)) {
+          throw new Error('Use /usage, /usage daily, /usage weekly, or /usage cumulative.');
+        }
+        const [activity, rateLimits] = await Promise.all([
+          this.#call('account/usage/read', {}),
+          this.#call('account/rateLimits/read', null).catch(() => null),
+        ]);
+        return formatAccountUsage(activity, view, rateLimits);
       }
       case 'diff': {
         const status = await runFile('git', ['-C', this.cwd, 'status', '--short']);
         const diff = await runFile('git', ['-C', this.cwd, 'diff', '--no-ext-diff', '--stat', '--patch']);
-        const text = [status.stdout.trim() && `Status:\n${status.stdout.trim()}`, diff.stdout.trim()].filter(Boolean).join('\n\n');
-        return clip(text || 'Working tree clean.');
+        // A ``` run inside git output would break the fence it lands in.
+        const fence = (lang, body) => `\`\`\`${lang}\n${body.replace(/```/g, "'''")}\n\`\`\``;
+        const parts = [
+          status.stdout.trim() && `### Status\n\n${fence('text', status.stdout.trim())}`,
+          diff.stdout.trim() && `### Diff\n\n${fence('diff', diff.stdout.trim())}`,
+        ].filter(Boolean);
+        return clip(parts.join('\n\n') || 'Working tree clean.');
       }
       default:
         throw new Error(`Unsupported Codex command: /${name}`);
@@ -490,6 +680,31 @@ export class CodexDriver extends Driver {
     }
     this.#turnId = res.result.turn.id;
     this.push('turn.start', { turnId: this.#turnId, text });
+  }
+
+  /**
+   * A message handed to the turn already running. app-server's turn/steer
+   * injects it without interrupting, so a queued message does not have to
+   * wait for the turn it was typed behind. It is the same input blocks a
+   * turn/start takes; there is deliberately no status or turn event here -
+   * the running turn's stream covers what the message becomes.
+   */
+  async steer(text, attachments = []) {
+    await this.start();
+    if (!this.#turnId) throw new Error('codex has no active turn to steer');
+    const input = text ? [{ type: 'text', text, text_elements: [] }] : [];
+    for (const a of attachments ?? []) {
+      if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
+      input.push({ type: 'image', url: `data:${a.mime};base64,${a.data}` });
+    }
+    if (!input.length) input.push({ type: 'text', text: '(empty message)', text_elements: [] });
+    const res = await this.#server.call('turn/steer', {
+      threadId: this.threadId,
+      expectedTurnId: this.#turnId,
+      input,
+      clientUserMessageId: randomUUID(),
+    });
+    if (res.error) throw new Error(res.error.message);
   }
 
   async answer(requestId, decision) {
@@ -625,6 +840,11 @@ export class CodexDriver extends Driver {
         return;
       default: return;
     }
+  }
+
+  onRateLimits(rateLimits) {
+    this.#rateLimits = rateLimits ?? this.#rateLimits;
+    this.push('limits', { codex: rateLimits });
   }
 
   #changes(changes) {

@@ -1,5 +1,6 @@
 import { readdir, stat, open } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { join, basename } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expand, HOME } from './paths.js';
@@ -125,6 +126,16 @@ function summarise(input) {
 }
 
 async function readLines(path, onLine, { tailBytes = 4 << 20 } = {}) {
+  if (tailBytes === Infinity) {
+    // Full history without allocating the whole rollout. External Codex
+    // transcripts can be hundreds of MB after a long-running task.
+    const lines = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      try { onLine(JSON.parse(line)); } catch { /* torn final write */ }
+    }
+    return;
+  }
   const fh = await open(path, 'r');
   try {
     const { size } = await fh.stat();
@@ -144,12 +155,26 @@ async function readLines(path, onLine, { tailBytes = 4 << 20 } = {}) {
   }
 }
 
-async function codexMessages(path) {
+async function codexMessages(path, { all = false } = {}) {
   const out = [];
   await readLines(path, (rec) => {
     if (rec.type !== 'response_item') return;
     const p = rec.payload;
-    if (!p || p.type !== 'message') return;
+    if (!p) return;
+    // Codex records tool calls as their own response items rather than as
+    // blocks inside an assistant message. Keep them in the conversation so
+    // an externally-created thread does not turn into a prose-only summary
+    // when it is opened in Helm.
+    if (['custom_tool_call', 'function_call', 'local_shell_call', 'web_search_call'].includes(p.type)) {
+      const input = p.input ?? p.arguments ?? p.action ?? p.command ?? '';
+      out.push({
+        role: 'assistant', text: '',
+        tools: [{ name: p.name ?? (p.type === 'local_shell_call' ? 'shell' : p.type.replace(/_call$/, '')), input: summariseTool(input) }],
+        at: rec.timestamp,
+      });
+      return;
+    }
+    if (p.type !== 'message') return;
     // `developer` carries injected instructions, not conversation.
     if (p.role !== 'user' && p.role !== 'assistant') return;
 
@@ -157,13 +182,75 @@ async function codexMessages(path) {
     if (!text && !tools.length) return;
     // Codex prepends a machine-readable context block to the first turn.
     if (p.role === 'user' && text.startsWith('<environment_context>')) return;
-    out.push({ role: p.role, text: clip(text), tools, at: rec.timestamp });
-  });
+    out.push({ role: p.role, text: clip(text), tools, at: rec.timestamp, sourceId: p.id ?? rec.id });
+  }, { tailBytes: all ? Infinity : 4 << 20 });
   return out;
 }
 
-async function claudeMessages(path) {
-  const out = [];
+function summariseTool(input) {
+  if (typeof input === 'string') {
+    try { return summarise(JSON.parse(input)); } catch { return input.replace(/\s+/g, ' ').slice(0, 120); }
+  }
+  return summarise(input);
+}
+
+/**
+ * Session facts the Codex TUI persists in a rollout and uses for `/status`.
+ * A resumed app-server does not emit token usage until another model turn,
+ * so reading the final token_count is the only accurate answer immediately
+ * after an external CLI hands the thread to Helm.
+ */
+export async function codexSessionState(path) {
+  const state = { settings: null, usage: null, rateLimits: null, cliVersion: null };
+  if (!path || !existsSync(path)) return state;
+  await readLines(path, (rec) => {
+    const p = rec.payload;
+    if (rec.type === 'session_meta') {
+      state.cliVersion = p?.cli_version ?? state.cliVersion;
+      if (!state.settings) state.settings = { cwd: p?.cwd, modelProvider: p?.model_provider };
+      return;
+    }
+    if (rec.type === 'turn_context') {
+      state.settings = {
+        ...(state.settings ?? {}), cwd: p?.cwd, model: p?.model,
+        effort: p?.effort ?? p?.collaboration_mode?.settings?.reasoning_effort,
+        approvalPolicy: p?.approval_policy, sandboxPolicy: p?.sandbox_policy,
+        permissionProfile: p?.permission_profile, personality: p?.personality,
+      };
+      return;
+    }
+    if (rec.type === 'event_msg' && p?.type === 'thread_settings_applied') {
+      const x = p.thread_settings ?? {};
+      state.settings = {
+        ...(state.settings ?? {}), cwd: x.cwd, model: x.model,
+        effort: x.reasoning_effort, approvalPolicy: x.approval_policy,
+        sandboxPolicy: x.sandbox_policy, permissionProfile: x.permission_profile,
+        personality: x.personality, serviceTier: x.service_tier,
+      };
+      return;
+    }
+    if (rec.type === 'event_msg' && p?.type === 'token_count') {
+      const info = p.info ?? {};
+      const camel = (x) => x && ({
+        inputTokens: x.input_tokens ?? 0,
+        cachedInputTokens: x.cached_input_tokens ?? 0,
+        cacheWriteInputTokens: x.cache_write_input_tokens ?? 0,
+        outputTokens: x.output_tokens ?? 0,
+        reasoningOutputTokens: x.reasoning_output_tokens ?? 0,
+        totalTokens: x.total_tokens ?? 0,
+      });
+      state.usage = {
+        total: camel(info.total_token_usage), last: camel(info.last_token_usage),
+        modelContextWindow: info.model_context_window ?? null,
+      };
+      state.rateLimits = p.rate_limits ?? state.rateLimits;
+    }
+  });
+  return state;
+}
+
+async function claudeMessages(path, { all = false } = {}) {
+  const found = [];
   await readLines(path, (rec) => {
     if (rec.type !== 'user' && rec.type !== 'assistant') return;
     if (rec.isSidechain) return; // a subagent's transcript, not this conversation
@@ -176,42 +263,186 @@ async function claudeMessages(path) {
     if (rec.type === 'user' && !text) return;
     if (rec.type === 'user' && text.startsWith('<')) return;
 
-    out.push({
+    found.push({
       role: rec.type, text: clip(text), tools,
-      thinking, at: rec.timestamp,
+      thinking, at: rec.timestamp, sourceId: msg.id ?? rec.uuid,
     });
-  });
+  }, { tailBytes: all ? Infinity : 4 << 20 });
+  // Claude may persist successive snapshots of a streaming message. The
+  // last copy has the complete text/tool set.
+  const out = [], byId = new Map();
+  for (const message of found) {
+    if (!message.sourceId) { out.push(message); continue; }
+    const at = byId.get(message.sourceId);
+    if (at == null) { byId.set(message.sourceId, out.length); out.push(message); }
+    else out[at] = message;
+  }
   return out;
 }
 
-function opencodeMessages(db, sessionId) {
+function tableColumns(conn, table) {
+  try { return new Set(conn.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name)); }
+  catch { return new Set(); }
+}
+
+function json(value) {
+  if (!value || typeof value !== 'string') return null;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+function opencodeMessages(db, sessionId, { all = false } = {}) {
   const out = [];
   try {
     const conn = new DatabaseSync(db, { readOnly: true });
-    const rows = conn.prepare(
-      `SELECT m.id, m.role, m.time_created FROM message m
-        WHERE m.session_id = ? ORDER BY m.time_created ASC LIMIT 400`
+    const messageCols = tableColumns(conn, 'message');
+    const modern = messageCols.has('data');
+    const cap = all ? '' : ' LIMIT 400';
+    const rows = conn.prepare(modern
+      ? `SELECT id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created ASC${cap}`
+      : `SELECT id, role, time_created FROM message WHERE session_id = ? ORDER BY time_created ASC${cap}`
     ).all(sessionId);
     for (const r of rows) {
-      const parts = conn.prepare(
-        `SELECT type, text, tool FROM part WHERE message_id = ? ORDER BY rowid`
-      ).all(r.id);
-      const text = parts.filter((p) => p.type === 'text').map((p) => p.text).join('\n\n');
-      const tools = parts.filter((p) => p.type === 'tool').map((p) => ({ name: p.tool, input: '' }));
+      const message = modern ? json(r.data) ?? {} : r;
+      const parts = conn.prepare(modern
+        ? `SELECT data FROM part WHERE message_id = ? ORDER BY time_created, id`
+        : `SELECT type, text, tool FROM part WHERE message_id = ? ORDER BY rowid`
+      ).all(r.id).map((p) => modern ? json(p.data) ?? {} : p);
+      const text = parts.filter((p) => p.type === 'text' && !p.synthetic).map((p) => p.text).filter(Boolean).join('\n\n');
+      const tools = parts.filter((p) => p.type === 'tool').map((p) => ({
+        name: p.tool ?? p.name ?? 'tool', input: summarise(p.state?.input ?? p.input),
+      }));
       if (!text && !tools.length) continue;
-      out.push({ role: r.role, text: clip(text), tools, at: r.time_created });
+      out.push({ role: message.role, text: clip(text), tools, at: r.time_created, sourceId: r.id });
     }
     conn.close();
   } catch { /* schema drift or a locked database */ }
   return out;
 }
 
+function devinMessages(db, sessionId, { all = false } = {}) {
+  const out = [];
+  try {
+    const conn = new DatabaseSync(db, { readOnly: true });
+    const cap = all ? '' : ' LIMIT 400';
+    const rows = conn.prepare(
+      `SELECT node_id, chat_message, created_at FROM message_nodes
+        WHERE session_id = ? ORDER BY node_id ASC${cap}`
+    ).all(sessionId);
+    // Devin persists successive snapshots of one streaming message. Keep the
+    // final snapshot for each message id, then restore conversation order.
+    const latest = new Map();
+    for (const r of rows) {
+      const m = json(r.chat_message);
+      if (!m || !['user', 'assistant'].includes(m.role)) continue;
+      const key = m.message_id ?? `${r.node_id}`;
+      latest.set(key, { ...r, message: m });
+    }
+    for (const r of [...latest.values()].sort((a, b) => a.node_id - b.node_id)) {
+      const m = r.message;
+      const text = typeof m.content === 'string' ? m.content : blocks(m.content).text;
+      const tools = (m.tool_calls ?? []).map((t) => ({
+        name: t.name ?? t.function?.name ?? 'tool',
+        input: summarise(t.arguments ?? t.function?.arguments),
+      }));
+      if (!text && !tools.length) continue;
+      // Cache keepalives and injected summaries are implementation detail,
+      // not messages the owner typed into the conversation.
+      if (m.role === 'user' && m.metadata?.telemetry?.source === 'cache_keepalive') continue;
+      out.push({ role: m.role, text: clip(text), tools, at: m.created_at ?? r.created_at, sourceId: m.message_id ?? String(r.node_id) });
+    }
+    conn.close();
+  } catch { /* schema drift or a locked database */ }
+  return out;
+}
+
+/** A persisted, provider-neutral status answer for a session being monitored. */
+export async function sessionSnapshot({ engine, path, sessionId, cwd, monitored = true }) {
+  const fmt = (n) => Number(n ?? 0).toLocaleString('en-US');
+  // The answer renders as Markdown, so what a provider stored cannot become
+  // markup of its own.
+  const esc = (v) => String(v ?? '').replace(/([\\`*_{}\[\]()<>#+.!|])/g, '\\$1');
+  const code = (v) => `\`${String(v ?? '').replace(/`/g, '\\`')}\``;
+  const lines = [
+    `**Provider:** ${esc(engine)}`,
+    `**Session:** ${esc(sessionId)}`,
+    `**Directory:** ${code(cwd)}`,
+    monitored ? '**State:** running outside Helm (live monitor)' : '**State:** resumed in Helm',
+  ];
+  let usage = null;
+  try {
+    if (engine === 'claude') {
+      const seen = new Map();
+      let model = null;
+      await readLines(path, (r) => {
+        const m = r.message;
+        if (r.type !== 'assistant' || !m) return;
+        model = m.model ?? model;
+        seen.set(m.id ?? r.uuid ?? `${seen.size}`, m.usage ?? {});
+      }, { tailBytes: Infinity });
+      let input = 0, output = 0, cacheRead = 0;
+      for (const x of seen.values()) {
+        input += Number(x.input_tokens ?? 0);
+        output += Number(x.output_tokens ?? 0);
+        cacheRead += Number(x.cache_read_input_tokens ?? 0);
+      }
+      if (model) lines.splice(1, 0, `**Model:** ${esc(model)}`);
+      usage = { input, output, cacheRead };
+    } else if (engine === 'opencode') {
+      const conn = new DatabaseSync(path, { readOnly: true });
+      const cols = tableColumns(conn, 'session');
+      const totals = cols.has('tokens_input')
+        ? conn.prepare(`SELECT tokens_input AS input, tokens_output AS output, tokens_cache_read AS cacheRead, cost, model FROM session WHERE id = ?`).get(sessionId)
+        : null;
+      conn.close();
+      if (totals?.model) lines.splice(1, 0, `**Model:** ${esc(opencodeModel(totals.model) ?? totals.model)}`);
+      if (totals) usage = totals;
+    } else if (engine === 'devin') {
+      const conn = new DatabaseSync(path, { readOnly: true });
+      const row = conn.prepare(`SELECT model, agent_mode FROM sessions WHERE id = ?`).get(sessionId);
+      const records = conn.prepare(`SELECT chat_message FROM message_nodes WHERE session_id = ?`).all(sessionId);
+      conn.close();
+      if (row?.model) lines.splice(1, 0, `**Model:** ${esc(row.model)}`);
+      if (row?.agent_mode) lines.splice(2, 0, `**Mode:** ${esc(row.agent_mode)}`);
+      const seen = new Map();
+      usage = { input: 0, output: 0, cacheRead: 0 };
+      for (const record of records) {
+        const m = json(record.chat_message);
+        if (m?.role !== 'assistant' || !m.message_id) continue;
+        seen.set(m.message_id, m.metadata?.metrics ?? {});
+      }
+      for (const x of seen.values()) {
+        usage.input += Number(x.input_tokens ?? 0);
+        usage.output += Number(x.output_tokens ?? 0);
+        usage.cacheRead += Number(x.cache_read_tokens ?? 0);
+      }
+    }
+  } catch { /* status remains useful even if a provider changes its schema */ }
+  let out = `### Session status\n\n${lines.join('  \n')}`;
+  if (usage) {
+    const usageLines = [
+      `**Input:** ${fmt(usage.input)}`,
+      `**Cached input:** ${fmt(usage.cacheRead)}`,
+      `**Output:** ${fmt(usage.output)}`,
+      ...(usage.cost != null ? [`**Cost:** $${Number(usage.cost).toFixed(4)}`] : []),
+    ];
+    out += `\n\n### Session usage\n\n${usageLines.join('  \n')}`;
+  }
+  return out;
+}
+
+function opencodeModel(v) {
+  if (typeof v !== 'string' || !v) return null;
+  if (!v.startsWith('{')) return v;
+  try { const x = JSON.parse(v); return x.id ?? x.modelID ?? null; } catch { return null; }
+}
+
 /** Read a transcript as a list of messages, oldest first. */
-export async function messages({ engine, path, sessionId, limit = 120 }) {
+export async function messages({ engine, path, sessionId, limit = 120, all = false }) {
   if (!path || !existsSync(path)) return [];
-  let all = [];
-  if (engine === 'codex') all = await codexMessages(path);
-  else if (engine === 'claude') all = await claudeMessages(path);
-  else if (engine === 'opencode') all = opencodeMessages(path, sessionId);
-  return all.slice(-limit);
+  let found = [];
+  if (engine === 'codex') found = await codexMessages(path, { all });
+  else if (engine === 'claude') found = await claudeMessages(path, { all });
+  else if (engine === 'opencode') found = opencodeMessages(path, sessionId, { all });
+  else if (engine === 'devin') found = devinMessages(path, sessionId, { all });
+  return all ? found : found.slice(-limit);
 }

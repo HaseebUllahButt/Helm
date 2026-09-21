@@ -39,9 +39,9 @@ export class Driver extends EventEmitter {
   #buffer = new Map();
   #flushTimer = null;
 
-  constructor({ engine, cmd, env, args = [], cwd, model, effort, mode, engineSessionId, log = () => {} }) {
+  constructor({ engine, cmd, env, args = [], cwd, model, effort, mode, engineSessionId, transcript = null, log = () => {} }) {
     super();
-    Object.assign(this, { engine, cmd, env, profileArgs: args, cwd, model, effort, mode, engineSessionId, log });
+    Object.assign(this, { engine, cmd, env, profileArgs: args, cwd, model, effort, mode, engineSessionId, transcript, log });
     this.status = 'idle';
     /** requestId -> the permission.request event, until answered */
     this.pending = new Map();
@@ -80,6 +80,8 @@ export class Driver extends EventEmitter {
   // default that quietly dropped them made every attachment vanish.
   async start() { throw new Error('not implemented'); }
   async send(_text) { throw new Error('not implemented'); }
+  /** True for client-side reads that do not start or alter an agent turn. */
+  canRunWhileBusy(_text) { return false; }
   /** Slash commands the live CLI says this particular session supports. */
   async availableCommands() { return []; }
   // Summarise the conversation so far into a fresh context window. The

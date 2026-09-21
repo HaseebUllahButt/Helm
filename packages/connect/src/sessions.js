@@ -1,11 +1,11 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, readlinkSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { HELM_DIR, expand } from './paths.js';
 import { getProfiles, materialize } from './profiles.js';
-import { locate, messages as readMessages } from './transcript.js';
+import { locate, messages as readMessages, sessionSnapshot } from './transcript.js';
 import { ENGINES } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
@@ -13,11 +13,12 @@ import { optionArgs } from './models.js';
 import { modelPrefs, startPrefs, accountKey } from './settings.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
-import { CodexDriver } from './drivers/codex.js';
+import { CodexDriver, canInspectExternalCodex } from './drivers/codex.js';
 import { OpencodeDriver } from './drivers/opencode.js';
 import { DevinDriver } from './drivers/devin.js';
 import { defaultMode, modeFromAuto } from './modes.js';
 import { TerminalHost } from './terminals.js';
+import { inventory } from './inventory.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -79,7 +80,12 @@ const EXTERNAL = /^(pane:|found:)/;
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
-export const wire = ({ promptSample, ...s }) => s;
+export const wire = ({ promptSample, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, ...s }) => s;
+
+const EXTERNAL_INFO_COMMANDS = [
+  { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
+  { name: 'usage', description: 'Show persisted token usage for this session', source: 'helm' },
+];
 
 /**
  * The quick keys above the phone keyboard, as the bytes a terminal expects.
@@ -195,6 +201,8 @@ export class Sessions extends EventEmitter {
   #outbox = new Map();
   /** sessionIds with a `#deliver` in flight - the queue's mutex. */
   #sending = new Set();
+  /** session object -> in-flight full-rollout reconciliation */
+  #imports = new WeakMap();
 
   constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost() } = {}) {
     super();
@@ -223,8 +231,16 @@ export class Sessions extends EventEmitter {
   async commands(id) {
     const s = this.get(id);
     if (!s.driver) return [];
+    // Starting a second Claude/ACP process merely to populate a menu can
+    // contend with the external CLI we are monitoring. These two reads are
+    // available immediately; the provider's full dynamic palette appears
+    // after Helm owns/resumes the session.
+    if (s.external && s.engine !== 'codex') return EXTERNAL_INFO_COMMANDS;
     const driver = await this.#driver(s);
-    return driver.availableCommands?.() ?? [];
+    const available = await driver.availableCommands?.() ?? [];
+    return s.externalSource && s.engine !== 'codex'
+      ? [...EXTERNAL_INFO_COMMANDS, ...available]
+      : available;
   }
 
   /**
@@ -401,6 +417,18 @@ export class Sessions extends EventEmitter {
     }
 
     for (const s of this.#index.values()) {
+      if (s.external) {
+        const active = this.#externalActive(s);
+        // This record is a read-only window onto another process until its
+        // writer lock goes away. Keep it in the ordinary list so an open app
+        // continues to receive transcript notifications across refreshes.
+        out.push({
+          ...wire(s), alive: active, adopted: true,
+          status: active ? 'idle' : 'idle',
+          externalActive: active,
+        });
+        continue;
+      }
       if (s.driver) {
         out.push({ ...wire(s), archived: !!s.archived, alive: this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
         continue;
@@ -554,7 +582,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null }) {
+  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null }) {
     const dir = expand(cwd);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -577,6 +605,7 @@ export class Sessions extends EventEmitter {
       // Set when picking up a conversation the CLI already has: the driver
       // reads this as "resume", not "start".
       engineSessionId,
+      transcript,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -608,6 +637,8 @@ export class Sessions extends EventEmitter {
       cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
       model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
       engineSessionId: s.engineSessionId,
+      transcript: s.transcript,
+      monitorOnly: !!s.external,
       log: (m) => this.log(`[${s.id}] ${m}`),
     });
     this.#drivers.set(s.id, d);
@@ -767,12 +798,10 @@ export class Sessions extends EventEmitter {
    * from the desk, and the thread you most want on your phone is the one you
    * were just working on.
    *
-   * There is no process to attach to; the CLI exited. What this does is start
-   * a *new* driven session carrying the old one's id, so the engine resumes
-   * its own conversation - the same `--resume` the CLI would do - and helm
-   * then owns it like any other thread. `engineSessionId` set before the
-   * driver is built is the whole mechanism; every driver already treats a
-   * supplied id as "resume this" rather than "start this".
+   * An inactive row starts a new driven process carrying the old id, the same
+   * `--resume` the CLI would do. A Codex row with a live writer first becomes
+   * a transcript monitor: Codex permits one writer, so Helm either waits for
+   * the CLI to close or takes it over explicitly before resuming the thread.
    *
    * The account matters: a conversation recorded under one login cannot be
    * resumed under another, because the transcript is not there to resume.
@@ -787,7 +816,7 @@ export class Sessions extends EventEmitter {
     // Already resumed once: hand back the thread rather than making a second
     // one that fights the first for the same conversation.
     for (const s2 of this.#index.values()) {
-      if (s2.engineSessionId === id && s2.driver) return this.get(s2.id);
+      if (s2.engineSessionId === id && (s2.driver || s2.external)) return this.get(s2.id);
     }
 
     const profiles = await getProfiles();
@@ -816,16 +845,190 @@ export class Sessions extends EventEmitter {
       || (a.args?.length ?? 0) - (b.args?.length ?? 0))[0];
     if (!profile) throw new Error(`no ${engine} account on this machine`);
 
+    // Codex permits exactly one writer per thread. When a laptop CLI is
+    // still holding it, opening from the app is a monitor operation: keep
+    // reading that exact rollout and wait to become the writer until the
+    // original CLI has gone. Starting app-server here would fail with an
+    // active-writer conflict and, worse, make the row look controllable when
+    // it is not.
+    const found = (await inventory(profiles)).find((x) => x.engine === engine && x.id === id);
+    if (found?.active) {
+      const externalLock = engine === 'codex'
+        ? join(expand(homeOf(profile)), 'thread-writer-locks', `${id}.lock`)
+        : null;
+      const session = {
+        id: randomBytes(6).toString('hex'),
+        profileId: profile.id,
+        engine,
+        cwd: expand(cwd || found.cwd || '~'),
+        title: title || found.title || basename(expand(cwd || '~')),
+        titleBy: title ? 'user' : null,
+        engineSessionId: id,
+        transcript: found.transcript,
+        externalLock,
+        externalPid: found.writerPid || null,
+        driver: engine,
+        external: true,
+        externalSource: true,
+        externalActive: true,
+        adopted: true,
+        status: 'idle',
+        createdAt: Date.now(),
+        updatedAt: found.updatedAt || Date.now(),
+      };
+      this.#index.set(session.id, session);
+      this.#save();
+      this.emit('session', session);
+      await this.#importExternalTranscript(session);
+      this.#watchTranscript(session.id, session.transcript);
+      return session;
+    }
+
     const session = await this.#startDriven({
       cwd: cwd || '~', profile, title: title || null,
       model: null, effort: null, mode: null, auto: null,
-      engineSessionId: id,
+      engineSessionId: id, transcript: found?.transcript ?? null,
     });
+    session.externalSource = true;
+    session.externalImported = 0;
+    // app-server resumes with metadata only; the rollout is the source of
+    // truth for the conversation that happened before Helm picked it up.
+    await this.#importExternalTranscript(session);
+    this.#save();
     // Nothing to mark: the row it came from is matched to this session by
     // its engineSessionId and drops out of the list on the next refresh
     // (`dedupeDetected` in the web app), which is also what stops a resumed
     // thread appearing twice.
     return session;
+  }
+
+  #externalActive(s) {
+    if (!s.external) return false;
+    if (s.engine === 'codex') return !!(s.externalLock && existsSync(s.externalLock));
+    if (!s.externalPid) return false;
+    try { process.kill(s.externalPid, 0); return this.#processOwnsTranscript(s); }
+    catch { return false; }
+  }
+
+  #processOwnsTranscript(s) {
+    if (!s.externalPid || !s.transcript) return false;
+    if (s.engine === 'opencode' || s.engine === 'devin') {
+      try {
+        const argv = readFileSync(`/proc/${s.externalPid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+        const engineAt = argv.findIndex((x) => basename(x) === s.engine || basename(x).startsWith(`${s.engine}.`));
+        if (engineAt < 0 || readlinkSync(`/proc/${s.externalPid}/cwd`) !== s.cwd) return false;
+        const sub = argv[engineAt + 1];
+        if (s.engine === 'opencode' && ['acp', 'serve', 'run', 'stats', 'api', 'service'].includes(sub)) return false;
+        return !(s.engine === 'devin' && sub === 'acp');
+      } catch { return false; }
+    }
+    const dir = `/proc/${s.externalPid}/fd`;
+    let fds;
+    try { fds = readdirSync(dir); } catch { return false; }
+    return fds.some((fd) => {
+      try { return readlinkSync(join(dir, fd)) === s.transcript; } catch { return false; }
+    });
+  }
+
+  /** Release the external writer as part of the first send from Helm. */
+  async #handoffExternal(s) {
+    if (!this.#externalActive(s)) return;
+    if (!this.#processOwnsTranscript(s)) {
+      throw new Error(`Helm cannot identify the external ${s.engine} process safely; close it on the machine first`);
+    }
+    process.kill(s.externalPid, 'SIGTERM');
+    const deadline = Date.now() + 8_000;
+    while (this.#externalActive(s) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (this.#externalActive(s)) throw new Error(`the external ${s.engine} process did not release the session`);
+    s.externalActive = false;
+    s.updatedAt = Date.now();
+    this.#save();
+    this.emit('session', s);
+  }
+
+  /** Seed Helm's event view with the transcript it was monitoring. */
+  async #importExternalTranscript(s) {
+    const running = this.#imports.get(s);
+    if (running) return running;
+    const work = this.#readExternalTranscript(s);
+    this.#imports.set(s, work);
+    try { return await work; } finally { this.#imports.delete(s); }
+  }
+
+  async #readExternalTranscript(s) {
+    if (!s.transcript) return;
+    const messages = await readMessages({
+      engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, all: true,
+    });
+    const imported = Math.min(s.externalImported ?? 0, messages.length);
+    const nextId = () => `imported-${randomBytes(8).toString('hex')}`;
+    const append = (event) => {
+      const saved = this.events.append(s.id, event);
+      s.lastSeq = saved.seq;
+      this.emit('event', { id: s.id, event: saved });
+    };
+    // SQLite providers update the final message row in place while it
+    // streams, so the message count does not move. Extend the already drawn
+    // item when its persisted snapshot grows instead of waiting for the next
+    // message (or drawing the whole answer a second time).
+    if (imported === messages.length) {
+      const last = messages.at(-1), tail = s.externalTail;
+      if (last?.role === 'assistant' && last.sourceId && tail?.sourceId === last.sourceId) {
+        const text = last.text ?? '';
+        if (tail.itemId && text.startsWith(tail.text ?? '') && text.length > (tail.text?.length ?? 0)) {
+          append({ type: 'item.delta', id: tail.itemId, turnId: tail.turnId, text: text.slice((tail.text ?? '').length) });
+        }
+        for (const tool of (last.tools ?? []).slice(tail.tools ?? 0)) {
+          const itemId = nextId();
+          append({ type: 'item.start', id: itemId, turnId: tail.turnId, kind: 'tool', name: tool.name, input: tool.input });
+          append({ type: 'item.done', id: itemId, turnId: tail.turnId, status: 'ok' });
+        }
+        tail.text = text;
+        tail.tools = last.tools?.length ?? 0;
+        if (this.#index.has(s.id)) this.#save();
+      }
+      return;
+    }
+    let turnId = null;
+    const close = () => {
+      if (!turnId) return;
+      append({ type: 'turn.done', turnId, status: 'ok', imported: true });
+      turnId = null;
+    };
+    for (const message of messages.slice(imported)) {
+      if (message.role === 'user') {
+        close();
+        s.externalTail = null;
+        turnId = nextId();
+        append({ type: 'turn.start', turnId, text: message.text ?? '', imported: true });
+        continue;
+      }
+      if (!turnId) {
+        turnId = nextId();
+        append({ type: 'turn.start', turnId, text: '', imported: true });
+      }
+      for (const tool of message.tools ?? []) {
+        const itemId = nextId();
+        append({ type: 'item.start', id: itemId, turnId, kind: 'tool', name: tool.name, input: tool.input });
+        append({ type: 'item.done', id: itemId, turnId, status: 'ok' });
+      }
+      let textItemId = null;
+      if (message.text) {
+        textItemId = nextId();
+        append({ type: 'item.start', id: textItemId, turnId, kind: 'text' });
+        append({ type: 'item.delta', id: textItemId, turnId, text: message.text });
+        append({ type: 'item.done', id: textItemId, turnId, status: 'ok' });
+      }
+      if (message.sourceId) s.externalTail = {
+        sourceId: message.sourceId, turnId, itemId: textItemId,
+        text: message.text ?? '', tools: message.tools?.length ?? 0,
+      };
+    }
+    close();
+    s.externalImported = messages.length;
+    if (this.#index.has(s.id)) this.#save();
   }
 
   /**
@@ -911,14 +1114,12 @@ export class Sessions extends EventEmitter {
     // "Stop" stops the queue too, and before the driver is asked: a settled
     // turn is what wakes the pump, so a stop that left the queue intact
     // would fire the next message the moment the interrupt landed. Each
-    // waiting bubble closes as interrupted, which is what happened to it.
+    // waiting bubble disappears because the agent never saw it. Only the
+    // actual turn in flight ends as interrupted and earns a "stopped" line.
     const queued = this.#outbox.get(id) ?? [];
     this.#outbox.delete(id);
     for (const item of queued) {
-      const event = this.events.append(id, {
-        type: 'turn.done', turnId: item.turnId, status: 'interrupted',
-        error: 'stopped before it was sent',
-      });
+      const event = this.events.append(id, { type: 'turn.remove', turnId: item.turnId });
       this.emit('event', { id, event });
     }
     const s = this.#index.get(id);
@@ -1062,6 +1263,7 @@ export class Sessions extends EventEmitter {
     return {
       messages: await readMessages({
         engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit,
+        all: !!s.external && s.engine === 'codex',
       }),
       source: s.transcript,
     };
@@ -1178,8 +1380,16 @@ export class Sessions extends EventEmitter {
       }
       try {
         const { size, mtimeMs } = await stat(path);
-        const stamp = `${size}:${mtimeMs}`;
+        // SQLite writes live updates to a WAL while another CLI is open.
+        // Watching only the main database makes OpenCode/Devin appear frozen
+        // until their process checkpoints or exits.
+        const wal = await stat(`${path}-wal`).catch(() => null);
+        const stamp = `${size}:${mtimeMs}:${wal?.size ?? 0}:${wal?.mtimeMs ?? 0}`;
         if (t.size !== -1 && stamp !== t.size) this.emit('transcript', { id });
+        if (t.size !== -1 && stamp !== t.size) {
+          const session = this.#index.get(id);
+          if (session?.external && session.driver) await this.#importExternalTranscript(session);
+        }
         t.size = stamp;
       } catch { /* transcript not written yet */ }
     }, TRANSCRIPT_POLL_MS);
@@ -1196,6 +1406,55 @@ export class Sessions extends EventEmitter {
    */
   async input(id, text, { raw = false, attachments = [] } = {}) {
     const s = this.get(id);
+    if (s.external) {
+      await this.#importExternalTranscript(s);
+      const portableInfo = !raw && !attachments.length && s.engine !== 'codex' && /^\/(?:status|usage)\s*$/i.test(text.trim());
+      if (portableInfo) {
+        const turnId = `local-${randomBytes(6).toString('hex')}`;
+        const body = await sessionSnapshot({
+          engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, cwd: s.cwd, monitored: true,
+        });
+        this.#emitLocal(s, turnId, text.trim(), body);
+        return { ok: true };
+      }
+      const inspectOnly = !raw && !attachments.length && s.engine === 'codex' && canInspectExternalCodex(text);
+      if (inspectOnly) {
+        // This changes only Helm's renderer: the external CLI remains the
+        // writer and keeps running. The driver is connected for account reads
+        // such as /usage but does not resume the thread.
+        s.driver = s.engine;
+        s.updatedAt = Date.now();
+        this.#save();
+        this.emit('session', s);
+      } else {
+        await this.#handoffExternal(s);
+      // Ownership has moved naturally: turn the monitor into the same driven
+      // session instead of creating a duplicate row or losing its transcript.
+        s.external = false;
+        s.externalActive = false;
+        s.adopted = false;
+        s.externalLock = null;
+        s.driver = s.engine;
+        s.mode ??= defaultMode(s.engine);
+        s.notifyDone = true;
+        s.updatedAt = Date.now();
+        this.#drivers.get(s.id)?.enableWriting?.();
+        this.#save();
+        this.emit('session', s);
+      }
+    }
+    // A historical provider session remains marked after Helm resumes it so
+    // /status and /usage can be answered from that provider's persisted
+    // record without spending a model turn. Codex has its richer app-server
+    // implementation, including account rate limits, so it is left alone.
+    if (!raw && !attachments.length && s.externalSource && s.engine !== 'codex' && /^\/(?:status|usage)\s*$/i.test(text.trim())) {
+      const turnId = `local-${randomBytes(6).toString('hex')}`;
+      const body = await sessionSnapshot({
+        engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, cwd: s.cwd, monitored: false,
+      });
+      this.#emitLocal(s, turnId, text.trim(), body);
+      return { ok: true };
+    }
     // Mark the chat synchronously, before starting/resuming a driver can
     // yield. A user can send and immediately navigate back; the navigation's
     // discard request must never overtake that first message and erase it.
@@ -1232,11 +1491,24 @@ export class Sessions extends EventEmitter {
       if (images.length) await d.start?.();
       // Sampled before the prefix goes on: the network's state is helm's
       // note to the agent, and naming the thread "[helm 2 machines…]" would
-      // be naming it after helm rather than after the work.
-      if (!raw && compact == null) this.#prompted(s, clean);
+      // be naming it after helm rather than after the work. A slash command
+      // is a verb for the CLI, not a description of the work - "/status"
+      // must never become the thread's title.
+      if (!raw && !clean.trimStart().startsWith('/')) this.#prompted(s, clean);
       if (brainLine) clean = `${brainLine}\n\n${clean}`;
 
       const turnId = `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      const item = { turnId, text: clean, images, compact };
+      // Sideband commands are app-server or local reads that run beside an
+      // active turn rather than behind it. Busy is a turn in flight, a
+      // prompt waiting on the owner, or a send still being written - the
+      // cases where the message takes a ticket instead. Both are settled
+      // here, before the optimistic bubble, because it is the bubble that
+      // tells the client which this message was: the `local-` id alone
+      // cannot, since the first send into an idle session is briefly local
+      // too without ever having waited.
+      const sideband = !raw && compact == null && !images.length && d.canRunWhileBusy?.(clean);
+      const busy = !sideband && (this.#sending.has(s.id) || s.status === 'working' || s.status === 'blocked');
       if (compact != null) {
         // `/compact` is a command, not a prompt, so its bubble is a closed
         // one-liner rather than a turn that waits on the agent's echo.
@@ -1254,19 +1526,23 @@ export class Sessions extends EventEmitter {
         // turns, and an id shared between them would let one's turn.done
         // close the other.
         const event = this.events.append(id, {
-          type: 'turn.start', turnId, text: clean,
+          type: 'turn.start', turnId, text: clean, queued: busy,
           attachments: images.map((a) => this.events.putAttachment(id, a)),
         });
         s.lastSeq = event.seq;
         this.emit('event', { id, event });
       }
 
-      const item = { turnId, text: clean, images, compact };
-      // Busy is a turn in flight, a prompt waiting on the owner, or a send
-      // still being written. The message takes a ticket and `#pump` hands
-      // it to the agent once the turn settles - the same thing typing into
-      // a busy CLI does, on engines whose own queue would drop it instead.
-      const busy = this.#sending.has(s.id) || s.status === 'working' || s.status === 'blocked';
+      // These Codex commands are app-server or local reads, not model turns.
+      // Run them beside the active turn so checking status or usage neither
+      // queues behind it nor clears its working state and Stop control.
+      if (sideband) {
+        await this.#deliver(s, item, d);
+        return { ok: true };
+      }
+      // The message takes a ticket and `#pump` hands it to the agent once
+      // the turn settles - the same thing typing into a busy CLI does, on
+      // engines whose own queue would drop it instead.
       if (busy) {
         const q = this.#outbox.get(s.id) ?? [];
         q.push(item);
@@ -1389,13 +1665,57 @@ export class Sessions extends EventEmitter {
     const i = q.findIndex((x) => x.turnId === turnId);
     if (i < 0) return { ok: true, found: false };
     const [item] = q.splice(i, 1);
-    const event = this.events.append(id, {
-      type: 'turn.done', turnId, status: 'interrupted',
-      error: 'withdrawn before it was sent',
-    });
+    const event = this.events.append(id, { type: 'turn.remove', turnId });
     s.lastSeq = event.seq;
     this.emit('event', { id, event });
     return { ok: true, found: true, text: item.text };
+  }
+
+  /**
+   * Hand a queued message to the turn already running, without stopping it.
+   *
+   * Only engines with a real steering primitive get this - codex's
+   * app-server turn/steer is the one that exists today - so the capability
+   * is the method existing on the driver, not a flag. Where it does not
+   * exist the refusal lands before the queue is touched: Claude's print
+   * stream would queue a second frame as its own later turn and ACP v1 has
+   * no safe equivalent, and faking either would mislabel the promise.
+   *
+   * `#sending` is held across the steer so a turn settling mid-call cannot
+   * let `#pump` hand the same ticket to the agent twice. `turn.accept` is
+   * the event that lands instead of a close: the message went out, so its
+   * bubble is promoted into the transcript rather than marked stopped.
+   */
+  async sendNow(id, turnId) {
+    const s = this.get(id);
+    const q = this.#outbox.get(id) ?? [];
+    const i = q.findIndex((x) => x.turnId === turnId);
+    if (i < 0) return { ok: true, found: false, sent: false };
+    const item = q[i];
+    const d = this.#drivers.get(id);
+    if (typeof d?.steer !== 'function') {
+      throw new Error(`${s.engine} cannot send a queued message into the current turn`);
+    }
+    if (this.#sending.has(s.id)) throw new Error('message is already being sent');
+    this.#sending.add(s.id);
+    try {
+      await d.steer(item.text, item.images);
+      // A withdraw or a queue-clearing interrupt may have landed while the
+      // steer was in flight: take the ticket out by id, not by position.
+      const rest = this.#outbox.get(s.id);
+      if (rest) {
+        const j = rest.findIndex((x) => x.turnId === turnId);
+        if (j >= 0) rest.splice(j, 1);
+        if (!rest.length) this.#outbox.delete(s.id);
+      }
+      const event = this.events.append(id, { type: 'turn.accept', turnId });
+      s.lastSeq = event.seq;
+      this.emit('event', { id, event });
+      return { ok: true, found: true, sent: true };
+    } finally {
+      this.#sending.delete(s.id);
+      this.#pump(s);
+    }
   }
 
   /** A turn helm itself speaks: appended and pushed like any driver event. */
@@ -1444,6 +1764,17 @@ export class Sessions extends EventEmitter {
     // CLI's own transcript is its data, not helm's, and stays where it is.
     if (id.startsWith('found:')) return this.#mark(id, 'removed');
     const s = this.get(id);
+    if (s.external) {
+      // Close only Helm's monitor. The external CLI and its transcript are
+      // deliberately untouched; its inventory row can be opened again.
+      const d = this.#drivers.get(id);
+      this.#drivers.delete(id);
+      await d?.kill?.();
+      this.#index.delete(id);
+      this.#save();
+      this.emit('session', { ...s, status: 'exited', alive: false });
+      return { ok: true };
+    }
     if (s.driver) {
       const d = this.#drivers.get(id);
       this.#drivers.delete(id);

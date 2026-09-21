@@ -49,6 +49,9 @@ class FakeDriver extends EventEmitter {
     this.push('item.start', { id: 'i1', kind: 'text', turnId: 't1' });
     this.push('item.delta', { id: 'i1', text: 'hello' });
   }
+  async steer(text, images = []) {
+    this.steered = [...(this.steered ?? []), { text, images }];
+  }
   ask() {
     this.push('status', { status: 'blocked' });
     this.push('permission.request', { requestId: 'r1', kind: 'command', title: 'Run a command', options: [] });
@@ -662,6 +665,11 @@ test('messages sent mid-turn queue in order; stop and withdraw take theirs with 
   const locals = () => sessions.history(s.id).events
     .filter((e) => e.type === 'turn.start' && e.turnId.startsWith('local-'));
   assert.equal(locals().length, 3);
+  // The queue state is explicit on the event, not inferred from the
+  // `local-` id: the first send is briefly local too but never waited.
+  assert.equal(locals()[0].queued, false);
+  assert.equal(locals()[1].queued, true);
+  assert.equal(locals()[2].queued, true);
 
   // The turn settling is what hands the next one over, in the order typed.
   d.push('turn.done', { turnId: 't1', status: 'ok' });
@@ -684,6 +692,17 @@ test('messages sent mid-turn queue in order; stop and withdraw take theirs with 
   await tick(); await tick();
   assert.deepEqual(d.sent, ['first', 'second', 'third', 'while you were asking']);
 
+  // Send-now is steering, not dequeueing: where the driver has the
+  // primitive the ticket leaves the queue mid-turn, the optimistic bubble
+  // is accepted rather than closed, and a second attempt finds nothing.
+  await sessions.input(s.id, 'rush this now');
+  const rushId = locals().at(-1).turnId;
+  assert.deepEqual(await sessions.sendNow(s.id, rushId), { ok: true, found: true, sent: true });
+  assert.deepEqual(d.sent, ['first', 'second', 'third', 'while you were asking'], 'steered, not a normal send');
+  assert.deepEqual(d.steered, [{ text: 'rush this now', images: [] }]);
+  assert.ok(sessions.history(s.id).events.some((e) => e.type === 'turn.accept' && e.turnId === rushId));
+  assert.deepEqual(await sessions.sendNow(s.id, rushId), { ok: true, found: false, sent: false });
+
   // Withdraw pulls a ticket back before the agent ever sees the message.
   await sessions.input(s.id, 'fourth');
   const turnId = locals().at(-1).turnId;
@@ -703,8 +722,9 @@ test('messages sent mid-turn queue in order; stop and withdraw take theirs with 
   await tick(); await tick();
   assert.deepEqual(d.sent, ['first', 'second', 'third', 'while you were asking']);
 
-  // The withdrawn and the stopped bubbles all closed, by name.
-  const dones = sessions.history(s.id).events.filter((e) => e.type === 'turn.done' && e.turnId.startsWith('local-'));
-  assert.equal(dones.filter((e) => e.error === 'withdrawn before it was sent').length, 1);
-  assert.equal(dones.filter((e) => e.error === 'stopped before it was sent').length, 2);
+  // The agent never saw these messages, so their bubbles are removed rather
+  // than rendered as stopped turns. The real turn above still ends stopped.
+  const removed = sessions.history(s.id).events.filter((e) => e.type === 'turn.remove');
+  assert.equal(removed.length, 3);
+  assert.ok(removed.some((e) => e.turnId === turnId));
 });

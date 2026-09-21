@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Driver, readJsonLines, checkVersion } from './index.js';
-import { modeFor } from '../modes.js';
+import { modeFor, modesFor } from '../modes.js';
 
 /**
  * Agent Client Protocol, headless.
@@ -13,10 +13,15 @@ import { modeFor } from '../modes.js';
  * `session/request_permission` requests that we answer by id.
  *
  * Everything engine-specific lives in `spec`, set by the subclass:
- *   args()          argv after the binary ('acp', '--cwd', ...)
- *   min             the CLI version this driver was written against
- *   acpMode(mode)   a helm mode's value for configId 'mode' (or null)
- *   effortId        configId that carries thinking level ('effort'), if any
+ *   args()            argv after the binary ('acp', '--cwd', ...)
+ *   min               the CLI version this driver was written against
+ *   acpMode(mode)     a helm mode's value for configId 'mode' (or null)
+ *   effortId          configId that carries thinking level ('effort'), if any
+ *   fallbackCommands  static palette entries for an agent that advertises none
+ *   extraCommands     entries appended to whichever list won, for aliases the
+ *                     agent never advertises (devin's /usage)
+ *   mapPrompt(text)   the wire text for what the owner typed, when a command
+ *                     spelling is really an alias for another
  *
  * helm's own permission modes may be wider than what the agent's modes
  * express; a mode with `autoAllow` in modes.js is enforced here by answering
@@ -63,6 +68,13 @@ export class AcpDriver extends Driver {
   /** Slash commands advertised by the ACP agent for this session. */
   #commands = [];
   /**
+   * Helm's own model/mode choices have landed on the session. Until then,
+   * the agent's mode/model notifications describe the state it loaded,
+   * not a change it made, so mirroring them would overwrite the record's
+   * choices before they were ever applied.
+   */
+  #live = false;
+  /**
    * Whether this agent said it can take images in a prompt. ACP agents
    * differ - opencode's answer follows the provider behind the model, Devin
    * answers for itself - so it is read from what the agent advertised at
@@ -94,7 +106,15 @@ export class AcpDriver extends Driver {
 
   async availableCommands() {
     await this.start();
-    return this.#commands;
+    // What the agent advertised always wins; the spec's static list is the
+    // fallback for one that never sent available_commands_update, so the
+    // palette is not left with only helm's own actions. The spec's extra
+    // commands join either way - an alias like devin's /usage is missing
+    // from the advertised list by definition, so it cannot wait for the
+    // fallback to be the one that runs.
+    const base = this.#commands.length ? this.#commands : (this.spec.fallbackCommands ?? []);
+    const extra = (this.spec.extraCommands ?? []).filter((c) => c?.name && !base.some((x) => x.name === c.name));
+    return extra.length ? [...base, ...extra] : base;
   }
 
   async start() {
@@ -106,6 +126,9 @@ export class AcpDriver extends Driver {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.#child = child;
+    // A fresh agent reports the state it loaded before helm's choices are
+    // applied below; that reporting must not pass for a change it made.
+    this.#live = false;
     let stderr = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d); });
@@ -170,6 +193,9 @@ export class AcpDriver extends Driver {
       if (r.error) this.log(`${this.engine}: set ${configId}=${value} refused: ${r.error.message}`);
       else this.#takeOptions(r.result);
     }
+    // From here the agent's own switches - its /code, /fast, and the like -
+    // are real changes, mirrored into settings by #modeChanged/#optionsChanged.
+    this.#live = true;
 
     const opt = (id) => this.#options.find((o) => o.id === id)?.currentValue;
     this.info = { model: opt('model'), effort: this.spec.effortId ? opt(this.spec.effortId) : null };
@@ -185,13 +211,23 @@ export class AcpDriver extends Driver {
     }
   }
 
+  /**
+   * Merge freshly advertised configOptions into the known set - an update
+   * may carry the whole picker set or just the one that changed. Returns
+   * the entries whose value actually moved: first sight of a picker is its
+   * baseline, not a change.
+   */
   #takeOptions(result) {
-    if (!Array.isArray(result?.configOptions)) return;
-    // config_option_update may carry the whole picker set or just the one
-    // that changed - merge by id so a partial update never loses the rest.
+    if (!Array.isArray(result?.configOptions)) return [];
     const byId = new Map(this.#options.map((o) => [o.id, o]));
-    for (const o of result.configOptions) byId.set(o.id, o);
+    const changed = [];
+    for (const o of result.configOptions) {
+      const known = byId.get(o?.id);
+      if (known && o.currentValue !== known.currentValue) changed.push(o);
+      byId.set(o.id, o);
+    }
     this.#options = [...byId.values()];
+    return changed;
   }
 
   // ------------------------------------------------------------------ wire
@@ -230,11 +266,15 @@ export class AcpDriver extends Driver {
     this.#turnId = turnId;
     this.push('turn.start', { turnId, text });
     if (!this.pending.size) this.push('status', { status: 'working' });
+    // A spec alias rewrites only the wire text - devin's /usage goes out as
+    // /session-stats - while the turn keeps the spelling the owner typed,
+    // so the bubble and the optimistic echo match what was sent for them.
+    const promptText = this.spec.mapPrompt?.(text) ?? text;
     // The response only arrives when the turn ends - which may be a
     // permission answer away - so it cannot be awaited here.
     this.#call('session/prompt', {
       sessionId: this.engineSessionId,
-      prompt: [{ type: 'text', text }],
+      prompt: [{ type: 'text', text: promptText }],
     }).then((res) => this.#turnDone(turnId, res));
   }
 
@@ -404,7 +444,8 @@ export class AcpDriver extends Driver {
       case 'tool_call': return this.#toolCall(u);
       case 'tool_call_update': return this.#toolUpdate(u);
       case 'plan': return this.#plan(u);
-      case 'config_option_update': return this.#takeOptions(u);
+      case 'config_option_update': return this.#optionsChanged(u);
+      case 'current_mode_update': return this.#modeChanged(u.currentModeId);
       case 'usage_update':
         this.push('limits', { [this.engine]: { used: u.used, size: u.size, cost: u.cost } });
         return;
@@ -416,8 +457,45 @@ export class AcpDriver extends Driver {
         if (title) this.push('title', { title });
         return;
       }
-      default: return; // user_message_chunk, current_mode_update
+      default: return; // user_message_chunk and friends
     }
+  }
+
+  /**
+   * A config_option_update always refreshes the pickers; a settings event
+   * only when a value the agent had already reported actually moved. That
+   * is the agent switching something itself - devin's /fast changes the
+   * model, /code the mode - and helm's record should follow.
+   */
+  #optionsChanged(u) {
+    const changed = this.#takeOptions(u);
+    if (!this.#live) return;
+    for (const o of changed) {
+      if (!o?.currentValue) continue;
+      if (o.id === 'model') {
+        this.model = o.currentValue;
+        this.push('settings', { model: o.currentValue });
+      } else if (o.id === 'mode') {
+        this.#modeChanged(o.currentValue);
+      }
+    }
+  }
+
+  /**
+   * The agent switched its own session mode (devin's /ask, /code, ... do
+   * it agent-side, with no set_config_option from us). The acp word is
+   * reversed through the spec's own acpMode so a mode helm never sent is
+   * simply ignored, and when the current helm mode already maps to that
+   * word - opencode folds three helm modes into 'build' - the agent is
+   * agreeing, not changing.
+   */
+  #modeChanged(acpId) {
+    if (!acpId || !this.#live) return;
+    if (this.spec.acpMode(this.mode) === acpId) return;
+    const mode = modesFor(this.engine).find((m) => this.spec.acpMode(m.id) === acpId);
+    if (!mode || mode.id === this.mode) return;
+    this.mode = mode.id;
+    this.push('settings', { mode: mode.id });
   }
 
   /** A run of prose or thinking, opened on its first chunk and closed by
