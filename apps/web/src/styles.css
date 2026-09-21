@@ -531,6 +531,12 @@ pre.snippet {
 }
 .turn.assistant { padding: 2px 4px 8px; gap: 2px; }
 .prose { font-size: var(--t-read); line-height: 1.65; color: var(--text-80); word-break: break-word; }
+/* A command's own report: a quiet information panel, not a tool card. */
+.command-result {
+  max-width: 100%; margin: 4px 0; padding: 10px 12px; overflow-x: auto;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.command-result > p { white-space: pre-wrap; }
 /* Before the markdown chunk lands, the same text as plain text. */
 .md.raw { white-space: pre-wrap; }
 
@@ -680,6 +686,25 @@ pre.snippet {
 .palette .pname { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); }
 .palette .pdesc { color: var(--mutedfg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette .psrc { color: var(--icon); font-size: var(--t-micro); }
+
+/* Messages accepted but not yet handed to the agent: a section inside the
+   slab rather than bubbles in the transcript. */
+.queued-panel {
+  padding: 8px 10px 4px; border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--card) 60%, transparent);
+  color: var(--text-dim); font-size: var(--t-meta);
+}
+.queued-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 0 4px 5px; font-size: var(--t-micro); color: var(--mutedfg);
+}
+.queued-head b { font-weight: 600; color: var(--text-dim); }
+.queued-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 4px; }
+.queued-row + .queued-row { border-top: 1px solid var(--line); }
+.queued-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queued-attachments { color: var(--mutedfg); font-size: var(--t-micro); }
+.queued-row button { flex: none; font-size: var(--t-micro); font-weight: 500; color: var(--mutedfg); }
+.queued-row button:hover { color: var(--text); }
 
 /* Images already sent, inside the owner's own message. */
 .turn-image { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; }

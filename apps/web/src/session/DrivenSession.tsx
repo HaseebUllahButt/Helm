@@ -52,6 +52,10 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const status = log.loaded ? log.status : session.status;
   const working = status === 'working';
   const pending = log.pending[0];
+  // Queued messages are the daemon's outbox rendered in the composer, not
+  // transcript turns: they only become a bubble once the agent echoes them.
+  const queuedTurns = log.turns.filter((turn) => turn.queued && !turn.done);
+  const transcriptTurns = log.turns.filter((turn) => !turn.queued);
 
   // The catalogue this device last heard, then the machine's answer behind it.
   // Without the first half the model chip reads "default" and the picker is
@@ -71,9 +75,16 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // commands are: files beside the project, or in that account's config.
   useEffect(() => {
     let stale = false;
-    const load = () => client.rpc<{ commands: typeof commands }>(env.id, 'session.commands', { id: session.id }, 20_000)
+    let timer: ReturnType<typeof setTimeout>;
+    const load = (tries = 1) => client.rpc<{ commands: typeof commands }>(env.id, 'session.commands', { id: session.id }, 20_000)
       .then((r) => { if (!stale) setCommands(r.commands ?? []); })
-      .catch(() => { if (!stale) setCommands([]); });
+      .catch(() => {
+        // A cold machine can time the RPC out while the lazy driver boots
+        // the CLI; one retry is the difference between a palette and none.
+        if (stale) return;
+        if (tries > 0) timer = setTimeout(() => load(tries - 1), 4_000);
+        else setCommands([]);
+      });
     void load();
     // A daemon upgrade can add commands while this conversation remains
     // open. Refresh after either the hub reconnects or this machine's direct
@@ -81,7 +92,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     const off = client.on((e, kind, payload: any) => {
       if ((kind === 'connection' && payload?.online) || (e === env.id && kind === 'transport' && payload?.direct)) void load();
     });
-    return () => { stale = true; off(); };
+    return () => { stale = true; clearTimeout(timer); off(); };
   }, [client, env.id, session.id]);
 
   // The record changes without us asking: the CLI reports which model it
@@ -163,6 +174,10 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     void sendText(turn.text.trim(), atts);
   };
 
+  // A queue action in flight, by ticket: the daemon's events are the source
+  // of truth for what left the queue, so the button just waits it out.
+  const [queueBusy, setQueueBusy] = useState('');
+
   /**
    * Pull a queued message back before the agent sees it: the daemon drops
    * it from the queue and closes the bubble, and the words go back into the
@@ -170,6 +185,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
    * note is not restored: it was never the owner's typing.
    */
   const withdraw = async (turn: Turn) => {
+    if (queueBusy) return;
+    setQueueBusy(turn.id);
     try {
       const r: any = await client.rpc(env.id, 'session.dequeue', { id: session.id, turnId: turn.id });
       if (r?.found) {
@@ -177,6 +194,23 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         setDraft(draft ? `${draft.replace(/\s*$/, '')}\n${back}` : back);
       }
     } catch (e: any) { setError(e.message); }
+    finally { setQueueBusy(''); }
+  };
+
+  /**
+   * Send a queued message into the turn already running, without
+   * interrupting it. Real steering, not a queue trick: Codex's app-server
+   * turn/steer is currently the only true in-flight primitive Helm has -
+   * Claude's print stream queues a second frame as its own later turn and
+   * ACP v1 has no equivalent, so those engines keep FIFO plus withdraw.
+   */
+  const sendQueuedNow = async (turn: Turn) => {
+    if (queueBusy) return;
+    setQueueBusy(turn.id);
+    try {
+      await client.rpc(env.id, 'session.send-now', { id: session.id, turnId: turn.id });
+    } catch (e: any) { setError(e.message); }
+    finally { setQueueBusy(''); }
   };
 
   const answer = (d: Decision) => pending && call(() => client.rpc(env.id, 'session.answer', { id: session.id, requestId: pending.requestId, decision: d }));
@@ -292,7 +326,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // while. The open turn's own start beats the record's last transition,
   // which also moves when a permission is answered.
   const now = useNow();
-  const openTurn = log.turns.at(-1);
+  const openTurn = transcriptTurns.at(-1);
   const since = status === 'working' && openTurn && !openTurn.done ? openTurn.at : session.updatedAt;
   const age = since ? waitingSince(since, now) : '';
   const chip = (s: string) => {
@@ -375,7 +409,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       </div>
 
       <Transcript
-        turns={log.turns} status={status} loaded={log.loaded}
+        turns={transcriptTurns} status={status} loaded={log.loaded}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
         onResend={resend} onWithdraw={withdraw}
         empty={session.alive === false ? 'This conversation resumes with your next message.' : undefined}
@@ -389,6 +423,13 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
         commands={commands}
+        queued={queuedTurns.map((turn) => ({
+          turn, text: splitNote(turn.text).text ?? turn.text,
+          attachments: turn.attachments?.length ?? 0,
+        }))}
+        onWithdrawQueued={withdraw}
+        onSendQueuedNow={session.engine === 'codex' ? sendQueuedNow : undefined}
+        queueBusy={queueBusy}
         history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
       >
         {controls.sheet}

@@ -89,6 +89,8 @@ export interface Turn {
   id: string;
   text: string;
   at: number;
+  /** Still in helm's outbox: accepted, but the agent has not seen it yet. */
+  queued?: boolean;
   attachments?: { filename: string; mime: string; data?: string; bytes?: number; missing?: boolean }[];
   items: Item[];
   done?: TurnEnd;
@@ -194,8 +196,8 @@ export function apply(state: LogState, e: HelmEvent): void {
         const mine = t.text.trim();
         if (mine === echo || (mine && echo.startsWith(mine + '\n'))) { open = t; break; }
       }
-      if (open) { open.id = id; return; }
-      state.turns.push({ id, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [] });
+      if (open) { open.id = id; open.queued = false; return; }
+      state.turns.push({ id, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true });
       return;
     }
     case 'item.start': {
@@ -245,8 +247,25 @@ export function apply(state: LogState, e: HelmEvent): void {
     case 'permission.resolved':
       state.pending = state.pending.filter((p) => p.requestId !== e.requestId);
       return;
+    case 'turn.accept': {
+      // A queued ticket steered into the live turn: it is a transcript
+      // bubble now, not a queue row.
+      const turn = state.turns.find((t) => t.id === e.turnId);
+      if (turn) turn.queued = false;
+      return;
+    }
     case 'turn.done': {
       const turn = turnFor(state.turns, e.turnId);
+      // An older daemon closed withdrawn and stop-cleared tickets with an
+      // interrupted turn.done on the `local-` turn. The message was never
+      // sent, so the bubble is removed rather than rendered as stopped -
+      // turn.remove is the shape a current daemon sends for the same thing.
+      if (turn && turn.id === e.turnId && turn.id.startsWith('local-')
+        && e.status === 'interrupted'
+        && /^(?:withdrawn|stopped) before it was sent$/i.test(e.error ?? '')) {
+        state.turns = state.turns.filter((t) => t.id !== e.turnId);
+        return;
+      }
       if (turn) {
         // The turn's error is usually the same sentence an `error` event
         // already put in the transcript ("Not logged in - run /login"), and
@@ -263,6 +282,9 @@ export function apply(state: LogState, e: HelmEvent): void {
       for (const it of turn?.items ?? []) if (it.status === 'streaming') { it.status = e.status === 'interrupted' ? 'ok' : it.status === 'streaming' ? 'ok' : it.status; it.doneAt ??= e.at; }
       return;
     }
+    case 'turn.remove':
+      state.turns = state.turns.filter((turn) => turn.id !== e.turnId);
+      return;
     case 'status':
       state.status = e.status;
       return;

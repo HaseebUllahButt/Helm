@@ -65,11 +65,11 @@ function useTyped(text: string, live: boolean) {
 
 // ------------------------------------------------------------------- items
 
-function TextItem({ item }: { item: Item }) {
+function TextItem({ item, commandOutput }: { item: Item; commandOutput?: boolean }) {
   const live = item.status === 'streaming';
   const text = useTyped(item.text, live);
   if (!text && !live) return null;
-  return <Markdown text={text} className={`prose${live ? ' live' : ''}`} />;
+  return <Markdown text={text} className={`prose${commandOutput ? ' command-result' : ''}${live ? ' live' : ''}`} />;
 }
 
 function ThinkingItem({ item }: { item: Item }) {
@@ -258,9 +258,9 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
   );
 }
 
-function ItemView({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
+function ItemView({ item, byParent, commandOutput }: { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean }) {
   switch (item.kind) {
-    case 'text': return <TextItem item={item} />;
+    case 'text': return <TextItem item={item} commandOutput={commandOutput} />;
     case 'thinking': return <ThinkingItem item={item} />;
     case 'tool': return <ToolItem item={item} />;
     case 'command': return <CommandItem item={item} />;
@@ -301,11 +301,16 @@ function clock(ts?: number) {
 
 function TurnView({ turn, working, blocked, onResend, onWithdraw }: { turn: Turn; working: boolean; blocked: boolean; onResend?: (turn: Turn) => void; onWithdraw?: (turn: Turn) => void }) {
   const said = splitNote(turn.text);
+  // A prompt that is itself a command means the turn's text is that
+  // command's answer - styled as a quiet result panel rather than prose.
+  const commandOutput = /^\/\S+/.test((said.text ?? '').trim());
   const d = turn.done;
-  // A `local-` turn is one helm posted before the agent echoed it. Until
-  // the echo adopts it that is the honest state of the message: written,
-  // queued behind whatever the agent is doing, not yet read by it.
-  const queued = turn.id.startsWith('local-') && !d && !turn.items.length;
+  // New daemons say it outright: `queued` is set on the optimistic turn,
+  // false included, so a first send into an idle session never flashes as
+  // waiting. The `local-` inference is for old events and old daemons: a
+  // turn helm posted that the agent has not echoed is written, queued
+  // behind whatever the agent is doing, not yet read by it.
+  const queued = turn.queued ?? (turn.id.startsWith('local-') && !d && !turn.items.length);
   // Any turn that ended in an error - whether the message never reached the
   // agent or the turn it became died - is worth offering again: the words
   // are already written, retyping them is the part nobody wants.
@@ -345,7 +350,7 @@ function TurnView({ turn, working, blocked, onResend, onWithdraw }: { turn: Turn
         </div></div>
       )}
       <div className="turn assistant">
-        {roots.map((it) => <ItemView key={it.id} item={it} byParent={byParent} />)}
+        {roots.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}
         {!d && working && !turn.items.some((it) => it.status === 'streaming' && it.kind === 'text') && (
           blocked
             ? <div className="working quiet">Waiting for you</div>

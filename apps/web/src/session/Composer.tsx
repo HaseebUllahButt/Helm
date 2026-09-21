@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { IMAGE_ACCEPT, looksLikeImage } from './image';
 import { useDictation } from './voice';
+import type { Turn } from './types';
 
 const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -16,7 +17,7 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], onTranscribe }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, onSendQueuedNow, queueBusy, onTranscribe }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
@@ -35,6 +36,21 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   commands?: { name: string; description?: string; source?: string }[];
   /** Earlier prompts, oldest first, for shell-style Up/Down recall. */
   history?: string[];
+  /**
+   * Messages still in helm's outbox, oldest first: accepted but not yet
+   * handed to the agent, so they sit here rather than in the transcript.
+   */
+  queued?: { turn: Turn; text: string; attachments: number }[];
+  /** Pull a queued message back into the draft before the agent sees it. */
+  onWithdrawQueued?: (turn: Turn) => void;
+  /**
+   * Send a queued message into the turn already running, without
+   * interrupting it. Absent unless the engine has a real in-flight steering
+   * primitive - ACP v1 has no safe one, so the button is never faked there.
+   */
+  onSendQueuedNow?: (turn: Turn) => void;
+  /** The queued turn id an action is in flight for, so it cannot run twice. */
+  queueBusy?: string;
   /**
    * Turn a recording into text on a machine that holds a Groq key. Absent
    * when no machine in the network has one, and then there is no microphone:
@@ -225,6 +241,45 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                   <span className="psrc">{c.source}</span>
                 </button>
               ))}
+            </div>
+          )}
+          {queued.length > 0 && (
+            <div className="queued-panel">
+              <div className="queued-head">
+                <b>{queued.length} queued</b>
+                <span>sent after the current turn</span>
+              </div>
+              {queued.map((item) => {
+                const label = item.text || (item.attachments === 1 ? 'Image' : `${item.attachments} images`);
+                const name = label.length > 80 ? `${label.slice(0, 79)}…` : label;
+                const busy = queueBusy === item.turn.id;
+                return (
+                  <div className="queued-row" key={item.turn.id}>
+                    <span className="queued-text">
+                      {label}
+                      {!!item.text && item.attachments > 0 && (
+                        <span className="queued-attachments">{item.attachments === 1 ? ' + image' : ` + ${item.attachments} images`}</span>
+                      )}
+                    </span>
+                    {onSendQueuedNow && (
+                      <button
+                        disabled={busy}
+                        onClick={() => onSendQueuedNow(item.turn)}
+                        title={`send now, without stopping the current turn: ${name}`}
+                        aria-label={`send queued message now: ${name}`}
+                      >send now</button>
+                    )}
+                    {onWithdrawQueued && (
+                      <button
+                        disabled={busy}
+                        onClick={() => onWithdrawQueued(item.turn)}
+                        title={`take back into the draft: ${name}`}
+                        aria-label={`withdraw queued message: ${name}`}
+                      >withdraw</button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           {attachments && attachments.length > 0 && (
