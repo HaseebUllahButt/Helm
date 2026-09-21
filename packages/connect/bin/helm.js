@@ -67,6 +67,7 @@ const usage = () => {
   helm devices                      controllers that can drive this network
   helm machines                     machines in this network
   helm redesignate [machine] <kind> what a machine is for: pc, vm or nas
+  helm nas [machine] [add|remove <folder>]   what a nas shares
   helm remove <id>                  remove a controller or machine, permanently
   helm leave                        remove this machine from its network
 
@@ -82,6 +83,7 @@ const usage = () => {
 
   helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
   helm proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
+  helm self-update                  pull the newest helm to this machine and restart
   helm service install|uninstall    background service
 
 Only 'helm add controller' prints a link to open; the others print a code to
@@ -228,6 +230,15 @@ async function up() {
       console.log('  stop it with:   helm service uninstall --serve\n');
     }
     return;
+  }
+
+  // A daemon systemd started keeps itself current: make sure the update
+  // timer exists, then a machine that ever lands this code follows new
+  // releases on its own from then on. INVOCATION_ID is set only for units
+  // systemd launched, so a foreground `helm up` is untouched.
+  if (process.env.INVOCATION_ID) {
+    // The daemon's own PATH is the one that found node, git and npm.
+    import('../src/update.js').then((m) => m.ensureUpdateTimer({ searchPath: process.env.PATH })).catch(() => {});
   }
 
   useHubDb();
@@ -963,6 +974,77 @@ function listMachines() {
   }
 }
 
+// --------------------------------------------------------------------- nas
+
+/**
+ * `helm nas [machine] [add|remove <folder>]` - what a nas shares.
+ *
+ * The allowlist is the whole security boundary of the designation, so it is
+ * edited deliberately and only ever on the machine that serves it: a remote
+ * target is asked through its daemon, and this machine through its daemon
+ * too when it is up - falling back to writing the file directly, which the
+ * media handler re-reads on every request anyway.
+ */
+async function nasCmd() {
+  const net = requireNetwork();
+  const args = rest.filter((a) => !a.startsWith('--'));
+  const isVerb = (w) => ['ls', 'list', 'add', 'rm', 'remove'].includes(w);
+
+  let who = null, verb = 'list', folder = null;
+  if (args.length && !isVerb(args[0])) who = args.shift();
+  if (args.length) verb = args.shift();
+  if (args.length) folder = args.join(' ');
+  if (!isVerb(verb)) die('usage: helm nas [machine] [add|remove <folder>]');
+
+  const target = who ? machineId(who) : net.self;
+  const record = net.machines[target];
+  const kind = record?.kind ?? (target === net.self ? net.role : 'pc');
+  const nas = await import('@helm/nas');
+
+  if (verb === 'ls' || verb === 'list') {
+    if (kind !== 'nas') {
+      console.log(`\n  ${record?.name ?? 'this machine'} is not a nas - ` +
+        `\`helm redesignate ${who ?? ''} nas\` first.\n`);
+      return;
+    }
+    const { roots } = target === net.self && !await reachable(net, target)
+      ? { roots: nas.mediaRoots() }
+      : await hubRpc(net, target, M.MEDIA_ROOTS);
+    if (!roots.length) console.log('\n  nothing shared yet:  helm nas add <folder>');
+    for (const r of roots) console.log(`  [${r.id}] ${r.path}`);
+    console.log('');
+    return;
+  }
+
+  if (kind !== 'nas') {
+    die(`${record?.name ?? 'this machine'} is not a nas - run ` +
+      `\`helm redesignate ${who ?? ''} nas\` first`);
+  }
+  if (!folder) die(`usage: helm nas ${who ? `${who} ` : ''}${verb} <folder>`);
+  const method = verb === 'add' ? M.MEDIA_ROOT_ADD : M.MEDIA_ROOT_REMOVE;
+
+  if (target !== net.self || await reachable(net, target)) {
+    const { roots } = await hubRpc(net, target, method, { path: folder }).catch((err) => {
+      if (target !== net.self) throw err;
+      return null;
+    });
+    if (roots) { for (const r of roots) console.log(`  [${r.id}] ${r.path}`); console.log(''); return; }
+  }
+  // The daemon is not answering and the target is this machine: the file is
+  // the store, so write it directly. The listener re-reads it per request.
+  const roots = verb === 'add' ? nas.addMediaRoot(folder) : nas.removeMediaRoot(folder);
+  for (const r of roots) console.log(`  [${r.id}] ${r.path}`);
+  console.log('');
+}
+
+/** Can this machine's own daemon be asked something right now? */
+async function reachable(net, target) {
+  return hubRpc(net, target, M.MEDIA_INFO, {}, { timeout: 3000 }).then(
+    () => true,
+    () => false
+  );
+}
+
 /**
  * Remove a member. This is the only way something leaves a network - which is
  * the point: nothing else, including restarts, reinstalls or an expired
@@ -1075,6 +1157,10 @@ try {
       await redesignate();
       break;
 
+    case 'nas':
+      await nasCmd();
+      break;
+
     case 'remove':
     case 'revoke':
       remove();
@@ -1117,6 +1203,17 @@ try {
       if (!rest[0]) die('usage: helm proxy <host>');
       await proxy(rest[0]);
       break;
+
+    case 'self-update':
+    case 'update': {
+      const { selfUpdate } = await import('../src/update.js');
+      const r = await selfUpdate();
+      if (!r.updated) { console.log(`  not updated - ${r.reason}`); break; }
+      console.log(r.restarting?.length
+        ? `  updated - ${r.restarting.join(', ')} restart${r.restarting.length === 1 ? 's' : ''} in a few seconds`
+        : '  updated - restart helm to pick it up');
+      break;
+    }
 
     case 'profiles': {
       const profiles = rest.includes('--refresh')

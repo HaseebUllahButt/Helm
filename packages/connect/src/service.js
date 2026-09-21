@@ -85,6 +85,10 @@ WantedBy=default.target
 `
   );
 
+  // The update pair comes with the daemon: helm-update.timer runs
+  // `helm self-update` so the machine follows new releases on its own.
+  await (await import('./update.js')).ensureUpdateTimer({ searchPath }).catch(() => false);
+
   await exec('systemctl', ['--user', 'daemon-reload']);
   // `enable --now` does not restart a unit that is already active, so a
   // re-install with different arguments (say, a new --advertise address after
@@ -111,6 +115,7 @@ export async function uninstallService({ mode = 'agent' } = {}) {
   if (process.env.HELM_NO_SERVICE === '1') return { removed: false };
   if (platform() !== 'linux') return { removed: false };
   await exec('systemctl', ['--user', 'disable', '--now', UNIT]).catch(() => {});
+  await (await import('./update.js')).removeUpdateTimer().catch(() => {});
   const file = join(unitDir, UNIT);
   if (existsSync(file)) rmSync(file);
   await exec('systemctl', ['--user', 'daemon-reload']).catch(() => {});
