@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Markdown } from '../Markdown';
 import type { Change, Item, Turn } from './types';
 import { money, seconds } from '../format';
@@ -299,7 +299,18 @@ function clock(ts?: number) {
   return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
 }
 
-function TurnView({ turn, working, blocked, onResend, onWithdraw }: { turn: Turn; working: boolean; blocked: boolean; onResend?: (turn: Turn) => void; onWithdraw?: (turn: Turn) => void }) {
+function TurnView({ turn, items, head = true, tail = true, working, blocked, onResend, onWithdraw }: {
+  turn: Turn;
+  /**
+   * A slice of the turn's items, when it renders around a helm answer hosted
+   * inside it: the first slice carries the prompt bubble, the last carries
+   * the working pulse and the footer, and the slices between are just items.
+   */
+  items?: Item[];
+  head?: boolean;
+  tail?: boolean;
+  working: boolean; blocked: boolean; onResend?: (turn: Turn) => void; onWithdraw?: (turn: Turn) => void;
+}) {
   const said = splitNote(turn.text);
   // A prompt that is itself a command means the turn's text is that
   // command's answer - styled as a quiet result panel rather than prose.
@@ -316,9 +327,10 @@ function TurnView({ turn, working, blocked, onResend, onWithdraw }: { turn: Turn
   // are already written, retyping them is the part nobody wants.
   const failed = d?.status === 'error' && !!turn.text;
   // Subagent children hang off their spawn card; a missing parent renders flat.
-  const ids = new Set(turn.items.map((i) => i.id));
+  const list = items ?? turn.items;
+  const ids = new Set(list.map((i) => i.id));
   const byParent = new Map<string, Item[]>();
-  const roots = turn.items.filter((it) => {
+  const roots = list.filter((it) => {
     if (!it.parentId || !ids.has(it.parentId)) return true;
     const kids = byParent.get(it.parentId) ?? [];
     kids.push(it);
@@ -327,7 +339,7 @@ function TurnView({ turn, working, blocked, onResend, onWithdraw }: { turn: Turn
   });
   return (
     <>
-      {(turn.text || turn.attachments?.length) && (
+      {head && (turn.text || turn.attachments?.length) && (
         <div className={`turn user${queued ? ' queued' : ''}`}><div className="bubble">
           {said.note && <span className="turn-note">{said.note}</span>}
           {said.text}
@@ -351,12 +363,12 @@ function TurnView({ turn, working, blocked, onResend, onWithdraw }: { turn: Turn
       )}
       <div className="turn assistant">
         {roots.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}
-        {!d && working && !turn.items.some((it) => it.status === 'streaming' && it.kind === 'text') && (
+        {tail && !d && working && !turn.items.some((it) => it.status === 'streaming' && it.kind === 'text') && (
           blocked
             ? <div className="working quiet">Waiting for you</div>
             : <div className="working"><span className="shine">Working…</span></div>
         )}
-        {d && (d.status === 'interrupted' ? <div className="turn-meta">stopped</div>
+        {tail && d && (d.status === 'interrupted' ? <div className="turn-meta">stopped</div>
           : d.status === 'error' ? (
             <div className="turn-meta bad">
               {d.error || 'the turn failed'}
@@ -385,7 +397,9 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   const box = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
   const [unread, setUnread] = useState(false);
-  const last = turns[turns.length - 1];
+  // The working pulse hangs off the turn still being written - with a helm
+  // answer hosted mid-turn, that is not necessarily the last turn in the list.
+  const openTurn = turns.filter((t) => !t.done).at(-1);
   const working = status === 'working' || status === 'blocked';
 
   const onScroll = () => {
@@ -406,6 +420,39 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     if (el) { el.scrollTop = el.scrollHeight; stuck.current = true; setUnread(false); }
   };
 
+  // A helm answer that landed inside a still-running turn renders at the seam
+  // it recorded (insideOf/insideAt): the host's items up to the seam above it,
+  // the rest below - the running turn's output flows under the answer instead
+  // of piling up over it. One whose host is not on screen just sits where it
+  // was appended.
+  const turnIds = new Set(turns.map((t) => t.id));
+  const insideByHost = new Map<string, Turn[]>();
+  const hostedIds = new Set<string>();
+  for (const t of turns) {
+    if (!t.insideOf || !turnIds.has(t.insideOf)) continue;
+    insideByHost.set(t.insideOf, [...(insideByHost.get(t.insideOf) ?? []), t]);
+    hostedIds.add(t.id);
+  }
+  const view = (t: Turn, items?: Item[], head = true, tail = true, key: string = t.id) => (
+    <TurnView key={key} turn={t} items={items} head={head} tail={tail}
+      working={working && t === openTurn} blocked={status === 'blocked'}
+      onResend={onResend} onWithdraw={onWithdraw} />
+  );
+  const flow: ReactNode[] = [];
+  for (const t of turns) {
+    if (hostedIds.has(t.id)) continue;
+    const hosted = insideByHost.get(t.id)?.sort((a, b) => (a.insideAt ?? 0) - (b.insideAt ?? 0));
+    if (!hosted?.length) { flow.push(view(t)); continue; }
+    let prev = 0;
+    hosted.forEach((c, k) => {
+      const cut = Math.max(prev, Math.min(c.insideAt ?? t.items.length, t.items.length));
+      if (k === 0 || cut > prev) flow.push(view(t, t.items.slice(prev, cut), k === 0, false, `${t.id}#${k}`));
+      flow.push(view(c));
+      prev = cut;
+    });
+    flow.push(view(t, t.items.slice(prev), false, true, `${t.id}#end`));
+  }
+
   return (
     <div className="chat-wrap">
       <div className="chat" ref={box} onScroll={onScroll}>
@@ -419,7 +466,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
           )}
           {!loaded && <p className="placeholder">Loading the conversation…</p>}
           {loaded && turns.length === 0 && <p className="placeholder">{empty ?? 'Send a message to start the conversation.'}</p>}
-          {turns.map((t) => <TurnView key={t.id} turn={t} working={working && t === last} blocked={status === 'blocked'} onResend={onResend} onWithdraw={onWithdraw} />)}
+          {flow}
         </div>
       </div>
       {unread && <button className="jump" onClick={jump}>↓ new</button>}

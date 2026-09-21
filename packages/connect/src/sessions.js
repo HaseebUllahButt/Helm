@@ -1525,6 +1525,7 @@ export class Sessions extends EventEmitter {
         // close the other.
         const event = this.events.append(id, {
           type: 'turn.start', turnId, text: clean, queued: busy,
+          ...(sideband ? { local: true } : {}),
           attachments: images.map((a) => this.events.putAttachment(id, a)),
         });
         s.lastSeq = event.seq;
@@ -1744,7 +1745,7 @@ export class Sessions extends EventEmitter {
   #emitLocal(s, turnId, text, body = null) {
     const itemId = `local-${turnId}`;
     const evs = [
-      { type: 'turn.start', turnId, text },
+      { type: 'turn.start', turnId, text, local: true },
       ...(body == null ? [] : [
         { type: 'item.start', id: itemId, kind: 'text', turnId },
         { type: 'item.delta', id: itemId, text: body },

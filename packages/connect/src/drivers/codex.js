@@ -499,7 +499,10 @@ export class CodexDriver extends Driver {
     else await this.start();
     const commandTurn = `command-${randomUUID()}`;
     if (!sideband) this.push('status', { status: 'working' });
-    this.push('turn.start', { turnId: commandTurn, text });
+    // A sideband answer is complete on arrival (local): it renders inside a
+    // turn still streaming, not pinned after it. /review is a real turn and
+    // keeps the ordinary shape.
+    this.push('turn.start', { turnId: commandTurn, text, ...(sideband ? { local: true } : {}) });
 
     if (name === 'review') {
       const target = args ? { type: 'custom', instructions: args } : { type: 'uncommittedChanges' };

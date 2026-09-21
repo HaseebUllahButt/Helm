@@ -100,6 +100,7 @@ test('devin: /usage answers locally - the quota card, not an ACP prompt', async 
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
   assert.equal(log.of('turn.start')[0].text, '/usage', 'the bubble keeps the spelling that was typed');
+  assert.equal(log.of('turn.start')[0].local, true, 'the turn says helm answered it itself - it lands inside a live turn');
   const body = log.of('item.delta').map((e) => e.text).join('');
   assert.match(body, /### Usage/);
   assert.match(body, /\*\*Daily\*\* `█░{19}` 5% used · resets in \d+h \d+m/);

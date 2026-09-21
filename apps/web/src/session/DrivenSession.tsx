@@ -326,8 +326,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // while. The open turn's own start beats the record's last transition,
   // which also moves when a permission is answered.
   const now = useNow();
-  const openTurn = transcriptTurns.at(-1);
-  const since = status === 'working' && openTurn && !openTurn.done ? openTurn.at : session.updatedAt;
+  const openTurn = transcriptTurns.filter((t) => !t.done).at(-1);
+  const since = status === 'working' && openTurn ? openTurn.at : session.updatedAt;
   const age = since ? waitingSince(since, now) : '';
   const chip = (s: string) => {
     const ago = age && age !== 'just now' ? ` ${age}` : '';

@@ -6,7 +6,9 @@ import { execFile } from 'node:child_process';
  * one vocabulary of session events. Every driver emits the same events, so
  * the app renders Claude Code and Codex with the same components:
  *
- *   turn.start          { turnId, text }
+ *   turn.start          { turnId, text, local? }  local: helm answered the
+ *                                                 turn itself - it is
+ *                                                 complete on arrival
  *   item.start          { id, kind, turnId, parentId?, ... }   kind: text | thinking | tool | command | edit | subagent
  *   item.delta          { id, text }                appended to the item's text / output / input JSON
  *   item.update         { id, ...fields }           e.g. { agent: { status, lastTool, toolUses } }

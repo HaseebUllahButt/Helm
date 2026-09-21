@@ -91,6 +91,15 @@ export interface Turn {
   at: number;
   /** Still in helm's outbox: accepted, but the agent has not seen it yet. */
   queued?: boolean;
+  /** Answered by helm itself - complete on arrival, never a live turn. */
+  local?: boolean;
+  /**
+   * The turn still running when this one landed, and how many of its items
+   * existed then: the chat renders this turn at that seam, so the running
+   * turn's later output flows below the answer instead of over it.
+   */
+  insideOf?: string;
+  insideAt?: number;
   attachments?: { filename: string; mime: string; data?: string; bytes?: number; missing?: boolean }[];
   items: Item[];
   done?: TurnEnd;
@@ -162,6 +171,20 @@ const turnFor = (turns: Turn[], turnId?: string): Turn | undefined =>
   (turnId && turns.find((t) => t.id === turnId)) || turns[turns.length - 1];
 
 /**
+ * The last turn still open that a helm-answered turn can land inside -
+ * never a queued ticket (that is a composer row, not a stream), never
+ * another local answer (it is already done), never the turn itself.
+ */
+const hostFor = (turns: Turn[], target?: Turn): Turn | undefined => {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i];
+    if (t === target || t.done || t.local || t.queued) continue;
+    return t;
+  }
+  return undefined;
+};
+
+/**
  * Apply one event. Mutates in place for speed - deltas arrive many times a
  * second - and the hook clones the top-level object to re-render.
  */
@@ -196,8 +219,29 @@ export function apply(state: LogState, e: HelmEvent): void {
         const mine = t.text.trim();
         if (mine === echo || (mine && echo.startsWith(mine + '\n'))) { open = t; break; }
       }
-      if (open) { open.id = id; open.queued = false; return; }
-      state.turns.push({ id, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true });
+      // A helm-answered turn is complete on arrival. If another turn is
+      // still streaming, appending it would put every later item of that
+      // turn *above* the answer - pinning it at the bottom while work piles
+      // up over it. Record the open turn it landed inside and how much of
+      // it existed, so the chat can host it at that seam instead.
+      const host = e.local ? hostFor(state.turns, open) : undefined;
+      if (open) {
+        open.id = id;
+        open.queued = false;
+        if (e.local) {
+          open.local = true;
+          open.insideOf = host?.id;
+          open.insideAt = host?.items.length;
+        }
+        return;
+      }
+      const turn: Turn = { id, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true };
+      if (e.local) {
+        turn.local = true;
+        turn.insideOf = host?.id;
+        turn.insideAt = host?.items.length;
+      }
+      state.turns.push(turn);
       return;
     }
     case 'item.start': {

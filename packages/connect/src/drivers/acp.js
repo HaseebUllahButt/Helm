@@ -291,7 +291,9 @@ export class AcpDriver extends Driver {
    */
   async #localCommand(text, run) {
     const turnId = `command-${randomUUID()}`;
-    this.push('turn.start', { turnId, text });
+    // local: the answer is complete on arrival, so the app renders it inside
+    // whatever turn is still streaming rather than pinned after it.
+    this.push('turn.start', { turnId, text, local: true });
     try {
       const body = await run();
       const itemId = `command-result-${randomUUID()}`;
