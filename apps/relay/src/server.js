@@ -69,7 +69,10 @@ export async function startRelay({
       if (!(await stat(file)).isFile()) return false;
       res.writeHead(200, {
         'content-type': MIME[extname(file)] ?? 'application/octet-stream',
-        'cache-control': rel === '/index.html' ? 'no-cache' : 'public, max-age=3600',
+        // The worker is the update mechanism for installed PWAs. It must be
+        // revalidated so a phone that has been backgrounded cannot keep an
+        // old shell and old engine marks after a deploy.
+        'cache-control': rel === '/index.html' || rel === '/sw.js' ? 'no-cache' : 'public, max-age=3600',
         ...SECURITY_HEADERS,
       });
       res.end(await readFile(file));

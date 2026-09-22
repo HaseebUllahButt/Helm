@@ -6,7 +6,9 @@
  * here would mean showing you a session state that is no longer true, which is
  * worse than showing you nothing.
  */
-const CACHE = 'helm-shell-v6';
+// Bump this whenever the shell changes so an installed PWA cannot stay on a
+// previous bundle forever when its page has been left open for days.
+const CACHE = 'helm-shell-v7';
 const SHELL = [
   '/', '/index.html', '/manifest.webmanifest',
   '/icon.svg', '/icon-180.png', '/icon-192.png', '/favicon-32.png',

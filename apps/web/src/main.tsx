@@ -13,10 +13,13 @@ createRoot(document.getElementById('root')!).render(
 // on http://127.0.0.1, which a browser still counts as secure, and a laptop
 // is exactly where an OS-level notification earns its keep. A bare LAN
 // address is neither, and correctly keeps getting neither.
+const refreshWorker = () => {
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+  navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => {});
+};
+
 if ('serviceWorker' in navigator && window.isSecureContext) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-  });
+  window.addEventListener('load', refreshWorker);
 }
 
 // An installed app resumes the page it loaded rather than reloading, so an
@@ -34,5 +37,8 @@ const checkBuild = () => {
 };
 checkBuild();
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') checkBuild();
+  if (document.visibilityState === 'visible') {
+    refreshWorker();
+    checkBuild();
+  }
 });
