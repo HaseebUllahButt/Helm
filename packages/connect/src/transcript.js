@@ -69,7 +69,7 @@ export async function locate({ engine, home, cwd, startedAt = 0 }) {
     return hit?.path ?? null;
   }
 
-  if (engine === 'opencode') {
+  if (engine === 'opencode' || engine === 'opencode2') {
     const base = process.env.XDG_DATA_HOME || join(HOME, '.local', 'share');
     for (const name of ['opencode', 'opencode2']) {
       const db = join(base, name, 'opencode.db');
@@ -319,6 +319,40 @@ function opencodeMessages(db, sessionId, { all = false } = {}) {
   return out;
 }
 
+/** OpenCode 2 stores one complete provider-neutral payload per message. */
+function opencode2Messages(db, sessionId, { all = false } = {}) {
+  const out = [];
+  try {
+    const conn = new DatabaseSync(db, { readOnly: true });
+    const cap = all ? '' : ' LIMIT 400';
+    const rows = conn.prepare(
+      `SELECT id, type, data, time_created FROM session_message
+        WHERE session_id = ? ORDER BY seq ASC${cap}`
+    ).all(sessionId);
+    for (const r of rows) {
+      const message = json(r.data) ?? {};
+      const content = Array.isArray(message.content) ? message.content : [];
+      const text = [
+        ...(typeof message.text === 'string' ? [message.text] : []),
+        ...content.filter((p) => p?.type === 'text').map((p) => p.text).filter(Boolean),
+      ].join('\n\n');
+      const tools = content
+        .filter((p) => p?.type === 'tool' || p?.type === 'tool_use')
+        .map((p) => ({
+          name: p.name ?? p.tool ?? p.toolName ?? 'tool',
+          input: summarise(p.state?.input ?? p.input ?? p.arguments),
+        }));
+      if (!text && !tools.length) continue;
+      out.push({
+        role: r.type === 'assistant' ? 'assistant' : 'user',
+        text: clip(text), tools, at: r.time_created, sourceId: r.id,
+      });
+    }
+    conn.close();
+  } catch { /* preview schema drift or a locked database */ }
+  return out;
+}
+
 function devinMessages(db, sessionId, { all = false } = {}) {
   const out = [];
   try {
@@ -387,11 +421,12 @@ export async function sessionSnapshot({ engine, path, sessionId, cwd, monitored 
       }
       if (model) lines.splice(1, 0, `**Model:** ${esc(model)}`);
       usage = { input, output, cacheRead };
-    } else if (engine === 'opencode') {
+    } else if (engine === 'opencode' || engine === 'opencode2') {
       const conn = new DatabaseSync(path, { readOnly: true });
-      const cols = tableColumns(conn, 'session');
+      const table = engine === 'opencode2' ? 'session_v2' : 'session';
+      const cols = tableColumns(conn, table);
       const totals = cols.has('tokens_input')
-        ? conn.prepare(`SELECT tokens_input AS input, tokens_output AS output, tokens_cache_read AS cacheRead, cost, model FROM session WHERE id = ?`).get(sessionId)
+        ? conn.prepare(`SELECT tokens_input AS input, tokens_output AS output, tokens_cache_read AS cacheRead, cost, model FROM ${table} WHERE id = ?`).get(sessionId)
         : null;
       conn.close();
       if (totals?.model) lines.splice(1, 0, `**Model:** ${esc(opencodeModel(totals.model) ?? totals.model)}`);
@@ -443,6 +478,7 @@ export async function messages({ engine, path, sessionId, limit = 120, all = fal
   if (engine === 'codex') found = await codexMessages(path, { all });
   else if (engine === 'claude') found = await claudeMessages(path, { all });
   else if (engine === 'opencode') found = opencodeMessages(path, sessionId, { all });
+  else if (engine === 'opencode2') found = opencode2Messages(path, sessionId, { all });
   else if (engine === 'devin') found = devinMessages(path, sessionId, { all });
   return all ? found : found.slice(-limit);
 }

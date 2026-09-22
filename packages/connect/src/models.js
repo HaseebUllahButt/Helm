@@ -40,7 +40,9 @@ export async function listModels(engine, home) {
   try {
     if (engine === 'codex') value = await codexModels(root);
     else if (engine === 'claude') value = claudeModels(root);
-    else if (engine === 'opencode') value = await opencodeModels(root);
+    else if (engine === 'opencode' || engine === 'opencode2') {
+      value = await opencodeModels(root, ENGINES[engine]?.bin ?? engine);
+    }
     else if (engine === 'devin') value = await devinModels(root);
   } catch { /* fall through to nothing */ }
   cache.set(key, { at: Date.now(), value });
@@ -148,16 +150,20 @@ function claudeModels(root) {
   };
 }
 
-async function opencodeModels(root) {
+async function opencodeModels(root, bin = 'opencode') {
   let def = null;
-  try {
-    // opencode's config is JSONC: strip comments before parsing.
-    const raw = readFileSync(join(root, 'opencode', 'opencode.json'), 'utf8')
-      .replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
-    const cfg = JSON.parse(raw);
-    if (typeof cfg.model === 'string') def = cfg.model;
-  } catch { /* no config */ }
-  const { stdout } = await exec('opencode', ['models'], {
+  for (const name of ['opencode.jsonc', 'opencode.json']) {
+    try {
+      // Both versions accept JSONC; v2 documents the .jsonc spelling first.
+      const raw = readFileSync(join(root, 'opencode', name), 'utf8')
+        .replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/,\s*([}\]])/g, '$1');
+      const cfg = JSON.parse(raw);
+      if (typeof cfg.model === 'string') def = cfg.model;
+      break;
+    } catch { /* try the other spelling */ }
+  }
+  const { stdout } = await exec(bin, ['models'], {
     timeout: 20_000,
     env: { ...process.env, XDG_CONFIG_HOME: root },
   });
@@ -215,6 +221,23 @@ async function opencodeModels(root) {
  * then one indented line per model: `uid   Display Name   [meta]`. The
  * account's default sits in ~/.config/devin/config.json under agent.model.
  */
+/** Parse Devin's human-readable catalogue without naming model families here. */
+export function parseDevinModelList(stdout) {
+  const models = [];
+  const labels = {};
+  const seen = new Set();
+  for (const line of String(stdout ?? '').split('\n')) {
+    // Family headings are flush-left. Model rows are indented and have a
+    // stable two-column shape, even when Devin adds a new family or variant.
+    const m = /^\s{2,}(\S+)\s{2,}(.+?)(?:\s{2,}\[.*)?\s*$/.exec(line);
+    if (!m || m[1] === 'aliases:' || seen.has(m[1])) continue;
+    seen.add(m[1]);
+    models.push(m[1]);
+    labels[m[1]] = m[2].trim();
+  }
+  return { models, labels };
+}
+
 async function devinModels(root) {
   let def = null;
   try {
@@ -226,14 +249,7 @@ async function devinModels(root) {
     maxBuffer: 4 << 20,
     env: { ...process.env, XDG_CONFIG_HOME: root },
   });
-  const models = [];
-  const labels = {};
-  for (const line of stdout.split('\n')) {
-    const m = /^ {2,}(\S+)\s{2,}(.+?)\s{2,}\[/.exec(line);
-    if (!m || m[1] === 'aliases:') continue;
-    models.push(m[1]);
-    labels[m[1]] = m[2].trim();
-  }
+  const { models, labels } = parseDevinModelList(stdout);
   if (def && !models.includes(def)) models.unshift(def);
   // Devin answers `promptCapabilities.image: true` at ACP `initialize`
   // (checked against devin 3000.10.21), and that answer is per-agent rather
@@ -265,7 +281,7 @@ export function optionArgs(engine, { model, auto, effort } = {}) {
     if (model) args.push('-m', model);
     if (effort) args.push('-c', `model_reasoning_effort="${effort}"`);
     if (auto) args.push('--yolo');
-  } else if (engine === 'opencode') {
+  } else if (engine === 'opencode' || engine === 'opencode2') {
     if (model) args.push('-m', model);
     if (auto) args.push('--auto');
   }

@@ -100,7 +100,7 @@ export async function transcribe({ audio, mime = 'audio/webm', prompt, signal } 
   form.append('response_format', 'json');
   // What the speaker is likely to say. Names that Whisper has never heard -
   // helm, herdr, Codex, sslip - come back mangled without it.
-  form.append('prompt', prompt || 'helm, herdr, Codex, Claude Code, opencode, Devin, sslip.io, PWA, repo, daemon.');
+  form.append('prompt', prompt || 'helm, herdr, Codex, Claude Code, opencode, OpenCode 2, Devin, sslip.io, PWA, repo, daemon.');
 
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);

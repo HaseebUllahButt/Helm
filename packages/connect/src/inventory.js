@@ -83,7 +83,8 @@ function interactiveProcesses(engine) {
       });
       if (at < 0) continue;
       const sub = argv[at + 1];
-      if (engine === 'opencode' && ['acp', 'serve', 'run', 'stats', 'api', 'service'].includes(sub)) continue;
+      if ((engine === 'opencode' || engine === 'opencode2')
+          && ['acp', 'serve', 'run', 'stats', 'api', 'service'].includes(sub)) continue;
       if (engine === 'devin' && sub === 'acp') continue;
       const cwd = readlinkSync(`/proc/${pid}/cwd`);
       if (!out.has(cwd)) out.set(cwd, Number(pid));
@@ -288,7 +289,7 @@ const opencodeModel = (v) => {
   try { return JSON.parse(v).id ?? null; } catch { return null; }
 };
 
-function opencode(home, account) {
+function opencode(home, account, engine = 'opencode') {
   // opencode keeps a real database, so this is the one engine where we get
   // titles, cost and model without parsing anything.
   const base = process.env.XDG_DATA_HOME || join(HOME, '.local', 'share');
@@ -300,7 +301,7 @@ function opencode(home, account) {
   } catch { /* no XDG data dir here */ }
 
   const out = [];
-  const active = interactiveProcesses('opencode');
+  const active = interactiveProcesses(engine);
   const claimed = new Set();
   for (const db of candidates) {
     if (!existsSync(db)) continue;
@@ -308,11 +309,29 @@ function opencode(home, account) {
       const conn = new DatabaseSync(db, { readOnly: true });
       let rows;
       try {
-        rows = conn.prepare(
-          `SELECT id, title, directory, time_updated, agent, model
-             FROM session ORDER BY time_updated DESC LIMIT ?`
-        ).all(PER_ENGINE);
+        if (engine === 'opencode2') {
+          // V2 backfills V1 rows into session_v2. Rows absent from the V1
+          // table are the conversations created by the separate V2 client.
+          const hasV1 = !!conn.prepare(
+            `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session'`
+          ).get();
+          rows = conn.prepare(
+            `SELECT id, title, directory, time_updated, agent, model
+               FROM session_v2
+              ${hasV1 ? 'WHERE id NOT IN (SELECT id FROM session)' : ''}
+              ORDER BY time_updated DESC LIMIT ?`
+          ).all(PER_ENGINE);
+        } else {
+          rows = conn.prepare(
+            `SELECT id, title, directory, time_updated, agent, model
+               FROM session ORDER BY time_updated DESC LIMIT ?`
+          ).all(PER_ENGINE);
+        }
       } catch {
+        if (engine === 'opencode2') {
+          conn.close();
+          continue;
+        }
         // OpenCode 2 stores model/agent in message.data and keeps aggregate
         // token columns on session. Inventory only needs the stable fields.
         rows = conn.prepare(
@@ -326,10 +345,10 @@ function opencode(home, account) {
         const isActive = !!pid && !claimed.has(cwd);
         if (isActive) claimed.add(cwd);
         out.push({
-          engine: 'opencode',
+          engine,
           account: `${account}:${basename(join(db, '..'))}`,
           id: r.id,
-          title: r.title || 'opencode session',
+          title: r.title || (engine === 'opencode2' ? 'OpenCode 2 session' : 'opencode session'),
           cwd: collapse(cwd),
           updatedAt: Number(r.time_updated) || 0,
           model: opencodeModel(r.model),
@@ -365,7 +384,9 @@ export async function inventory(profiles = []) {
 
     if (p.engine === 'codex') jobs.push(codex(home, p.id));
     else if (p.engine === 'claude') jobs.push(claude(home, p.id));
-    else if (p.engine === 'opencode') jobs.push(Promise.resolve(opencode(home, p.id)));
+    else if (p.engine === 'opencode' || p.engine === 'opencode2') {
+      jobs.push(Promise.resolve(opencode(home, p.id, p.engine)));
+    }
     else if (p.engine === 'devin') jobs.push(Promise.resolve(devin(home, p.id)));
   }
 

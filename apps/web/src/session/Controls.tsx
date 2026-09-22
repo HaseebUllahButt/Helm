@@ -84,7 +84,7 @@ const shortModel = (slug: string, labels?: Record<string, string>, engine?: stri
   // opencode puts the provider first ("OpenCode Go/Kimi K2.7") - for both,
   // the last word is a tier or a suffix, not the model, so the chip is the
   // whole name minus a "provider/" prefix.
-  if (engine === 'devin' || engine === 'opencode') return name.replace(/^[^/]+\//, '');
+  if (engine === 'devin' || engine === 'opencode' || engine === 'opencode2') return name.replace(/^[^/]+\//, '');
   // "GPT-5.6-Luna" -> "Luna"; "claude-fable-5-1" -> "fable"
   const tail = name.split(/[-\s]/).filter(Boolean).pop() ?? name;
   return /^\d/.test(tail) ? name.replace(/^(gpt|claude)[-\s]?/i, '') : tail.toLowerCase();

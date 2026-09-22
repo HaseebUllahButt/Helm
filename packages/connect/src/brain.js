@@ -25,7 +25,7 @@ import { HELM_DIR } from './paths.js';
  *      what the digest made it curious about.
  *   3. Its hands: `helm say`, `helm spawn`. Same CLI, so the agent's own
  *      Bash tool is the only integration - which is why this works the same
- *      on Claude Code, Codex, opencode and Devin, and why the permission
+ *      on Claude Code, Codex, opencode, OpenCode 2 and Devin, and why the permission
  *      card you already answer on your phone is the brain's guardrail too.
  *
  * The line per session is derived, never generated: no model is called to

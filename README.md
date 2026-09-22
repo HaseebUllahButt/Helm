@@ -155,9 +155,10 @@ Claude Code and Codex sessions run **headless**: helm starts the CLI in its
 streaming mode (`claude -p` with stream-json, `codex app-server`) and turns
 what it says into one stream of events - text as it is written, each tool
 call and its result, every permission prompt with the choices the CLI
-offered. OpenCode and Devin are detected and started through the terminal
-runtime. The app renders the agent screen, and the phone can watch and send
-messages to all four CLIs. Stop interrupts the turn.
+offered. OpenCode, OpenCode 2 and Devin use their ACP interfaces. The app
+renders the same structured conversation for all five CLIs, including streamed
+text, tool calls, permission prompts, models, modes, images and slash commands.
+Stop interrupts the turn.
 
 **How much the agent may do without asking** is a chip in the composer, next
 to Send: `ask` · `edit` · `plan` · `auto` · `yolo` for Claude Code, `ask` ·
@@ -245,7 +246,8 @@ appended are read, and the index survives a daemon restart. On a machine with
 ## Profiles and secrets
 
 Helm reads shell aliases and functions and turns them into profiles. This makes
-different Codex, Claude, and OpenCode accounts selectable per session.
+different Codex, Claude, OpenCode, OpenCode 2 and Devin accounts selectable per
+session.
 
 Profiles reference secret locations; they do not upload provider credentials.
 Agents and credentials stay on the computer where the work runs.

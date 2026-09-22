@@ -59,6 +59,7 @@
   --claude:    #d3a186;
   --codex:     #b9c1d6;
   --opencode:  #b3abd8;
+  --opencode2: #9ebbe7;
   --devin:     #a3cdb9;
 
   /* A type scale, so sizes are chosen from a set rather than invented at
@@ -296,6 +297,7 @@ code, pre, kbd { font-family: var(--mono); }
 .mark.claude   { background: color-mix(in srgb, var(--claude) 11%, transparent);   color: var(--claude); }
 .mark.codex    { background: color-mix(in srgb, var(--codex) 10%, transparent);    color: var(--codex); }
 .mark.opencode { background: color-mix(in srgb, var(--opencode) 11%, transparent); color: var(--opencode); }
+.mark.opencode2 { background: color-mix(in srgb, var(--opencode2) 11%, transparent); color: var(--opencode2); }
 .mark.devin    { background: color-mix(in srgb, var(--devin) 10%, transparent);    color: var(--devin); }
 .mark.shell    { background: color-mix(in srgb, var(--emerald) 11%, transparent);  color: var(--emerald); }
 

@@ -48,6 +48,14 @@ function directories(engine, cwd, home) {
       return [{ dir: join(root, 'prompts'), source: 'yours' }];
     case 'opencode':
       return [{ dir: join(root, 'opencode', 'command'), source: 'yours' }];
+    case 'opencode2':
+      return [
+        { dir: join(project, '.opencode', 'commands'), source: 'project', separator: '/' },
+        // V2 still discovers the singular V1 directory for compatibility.
+        { dir: join(project, '.opencode', 'command'), source: 'project', separator: '/' },
+        { dir: join(root, 'opencode', 'commands'), source: 'yours', separator: '/' },
+        { dir: join(root, 'opencode', 'command'), source: 'yours', separator: '/' },
+      ];
     case 'devin':
       // Devin's owner commands are skills: a named directory holding a
       // SKILL.md. `home` is devin's XDG_CONFIG_HOME, so the config copy of
@@ -78,7 +86,7 @@ function summarise(text) {
   return '';
 }
 
-function read(dir, source, prefix = '', depth = 0) {
+function read(dir, source, prefix = '', depth = 0, separator = ':') {
   let entries;
   try { entries = readdirSync(dir); } catch { return []; }
   const out = [];
@@ -88,7 +96,7 @@ function read(dir, source, prefix = '', depth = 0) {
     try { info = statSync(full); } catch { continue; }
     // One level of nesting, spelled the way the CLIs namespace them.
     if (info.isDirectory() && depth === 0) {
-      out.push(...read(full, source, `${prefix}${entry}:`, 1));
+      out.push(...read(full, source, `${prefix}${entry}${separator}`, 1, separator));
       continue;
     }
     if (!entry.endsWith('.md')) continue;
@@ -150,7 +158,7 @@ export function listCommands({ engine, cwd, home, available = [] }) {
   // over a prompt file with the same name, just as they do in Codex's TUI.
   if (engine === 'codex') take(available);
   for (const d of directories(engine, cwd ?? '~', home)) {
-    take(d.skills ? readSkills(d.dir, d.source) : read(d.dir, d.source));
+    take(d.skills ? readSkills(d.dir, d.source) : read(d.dir, d.source, '', 0, d.separator));
   }
   if (engine !== 'codex') take(available);
   return out;

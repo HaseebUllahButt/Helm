@@ -15,7 +15,7 @@ import { loadModels, saveModels } from '../modelCache';
 import { useSessionLog } from './useSessionLog';
 import type { Decision, Turn } from './types';
 
-const ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', devin: 'Devin' };
+const ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin' };
 const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split('/').slice(-2).join('/');
 
 /**

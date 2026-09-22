@@ -19,3 +19,13 @@ test('Devin runs headless like the other agents', () => {
   assert.equal(ENGINES.devin.homeEnv, 'XDG_CONFIG_HOME');
   assert.equal(ENGINES.devin.defaultHome, '~/.config');
 });
+
+test('OpenCode 2 is a separate discovered CLI', () => {
+  assert.deepEqual(
+    { id: ENGINES.opencode2.id, label: ENGINES.opencode2.label, bin: ENGINES.opencode2.bin },
+    { id: 'opencode2', label: 'OpenCode 2', bin: 'opencode2' },
+  );
+  assert.equal(engineForCommand('opencode2'), 'opencode2');
+  assert.equal(engineForCommand('/usr/bin/opencode2'), 'opencode2');
+  assert.equal(ENGINES.opencode2.driver, 'opencode2');
+});

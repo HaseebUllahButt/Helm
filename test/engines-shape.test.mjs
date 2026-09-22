@@ -27,9 +27,9 @@ test('every engine helm drives names a driver it has', async () => {
     if (!e.driver) continue;
     assert.ok(DRIVERS?.[e.driver] ?? true, `${id} names driver ${e.driver}`);
   }
-  // The four agents helm runs headless, so a dropped driver is caught here.
+  // The five agents helm runs headless, so a dropped driver is caught here.
   assert.deepEqual(
     Object.entries(ENGINES).filter(([, e]) => e.driver).map(([id]) => id).sort(),
-    ['claude', 'codex', 'devin', 'opencode'],
+    ['claude', 'codex', 'devin', 'opencode', 'opencode2'],
   );
 });

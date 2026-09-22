@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeCli, collect } from './helpers.mjs';
-import { OpencodeDriver } from '../packages/connect/src/drivers/opencode.js';
+import { OpencodeDriver, Opencode2Driver } from '../packages/connect/src/drivers/opencode.js';
 import { DevinDriver } from '../packages/connect/src/drivers/devin.js';
 
 // Both ACP engines run the same turn against the same vocabulary; the only
@@ -174,5 +174,23 @@ test('opencode: auto mode answers a permission request without asking the phone'
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
   assert.equal(log.of('permission.request').length, 0);
+  await driver.kill();
+});
+
+test('opencode2: the separate v2 driver starts an ACP session and exposes commands', async () => {
+  const fake = fakeCli('opencode', 'plain');
+  const driver = new Opencode2Driver({
+    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'plan',
+  });
+  const log = collect(driver);
+  assert.deepEqual(driver.args, ['acp'], 'v2 has no --cwd flag');
+  await driver.send('Reply with exactly the words: hello from helm');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.equal(driver.engine, 'opencode2');
+  const modeCall = fake.stdinLines().find(
+    (l) => l.method === 'session/set_config_option' && l.params.configId === 'mode',
+  );
+  assert.equal(modeCall.params.value, 'plan');
   await driver.kill();
 });

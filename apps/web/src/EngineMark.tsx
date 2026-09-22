@@ -10,7 +10,7 @@
  * square brand mark, and Cognition's Devin mark.
  */
 
-const shell = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', devin: 'Devin' };
+const shell = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin' };
 
 const common = {
   width: 16,
@@ -43,9 +43,9 @@ export function EngineMark({ engine, className = '' }: { engine?: string; classN
     );
   }
 
-  if (engine === 'opencode') {
+  if (engine === 'opencode' || engine === 'opencode2') {
     return (
-      <span className={`mark opencode ${className}`} title={label}>
+      <span className={`mark ${engine} ${className}`} title={label}>
         <svg {...common} fill="currentColor">
           <path d="M22 24H2V0h20zM17 4.8H7v14.4h10z" />
         </svg>

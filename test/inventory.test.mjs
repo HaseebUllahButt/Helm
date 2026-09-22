@@ -103,3 +103,32 @@ test('opencode inventory: the model is a JSON object, not a name', async () => {
   assert.equal(by('oc-2').model, 'plain-model-name', 'a plain name is left alone');
   assert.equal(by('oc-3').model, null, 'nonsense becomes nothing, not JSON on screen');
 });
+
+test('OpenCode 2 inventory reads only native v2 sessions', async () => {
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const dir = join(XDG, 'opencode-v2-test');
+  mkdirSync(dir, { recursive: true });
+  const db = new DatabaseSync(join(dir, 'opencode.db'));
+  db.exec(`
+    CREATE TABLE session (
+      id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER,
+      agent TEXT, model TEXT);
+    CREATE TABLE session_v2 (
+      id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER,
+      agent TEXT, model TEXT);
+  `);
+  db.prepare('INSERT INTO session VALUES (?, ?, ?, ?, ?, ?)').run(
+    'v1-shared', 'V1 thread', '/tmp/v1', Date.now() - 1000, 'build', 'old-model');
+  db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?)').run(
+    'v1-shared', 'V1 thread', '/tmp/v1', Date.now() - 1000, 'build', 'old-model');
+  db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?)').run(
+    'v2-only', 'V2 thread', '/tmp/v2', Date.now(), 'build', '{"id":"new-model"}');
+  db.close();
+
+  const found = await inventory([
+    { id: 'oc2', engine: 'opencode2', env: { XDG_CONFIG_HOME: '~/.config' } },
+  ]);
+  const rows = found.filter((r) => r.engine === 'opencode2');
+  assert.ok(rows.some((r) => r.id === 'v2-only' && r.model === 'new-model'));
+  assert.ok(!rows.some((r) => r.id === 'v1-shared'), 'the V1 backfill is not listed twice');
+});

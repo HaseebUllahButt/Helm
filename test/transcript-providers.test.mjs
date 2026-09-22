@@ -37,6 +37,32 @@ test('OpenCode 2 JSON-column history renders text, tools, and usage', async () =
   assert.match(status, /\*\*State:\*\* resumed in Helm/);
 });
 
+test('OpenCode 2 native session history renders from session_message', async () => {
+  const path = join(root, 'opencode2.db');
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE session_v2 (id TEXT PRIMARY KEY, model TEXT, tokens_input INTEGER, tokens_output INTEGER, tokens_cache_read INTEGER, cost REAL);
+    CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, data TEXT);
+  `);
+  db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?)').run(
+    'oc2-1', '{"id":"model-v2"}', 240, 60, 160, 0.25);
+  const put = (id, type, seq, data) => db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, 'oc2-1', type, seq, seq, JSON.stringify(data));
+  put('u2', 'user', 1, { content: [{ type: 'text', text: 'fix v2' }] });
+  put('a2', 'assistant', 2, { content: [
+    { type: 'tool', name: 'shell', state: { input: { command: 'npm test' } } },
+    { type: 'text', text: 'v2 done' },
+  ] });
+  db.close();
+
+  const history = await messages({ engine: 'opencode2', path, sessionId: 'oc2-1', all: true });
+  assert.deepEqual(history.map((m) => [m.role, m.text]), [['user', 'fix v2'], ['assistant', 'v2 done']]);
+  assert.deepEqual(history[1].tools, [{ name: 'shell', input: 'npm test' }]);
+  const status = await sessionSnapshot({ engine: 'opencode2', path, sessionId: 'oc2-1', cwd: '/work' });
+  assert.match(status, /\*\*Model:\*\* model-v2/);
+  assert.match(status, /\*\*Input:\*\* 240/);
+});
+
 test('Devin history keeps the final streaming snapshot and session statistics', async () => {
   const path = join(root, 'sessions.db');
   const db = new DatabaseSync(path);

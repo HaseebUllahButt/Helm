@@ -58,6 +58,7 @@ const ENGINE: Record<string, { label: string; cls: string }> = {
   claude:   { label: 'Claude Code', cls: 'claude' },
   codex:    { label: 'Codex',       cls: 'codex' },
   opencode: { label: 'opencode',    cls: 'opencode' },
+  opencode2:{ label: 'OpenCode 2',  cls: 'opencode2' },
   devin:    { label: 'Devin',       cls: 'devin' },
   shell:    { label: 'Terminal',    cls: 'shell' },
 };
@@ -134,7 +135,7 @@ function accountsFrom(profiles: Profile[]): Account[] {
     // daemon computes the same key, which is what its model prefs index by.
     const key = p.account ?? [p.engine, home ?? '', [...(p.envFrom ?? [])].sort().join(',')].join('|');
     const leaf = home?.split('/').pop() ?? '';
-    const suffix = leaf.replace(/^\.?(claude|codex|opencode|devin|config)-?/, '');
+    const suffix = leaf.replace(/^\.?(claude|codex|opencode2|opencode|devin|config)-?/, '');
     const existing = by.get(key);
     if (existing) {
       existing.aliases.push(p.id);
@@ -151,7 +152,7 @@ function accountsFrom(profiles: Profile[]): Account[] {
       profile: p, aliases: [p.id], prefs: p.prefs, defaults: p.defaults,
     });
   }
-  const order = ['claude', 'codex', 'opencode', 'devin'];
+  const order = ['claude', 'codex', 'opencode', 'opencode2', 'devin'];
   return [...by.values()].sort((a, b) =>
     (order.indexOf(a.engine) - order.indexOf(b.engine)) || a.account.localeCompare(b.account));
 }
@@ -641,6 +642,11 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => s.engine !== 'shell' && !s.archived);
+  // The machine card says "running", so count processes that are actually
+  // alive. `session.list` also includes finished threads so they remain
+  // reachable from the machine view; counting those made old machines look
+  // like they had dozens of live agents.
+  const runningAgentsOf = (id: string) => agentsOf(id).filter((s) => s.alive === true);
 
   /**
    * Turning a recording into words, on whichever machine can.
@@ -879,7 +885,7 @@ function Shell({ client, conn, onSignOut }: {
             <Fold title="machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
               <div className="rows cards">
                 {envs.map((e) => {
-                  const list = agentsOf(e.id);
+                  const list = runningAgentsOf(e.id);
                   const working = list.filter((s) => s.status === 'working').length;
                   const waiting = list.filter((s) => s.status === 'blocked').length;
                   return (
@@ -3455,7 +3461,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
         {accounts?.length === 0 && (
           <div className="empty quiet">
             no agents on {env.name}
-            <div className="note" style={{ marginTop: 6 }}>install claude, codex, opencode or devin there and run <code>helm profiles --refresh</code></div>
+            <div className="note" style={{ marginTop: 6 }}>install claude, codex, opencode, opencode2 or devin there and run <code>helm profiles --refresh</code></div>
           </div>
         )}
 

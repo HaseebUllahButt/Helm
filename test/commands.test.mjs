@@ -77,6 +77,19 @@ test('commands advertised by the live CLI join the palette without duplicates', 
   assert.equal(list.find((c) => c.name === 'compact').source, 'helm');
 });
 
+test('OpenCode 2 reads global and project command directories', () => {
+  const root = mkdtempSync(join(tmpdir(), 'helm-oc2-cmds-'));
+  const project = join(root, 'project');
+  const home = join(root, 'config');
+  mkdirSync(join(project, '.opencode', 'commands', 'team'), { recursive: true });
+  mkdirSync(join(home, 'opencode', 'commands'), { recursive: true });
+  writeFileSync(join(project, '.opencode', 'commands', 'team', 'review.md'), 'Review this branch.\n');
+  writeFileSync(join(home, 'opencode', 'commands', 'release.md'), 'Prepare a release.\n');
+  const list = listCommands({ engine: 'opencode2', cwd: project, home });
+  assert.equal(list.find((c) => c.name === 'team/review')?.source, 'project');
+  assert.equal(list.find((c) => c.name === 'release')?.source, 'yours');
+});
+
 test('codex has a real app-server command palette instead of only compact', () => {
   const list = listCommands({
     engine: 'codex', cwd: '/tmp', home: '/nowhere', available: CODEX_COMMANDS,

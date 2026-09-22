@@ -44,6 +44,19 @@ export const ENGINES = {
     // Run headless through `opencode acp` (drivers/opencode.js).
     driver: 'opencode',
   },
+  opencode2: {
+    id: 'opencode2',
+    label: 'OpenCode 2',
+    bin: 'opencode2',
+    // V2 deliberately shares provider credentials and configuration with V1,
+    // but keeps its own session schema inside the shared data database.
+    homeEnv: 'XDG_CONFIG_HOME',
+    defaultHome: '~/.config',
+    configPath: 'opencode/opencode.jsonc',
+    resumeArgs: (id) => ['--session', id],
+    // V2's ACP command uses the process cwd; it has no --cwd flag.
+    driver: 'opencode2',
+  },
   devin: {
     id: 'devin',
     label: 'Devin',
