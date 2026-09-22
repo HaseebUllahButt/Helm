@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws';
 import { Duplex } from 'node:stream';
-import { T, E, PROTOCOL_VERSION } from '@helm/protocol';
+import { T, E, M, PROTOCOL_VERSION } from '@helm/protocol';
+import { foldBuckets } from '@helm/usage';
 import { q, now, newId } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, rosterHash,
@@ -57,6 +58,29 @@ export function createWsLayer() {
       name: net?.machines?.[envId]?.name,
     };
     for (const sock of clients.keys()) send(sock, T.PRESENCE, payload);
+  }
+
+  /**
+   * The report a machine would have sent, folded from the rollup it last
+   * pushed. The buckets keep date, model, engine, account and folder per row,
+   * so a stored copy still windows and facets exactly like a live answer -
+   * `stale` is what tells the screen it is a memory, not a reading.
+   */
+  function cachedUsage(envId, params = {}) {
+    const row = q.usageGet.get(envId);
+    if (!row) return null;
+    try {
+      const report = foldBuckets(JSON.parse(row.buckets), {
+        since: params.since ?? null,
+        until: params.until ?? null,
+        by: Array.isArray(params.by) && params.by.length ? params.by : ['engine', 'model'],
+        accounts: JSON.parse(row.accounts || '[]'),
+        scan: JSON.parse(row.scan || '{}'),
+        at: row.at,
+      });
+      report.stale = true;
+      return report;
+    } catch { return null; }
   }
 
   // ------------------------------------------------------------- daemon side
@@ -154,6 +178,22 @@ export function createWsLayer() {
         return;
       }
 
+      case T.USAGE_SYNC: {
+        // A machine's whole usage rollup, remembered. This is what keeps a
+        // machine that went to sleep inside the total rather than silently
+        // zeroing its line - digests have snapshot.json, usage has this.
+        if (msg.buckets && typeof msg.buckets === 'object') {
+          try {
+            q.usageSet.run(
+              envId, JSON.stringify(msg.buckets),
+              JSON.stringify(msg.accounts ?? []), JSON.stringify(msg.scan ?? {}),
+              Number(msg.at) || now(), now()
+            );
+          } catch { /* a malformed rollup must never kill the connection */ }
+        }
+        return;
+      }
+
       case T.SIGNAL:
       case T.SIGNAL_READY: {
         // Opaque to us: hand it to whichever client is negotiating.
@@ -192,6 +232,15 @@ export function createWsLayer() {
       case T.RPC: {
         const target = online.get(msg.env);
         if (!target) {
+          // A sleeping machine is not zero usage. If it left its rollup with
+          // us while it was attached, fold it for the window asked and answer
+          // as it would have - marked stale, because it is a memory.
+          if (msg.method === M.USAGE_REPORT) {
+            const remembered = cachedUsage(msg.env, msg.params);
+            if (remembered) {
+              return send(sock, T.RPC_RESULT, { id: msg.id, ok: true, result: remembered });
+            }
+          }
           return send(sock, T.RPC_RESULT, {
             id: msg.id, ok: false,
             error: { code: 'offline', message: 'environment is not connected' },

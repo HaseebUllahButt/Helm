@@ -1,10 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, appendFileSync, mkdirSync, statSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { UsageReader, hitRate } = await import('../packages/usage/src/index.js');
+// Database engines read their ledgers from the data dir whether or not a
+// profile names them - so point it at scratch space, or the machine this
+// suite happens to run on would leak its own history into every total.
+process.env.XDG_DATA_HOME = mkdtempSync(join(tmpdir(), 'helm-usage-xdg-'));
+
+const { UsageReader, hitRate, foldBuckets } = await import('../packages/usage/src/index.js');
 const { FileRollupCache, foldLinesFrom, splitKey, bucketKey } =
   await import('../packages/usage/src/scan-cache.js');
 const { claudeParser, codexParser } = await import('../packages/usage/src/scanners.js');
@@ -287,6 +293,56 @@ test('an unreadable account does not lose the others', async () => {
     { id: 'gone', engine: 'claude', env: { CLAUDE_CONFIG_DIR: '/nonexistent/path/nowhere' } },
   ], {});
   assert.ok(withGhost.totals.costUsd > 0, 'the machines that answered still report');
+  rmSync(m.dir, { recursive: true, force: true });
+});
+
+test('a database ledger counts even with no profile naming it', async () => {
+  // An engine whose CLI was uninstalled still spent tokens. Its ledger lives
+  // at a fixed place in the data dir, so the evidence is the file, not a
+  // surviving profile - this is also how an opencode2 store with no alias
+  // still ends up inside the total.
+  const dir = join(process.env.XDG_DATA_HOME, 'devin-test', 'cli');
+  mkdirSync(dir, { recursive: true });
+  const conn = new DatabaseSync(join(dir, 'sessions.db'));
+  conn.exec('CREATE TABLE message_nodes (session_id TEXT, chat_message TEXT, created_at INTEGER)');
+  conn.prepare('INSERT INTO message_nodes VALUES (?, ?, ?)').run('s1', JSON.stringify({
+    role: 'assistant',
+    metadata: {
+      request_id: 'r1', generation_model: 'swe-2',
+      metrics: { input_tokens: 5000, output_tokens: 500, cache_read_tokens: 40000, cache_creation_tokens: 0 },
+    },
+  }), 1757000000);
+  conn.close();
+
+  try {
+    const reader = new UsageReader();
+    const r = await reader.report([], {});
+    assert.equal(r.totals.input, 5000);
+    assert.equal(r.totals.cacheRead, 40000);
+    assert.equal(r.totals.turns, 1);
+    assert.equal(r.accounts.length, 1);
+    assert.equal(r.accounts[0].engine, 'devin');
+    assert.equal(r.accounts[0].profileId, null, 'nothing launched it - nothing to name');
+  } finally {
+    rmSync(join(process.env.XDG_DATA_HOME, 'devin-test'), { recursive: true, force: true });
+  }
+});
+
+test('a remembered rollup folds exactly like the live report', async () => {
+  // The hub answering for a sleeping machine must produce the same numbers
+  // the daemon would have - that is the whole reason the rollup crosses the
+  // wire raw rather than as a finished report.
+  const m = machine();
+  const reader = new UsageReader();
+  const rollup = await reader.buckets(m.profiles);
+  const live = await reader.report(m.profiles, { since: '2026-09-11' });
+  const folded = foldBuckets(JSON.parse(JSON.stringify(rollup.buckets)), {
+    since: '2026-09-11', accounts: rollup.accounts, scan: rollup.scan, at: rollup.at,
+  });
+  // `scan` is bookkeeping for the read that produced the rollup, so it
+  // legitimately differs between the two passes - the numbers must not.
+  const strip = ({ at: _a, scan: _s, ...rest }) => rest;
+  assert.deepEqual(strip(folded), strip(live));
   rmSync(m.dir, { recursive: true, force: true });
 });
 

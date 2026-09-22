@@ -93,9 +93,20 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
     setPending((p) => new Set(p).add(env.id));
     client.usage(env.id, { since: since || undefined, by: ['engine', 'model', 'provider', 'project'], rebuild })
       .then((report) => {
+        setFailed((f) => { const { [env.id]: _gone, ...rest } = f; return rest; });
+        if (report.stale) {
+          // The hub answered for a machine that is asleep - a memory too,
+          // and possibly an older one than this device already holds. A
+          // memory must never walk the number backwards.
+          setReports((r) => {
+            const cur = r[env.id];
+            return cur && (cur.at || 0) > (report.at || 0) ? r : { ...r, [env.id]: report };
+          });
+          setRemembered((r) => ({ ...r, [env.id]: Math.max(report.at || 0, r[env.id] || 0) }));
+          return;
+        }
         setReports((r) => ({ ...r, [env.id]: report }));
         setRemembered((r) => { const { [env.id]: _drop, ...rest } = r; return rest; });
-        setFailed((f) => { const { [env.id]: _gone, ...rest } = f; return rest; });
         saveUsage(env.id, report, win);
       })
       .catch((e) => setFailed((f) => ({ ...f, [env.id]: String(e?.message || e) })))

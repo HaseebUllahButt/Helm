@@ -179,6 +179,12 @@ export interface UsageReport {
   accounts: { account: string; engine: string; profileId: string }[];
   scan: Record<string, number>;
   at: number;
+  /**
+   * The hub answered for a machine that is asleep, folding the rollup it
+   * last pushed. A memory, not a reading - the same courtesy this device's
+   * own cache gets, surfaced the same way.
+   */
+  stale?: boolean;
 }
 
 /** The share of input tokens that came back out of the prompt cache. */

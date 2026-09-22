@@ -6,6 +6,7 @@
   "dependencies": {
     "@helm/nas": "*",
     "@helm/protocol": "*",
+    "@helm/usage": "*",
     "ws": "^8.18.0"
   },
   "exports": {

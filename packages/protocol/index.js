@@ -66,6 +66,11 @@ export const T = {
   // revocation has to propagate even when nothing else about the network has
   // changed.
   ROSTER: 'roster',               // daemon <-> hub { roster }
+
+  // daemon -> every connected hub, like NOTIFY: the machine's whole usage
+  // rollup, so a hub can keep answering for it after it goes to sleep. Small
+  // by design - day-by-model rows, never transcript bytes.
+  USAGE_SYNC: 'usage.sync',       // { buckets: {key: bucket}, accounts, scan, at }
 };
 
 // ------------------------------------------------------------- daemon methods
@@ -141,6 +146,9 @@ export const M = {
   // wrote. Pre-aggregated here: a phone over the hub gets day-by-model
   // buckets, never the gigabytes of transcript behind them.
   USAGE_REPORT: 'usage.report',    // { since?, until?, by?[], rebuild? } -> { totals, daily[], groups[], accounts[], scan }
+  // The same scan as a raw bucket map - what a hub stores so it can still
+  // answer usage.report for this machine after it disconnects.
+  USAGE_BUCKETS: 'usage.buckets',  // { rebuild? } -> { buckets, accounts, scan, at }
 
   // A machine designated 'nas'. Browsing is RPC (small JSON, fits the
   // channel), but the bytes themselves are not: streaming is real HTTP at

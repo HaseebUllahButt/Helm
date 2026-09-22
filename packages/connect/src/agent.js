@@ -18,7 +18,7 @@ import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
 import { inventory } from './inventory.js';
-import { UsageReader } from '@helm/usage';
+import { UsageReader, foldBuckets } from '@helm/usage';
 import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
@@ -626,6 +626,18 @@ export class Daemon {
     // Nudge the hub to redistribute SSH keys now that we are attached. Our
     // identity travelled in the roster above; the hub does not write it.
     sshInfo().then((ssh) => link.send(T.SSH_INFO_REPORT, ssh)).catch(() => {});
+    // And hand this hub our usage rollup now rather than when somebody asks:
+    // it is what lets the hub keep answering for us while we are asleep.
+    this.#usageRollup()
+      .then((r) => link.send(T.USAGE_SYNC, r))
+      .catch(() => {});
+  }
+
+  /** The machine's whole usage rollup - shared by the report and the push. */
+  async #usageRollup(rebuild = false) {
+    this.usage ??= new UsageReader({ indexPath: join(HELM_DIR, 'usage-index.json') });
+    const profiles = await currentProfiles();
+    return this.usage.buckets(profiles, { rebuild });
   }
 
   /** The hubs we can actually talk to right now. */
@@ -1157,17 +1169,27 @@ export class Daemon {
        * which is trimmed to the last couple of thousand events - a long thread
        * would otherwise start forgetting what its early turns cost. Answered
        * pre-aggregated: the phone asking may be three network hops away.
+       *
+       * Every answer is also pushed to the hubs we are attached to, so a hub
+       * holding the rollup can keep answering for us after we go to sleep -
+       * the same trick digest's snapshot.json plays for the brain.
        */
       case M.USAGE_REPORT: {
-        this.usage ??= new UsageReader({ indexPath: join(HELM_DIR, 'usage-index.json') });
-        const profiles = await currentProfiles();
-        return this.usage.report(profiles, {
+        const rollup = await this.#usageRollup(!!p.rebuild);
+        this.broadcastFrame(T.USAGE_SYNC, rollup);
+        return foldBuckets(rollup.buckets, {
           since: p.since ?? null,
           until: p.until ?? null,
           by: Array.isArray(p.by) && p.by.length ? p.by : ['engine', 'model'],
-          rebuild: !!p.rebuild,
+          accounts: rollup.accounts,
+          scan: rollup.scan,
         });
       }
+
+      // The rollup itself, un-folded. What a hub stores for us; the app only
+      // ever asks for a folded report.
+      case M.USAGE_BUCKETS:
+        return this.#usageRollup(!!p.rebuild);
 
       case M.PING:            return { t: Date.now() };
 

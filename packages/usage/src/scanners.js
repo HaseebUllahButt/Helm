@@ -136,15 +136,17 @@ async function jsonlUnder(root) {
  */
 const dbFiles = (dbPath) => [dbPath, `${dbPath}-wal`];
 
-function opencodeRows(dbPath) {
+function opencodeRows(dbPath, engine = 'opencode') {
   const buckets = new Map();
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
+    const table = engine === 'opencode2' ? 'session_v2' : 'session';
+    const onlyV2 = engine === 'opencode2' ? ' WHERE id NOT IN (SELECT id FROM session)' : '';
     const rows = db.prepare(
       `SELECT model, time_created, tokens_input, tokens_output,
               tokens_cache_read, tokens_cache_write, cost
-         FROM session`
+         FROM ${table}${onlyV2}`
     ).all();
     for (const r of rows) {
       const ms = Number(r.time_created) || 0;
@@ -247,7 +249,7 @@ export class Scanners {
   async scanDatabase(kind, dbPath, opts = {}) {
     const stats = blankStats();
     stats.dbs++;
-    const read = kind === 'devin' ? devinRows : opencodeRows;
+    const read = kind === 'devin' ? devinRows : (path) => opencodeRows(path, kind);
     const { hit, sig, value } = await this.dbs.lookup(`${kind}:${dbPath}`, dbFiles(dbPath), { force: opts.rebuild });
     if (hit) {
       stats.dbHits++;

@@ -68,6 +68,19 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS digests_env_time ON digests(env_id, created_at DESC);
 
+  -- A machine's whole usage rollup, pushed by its daemon while it was
+  -- attached. It is what lets the hub keep answering usage.report after the
+  -- machine goes to sleep: the same courtesy the digest's snapshot pays the
+  -- brain. A cache like machine_state - never authoritative, replaced whole.
+  CREATE TABLE IF NOT EXISTS usage_cache (
+    env_id    TEXT PRIMARY KEY,
+    buckets   TEXT NOT NULL,
+    accounts  TEXT NOT NULL DEFAULT '[]',
+    scan      TEXT NOT NULL DEFAULT '{}',
+    at        INTEGER NOT NULL,
+    stored_at INTEGER NOT NULL
+  );
+
   -- The one device credential this machine's own browsers share.
   --
   -- A local sign-in is not a new device joining the network - it is this
@@ -159,6 +172,15 @@ export const q = {
   ),
   stateGet: db.prepare('SELECT * FROM machine_state WHERE id = ?'),
   stateAll: db.prepare('SELECT * FROM machine_state'),
+
+  usageSet: db.prepare(
+    `INSERT INTO usage_cache (env_id, buckets, accounts, scan, at, stored_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(env_id) DO UPDATE SET
+       buckets = excluded.buckets, accounts = excluded.accounts,
+       scan = excluded.scan, at = excluded.at, stored_at = excluded.stored_at`
+  ),
+  usageGet: db.prepare('SELECT * FROM usage_cache WHERE env_id = ?'),
 
   digestInsert: db.prepare(
     `INSERT INTO digests (id, env_id, session_id, cwd, engine, summary, state, created_at)
