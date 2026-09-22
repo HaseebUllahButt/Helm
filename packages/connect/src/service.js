@@ -75,6 +75,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=${[process.execPath, binPath, ...command].map(systemdArg).join(' ')}
+# Session hosts normally run in their own transient unit. Keep a detached
+# fallback host alive across a daemon restart too; the host owns the long-lived
+# terminal and agent processes that the daemon reconnects to afterward.
+KillMode=process
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production

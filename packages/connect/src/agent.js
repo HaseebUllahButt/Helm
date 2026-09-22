@@ -324,7 +324,8 @@ export class Daemon {
     }));
   }
 
-  stop() {
+  async stop() {
+    if (this.#stopped) return;
     this.#stopped = true;
     clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
@@ -338,8 +339,11 @@ export class Daemon {
     this.#media = null;
     this.peers?.stop();
     this.runtime?.stop();
-    // Headless agents die with the daemon; their sessions resume on demand.
-    this.sessions?.stop().catch(() => {});
+    // Hosted agents are detached by Sessions.stop() and resume on demand;
+    // local ones are stopped as before. Awaiting this is important during a
+    // systemd restart: the daemon must release its side of every session
+    // before the service exits.
+    await this.sessions?.stop().catch(() => {});
   }
 
   // ------------------------------------------------------------------ links

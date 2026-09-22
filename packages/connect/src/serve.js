@@ -102,6 +102,23 @@ export async function up({
   });
   await daemon.start();
 
+  // systemd sends SIGTERM before replacing the daemon during an update. Do
+  // the same orderly detach as an explicit stop and wait for it to finish;
+  // otherwise systemd can end the main process before its session drivers
+  // have handed their surviving agents back to the proc host.
+  let stopping = false;
+  const shutdown = async () => {
+    if (stopping) return;
+    stopping = true;
+    try {
+      await daemon.stop();
+    } finally {
+      process.exit(0);
+    }
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
+
   // If the tunnel goes away, stop telling the network it is there.
   tunnelHandle?.onDown?.(() => {
     console.log('[helm] the tunnel closed - no longer advertising that address');
