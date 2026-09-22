@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Driver, readJsonLines, checkVersion } from './index.js';
 import { modeFor } from '../modes.js';
 import { expand } from '../paths.js';
@@ -210,6 +210,9 @@ const servers = new Map();
 /** One app-server process, shared by every thread on the same account. */
 class CodexServer {
   #child = null;
+  #pipe = null;
+  #hosted = false;
+  #adopted = false;
   #seq = 0;
   /** id -> resolve for requests we sent */
   #calls = new Map();
@@ -219,14 +222,16 @@ class CodexServer {
   #aliases = new Map();
   #starting = null;
 
-  constructor(cmd, env, log) {
-    Object.assign(this, { cmd, env, log });
+  constructor(cmd, env, log, procHost) {
+    Object.assign(this, { cmd, env, log, procHost });
+    this.procId = `codex-server-${createHash('sha256').update(`${cmd}|${env.CODEX_HOME ?? ''}`).digest('hex').slice(0, 20)}`;
   }
 
-  static for(cmd, env, log) {
+  static for(cmd, env, log, procHost) {
     const home = env.CODEX_HOME ?? '';
     const key = `${cmd}|${home}`;
-    if (!servers.has(key)) servers.set(key, new CodexServer(cmd, env, log));
+    if (!servers.has(key)) servers.set(key, new CodexServer(cmd, env, log, procHost));
+    else servers.get(key).procHost = procHost ?? servers.get(key).procHost;
     return servers.get(key);
   }
 
@@ -236,10 +241,25 @@ class CodexServer {
     for (const [threadId, existing] of this.#drivers) if (existing === driver) this.#drivers.delete(threadId);
     this.#drivers.set(driver.threadId, driver);
   }
-  detach(driver) {
+  detach(driver, { stop = true } = {}) {
     this.#drivers.delete(driver.threadId);
     for (const [tid, d] of this.#aliases) if (d === driver) this.#aliases.delete(tid);
-    if (!this.#drivers.size) this.#stop();
+    if (stop && !this.#drivers.size) this.#stop();
+  }
+
+  /**
+   * The daemon is going away, but a hosted app-server is not. Drop this
+   * daemon's reader so the proc host can buffer output for its replacement.
+   */
+  suspend(driver) {
+    this.detach(driver, { stop: false });
+    if (this.#drivers.size) return;
+    if (this.#hosted && this.#pipe) {
+      this.#pipe.detach();
+      this.#pipe = null;
+      return;
+    }
+    this.#stop();
   }
 
   /** Route a spawned agent's thread to the driver that spawned it. */
@@ -247,49 +267,80 @@ class CodexServer {
   #route(threadId) { return this.#drivers.get(threadId) ?? this.#aliases.get(threadId); }
 
   async ensure() {
-    if (this.#child) return;
+    if (this.#child || this.#pipe) return this.#adopted;
     if (this.#starting) return this.#starting;
     this.#starting = (async () => {
       await checkVersion('codex', this.cmd, this.env, CODEX_MIN_VERSION, this.log);
       // The server exits if its home does not exist yet.
       if (this.env.CODEX_HOME) mkdirSync(expand(this.env.CODEX_HOME), { recursive: true });
-      const child = spawn(this.cmd, ['app-server', '--stdio'], {
-        env: { ...process.env, ...this.env },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      this.#child = child;
-      let stderr = '';
-      child.stderr.setEncoding('utf8');
-      child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
-      readJsonLines(child.stdout, (m) => this.#onMessage(m), (line) => this.log(`codex: ${line.slice(0, 200)}`));
-      child.on('exit', (code) => {
-        this.#child = null;
-        this.#starting = null;
-        for (const resolve of this.#calls.values()) resolve({ error: { message: 'codex exited' } });
-        this.#calls.clear();
-        for (const d of this.#drivers.values()) d.serverExited(code, stderr);
-      });
-      child.on('error', (err) => {
-        for (const d of this.#drivers.values()) d.push('error', { message: `could not start ${this.cmd}: ${err.message}`, kind: 'spawn' });
-      });
+      if (this.procHost) {
+        try {
+          const adopted = this.procHost.hasProc(this.procId);
+          if (!adopted) {
+            await this.procHost.openProc(this.procId, {
+              cmd: this.cmd, args: ['app-server', '--stdio'], cwd: undefined, env: this.env,
+            });
+          }
+          const pipe = this.procHost.procPipe(this.procId);
+          if (pipe) {
+            this.#hosted = true;
+            this.#adopted = adopted;
+            this.#bindPipe(pipe);
+            if (this.#adopted) return true;
+            // A newly opened hosted proc still needs the normal app-server
+            // handshake; only an already-running proc has been initialized.
+          }
+        } catch (e) {
+          this.log(`codex: no proc host (${e.message}); running under the daemon`);
+        }
+      }
+      if (!this.#pipe) {
+        const child = spawn(this.cmd, ['app-server', '--stdio'], {
+          env: { ...process.env, ...this.env },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        this.#child = child;
+        this.#hosted = false;
+        this.#adopted = false;
+        let stderr = '';
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
+        readJsonLines(child.stdout, (m) => this.#onMessage(m), (line) => this.log(`codex: ${line.slice(0, 200)}`));
+        child.on('exit', (code) => {
+          this.#child = null;
+          this.#starting = null;
+          for (const resolve of this.#calls.values()) resolve({ error: { message: 'codex exited' } });
+          this.#calls.clear();
+          for (const d of this.#drivers.values()) d.serverExited(code, stderr);
+        });
+        child.on('error', (err) => {
+          for (const d of this.#drivers.values()) d.push('error', { message: `could not start ${this.cmd}: ${err.message}`, kind: 'spawn' });
+        });
+      }
       const init = await this.call('initialize', {
         clientInfo: { name: 'helm', title: 'Helm', version: '0.1.0' },
         capabilities: { experimentalApi: true },
       });
       if (init.error) throw new Error(`codex initialize failed: ${init.error.message}`);
       this.notify('initialized');
+      return false;
     })();
-    try { await this.#starting; } finally { this.#starting = null; }
+    try { return await this.#starting; } finally { this.#starting = null; }
   }
 
   #stop() {
     const child = this.#child;
-    if (!child) return;
-    try { child.stdin.end(); } catch { /* closed */ }
-    setTimeout(() => { if (this.#child === child) child.kill('SIGTERM'); }, 3000).unref?.();
+    const pipe = this.#pipe;
+    if (!child && !pipe) return;
+    try { (pipe ?? child.stdin).end(); } catch { /* closed */ }
+    setTimeout(() => {
+      if (child && this.#child === child) child.kill('SIGTERM');
+      if (pipe && this.#pipe === pipe) pipe.kill('SIGTERM');
+    }, 3000).unref?.();
   }
 
   write(obj) {
+    if (this.#pipe) return this.#pipe.write(JSON.stringify(obj) + '\n');
     if (!this.#child?.stdin.writable) throw new Error('codex is not running');
     this.#child.stdin.write(JSON.stringify(obj) + '\n');
   }
@@ -306,6 +357,27 @@ class CodexServer {
   notify(method, params) { this.write(params ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', method }); }
 
   respond(id, result) { this.write({ jsonrpc: '2.0', id, result }); }
+
+  #bindPipe(pipe) {
+    this.#pipe = pipe;
+    pipe.onExit(({ code, stderr }) => {
+      this.#pipe = null;
+      for (const resolve of this.#calls.values()) resolve({ error: { message: 'codex exited' } });
+      this.#calls.clear();
+      for (const d of this.#drivers.values()) d.serverExited(code, stderr);
+    });
+    let buf = '';
+    pipe.onData((chunk) => {
+      buf += chunk;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (!line.trim()) continue;
+        try { this.#onMessage(JSON.parse(line)); }
+        catch { this.log(`codex: ${line.slice(0, 200)}`); }
+      }
+    });
+  }
 
   #onMessage(m) {
     if (m.id !== undefined && m.method) {
@@ -355,6 +427,7 @@ function childStep(item) {
 
 export class CodexDriver extends Driver {
   #server = null;
+  #serverAdopted = false;
   #started = false;
   #turnId = null;
   #usage = null;
@@ -388,6 +461,25 @@ export class CodexDriver extends Driver {
   async start() {
     if (this.#started) return;
     const server = await this.#connectOnly();
+    if (this.#serverAdopted && this.threadId) {
+      // The app-server itself survived on helm-procs. Its thread state and
+      // any in-flight turn are already live; sending thread/resume here would
+      // race the old turn instead of simply reconnecting to it.
+      this.#turnId = this.openTurn?.() ?? null;
+      this.#rolloutState = await codexSessionState(this.transcript);
+      this.#usage = this.#rolloutState.usage ?? this.#usage;
+      this.info = {
+        model: this.model ?? this.#rolloutState.settings?.model ?? null,
+        effort: this.effort ?? this.#rolloutState.settings?.effort ?? null,
+        approvalPolicy: this.#policy().approvalPolicy,
+        sandbox: this.#policy().sandbox,
+        cliVersion: this.#rolloutState.cliVersion,
+      };
+      this.#started = true;
+      if (this.#turnId) this.push('status', { status: 'working' });
+      this.emit('init', this.info);
+      return;
+    }
     const { approvalPolicy, sandbox } = this.#policy();
     const common = { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}) };
     const res = this.threadId
@@ -418,8 +510,8 @@ export class CodexDriver extends Driver {
   /** Initialize app-server for account reads without resuming the thread. */
   async #connectOnly() {
     if (this.#server) return this.#server;
-    const server = CodexServer.for(this.cmd, this.env, this.log);
-    await server.ensure();
+    const server = CodexServer.for(this.cmd, this.env, this.log, this.procHost);
+    this.#serverAdopted = await server.ensure();
     this.#server = server;
     server.attach(this);
     return server;
@@ -814,6 +906,15 @@ export class CodexDriver extends Driver {
     this.#server.detach(this);
     this.#server = null;
     this.push('status', { status: 'exited' });
+  }
+
+  /** Keep a hosted app-server alive while this daemon is being replaced. */
+  async suspend() {
+    const server = this.#server;
+    if (!server) return;
+    this.#server = null;
+    this.#started = false;
+    server.suspend(this);
   }
 
   // ------------------------------------------------------------- the stream

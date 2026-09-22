@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { collect } from './helpers.mjs';
+import { collect, fakeCli } from './helpers.mjs';
 
 // Agent processes outliving the daemon.
 //
@@ -22,6 +23,8 @@ process.env.HELM_NO_SYSTEMD_RUN = '1';
 
 const { TerminalHost, PROC_SOCKET_PATH } = await import('../packages/connect/src/terminals.js');
 const { DevinDriver } = await import('../packages/connect/src/drivers/devin.js');
+const { ClaudeDriver } = await import('../packages/connect/src/drivers/claude.js');
+const { CodexDriver } = await import('../packages/connect/src/drivers/codex.js');
 
 // The proc host is the terminal-host binary on its own socket and unit -
 // same protocol, separate lifecycle from the pty host.
@@ -168,6 +171,74 @@ test('a permission request stays answerable across a restart', async (t) => {
   const done = await log2.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
   await d2.kill();
+});
+
+test('a hosted Codex app-server survives and is rebound by the next daemon', async (t) => {
+  const fake = fakeCli('codex', 'plain');
+  const env = { CODEX_HOME: join(fake.dir, 'home') };
+  const procId = `codex-server-${createHash('sha256').update(`${fake.cmd}|${env.CODEX_HOME}`).digest('hex').slice(0, 20)}`;
+  const host1 = procHost();
+  t.after(() => host1.detach());
+  assert.equal(await host1.ensure(), true);
+
+  const d1 = new CodexDriver({
+    cmd: fake.cmd, env, cwd: fake.dir,
+    mode: 'ask', procHost: host1, procId: 'codex-persist',
+  });
+  const log1 = collect(d1);
+  await d1.send('Reply with exactly the words: hello from helm');
+  await log1.until((e) => e.type === 'turn.done');
+  assert.equal(host1.hasProc(procId), true);
+  const threadId = d1.threadId;
+
+  await d1.suspend();
+  host1.detach();
+  const host2 = procHost();
+  t.after(() => host2.detach());
+  assert.equal(await host2.ensure(), true);
+  assert.equal(host2.hasProc(procId), true, 'the app-server should outlive the first daemon');
+
+  const d2 = new CodexDriver({
+    cmd: fake.cmd, env, cwd: fake.dir,
+    mode: 'ask', engineSessionId: threadId, procHost: host2, procId: 'codex-persist',
+  });
+  await d2.start();
+  assert.equal(d2.threadId, threadId, 'the replacement driver should attach to the same thread');
+  await d2.kill();
+  await until(() => !host2.hasProc(procId));
+});
+
+test('a hosted Claude process survives and is rebound by the next daemon', async (t) => {
+  const fake = fakeCli('claude', 'plain');
+  const host1 = procHost();
+  t.after(() => host1.detach());
+  assert.equal(await host1.ensure(), true);
+
+  const d1 = new ClaudeDriver({
+    cmd: fake.cmd, env: {}, cwd: fake.dir, mode: 'ask',
+    procHost: host1, procId: 'claude-persist',
+  });
+  const log1 = collect(d1);
+  await d1.send('Reply with exactly the words: hello from helm');
+  await log1.until((e) => e.type === 'turn.done');
+  assert.equal(host1.hasProc('claude-persist'), true);
+  const sessionId = d1.engineSessionId;
+
+  await d1.suspend();
+  host1.detach();
+  const host2 = procHost();
+  t.after(() => host2.detach());
+  assert.equal(await host2.ensure(), true);
+  assert.equal(host2.hasProc('claude-persist'), true, 'Claude should outlive the first daemon');
+
+  const d2 = new ClaudeDriver({
+    cmd: fake.cmd, env: {}, cwd: fake.dir, mode: 'ask', engineSessionId: sessionId,
+    procHost: host2, procId: 'claude-persist',
+  });
+  await d2.start();
+  assert.equal(d2.engineSessionId, sessionId, 'the replacement driver should keep the same Claude session');
+  await d2.kill();
+  await until(() => !host2.hasProc('claude-persist'));
 });
 
 // Leave nothing running: the host outlives this process by design.

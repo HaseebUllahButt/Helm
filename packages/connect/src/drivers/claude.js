@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Driver, readJsonLines, checkVersion } from './index.js';
+import { Driver, checkVersion } from './index.js';
 import { modeFor } from '../modes.js';
 
 /**
@@ -36,7 +36,8 @@ function resultText(content) {
 }
 
 export class ClaudeDriver extends Driver {
-  #child = null;
+  #pipe = null;
+  #hosted = false;
   #exited = null;
   #ready = null;
   /**
@@ -72,46 +73,102 @@ export class ClaudeDriver extends Driver {
   }
 
   async start() {
-    if (this.#child) return;
+    if (this.#pipe) return;
     await checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
-    const child = spawn(this.cmd, this.args, {
-      cwd: this.cwd,
-      env: { ...process.env, ...this.env },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    this.#child = child;
-    let stderr = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d); });
-    readJsonLines(child.stdout, (m) => this.#onMessage(m), (line) => this.log(`claude: ${line.slice(0, 200)}`));
+    if (this.procId && this.procHost?.hasProc(this.procId)) {
+      const pipe = this.procHost.procPipe(this.procId);
+      if (pipe) {
+        this.#hosted = true;
+        this.#bindPipe(pipe, { adopted: true });
+        return;
+      }
+    }
 
+    let pipe = null;
+    if (this.procId && this.procHost) {
+      try {
+        await this.procHost.openProc(this.procId, {
+          cmd: this.cmd, args: this.args, cwd: this.cwd, env: this.env,
+        });
+        pipe = this.procHost.procPipe(this.procId);
+      } catch (e) {
+        this.log(`${this.engine}: no proc host (${e.message}); running under the daemon`);
+      }
+    }
+    this.#hosted = !!pipe;
+    if (!pipe) {
+      const child = spawn(this.cmd, this.args, {
+        cwd: this.cwd,
+        env: { ...process.env, ...this.env },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      child.on('error', (err) => this.push('error', { message: `could not start ${this.cmd}: ${err.message}`, kind: 'spawn' }));
+      pipe = this.#localPipe(child);
+    }
+    this.#bindPipe(pipe);
+    // The next turn resumes this session.
+    this.resume = true;
+  }
+
+  #write(obj) {
+    if (!this.#pipe) throw new Error('claude is not running');
+    this.#pipe.write(JSON.stringify(obj) + '\n');
+  }
+
+  #localPipe(child) {
+    child.stderr.setEncoding('utf8');
+    let tail = '';
+    child.stderr.on('data', (d) => {
+      tail = (tail + d).slice(-4000);
+      if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d);
+    });
+    return {
+      write: (d) => child.stdin.write(d),
+      end: () => child.stdin.end(),
+      kill: (s) => child.kill(s),
+      onData: (cb) => child.stdout.on('data', (c) => cb(typeof c === 'string' ? c : c.toString('utf8'))),
+      onExit: (cb) => child.on('exit', (code, signal) => cb({ code, signal, stderr: tail.trim().split('\n').pop() || null })),
+      detach: () => {},
+    };
+  }
+
+  #bindPipe(pipe, { adopted = false } = {}) {
+    this.#pipe = pipe;
     let markReady;
     this.#ready = new Promise((r) => { markReady = r; });
-    this.once('init', markReady);
-
+    if (adopted) {
+      this.resume = true;
+      markReady();
+      this.emit('init', this.info ?? { model: this.model, effort: this.effort });
+    } else {
+      this.once('init', markReady);
+    }
     this.#exited = new Promise((resolve) => {
-      child.on('exit', (code, signal) => {
-        this.#child = null;
+      pipe.onExit(({ code, signal, stderr }) => {
+        this.#pipe = null;
         markReady();
         // A prompt the CLI was holding open dies with it; say so.
         for (const requestId of [...this.pending.keys()]) {
           this.push('permission.resolved', { requestId, decision: 'cancelled' });
         }
         if (code && code !== 0 && !this.killed) {
-          this.push('error', { message: `claude exited with code ${code}${stderr ? `: ${stderr.trim().split('\n').pop()}` : ''}`, kind: 'exit' });
+          this.push('error', { message: `claude exited with code ${code}${stderr ? `: ${stderr}` : ''}`, kind: 'exit' });
         }
         this.push('status', { status: 'exited' });
         resolve({ code, signal });
       });
     });
-    child.on('error', (err) => this.push('error', { message: `could not start ${this.cmd}: ${err.message}`, kind: 'spawn' }));
-    // The next turn resumes this session.
-    this.resume = true;
-  }
-
-  #write(obj) {
-    if (!this.#child?.stdin.writable) throw new Error('claude is not running');
-    this.#child.stdin.write(JSON.stringify(obj) + '\n');
+    let buf = '';
+    pipe.onData((chunk) => {
+      buf += chunk;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (!line.trim()) continue;
+        try { this.#onMessage(JSON.parse(line)); }
+        catch { this.log(`claude: ${line.slice(0, 200)}`); }
+      }
+    });
   }
 
   #control(request) {
@@ -193,20 +250,20 @@ export class ClaudeDriver extends Driver {
   }
 
   async interrupt() {
-    if (!this.#child) return;
+    if (!this.#pipe) return;
     this.#interrupting = true;
     await this.#control({ subtype: 'interrupt', cancel_queued: this.#capabilities.has('interrupt_cancel_queued_v1') });
   }
 
   async setModel(model) {
     this.model = model || null;
-    if (this.#child) await this.#control({ subtype: 'set_model', model: model || null });
+    if (this.#pipe) await this.#control({ subtype: 'set_model', model: model || null });
   }
 
   async setMode(id) {
     this.mode = id;
     const mode = modeFor('claude', id);
-    if (this.#child && mode) await this.#control({ subtype: 'set_permission_mode', mode: mode.cli === 'manual' ? 'default' : mode.cli });
+    if (this.#pipe && mode) await this.#control({ subtype: 'set_permission_mode', mode: mode.cli === 'manual' ? 'default' : mode.cli });
   }
 
   /**
@@ -217,7 +274,7 @@ export class ClaudeDriver extends Driver {
    */
   async setEffort(effort) {
     this.effort = effort || null;
-    if (!this.#child) return;
+    if (!this.#pipe) return;
     await this.kill();
     // `kill()` is for good; this one is coming back.
     this.killed = false;
@@ -225,18 +282,28 @@ export class ClaudeDriver extends Driver {
 
   async kill() {
     this.killed = true;
-    const child = this.#child;
-    if (!child) return;
+    const pipe = this.#pipe;
+    if (!pipe) return;
     // A prompt left unanswered blocks the CLI forever; close them out first.
     for (const requestId of [...this.pending.keys()]) {
       try { await this.answer(requestId, { option: 'deny', message: 'The session was ended.' }); } catch { /* already gone */ }
     }
-    try { child.stdin.end(); } catch { /* closed */ }
+    try { pipe.end(); } catch { /* closed */ }
     const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
-    if (!done) child.kill('SIGTERM');
+    if (!done) pipe.kill('SIGTERM');
     const done2 = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
-    if (!done2) child.kill('SIGKILL');
+    if (!done2) pipe.kill('SIGKILL');
     await this.#exited;
+  }
+
+  /** Keep a hosted Claude process alive while this daemon is being replaced. */
+  async suspend() {
+    if (this.#hosted && this.#pipe) {
+      this.#pipe.detach();
+      this.#pipe = null;
+      return;
+    }
+    return this.kill();
   }
 
   // ------------------------------------------------------------- the stream
