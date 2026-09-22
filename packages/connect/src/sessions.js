@@ -14,11 +14,11 @@ import { modelPrefs, startPrefs, accountKey } from './settings.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver, canInspectExternalCodex } from './drivers/codex.js';
-import { OpencodeDriver } from './drivers/opencode.js';
+import { OpencodeDriver, Opencode2Driver } from './drivers/opencode.js';
 import { DevinDriver } from './drivers/devin.js';
 import { devinUsageReport } from './devin-usage.js';
 import { defaultMode, modeFromAuto } from './modes.js';
-import { TerminalHost } from './terminals.js';
+import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory } from './inventory.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
@@ -33,7 +33,13 @@ const WATCH_TTL_MS = 60_000;
 // resumes the same conversation, so nothing is lost but the warm process.
 const IDLE_REAP_MS = 30 * 60_000;
 
-const DRIVERS = { claude: ClaudeDriver, codex: CodexDriver, opencode: OpencodeDriver, devin: DevinDriver };
+const DRIVERS = {
+  claude: ClaudeDriver,
+  codex: CodexDriver,
+  opencode: OpencodeDriver,
+  opencode2: Opencode2Driver,
+  devin: DevinDriver,
+};
 
 /**
  * A name for a session that is more than the folder it runs in.
@@ -205,13 +211,16 @@ export class Sessions extends EventEmitter {
   /** session object -> in-flight full-rollout reconciliation */
   #imports = new WeakMap();
 
-  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost() } = {}) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null } = {}) {
     super();
     this.runtime = runtime;
     this.events = events;
     this.log = log;
     this.makeDriver = makeDriver ?? ((engine, opts) => new DRIVERS[engine](opts));
     this.terminals = terminals;
+    // Agent processes live on a second host behind a second socket, so this
+    // feature does not wait on - or cost - whatever the pty host is holding.
+    this.procs = procHost ?? new TerminalHost({ socketPath: PROC_SOCKET_PATH, unit: 'helm-procs' });
     this.#load();
     runtime.on('status', (e) => this.#onStatus(e));
     runtime.on('closed', (e) => this.#onClosed(e));
@@ -224,6 +233,9 @@ export class Sessions extends EventEmitter {
       this.emit('exit', { id, code });
       this.emit('session', { ...s, status: 'exited', alive: false });
     });
+    // An agent process that dies while no driver holds it still leaves the
+    // record: close what it left open so the session stops reading as busy.
+    this.procs.on('proc.exit', ({ id }) => this.#procGone(id));
   }
 
   isDriven(s) { return !!s?.driver; }
@@ -640,6 +652,12 @@ export class Sessions extends EventEmitter {
       engineSessionId: s.engineSessionId,
       transcript: s.transcript,
       monitorOnly: !!s.external,
+      // Held on the proc host, the process outlives this daemon. The
+      // getters answer what the log still has open - read only when the
+      // driver actually finds its process there to rebind.
+      procHost: this.procs, procId: s.id,
+      openTurn: () => this.events.openTurn(s.id)?.turnId ?? null,
+      pendingEvents: () => this.events.pending(s.id),
       log: (m) => this.log(`[${s.id}] ${m}`),
     });
     this.#drivers.set(s.id, d);
@@ -913,13 +931,14 @@ export class Sessions extends EventEmitter {
 
   #processOwnsTranscript(s) {
     if (!s.externalPid || !s.transcript) return false;
-    if (s.engine === 'opencode' || s.engine === 'devin') {
+    if (s.engine === 'opencode' || s.engine === 'opencode2' || s.engine === 'devin') {
       try {
         const argv = readFileSync(`/proc/${s.externalPid}/cmdline`, 'utf8').split('\0').filter(Boolean);
         const engineAt = argv.findIndex((x) => basename(x) === s.engine || basename(x).startsWith(`${s.engine}.`));
         if (engineAt < 0 || readlinkSync(`/proc/${s.externalPid}/cwd`) !== s.cwd) return false;
         const sub = argv[engineAt + 1];
-        if (s.engine === 'opencode' && ['acp', 'serve', 'run', 'stats', 'api', 'service'].includes(sub)) return false;
+        if ((s.engine === 'opencode' || s.engine === 'opencode2')
+            && ['acp', 'serve', 'run', 'stats', 'api', 'service'].includes(sub)) return false;
         return !(s.engine === 'devin' && sub === 'acp');
       } catch { return false; }
     }
@@ -1904,6 +1923,9 @@ export class Sessions extends EventEmitter {
    */
   async adoptTerminals() {
     const ok = await this.terminals.ensure({ spawn: false }).catch(() => false);
+    // The proc host's hello carries which agent processes survived; resume()
+    // reads that list to leave their open turns and questions standing.
+    await this.procs.ensure({ spawn: false }).catch(() => false);
     let changed = false;
     for (const s of [...this.#index.values()]) {
       if (!s.pty) continue;
@@ -1916,6 +1938,34 @@ export class Sessions extends EventEmitter {
     return ok;
   }
 
+  /**
+   * A hosted agent process died while detached, or with no driver ever
+   * bound after a restart. The turns and questions it left open are
+   * unanswerable now - close them the way `resume` does for a dead process.
+   */
+  #procGone(id) {
+    const s = this.#index.get(id);
+    if (!s?.driver || this.#drivers.has(id)) return;
+    const tail = this.events.tail(id, 0);
+    const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
+    for (const e of tail) {
+      if (e.type !== 'turn.start' || closed.has(e.turnId)) continue;
+      closed.add(e.turnId);
+      this.events.append(id, { type: 'turn.done', turnId: e.turnId, status: 'interrupted', error: 'agent exited' });
+    }
+    for (const p of this.events.pending(id)) {
+      this.events.append(id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
+    }
+    if (s.status === 'idle') return;
+    s.status = 'idle';
+    s.updatedAt = Date.now();
+    const event = this.events.append(id, { type: 'status', status: 'idle' });
+    s.lastSeq = event.seq;
+    this.emit('event', { id, event });
+    this.emit('session', s);
+    this.#save();
+  }
+
   /** Re-watch every surviving pane after a daemon restart. */
   resume() {
     for (const s of this.#index.values()) {
@@ -1923,6 +1973,21 @@ export class Sessions extends EventEmitter {
       // record stays until `adoptTerminals()` has asked what really survived.
       if (s.pty) continue;
       if (!s.driver) { this.runtime.watch(this.#handle(s)); continue; }
+      // An agent process the host kept is still running whatever it was
+      // running: its last open turn may be live and its questions still
+      // answerable, so neither gets closed. Earlier open turns are another
+      // matter - only one prompt is ever in flight, so those were queued
+      // messages that never reached the agent.
+      if (this.procs.hasProc(s.id)) {
+        const tail = this.events.tail(s.id, 0);
+        const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
+        const open = tail.filter((e) => e.type === 'turn.start' && !closed.has(e.turnId)).map((e) => e.turnId);
+        open.pop();
+        for (const turnId of open) {
+          this.events.append(s.id, { type: 'turn.done', turnId, status: 'interrupted', error: 'helm restarted' });
+        }
+        continue;
+      }
       // The process that asked died with the previous daemon; a prompt it
       // left open cannot be answered any more, so close it out here rather
       // than show a phone a question nobody can act on.
@@ -1955,9 +2020,9 @@ export class Sessions extends EventEmitter {
     this.#save();
   }
 
-  /** Close every live agent process; sessions stay resumable. */
+  /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
-    await Promise.allSettled([...this.#drivers.values()].map((d) => d.kill()));
+    await Promise.allSettled([...this.#drivers.values()].map((d) => d.suspend?.() ?? d.kill()));
     this.#drivers.clear();
   }
 }

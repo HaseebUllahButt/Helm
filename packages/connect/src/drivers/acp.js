@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Driver, readJsonLines, checkVersion } from './index.js';
+import { Driver, checkVersion } from './index.js';
 import { modeFor, modesFor } from '../modes.js';
 
 /**
@@ -48,9 +48,20 @@ const KIND = { execute: 'command', edit: 'edit', delete: 'edit', move: 'edit' };
 const SUBAGENT_TOOL = /subagent|spawn.?agent|^task$/i;
 
 export class AcpDriver extends Driver {
-  #child = null;
+  /**
+   * The agent's stdio, whether the process is our own child or one the
+   * terminal host kept alive across a restart: { write, end, kill, onData,
+   * onExit, detach }. Same calls either way - the socket hop is the only
+   * difference, and it is invisible to the protocol.
+   */
+  #pipe = null;
+  /** True when the process lives on the host rather than under this daemon. */
+  #hosted = false;
   #exited = null;
   #seq = 0;
+  /** Per-instance request-id namespace, so a late answer meant for the
+   *  driver that died cannot resolve a call this one made. */
+  #tag = randomUUID().slice(0, 4);
   /** request id -> resolve, for calls we sent */
   #calls = new Map();
   /** permission requestId -> { id, options } */
@@ -121,38 +132,42 @@ export class AcpDriver extends Driver {
   }
 
   async start() {
-    if (this.#child) return;
+    if (this.#pipe) return;
     await checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
-    const child = spawn(this.cmd, this.args, {
-      cwd: this.cwd,
-      env: { ...process.env, ...this.env },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    this.#child = child;
+
+    // The process may already be running: the terminal host holds agent
+    // processes the way it holds ptys, so a daemon restart leaves the
+    // conversation standing. Rebind its stream rather than starting over.
+    if (this.procId && this.procHost?.hasProc(this.procId)) {
+      const pipe = this.procHost.procPipe(this.procId);
+      if (pipe) return this.#adoptPipe(pipe);
+    }
+
+    let pipe = null;
+    if (this.procId && this.procHost) {
+      try {
+        await this.procHost.openProc(this.procId, {
+          cmd: this.cmd, args: this.args, cwd: this.cwd, env: this.env,
+        });
+        pipe = this.procHost.procPipe(this.procId);
+      } catch (e) {
+        this.log(`${this.engine}: no proc host (${e.message}); running under the daemon`);
+      }
+    }
+    this.#hosted = !!pipe;
+    if (!pipe) {
+      const child = spawn(this.cmd, this.args, {
+        cwd: this.cwd,
+        env: { ...process.env, ...this.env },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      child.on('error', (err) => this.push('error', { message: `could not start ${this.cmd}: ${err.message}`, kind: 'spawn' }));
+      pipe = this.#localPipe(child);
+    }
     // A fresh agent reports the state it loaded before helm's choices are
     // applied below; that reporting must not pass for a change it made.
     this.#live = false;
-    let stderr = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d); });
-    readJsonLines(child.stdout, (m) => this.#onMessage(m), (line) => this.log(`${this.engine}: ${line.slice(0, 200)}`));
-
-    this.#exited = new Promise((resolve) => {
-      child.on('exit', (code) => {
-        this.#child = null;
-        for (const resolve of this.#calls.values()) resolve({ error: { message: `${this.engine} exited` } });
-        this.#calls.clear();
-        for (const requestId of [...this.pending.keys()]) {
-          this.push('permission.resolved', { requestId, decision: 'cancelled' });
-        }
-        if (code && code !== 0 && !this.killed) {
-          this.push('error', { message: `${this.engine} exited with code ${code}${stderr ? `: ${stderr.trim().split('\n').pop()}` : ''}`, kind: 'exit' });
-        }
-        this.push('status', { status: 'exited' });
-        resolve({ code });
-      });
-    });
-    child.on('error', (err) => this.push('error', { message: `could not start ${this.cmd}: ${err.message}`, kind: 'spawn' }));
+    this.#bindPipe(pipe);
 
     // fs and terminal are left unadvertised on purpose: with no client to
     // delegate to, the agent runs its own tools and only stops for
@@ -233,15 +248,85 @@ export class AcpDriver extends Driver {
     return changed;
   }
 
+  /**
+   * A pipe the daemon owns outright - the pre-host way, for machines where
+   * no host is listening. Shape matches what `TerminalHost.procPipe` hands
+   * back so everything downstream is identical.
+   */
+  #localPipe(child) {
+    child.stderr.setEncoding('utf8');
+    let tail = '';
+    child.stderr.on('data', (d) => { tail = (tail + d).slice(-4000); if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d); });
+    return {
+      write: (d) => child.stdin.write(d),
+      end: () => child.stdin.end(),
+      kill: (s) => child.kill(s),
+      onData: (cb) => child.stdout.on('data', (c) => cb(typeof c === 'string' ? c : c.toString('utf8'))),
+      onExit: (cb) => child.on('exit', (code) => cb({ code, stderr: tail.trim().split('\n').pop() || null })),
+      detach: () => {},
+    };
+  }
+
+  /** Wire a pipe - fresh or adopted - into the driver's message loop. */
+  #bindPipe(pipe) {
+    this.#pipe = pipe;
+    this.#exited = new Promise((resolve) => {
+      pipe.onExit(({ code, stderr }) => {
+        this.#pipe = null;
+        for (const resolve of this.#calls.values()) resolve({ error: { message: `${this.engine} exited` } });
+        this.#calls.clear();
+        for (const requestId of [...this.pending.keys()]) {
+          this.push('permission.resolved', { requestId, decision: 'cancelled' });
+        }
+        if (code && code !== 0 && !this.killed) {
+          this.push('error', { message: `${this.engine} exited with code ${code}${stderr ? `: ${stderr}` : ''}`, kind: 'exit' });
+        }
+        this.push('status', { status: 'exited' });
+        resolve({ code });
+      });
+    });
+    let buf = '';
+    pipe.onData((chunk) => {
+      buf += chunk;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (!line.trim()) continue;
+        try { this.#onMessage(JSON.parse(line)); }
+        catch { this.log(`${this.engine}: ${line.slice(0, 200)}`); }
+      }
+    });
+  }
+
+  /**
+   * Rebind a process the host kept across a restart. The agent's own state
+   * is intact - the session is loaded, the turn may still be running - so
+   * there is no initialize, no session/load; just recover what the event
+   * log was still holding open and carry on listening.
+   */
+  #adoptPipe(pipe) {
+    this.#hosted = true;
+    this.#live = true;
+    this.#bindPipe(pipe);
+    this.#turnId = this.openTurn?.() ?? null;
+    for (const e of this.pendingEvents?.() ?? []) {
+      this.#requests.set(e.requestId, { id: e.acpId ?? e.requestId, options: e.acpOptions ?? [] });
+      this.pending.set(e.requestId, e);
+    }
+    this.emit('init', this.info ?? { model: this.model, effort: this.effort });
+  }
+
   // ------------------------------------------------------------------ wire
 
   #write(obj) {
-    if (!this.#child?.stdin.writable) throw new Error(`${this.engine} is not running`);
-    this.#child.stdin.write(JSON.stringify(obj) + '\n');
+    if (!this.#pipe) throw new Error(`${this.engine} is not running`);
+    this.#pipe.write(JSON.stringify(obj) + '\n');
   }
 
+  #nextId() { return `helm-${this.#tag}-${++this.#seq}`; }
+
   #call(method, params) {
-    const id = `helm-${++this.#seq}`;
+    const id = this.#nextId();
     return new Promise((resolve) => {
       this.#calls.set(id, resolve);
       try { this.#write({ jsonrpc: '2.0', id, method, params }); }
@@ -263,7 +348,7 @@ export class AcpDriver extends Driver {
     const local = this.spec.localCommand?.(this, text);
     if (local) return this.#localCommand(text, local);
     await this.start();
-    if (!this.engineSessionId || !this.#child) {
+    if (!this.engineSessionId || !this.#pipe) {
       this.push('error', { message: `${this.engine} has no session; it never finished starting`, kind: 'init' });
       return;
     }
@@ -327,7 +412,7 @@ export class AcpDriver extends Driver {
     const local = this.spec.localCommand?.(this, text);
     if (local) return this.#localCommand(text, local);
     await this.start();
-    if (!this.engineSessionId || !this.#child) {
+    if (!this.engineSessionId || !this.#pipe) {
       this.push('error', { message: `${this.engine} has no session; it never finished starting`, kind: 'init' });
       return;
     }
@@ -391,14 +476,14 @@ export class AcpDriver extends Driver {
   }
 
   async interrupt() {
-    if (!this.#child || !this.engineSessionId) return;
+    if (!this.#pipe || !this.engineSessionId) return;
     this.#interrupting = true;
     this.#notify('session/cancel', { sessionId: this.engineSessionId });
   }
 
   async setModel(model) {
     this.model = model || null;
-    if (this.#child && this.engineSessionId && model) {
+    if (this.#pipe && this.engineSessionId && model) {
       const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: 'model', value: model });
       if (!r.error) this.#takeOptions(r.result);
     }
@@ -407,7 +492,7 @@ export class AcpDriver extends Driver {
   async setMode(id) {
     this.mode = id;
     const mode = this.spec.acpMode(id);
-    if (this.#child && this.engineSessionId && mode) {
+    if (this.#pipe && this.engineSessionId && mode) {
       const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: 'mode', value: mode });
       if (!r.error) this.#takeOptions(r.result);
     }
@@ -415,7 +500,7 @@ export class AcpDriver extends Driver {
 
   async setEffort(effort) {
     this.effort = effort || null;
-    if (this.#child && this.engineSessionId && this.spec.effortId && effort) {
+    if (this.#pipe && this.engineSessionId && this.spec.effortId && effort) {
       const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: this.spec.effortId, value: effort });
       if (!r.error) this.#takeOptions(r.result);
     }
@@ -423,18 +508,31 @@ export class AcpDriver extends Driver {
 
   async kill() {
     this.killed = true;
-    const child = this.#child;
-    if (!child) return;
+    const pipe = this.#pipe;
+    if (!pipe) return;
     for (const requestId of [...this.pending.keys()]) {
       try { await this.answer(requestId, { option: 'deny' }); } catch { /* already gone */ }
     }
     if (this.status === 'working') this.#notify('session/cancel', { sessionId: this.engineSessionId });
-    try { child.stdin.end(); } catch { /* closed */ }
+    try { pipe.end(); } catch { /* closed */ }
     const done = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 3000))]);
-    if (!done) child.kill('SIGTERM');
+    if (!done) pipe.kill('SIGTERM');
     const done2 = await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
-    if (!done2) child.kill('SIGKILL');
-    await this.#exited;
+    if (!done2) pipe.kill('SIGKILL');
+    // The exit notice crosses the host's socket when the process is hosted;
+    // a dead socket would leave this promise waiting on a death nobody can
+    // see, so the last wait is bounded too.
+    await Promise.race([this.#exited, new Promise((r) => setTimeout(() => r(null), 2000))]);
+  }
+
+  /**
+   * The daemon is going away; a hosted process must not. Hand the stream
+   * back untouched - the next daemon binds it again through the host.
+   * A process that is ours to begin with has no one to outlive into.
+   */
+  async suspend() {
+    if (this.#hosted && this.#pipe) { this.#pipe.detach(); this.#pipe = null; return; }
+    return this.kill();
   }
 
   // ------------------------------------------------------------- the stream
@@ -443,7 +541,10 @@ export class AcpDriver extends Driver {
     if (m.id !== undefined && m.method) return this.#onRequest(m);
     if (m.id !== undefined) {
       const resolve = this.#calls.get(m.id);
-      if (resolve) { this.#calls.delete(m.id); resolve(m); }
+      if (resolve) { this.#calls.delete(m.id); resolve(m); return; }
+      // A response to a call a previous daemon made - the turn's prompt,
+      // most likely. Its stopReason still ends whichever turn is open.
+      if (m.result?.stopReason !== undefined && this.#turnId) this.#turnDone(this.#turnId, m);
       return;
     }
     if (m.method === 'session/update') return this.#onUpdate(m.params);
@@ -721,6 +822,9 @@ export class AcpDriver extends Driver {
       requestId, itemId: id, kind, tool, title, detail,
       parentId: p.toolCall?._meta?.['cognition.ai/subagent_context'] ? this.#lastSub : undefined,
       options: shown, defaultTo: 'allow', allowEdit: false,
+      // What the wire needs to answer this - kept on the event so a daemon
+      // that adopted the process mid-question can still complete the reply.
+      acpId: m.id, acpOptions: options,
     });
   }
 }

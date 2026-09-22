@@ -221,10 +221,13 @@ export class Daemon {
       this.refreshSnapshot().catch(() => {});
       return summaryLine(snap, { roster: this.rosterState(snap) });
     };
-    this.sessions.resume();
-    // Terminals live in their own process, so some of them are still running.
-    // Ask which, once, rather than assuming either way.
-    this.sessions.adoptTerminals().catch(() => {});
+    // Terminals and agent processes live in their own host, so some of them
+    // are still running. Ask which before resuming: `resume` reads the
+    // surviving-proc list to know which open turns are still live rather
+    // than interrupted.
+    this.sessions.adoptTerminals()
+      .catch(() => {})
+      .then(() => this.sessions.resume());
     // The folder index behind `fs.search`: one background walk now, so the
     // first query is answered from memory rather than starting the walk then.
     fsApi.warmIndex?.();

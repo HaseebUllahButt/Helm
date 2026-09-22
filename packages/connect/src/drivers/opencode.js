@@ -28,3 +28,19 @@ export class OpencodeDriver extends AcpDriver {
     }, opts);
   }
 }
+
+/** OpenCode 2 preview, which ships as a separate `opencode2` executable. */
+export class Opencode2Driver extends AcpDriver {
+  constructor(opts) {
+    super({
+      engine: 'opencode2',
+      label: 'OpenCode 2',
+      // Preview versions are 0.0.0-beta-N; the live ACP handshake is the
+      // compatibility check that matters while that channel is unversioned.
+      min: '0.0.0',
+      args: () => ['acp'],
+      acpMode: (m) => modeFor('opencode2', m)?.acp ?? null,
+      effortId: 'effort',
+    }, opts);
+  }
+}

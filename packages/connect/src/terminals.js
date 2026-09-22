@@ -22,6 +22,14 @@ const socketDir = process.env.XDG_RUNTIME_DIR || tmpdir();
 const helmTag = createHash('sha256').update(HELM_DIR).digest('hex').slice(0, 10);
 export const SOCKET_PATH =
   process.env.HELM_TERMINALS_SOCKET || join(socketDir, `helm-terminals-${helmTag}.sock`);
+/**
+ * Agent processes get a host of their own, on their own socket: ptys and
+ * procs then upgrade on independent schedules, and a machine mid-migration -
+ * an old terminal host still holding shells - gains proc persistence without
+ * a single terminal being killed for it.
+ */
+export const PROC_SOCKET_PATH =
+  process.env.HELM_PROCS_SOCKET || join(socketDir, `helm-procs-${helmTag}.sock`);
 
 /** Where a host that fails to start says why. */
 export const HOST_LOG = join(HELM_DIR, 'terminals.log');
@@ -61,8 +69,27 @@ export class TerminalHost extends EventEmitter {
   #rid = 0;
   #waiting = new Map();
   #ids = new Set();
+  /**
+   * Agent processes the host holds - same lifecycle, same reason. A proc's
+   * session id is its id here, so `hasProc(s.id)` is the whole check.
+   */
+  #procs = new Set();
+  /** proc id -> the driver's listeners, once one has bound the stream */
+  #procListeners = new Map();
+  /** proc id -> output nobody is holding yet, kept for whichever driver asks */
+  #procBacklog = new Map();
   #connecting = null;
   #pty = null;
+  /** Which socket to talk to and which systemd unit to spawn it as - the
+   *  pty host by default; a proc-only instance when asked. */
+  #socketPath;
+  #unit;
+
+  constructor({ socketPath = SOCKET_PATH, unit = 'helm-terminals' } = {}) {
+    super();
+    this.#socketPath = socketPath;
+    this.#unit = unit;
+  }
 
   /** True once a host has answered and it has a working pty. */
   get usable() { return this.#pty === true; }
@@ -96,8 +123,8 @@ export class TerminalHost extends EventEmitter {
       if (!maySpawn) return false;
       // Nothing listening, or something stale is. A socket file whose host is
       // gone refuses every connection until it is removed.
-      if (existsSync(SOCKET_PATH)) {
-        try { unlinkSync(SOCKET_PATH); } catch { /* not ours */ }
+      if (existsSync(this.#socketPath)) {
+        try { unlinkSync(this.#socketPath); } catch { /* not ours */ }
       }
       try {
         await this.#spawnHost();
@@ -111,7 +138,7 @@ export class TerminalHost extends EventEmitter {
 
   #dial() {
     return new Promise((resolve, reject) => {
-      const sock = connect(SOCKET_PATH);
+      const sock = connect(this.#socketPath);
       sock.setNoDelay?.(true);
       const fail = (err) => { sock.destroy(); reject(err); };
       sock.once('error', fail);
@@ -166,6 +193,7 @@ export class TerminalHost extends EventEmitter {
     if (msg.t === 'hello') {
       this.#pty = !!msg.pty;
       this.#ids = new Set(msg.ids ?? []);
+      this.#procs = new Set(msg.procs ?? []);
       this.emit('hello', msg);
       return;
     }
@@ -174,6 +202,26 @@ export class TerminalHost extends EventEmitter {
       if (!p) return;
       this.#waiting.delete(msg.rid);
       msg.t === 'ok' ? p.resolve(msg.result) : p.reject(new Error(msg.error));
+      return;
+    }
+    // A proc's bytes belong to the driver holding it - or to a small buffer
+    // when none has bound yet, because the agent does not stop mid-answer
+    // just because the daemon has not reopened the session.
+    if (msg.t === 'proc.data') {
+      const l = this.#procListeners.get(msg.id);
+      if (l?.onData) l.onData(msg.data);
+      else this.#procBacklog.set(msg.id, ((this.#procBacklog.get(msg.id) ?? '') + msg.data).slice(-262144));
+      return;
+    }
+    if (msg.t === 'proc.exit') {
+      this.#procs.delete(msg.id);
+      const l = this.#procListeners.get(msg.id);
+      this.#procListeners.delete(msg.id);
+      this.#procBacklog.delete(msg.id);
+      if (l?.onExit) l.onExit({ code: msg.code, stderr: msg.stderr });
+      // With no driver attached, the session itself has to close the turn
+      // the dead process left open - it cannot wait for somebody to look.
+      else this.emit('proc.exit', { id: msg.id, code: msg.code });
       return;
     }
     if (msg.t === 'data') this.emit('data', { id: msg.id, text: msg.text });
@@ -195,7 +243,7 @@ export class TerminalHost extends EventEmitter {
   async #spawnHost() {
     const ready = new Promise((resolve, reject) => {
       const poll = setInterval(() => {
-        if (existsSync(SOCKET_PATH)) { clearInterval(poll); clearTimeout(timer); resolve(); }
+        if (existsSync(this.#socketPath)) { clearInterval(poll); clearTimeout(timer); resolve(); }
       }, 100);
       const timer = setTimeout(() => {
         clearInterval(poll);
@@ -205,7 +253,9 @@ export class TerminalHost extends EventEmitter {
 
     const env = {
       HELM_DIR: process.env.HELM_DIR ?? '',
-      HELM_TERMINALS_SOCKET: process.env.HELM_TERMINALS_SOCKET ?? '',
+      // Always this instance's own path: a proc host spawned while the env
+      // points at the pty socket must still bind the proc one.
+      HELM_TERMINALS_SOCKET: this.#socketPath,
     };
     const passed = Object.entries(env).filter(([, v]) => v);
 
@@ -213,7 +263,7 @@ export class TerminalHost extends EventEmitter {
     if (useSystemd) {
       const args = [
         '--user', '--quiet', '--collect',
-        `--unit=helm-terminals-${process.getuid?.() ?? 0}`,
+        `--unit=${this.#unit}-${process.getuid?.() ?? 0}`,
         ...passed.map(([k, v]) => `--setenv=${k}=${v}`),
         process.execPath, HOST_BIN,
       ];
@@ -269,6 +319,43 @@ export class TerminalHost extends EventEmitter {
   unview(id)             { return this.#call({ t: 'unview', id }).catch(() => {}); }
   write(id, data)        { return this.#call({ t: 'write', id, data }); }
   resize(id, cols, rows) { return this.#call({ t: 'resize', id, cols, rows }).catch(() => {}); }
+
+  // ------------------------------------------------- agent processes (procs)
+
+  hasProc(id) { return this.#procs.has(id); }
+
+  /** Start a pipe-stdio process on the host, or attach to the one it kept. */
+  async openProc(id, spec) {
+    await this.ensure();
+    const r = await this.#call({ t: 'proc.open', id, ...spec });
+    this.#procs.add(id);
+    return r;
+  }
+
+  /**
+   * A live proc's stdio as the pipe-shaped object a driver drives. Output
+   * the agent produced before anyone bound is replayed first, in order.
+   * `detach` hands the stream back without touching the process - what the
+   * daemon calls when it is the one going away.
+   */
+  procPipe(id) {
+    if (!this.#procs.has(id)) return null;
+    const l = {};
+    this.#procListeners.set(id, l);
+    return {
+      write: (data) => this.#call({ t: 'proc.write', id, data }).catch(() => {}),
+      end: () => this.#call({ t: 'proc.end', id }).catch(() => {}),
+      kill: (signal) => this.#call({ t: 'proc.kill', id, signal }).catch(() => {}),
+      onData: (cb) => {
+        l.onData = cb;
+        const backlog = this.#procBacklog.get(id) ?? '';
+        this.#procBacklog.delete(id);
+        if (backlog) queueMicrotask(() => { if (l.onData === cb) cb(backlog); });
+      },
+      onExit: (cb) => { l.onExit = cb; },
+      detach: () => { if (this.#procListeners.get(id) === l) this.#procListeners.delete(id); },
+    };
+  }
 
   async close(id) {
     this.#ids.delete(id);

@@ -35,6 +35,12 @@ export const MODES = {
     { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', acp: 'plan' },
     { id: 'auto', label: 'Act without asking', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'build', autoAllow: 'all', danger: true },
   ],
+  opencode2: [
+    { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', acp: 'build' },
+    { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'edits go through, commands still ask', acp: 'build', autoAllow: ['edit'] },
+    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', acp: 'plan' },
+    { id: 'auto', label: 'Act without asking', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'build', autoAllow: 'all', danger: true },
+  ],
   // devin's session modes are its own words: Code is its default and asks on
   // the risky half, Ask runs no tools at all, Bypass is the dangerous one.
   devin: [

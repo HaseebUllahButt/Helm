@@ -41,9 +41,17 @@ export class Driver extends EventEmitter {
   #buffer = new Map();
   #flushTimer = null;
 
-  constructor({ engine, cmd, env, args = [], cwd, model, effort, mode, engineSessionId, transcript = null, log = () => {} }) {
+  constructor({ engine, cmd, env, args = [], cwd, model, effort, mode, engineSessionId, transcript = null, log = () => {},
+                procHost = null, procId = null, openTurn = null, pendingEvents = null }) {
     super();
-    Object.assign(this, { engine, cmd, env, profileArgs: args, cwd, model, effort, mode, engineSessionId, transcript, log });
+    Object.assign(this, {
+      engine, cmd, env, profileArgs: args, cwd, model, effort, mode, engineSessionId, transcript, log,
+      // How a process can outlive this daemon: `procHost` is the terminal
+      // host, `procId` the id the agent runs under there, and the two getters
+      // answer what the event log still has open for the session - read
+      // lazily, only when a surviving process is actually rebound.
+      procHost, procId, openTurn, pendingEvents,
+    });
     this.status = 'idle';
     /** requestId -> the permission.request event, until answered */
     this.pending = new Map();

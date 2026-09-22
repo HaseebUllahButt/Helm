@@ -13,6 +13,7 @@
  * the service it was started from; `terminals.js` handles that when spawning.
  */
 import { createServer } from 'node:net';
+import { spawn } from 'node:child_process';
 import { existsSync, unlinkSync, mkdirSync, chmodSync } from 'node:fs';
 import { HELM_DIR } from '../src/paths.js';
 import { Terminals, loadPty, ptyUnavailable } from '../src/pty.js';
@@ -20,10 +21,21 @@ import { SOCKET_PATH } from '../src/terminals.js';
 
 /** With nothing left to hold, there is no reason to stay resident. */
 const IDLE_EXIT_MS = 60_000;
+/** Per-proc output kept while nobody is attached - a restart's worth, not a history. */
+const PROC_BACKLOG_MAX = 256 * 1024;
 
 const terminals = new Terminals();
 const clients = new Set();
 let idleTimer = null;
+
+/**
+ * Headless agent processes - the ACP sessions - held here for the same
+ * reason the ptys are: the daemon is restartable, a conversation is not.
+ * `procs` maps a session id to { child, errTail, backlog }, where backlog
+ * is stdout produced while no client was connected, flushed on the next
+ * attach so a turn that finished mid-restart still reports its end.
+ */
+const procs = new Map();
 
 const send = (sock, msg) => {
   if (sock.writable) sock.write(JSON.stringify(msg) + '\n');
@@ -32,6 +44,49 @@ const broadcast = (msg) => { for (const c of clients) send(c, msg); };
 
 terminals.on('data', ({ id, text }) => broadcast({ t: 'data', id, text }));
 terminals.on('exit', ({ id, code }) => { broadcast({ t: 'exit', id, code }); armIdleExit(); });
+
+function procOut(id, data) {
+  if (clients.size === 0) {
+    const p = procs.get(id);
+    if (p) p.backlog = (p.backlog + data).slice(-PROC_BACKLOG_MAX);
+    return;
+  }
+  broadcast({ t: 'proc.data', id, data });
+}
+
+function procOpen(msg) {
+  const existing = procs.get(msg.id);
+  if (existing) return { ok: true, pid: existing.child.pid, existing: true };
+  const child = spawn(msg.cmd, msg.args ?? [], {
+    cwd: msg.cwd || undefined,
+    env: msg.env ? { ...process.env, ...msg.env } : process.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const proc = { child, errTail: '', backlog: '' };
+  procs.set(msg.id, proc);
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (d) => procOut(msg.id, d));
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (d) => { proc.errTail = (proc.errTail + d).slice(-4000); });
+  child.on('exit', (code) => {
+    procs.delete(msg.id);
+    broadcast({ t: 'proc.exit', id: msg.id, code, stderr: proc.errTail.trim().split('\n').pop() || null });
+    armIdleExit();
+  });
+  child.on('error', (err) => {
+    procs.delete(msg.id);
+    broadcast({ t: 'proc.exit', id: msg.id, code: -1, stderr: String(err?.message || err) });
+    armIdleExit();
+  });
+  return { ok: true, pid: child.pid };
+}
+
+function procDrop() {
+  for (const p of procs.values()) {
+    try { p.child.kill('SIGTERM'); } catch { /* already gone */ }
+  }
+  procs.clear();
+}
 
 /**
  * Leave once there is nothing to hold and nobody attached. A host that
@@ -52,7 +107,7 @@ function armIdleExit() {
       terminals.closeAll();
       process.exit(0);
     }
-    if (terminals.list().length || clients.size) { idleSince = Date.now(); return; }
+    if (terminals.list().length || procs.size || clients.size) { idleSince = Date.now(); return; }
     if (Date.now() - idleSince < IDLE_EXIT_MS) return;
     try { unlinkSync(SOCKET_PATH); } catch { /* already gone */ }
     process.exit(0);
@@ -72,11 +127,19 @@ async function handle(msg) {
     case 'resize':  terminals.resize(msg.id, msg.cols, msg.rows); return { ok: true };
     case 'close':   terminals.close(msg.id); armIdleExit(); return { ok: true };
     case 'list':    return { ids: terminals.list() };
+
+    // Pipe-stdio processes, held on the same terms as the ptys.
+    case 'proc.open':  return procOpen(msg);
+    case 'proc.write': procs.get(msg.id)?.child.stdin.write(msg.data); return { ok: true };
+    case 'proc.end':   procs.get(msg.id)?.child.stdin.end(); return { ok: true };
+    case 'proc.kill':  procs.get(msg.id)?.child.kill(msg.signal || 'SIGTERM'); return { ok: true };
+    case 'proc.list':  return { ids: [...procs.keys()] };
     // Asked to go: close what we hold rather than orphan it. Used by tests
     // and by anything that wants the machine left tidy.
     case 'shutdown':
       setTimeout(() => {
         terminals.closeAll();
+        procDrop();
         try { unlinkSync(SOCKET_PATH); } catch { /* already gone */ }
         process.exit(0);
       }, 20).unref?.();
@@ -100,8 +163,12 @@ const server = createServer((sock) => {
   sock.setNoDelay?.(true);
 
   // Say what we are straight away, so a daemon that has just restarted knows
-  // which terminals survived without having to ask.
-  send(sock, { t: 'hello', pty: !!pty, reason: pty ? null : ptyUnavailable(), ids: terminals.list() });
+  // which terminals and agent processes survived without having to ask - then
+  // hand it anything those processes said while nobody was listening.
+  send(sock, { t: 'hello', pty: !!pty, reason: pty ? null : ptyUnavailable(), ids: terminals.list(), procs: [...procs.keys()] });
+  for (const [id, p] of procs) {
+    if (p.backlog) { send(sock, { t: 'proc.data', id, data: p.backlog }); p.backlog = ''; }
+  }
 
   let buffer = '';
   sock.on('data', async (chunk) => {
@@ -144,6 +211,7 @@ server.listen(SOCKET_PATH, () => {
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     terminals.closeAll();
+    procDrop();
     try { unlinkSync(SOCKET_PATH); } catch { /* already gone */ }
     process.exit(0);
   });
