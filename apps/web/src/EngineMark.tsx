@@ -7,7 +7,8 @@
  * in every place the mark appears.
  *
  * Sources: Anthropic's Claude mark, OpenAI's Blossom, opencode's official
- * square brand mark, and Cognition's Devin mark.
+ * square brand mark, and Cognition's Devin mark. OpenCode 2 keeps the
+ * square mark and adds a small v2 badge so the two CLIs are distinguishable.
  */
 
 const shell = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin' };
@@ -43,11 +44,22 @@ export function EngineMark({ engine, className = '' }: { engine?: string; classN
     );
   }
 
-  if (engine === 'opencode' || engine === 'opencode2') {
+  if (engine === 'opencode') {
     return (
-      <span className={`mark ${engine} ${className}`} title={label}>
+      <span className={`mark opencode ${className}`} title={label}>
         <svg {...common} fill="currentColor">
           <path d="M22 24H2V0h20zM17 4.8H7v14.4h10z" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (engine === 'opencode2') {
+    return (
+      <span className={`mark opencode2 ${className}`} title={label}>
+        <svg {...common} fill="currentColor">
+          <path d="M22 24H2V0h20zM17 4.8H7v14.4h10z" />
+          <path d="M16.9 13.6c1.7 0 2.8.9 2.8 2.2 0 .9-.5 1.6-1.5 2.2l-1.1.7h2.8v1.4h-5.1v-1.2l2.5-1.6c.6-.4.9-.8.9-1.2 0-.4-.3-.7-.8-.7s-.8.3-1 .9l-1.3-.4c.3-1.4 1.3-2.3 2.8-2.3z" fill="var(--panel)" />
         </svg>
       </span>
     );
