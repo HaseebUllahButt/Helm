@@ -11,6 +11,11 @@ NAS is a role and media-serving capability, not a storage product. Helm must
 not copy, synchronize, upload, deduplicate, or otherwise manage the media
 library.
 
+It is a small optional addition, not a change to what Helm is. A machine
+that is never designated and never given folders runs exactly the code it
+ran before; the core product is controlling agents, and nothing about this
+feature may make the ordinary path heavier.
+
 ## Product behavior
 
 - Any online Helm machine can be designated as a NAS.
@@ -79,5 +84,12 @@ library.
 
 The repository already has the `nas` machine kind, invite/join support,
 redesignation, roster propagation, and a basic NAS selector in the web UI.
-The missing work is the media-root configuration, protected media catalog,
-byte-stream transport, player interface, and end-to-end tests.
+The media layer lives in `packages/nas` (`@helm/nas`): the shared-roots
+allowlist, the protected catalog, and the byte-stream transport with range
+support. The wiring around it is in place end to end: the daemon mounts the
+listener and answers the `media.*` RPCs only while designated, every hub
+answers `/media/<machine>/...` - directly for itself, proxied through a
+tunnel for a machine only it can reach - and the web app browses and plays
+through it. `helm nas [machine] [add|remove <folder>]` edits the allowlist,
+and `test/nas-media.test.mjs` plus `test/nas-route.test.mjs` cover the
+boundary and the route.

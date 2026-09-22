@@ -128,9 +128,9 @@ code, pre, kbd { font-family: var(--mono); }
   }
   .sidebar.collapsed { width: 52px; }
   .sidebar.collapsed .brand, .sidebar.collapsed .conn,
-  .sidebar.collapsed .scroll, .sidebar.collapsed .diag,
-  .sidebar.collapsed .settings-toggle { display: none; }
+  .sidebar.collapsed .scroll, .sidebar.collapsed .diag { display: none; }
   .sidebar.collapsed .bar.side { justify-content: center; padding-inline: 6px; }
+  .sidebar.collapsed .side-tools { flex-direction: column; }
   .main { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; }
 }
 @media (max-width: 899px) {
@@ -1280,3 +1280,8 @@ button.sheet-editlink:hover { color: var(--text); }
 
 /* The notify-when-done bell: dim until armed, amber once it is. */
 .iconbtn.bell.on { color: var(--amber); }
+
+/* The nas player: as wide as the measure, nothing else dressed up. */
+.player video { width: 100%; border-radius: var(--radius); background: #000; display: block; }
+.player audio { width: 100%; }
+.media-meta { padding: 8px 2px 0; font-size: var(--t-meta); word-break: break-all; }

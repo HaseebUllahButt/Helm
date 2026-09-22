@@ -11,9 +11,9 @@ import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brai
 import {
   Client, login, validMachineName, MACHINE_NAME_RULE,
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
-  type InventorySession, type Device, type Project,
+  type InventorySession, type Device, type Project, type MediaRoot, type MediaEntry,
 } from './client';
-import { money } from './format';
+import { money, bytes } from './format';
 import { loadModels, saveModels } from './modelCache';
 import { loadMessages, saveMessages } from './session/logCache';
 
@@ -87,6 +87,21 @@ const Sliders = () => (
        strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
     <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
     <circle cx="16" cy="7" r="2.2" /><circle cx="10" cy="17" r="2.2" />
+  </svg>
+);
+
+const Play = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
+    <path d="M8 5.5v13l11-6.5z" />
+  </svg>
+);
+
+const Gear = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="3.2" />
+    <path d="M12 3v2.6M12 18.4V21M5.2 5.2l1.9 1.9M16.9 16.9l1.9 1.9M3 12h2.6M18.4 12H21M5.2 18.8l1.9-1.9M16.9 7.1l1.9-1.9" />
   </svg>
 );
 
@@ -289,6 +304,11 @@ type MainView =
   // Which phones and browsers hold a key to this network: pair another, or
   // stop trusting one.
   | { kind: 'devices' }
+  // One page for everything that is not the day's work: machine defaults,
+  // what it has all cost, and this device's pairing, alerts and install.
+  | { kind: 'app-settings' }
+  // The media a nas shares, browsed and played - only ever offered on one.
+  | { kind: 'media' }
   | { kind: 'session'; session: Session };
 
 /** A request answered elsewhere, or a session that just started waiting -
@@ -735,8 +755,10 @@ function Shell({ client, conn, onSignOut }: {
   // to one.
   // Usage across every machine is a main-pane view that belongs to no machine,
   // so it has to open the main pane on a phone without one being selected -
-  // and what devices hold keys belongs to no machine either.
-  const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'devices' || view.kind === 'network-settings';
+  // and what devices hold keys, and the settings they live under, belong to
+  // no machine either.
+  const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'devices'
+    || view.kind === 'network-settings' || view.kind === 'app-settings';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -758,9 +780,9 @@ function Shell({ client, conn, onSignOut }: {
           </span>
           <span className="side-tools">
             <button
-              className="iconbtn settings-toggle" title="CLI defaults on every machine" aria-label="CLI settings"
-              onClick={() => navigate([{ kind: 'network-settings' }])}
-            ><Sliders /></button>
+              className="iconbtn settings-toggle" title="Settings" aria-label="Settings"
+              onClick={() => navigate([{ kind: 'app-settings' }])}
+            ><Gear /></button>
             <button
               className="iconbtn collapse-toggle"
               title={sidebarCollapsed ? 'expand sidebar' : 'collapse sidebar'}
@@ -913,37 +935,9 @@ function Shell({ client, conn, onSignOut }: {
               </div>
             </Fold>
 
-            <div className="section">usage</div>
-            <div className="rows">
-              <button className="row" onClick={() => navigate([{ kind: 'usage' }])}>
-                <span className="grow">
-                  <span className="rt">What it has cost</span>
-                  <span className="rm">tokens, spend and cache across every machine</span>
-                </span>
-                <span className="chev">›</span>
-              </button>
-            </div>
-
-            {/* Setup is three things you do once and then never again. As
-                full-width slabs they outweighed the machines above them,
-                which is the wrong way round: they are a footer, so they
-                look like one. */}
-            <div className="section">this device</div>
-            <div className="rows">
-              <button className="row" onClick={() => navigate([{ kind: 'devices' }])}>
-                <span className="grow">
-                  <span className="rt">Devices & pairing</span>
-                  <span className="rm">what holds a key to this network</span>
-                </span>
-                <span className="chev">›</span>
-              </button>
-              <AddMachine client={client} />
-              <Notifications client={client} />
-              <InstallPwa />
-              <button className="row destructive" onClick={() => setUnpairing(true)}>
-                <span className="grow"><span className="rt">Unpair this device</span></span>
-              </button>
-            </div>
+            {/* Setup, spend and pairing are a page of their own now - the
+                gear up top. The home screen is just the machines and what
+                is running on them. */}
             {error && <div className="error">{error}</div>}
 
             </>)}
@@ -956,7 +950,12 @@ function Shell({ client, conn, onSignOut }: {
       </aside>
 
       <section className={`main${showMain ? ' showing' : ''}`}>
-        {view.kind === 'usage' ? (
+        {view.kind === 'app-settings' ? (
+          <SettingsView
+            client={client} onBack={back}
+            onOpen={(v) => push(v)} onUnpair={() => setUnpairing(true)}
+          />
+        ) : view.kind === 'usage' ? (
           <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
         ) : view.kind === 'devices' ? (
           <DevicesView client={client} onBack={back} />
@@ -998,8 +997,11 @@ function Shell({ client, conn, onSignOut }: {
             onStart={(cwd) => push({ kind: 'start', cwd })}
             onSettings={() => push({ kind: 'settings' })}
             onUsage={() => push({ kind: 'usage', envId: env.id })}
+            onMedia={() => push({ kind: 'media' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
           />
+        ) : view.kind === 'media' ? (
+          <MediaView key={env.id} client={client} env={env} onBack={back} />
         ) : view.kind === 'settings' ? (
           <EnvSettings
             client={client} env={env} onBack={back}
@@ -1310,44 +1312,60 @@ interface InstallPromptEvent extends Event {
 /**
  * Turning on "tell me when a session is waiting".
  *
- * The browser only asks for permission from a real click, and only over
- * https, so this is a button and it stays hidden on plain http where the
- * whole thing is impossible anyway. Every way it can fail says why: a
- * permission the person already denied cannot be re-asked from inside the
- * page, and silently doing nothing is the worst answer to give there.
+ * The browser only asks for permission from a real click, and only in a
+ * secure context, so this is a button and it stays hidden on a plain LAN
+ * address where the whole thing is impossible anyway. Every way it can fail
+ * says why: a permission the person already denied cannot be re-asked from
+ * inside the page, and silently doing nothing is the worst answer to give
+ * there.
  */
 function Notifications({ client }: { client: Client }) {
   const [state, setState] = useState<'unknown' | 'off' | 'on' | 'blocked' | 'unsupported'>('unknown');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  /** Switched off by hand: a reconnect must not quietly turn it back on. */
+  const declined = useRef(false);
+  const syncing = useRef(false);
 
   useEffect(() => {
     const able = 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
-    if (!able || location.protocol !== 'https:') { setState('unsupported'); return; }
+    // The real requirement is a secure context, not https in particular:
+    // `helm open` serves the app on http://127.0.0.1, which a browser still
+    // counts as secure, while a bare LAN address can never subscribe at all.
+    if (!able || !window.isSecureContext) { setState('unsupported'); return; }
     if (Notification.permission === 'denied') { setState('blocked'); return; }
-    navigator.serviceWorker.ready
-      .then(async (reg) => {
-        const existing = await reg.pushManager.getSubscription();
-        if (existing) return existing;
-        // Browsers only let the permission prompt happen on a click. Once a
-        // person has already granted it, however, restore the subscription
-        // automatically so notifications remain on by default after a
-        // browser reset or service-worker replacement.
-        if (Notification.permission !== 'granted') return null;
+
+    const sync = async () => {
+      if (declined.current || syncing.current) return;
+      syncing.current = true;
+      try {
+        const reg = await navigator.serviceWorker.ready;
         const { key } = await client.pushKey();
-        const sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: base64urlToBytes(key),
-        });
-        await client.pushSubscribe({
-          endpoint: sub.endpoint,
-          keys: (sub.toJSON() as any).keys,
-          label: navigator.platform || 'this device',
-        });
-        return sub;
-      })
-      .then((sub) => setState(sub ? 'on' : 'off'))
-      .catch(() => setState('off'));
+        // Browsers only let the permission prompt happen on a click. Once a
+        // person has granted it, however, a missing subscription can be
+        // restored silently, so notifications stay on after a browser reset
+        // or a service-worker replacement.
+        const sub = (await boundSub(client, reg, key))
+          ?? (Notification.permission === 'granted' ? await subscribe(client, reg, key) : null);
+        // `declined` is checked again at the end, not only on the way in:
+        // the person saying "off" while this was mid-flight wins, including
+        // taking down a subscription that was just created underneath them.
+        if (declined.current && sub) {
+          await client.pushUnsubscribe(sub.endpoint).catch(() => {});
+          await sub.unsubscribe().catch(() => {});
+        }
+        setState(declined.current ? 'off' : sub ? 'on' : 'off');
+      } catch {
+        setState((s) => (s === 'unknown' ? 'off' : s));
+      } finally { syncing.current = false; }
+    };
+
+    void sync();
+    // Which hub answers can change on any reconnect, and a subscription is
+    // only good for the key of the one it was taken out against.
+    return client.on((_env, kind, payload) => {
+      if (kind === 'connection' && payload?.online) void sync();
+    });
   }, [client]);
 
   const enable = async () => {
@@ -1355,18 +1373,11 @@ function Notifications({ client }: { client: Client }) {
     try {
       const permission = await Notification.requestPermission();
       if (permission !== 'granted') { setState(permission === 'denied' ? 'blocked' : 'off'); return; }
+      declined.current = false;
       const { key } = await client.pushKey();
       const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: base64urlToBytes(key),
-      });
-      await client.pushSubscribe({
-        endpoint: sub.endpoint,
-        keys: (sub.toJSON() as any).keys,
-        label: navigator.platform || 'this device',
-      });
-      setState('on');
+      const sub = await boundSub(client, reg, key) ?? await subscribe(client, reg, key);
+      setState(sub ? 'on' : 'off');
     } catch (e: any) {
       setError(e?.message || 'could not turn notifications on');
     } finally { setBusy(false); }
@@ -1374,6 +1385,7 @@ function Notifications({ client }: { client: Client }) {
 
   const disable = async () => {
     setBusy(true); setError('');
+    declined.current = true;
     try {
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.getSubscription();
@@ -1409,6 +1421,56 @@ function Notifications({ client }: { client: Client }) {
       {error && <p className="note setup-open">{error}</p>}
     </>
   );
+}
+
+/**
+ * The browser's push subscription if - and only if - it belongs to the hub
+ * answering now.
+ *
+ * A subscription verifies pushes against one VAPID key, and every hub has
+ * its own. When a different hub is answering - a second home, a rebuilt VM,
+ * `helm open` having settled on the real home rather than the loopback it
+ * started with - the old subscription is a doorbell wired to a house that
+ * no longer exists: nothing arrives, ever, and nothing says why. A stale
+ * one is dropped so a fresh one can be taken; the dead endpoint's next 410
+ * cleans the row on whichever hub still remembers it.
+ */
+async function boundSub(client: Client, reg: ServiceWorkerRegistration, key: string) {
+  const sub = await reg.pushManager.getSubscription();
+  // `options.applicationServerKey` says which key this subscription verifies
+  // against. A browser that will not say is one helm did not subscribe this
+  // way, so it is treated the same as a mismatch: dropped and taken again.
+  const bound = sub?.options?.applicationServerKey;
+  if (!sub || !bound) return null;
+  const have = new Uint8Array(bound);
+  const wanted = new Uint8Array(base64urlToBytes(key));
+  if (have.length !== wanted.length || have.some((b, i) => b !== wanted[i])) {
+    await client.pushUnsubscribe(sub.endpoint).catch(() => {});
+    await sub.unsubscribe().catch(() => {});
+    return null;
+  }
+  // Registering is idempotent - the endpoint is the row's key - so a hub
+  // that lost its database since we subscribed is put right for free.
+  await client.pushSubscribe({
+    endpoint: sub.endpoint,
+    keys: (sub.toJSON() as any).keys,
+    label: navigator.platform || 'this device',
+  });
+  return sub;
+}
+
+/** Take out a fresh subscription against this hub's key and register it there. */
+async function subscribe(client: Client, reg: ServiceWorkerRegistration, key: string) {
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: base64urlToBytes(key),
+  });
+  await client.pushSubscribe({
+    endpoint: sub.endpoint,
+    keys: (sub.toJSON() as any).keys,
+    label: navigator.platform || 'this device',
+  });
+  return sub;
 }
 
 /**
@@ -1586,13 +1648,13 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   );
 }
 
-function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onStart, onSettings, onUsage, onOpen, onResume, resuming }: {
+function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[];
   /** What this machine last said it was running, while it cannot be asked. */
   remembered?: Session[]; rememberedAt?: number;
   reload: () => void; onBack: () => void; onNewSession: () => void; onAddProject: () => void; onStart: (cwd: string) => void;
   onSettings: () => void;
-  onUsage: () => void; onOpen: (s: Session) => void;
+  onUsage: () => void; onMedia: () => void; onOpen: (s: Session) => void;
   /** Continue a conversation a CLI recorded on its own; starts the engine. */
   onResume: (s: Session) => void;
   resuming: string | null;
@@ -1858,6 +1920,11 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             {env.kind ? ` \u00b7 ${env.kind}` : ''}
           </span>
         </div>
+        {/* The media view only exists on a machine that is a nas: elsewhere
+            the button would be an offer the daemon has to refuse. */}
+        {env.kind === 'nas' && (
+          <button className="iconbtn" title={`media on ${env.name}`} onClick={onMedia}><Play /></button>
+        )}
         <button
           className="iconbtn mono"
           // A machine with no pty falls back to sampling a herdr pane's
@@ -2610,6 +2677,65 @@ const startSummary = (a: Account) => {
   return values.length ? `starts ${values.join(' · ')}` : "starts with the CLI's defaults";
 };
 
+/**
+ * The settings page: everything that used to fill the bottom of the home
+ * screen.
+ *
+ * None of it is the day's work - what the machines cost, what this device
+ * can do, a join code for a new computer - so it lives one tap away under
+ * the gear instead of under the machine list, where it outweighed the
+ * machines themselves.
+ */
+function SettingsView({ client, onBack, onOpen, onUnpair }: {
+  client: Client; onBack: () => void;
+  onOpen: (v: MainView) => void; onUnpair: () => void;
+}) {
+  return (
+    <>
+      <div className="bar">
+        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <div className="titles"><h1>Settings</h1><span className="sub">this network, this device</span></div>
+      </div>
+      <div className="scroll"><div className="pad column">
+        <div className="section">machines</div>
+        <div className="rows">
+          <button className="row" onClick={() => onOpen({ kind: 'network-settings' })}>
+            <span className="grow">
+              <span className="rt">CLI defaults</span>
+              <span className="rm">model, thinking and permissions on every machine</span>
+            </span>
+            <span className="chev">›</span>
+          </button>
+          <button className="row" onClick={() => onOpen({ kind: 'usage' })}>
+            <span className="grow">
+              <span className="rt">What it has cost</span>
+              <span className="rm">tokens, spend and cache across every machine</span>
+            </span>
+            <span className="chev">›</span>
+          </button>
+        </div>
+
+        <div className="section">this device</div>
+        <div className="rows">
+          <button className="row" onClick={() => onOpen({ kind: 'devices' })}>
+            <span className="grow">
+              <span className="rt">Devices & pairing</span>
+              <span className="rm">what holds a key to this network</span>
+            </span>
+            <span className="chev">›</span>
+          </button>
+          <AddMachine client={client} />
+          <Notifications client={client} />
+          <InstallPwa />
+          <button className="row destructive" onClick={onUnpair}>
+            <span className="grow"><span className="rt">Unpair this device</span></span>
+          </button>
+        </div>
+      </div></div>
+    </>
+  );
+}
+
 /** One place to inspect every machine's account defaults. */
 function NetworkSettings({ client, envs, onBack, onOpen }: {
   client: Client; envs: Environment[]; onBack: () => void; onOpen: (envId: string, account: Account) => void;
@@ -3063,6 +3189,164 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
               {!entries.length && !error && <div className="empty quiet">no subfolders</div>}
             </div>
           </>
+        )}
+        {error && <div className="error">{error}</div>}
+      </div></div>
+    </>
+  );
+}
+
+// -------------------------------------------------------------------- media
+
+/**
+ * What a machine designated 'nas' shares: the folders it was given, browsed
+ * and played where they lie.
+ *
+ * Listing is ordinary RPC - small JSON, made for this channel. Playback is
+ * not: a media element speaks real HTTP and cannot set an Authorization
+ * header, so the screen mints a short-lived ticket and hands the element a
+ * URL to fetch itself. The URL prefers the machine's own hub - the direct
+ * path on the same network - and retries through the hub this page is
+ * attached to, which proxies the same stream when the direct one cannot be
+ * reached. The bytes never touch the JSON socket either way.
+ */
+function MediaView({ client, env, onBack }: {
+  client: Client; env: Environment; onBack: () => void;
+}) {
+  const [roots, setRoots] = useState<MediaRoot[] | null>(null);
+  const [root, setRoot] = useState<MediaRoot | null>(null);
+  const [path, setPath] = useState('');
+  const [entries, setEntries] = useState<MediaEntry[] | null>(null);
+  const [playing, setPlaying] = useState<{ entry: MediaEntry; url: string } | null>(null);
+  const [error, setError] = useState('');
+  // The minted credential, kept so the relayed retry can reuse it.
+  const ticket = useRef<{ value: string; relayed: boolean } | null>(null);
+
+  useEffect(() => {
+    client.mediaRoots(env.id)
+      .then((r) => setRoots(r.roots))
+      .catch((e: any) => setError(e.message));
+  }, [client, env.id]);
+
+  useEffect(() => {
+    if (!root) return;
+    setEntries(null);
+    setError('');
+    client.mediaList(env.id, root.id, path)
+      .then((r) => setEntries(r.entries))
+      .catch((e: any) => setError(e.message));
+  }, [client, env.id, root, path]);
+
+  const play = async (entry: MediaEntry) => {
+    if (!root) return;
+    setError('');
+    try {
+      const t = await client.mediaTicket(env.id);
+      ticket.current = { value: t.ticket, relayed: false };
+      setPlaying({
+        entry,
+        url: client.mediaStreamUrl(env, { root: root.id, path: entry.path, ticket: t.ticket }),
+      });
+    } catch (e: any) { setError(e.message); }
+  };
+
+  /**
+   * A media error is ambiguous: the direct address may be unreachable from
+   * here (different network), or the browser may simply not decode the file.
+   * The first failure retries the same file through the attached hub - cheap
+   * and usually the answer - and only the second says unplayable.
+   */
+  const unplayable = () => {
+    const t = ticket.current;
+    if (playing && root && t && !t.relayed) {
+      t.relayed = true;
+      setPlaying({
+        entry: playing.entry,
+        url: client.mediaStreamUrl(env,
+          { root: root.id, path: playing.entry.path, ticket: t.value },
+          { direct: false }),
+      });
+    } else {
+      setError(`this browser cannot play ${playing?.entry.name ?? 'that file'}`);
+    }
+  };
+
+  const crumbs = [root?.name, ...(path ? path.split('/') : [])].filter(Boolean).join(' / ');
+  const backTo = playing ? () => setPlaying(null)
+    : root ? () => { setRoot(null); setPath(''); }
+    : onBack;
+
+  return (
+    <>
+      <div className="bar">
+        <button className="iconbtn back" onClick={backTo}>‹</button>
+        <div className="titles">
+          <h1>{playing ? playing.entry.name : env.name}</h1>
+          <span className="sub">{playing ? 'playing' : crumbs || 'media'}</span>
+        </div>
+      </div>
+
+      <div className="scroll"><div className="pad column">
+        {playing ? (
+          <>
+            <div className="player">
+              {playing.entry.mime?.startsWith('audio/') ? (
+                <audio controls autoPlay src={playing.url} onError={unplayable} />
+              ) : (
+                <video controls autoPlay playsInline src={playing.url} onError={unplayable} />
+              )}
+            </div>
+            <div className="quiet media-meta">
+              {playing.entry.path}
+              {playing.entry.size != null && ` · ${bytes(playing.entry.size)}`}
+            </div>
+          </>
+        ) : !root ? (
+          <div className="rows">
+            {(roots ?? []).map((r) => (
+              <button key={r.id} className="row" onClick={() => { setRoot(r); setPath(''); }}>
+                <span className="glyph repo">◆</span>
+                <span className="grow">
+                  <span className="rt">{r.name}</span>
+                  <span className="rm">{r.path}</span>
+                </span>
+                <span className="chev">›</span>
+              </button>
+            ))}
+            {roots === null
+              ? <div className="empty quiet">asking {env.name}…</div>
+              : !roots.length && !error && (
+                <div className="empty quiet">
+                  nothing shared yet — on {env.name}: helm nas add ~/Movies
+                </div>
+              )}
+          </div>
+        ) : (
+          <div className="rows">
+            {path && (
+              <button className="row" onClick={() => setPath(path.split('/').slice(0, -1).join('/'))}>
+                <span className="glyph">‹</span>
+                <span className="grow"><span className="rt">up a folder</span></span>
+              </button>
+            )}
+            {(entries ?? []).map((e) => (
+              <button
+                key={e.path}
+                className={`row${e.dir || e.media ? '' : ' quiet'}`}
+                disabled={!e.dir && !e.media}
+                onClick={() => (e.dir ? setPath(e.path) : play(e))}
+              >
+                <span className={`glyph${e.dir ? ' repo' : ''}`}>{e.dir ? '▸' : e.media ? '▶' : '·'}</span>
+                <span className="grow">
+                  <span className="rt">{e.name}</span>
+                  {!e.dir && e.size != null && <span className="rm">{bytes(e.size)}</span>}
+                </span>
+                {e.dir && <span className="chev">›</span>}
+              </button>
+            ))}
+            {entries === null && !error && <div className="empty quiet">listing…</div>}
+            {entries?.length === 0 && <div className="empty quiet">empty</div>}
+          </div>
         )}
         {error && <div className="error">{error}</div>}
       </div></div>

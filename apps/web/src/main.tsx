@@ -7,9 +7,13 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode><App /></StrictMode>
 );
 
-// Registering the worker is what makes this installable to a home screen.
-// It is also entirely optional - the app works without it.
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
+// Registering the worker is what makes this installable to a home screen,
+// and it is the only thing a push notification can arrive on. The rule is a
+// secure context rather than https in particular: `helm open` serves the app
+// on http://127.0.0.1, which a browser still counts as secure, and a laptop
+// is exactly where an OS-level notification earns its keep. A bare LAN
+// address is neither, and correctly keeps getting neither.
+if ('serviceWorker' in navigator && window.isSecureContext) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   });

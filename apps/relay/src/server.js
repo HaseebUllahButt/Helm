@@ -49,8 +49,12 @@ export async function startRelay({
     ? rotatePassword(password, passwordTtlMs)
     : { password: null, expiresAt: 0 };
 
-  const { wss, online, kick } = createWsLayer();
+  const { wss, online, kick, callEnv, openTcp } = createWsLayer();
   const api = makeHttpHandler({ online, kick });
+  // The byte-stream half of a nas - a real HTTP surface, mounted on every
+  // hub but answering only where a nas designation and a valid media
+  // credential say it may.
+  const media = (await import('./media.js')).createMediaRoute({ online, callEnv, openTcp });
 
   const serveStatic = async (req, res) => {
     if (!webRoot) return false;
@@ -105,9 +109,21 @@ export async function startRelay({
     return false;
   };
 
+  const notFound = (res) => {
+    res.writeHead(404, { 'content-type': 'application/json', ...SECURITY_HEADERS });
+    res.end(JSON.stringify({ error: 'not found' }));
+  };
+
   const routeHelm = (req, res) =>
     req.url === '/api/version'
       ? version(req, res)
+      : req.url.startsWith('/media/')
+      ? Promise.resolve(media(req, res)).then((handled) => {
+          // Inside the media surface every request is answered; a path that
+          // is not a media route is a missing thing, not a hanging one.
+          if (!handled) notFound(res);
+          return null;
+        })
       : req.url.startsWith('/api/')
       ? api(req, res)
       : serveStatic(req, res).then((served) => {
@@ -115,14 +131,16 @@ export async function startRelay({
           // Not an api path and not a file: helm's own 404. Falling through
           // to api() here would 401 an unknown page, which reads as auth, not
           // absence.
-          res.writeHead(404, { 'content-type': 'application/json', ...SECURITY_HEADERS });
-          res.end(JSON.stringify({ error: 'not found' }));
+          notFound(res);
           return null;
         });
 
   const server = createServer((req, res) => {
     helmPath(req);
     Promise.resolve(routeHelm(req, res)).catch((err) => {
+      // A handler that fails mid-answer - a media stream is the usual one -
+      // cannot become a 500, only a dropped connection.
+      if (res.headersSent) return res.destroy();
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: String(err?.message || err) }));
     });

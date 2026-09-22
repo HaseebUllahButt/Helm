@@ -1,4 +1,5 @@
 import { WebSocketServer } from 'ws';
+import { Duplex } from 'node:stream';
 import { T, E, PROTOCOL_VERSION } from '@helm/protocol';
 import { q, now, newId } from './db.js';
 import {
@@ -208,6 +209,10 @@ export function createWsLayer() {
         }, 60_000).unref?.();
         send(target, T.RPC, {
           id: relayId, method: msg.method, params: msg.params ?? {},
+          // Who is asking travels with the call, so methods that answer
+          // "for you" - a media ticket minted for the caller alone - work
+          // over the hub exactly as they do over a direct channel.
+          sub: sock.sub,
         });
         return;
       }
@@ -415,5 +420,116 @@ export function createWsLayer() {
   }, HEARTBEAT_MS);
   heartbeat.unref?.();
 
-  return { wss, online, broadcastPeers, kick, routeTunnel };
+  // --------------------------------------------------- the hub itself asking
+  //
+  // A hub is nobody's client, but it is allowed to originate traffic of its
+  // own: answering an HTTP media request for a machine only this hub can see
+  // means first asking that machine which port its media is on, then opening
+  // a tunnel to it. `inner` is the in-process socket those go over - it
+  // implements exactly the surface the RPC router and routeTunnel touch, so
+  // the daemon cannot tell it apart from a ws client, and it answers to no
+  // one else.
+  const inner = {
+    readyState: 1,
+    sidMap: new Map(),
+    tunnelSids: new Set(),
+    rpcWaiters: new Map(),
+    streamWaiters: new Map(),
+    // What every other socket sees on the wire is a serialized frame; this
+    // one parses it back, so `send(inner, ...)` routes exactly as it would
+    // to a ws - it is a socket in every way that matters to the router.
+    send(data) {
+      const { t, ...extra } = JSON.parse(data);
+      if (t === T.RPC_RESULT) {
+        const waiter = inner.rpcWaiters.get(extra.id);
+        if (waiter) { inner.rpcWaiters.delete(extra.id); waiter(extra); }
+      } else {
+        inner.streamWaiters.get(extra.sid)?.(t, extra);
+      }
+    },
+  };
+
+  /** An RPC to a machine's daemon, originated by the hub itself. */
+  function callEnv(env, method, params = {}, { timeout = 15_000 } = {}) {
+    const target = online.get(env);
+    if (!target) return Promise.reject(new Error('environment is not connected'));
+    return new Promise((resolve, reject) => {
+      const id = newId(8);
+      const relayId = newId(8);
+      const timer = setTimeout(() => {
+        if (!inner.rpcWaiters.delete(id)) return;
+        pending.delete(relayId);
+        reject(new Error('daemon did not respond'));
+      }, timeout);
+      timer.unref?.();
+      inner.rpcWaiters.set(id, (msg) => {
+        clearTimeout(timer);
+        msg.ok ? resolve(msg.result)
+               : reject(Object.assign(new Error(msg.error?.message || 'rpc failed'), { code: msg.error?.code }));
+      });
+      pending.set(relayId, { socket: inner, originalId: id });
+      send(target, T.RPC, { id: relayId, method, params });
+    });
+  }
+
+  /**
+   * A duplex byte stream to 127.0.0.1:<port> on a machine, over the socket
+   * its daemon already holds open - the initiator's half of the same tunnel
+   * ssh uses. The daemon still decides which ports it will connect to; this
+   * asks, it cannot compel.
+   */
+  function openTcp(env, port, { timeout = 10_000 } = {}) {
+    return new Promise((resolve, reject) => {
+      const sid = newId(8);
+      let opened = false;
+      const stream = new Duplex({
+        write(chunk, _enc, cb) {
+          routeTunnel(inner, { t: T.TUNNEL_DATA, sid, data: chunk.toString('base64') });
+          cb();
+        },
+        read() {},
+      });
+      // http.ClientRequest drives these on its socket; over a tunnel they
+      // are no-ops, but the calls have to land somewhere. setTimeout must
+      // not arm anything: a media stream idles legitimately while paused.
+      stream.setNoDelay = () => stream;
+      stream.setKeepAlive = () => stream;
+      stream.setTimeout = () => stream;
+      stream.ref = () => stream;
+      stream.unref = () => stream;
+
+      const fail = (err) => {
+        inner.streamWaiters.delete(sid);
+        routeTunnel(inner, { t: T.TUNNEL_CLOSE, sid });
+        if (opened) stream.destroy(err); else reject(err);
+      };
+      const timer = setTimeout(() => fail(new Error('tunnel timed out')), timeout);
+      timer.unref?.();
+
+      inner.streamWaiters.set(sid, (t, msg) => {
+        if (t === T.TUNNEL_READY) {
+          opened = true;
+          clearTimeout(timer);
+          resolve(stream);
+        } else if (t === T.TUNNEL_DATA) {
+          stream.push(Buffer.from(msg.data, 'base64'));
+        } else if (t === T.TUNNEL_CLOSE) {
+          inner.streamWaiters.delete(sid);
+          clearTimeout(timer);
+          if (opened) { stream.push(null); }
+          else fail(new Error(msg.reason === 'offline' ? 'environment is not connected' : `tunnel closed: ${msg.reason ?? 'closed'}`));
+        }
+      });
+
+      stream.once('close', () => {
+        inner.streamWaiters.delete(sid);
+        clearTimeout(timer);
+        routeTunnel(inner, { t: T.TUNNEL_CLOSE, sid });
+      });
+
+      routeTunnel(inner, { t: T.TUNNEL_OPEN, env, sid, port });
+    });
+  }
+
+  return { wss, online, broadcastPeers, kick, routeTunnel, callEnv, openTcp };
 }

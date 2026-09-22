@@ -142,6 +142,18 @@ export const M = {
   // buckets, never the gigabytes of transcript behind them.
   USAGE_REPORT: 'usage.report',    // { since?, until?, by?[], rebuild? } -> { totals, daily[], groups[], accounts[], scan }
 
+  // A machine designated 'nas'. Browsing is RPC (small JSON, fits the
+  // channel), but the bytes themselves are not: streaming is real HTTP at
+  // /media/<machine>/stream on any hub, which a <video> element can speak
+  // directly. `media.ticket` mints the short-lived credential that URL
+  // carries, because a media element cannot set an Authorization header.
+  MEDIA_INFO: 'media.info',        // {} -> { kind, port, roots[] }   the media listener's loopback port
+  MEDIA_ROOTS: 'media.roots',      // {} -> { roots[] }   the shared-folder allowlist
+  MEDIA_ROOT_ADD: 'media.root_add',    // { path } -> { roots[] }
+  MEDIA_ROOT_REMOVE: 'media.root_remove', // { path } -> { roots[] }
+  MEDIA_LIST: 'media.list',        // { root, path? } -> { root, path, entries[] }
+  MEDIA_TICKET: 'media.ticket',    // {} -> { ticket, expiresAt }  scoped to caller + this nas
+
   // A round trip that does nothing, for measuring what one costs. The
   // terminal needs to know: how it draws depends on how far away you are.
   PING: 'ping',                    // {} -> { t }

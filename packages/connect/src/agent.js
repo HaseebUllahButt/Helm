@@ -164,6 +164,11 @@ export class Daemon {
   /** This process's half of an event id; a restart must not reuse ids. */
   #boot = Math.random().toString(36).slice(2, 8);
   #emitted = 0;
+  // The nas capability, only ever populated when this machine is designated
+  // one: { server, port } for the media listener, plus the lazily imported
+  // module. A machine that is never a nas never loads the package.
+  #media = null;
+  #nas = null;
 
   /**
    * @param {object} opts
@@ -199,7 +204,7 @@ export class Daemon {
     this.peers = new PeerHub(
       (peer, payload, link) =>
         (link ?? { send: (t, e) => this.broadcastFrame(t, e) }).send(T.SIGNAL, { peer, payload }),
-      (method, params) => this.dispatch(method, params)
+      (method, params, caller) => this.dispatch(method, params, caller)
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
@@ -270,6 +275,11 @@ export class Daemon {
       RECONCILE_MS
     );
     this.#reconcile.unref?.();
+
+    // The opt-in half of being a nas. Synced with the kind at start and on
+    // every redesignation, so a machine that is never one never pays for it.
+    this.#syncMedia().catch((err) =>
+      console.error('[helm] nas media:', err?.message || err));
   }
 
   /**
@@ -321,6 +331,8 @@ export class Daemon {
     // (and the process that owns them) alive indefinitely.
     for (const { sock } of this.#tunnels.values()) sock.destroy();
     this.#tunnels.clear();
+    this.#media?.server.close();
+    this.#media = null;
     this.peers?.stop();
     this.runtime?.stop();
     // Headless agents die with the daemon; their sessions resume on demand.
@@ -535,7 +547,70 @@ export class Daemon {
     // Now rather than at the next reconcile: the caller is waiting on the
     // answer, and every other machine holds the old word until this lands.
     this.broadcastFrame(T.ROSTER, { roster: rosterOf(this.net) });
+    await this.#syncMedia();
     return { id: this.id, kind, from, changed: true, notes };
+  }
+
+  // -------------------------------------------------------------------- nas
+
+  /** What this machine is for, as its own record currently says. */
+  #isNas() {
+    const net = loadNetwork() ?? this.net;
+    return (net.machines[this.id]?.kind ?? net.role) === 'nas';
+  }
+
+  /**
+   * The media listener, present exactly while this machine is a nas.
+   *
+   * It binds loopback only: the LAN-facing media path is the hub's /media
+   * route, and the remote one is a tunnel to this port. The listener exists
+   * for the tunnel - a hub on another machine reaches in through the
+   * connection this daemon already holds open, which is how a NAS behind
+   * NAT still streams. Nothing is ever served without the authorization
+   * plug, and the port enters the tunnel allowlist only while it is ours.
+   */
+  async #syncMedia() {
+    if (this.#isNas()) {
+      if (this.#media) return;
+      this.#nas ??= await import('@helm/nas');
+      const { server, port } = await this.#nas.startMediaServer({
+        host: '127.0.0.1', port: 0,
+        authorize: this.#nas.mediaAuthorize({ self: this.id }),
+      });
+      this.#media = { server, port };
+    } else if (this.#media) {
+      this.#media.server.close();
+      this.#media = null;
+    }
+  }
+
+  /**
+   * The media RPCs, gated on the kind: a machine that is not a nas has no
+   * media answers, full stop. `caller` is the member id the frame arrived
+   * under - the ticket it gets back is minted for that member alone.
+   */
+  async #mediaRpc(method, p, caller) {
+    if (!this.#isNas()) {
+      throw Object.assign(new Error('this machine is not a nas'), { code: 'not-nas' });
+    }
+    this.#nas ??= await import('@helm/nas');
+    switch (method) {
+      case M.MEDIA_INFO:
+        return { kind: 'nas', port: this.#media?.port ?? null, roots: this.#nas.mediaRoots() };
+      case M.MEDIA_ROOTS:
+        return { roots: this.#nas.mediaRoots() };
+      case M.MEDIA_ROOT_ADD:
+        return { roots: this.#nas.addMediaRoot(p.path) };
+      case M.MEDIA_ROOT_REMOVE:
+        return { roots: this.#nas.removeMediaRoot(p.path) };
+      case M.MEDIA_LIST: {
+        const root = this.#nas.mediaRoots()[Number(p.root)];
+        if (!root) throw new Error('no such shared folder');
+        return { root: root.id, ...(await this.#nas.listMedia(root.path, p.path ?? '')) };
+      }
+      case M.MEDIA_TICKET:
+        return this.#nas.mediaTicket(loadNetwork() ?? this.net, { sub: caller, env: this.id });
+    }
   }
 
   onLinkUp(link) {
@@ -670,7 +745,7 @@ export class Daemon {
 
       case T.RPC: {
         try {
-          const result = await this.dispatch(msg.method, msg.params ?? {});
+          const result = await this.dispatch(msg.method, msg.params ?? {}, msg.sub);
           link.send(T.RPC_RESULT, { id: msg.id, ok: true, result });
         } catch (err) {
           link.send(T.RPC_RESULT, {
@@ -758,14 +833,17 @@ export class Daemon {
    * own loopback interface and get a full duplex byte stream back, which is
    * every database, admin socket and localhost-only HTTP server on the box.
    *
-   * The only thing that has ever needed a tunnel is ssh, so that is the whole
-   * list; `tunnel.ports` in ~/.helm/config.json adds to it for anyone who
-   * wants more, deliberately and on the machine itself.
+   * The only things that have ever needed a tunnel are ssh and - while this
+   * machine is a nas - its own media listener, which is how a remote hub
+   * reaches the byte stream. `tunnel.ports` in ~/.helm/config.json adds to
+   * the list for anyone who wants more, deliberately and on the machine
+   * itself.
    */
   #allowedTunnelPorts() {
     const extra = loadSettings()?.tunnel?.ports;
     return [
       Number(process.env.HELM_SSH_PORT || 22),
+      this.#media?.port,
       ...(Array.isArray(extra) ? extra.map(Number) : []),
     ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
   }
@@ -799,7 +877,7 @@ export class Daemon {
 
   // --------------------------------------------------------------- dispatch
 
-  async dispatch(method, p) {
+  async dispatch(method, p, caller) {
     switch (method) {
       case M.ENV_INFO:
         return { ...(await this.describe()), name: this.name };
@@ -849,6 +927,14 @@ export class Daemon {
        */
       case M.MACHINE_SET_KIND:
         return this.setMachineKind(String(p.kind ?? '').toLowerCase(), { address: p.address });
+
+      case M.MEDIA_INFO:
+      case M.MEDIA_ROOTS:
+      case M.MEDIA_ROOT_ADD:
+      case M.MEDIA_ROOT_REMOVE:
+      case M.MEDIA_LIST:
+      case M.MEDIA_TICKET:
+        return this.#mediaRpc(method, p, caller);
 
       case M.FS_LIST:   return fsApi.list(p.path);
       case M.FS_ROOTS:  return fsApi.roots();

@@ -10,6 +10,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@helm/nas": "*",
     "@helm/protocol": "*",
     "@helm/usage": "*",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.12.0",

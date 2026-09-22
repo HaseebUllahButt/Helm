@@ -10,3 +10,11 @@ export const seconds = (ms?: number) =>
 /** Sub-cent work is real work; it just is not a number worth printing. */
 export const money = (usd?: number | null) =>
   (usd == null || usd <= 0 ? '' : usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`);
+
+/** A file size for a person, e.g. media listings. */
+export const bytes = (n?: number | null) =>
+  (n == null ? ''
+    : n < 1024 ? `${n} B`
+    : n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB`
+    : n < 1024 ** 3 ? `${(n / 1024 ** 2).toFixed(1)} MB`
+    : `${(n / 1024 ** 3).toFixed(1)} GB`);

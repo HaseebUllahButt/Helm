@@ -64,7 +64,7 @@ export class PeerHub {
 
   /**
    * @param {(peer: string, payload: object, link?: object) => void} sendSignal  post a signalling blob back
-   * @param {(method: string, params: object) => Promise<any>} dispatch  the daemon's RPC handler
+   * @param {(method: string, params: object, caller?: string) => Promise<any>} dispatch  the daemon's RPC handler
    */
   constructor(sendSignal, dispatch) {
     this.sendSignal = sendSignal;
@@ -179,7 +179,7 @@ export class PeerHub {
     };
 
     try {
-      reply({ id: msg.id, ok: true, result: await this.dispatch(msg.method, msg.params ?? {}) });
+      reply({ id: msg.id, ok: true, result: await this.dispatch(msg.method, msg.params ?? {}, peer.device) });
     } catch (err) {
       reply({
         id: msg.id, ok: false,

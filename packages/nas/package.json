@@ -1,0 +1,20 @@
+{
+  "name": "@helm/nas",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./roots": "./src/roots.js",
+    "./resolve": "./src/resolve.js",
+    "./catalog": "./src/catalog.js",
+    "./server": "./src/server.js",
+    "./auth": "./src/auth.js"
+  },
+  "dependencies": {
+    "@helm/protocol": "*"
+  },
+  "description": "The media-serving half of a machine designated 'nas': an allowlist of shared folders and a byte-stream server that can see nothing outside it."
+}

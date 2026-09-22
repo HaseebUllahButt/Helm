@@ -4,6 +4,7 @@
   "type": "module",
   "main": "src/server.js",
   "dependencies": {
+    "@helm/nas": "*",
     "@helm/protocol": "*",
     "ws": "^8.18.0"
   },
