@@ -60,6 +60,15 @@ test('the estimate follows the rate card of the day', () => {
     'the pre-cutover card should differ from the current one');
 });
 
+test('new GPT-6 Codex models use their published rates', () => {
+  assert.deepEqual(cacheRatesFor('gpt-6-luna', 'codex', '2026-09-22'), {
+    input: 0.1, cacheRead: 0.01, cacheWrite: 0.1,
+  });
+  assert.deepEqual(cacheRatesFor('gpt-6-sol', 'codex', '2026-09-22'), {
+    input: 2, cacheRead: 0.2, cacheWrite: 2,
+  });
+});
+
 test('engines that report no per-channel rates decline to quote', () => {
   // OpenCode reports a billed total and Grok only a tick cost, so neither can
   // say what a cache write costs. The warning degrades to a token figure.

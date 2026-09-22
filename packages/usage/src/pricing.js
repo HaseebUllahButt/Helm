@@ -71,6 +71,8 @@ export function claudeModelCost(modelName, tokens, asOfDate) {
 export const CODEX_PRICING = {
   // input / cachedInput / output, $ per million tokens (standard, short context)
   'gpt-6-astra': { input: 10, cachedInput: 1, output: 50 },
+  'gpt-6-sol': { input: 2, cachedInput: 0.2, output: 10 },
+  'gpt-6-luna': { input: 0.1, cachedInput: 0.01, output: 0.5 },
   'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
   'gpt-5.6-terra': { input: 2, cachedInput: 0.2, output: 12 },
   'gpt-5.6-luna': { input: 0.2, cachedInput: 0.02, output: 1.2 },

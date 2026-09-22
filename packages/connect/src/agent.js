@@ -10,7 +10,7 @@ import {
 import { createRuntime } from './runtime/index.js';
 import { modesFor } from './modes.js';
 import { Sessions, wire } from './sessions.js';
-import { getProfiles, refreshProfiles, currentProfiles } from './profiles.js';
+import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
 import { listModels } from './models.js';
 import { listCommands } from './commands.js';
 import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
@@ -1015,7 +1015,12 @@ export class Daemon {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
         const engine = ENGINES[profile.engine];
-        const models = await listModels(profile.engine, profile.env?.[engine?.homeEnv] ?? engine?.defaultHome);
+        const spec = materialize(profile);
+        const models = await listModels(
+          profile.engine,
+          spec.env?.[engine?.homeEnv] ?? engine?.defaultHome,
+          spec.env,
+        );
         // A live agent reports the pickers it actually has - real display
         // names, the levels this session offers - which beats what the CLI
         // can print. The printed list is the fallback for a cold session.
