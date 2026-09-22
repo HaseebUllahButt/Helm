@@ -817,10 +817,12 @@ export class Sessions extends EventEmitter {
    * from the desk, and the thread you most want on your phone is the one you
    * were just working on.
    *
-   * An inactive row starts a new driven process carrying the old id, the same
-   * `--resume` the CLI would do. A Codex row with a live writer first becomes
-   * a transcript monitor: Codex permits one writer, so Helm either waits for
-   * the CLI to close or takes it over explicitly before resuming the thread.
+   * Opening is deliberately read-only. An inactive row becomes a lightweight
+   * transcript-backed Helm record immediately; the provider process is
+   * started only when the owner sends a new message. A Codex row with a live
+   * writer first becomes a transcript monitor: Codex permits one writer, so
+   * Helm either waits for the CLI to close or takes it over explicitly before
+   * resuming the thread.
    *
    * The account matters: a conversation recorded under one login cannot be
    * resumed under another, because the transcript is not there to resume.
@@ -864,14 +866,49 @@ export class Sessions extends EventEmitter {
       || (a.args?.length ?? 0) - (b.args?.length ?? 0))[0];
     if (!profile) throw new Error(`no ${engine} account on this machine`);
 
+    // The inventory row is the authority for the transcript path. Do not
+    // guess it from the working directory: several old conversations can
+    // share one folder, and guessing the newest one is how opening a chat
+    // displays the wrong conversation.
+    const found = (await inventory(profiles)).find((x) => x.engine === engine && x.id === id);
+    if (!found) throw new Error(`that ${engine} conversation is no longer available on this machine; refresh the list`);
+
+    // Opening history must not create a provider process. Besides being
+    // wasteful, a cold Devin/OpenCode/Claude process can take long enough to
+    // make a perfectly good chat look unopenable. This record is promoted to
+    // a driven session by input() on the first real prompt.
+    if (!found.active) {
+      const session = {
+        id: randomBytes(6).toString('hex'),
+        profileId: profile.id,
+        engine,
+        cwd: expand(cwd || found.cwd || '~'),
+        title: title || found.title || basename(expand(cwd || '~')),
+        titleBy: title ? 'user' : null,
+        engineSessionId: id,
+        transcript: found.transcript || null,
+        external: true,
+        externalSource: true,
+        externalActive: false,
+        adopted: true,
+        status: 'idle',
+        createdAt: Date.now(),
+        updatedAt: found.updatedAt || Date.now(),
+      };
+      this.#index.set(session.id, session);
+      this.#save();
+      this.emit('session', session);
+      this.#watchTranscript(session.id, session.transcript);
+      return session;
+    }
+
     // Codex permits exactly one writer per thread. When a laptop CLI is
     // still holding it, opening from the app is a monitor operation: keep
     // reading that exact rollout and wait to become the writer until the
     // original CLI has gone. Starting app-server here would fail with an
     // active-writer conflict and, worse, make the row look controllable when
     // it is not.
-    const found = (await inventory(profiles)).find((x) => x.engine === engine && x.id === id);
-    if (found?.active) {
+    if (found.active) {
       const externalLock = engine === 'codex'
         ? join(expand(homeOf(profile)), 'thread-writer-locks', `${id}.lock`)
         : null;

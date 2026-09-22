@@ -357,10 +357,15 @@ function devinMessages(db, sessionId, { all = false } = {}) {
   const out = [];
   try {
     const conn = new DatabaseSync(db, { readOnly: true });
-    const cap = all ? '' : ' LIMIT 400';
+    // Streaming Devin messages are stored as successive snapshots. Reading
+    // from the front meant a long session's "latest 120" were actually the
+    // first 400 database nodes, so an old chat opened with stale content.
+    // Read the tail, keep the newest snapshot for each message, then restore
+    // chronological order. `all` is reserved for explicit full-history reads.
+    const cap = all ? '' : ' LIMIT 800';
     const rows = conn.prepare(
       `SELECT node_id, chat_message, created_at FROM message_nodes
-        WHERE session_id = ? ORDER BY node_id ASC${cap}`
+        WHERE session_id = ? ORDER BY node_id DESC${cap}`
     ).all(sessionId);
     // Devin persists successive snapshots of one streaming message. Keep the
     // final snapshot for each message id, then restore conversation order.
@@ -369,7 +374,7 @@ function devinMessages(db, sessionId, { all = false } = {}) {
       const m = json(r.chat_message);
       if (!m || !['user', 'assistant'].includes(m.role)) continue;
       const key = m.message_id ?? `${r.node_id}`;
-      latest.set(key, { ...r, message: m });
+      if (!latest.has(key)) latest.set(key, { ...r, message: m });
     }
     for (const r of [...latest.values()].sort((a, b) => a.node_id - b.node_id)) {
       const m = r.message;

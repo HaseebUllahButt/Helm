@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +19,10 @@ const claudeHome = join(root, 'claude-home');
 const claudeProject = join(claudeHome, 'projects', '-tmp-Maser');
 const claudeId = '11111111-2222-4333-8444-555555555555';
 const claudeTranscript = join(claudeProject, `${claudeId}.jsonl`);
+const devinData = join(root, 'data');
+const devinDir = join(devinData, 'devin');
+const devinDb = join(devinDir, 'cli', 'sessions.db');
+const devinId = 'lucky-jonquil';
 
 process.env.HELM_DIR = join(root, 'helm');
 process.env.HELM_NO_SERVICE = '1';
@@ -25,6 +30,26 @@ mkdirSync(process.env.HELM_DIR, { recursive: true });
 mkdirSync(sessionsDir, { recursive: true });
 mkdirSync(locksDir, { recursive: true });
 mkdirSync(claudeProject, { recursive: true });
+mkdirSync(join(devinDir, 'cli'), { recursive: true });
+const devinStore = new DatabaseSync(devinDb);
+devinStore.exec(`
+  CREATE TABLE sessions (
+    id TEXT PRIMARY KEY, title TEXT, working_directory TEXT, model TEXT,
+    created_at INTEGER, last_activity_at INTEGER, hidden INTEGER DEFAULT 0
+  );
+  CREATE TABLE message_nodes (
+    row_id INTEGER PRIMARY KEY, session_id TEXT, node_id INTEGER,
+    parent_node_id INTEGER, chat_message TEXT, created_at INTEGER, metadata TEXT
+  );
+`);
+devinStore.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)')
+  .run(devinId, 'Devin history', '/tmp/Maser', 'swe-test', 1, 2, 0);
+devinStore.prepare('INSERT INTO message_nodes VALUES (?, ?, ?, ?, ?, ?, ?)')
+  .run(1, devinId, 1, null, JSON.stringify({ message_id: 'du1', role: 'user', content: 'old prompt' }), 1, null);
+devinStore.prepare('INSERT INTO message_nodes VALUES (?, ?, ?, ?, ?, ?, ?)')
+  .run(2, devinId, 2, null, JSON.stringify({ message_id: 'da1', role: 'assistant', content: 'old answer' }), 2, null);
+devinStore.close();
+process.env.XDG_DATA_HOME = devinData;
 writeFileSync(transcript, [
   JSON.stringify({ type: 'session_meta', payload: { id: threadId, cwd: '/tmp/Maser', cli_version: '0.154.0' } }),
   JSON.stringify({ type: 'turn_context', payload: {
@@ -53,6 +78,7 @@ writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
   profiles: [
     { id: 'codex', label: 'Codex', engine: 'codex', cmd: 'codex', args: [], env: { CODEX_HOME: codexHome }, source: 'custom' },
     { id: 'claude', label: 'Claude', engine: 'claude', cmd: 'claude', args: [], env: { CLAUDE_CONFIG_DIR: claudeHome }, source: 'custom' },
+    { id: 'devin', label: 'Devin', engine: 'devin', cmd: 'devin', args: [], env: { XDG_DATA_HOME: devinData }, source: 'custom' },
   ],
 }));
 
@@ -192,4 +218,28 @@ test('an active external Claude thread is monitored and status does not take own
   } finally {
     try { process.kill(writer.pid, 'SIGKILL'); } catch { /* already exited */ }
   }
+});
+
+test('an inactive Devin history opens without starting a provider process', async () => {
+  let started = false;
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const profiles = [{ id: 'devin', engine: 'devin', env: { XDG_DATA_HOME: devinData } }];
+  const found = (await inventory(profiles)).find((x) => x.id === devinId);
+  assert.equal(found.active, false);
+  assert.equal(found.transcript, devinDb);
+
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new Runtime(), {
+    makeDriver: () => {
+      started = true;
+      return new FakeDriver({ engineSessionId: devinId });
+    },
+  });
+  const opened = await sessions.resumeExternal({
+    engine: 'devin', account: found.account, id: devinId, cwd: '/tmp/Maser', title: found.title,
+  });
+  assert.equal(opened.external, true);
+  assert.equal(opened.driver, undefined);
+  assert.equal(started, false, 'opening history must not start Devin');
+  assert.deepEqual((await sessions.messages(opened.id)).messages.map((m) => m.text), ['old prompt', 'old answer']);
 });
