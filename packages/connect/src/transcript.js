@@ -296,10 +296,19 @@ function opencodeMessages(db, sessionId, { all = false } = {}) {
     const conn = new DatabaseSync(db, { readOnly: true });
     const messageCols = tableColumns(conn, 'message');
     const modern = messageCols.has('data');
+    // The first rows are the oldest part of a long database. A cold chat
+    // needs its end, not hundreds of stale messages before the work the user
+    // just came back for.
     const cap = all ? '' : ' LIMIT 400';
     const rows = conn.prepare(modern
-      ? `SELECT id, data, time_created FROM message WHERE session_id = ? ORDER BY time_created ASC${cap}`
-      : `SELECT id, role, time_created FROM message WHERE session_id = ? ORDER BY time_created ASC${cap}`
+      ? `SELECT id, data, time_created FROM (
+           SELECT id, data, time_created FROM message
+            WHERE session_id = ? ORDER BY time_created DESC, id DESC${cap}
+         ) ORDER BY time_created ASC, id ASC`
+      : `SELECT id, role, time_created FROM (
+           SELECT id, role, time_created FROM message
+            WHERE session_id = ? ORDER BY time_created DESC, id DESC${cap}
+         ) ORDER BY time_created ASC, id ASC`
     ).all(sessionId);
     for (const r of rows) {
       const message = modern ? json(r.data) ?? {} : r;
@@ -326,8 +335,10 @@ function opencode2Messages(db, sessionId, { all = false } = {}) {
     const conn = new DatabaseSync(db, { readOnly: true });
     const cap = all ? '' : ' LIMIT 400';
     const rows = conn.prepare(
-      `SELECT id, type, data, time_created FROM session_message
-        WHERE session_id = ? ORDER BY seq ASC${cap}`
+      `SELECT id, type, data, time_created, seq FROM (
+         SELECT id, type, data, time_created, seq FROM session_message
+          WHERE session_id = ? ORDER BY seq DESC${cap}
+       ) ORDER BY seq ASC`
     ).all(sessionId);
     for (const r of rows) {
       const message = json(r.data) ?? {};

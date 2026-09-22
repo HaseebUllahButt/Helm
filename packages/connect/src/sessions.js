@@ -1320,7 +1320,6 @@ export class Sessions extends EventEmitter {
     return {
       messages: await readMessages({
         engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit,
-        all: !!s.external && s.engine === 'codex',
       }),
       source: s.transcript,
     };

@@ -88,3 +88,40 @@ test('Devin history keeps the final streaming snapshot and session statistics', 
   assert.match(status, /\*\*Cached input:\*\* 20/);
   assert.match(status, /\*\*Output:\*\* 5/);
 });
+
+test('database-backed histories open on their latest window', async () => {
+  const opencodePath = join(root, 'opencode-long.db');
+  const opencode = new DatabaseSync(opencodePath);
+  opencode.exec(`
+    CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+    CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, time_created INTEGER, data TEXT);
+  `);
+  const putOpenCode = opencode.prepare('INSERT INTO message VALUES (?, ?, ?, ?)');
+  const putPart = opencode.prepare('INSERT INTO part VALUES (?, ?, ?, ?)');
+  for (let i = 0; i < 450; i++) {
+    const id = `m-${i}`;
+    putOpenCode.run(id, 'long-oc', i, JSON.stringify({ role: i % 2 ? 'assistant' : 'user' }));
+    putPart.run(`p-${i}`, id, i, JSON.stringify({ type: 'text', text: `message-${i}` }));
+  }
+  opencode.close();
+  const openCodeHistory = await messages({ engine: 'opencode', path: opencodePath, sessionId: 'long-oc' });
+  assert.equal(openCodeHistory.length, 120);
+  assert.equal(openCodeHistory[0].text, 'message-330');
+  assert.equal(openCodeHistory.at(-1).text, 'message-449');
+
+  const opencode2Path = join(root, 'opencode2-long.db');
+  const opencode2 = new DatabaseSync(opencode2Path);
+  opencode2.exec(`
+    CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, data TEXT);
+  `);
+  const putOpenCode2 = opencode2.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?)');
+  for (let i = 0; i < 450; i++) {
+    putOpenCode2.run(`m2-${i}`, 'long-oc2', i % 2 ? 'assistant' : 'user', i, i,
+      JSON.stringify({ content: [{ type: 'text', text: `message-${i}` }] }));
+  }
+  opencode2.close();
+  const openCode2History = await messages({ engine: 'opencode2', path: opencode2Path, sessionId: 'long-oc2' });
+  assert.equal(openCode2History.length, 120);
+  assert.equal(openCode2History[0].text, 'message-330');
+  assert.equal(openCode2History.at(-1).text, 'message-449');
+});
