@@ -336,6 +336,137 @@ test('a restart writes the settle into the log, so the chat stops drawing "worki
   assert.equal(open.length, 0, 'no turn left open');
 });
 
+test('queued prompts and attachments are replayed after a daemon restart', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-queued-restart');
+  const data = 'iVBORw0KGgo=';
+  const procHost = () => Object.assign(new EventEmitter(), { hasProc: () => false });
+
+  class RecoveryDriver extends FakeDriver {
+    async send(text) {
+      this.sent = [...(this.sent ?? []), text];
+      this.#startTurn(text);
+    }
+    async sendWithAttachments(text, attachments) {
+      this.gotAttachments = { text, attachments };
+      this.#startTurn(text);
+    }
+    acceptsImages() { return true; }
+    #startTurn(text) {
+      this.turnNumber = (this.turnNumber ?? 0) + 1;
+      this.push('status', { status: 'working' });
+      this.push('turn.start', { turnId: `recovered-${this.turnNumber}`, text });
+    }
+  }
+
+  const makeDriver = (engine, opts) => new RecoveryDriver({ engine, ...opts });
+  const original = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: procHost(),
+  });
+  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  const first = FakeDriver.made.at(-1);
+  await original.input(s.id, 'already sent');
+  await original.input(s.id, 'queued with image', {
+    attachments: [{ filename: 'a.png', mime: 'image/png', data }],
+  });
+  await original.input(s.id, 'queued after image');
+  await original.input(s.id, '/compact checkpoint');
+
+  const queued = original.history(s.id).events
+    .filter((e) => e.type === 'turn.start' && e.queued);
+  assert.deepEqual(queued.map((e) => e.text), [
+    'queued with image', 'queued after image', '/compact checkpoint',
+  ]);
+  assert.deepEqual(first.sent, ['already sent']);
+
+  // The old daemon and its driver are gone; only the event log and stored
+  // attachment bytes are available to the replacement.
+  const restarted = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: procHost(),
+  });
+  const driversBeforeRestart = FakeDriver.made.length;
+  restarted.resume();
+  const deadline = Date.now() + 2000;
+  while (FakeDriver.made.length === driversBeforeRestart && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+  const driver = FakeDriver.made.at(-1);
+  while (!driver.gotAttachments && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(driver.gotAttachments, {
+    text: 'queued with image',
+    attachments: [{ filename: 'a.png', mime: 'image/png', data }],
+  });
+  assert.deepEqual(driver.sent, undefined, 'the already-echoed first prompt is not replayed');
+
+  driver.push('turn.done', { turnId: 'recovered-1', status: 'ok' });
+  driver.push('status', { status: 'idle' });
+  const secondDeadline = Date.now() + 2000;
+  while (!driver.sent?.length && Date.now() < secondDeadline) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(driver.sent, ['queued after image'], 'remaining tickets keep their original order');
+  driver.push('turn.done', { turnId: 'recovered-2', status: 'ok' });
+  driver.push('status', { status: 'idle' });
+  const compactDeadline = Date.now() + 2000;
+  while (driver.compacted == null && Date.now() < compactDeadline) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(driver.compacted, 'checkpoint', 'queued compact commands survive too');
+
+  await restarted.kill(s.id);
+  await original.kill(s.id);
+});
+
+test('a surviving agent process keeps its active turn while queued tickets return', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-queued-hosted-restart');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const procHost = (alive) => Object.assign(new EventEmitter(), { hasProc: () => alive });
+  const original = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: procHost(false),
+  });
+  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  await original.input(s.id, 'active turn');
+  await original.input(s.id, 'still queued');
+  const activeTurn = original.history(s.id).events.find((e) => e.type === 'turn.start' && e.turnId === 't1');
+  const queuedTurn = original.history(s.id).events.find((e) => e.type === 'turn.start' && e.queued);
+
+  const restarted = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: procHost(true),
+  });
+  restarted.resume();
+  assert.equal(restarted.get(s.id).status, 'working', 'the host process is still in the active turn');
+  assert.equal(restarted.history(s.id).events.some((e) =>
+    e.type === 'turn.done' && e.turnId === activeTurn.turnId), false, 'the live turn stays open');
+  assert.deepEqual(restarted.dequeue(s.id, queuedTurn.turnId), {
+    ok: true, found: true, text: 'still queued',
+  }, 'the unsent ticket was restored even though its process survived');
+
+  await restarted.kill(s.id);
+  await original.kill(s.id);
+});
+
+test('a prompt is logged before lazy driver startup yields', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-before-driver');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const procHost = () => Object.assign(new EventEmitter(), { hasProc: () => false });
+  const original = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: procHost(),
+  });
+  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  const restarted = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: procHost(),
+  });
+  restarted.resume();
+
+  const sending = restarted.input(s.id, 'record before spawn');
+  assert.ok(restarted.history(s.id).events.some((e) =>
+    e.type === 'turn.start' && e.text === 'record before spawn'),
+  'the optimistic turn is durable before asynchronous driver creation');
+  await sending;
+
+  await restarted.kill(s.id);
+  await original.kill(s.id);
+});
+
 test('the model the CLI reports is kept, so the app can name what is running', async () => {
   // Neither CLI takes a model unless one is chosen, but both announce what
   // they started with. Without keeping it the chip has nothing to show but

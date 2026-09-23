@@ -2079,6 +2079,80 @@ export class Sessions extends EventEmitter {
     this.#save();
   }
 
+  /** Rebuild unsent tickets from the log and settle turns that cannot resume. */
+  #restoreOpenTurns(s, tail, processAlive) {
+    const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
+    const removed = new Set(tail.filter((e) => e.type === 'turn.remove').map((e) => e.turnId));
+    const accepted = new Set(tail.filter((e) => e.type === 'turn.accept').map((e) => e.turnId));
+    const echoes = tail.filter((e) => e.type === 'turn.start'
+      && !String(e.turnId).startsWith('local-'));
+    const open = tail.filter((e) => e.type === 'turn.start'
+      && !closed.has(e.turnId) && !removed.has(e.turnId));
+    // A hosted process may still be in its current real turn. Queued local
+    // turns can follow it in the log, so use the last real turn, not simply
+    // the last open turn, as the one to leave running.
+    const active = processAlive
+      ? [...open].reverse().find((e) => !String(e.turnId).startsWith('local-'))
+        ?? [...open].reverse().find((e) => e.queued !== true)
+      : null;
+    const revive = [];
+    const settle = (turnId, status, error) => {
+      const event = this.events.append(s.id, { type: 'turn.done', turnId, status, ...(error ? { error } : {}) });
+      s.lastSeq = event.seq;
+      this.emit('event', { id: s.id, event });
+    };
+
+    for (const e of open) {
+      const local = String(e.turnId).startsWith('local-');
+      const mine = (e.text ?? '').trim();
+      const echoIndex = local ? echoes.findIndex((x) => x.seq > e.seq && (
+        (x.text ?? '').trim() === mine || (mine && (x.text ?? '').trim().startsWith(mine + '\n'))
+      )) : -1;
+      const echoed = echoIndex >= 0;
+      if (echoed) echoes.splice(echoIndex, 1);
+
+      if (local && accepted.has(e.turnId)) {
+        // `turn.accept` records a successful steer into a live turn; never
+        // send that ticket again if the daemon restarted before its echo.
+        settle(e.turnId, 'ok');
+        continue;
+      }
+      if (local && e.queued === true && !echoed) {
+        // The event log is the queue. Recover the text, compact command, and
+        // image bytes from it in sequence order; the small attachment refs
+        // themselves are deliberately not enough to send to a driver.
+        let text = e.text ?? '';
+        if (s.brain) {
+          const body = text.replace(/^\[helm [^\]\n]*\]\n\n/, '');
+          const line = this.brief?.();
+          text = line ? `${line}\n\n${body}` : body;
+        }
+        const images = (e.attachments ?? [])
+          .map((a) => ({
+            filename: a.filename,
+            mime: a.mime,
+            data: a.data ?? (a.ref ? this.events.attachment(s.id, a.ref) : null),
+          }))
+          .filter((a) => a.data);
+        if (!text && !images.length) {
+          settle(e.turnId, 'interrupted', 'queued message could not be restored after restart');
+          continue;
+        }
+        revive.push({
+          turnId: e.turnId,
+          text,
+          images,
+          compact: e.compact ?? null,
+        });
+        continue;
+      }
+      if (processAlive && active?.turnId === e.turnId) continue;
+      settle(e.turnId, echoed ? 'ok' : 'interrupted', echoed ? null : 'helm restarted');
+    }
+
+    if (revive.length) this.#outbox.set(s.id, [...(this.#outbox.get(s.id) ?? []), ...revive]);
+  }
+
   /** Re-watch every surviving pane after a daemon restart. */
   resume() {
     for (const s of this.#index.values()) {
@@ -2087,18 +2161,13 @@ export class Sessions extends EventEmitter {
       if (s.pty) continue;
       if (!s.driver) { this.runtime.watch(this.#handle(s)); continue; }
       // An agent process the host kept is still running whatever it was
-      // running: its last open turn may be live and its questions still
-      // answerable, so neither gets closed. Earlier open turns are another
-      // matter - only one prompt is ever in flight, so those were queued
-      // messages that never reached the agent.
+      // running: its active turn and questions are still answerable. Any
+      // unmatched queued tickets are rebuilt from the log for when it settles.
       if (this.procs.hasProc(s.id)) {
         const tail = this.events.tail(s.id, 0);
-        const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
-        const open = tail.filter((e) => e.type === 'turn.start' && !closed.has(e.turnId)).map((e) => e.turnId);
-        open.pop();
-        for (const turnId of open) {
-          this.events.append(s.id, { type: 'turn.done', turnId, status: 'interrupted', error: 'helm restarted' });
-        }
+        this.#restoreOpenTurns(s, tail, true);
+        s.lastSeq = this.events.last(s.id);
+        this.#pump(s);
         continue;
       }
       // The process that asked died with the previous daemon; a prompt it
@@ -2107,17 +2176,11 @@ export class Sessions extends EventEmitter {
       for (const p of this.events.pending(s.id)) {
         this.events.append(s.id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
       }
-      // Every turn left open died with the previous daemon: a running turn's
-      // agent is gone, and a message still in the queue never sent. Scan the
-      // tail rather than asking `openTurn`, which only finds the last one -
-      // with several queued, each earlier bubble would hang "queued" forever.
+      // The active turn died with the old daemon. Unsent queued tickets are
+      // different: `#restoreOpenTurns` puts them back into the outbox rather
+      // than closing them as though the agent had already seen them.
       const tail = this.events.tail(s.id, 0);
-      const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
-      for (const e of tail) {
-        if (e.type !== 'turn.start' || closed.has(e.turnId)) continue;
-        closed.add(e.turnId);
-        this.events.append(s.id, { type: 'turn.done', turnId: e.turnId, status: 'interrupted', error: 'helm restarted' });
-      }
+      this.#restoreOpenTurns(s, tail, false);
       if (s.status !== 'idle') {
         s.status = 'idle';
         s.updatedAt = Date.now();
@@ -2129,6 +2192,8 @@ export class Sessions extends EventEmitter {
         this.emit('event', { id: s.id, event });
         this.emit('session', s);
       }
+      s.lastSeq = this.events.last(s.id);
+      this.#pump(s);
     }
     this.#save();
   }
