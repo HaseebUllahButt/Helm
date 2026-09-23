@@ -10,7 +10,7 @@ import { ENGINES } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
 import { optionArgs } from './models.js';
-import { modelPrefs, startPrefs, accountKey } from './settings.js';
+import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
 import { EventLog } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver, canInspectExternalCodex } from './drivers/codex.js';
@@ -623,14 +623,45 @@ export class Sessions extends EventEmitter {
       updatedAt: Date.now(),
     };
     this.#index.set(session.id, session);
-    const driver = await this.#driver(session);
-    await driver.start();
-    // A fresh session takes whatever id the driver minted; a resumed one
-    // already had the id that made it a resume, and must keep it.
-    session.engineSessionId = engineSessionId ?? driver.engineSessionId;
-    this.#save();
-    this.emit('session', session);
-    return session;
+    let driver = null;
+    try {
+      driver = await this.#driver(session);
+      await driver.start();
+      // A model the agent refused is corrected by a settings event mid-start
+      // (the record then carries what is actually running). When the refused
+      // value was the account's stored default it is stale - providers retire
+      // names - so drop it rather than fail the same way on every new
+      // session. An explicit pick that missed is left alone.
+      if (model && session.model !== model) {
+        try {
+          const prefs = modelPrefs(profile);
+          if (prefs?.default === model) {
+            this.log(`[${session.id}] dropping stale ${profile.engine} default model ${model}`);
+            saveModelPrefs(profile, { default: null, approved: prefs.approved });
+          }
+        } catch { /* a read-only config still gets the session's correction */ }
+      }
+      // A fresh session takes whatever id the driver minted; a resumed one
+      // already had the id that made it a resume, and must keep it.
+      session.engineSessionId = engineSessionId ?? driver.engineSessionId;
+      if (!session.engineSessionId) throw new Error(`${profile.label || profile.engine} did not create an engine session`);
+      this.#save();
+      this.emit('session', session);
+      return session;
+    } catch (err) {
+      // A failed handshake must not leave a phantom row (or an agent process)
+      // behind. The old path persisted the shell before awaiting ACP and
+      // returned it with engineSessionId null when startup went wrong.
+      this.#drivers.delete(session.id);
+      this.#index.delete(session.id);
+      this.#outbox.delete(session.id);
+      clearTimeout(this.#reapers.get(session.id));
+      this.#reapers.delete(session.id);
+      driver?.removeAllListeners?.('event');
+      await Promise.resolve(driver?.kill?.()).catch(() => {});
+      this.#save();
+      throw err;
+    }
   }
 
   /** The live driver for a session, starting (or resuming) one if needed. */

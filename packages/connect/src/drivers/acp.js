@@ -161,7 +161,6 @@ export class AcpDriver extends Driver {
         env: { ...process.env, ...this.env },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      child.on('error', (err) => this.push('error', { message: `could not start ${this.cmd}: ${err.message}`, kind: 'spawn' }));
       pipe = this.#localPipe(child);
     }
     // A fresh agent reports the state it loaded before helm's choices are
@@ -179,7 +178,7 @@ export class AcpDriver extends Driver {
     });
     if (init.error) {
       this.push('error', { message: `${this.engine} initialize failed: ${init.error.message}`, kind: 'init' });
-      return;
+      throw new Error(`${this.engine} initialize failed: ${init.error.message}`);
     }
     this.#imagePrompts = init.result?.agentCapabilities?.promptCapabilities?.image === true;
 
@@ -191,7 +190,7 @@ export class AcpDriver extends Driver {
       const created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
       if (created.error) {
         this.push('error', { message: `${this.engine} session/new failed: ${created.error.message}`, kind: 'init' });
-        return;
+        throw new Error(`${this.engine} session/new failed: ${created.error.message}`);
       }
       this.engineSessionId = created.result.sessionId;
       this.#takeOptions(created.result);
@@ -208,7 +207,7 @@ export class AcpDriver extends Driver {
     ]) {
       if (!configId || !value) continue;
       const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId, value });
-      if (r.error) this.log(`${this.engine}: set ${configId}=${value} refused: ${r.error.message}`);
+      if (r.error) this.#refused(configId, value, r.error);
       else this.#takeOptions(r.result);
     }
     // From here the agent's own switches - its /code, /fast, and the like -
@@ -226,6 +225,36 @@ export class AcpDriver extends Driver {
       return await this.#call('session/load', { sessionId, cwd: this.cwd, mcpServers: [] });
     } finally {
       this.#loading = false;
+    }
+  }
+
+  /**
+   * The agent said no to a set - a model name its printed catalogue lists
+   * but its session picker does not, say. Two things must not happen: the
+   * refusal going by silently while the owner believes they switched, and
+   * the record claiming the refused value is what is running. So say it in
+   * the transcript, and correct the stored choice to what the agent reports
+   * it is actually on.
+   */
+  #refused(configId, value, error) {
+    this.log(`${this.engine}: set ${configId}=${value} refused: ${error.message}`);
+    const current = this.#options.find((o) => o.id === configId)?.currentValue ?? null;
+    this.push('error', {
+      message: `${this.spec.label ?? this.engine} does not offer "${value}" here - it stays on ${current ?? 'its default'}. (${error.message})`,
+      kind: 'settings',
+    });
+    if (configId === 'model' && current !== this.model) {
+      this.model = current;
+      this.push('settings', { model: current });
+    } else if (configId === this.spec.effortId && current !== this.effort) {
+      this.effort = current;
+      this.push('settings', { effort: current });
+    } else if (configId === 'mode') {
+      const back = modesFor(this.engine).find((m) => this.spec.acpMode(m.id) === current);
+      if (back && back.id !== this.mode) {
+        this.mode = back.id;
+        this.push('settings', { mode: back.id });
+      }
     }
   }
 
@@ -257,12 +286,29 @@ export class AcpDriver extends Driver {
     child.stderr.setEncoding('utf8');
     let tail = '';
     child.stderr.on('data', (d) => { tail = (tail + d).slice(-4000); if (process.env.HELM_DEBUG_DRIVER) process.stderr.write(d); });
+    let exitResult = null;
+    let exitHandler = null;
+    const finish = (result) => {
+      if (exitResult) return;
+      exitResult = result;
+      if (exitHandler) exitHandler(result);
+    };
+    child.on('exit', (code, signal) => finish({ code, signal, stderr: tail.trim().split('\n').pop() || null }));
+    child.on('error', (err) => {
+      const message = `could not start ${this.cmd}: ${err.message}`;
+      tail = (tail + message).slice(-4000);
+      this.push('error', { message, kind: 'spawn' });
+      finish({ code: -1, signal: null, stderr: message });
+    });
     return {
       write: (d) => child.stdin.write(d),
       end: () => child.stdin.end(),
       kill: (s) => child.kill(s),
       onData: (cb) => child.stdout.on('data', (c) => cb(typeof c === 'string' ? c : c.toString('utf8'))),
-      onExit: (cb) => child.on('exit', (code) => cb({ code, stderr: tail.trim().split('\n').pop() || null })),
+      onExit: (cb) => {
+        exitHandler = cb;
+        if (exitResult) queueMicrotask(() => cb(exitResult));
+      },
       detach: () => {},
     };
   }
@@ -485,7 +531,8 @@ export class AcpDriver extends Driver {
     this.model = model || null;
     if (this.#pipe && this.engineSessionId && model) {
       const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: 'model', value: model });
-      if (!r.error) this.#takeOptions(r.result);
+      if (r.error) this.#refused('model', model, r.error);
+      else this.#takeOptions(r.result);
     }
   }
 
@@ -494,7 +541,8 @@ export class AcpDriver extends Driver {
     const mode = this.spec.acpMode(id);
     if (this.#pipe && this.engineSessionId && mode) {
       const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: 'mode', value: mode });
-      if (!r.error) this.#takeOptions(r.result);
+      if (r.error) this.#refused('mode', mode, r.error);
+      else this.#takeOptions(r.result);
     }
   }
 
@@ -502,7 +550,8 @@ export class AcpDriver extends Driver {
     this.effort = effort || null;
     if (this.#pipe && this.engineSessionId && this.spec.effortId && effort) {
       const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: this.spec.effortId, value: effort });
-      if (!r.error) this.#takeOptions(r.result);
+      if (r.error) this.#refused(this.spec.effortId, effort, r.error);
+      else this.#takeOptions(r.result);
     }
   }
 
@@ -616,6 +665,9 @@ export class AcpDriver extends Driver {
         this.push('settings', { model: o.currentValue });
       } else if (o.id === 'mode') {
         this.#modeChanged(o.currentValue);
+      } else if (o.id === this.spec.effortId) {
+        this.effort = o.currentValue;
+        this.push('settings', { effort: o.currentValue });
       }
     }
   }

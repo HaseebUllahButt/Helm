@@ -71,6 +71,67 @@ class FakeDriver extends EventEmitter {
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
 
+class FailingDriver extends EventEmitter {
+  static last = null;
+  constructor(opts) {
+    super();
+    Object.assign(this, opts);
+    FailingDriver.last = this;
+  }
+  async start() { throw new Error('ACP initialize failed'); }
+  async kill() { this.killed = true; }
+}
+
+test('a failed driver startup does not leave a phantom session', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FailingDriver({ engine, ...opts }) });
+  const before = (await sessions.list()).length;
+
+  await assert.rejects(
+    sessions.start({ cwd: '/tmp', profileId: 'claudea' }),
+    /ACP initialize failed/,
+  );
+  assert.equal((await sessions.list()).length, before);
+  assert.equal(FailingDriver.last.killed, true, 'the failed driver should be stopped');
+});
+
+test('a refused account default is dropped so the next start does not fail the same way', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { saveModelPrefs, loadSettings } = await import('../packages/connect/src/settings.js');
+  // claudea's account key, as settings.accountKey computes it.
+  const account = { engine: 'claude', env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' } };
+  saveModelPrefs(account, { default: 'opus-gone', approved: [] });
+  // What an ACP driver does when the agent refuses a set: it reports the
+  // refusal and corrects the record to the value actually running.
+  class RefusingDriver extends FakeDriver {
+    async start() {
+      this.push('settings', { model: 'claude-fable-5-1' });
+      this.started = true;
+    }
+  }
+  const sessions = new Sessions(new StubRuntime(), {
+    makeDriver: (engine, opts) => new RefusingDriver({ engine, ...opts }),
+  });
+
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  assert.equal(s.model, 'claude-fable-5-1', 'the record carries the model that is running');
+  assert.equal(
+    loadSettings().models?.['claude|~/.claude-personal|'], undefined,
+    'the stale account default is gone',
+  );
+
+  // An explicit pick that missed is the owner's choice to remake - the
+  // stored default is a different setting and stays put.
+  saveModelPrefs(account, { default: 'claude-fable-5-1', approved: [] });
+  const s2 = await sessions.start({ cwd: '/tmp', profileId: 'claudea', model: 'opus-gone' });
+  assert.equal(s2.model, 'claude-fable-5-1');
+  assert.equal(loadSettings().models?.['claude|~/.claude-personal|']?.default, 'claude-fable-5-1');
+
+  await sessions.kill(s.id);
+  await sessions.kill(s2.id);
+  saveModelPrefs(account, { default: null, approved: [] });
+});
+
 test('a headless session: start, stream, watch, prompt, resume, kill', async (t) => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');

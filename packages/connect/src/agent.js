@@ -1029,8 +1029,24 @@ export class Daemon {
         // names, the levels this session offers - which beats what the CLI
         // can print. The printed list is the fallback for a cold session.
         const live = p.id ? this.sessions.catalog(p.id) : null;
+        // What the static list claims beyond the live picker is demoted, not
+        // deleted: the printed catalogue names rows `set_config_option` then
+        // refuses (devin's `models list` shows ~600 uids; the session accepts
+        // ~100 plus fuzzy spellings), so they are no longer offered as
+        // first-class choices but stay reachable through `more`. `all` keeps
+        // the union - the settings editor manages approvals against
+        // everything the CLI knows.
+        let extra = [];
+        if (live?.models?.length) {
+          if (p.all) {
+            models.models = [...new Set([...live.models, ...models.models])];
+          } else {
+            const advertised = new Set(live.models);
+            extra = models.models.filter((m) => !advertised.has(m));
+            models.models = [...live.models];
+          }
+        }
         if (live) {
-          if (live.models?.length) models.models = [...new Set([...live.models, ...models.models])];
           models.labels = { ...(models.labels ?? {}), ...(live.labels ?? {}) };
           // The running agent's pickers are the truth for what it takes: a
           // session whose agent advertises no thinking level gets no chip -
@@ -1051,7 +1067,15 @@ export class Daemon {
         // The account's approved list trims the picker; `all` skips that for
         // the settings editor, which needs everything to pick from.
         const prefs = modelPrefs(profile);
-        const filtered = applyModelPrefs(models, prefs, { all: !!p.all });
+        // `models` is the cached catalogue object - copy before folding in
+        // prefs/extras so the cache never carries one session's answer.
+        const filtered = applyModelPrefs({ ...models }, prefs, { all: !!p.all });
+        if (extra.length) filtered.more = [...(filtered.more ?? []), ...extra];
+        // A stored default the running agent refuses must not read as the
+        // session's model.
+        if (live?.models?.length && filtered.default && !live.models.includes(filtered.default)) {
+          filtered.default = live.current ?? filtered.default;
+        }
         // The permission modes this engine offers, so the app never has to know the flags.
         return { ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [] };
       }

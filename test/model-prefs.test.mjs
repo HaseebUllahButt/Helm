@@ -33,6 +33,7 @@ class FakeDriver extends EventEmitter {
     super();
     Object.assign(this, opts);
     this.status = 'idle';
+    this.engineSessionId = opts.engineSessionId ?? 'engine-1';
     this.pending = new Map();
     FakeDriver.made.push(this);
   }

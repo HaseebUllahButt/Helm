@@ -8,11 +8,14 @@ import { devinUsageReport } from '../devin-usage.js';
  * Devin's own session modes are real - Code/Ask/Plan/Bypass map straight
  * onto helm's (modes.js `acp`), so permission policy is the agent's and
  * every request reaches the phone. Models are picked with
- * `session/set_config_option` 'model'; there is no separate thinking level -
- * each Devin model bakes it into the name ("…-low", "…-high", "…-fast").
+ * `session/set_config_option` 'model'; since 3000.11.x the session also
+ * advertises 'thought_level' (medium/high/max) as the thinking dial - the
+ * "-medium"/"-high" tail on a model id is just its name.
  *
  * Written against devin 3000.10.21, probed live: session/new returns modes
  * and configOptions, session/load resumes by id and replays history first.
+ * The thought_level picker is probed on 3000.11.1; an older agent simply
+ * never advertises it and helm offers no thinking chip.
  */
 export const DEVIN_MIN_VERSION = '3000.10.0';
 
@@ -65,7 +68,7 @@ export class DevinDriver extends AcpDriver {
       min: DEVIN_MIN_VERSION,
       args: () => ['acp'],
       acpMode: (m) => modeFor('devin', m)?.acp ?? null,
-      effortId: null,
+      effortId: 'thought_level',
       fallbackCommands: DEVIN_COMMANDS,
       extraCommands: [DEVIN_USAGE],
       localCommand: (driver, text) =>

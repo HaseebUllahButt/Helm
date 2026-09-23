@@ -111,6 +111,43 @@ test('devin: /usage answers locally - the quota card, not an ACP prompt', async 
   await driver.kill();
 });
 
+test('devin: a refused model says so, and the record lands on what is running', async () => {
+  const fake = fakeCli('devin', 'refuse-model');
+  const driver = new DevinDriver({
+    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'edit', model: 'swe-2-max',
+  });
+  const log = collect(driver);
+  await driver.start();
+  // `devin models list` still prints swe-2-max; the session picker does not
+  // take it. Until now that refusal only ever reached the daemon's own log.
+  const err = log.of('error').find((e) => /swe-2-max/.test(e.message));
+  assert.ok(err, 'the refusal is an event the app can show');
+  const corrected = log.of('settings').find((e) => 'model' in e);
+  assert.equal(corrected.model, 'swe-2-high', 'the record names the model actually running');
+  assert.equal(driver.model, 'swe-2-high');
+  assert.equal(driver.info.model, 'swe-2-high');
+  const modeCall = fake.stdinLines().find((l) => l.method === 'session/set_config_option' && l.params.configId === 'model');
+  assert.equal(modeCall.params.value, 'swe-2-max');
+
+  // The advertised picker is also what catalog() reports - thinking included.
+  assert.deepEqual(driver.catalog().models, ['swe-2-high', 'gpt-6-luna-medium', 'gpt-6-sol-medium']);
+  assert.deepEqual(driver.catalog().efforts, ['medium', 'high', 'max']);
+  assert.equal(driver.catalog().current, 'swe-2-high');
+
+  // Mid-session is the same story: refused, corrected, told.
+  await driver.setModel('swe-2-max');
+  assert.equal(driver.model, 'swe-2-high');
+  assert.equal(log.of('error').filter((e) => /swe-2-max/.test(e.message)).length, 2);
+  await driver.setModel('gpt-6-luna-medium');
+  assert.equal(driver.model, 'gpt-6-luna-medium');
+  await driver.setEffort('high');
+  assert.equal(driver.effort, 'high');
+  await driver.setEffort('bogus');
+  assert.equal(driver.effort, 'high', 'a refused effort snaps back to the agent\'s level');
+  assert.equal(log.of('error').filter((e) => /bogus/.test(e.message)).length, 1);
+  await driver.kill();
+});
+
 test('opencode: no fallback list means an unadvertised palette is empty', async () => {
   const fake = fakeCli('opencode', 'plain');
   const driver = new OpencodeDriver({ cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'ask' });
