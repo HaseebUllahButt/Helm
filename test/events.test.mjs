@@ -22,6 +22,14 @@ test('events are numbered, persisted, and replayable from a sequence number', ()
   assert.equal(again.append('s1', { type: 'turn.done' }).seq, 3);
 });
 
+test('a parked attachment can be read back for queued-message recovery', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  const data = 'iVBORw0KGgo=';
+  const { ref } = log.putAttachment('s1', { filename: 'a.png', mime: 'image/png', data });
+  assert.equal(log.attachment('s1', ref), data);
+  assert.equal(log.attachment('s1', 'missing'), null);
+});
+
 test('pending permissions are derived from the log', () => {
   const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   log.append('s', { type: 'permission.request', requestId: 'r1', kind: 'command' });

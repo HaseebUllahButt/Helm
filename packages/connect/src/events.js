@@ -158,6 +158,12 @@ export class EventLog {
     return { filename, mime, bytes: bytes.length, ref };
   }
 
+  /** Read a parked attachment for replaying a queued message after restart. */
+  attachment(id, ref) {
+    try { return readFileSync(join(this.#attDir(id), `${ref}.bin`)).toString('base64'); }
+    catch { return null; }
+  }
+
   /**
    * An event as a client should see it: references turned back into bytes.
    * A blob that has been swept leaves `data` unset rather than a broken
