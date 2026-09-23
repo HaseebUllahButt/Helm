@@ -258,13 +258,16 @@ export class Sessions extends EventEmitter {
 
   /**
    * What a terminal on this machine will be: helm's own pty, or the slow
-   * herdr-pane fallback. Answerable with no host running - which is the usual
-   * case, since one only starts when a terminal is opened.
+   * herdr-pane fallback. While the app is loading machine details, start the
+   * pty host in the background so the first terminal does not have to wait
+   * for its process and socket to come up.
    */
   async terminalBackend() {
     if (this.terminals.usable) return 'pty';
     const { loadPty } = await import('./pty.js');
-    return (await loadPty()) ? 'pty' : 'panes';
+    if (!(await loadPty())) return 'panes';
+    this.terminals.ensure().catch(() => {});
+    return 'pty';
   }
 
   /** The runtime handle for a stored session record. */

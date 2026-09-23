@@ -4,6 +4,31 @@ import { FitAddon } from '@xterm/addon-fit';
 import type { Client } from './client';
 
 /**
+ * The keys a phone keyboard does not have. `key` names a key the daemon
+ * translates (or hands herdr by name); `paste` reads the clipboard into
+ * the terminal as typed input - the only way ^V exists at all.
+ */
+const TERMKEYS: { label: string; key?: string; paste?: boolean; modifier?: 'ctrl' }[] = [
+  { label: 'ctrl', modifier: 'ctrl' },
+  { label: 'esc', key: 'Escape' },
+  { label: 'tab', key: 'Tab' },
+  { label: 'enter', key: 'Enter' },
+  { label: '⌫', key: 'Backspace' },
+  { label: '←', key: 'Left' },
+  { label: '↑', key: 'Up' },
+  { label: '↓', key: 'Down' },
+  { label: '→', key: 'Right' },
+  { label: 'home', key: 'Home' },
+  { label: 'end', key: 'End' },
+  { label: 'pgup', key: 'PageUp' },
+  { label: 'pgdn', key: 'PageDown' },
+  { label: '^C', key: 'C-c' },
+  { label: '^D', key: 'C-d' },
+  { label: '^Z', key: 'C-z' },
+  { label: 'paste', paste: true },
+];
+
+/**
  * A real terminal in the browser.
  *
  * Attaching says how big we are drawing and gets back everything worth
@@ -16,12 +41,32 @@ import type { Client } from './client';
  * is still sampled as a rendered screen, where `reset` means the program
  * redrew and the text replaces what we have.
  */
+
 export function Terminal({ client, env, sessionId }: {
   client: Client; env: string; sessionId: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState(false);
-  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [note, setNote] = useState('');
+  const [ctrlArmed, setCtrlArmed] = useState(false);
+  const ctrlPending = useRef(false);
+  const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flash = (text: string) => {
+    setNote(text);
+    if (noteTimer.current) clearTimeout(noteTimer.current);
+    noteTimer.current = setTimeout(() => setNote(''), 1100);
+  };
+
+  const sendKey = (key: string) => {
+    client.rpc(env, 'session.keys', { id: sessionId, keys: [key] }, 10_000).catch(() => {});
+  };
+  const paste = async () => {
+    try {
+      if (!navigator.clipboard?.readText) return flash('clipboard blocked');
+      const text = await navigator.clipboard.readText();
+      if (!text) return flash('nothing on the clipboard');
+      await client.rpc(env, 'session.input', { id: sessionId, data: text, raw: true }, 10_000);
+    } catch { flash('clipboard blocked'); }
+  };
 
   useEffect(() => {
     if (!host.current) return;
@@ -194,21 +239,28 @@ export function Terminal({ client, env, sessionId }: {
     // Everything typed goes straight through, control characters included.
     // Fire and forget: waiting for the round trip would only add latency.
     const typed = xterm.onData((data) => {
-      if (mayPredict(data)) {
-        if (!owed) owedSince = Date.now();
-        owed += data;
-        xterm.write(data);
+      let input = data;
+      if (ctrlPending.current && data.length === 1) {
+        ctrlPending.current = false;
+        setCtrlArmed(false);
+        if (data === ' ') {
+          input = '\0';
+        } else if (/^[a-z@\[\\\]^_]$/i.test(data)) {
+          input = String.fromCharCode(data.toLowerCase().charCodeAt(0) & 0x1f);
+        }
       }
-      lastSent = data;
-      client.rpc(env, 'session.input', { id: sessionId, data, raw: true }, 10_000).catch(() => {});
+      if (mayPredict(input)) {
+        if (!owed) owedSince = Date.now();
+        owed += input;
+        xterm.write(input);
+      }
+      lastSent = input;
+      client.rpc(env, 'session.input', { id: sessionId, data: input, raw: true }, 10_000).catch(() => {});
     });
     const selected = xterm.onSelectionChange(() => {
       const text = xterm.getSelection();
       if (text) navigator.clipboard?.writeText(text).then(() => {
-        if (stopped) return;
-        setCopied(true);
-        if (copiedTimer.current) clearTimeout(copiedTimer.current);
-        copiedTimer.current = setTimeout(() => setCopied(false), 1100);
+        if (!stopped) flash('Copied');
       }).catch(() => {});
     });
 
@@ -244,7 +296,7 @@ export function Terminal({ client, env, sessionId }: {
       stopped = true;
       clearInterval(renew);
       clearInterval(staleGuess);
-      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      if (noteTimer.current) clearTimeout(noteTimer.current);
       stopLatency();
       off();
       typed.dispose();
@@ -259,7 +311,28 @@ export function Terminal({ client, env, sessionId }: {
   return (
     <div className="terminal-wrap">
       <div className="xterm-host" ref={host} />
-      {copied && <div className="terminal-copied" role="status">Copied</div>}
+      <div className="termkeys" role="toolbar" aria-label="terminal keys">
+        {TERMKEYS.map((k) => (
+          <button
+            key={k.label}
+            type="button"
+            aria-pressed={k.modifier === 'ctrl' ? ctrlArmed : undefined}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              if (k.modifier === 'ctrl') {
+                ctrlPending.current = !ctrlPending.current;
+                setCtrlArmed(ctrlPending.current);
+              } else {
+                ctrlPending.current = false;
+                setCtrlArmed(false);
+                if (k.paste) paste();
+                else if (k.key) sendKey(k.key);
+              }
+            }}
+          >{k.label}</button>
+        ))}
+      </div>
+      {note && <div className="terminal-copied" role="status">{note}</div>}
     </div>
   );
 }

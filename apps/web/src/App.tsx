@@ -1736,17 +1736,20 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const openTerminal = async () => {
     setOpening(true); setError('');
     try {
-      // A machine has one terminal to return to until that shell ends. Only
-      // then does opening the terminal create its replacement.
-      const existing = sessions
-        .filter((s) => s.engine === 'shell' && !s.archived && s.alive !== false)
-        .sort(byRecent)[0];
-      if (existing) {
-        onOpen(existing);
-        return;
-      }
+      // Every open is a fresh shell: reopening the last one returned to a
+      // prompt still holding whatever the last command left in it, which
+      // read as the previous session carrying over. Shells helm already ran
+      // are closed once the new one exists - killing them first would leave
+      // a failed start with no terminal at all. Adopted panes are someone
+      // else's shell at a real keyboard; those are left alone.
+      const stale = sessions
+        .filter((s) => s.engine === 'shell' && !s.archived && s.alive !== false && !s.adopted)
+        .map((s) => s.id);
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start',
         { cwd: '~', profileId: 'shell' }, 45_000);
+      for (const id of stale) {
+        client.rpc(env.id, 'session.kill', { id }, 10_000).catch(() => {});
+      }
       reload();
       onOpen(r.session);
     } catch (e: any) { setError(e.message); }
