@@ -208,11 +208,11 @@ export class Sessions extends EventEmitter {
    * So the queue lives here, where it works the same on all four: a message
    * sent while the agent is working or blocked waits for the turn to end,
    * then goes out in the order it was typed - what typing into a CLI does.
-   * Memory only: a daemon restart closes the orphaned `local-` turns in
-   * `resume()` rather than promising to send what it no longer can.
+   * Open `local-` turns are the durable tickets; `resume()` rebuilds this
+   * map from the event log after a daemon restart.
    */
   #outbox = new Map();
-  /** sessionIds with a `#deliver` in flight - the queue's mutex. */
+  /** sessionIds with a pump loop live - the queue's mutex. */
   #sending = new Set();
   /** session object -> in-flight full-rollout reconciliation */
   #imports = new WeakMap();
@@ -1600,14 +1600,10 @@ export class Sessions extends EventEmitter {
       // the digest: see `summaryLine`.
       const brainLine = s.brain && !raw ? this.brief?.() : null;
 
-      const d = await this.#driver(s);
-      // An ACP agent only says whether it takes images in its reply to
-      // `initialize`, and the driver is started lazily - so asking before it
-      // is up gets `false` for an agent that would have said yes, and the
-      // picture becomes a filename. Start it first when there is an image
-      // riding on the answer. `start()` returns immediately if it is already
-      // running, and `send` would have called it a line later anyway.
-      if (images.length) await d.start?.();
+      // Sideband reads only run beside a process already attached to this
+      // daemon. Otherwise record the message first; driver startup can yield
+      // long enough for a daemon restart.
+      const d = this.#drivers.get(s.id) ?? null;
       // Sampled before the prefix goes on: the network's state is helm's
       // note to the agent, and naming the thread "[helm 2 machines…]" would
       // be naming it after helm rather than after the work. A slash command
@@ -1617,7 +1613,6 @@ export class Sessions extends EventEmitter {
       if (brainLine) clean = `${brainLine}\n\n${clean}`;
 
       const turnId = `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-      const item = { turnId, text: clean, images, compact };
       // Sideband commands are app-server or local reads that run beside an
       // active turn rather than behind it. Busy is a turn in flight, a
       // prompt waiting on the owner, or a send still being written - the
@@ -1626,31 +1621,36 @@ export class Sessions extends EventEmitter {
       // tells the client which this message was: the `local-` id alone
       // cannot, since the first send into an idle session is briefly local
       // too without ever having waited.
-      const sideband = !raw && compact == null && !images.length && d.canRunWhileBusy?.(clean);
-      const busy = !sideband && (this.#sending.has(s.id) || s.status === 'working' || s.status === 'blocked');
-      if (compact != null) {
-        // `/compact` is a command, not a prompt, so its bubble is a closed
-        // one-liner rather than a turn that waits on the agent's echo.
-        this.#emitLocal(s, turnId, `/compact${compact ? ` ${compact}` : ''}`);
-      } else {
-        // Emit the turn optimistically so every watcher sees the message the
-        // moment it is sent, not when the agent gets round to echoing it. A
-        // message queued behind a running turn can sit un-announced for
-        // minutes - without this it looks like it was never sent at all. The
-        // text emitted is the final text, helm's note included, because the
-        // echo is matched against it: a `local-` turn is adopted by the real
-        // turn's `turn.start` when the texts agree (see `apply` in the web's
-        // session/types.ts).
-        // `local-` plus a nonce: two sends in the same millisecond are two
-        // turns, and an id shared between them would let one's turn.done
-        // close the other.
-        const event = this.events.append(id, {
-          type: 'turn.start', turnId, text: clean, queued: busy,
-          ...(sideband ? { local: true } : {}),
-          attachments: images.map((a) => this.events.putAttachment(id, a)),
-        });
-        s.lastSeq = event.seq;
-        this.emit('event', { id, event });
+      let sideband = !raw && compact == null && !images.length && d?.canRunWhileBusy?.(clean);
+      let busy = !sideband && (this.#sending.has(s.id) || s.status === 'working' || s.status === 'blocked');
+      const commandText = compact != null ? `/compact${compact ? ` ${compact}` : ''}` : clean;
+      const item = { turnId, text: commandText, images, compact };
+      // This event is both the optimistic chat bubble and the durable queue
+      // ticket. Persist it before starting/resuming a driver, so a daemon
+      // restart can recover a message accepted during that await.
+      const event = this.events.append(id, {
+        type: 'turn.start', turnId, text: commandText, queued: busy,
+        ...(sideband ? { local: true } : {}),
+        ...(compact != null ? { compact } : {}),
+        attachments: images.map((a) => this.events.putAttachment(id, a)),
+      });
+      s.lastSeq = event.seq;
+      this.emit('event', { id, event });
+
+      // If the process survived on the host but has not been rebound yet,
+      // give its slash-command classifier a chance to keep a sideband read
+      // beside the active turn. The optimistic ticket is already durable;
+      // `turn.accept` promotes it out of the queue if it proves sideband.
+      if (!d && busy && this.procs.hasProc(s.id) && !raw && compact == null && !images.length
+        && clean.trimStart().startsWith('/')) {
+        d = await this.#driver(s);
+        sideband = !!d.canRunWhileBusy?.(clean);
+        if (sideband) {
+          const accepted = this.events.append(id, { type: 'turn.accept', turnId });
+          s.lastSeq = accepted.seq;
+          this.emit('event', { id, event: accepted });
+          busy = false;
+        }
       }
 
       // These Codex commands are app-server or local reads, not model turns.
@@ -1720,11 +1720,19 @@ export class Sessions extends EventEmitter {
    * but it says so out loud rather than dropping them silently.
    */
   async #deliver(s, item, d = null) {
-    d ??= await this.#driver(s);
     try {
+      d ??= await this.#driver(s);
       if (item.compact != null) {
         await d.compact(item.compact);
-      } else if (item.images.length && driverTakesImages(d)) {
+        const done = this.events.append(s.id, { type: 'turn.done', turnId: item.turnId, status: 'ok' });
+        s.lastSeq = done.seq;
+        this.emit('event', { id: s.id, event: done });
+        return;
+      }
+      // ACP reports image support only after initialize. Start it before
+      // checking capabilities so queued images are restored faithfully too.
+      if (item.images.length) await d.start?.();
+      if (item.images.length && driverTakesImages(d)) {
         await d.sendWithAttachments(item.text, item.images);
       } else {
         let msg = item.text;
@@ -1779,6 +1787,10 @@ export class Sessions extends EventEmitter {
           // gone, so there is no turn to close the message against anyway.
           if (!this.#index.has(s.id)) { this.#outbox.delete(s.id); break; }
           if (s.status === 'working' || s.status === 'blocked') break;
+          // Once delivery starts the ticket is no longer withdrawable or
+          // interruptible as queued work; those actions apply to later items.
+          this.#outbox.get(s.id)?.shift();
+          if (!this.#outbox.get(s.id)?.length) this.#outbox.delete(s.id);
           try {
             await this.#deliver(s, next);
           } catch {
@@ -1786,7 +1798,6 @@ export class Sessions extends EventEmitter {
             // The queue moves on - a dead agent fails each send on its own
             // merits rather than eating the rest of the queue silently.
           }
-          this.#outbox.get(s.id)?.shift();
         }
       } finally {
         this.#sending.delete(s.id);
