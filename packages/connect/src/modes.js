@@ -17,8 +17,8 @@ export const MODES = {
     { id: 'default', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', cli: 'manual' },
     { id: 'acceptEdits', label: 'Edit freely', short: 'edit', hint: 'edits go through, commands still ask', cli: 'acceptEdits' },
     { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', cli: 'plan' },
-    { id: 'auto', label: 'Act without asking', short: 'auto', hint: 'a safety classifier still stops dangerous commands', cli: 'auto' },
-    { id: 'bypassPermissions', label: 'Bypass all checks', short: 'yolo', hint: 'nothing asks and nothing stops', cli: 'bypassPermissions', danger: true },
+    { id: 'auto', label: 'Act without asking', short: 'auto', hint: 'Claude blocks risky actions quietly; they will not ping your phone', cli: 'auto' },
+    { id: 'bypassPermissions', label: 'Bypass all checks', short: 'yolo', hint: 'permission checks are off; direct questions from Claude still need an answer', cli: 'bypassPermissions', danger: true },
   ],
   codex: [
     { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'sandboxed in the workspace; anything else asks', approvalPolicy: 'on-request', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite' } },

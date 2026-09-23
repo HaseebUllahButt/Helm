@@ -1073,12 +1073,14 @@ function Shell({ client, conn, onSignOut }: {
       {toast && (
         <button
           className="toast"
+          aria-label={`${toast.session.title || 'A session'} needs you on ${envs.find((e) => e.id === toast.envId)?.name ?? 'a machine'}`}
+          title={toast.session.title}
           onClick={() => { const t = toast; setToast(null); openSession(t.envId, t.session); }}
         >
           <i className="sdot blocked" />
-          <span className="grow">
+          <span className="toast-copy">
             <b>{toast.session.title}</b>
-            <small>{envs.find((e) => e.id === toast.envId)?.name ?? 'a machine'} needs you</small>
+            <small>{envs.find((e) => e.id === toast.envId)?.name ?? 'a machine'} · {ENGINE[toast.session.engine]?.label ?? toast.session.engine} needs you</small>
           </span>
           <span className="chev">›</span>
         </button>

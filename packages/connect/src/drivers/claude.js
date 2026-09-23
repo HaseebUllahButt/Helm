@@ -27,6 +27,15 @@ const EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const MAX_OUTPUT = 32_000;
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
 const stripAnsi = (s) => (typeof s === 'string' ? s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '') : s);
+const automaticDecision = (mode, kind) => {
+  if (kind === 'question') return null;
+  if (mode === 'auto') return {
+    option: 'deny',
+    message: 'Blocked by Claude Auto safety mode. Switch to Bypass all checks to allow this action.',
+  };
+  if (mode === 'bypassPermissions') return { option: 'allow' };
+  return null;
+};
 
 /** The text of a tool_result, whatever shape the CLI sent it in. */
 function resultText(content) {
@@ -263,7 +272,22 @@ export class ClaudeDriver extends Driver {
   async setMode(id) {
     this.mode = id;
     const mode = modeFor('claude', id);
-    if (this.#pipe && mode) await this.#control({ subtype: 'set_permission_mode', mode: mode.cli === 'manual' ? 'default' : mode.cli });
+    // A mode change can happen while the owner is already looking at a
+    // permission card. Settle those requests under the new policy now; don't
+    // leave a stale card open after choosing Auto or Bypass.
+    const decision = automaticDecision(id, 'permission');
+    if (decision) {
+      for (const [requestId, pending] of [...this.pending]) {
+        if (pending.kind !== 'question') await this.answer(requestId, decision);
+      }
+    }
+    if (this.#pipe && mode) {
+      this.#control({ subtype: 'set_permission_mode', mode: mode.cli === 'manual' ? 'default' : mode.cli })
+        .then((response) => {
+          if (response?.subtype !== 'success') this.log(`claude: could not switch permission mode to ${mode.cli}`);
+        })
+        .catch((err) => this.log(`claude: could not switch permission mode to ${mode.cli}: ${err.message}`));
+    }
   }
 
   /**
@@ -503,6 +527,27 @@ export class ClaudeDriver extends Driver {
       : tool === 'ExitPlanMode' ? 'plan'
       : tool === 'Bash' ? 'command'
       : EDIT_TOOLS.has(tool) ? 'edit' : 'tool';
+
+    // `auto` lets Claude's safety classifier make the call. If Claude still
+    // sends a permission request here, don't turn that safety stop into a
+    // phone notification: deny it and let the model continue safely. The
+    // explicit bypass mode does the opposite. AskUserQuestion is a real
+    // conversation with the owner, not a permission check, so it stays
+    // interactive in both modes.
+    const decision = automaticDecision(this.mode, kind);
+    if (decision) {
+      this.#write({
+        type: 'control_response',
+        response: {
+          subtype: 'success',
+          request_id: m.request_id,
+          response: decision.option === 'allow'
+            ? { behavior: 'allow' }
+            : { behavior: 'deny', message: decision.message },
+        },
+      });
+      return;
+    }
 
     const title = stripAnsi(r.title) || (
       kind === 'command' ? 'Run a command'

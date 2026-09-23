@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -254,6 +254,56 @@ test('a daemon restart lists a driven session as idle and resumable', async (t) 
   assert.equal(listed.status, 'idle');
   assert.equal(listed.mode, 'default');
   t.after(() => again.kill(s.id));
+});
+
+test('a missing Claude conversation id is cleared and resend starts a fresh thread', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-stale-claude'));
+
+  class NoEchoDriver extends FakeDriver {
+    constructor(opts) {
+      super(opts);
+      this.resumeFrom = opts.engineSessionId ?? null;
+      if (!opts.engineSessionId) this.engineSessionId = `fresh-${FakeDriver.made.length}`;
+    }
+    async send(text) {
+      this.sent = (this.sent ?? []).concat(text);
+      // A missing provider thread fails before Claude echoes the prompt.
+      this.push('status', { status: 'working' });
+    }
+  }
+
+  const makeDriver = (engine, opts) => new NoEchoDriver({ engine, ...opts });
+  const sessions = new Sessions(new StubRuntime(), { events, makeDriver });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const first = FakeDriver.made.at(-1);
+  const staleId = s.engineSessionId;
+
+  await sessions.input(s.id, 'first prompt');
+  const local = sessions.history(s.id).events.find((e) => e.type === 'turn.start' && e.turnId.startsWith('local-'));
+  first.push('turn.done', { status: 'error', error: `No conversation found with session ID: ${staleId}` });
+  assert.equal(sessions.get(s.id).engineSessionId, null);
+  assert.ok(sessions.history(s.id).events.some((e) =>
+    e.type === 'turn.done' && e.turnId === local.turnId && e.status === 'error'));
+  first.push('status', { status: 'idle' });
+  first.push('status', { status: 'exited' });
+
+  // Recreate the pre-fix persisted state. On restart, the error in the log
+  // still proves that this id must not be passed to Claude a second time.
+  const indexPath = join(process.env.HELM_DIR, 'sessions.json');
+  const saved = JSON.parse(readFileSync(indexPath, 'utf8'));
+  saved.sessions.find((row) => row.id === s.id).engineSessionId = staleId;
+  writeFileSync(indexPath, JSON.stringify(saved));
+
+  const restarted = new Sessions(new StubRuntime(), { events, makeDriver });
+  restarted.resume();
+  await restarted.input(s.id, 'resend');
+  const second = FakeDriver.made.at(-1);
+  assert.deepEqual(second.sent, ['resend']);
+  assert.equal(second.resumeFrom, null, 'the missing provider id is not resumed again');
+  assert.notEqual(second.engineSessionId, staleId, 'a new provider conversation is created');
+  await restarted.kill(s.id);
 });
 
 test('a restart writes the settle into the log, so the chat stops drawing "working"', async () => {

@@ -65,6 +65,12 @@ const informative = (text) => {
   return line && !GREETING.test(line) ? line : null;
 };
 
+const missingClaudeConversation = (error, sessionId) => {
+  if (typeof error !== 'string' || !sessionId) return false;
+  const missing = /No conversation found with session ID:\s*(\S+)/i.exec(error);
+  return missing?.[1] === sessionId;
+};
+
 /** The first informative line among the sampled prompts, or null. */
 const promptTitle = (samples) => {
   for (const p of samples ?? []) {
@@ -671,6 +677,16 @@ export class Sessions extends EventEmitter {
   async #driver(s) {
     let d = this.#drivers.get(s.id);
     if (d) return d;
+    // A thread opened from local history can outlive the provider's
+    // transcript. If a previous attempt already proved its id is missing,
+    // resend as a fresh conversation instead of retrying the same dead id.
+    if (s.engine === 'claude' && missingClaudeConversation(
+      this.events.tail(s.id).findLast((e) => e.type === 'turn.done' && e.status === 'error')?.error,
+      s.engineSessionId,
+    )) {
+      s.engineSessionId = null;
+      this.#save();
+    }
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === s.profileId);
     if (!profile) throw new Error(`the account for this session (${s.profileId}) is gone`);
@@ -716,6 +732,22 @@ export class Sessions extends EventEmitter {
 
   #onDriverEvent(s, d, e) {
     if (this.#drivers.get(s.id) !== d && e.type !== 'status') return;
+    let forwarded = e;
+    const staleClaudeConversation = s.engine === 'claude'
+      && e.type === 'turn.done'
+      && e.status === 'error'
+      && missingClaudeConversation(e.error, s.engineSessionId);
+    if (staleClaudeConversation) {
+      // The CLI can fail before echoing the user message, leaving turnId
+      // empty. Close Helm's optimistic bubble with the same failure so the
+      // composer offers the original text for resend.
+      const open = this.events.openTurn(s.id);
+      if (!e.turnId && open) forwarded = { ...e, turnId: open.turnId };
+      s.engineSessionId = null;
+      d.engineSessionId = null;
+      d.resume = false;
+      this.#save();
+    }
     // Slash commands such as /model and /permissions change the same live
     // driver settings as the composer's pickers. Persist them here so every
     // connected client and the next resumed process sees the same choice.
@@ -758,11 +790,11 @@ export class Sessions extends EventEmitter {
       if (e.costUsd > 0) s.costUsd = Math.round(((s.costUsd ?? 0) + e.costUsd) * 1e6) / 1e6;
       this.#save();
     }
-    if (d.engineSessionId && d.engineSessionId !== s.engineSessionId) {
+    if (!staleClaudeConversation && d.engineSessionId && d.engineSessionId !== s.engineSessionId) {
       s.engineSessionId = d.engineSessionId;
       this.#save();
     }
-    const event = this.events.append(s.id, e);
+    const event = this.events.append(s.id, forwarded);
     s.lastSeq = event.seq;
     this.emit('event', { id: s.id, event });
   }

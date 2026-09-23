@@ -1233,17 +1233,22 @@ button.primary.danger { background: color-mix(in srgb, var(--red) 22%, var(--rai
    the composer, where a thumb already is. */
 .toast {
   position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 76px); transform: translateX(-50%);
-  z-index: 55; display: flex; align-items: center; gap: 10px; width: min(400px, calc(100vw - 28px));
-  padding: 10px 14px; border-radius: var(--radius); text-align: left;
-  background: color-mix(in srgb, var(--amber) 12%, var(--raised));
-  border: 1px solid color-mix(in srgb, var(--amber) 38%, transparent);
-  box-shadow: 0 16px 48px -12px rgb(0 0 0 / 80%);
+  z-index: 55; display: flex; align-items: center; gap: 12px; width: min(440px, calc(100vw - 28px));
+  padding: 12px 14px; border-radius: 12px; text-align: left;
+  background: color-mix(in srgb, var(--amber) 8%, #17171a);
+  border: 1px solid color-mix(in srgb, var(--amber) 32%, transparent);
+  box-shadow: 0 18px 52px -14px rgb(0 0 0 / 82%), 0 2px 8px rgb(0 0 0 / 35%);
   animation: toast-in 0.25s var(--ease);
 }
 @keyframes toast-in { from { opacity: 0; transform: translateX(-50%) translateY(8px); } }
-.toast b { display: block; font-size: var(--t-body); font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.toast small { display: block; font-size: var(--t-meta); color: var(--text-dim); }
-.toast .chev { color: var(--amber); font-size: 15px; flex: none; }
+.toast .toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.toast b {
+  display: -webkit-box; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--t-body); font-weight: 550;
+  line-height: 1.35; white-space: normal; overflow-wrap: anywhere; text-overflow: ellipsis;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.toast small { display: block; overflow: hidden; color: var(--text-dim); font-size: var(--t-meta); text-overflow: ellipsis; white-space: nowrap; }
+.toast .chev { color: var(--amber); font-size: 17px; flex: none; }
 
 /* Pull-to-refresh: a spacer that grows under the finger, then the release
    hint once it is far enough to count. */

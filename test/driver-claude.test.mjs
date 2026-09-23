@@ -82,6 +82,43 @@ test('tool: a Bash call becomes a tool item with streamed input and its output; 
   await driver.kill();
 });
 
+test('auto: Claude safety stops are denied locally instead of pinging the phone', async () => {
+  const { driver, log, fake } = make('tool', { mode: 'auto' });
+  await driver.send('Use the Bash tool…');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.equal(log.of('permission.request').length, 0);
+  const response = fake.stdinLines().find((l) => l.type === 'control_response');
+  assert.equal(response.response.response.behavior, 'deny');
+  assert.match(response.response.response.message, /Claude Auto safety mode/);
+  await driver.kill();
+});
+
+test('bypassPermissions: Claude tool permissions are allowed locally without notification', async () => {
+  const { driver, log, fake } = make('tool', { mode: 'bypassPermissions' });
+  await driver.send('Use the Bash tool…');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.equal(log.of('permission.request').length, 0);
+  const response = fake.stdinLines().find((l) => l.type === 'control_response');
+  assert.equal(response.response.response.behavior, 'allow');
+  await driver.kill();
+});
+
+test('switching to bypass settles an already-open Claude permission card', async () => {
+  const { driver, log, fake } = make('deny');
+  await driver.send('Use the Write tool…');
+  const ask = await log.until((e) => e.type === 'permission.request');
+  await driver.setMode('bypassPermissions');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.equal(driver.pending.size, 0);
+  assert.ok(log.of('permission.resolved').some((e) => e.requestId === ask.requestId && e.decision === 'allow'));
+  const response = fake.stdinLines().find((l) => l.type === 'control_response');
+  assert.equal(response.response.response.behavior, 'allow');
+  await driver.kill();
+});
+
 test('deny: the refusal reaches the CLI as a deny with a message', async () => {
   const { driver, log, fake } = make('deny');
   await driver.send('Use the Write tool…');
