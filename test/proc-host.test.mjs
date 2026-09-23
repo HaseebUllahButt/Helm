@@ -47,6 +47,18 @@ async function until(fn, ms = 8000) {
   }
 }
 
+test('a missing hosted command fails proc.open instead of creating a ghost', async (t) => {
+  const host = procHost();
+  t.after(() => host.detach());
+  assert.equal(await host.ensure(), true);
+
+  await assert.rejects(
+    host.openProc('missing-command', { cmd: join(dir, 'missing-command'), cwd: dir, env: {} }),
+    /ENOENT|could not start/,
+  );
+  assert.equal(host.hasProc('missing-command'), false);
+});
+
 test('a proc survives the daemon that started it, backlog intact', async (t) => {
   const first = procHost();
   t.after(() => first.detach());

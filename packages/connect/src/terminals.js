@@ -253,6 +253,12 @@ export class TerminalHost extends EventEmitter {
 
     const env = {
       HELM_DIR: process.env.HELM_DIR ?? '',
+      // `systemd-run --user` does not inherit the service's environment. In
+      // particular, its default PATH omits user-installed agent CLIs such as
+      // Devin, so the host would accept a proc.open request for a command it
+      // could never spawn.
+      PATH: process.env.PATH ?? '',
+      HOME: process.env.HOME ?? '',
       // Always this instance's own path: a proc host spawned while the env
       // points at the pty socket must still bind the proc one.
       HELM_TERMINALS_SOCKET: this.#socketPath,
@@ -327,7 +333,12 @@ export class TerminalHost extends EventEmitter {
   /** Start a pipe-stdio process on the host, or attach to the one it kept. */
   async openProc(id, spec) {
     await this.ensure();
-    const r = await this.#call({ t: 'proc.open', id, ...spec });
+    // The host may have been started by an older daemon (or by systemd with
+    // a sparse environment). Carry the daemon's lookup path with each open
+    // so a restart can still find user-installed CLIs without restarting a
+    // host that may be holding another live agent.
+    const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...(spec.env ?? {}) };
+    const r = await this.#call({ t: 'proc.open', id, ...spec, env });
     this.#procs.add(id);
     return r;
   }

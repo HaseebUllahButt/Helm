@@ -57,28 +57,53 @@ function procOut(id, data) {
 function procOpen(msg) {
   const existing = procs.get(msg.id);
   if (existing) return { ok: true, pid: existing.child.pid, existing: true };
-  const child = spawn(msg.cmd, msg.args ?? [], {
-    cwd: msg.cwd || undefined,
-    env: msg.env ? { ...process.env, ...msg.env } : process.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
+  return new Promise((resolve, reject) => {
+    const child = spawn(msg.cmd, msg.args ?? [], {
+      cwd: msg.cwd || undefined,
+      env: msg.env ? { ...process.env, ...msg.env } : process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const proc = { child, errTail: '', backlog: '' };
+    let spawned = false;
+    procs.set(msg.id, proc);
+
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (d) => procOut(msg.id, d));
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (d) => { proc.errTail = (proc.errTail + d).slice(-4000); });
+
+    const remove = () => {
+      procs.delete(msg.id);
+      armIdleExit();
+    };
+    const reportExit = (code, stderr = null) => {
+      remove();
+      broadcast({
+        t: 'proc.exit', id: msg.id, code,
+        stderr: stderr || proc.errTail.trim().split('\n').pop() || null,
+      });
+    };
+    const failBeforeSpawn = (err) => {
+      remove();
+      reject(new Error(`could not start ${msg.cmd}: ${String(err?.message || err)}`));
+    };
+
+    // Do not acknowledge proc.open until Node has emitted `spawn`. An
+    // `error` such as ENOENT used to arrive after the success response,
+    // leaving the daemon with a pipe for a process that never existed.
+    child.once('spawn', () => {
+      spawned = true;
+      resolve({ ok: true, pid: child.pid });
+    });
+    child.on('exit', (code) => {
+      if (!spawned) return failBeforeSpawn(new Error(`exited before spawn (code ${code})`));
+      reportExit(code);
+    });
+    child.on('error', (err) => {
+      if (!spawned) return failBeforeSpawn(err);
+      reportExit(-1, String(err?.message || err));
+    });
   });
-  const proc = { child, errTail: '', backlog: '' };
-  procs.set(msg.id, proc);
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (d) => procOut(msg.id, d));
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (d) => { proc.errTail = (proc.errTail + d).slice(-4000); });
-  child.on('exit', (code) => {
-    procs.delete(msg.id);
-    broadcast({ t: 'proc.exit', id: msg.id, code, stderr: proc.errTail.trim().split('\n').pop() || null });
-    armIdleExit();
-  });
-  child.on('error', (err) => {
-    procs.delete(msg.id);
-    broadcast({ t: 'proc.exit', id: msg.id, code: -1, stderr: String(err?.message || err) });
-    armIdleExit();
-  });
-  return { ok: true, pid: child.pid };
 }
 
 function procDrop() {
