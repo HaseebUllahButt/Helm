@@ -3,6 +3,7 @@ import { q, now, newId, newInviteCode } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, issueDevice, revoke,
   authenticate, allEndpoints, localKey, deviceToken,
+  hubProof, issueChallenge, HELLO_PATH,
 } from '@helm/protocol/network';
 import { ROLE } from '@helm/protocol/identity';
 
@@ -235,6 +236,19 @@ export function makeHttpHandler({ online, kick }) {
 
     // -------------------------------------------------- unauthenticated routes
 
+    // The hub goes first: a machine dialling us sends a nonce, we MAC it
+    // with the network key and hand back a challenge its credential must
+    // answer. Unauthenticated by nature - it is how the caller decides
+    // whether we are worth authenticating to. See hubCredential.
+    if (path === HELLO_PATH && req.method === 'POST') {
+      const net = loadNetwork();
+      if (!net) return json(res, 503, { error: 'this machine is not in a network yet' });
+      const body = await readBody(req).catch(() => ({}));
+      const nonce = typeof body?.nonce === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(body.nonce) ? body.nonce : null;
+      if (!nonce) return json(res, 400, { error: 'nonce required' });
+      return json(res, 200, { net: net.id, proof: hubProof(net, nonce), challenge: issueChallenge() });
+    }
+
     if (path === '/api/health') {
       const net = loadNetwork();
       return json(res, 200, { ok: true, network: net?.id ?? null });
@@ -250,9 +264,20 @@ export function makeHttpHandler({ online, kick }) {
     // local to the socket but carry its public host, and a browser blocks a
     // foreign site from reading a response with no CORS headers anyway.
     if (path === '/api/auth/local' && req.method === 'POST') {
-      const localHost = /^(127\.|localhost|\[::1\])/.test(String(req.headers.host));
-      const sameSite = req.headers['sec-fetch-site'] !== 'cross-site';
-      if (!isLoopback(req) || !localHost || !sameSite) {
+      //
+      // The host is matched whole. A prefix match let `localhost.evil.com`
+      // through: DNS-rebind that name to 127.0.0.1 and the attacker's page is
+      // same-origin with this route, reads the key, and trades it for a
+      // device token every machine accepts.
+      const LOOPBACK = /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])(:\d+)?$/;
+      const localHost = LOOPBACK.test(String(req.headers.host));
+      const site = req.headers['sec-fetch-site'];
+      const sameSite = !site || site === 'same-origin' || site === 'none';
+      let localOrigin = true;
+      if (req.headers.origin) {
+        try { localOrigin = LOOPBACK.test(new URL(req.headers.origin).host); } catch { localOrigin = false; }
+      }
+      if (!isLoopback(req) || !localHost || !sameSite || !localOrigin) {
         res.writeHead(403, { 'content-type': 'application/json', ...SECURITY_HEADERS });
         return res.end(JSON.stringify({ error: 'only a page served by this machine may do that' }));
       }

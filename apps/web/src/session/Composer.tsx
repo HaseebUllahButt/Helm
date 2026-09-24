@@ -5,6 +5,9 @@ import type { Turn } from './types';
 
 const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
+/** A phone: no hardware keyboard to type into straight away, no Shift+Enter. */
+const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+
 export const QUICK: { label: string; key: string }[] = [
   { label: 'yes', key: 'y' }, { label: 'no', key: 'n' },
   { label: 'enter', key: 'Enter' }, { label: 'esc', key: 'Escape' },
@@ -148,8 +151,11 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
 
   // Opening a conversation means typing into it. Focus after the composer is
   // mounted as well as marking the field autofocus, so restored chats and
-  // browser-history navigation land in the same useful place.
+  // browser-history navigation land in the same useful place. Not on a
+  // phone: there focus is the keyboard, over the permission sheet you
+  // opened the session to answer.
   useEffect(() => {
+    if (touch) return;
     const frame = requestAnimationFrame(() => ref.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
   }, []);
@@ -293,7 +299,8 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             </div>
           )}
           <textarea
-            ref={ref} rows={1} value={draft} autoFocus
+            ref={ref} rows={1} value={draft} autoFocus={!touch}
+            enterKeyHint={touch ? 'enter' : 'send'}
             placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
             onChange={(e) => { historyAt.current = null; setDraft(e.target.value); }}
             onPaste={(e) => { if (take(e.clipboardData?.files)) e.preventDefault(); }}
@@ -317,7 +324,9 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
               if (!e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowDown' && recall(1, e.currentTarget)) {
                 e.preventDefault(); return;
               }
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+              // A phone keyboard has no Shift+Enter, so there Return is a newline
+              // and the send button sends.
+              if (e.key === 'Enter' && !e.shiftKey && !touch) { e.preventDefault(); submit(); }
             }}
           />
           {foot && <div className="slab-controls">{foot}</div>}

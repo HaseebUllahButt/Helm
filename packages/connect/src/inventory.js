@@ -46,19 +46,41 @@ async function headLines(path, wanted = 1, cap = 1 << 20) {
 
 const parse = (line) => { try { return JSON.parse(line); } catch { return null; } };
 
-/** The process holding a rollout open, when this OS exposes process fds. */
-function writerPid(path) {
-  let pids;
-  try { pids = readdirSync('/proc').filter((x) => /^\d+$/.test(x)); } catch { return null; }
+/**
+ * One walk of /proc, shared by every lookup in an inventory pass. Answering
+ * each transcript with its own walk cost ~40ms apiece - 80 Claude files made
+ * the recent list take seconds of synchronous time. `inventory()` drops it
+ * on the way in, so no pass sees a process table older than itself.
+ */
+let procSnap = null;
+function procs() {
+  if (procSnap) return procSnap;
+  const files = new Map();
+  const list = [];
+  let pids = [];
+  try { pids = readdirSync('/proc').filter((x) => /^\d+$/.test(x)); } catch { /* not Linux */ }
   for (const pid of pids) {
     const dir = `/proc/${pid}/fd`;
-    let fds;
-    try { fds = readdirSync(dir); } catch { continue; }
-    for (const fd of fds) {
-      try { if (readlinkSync(join(dir, fd)) === path) return Number(pid); } catch { /* fd closed */ }
-    }
+    try {
+      for (const fd of readdirSync(dir)) {
+        try {
+          const target = readlinkSync(join(dir, fd));
+          if (target.startsWith('/') && !files.has(target)) files.set(target, Number(pid));
+        } catch { /* fd closed */ }
+      }
+    } catch { /* another user's, or gone */ }
+    try {
+      const argv = readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
+      if (argv.length) list.push({ pid: Number(pid), argv });
+    } catch { /* gone */ }
   }
-  return null;
+  procSnap = { at: Date.now(), files, list };
+  return procSnap;
+}
+
+/** The process holding a rollout open, when this OS exposes process fds. */
+function writerPid(path) {
+  return procs().files.get(path) ?? null;
 }
 
 /**
@@ -72,11 +94,8 @@ function writerPid(path) {
  */
 function interactiveProcesses(engine) {
   const out = new Map();
-  let pids;
-  try { pids = readdirSync('/proc').filter((x) => /^\d+$/.test(x)); } catch { return out; }
-  for (const pid of pids) {
+  for (const { pid, argv } of procs().list) {
     try {
-      const argv = readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
       const at = argv.findIndex((x) => {
         const name = basename(x);
         return name === engine || name.startsWith(`${engine}.`);
@@ -370,6 +389,7 @@ function opencode(home, account, engine = 'opencode') {
  * @param {Array} profiles  so we scan each configured account, not just the default
  */
 export async function inventory(profiles = []) {
+  procSnap = null;
   const seen = new Set();
   const jobs = [];
 

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { connect } from 'node:net';
 import { spawn } from 'node:child_process';
-import { existsSync, unlinkSync, mkdirSync, openSync } from 'node:fs';
+import { existsSync, unlinkSync, mkdirSync, openSync, lstatSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -18,7 +18,30 @@ import { HELM_DIR } from './paths.js';
  * name carries a hash of HELM_DIR so a sandboxed daemon never reaches the
  * real one's terminals.
  */
-const socketDir = process.env.XDG_RUNTIME_DIR || tmpdir();
+const socketDir = process.env.XDG_RUNTIME_DIR || privateTmp();
+
+/**
+ * Without a runtime directory the sockets used to sit loose in /tmp under a
+ * predictable name - and the daemon dials whatever is listening there, so
+ * another user who bound it first would be handed every agent's command
+ * line, environment and keystrokes. A 0700 directory of our own instead,
+ * refused if it is someone else's or a symlink.
+ */
+function privateTmp() {
+  const uid = process.getuid?.();
+  if (uid === undefined) return tmpdir();
+  const dir = join(tmpdir(), `helm-${uid}`);
+  try { mkdirSync(dir, { mode: 0o700 }); } catch { /* already there */ }
+  try {
+    const st = lstatSync(dir);
+    if (st.isDirectory() && !st.isSymbolicLink() && st.uid === uid) {
+      if (st.mode & 0o077) chmodSync(dir, 0o700);
+      return dir;
+    }
+  } catch { /* fall through */ }
+  mkdirSync(join(HELM_DIR, 'run'), { recursive: true, mode: 0o700 });
+  return join(HELM_DIR, 'run');
+}
 const helmTag = createHash('sha256').update(HELM_DIR).digest('hex').slice(0, 10);
 export const SOCKET_PATH =
   process.env.HELM_TERMINALS_SOCKET || join(socketDir, `helm-terminals-${helmTag}.sock`);

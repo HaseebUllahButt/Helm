@@ -170,7 +170,7 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
                   <button key={o.label} className={`q-opt${on ? ' on' : ''}`} onClick={() => toggle(q, o.label)}>
                     <span className={`q-mark${q.multiSelect ? ' box' : ''}`}>{on ? '✓' : ''}</span>
                     <span className="grow">
-                      <span className="rt">{o.label}</span>
+                      <span className="rt"><span className="rt-text">{o.label}</span></span>
                       {o.description && <span className="rm">{o.description}</span>}
                     </span>
                   </button>

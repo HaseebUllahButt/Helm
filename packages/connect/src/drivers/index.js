@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 
@@ -16,6 +17,7 @@ import { execFile } from 'node:child_process';
  *   permission.request  { requestId, itemId, kind, title, detail, options[], defaultTo, ... }
  *   permission.resolved { requestId, decision }
  *   turn.done           { turnId, status, costUsd?, usage?, error? }  status: ok | interrupted | error
+ *                       (or costTotalUsd: a conversation's running total, where the CLI reports that instead)
  *   status              { status }                  working | blocked | idle | exited
  *   title               { title }                   the name the agent gave its own session
  *   limits              { ... }
@@ -145,6 +147,21 @@ export const semverLess = (a, b) => {
   for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] < pb[i];
   return false;
 };
+
+/**
+ * The folder has to exist before a CLI is spawned in it. Node reports a
+ * missing `cwd` as `spawn <cmd> ENOENT` - the error for a missing *binary* -
+ * so a deleted or mistyped folder read as "devin is not installed" while
+ * devin sat on PATH the whole time. Said plainly, in the chat and thrown.
+ */
+export function assertFolder(driver) {
+  let ok = false;
+  try { ok = statSync(driver.cwd).isDirectory(); } catch { /* missing */ }
+  if (ok) return;
+  const message = `the folder ${driver.cwd} does not exist on this machine`;
+  driver.push('error', { message, kind: 'spawn' });
+  throw new Error(message);
+}
 
 /**
  * The protocol each driver was written against. An older CLI may speak it

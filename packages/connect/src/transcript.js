@@ -3,6 +3,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join, basename } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { offThread } from '@helm/usage/off-thread';
 import { expand, HOME } from './paths.js';
 import { ENGINES } from './engines.js';
 
@@ -487,14 +488,25 @@ function opencodeModel(v) {
   try { const x = JSON.parse(v); return x.id ?? x.modelID ?? null; } catch { return null; }
 }
 
+/** A database engine's messages; what `messages` runs on a worker thread. */
+export function databaseMessages(engine, path, sessionId, opts) {
+  if (engine === 'opencode') return opencodeMessages(path, sessionId, opts);
+  if (engine === 'opencode2') return opencode2Messages(path, sessionId, opts);
+  return devinMessages(path, sessionId, opts);
+}
+
 /** Read a transcript as a list of messages, oldest first. */
 export async function messages({ engine, path, sessionId, limit = 120, all = false }) {
   if (!path || !existsSync(path)) return [];
   let found = [];
   if (engine === 'codex') found = await codexMessages(path, { all });
   else if (engine === 'claude') found = await claudeMessages(path, { all });
-  else if (engine === 'opencode') found = opencodeMessages(path, sessionId, { all });
-  else if (engine === 'opencode2') found = opencode2Messages(path, sessionId, { all });
-  else if (engine === 'devin') found = devinMessages(path, sessionId, { all });
+  // The database engines read synchronously, and a long Devin chat is
+  // hundreds of MB of stored snapshots - about a second of a frozen daemon
+  // for the default window, nine for the whole history. Off the thread.
+  else if (engine === 'opencode' || engine === 'opencode2' || engine === 'devin') {
+    found = await offThread(import.meta.url, 'databaseMessages', [engine, path, sessionId, { all }])
+      .catch(() => databaseMessages(engine, path, sessionId, { all }));
+  }
   return all ? found : found.slice(-limit);
 }

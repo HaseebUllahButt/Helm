@@ -72,7 +72,11 @@ export async function startRelay({
         // The worker is the update mechanism for installed PWAs. It must be
         // revalidated so a phone that has been backgrounded cannot keep an
         // old shell and old engine marks after a deploy.
-        'cache-control': rel === '/index.html' || rel === '/sw.js' ? 'no-cache' : 'public, max-age=3600',
+        // Hashed bundles are named by their content, so they never change
+        // under a name and can be kept for good.
+        'cache-control': rel === '/index.html' || rel === '/sw.js' ? 'no-cache'
+          : rel.startsWith('/assets/') ? 'public, max-age=31536000, immutable'
+          : 'public, max-age=3600',
         ...SECURITY_HEADERS,
       });
       res.end(await readFile(file));

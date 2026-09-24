@@ -69,5 +69,20 @@ export function verifyToken(key, token) {
   }
 }
 
+/**
+ * A MAC over a labelled value, for the hub handshake. The label keeps these
+ * apart from tokens: a token signs a base64url payload, and a label carries a
+ * ':' base64url never contains, so no proof can be passed off as a token's
+ * signature or the other way round.
+ */
+export const proofOf = (key, label, value) => sign(key, `${label}:${value}`);
+
+export function checkProof(key, label, value, mac) {
+  if (typeof mac !== 'string') return false;
+  const expected = Buffer.from(proofOf(key, label, value));
+  const given = Buffer.from(mac);
+  return expected.length === given.length && timingSafeEqual(expected, given);
+}
+
 /** Roles a token can carry. Machines run agents; devices only drive them. */
 export const ROLE = { MACHINE: 'machine', DEVICE: 'device' };

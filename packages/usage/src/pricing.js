@@ -15,14 +15,17 @@
  * tables are maintained and checked against the published cards.
  */
 
-// (checked 2026-07-17), $ per million tokens. Cache creation is billed at the
-// 5-minute-write rate unless a 1-hour cache is explicitly requested; ccusage's
-// token logs don't distinguish the two, so cacheWrite below assumes 5m — the
-// same assumption Claude Code itself defaults to.
+// (checked 2026-09-24), $ per million tokens. cacheWrite is the 5-minute
+// rate (1.25x input); a 1-hour write bills at 2x input, and the transcripts
+// say which it was (`cacheWrite1h`), so claudeModelCost prices the two apart.
 export const CLAUDE_PRICING = {
   'claude-fable-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
-  'claude-fable-5-1': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
+  // Fable 5.1 re-cut cache reads to $0.25. Whether Mythos 5.1 shares it was
+  // left open at launch, so it keeps the tier's standard 0.1x until it says.
+  'claude-fable-5-1': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 0.25 },
   'claude-mythos-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
+  'claude-mythos-5-1': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
+  'claude-opus-5-5': { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 },
   'claude-opus-5': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-8': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-7': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
@@ -44,6 +47,8 @@ export const SONNET_5_STANDARD = { input: 3, output: 15, cacheWrite: 3.75, cache
 
 // Model names in ccusage's JSON sometimes carry a dated suffix
 // (claude-haiku-4-5-20251001) — strip it to match the rate table above.
+const isClaudeModel = (m) => /^claude-/.test(String(m || '')) && !!claudeRatesFor(String(m), new Date().toISOString());
+
 export function normalizeClaudeModel(modelName) {
   return modelName.replace(/-\d{8}$/, '');
 }
@@ -58,12 +63,13 @@ export function claudeRatesFor(modelName, asOfDate) {
 
 export function claudeModelCost(modelName, tokens, asOfDate) {
   const rates = claudeRatesFor(modelName, asOfDate);
-  const { inputTokens = 0, outputTokens = 0, cacheCreationTokens = 0, cacheReadTokens = 0 } = tokens;
+  const { inputTokens = 0, outputTokens = 0, cacheCreationTokens = 0, cacheCreation1hTokens = 0, cacheReadTokens = 0 } = tokens;
   if (!rates) return null;
+  const hour = Math.min(cacheCreation1hTokens, cacheCreationTokens);
   return {
     input: (inputTokens * rates.input) / 1_000_000,
     output: (outputTokens * rates.output) / 1_000_000,
-    cacheWrite: (cacheCreationTokens * rates.cacheWrite) / 1_000_000,
+    cacheWrite: ((cacheCreationTokens - hour) * rates.cacheWrite + hour * rates.input * 2) / 1_000_000,
     cacheRead: (cacheReadTokens * rates.cacheRead) / 1_000_000,
   };
 }
@@ -159,7 +165,7 @@ export function blankBreakdown(modelName, provider) {
  */
 export function cacheRatesFor(modelName, engine, asOfDate) {
   const flat = (r) => (r ? { input: r.input, cacheRead: r.cachedInput, cacheWrite: r.input } : null);
-  switch (engine) {
+  switch (isClaudeModel(modelName) ? 'claude' : engine) {
     case 'claude': {
       const r = claudeRatesFor(modelName, asOfDate ?? new Date().toISOString().slice(0, 10));
       return r ? { input: r.input, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite } : null;
@@ -183,11 +189,15 @@ export function cacheRatesFor(modelName, engine, asOfDate) {
 
 /** Cost of one (date, model) bucket of raw token counts, or null if unpriced. */
 export function priceBucket(engine, modelName, tokens, date) {
-  if (engine === 'claude') {
+  // A Claude model is priced as one whichever CLI ran it: Devin and OpenCode
+  // can drive Claude too, and the OpenAI-shaped table below has no entry for
+  // it - those buckets used to come out unpriced.
+  if (engine === 'claude' || isClaudeModel(modelName)) {
     const c = claudeModelCost(modelName, {
       inputTokens: tokens.input || 0,
       outputTokens: tokens.output || 0,
       cacheCreationTokens: tokens.cacheWrite || 0,
+      cacheCreation1hTokens: tokens.cacheWrite1h || 0,
       cacheReadTokens: tokens.cacheRead || 0,
     }, date);
     return c ? { ...c, total: c.input + c.output + c.cacheWrite + c.cacheRead } : null;

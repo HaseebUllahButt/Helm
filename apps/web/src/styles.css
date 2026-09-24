@@ -376,7 +376,9 @@ input.custom { font-family: var(--mono); font-size: var(--t-meta); }
    colour, a third less height, and the fill is slightly graded so it sits on
    the page rather than on top of it. */
 button.primary {
-  background: linear-gradient(var(--primary-t), var(--primary));
+  /* A shade under --primary: white on the brand fill was 3.5-4.3:1, under
+     AA for the Allow button of all things. This grades 4.8-5.2:1. */
+  background: linear-gradient(oklch(0.56 0.185 264), oklch(0.54 0.185 264));
   color: #fff; border-radius: var(--radius);
   padding: 10px 16px; width: 100%; font-size: var(--t-body); font-weight: 550;
   letter-spacing: -0.006em; margin-top: 12px;
@@ -635,9 +637,10 @@ pre.snippet {
   background: color-mix(in srgb, var(--amber) 8%, var(--card));
 }
 .docked-text { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; color: var(--text-dim); font-weight: 500; }
-.docked-actions { display: flex; gap: 4px; }
+.docked-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+/* The one-tap answer to a blocked session: sized for a thumb, not a cursor. */
 .docked-actions button {
-  height: 22px; padding: 0 8px; border-radius: var(--radius-sm); font-size: var(--t-micro); color: var(--text-dim);
+  height: 32px; min-width: 44px; padding: 0 12px; border-radius: var(--radius-sm); font-size: var(--t-meta); color: var(--text-dim);
 }
 .docked-actions button:hover { background: var(--accent); color: var(--text); }
 .docked-actions button:first-child { color: var(--amber); font-weight: 500; }
@@ -802,7 +805,7 @@ pre.snippet {
 }
 .pick:hover { background: var(--hover); color: var(--text); }
 .sub .offline { color: var(--amber); }
-.menu.wide { min-width: 240px; max-width: min(360px, calc(100vw - 24px)); max-height: 60vh; overflow-y: auto; }
+.menu.wide { min-width: 240px; max-width: min(360px, calc(100vw - 24px)); max-height: 60dvh; overflow-y: auto; }
 .menu .menu-title { font-size: var(--t-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--mutedfg); padding: 8px 12px 4px; }
 .menu button.on { background: var(--accent); }
 .menu button .rt { display: block; }
@@ -843,7 +846,7 @@ pre.snippet {
 .edit[open] .achev { transform: rotate(90deg); }
 .diff {
   margin: 0; padding: 6px 0 8px; font-size: 12.5px; line-height: 1.5; overflow-x: auto;
-  border-top: 1px solid var(--line); color: var(--text-dim); max-height: 50vh;
+  border-top: 1px solid var(--line); color: var(--text-dim); max-height: 50dvh;
 }
 .diff span { display: block; padding: 0 12px; white-space: pre; }
 .diff .add { background: color-mix(in srgb, var(--emerald) 10%, transparent); color: #a7f3d0; }
@@ -869,7 +872,7 @@ pre.snippet {
   border-radius: 18px 18px 0 0; font-size: var(--t-meta); line-height: 1.55;
   background: color-mix(in srgb, var(--amber) 7%, var(--card)); backdrop-filter: blur(16px) saturate(1.08);
   border: 1px solid color-mix(in srgb, var(--amber) 28%, transparent); border-bottom: 0;
-  display: flex; flex-direction: column; gap: 10px; max-height: 62vh;
+  display: flex; flex-direction: column; gap: 10px; max-height: 62dvh;
 }
 .sheet-head { display: flex; align-items: center; gap: 8px; color: var(--text); }
 .sheet-head b { font-weight: 500; flex: 1; min-width: 0; }
@@ -879,11 +882,11 @@ pre.snippet {
   margin: 0; padding: 10px 12px; font-size: var(--t-meta); line-height: 1.55; white-space: pre-wrap; word-break: break-all;
   background: var(--bg); border-radius: var(--radius); color: var(--text);
 }
-.sheet-json { margin: 0; padding: 10px 12px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; background: var(--bg); border-radius: var(--radius); color: var(--text-dim); max-height: 30vh; overflow: auto; }
+.sheet-json { margin: 0; padding: 10px 12px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; background: var(--bg); border-radius: var(--radius); color: var(--text-dim); max-height: 30dvh; overflow: auto; }
 .sheet-path { font: 12.5px var(--mono); color: var(--text-dim); margin-bottom: 4px; }
 .sheet .diff { border-top: 0; background: var(--bg); border-radius: var(--radius); }
 .sheet .edit { background: var(--bg); }
-.sheet .plan { max-height: 40vh; overflow: auto; padding: 8px 10px; background: var(--bg); border-radius: var(--radius); }
+.sheet .plan { max-height: 40dvh; overflow: auto; padding: 8px 10px; background: var(--bg); border-radius: var(--radius); }
 .sheet-note { font-size: var(--t-meta); padding: 8px 10px; }
 .sheet-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .sheet-actions button { width: auto; flex: 1 1 auto; margin: 0; padding: 10px 14px; font-size: var(--t-body); }
@@ -951,7 +954,7 @@ pre.snippet {
   position: relative; z-index: 0; margin: 0 6px -17px; padding: 10px 8px 26px;
   border-radius: 18px 18px 0 0; background: var(--card); backdrop-filter: blur(16px) saturate(1.08);
   border: 1px solid var(--line-2); border-bottom: 0;
-  display: flex; flex-direction: column; gap: 2px; max-height: 62vh; overflow: auto;
+  display: flex; flex-direction: column; gap: 2px; max-height: 62dvh; overflow: auto;
 }
 .modesheet-head {
   display: flex; align-items: center; padding: 2px 6px 6px;
@@ -1229,10 +1232,11 @@ pre.snippet {
 .modal-actions button { width: auto; margin: 0; padding: 8px 16px; font-size: var(--t-body); }
 button.primary.danger { background: color-mix(in srgb, var(--red) 22%, var(--raised)); color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
 
-/* "Another machine needs you" while a session is open. Bottom-centre above
-   the composer, where a thumb already is. */
+/* "Another machine needs you" while a session is open. Under the header: at
+   the bottom it sat on the composer, and a tap meant for the textarea opened
+   a different session. */
 .toast {
-  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 76px); transform: translateX(-50%);
+  position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 58px); transform: translateX(-50%);
   z-index: 55; display: flex; align-items: center; gap: 12px; width: min(440px, calc(100vw - 28px));
   padding: 12px 14px; border-radius: 12px; text-align: left;
   background: color-mix(in srgb, var(--amber) 8%, #17171a);
@@ -1240,7 +1244,7 @@ button.primary.danger { background: color-mix(in srgb, var(--red) 22%, var(--rai
   box-shadow: 0 18px 52px -14px rgb(0 0 0 / 82%), 0 2px 8px rgb(0 0 0 / 35%);
   animation: toast-in 0.25s var(--ease);
 }
-@keyframes toast-in { from { opacity: 0; transform: translateX(-50%) translateY(8px); } }
+@keyframes toast-in { from { opacity: 0; transform: translateX(-50%) translateY(-8px); } }
 .toast .toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .toast b {
   display: -webkit-box; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--t-body); font-weight: 550;
@@ -1275,7 +1279,8 @@ button.linkish:disabled { color: var(--icon); }
 .row.tall.sel { background: color-mix(in srgb, var(--primary) 8%, var(--card)); border-color: color-mix(in srgb, var(--primary) 45%, transparent); }
 
 /* What an offline machine last said: kept readable, unmistakably not live. */
-.rows.stale .row { opacity: 0.55; }
+.rows.stale .row .rt { color: var(--text-dim); }
+.rows.stale .row .mark, .rows.stale .row .glyph { opacity: 0.55; }
 
 /* "waiting 12m" on a permission sheet, and the queued tag on a bubble. */
 .tag.waiting { background: color-mix(in srgb, var(--amber) 14%, transparent); color: var(--amber); }
@@ -1308,3 +1313,18 @@ button.sheet-editlink:hover { color: var(--text); }
 .player video { width: 100%; border-radius: var(--radius); background: #000; display: block; }
 .player audio { width: 100%; }
 .media-meta { padding: 8px 2px 0; font-size: var(--t-meta); word-break: break-all; }
+
+/* Touch: the controls a thumb reaches for most were sized for a cursor. */
+@media (pointer: coarse) {
+  .iconbtn { min-width: 40px; height: 40px; }
+  .iconbtn.back { min-width: 44px; height: 44px; margin-left: -8px; }
+  .row { min-height: 44px; }
+  .ctl { height: 36px; }
+  .ctl.icon { width: 36px; }
+  .attach-preview button { width: 28px; height: 28px; top: -10px; right: -10px; }
+  .modesheet-head .x { min-width: 36px; min-height: 36px; }
+  .fold-toggle { min-height: 36px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast, .terminal-copied { animation: none; }
+}

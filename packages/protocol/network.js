@@ -17,9 +17,9 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostname, homedir } from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
-  newNetworkKey, newNetworkId, newDeviceId, mintToken, verifyToken, ROLE,
+  newNetworkKey, newNetworkId, newDeviceId, mintToken, verifyToken, ROLE, proofOf, checkProof,
 } from './identity.js';
 
 // Duplicated from @helm/connect's paths rather than imported: the relay reads
@@ -176,9 +176,71 @@ export function forgetNetwork() {
 
 // ------------------------------------------------------------------ tokens
 
-/** A credential for this machine, proving membership to any peer. */
+/**
+ * A credential for this machine, proving membership to any peer. Durable,
+ * so it is what the CLI's own tooling may hold - but it never goes over the
+ * wire from a daemon any more: see `hubCredential`.
+ */
 export const machineToken = (net) =>
   mintToken(net.key, { net: net.id, sub: net.self, role: ROLE.MACHINE });
+
+// ------------------------------------------------------------ hub handshake
+//
+// A machine dials every address in the roster, and most of those are plain
+// http on some LAN. It used to open with its durable machine token, to
+// whatever answered: anyone holding that IP on a café's wifi - or just
+// listening on it - got a credential that never expires, and every frame it
+// sent back (an RPC, an SSH key for authorized_keys) was obeyed. So now the
+// hub goes first: it proves it holds the network key by MACing our nonce,
+// and we answer its challenge with a token that is good for one use, for a
+// minute. A hub that cannot prove itself is never sent anything; a sniffer
+// on the wire sees a credential that is already spent.
+
+export const HELLO_PATH = '/api/hub/hello';
+const HUB_PROOF = 'hub-proof';
+const CREDENTIAL_TTL_MS = 60_000;
+
+/** The hub's answer to a dialler's nonce. */
+export const hubProof = (net, nonce) => proofOf(net.key, HUB_PROOF, `${net.id}:${nonce}`);
+
+export const checkHubProof = (net, nonce, mac) =>
+  checkProof(net.key, HUB_PROOF, `${net.id}:${nonce}`, mac);
+
+/** A machine token spendable once, against the challenge the hub issued. */
+export const oneTimeToken = (net, challenge) => mintToken(net.key, {
+  net: net.id, sub: net.self, role: ROLE.MACHINE, ch: challenge, exp: Date.now() + CREDENTIAL_TTL_MS,
+});
+
+/**
+ * Handshake with the hub at `base` (http/https) and return a credential for
+ * one request or socket. Throws, without having sent anything secret, if the
+ * hub cannot prove it is part of this network - an older hub included: it
+ * has no hello route, and falling back to the durable token for it would be
+ * the very downgrade an impostor would ask for.
+ */
+export async function hubCredential(net, base, { timeout = 5000 } = {}) {
+  const nonce = randomBytes(24).toString('base64url');
+  const res = await fetch(`${base.replace(/\/+$/, '')}${HELLO_PATH}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ nonce }),
+    signal: AbortSignal.timeout(timeout),
+  });
+  if (res.status === 404) {
+    const err = new Error('that hub runs an older helm without the handshake - upgrade it');
+    err.untrusted = true;
+    throw err;
+  }
+  if (!res.ok) throw new Error(`hub hello answered ${res.status}`);
+  const body = await res.json().catch(() => null);
+  if (!body || body.net !== net.id || typeof body.challenge !== 'string'
+      || !checkHubProof(net, nonce, body.proof)) {
+    const err = new Error('that address answered, but not as a hub of this network - nothing was sent to it');
+    err.untrusted = true;
+    throw err;
+  }
+  return oneTimeToken(net, body.challenge);
+}
 
 /**
  * A credential for a phone or browser. Durable: only revocation ends it.
@@ -224,7 +286,35 @@ export function authenticate(net, token) {
   if (!claims) return null;
   if (claims.net !== net.id) return null;
   if (net.revoked[claims.sub]) return null;
+  if (claims.exp !== undefined && !(claims.exp > Date.now())) return null;
+  // A handshake credential is good once, and only here: the challenge it
+  // answers must be one this process issued and nobody has spent.
+  if (claims.ch !== undefined && !spendChallenge(claims.ch)) return null;
   return claims;
+}
+
+/** Challenges this hub has handed out: value -> expiry. */
+const challenges = new Map();
+const MAX_CHALLENGES = 4096;
+
+/** A fresh challenge for a dialler to answer, good for a minute. */
+export function issueChallenge() {
+  const now = Date.now();
+  if (challenges.size >= MAX_CHALLENGES) {
+    for (const [c, exp] of challenges) if (exp <= now) challenges.delete(c);
+    // Still full: someone is asking faster than anyone honest would. Drop
+    // the oldest rather than grow - a real dialler retries.
+    while (challenges.size >= MAX_CHALLENGES) challenges.delete(challenges.keys().next().value);
+  }
+  const c = randomBytes(18).toString('base64url');
+  challenges.set(c, now + 60_000);
+  return c;
+}
+
+function spendChallenge(c) {
+  const exp = challenges.get(c);
+  challenges.delete(c);
+  return exp !== undefined && exp > Date.now();
 }
 
 /** Remove a device or machine from the network, everywhere, permanently. */

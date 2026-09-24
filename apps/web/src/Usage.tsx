@@ -153,7 +153,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
   return (
     <>
       <div className="bar">
-        <button className="back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <b>Usage</b>
         {pending.size > 0 && answered.length > 0 && <span className="conn"><i />updating</span>}
       </div>

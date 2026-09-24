@@ -83,8 +83,8 @@ export async function loadCached(env: string, sessionId: string): Promise<{ last
   try {
     const rec = await txn<Record | undefined>('session-logs', 'readonly', (s) => s.get(`${env}:${sessionId}`));
     if (!rec || rec.shape !== SHAPE || rec.kind === 'messages' || !Array.isArray(rec.events)) return null;
-    // Touch for LRU without rewriting the payload.
-    txn('session-logs', 'readwrite', (s) => s.put({ ...rec, at: Date.now() }, rec.key)).catch(() => {});
+    // No LRU touch here: it rewrote the whole payload to change one number,
+    // and the save that follows every open's refresh stamps `at` anyway.
     return { last: rec.last ?? 0, first: rec.first ?? rec.events[0]?.seq ?? 0, events: rec.events };
   } catch {
     return null;
@@ -96,10 +96,11 @@ export async function saveCached(env: string, sessionId: string, last: number, e
   try {
     const key = `${env}:${sessionId}`;
     const kept = trim(events);
+    const fresh = !(await known(key));
     await txn('session-logs', 'readwrite', (s) => s.put(
       { key, kind: 'events', shape: SHAPE, at: Date.now(), last,
         first: Math.max(first, kept[0]?.seq ?? 0), events: kept } satisfies Record, key));
-    await prune(key);
+    if (fresh) await prune(key);
   } catch {
     /* cache is best-effort; the network path still works */
   }
@@ -110,7 +111,6 @@ export async function loadMessages<T>(env: string, sessionId: string): Promise<T
   try {
     const rec = await txn<Record | undefined>('session-logs', 'readonly', (s) => s.get(`msg:${env}:${sessionId}`));
     if (!rec || rec.shape !== SHAPE || !Array.isArray(rec.messages)) return null;
-    txn('session-logs', 'readwrite', (s) => s.put({ ...rec, at: Date.now() }, rec.key)).catch(() => {});
     return rec.messages as T[];
   } catch {
     return null;
@@ -121,11 +121,22 @@ export async function loadMessages<T>(env: string, sessionId: string): Promise<T
 export async function saveMessages(env: string, sessionId: string, messages: unknown[]): Promise<void> {
   try {
     const key = `msg:${env}:${sessionId}`;
+    const fresh = !(await known(key));
     await txn('session-logs', 'readwrite', (s) => s.put({ key, kind: 'messages', shape: SHAPE, at: Date.now(), messages } satisfies Record, key));
-    await prune(key);
+    if (fresh) await prune(key);
   } catch {
     /* best-effort, as above */
   }
+}
+
+/**
+ * Is there a record under this key already? A key-only lookup: the count can
+ * only go over the limit when a new record arrives, and pruning reads every
+ * record back - it used to, on each save, every 2s while a reply streamed.
+ */
+async function known(key: string): Promise<boolean> {
+  const k = await txn<IDBValidKey | undefined>('session-logs', 'readonly', (s) => s.getKey(key));
+  return k !== undefined;
 }
 
 /**

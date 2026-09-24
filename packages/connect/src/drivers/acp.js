@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Driver, checkVersion } from './index.js';
+import { Driver, checkVersion, assertFolder } from './index.js';
 import { modeFor, modesFor } from '../modes.js';
 
 /**
@@ -133,6 +133,7 @@ export class AcpDriver extends Driver {
 
   async start() {
     if (this.#pipe) return;
+    assertFolder(this);
     await checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
 
     // The process may already be running: the terminal host holds agent

@@ -771,6 +771,33 @@ test('a thread keeps what it has cost', async () => {
   await sessions.kill(s.id);
 });
 
+test('a running total is turned back into what each turn cost', async () => {
+  // Claude reports the conversation's total so far on every result. Summing
+  // those counted turn one again on every later turn.
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-cost-total')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
+  const d = FakeDriver.made.at(-1);
+
+  d.push('turn.done', { turnId: 't1', status: 'ok', costTotalUsd: 1 });
+  d.push('turn.done', { turnId: 't2', status: 'ok', costTotalUsd: 2 });
+  d.push('turn.done', { turnId: 't3', status: 'ok', costTotalUsd: 3.5 });
+  let listed = (await sessions.list()).find((x) => x.id === s.id);
+  assert.equal(listed.costUsd, 3.5, 'three turns costing 1 + 1 + 1.5, not 1 + 2 + 3.5');
+  const done = sessions.events.tail(s.id).filter((e) => e.type === 'turn.done');
+  assert.deepEqual(done.map((e) => e.costUsd), [1, 1, 1.5], 'each turn shows its own cost');
+
+  // A total that goes down is a fresh count (a /clear): all of it is new.
+  d.push('turn.done', { turnId: 't4', status: 'ok', costTotalUsd: 0.25 });
+  listed = (await sessions.list()).find((x) => x.id === s.id);
+  assert.equal(listed.costUsd, 3.75);
+  await sessions.kill(s.id);
+});
+
 test('work helm did not start can be filed away or struck off', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');

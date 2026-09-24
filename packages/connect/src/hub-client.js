@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { T } from '@helm/protocol';
-import { machineToken, allEndpoints } from '@helm/protocol/network';
+import { hubCredential, allEndpoints } from '@helm/protocol/network';
 
 /**
  * The CLI talking to machines: one RPC through whichever hub answers.
@@ -13,11 +13,10 @@ export function hubUrls(net) {
 }
 
 export async function hubRpc(net, env, method, params = {}, { timeout = 20_000 } = {}) {
-  const token = machineToken(net);
   const failures = [];
   for (const hub of hubUrls(net)) {
     try {
-      return await rpcVia(hub, token, env, method, params, timeout);
+      return await rpcVia(hub, net, env, method, params, timeout);
     } catch (err) {
       failures.push(`${hub}: ${err.message}`);
       // "offline" is the hub telling us the machine is not attached there;
@@ -28,14 +27,16 @@ export async function hubRpc(net, env, method, params = {}, { timeout = 20_000 }
   throw new Error(`could not reach that machine through any hub\n  ${failures.join('\n  ')}`);
 }
 
-function rpcVia(hub, token, env, method, params, timeout) {
+function rpcVia(hub, net, env, method, params, timeout) {
   // helm's protocol lives at /helm/ws now; a hub from before the move still
   // answers at /ws, so a transport failure there is worth one retry.
   const base = hub.replace(/^http/, 'ws');
   return attempt(`${base}/helm/ws?role=client`).catch((err) =>
     err.rpc ? Promise.reject(err) : attempt(`${base}/ws?role=client`));
 
-  function attempt(url) {
+  // One handshake per socket: the credential it yields is spent on use.
+  async function attempt(url) {
+    const token = await hubCredential(net, hub);
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url, {
         headers: { authorization: `Bearer ${token}` },

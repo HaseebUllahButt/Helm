@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { argv, exit } from 'node:process';
 import {
-  loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, machineToken,
+  loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, hubCredential,
   localKey, describeSelf, saveNetwork, machineKind, MACHINE_KINDS,
 } from '@helm/protocol/network';
 import { refreshProfiles, getProfiles } from '../src/profiles.js';
@@ -129,7 +129,7 @@ async function postToHome(net, path, body = {}) {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${machineToken(net)}`,
+          authorization: `Bearer ${await hubCredential(net, base)}`,
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(5000),

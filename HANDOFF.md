@@ -1,6 +1,6 @@
 # Handoff
 
-State of helm as of 2026-09-17, for whoever picks this up next.
+State of helm as of 2026-09-24, for whoever picks this up next.
 
 Read `README.md` first for what the thing is and how it connects. This file
 is the part that is not obvious from the code: **what it is trying to be**,
@@ -309,6 +309,134 @@ claimed "a real phone has never opened this"; that was wrong for a day, and
 the report that started the latency work came from that phone. **Check
 `helm devices` before writing anything about what has or has not been
 tried.**
+
+## What changed on 2026-09-24
+
+A sweep for speed, cost, cache and security bugs, plus phone UI fixes. Four
+read-only audits found the bugs; each fix below was checked against the code.
+The ones marked *tested* have a test that fails on the old code.
+
+**Deploy note: the hub handshake below changes the wire protocol.** An
+upgraded machine will not link to a hub still on the old helm: it refuses to
+send credentials to anything that cannot prove itself, and an old hub has no
+way to. Run `install.sh` on **both** machines. Old daemons can still link to
+new hubs, so upgrade the VM first.
+
+### Security
+
+- **A daemon handed its permanent token to whatever answered at a roster
+  address.** Most of those are plain `http://<lan-ip>:8787`. Anyone who held
+  that IP on shared wifi got a token that never expires. Every frame they sent
+  back was obeyed too: RPCs, and a `peers` list that went into
+  `authorized_keys`. Now the hub goes first: `POST /api/hub/hello` MACs the
+  dialler's nonce with the network key and returns a challenge. The daemon
+  answers with a token bound to that challenge, valid for one use and 60s
+  (`hubCredential` in `protocol/network.js`). This covers the daemon link,
+  `helm` CLI posts, CLI RPC, and the ssh `ProxyCommand`. *Tested*
+  (`hub-handshake.test.mjs`); the gossip test runs it end to end over two real
+  hubs. **Tokens that already leaked still work.** Rotating the network key
+  is the only fix for those, and nothing does that yet.
+- **The `peers` frame no longer writes SSH keys straight from the hub's
+  word.** `authorized_keys` is built from our own checked, merged roster.
+- **DNS rebinding reached the local key.** `/api/auth/local` matched
+  `^(127\.|localhost|…)` with no end anchor, so `localhost.evil.com` passed.
+  From there the key traded for a network-wide device token. The host is now
+  matched exactly, and a present `Origin` must be loopback. *Tested.*
+- **Agent output could overlay the permission card.** DOMPurify kept `style`,
+  so a link styled `position:fixed; inset:0` sat over Allow. It now strips
+  `style` and form controls (`md.ts`).
+- **Terminal host sockets fell back to a predictable `/tmp` name** when
+  `XDG_RUNTIME_DIR` is unset. Now they use a 0700 `/tmp/helm-<uid>/`, checked
+  for owner and symlinks.
+
+### Cost: the numbers on the screen were wrong
+
+- **Claude thread cost was inflated about 10x over 20 turns.** Claude's
+  `total_cost_usd` is a running total (the CLI's own docs say "read the latest
+  result rather than summing"), and `sessions.js` summed it. The driver now
+  reports `costTotalUsd` and the session works out each turn from the last
+  total. Existing `s.costUsd` values stay inflated; only new turns are right.
+  *Tested.*
+- **Usage rescans double-counted** when two ran at once (several hub links
+  opening, two phones on Usage). `UsageReader.collect` is now single-flight.
+  *Tested.*
+- **A resumed thread older than 7 days was never counted again**: sealed files
+  were skipped without a `stat`. Now they are `stat`'d (1,026 files in 40ms
+  here). *Tested.*
+- **Claude messages written over several lines kept the first line's output
+  count.** Each message id is now credited with its growth. **Codex repeated
+  `token_count`s** are skipped. *Tested.*
+- **Pricing:** `claude-opus-5-5` ($4/$20, $0.20 cache read) and
+  `claude-mythos-5-1` were missing. Fable 5.1 cache reads are $0.25, not $1.
+  **1-hour cache writes** are 2x input, not 1.25x; they were 59M of 74M write
+  tokens here. Claude models run through Devin or OpenCode are now priced as
+  Claude. *Tested.* The index version is bumped, so the next usage open does
+  one cold rescan (~30s on this laptop).
+- **Checked and fine:** the brain prefix does not bust the prompt cache (it
+  goes on the newest message), and helm makes no hidden model calls.
+
+### Speed and leaks
+
+- **A stopped daemon never exited.** `Sessions.stop()` left its sockets to the
+  terminal and proc hosts open, and a usage scan kept reading after `stop()`.
+  Both are fixed. The gossip test went from hanging (the suite took 640s and
+  failed) to 33s, and the whole suite now runs in ~32s.
+- The recent-sessions list walked `/proc` once per transcript (~40ms each). It
+  now takes one snapshot per `inventory()` call.
+- The transcript watcher had no busy guard. A slow re-import now backs off 3x
+  its own duration, capping a 64MB transcript's CPU use.
+- `EventLog` keeps at most 24 logs parsed. Pending permission counts are kept
+  on their own, so `session.list` no longer parses every log.
+- Phone: a `session.update` now patches the row from its payload, plus one
+  trailing `session.list` per burst (it used to be two full lists per status
+  change). The chat cache prunes only when a new record appears; it used to
+  read every cached chat back on each save while streaming. A streaming reply
+  parses only its unsettled tail, not the whole message every 45ms.
+- Service worker: `/media/` is never cached, hashed assets live in their own
+  capped cache, and icons/manifest are network-first. The relay serves
+  `/assets/*` as `immutable`.
+
+### Devin
+
+- **Devin's store froze the whole daemon.** `~/.local/share/devin/cli/sessions.db`
+  is 1.5GB plus a 600MB WAL here. The usage read was **9s of synchronous
+  SQLite** on the daemon thread, re-run whenever the WAL moved, and the WAL
+  moves on every Devin turn. Opening a long Devin chat blocked it for ~1s.
+  Both reads now run on a worker thread (`@helm/usage/off-thread`); the
+  worst event-loop stall during the usage scan went from ~9s to 17ms. A
+  database read in the last 5 minutes is reused even if its WAL moved, so
+  Devin spend shows up on Usage up to 5 minutes late; Rebuild reads fresh.
+  OpenCode's database reads get the same treatment.
+- **A missing folder was reported as a missing CLI.** Two Devin starts at
+  03:00 today failed with `spawn devin ENOENT` while devin was on PATH. Node
+  says that for a missing `cwd` too, and `devin acp` started fine in an
+  existing folder (2.9-5.6s). The Claude and ACP drivers now say "the folder
+  … does not exist on this machine". *Tested.* Which folder those two starts
+  used was not recoverable: the sessions were gone and `cwd` is not logged.
+- Not done: an incremental Devin usage read (`row_id` is AUTOINCREMENT, but
+  rewritten nodes make a high-water mark unsafe without more study).
+
+### UI (phone)
+
+The answer buttons on a blocked session are 32px (were 22px). Back buttons are
+44px on touch and labelled. The "needs you" toast moved under the header (it
+covered the composer). Opening a session no longer pops the keyboard on a
+phone, and Return there inserts a newline (the send button sends). A false
+"↓ new" pill no longer appears on every keystroke, and loading older turns
+keeps your place. Session errors sit above the input and dismiss on tap. ⋯
+menus close on an outside tap. Long titles ellipsize and their tags stay.
+Sheets use `dvh`, so they fit above the keyboard. Primary buttons pass AA
+contrast.
+
+### Not done
+
+- External-transcript import still re-parses the whole file on each change,
+  now rate-limited rather than incremental.
+- Live events still go to every hub *and* every direct peer. The client
+  dedupes them, but they cross the wire twice.
+- No `React.memo`: the reducer mutates in place, so memoizing would show
+  stale data. It needs copy-on-write first.
+- `limits` events are ~20% of the largest event log.
 
 ## What changed on 2026-09-17
 

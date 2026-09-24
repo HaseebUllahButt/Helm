@@ -1,3 +1,4 @@
+import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useState } from 'react';
 import { Client, type Environment, type Session, type ModelList } from '../client';
 import { useNow, waitingSince } from '../useNow';
@@ -46,6 +47,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
+  useDismiss(menu !== null, useCallback(() => setMenu(null), []));
   const [options, setOptions] = useState<ModelList | null>(null);
   const [commands, setCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
   const engine = ENGINE_LABEL[session.engine] ?? session.engine;
@@ -352,7 +354,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles">
           <h1>{session.title}</h1>
           <span className="sub">
@@ -393,7 +395,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             </svg>
           </button>
         )}
-        <button className="iconbtn" title="more" onClick={() => setMenu(menu === 'more' ? null : 'more')}>⋯</button>
+        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}>⋯</button>
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
@@ -432,11 +434,13 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         queueBusy={queueBusy}
         history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
       >
+        {/* Above the input, not under it: below the composer it landed in
+            the home-bar zone and pushed the input up. A tap dismisses it. */}
+        {(error || logError) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || logError}</div>}
         {controls.sheet}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>
-      {(error || logError) && <div className="error floating">{error || logError}</div>}
 
       {ask === 'kill' && (
         <Confirm

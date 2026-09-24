@@ -785,9 +785,22 @@ export class Sessions extends EventEmitter {
     // Accumulated on the record rather than summed from the log, which is
     // trimmed to the last few hundred events - a long thread would start
     // forgetting what its early turns cost.
+    //
+    // Claude reports a running total instead, and a resumed conversation
+    // carries its saved total into the first result. Summing those counted
+    // turn one again on every later turn - twenty equal turns showed ~10x.
+    // The difference from the last total is the turn; a total that went
+    // *down* is a fresh count (a /clear, or a conversation that was lost).
+    if (e.type === 'turn.done' && e.costTotalUsd != null) {
+      const last = s.costTotalUsd ?? 0;
+      const turn = e.costTotalUsd >= last ? e.costTotalUsd - last : e.costTotalUsd;
+      s.costTotalUsd = e.costTotalUsd;
+      forwarded = { ...forwarded, costUsd: Math.round(turn * 1e6) / 1e6 };
+    }
     if (e.type === 'turn.done' && this.#index.has(s.id)) {
       s.turns = (s.turns ?? 0) + 1;
-      if (e.costUsd > 0) s.costUsd = Math.round(((s.costUsd ?? 0) + e.costUsd) * 1e6) / 1e6;
+      const cost = forwarded.costUsd;
+      if (cost > 0) s.costUsd = Math.round(((s.costUsd ?? 0) + cost) * 1e6) / 1e6;
       this.#save();
     }
     if (!staleClaudeConversation && d.engineSessionId && d.engineSessionId !== s.engineSessionId) {
@@ -1493,13 +1506,19 @@ export class Sessions extends EventEmitter {
       clearInterval(existing.poll);
       this.#transcripts.delete(id);
     }
-    const t = { path, expires: Date.now() + WATCH_TTL_MS, size: -1, poll: null };
+    const t = { path, expires: Date.now() + WATCH_TTL_MS, size: -1, poll: null, busy: false, rest: 0 };
     t.poll = setInterval(async () => {
       if (Date.now() > t.expires) {
         clearInterval(t.poll);
         this.#transcripts.delete(id);
         return;
       }
+      // One tick at a time, and a slow import earns a rest: re-reading a
+      // 64MB transcript is ~0.7s of CPU, and a CLI writing to it changes it
+      // every tick - unguarded that was a core spent for as long as it ran.
+      // Resting 3x the import caps it near a quarter of one.
+      if (t.busy || Date.now() < t.rest) return;
+      t.busy = true;
       try {
         const { size, mtimeMs } = await stat(path);
         // SQLite writes live updates to a WAL while another CLI is open.
@@ -1510,10 +1529,15 @@ export class Sessions extends EventEmitter {
         if (t.size !== -1 && stamp !== t.size) this.emit('transcript', { id });
         if (t.size !== -1 && stamp !== t.size) {
           const session = this.#index.get(id);
-          if (session?.external && session.driver) await this.#importExternalTranscript(session);
+          if (session?.external && session.driver) {
+            const began = Date.now();
+            await this.#importExternalTranscript(session);
+            const took = Date.now() - began;
+            if (took > TRANSCRIPT_POLL_MS / 2) t.rest = Date.now() + took * 3;
+          }
         }
         t.size = stamp;
-      } catch { /* transcript not written yet */ }
+      } catch { /* transcript not written yet */ } finally { t.busy = false; }
     }, TRANSCRIPT_POLL_MS);
     t.poll.unref?.();
     this.#transcripts.set(id, t);
@@ -2202,5 +2226,10 @@ export class Sessions extends EventEmitter {
   async stop() {
     await Promise.allSettled([...this.#drivers.values()].map((d) => d.suspend?.() ?? d.kill()));
     this.#drivers.clear();
+    // Let go of the hosts, without closing what they hold: their shells and
+    // agents outlive this daemon by design. A socket left open here kept a
+    // stopped daemon's process alive indefinitely.
+    this.terminals.detach?.();
+    this.procs.detach?.();
   }
 }

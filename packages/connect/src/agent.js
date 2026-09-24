@@ -3,7 +3,7 @@ import { hostname, platform, arch, release } from 'node:os';
 import { connect as tcpConnect } from 'node:net';
 import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import {
-  loadNetwork, machineToken, mergeRoster, allEndpoints, describeSelf,
+  loadNetwork, mergeRoster, allEndpoints, describeSelf, hubCredential,
   roster as rosterOf, rosterHash, machineName, NAME_RULE, machineKind,
   MACHINE_KINDS, saveNetwork,
 } from '@helm/protocol/network';
@@ -113,6 +113,23 @@ class Link {
     // accidentally dialled its own public address, which would set off the
     // supersede war invariant #2 exists to prevent).
     const isSelf = this.url === `http://127.0.0.1:${this.daemon.port}`;
+    // The hub proves itself before it hears a credential from us, and what
+    // it hears is good for this one socket. See hubCredential.
+    let credential;
+    try {
+      credential = await hubCredential(loadNetwork() ?? this.daemon.net, this.url);
+    } catch (err) {
+      if (err.untrusted && !this.warned) {
+        this.warned = true;
+        console.log(`[helm] ${this.url}: ${err.message}`);
+      }
+      if (this.#stopped) return;
+      setTimeout(() => this.#open(), this.#backoff).unref?.();
+      this.#backoff = Math.min(this.#backoff * 2, RECONNECT_MAX);
+      return;
+    }
+    if (this.#stopped) return;
+    this.warned = false;
     // The token travels as a header rather than in the URL, so it never
     // appears in the access logs of Caddy or a tunnel along the way.
     const ws = new WebSocket(
@@ -120,7 +137,7 @@ class Link {
       `?name=${encodeURIComponent(this.daemon.name)}` +
       `&info=${encodeURIComponent(JSON.stringify(info))}` +
       (isSelf ? '&role=self' : ''),
-      { headers: { authorization: `Bearer ${this.daemon.token}` } }
+      { headers: { authorization: `Bearer ${credential}` } }
     );
     this.#ws = ws;
 
@@ -194,7 +211,6 @@ export class Daemon {
     // service unit that still carries the `--name` it was installed with
     // would otherwise undo that rename on every restart.
     this.name = net.machines[net.self]?.name || name || hostname();
-    this.token = machineToken(net);
   }
 
   async start() {
@@ -339,6 +355,7 @@ export class Daemon {
     this.#media = null;
     this.peers?.stop();
     this.runtime?.stop();
+    this.usage?.stop();
     // Hosted agents are detached by Sessions.stop() and resume on demand;
     // local ones are stopped as before. Awaiting this is important during a
     // systemd restart: the daemon must release its side of every session
@@ -806,12 +823,21 @@ export class Daemon {
       case T.PEERS: {
         // Someone joined or left; take on whatever this hub knows that we do
         // not, then rewrite our SSH files to match.
+        //
+        // The keys come from our own roster after the merge, not from the
+        // frame's `peers`: that list is the hub's word alone, and what lands
+        // in authorized_keys should have passed the same checks as the
+        // roster it was derived from on the hub side anyway.
         const net = loadNetwork();
         if (net && msg.roster && mergeRoster(net, msg.roster)) {
           this.net = net;
           this.#reconcileLinks();
         }
-        return applyPeers(msg.peers ?? []);
+        const known = loadNetwork() ?? net;
+        if (!known) return;
+        return applyPeers(Object.values(known.machines ?? {})
+          .filter((m) => m.pubkey && m.id !== known.self)
+          .map((m) => ({ name: m.name, pubkey: m.pubkey, sshUser: m.sshUser, sshPort: m.sshPort ?? 22 })));
       }
 
       case T.TUNNEL_OPEN:

@@ -39,10 +39,12 @@ export const DEDUPE_RING = 32;
  * The counters every provider is folded into. All summable: a bucket is a
  * running total, so anything that is not a number belongs in the key.
  */
-export const FIELDS = ['input', 'output', 'cacheWrite', 'cacheRead', 'reasoning', 'total', 'turns'];
+// cacheWrite1h is the part of cacheWrite that went into a 1-hour cache (2x
+// input rather than 1.25x); it is inside cacheWrite, not beside it.
+export const FIELDS = ['input', 'output', 'cacheWrite', 'cacheWrite1h', 'cacheRead', 'reasoning', 'total', 'turns'];
 
 export const blankTokens = () => ({
-  input: 0, output: 0, cacheWrite: 0, cacheRead: 0, reasoning: 0, total: 0, turns: 0,
+  input: 0, output: 0, cacheWrite: 0, cacheWrite1h: 0, cacheRead: 0, reasoning: 0, total: 0, turns: 0,
 });
 
 /**
@@ -177,8 +179,8 @@ export class FileRollupCache {
    * Bring the index up to date for `files` and report what that cost.
    *
    * Three outcomes per file, and the whole point of the module is how often
-   * the first two happen: sealed (old enough to be immutable - not even
-   * stat'ed), hit (unchanged), appended (read from `bytes` on), parsed (new,
+   * the first two happen: sealed (unchanged, and untouched for long enough
+   * that it is probably done), hit (unchanged), appended (read from `bytes` on), parsed (new,
    * or changed in a way that is not an append - a rewrite, a truncation).
    *
    * Two escape hatches, because "I do not believe these numbers" has two
@@ -211,17 +213,16 @@ export class FileRollupCache {
     for (const filePath of files) {
       stats.files++;
       const entry = this.entries.get(filePath);
-      // Sealed: old, already whole, and JSONL is append-only. Skipping the
-      // stat is what keeps a history of tens of thousands of files flat.
-      if (!force && entry && entry.sealed && now - entry.mtimeMs > this.sealAfterMs) {
-        stats.sealed++;
-        stats.bytesSkipped += entry.size;
-        continue;
-      }
+      // Sealed files are still stat'ed. Skipping that was the point of the
+      // seal, but a thread resumed after a week appends to the file it was
+      // sealed in, and the cached mtime it was judged by never moves - so
+      // every turn of a resumed conversation went uncounted. A stat is ~40µs;
+      // a thousand files cost 40ms.
       let st;
       try { st = await stat(filePath); } catch { continue; }
       if (!rebuild && this.#matches(entry, st)) {
-        stats.hits++;
+        if (entry.sealed) stats.sealed++;
+        else stats.hits++;
         stats.bytesSkipped += st.size;
         if (now - st.mtimeMs > this.sealAfterMs) entry.sealed = true;
         continue;
@@ -234,7 +235,7 @@ export class FileRollupCache {
 
     let i = 0;
     const worker = async () => {
-      while (i < work.length) {
+      while (i < work.length && !this.stopped) {
         const item = work[i++];
         if (!item) break;
         const { filePath, st, appended } = item;
@@ -360,7 +361,7 @@ export class ResultCache {
   }
 
   store(key, sig, value) {
-    this.entries.set(key, { sig, value });
+    this.entries.set(key, { sig, value, at: Date.now() });
   }
 
   toJSON() {
@@ -384,7 +385,9 @@ export class ResultCache {
  * half-parsed index behind; a version stamp retires the format outright when
  * it changes, because a wrong bucket is worse than a cold scan.
  */
-export const INDEX_VERSION = 1;
+// 2: Claude lines sharing a message id credit their growth, Codex skips
+// repeated token_counts - buckets built by 1 are wrong, not just stale.
+export const INDEX_VERSION = 2;
 
 export async function loadIndex(file, caches) {
   if (!existsSync(file)) return false;
@@ -405,7 +408,9 @@ export async function loadIndex(file, caches) {
 export async function saveIndex(file, caches) {
   const payload = { version: INDEX_VERSION, savedAt: new Date().toISOString(), caches: {} };
   for (const cache of caches) payload.caches[cache.id] = cache.toJSON();
-  const tmp = `${file}.${process.pid}.tmp`;
+  // Unique per save, not per process: two saves in flight shared one temp
+  // file, and a rename could publish the other one's half-written bytes.
+  const tmp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
     await writeFile(tmp, JSON.stringify(payload), 'utf8');
     await rename(tmp, file);

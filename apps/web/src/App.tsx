@@ -1,3 +1,4 @@
+import { useDismiss } from './useDismiss';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
@@ -484,6 +485,8 @@ function Shell({ client, conn, onSignOut }: {
       .catch((e) => setError(e.message));
   }, [client]);
 
+  /** One trailing session.list per machine per burst of updates. */
+  const relist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const loadSessions = useCallback((envId: string) => {
     client.rpc<{ sessions: Session[] }>(envId, 'session.list', {}, 15_000)
       .then((r) => setSessions((s) => ({ ...s, [envId]: r.sessions })))
@@ -503,7 +506,21 @@ function Shell({ client, conn, onSignOut }: {
       }
       if (kind === 'connection' && payload.online) loadEnvs();
       if (kind === 'session.update' && e) {
-        loadSessions(e);
+        // The update carries the session, so draw it now; the list call
+        // behind it only has to find what came or went. It used to be the
+        // only path - a full session.list per update, two per status change
+        // (the daemon sends `session` and `status` together), each one a
+        // relay round trip before the sidebar moved.
+        const up = payload?.session as Session | undefined;
+        if (up?.id) {
+          setSessions((all) => {
+            const list = all[e];
+            if (!list?.some((x) => x.id === up.id)) return all;
+            return { ...all, [e]: list.map((x) => (x.id === up.id ? { ...x, ...up } : x)) };
+          });
+        }
+        clearTimeout(relist.current[e]);
+        relist.current[e] = setTimeout(() => loadSessions(e), 400);
         // A session that just started waiting, on a machine this window is
         // not looking at, earns a tap-target in front of whatever is open -
         // on a phone the sidebar that would say so is hidden behind the
@@ -839,7 +856,7 @@ function Shell({ client, conn, onSignOut }: {
                     {machines.map((e) => (
                       <button key={e.id} className="row" onClick={() => { setQuery(''); openEnv(e.id); }}>
                         <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-                        <span className="grow"><span className="rt">{e.name}</span><span className="rm">{e.kind ?? 'machine'}</span></span>
+                        <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span><span className="rm">{e.kind ?? 'machine'}</span></span>
                         <span className="chev">›</span>
                       </button>
                     ))}
@@ -851,7 +868,7 @@ function Shell({ client, conn, onSignOut }: {
                       }}>
                         <EngineMark engine={engineOf(s.engine).cls} />
                         <span className="grow">
-                          <span className="rt">{s.title}{stale && <span className="tag">offline</span>}</span>
+                          <span className="rt"><span className="rt-text">{s.title}</span>{stale && <span className="tag">offline</span>}</span>
                           <span className="rm">{e.name} · {shortPath(s.cwd)}</span>
                         </span>
                         <StatusChip status={s.status} />
@@ -873,7 +890,7 @@ function Shell({ client, conn, onSignOut }: {
                     <button key={s.id} className="row" onClick={() => openSession(e.id, s)}>
                       <span className="sdot blocked" />
                       <span className="grow">
-                        <span className="rt">{s.title}</span>
+                        <span className="rt"><span className="rt-text">{s.title}</span></span>
                         <span className="rm">{e.name} · {shortPath(s.cwd)}</span>
                       </span>
                     </button>
@@ -896,7 +913,7 @@ function Shell({ client, conn, onSignOut }: {
                     >
                       <span className={`mdot ${e.online ? 'on' : 'off'}`} />
                       <span className="grow">
-                        <span className="rt">{e.name}{e.kind && <span className="tag">{e.kind}</span>}</span>
+                        <span className="rt"><span className="rt-text">{e.name}</span>{e.kind && <span className="tag">{e.kind}</span>}</span>
                         <span className="rm">
                           {e.online
                             ? (list.length ? `${list.length} running${working ? `, ${working} working` : ''}` : 'idle')
@@ -927,7 +944,7 @@ function Shell({ client, conn, onSignOut }: {
                           with each other, and with the machines above. */}
                       <EngineMark engine={s ? engineOf(s.engine).cls : undefined} />
                       <span className="grow">
-                        <span className="rt">{e.name}{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
+                        <span className="rt"><span className="rt-text">{e.name}</span>{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
                         <span className="rm">
                           {s
                             ? `${engineOf(s.engine).label}${s.model ? ` · ${s.model}` : ''}`
@@ -1586,7 +1603,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles"><h1>Devices</h1><span className="sub">what holds a key to this network</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -1603,7 +1620,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
                 try { await navigator.clipboard.writeText(invite.link); setCopied(true); }
                 catch { setError('could not copy - long-press the link instead'); }
               }}>
-                <span className="grow"><span className="rt">{copied ? 'copied' : 'Copy link'}</span></span>
+                <span className="grow"><span className="rt"><span className="rt-text">{copied ? 'copied' : 'Copy link'}</span></span></span>
               </button>
               <button className="row" onClick={() => { setInvite(null); setCopied(false); }}>
                 <span className="grow"><span className="rt">Done</span></span>
@@ -1909,7 +1926,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   return (
     <>
       <div className="bar">
-        {!wide && <button className="iconbtn back" onClick={onBack}>‹</button>}
+        {!wide && <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>}
         <div className="titles">
           <h1>{env.name}</h1>
           <span className="sub">
@@ -2216,6 +2233,7 @@ function ProjectActions({ title, onStart, onRename, onRemove }: {
   title: string; onStart: () => void; onRename: () => void; onRemove: () => void;
 }) {
   const [menu, setMenu] = useState(false);
+  useDismiss(menu, useCallback(() => setMenu(false), []));
   return (
     <>
       <button
@@ -2225,7 +2243,7 @@ function ProjectActions({ title, onStart, onRename, onRemove }: {
       >+</button>
       <button
         type="button" className="foldbtn"
-        title={`actions for ${title}`} aria-label={`actions for ${title}`}
+        title={`actions for ${title}`} aria-label={`actions for ${title}`} aria-haspopup="menu" aria-expanded={menu}
         onClick={() => setMenu((v) => !v)}
       >⋯</button>
       {menu && (
@@ -2262,6 +2280,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
   // A thread read out of a CLI's own history rather than run by helm.
   const found = s.id.startsWith('found:');
   const [menu, setMenu] = useState(false);
+  useDismiss(menu, useCallback(() => setMenu(false), []));
   const [naming, setNaming] = useState(false);
   const [ending, setEnding] = useState(false);
   // Work helm did not start is still the owner's to file away. It used to get
@@ -2295,7 +2314,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
         {!selecting && managed && (
           <>
             <button
-              className="rowend" title="thread actions" aria-label={`actions for ${s.title}`}
+              className="rowend" title="thread actions" aria-label={`actions for ${s.title}`} aria-haspopup="menu" aria-expanded={menu}
               onClick={(e) => { e.stopPropagation(); setMenu((open) => !open); }}
             >⋯</button>
             {menu && (
@@ -2433,7 +2452,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles"><h1>{title}</h1><span className="sub">{sub}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -2461,7 +2480,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
                 <button key={a.key} className="row tall" disabled={!!busy} onClick={() => start(a)}>
                   <EngineMark engine={engineOf(a.engine).cls} />
                   <span className="grow">
-                    <span className="rt">{engineOf(a.engine).label}</span>
+                    <span className="rt"><span className="rt-text">{engineOf(a.engine).label}</span></span>
                     <span className="rm">{[a.account, a.prefs?.default].filter(Boolean).join(' · ')}</span>
                   </span>
                   {busy === a.key ? <span className="chip working"><i />starting</span> : <span className="chev">›</span>}
@@ -2486,7 +2505,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
                 return (
                   <button key={m} className={`row${current ? ' active' : ''}`} disabled={!!busy} onClick={() => setModel(m)}>
                     <span className="grow">
-                      <span className="rt">{models?.labels?.[m] ?? m}</span>
+                      <span className="rt"><span className="rt-text">{models?.labels?.[m] ?? m}</span></span>
                       {current && <span className="rm">what it thinks with now</span>}
                     </span>
                     {busy === m ? <span className="chip working"><i />changing</span> : current ? <span className="tag key">current</span> : <span className="chev">›</span>}
@@ -2704,7 +2723,7 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles"><h1>Settings</h1><span className="sub">this network, this device</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -2767,7 +2786,7 @@ function NetworkSettings({ client, envs, onBack, onOpen }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles"><h1>CLI defaults</h1><span className="sub">all machines</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -2830,7 +2849,7 @@ function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles"><h1>Settings</h1><span className="sub">{env.name}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -2973,7 +2992,7 @@ function ModelPrefsView({ client, env, account, onBack }: {
   const row = (m: string, checked: boolean) => (
     <button key={m} className={`row tall${checked ? ' active' : ''}`} onClick={() => toggle(m)}>
       <span className="grow">
-        <span className="rt">{list?.labels?.[m] ?? m}</span>
+        <span className="rt"><span className="rt-text">{list?.labels?.[m] ?? m}</span></span>
         {(list?.labels?.[m] && list.labels[m] !== m) && <span className="rm">{m}</span>}
         {!all.includes(m) && <span className="rm">not offered by the CLI anymore</span>}
       </span>
@@ -2984,7 +3003,7 @@ function ModelPrefsView({ client, env, account, onBack }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles"><h1>CLI defaults</h1><span className="sub">{eng.label} · {account.account} · {env.name}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -3116,7 +3135,7 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles"><h1>{title}</h1><span className="sub">{here}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -3139,7 +3158,7 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
               <button key={h.path} className="row" onClick={() => pick(h.path)}>
                 <span className={`glyph${h.repo ? ' repo' : ''}`}>{h.repo ? '◆' : '▸'}</span>
                 <span className="grow">
-                  <span className="rt">{h.name}</span>
+                  <span className="rt"><span className="rt-text">{h.name}</span></span>
                   <span className="rm">{h.path}</span>
                 </span>
                 <span className="chev">›</span>
@@ -3161,7 +3180,7 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
                     <button key={p} className="row" onClick={() => pick(p)}>
                       <span className="glyph repo">◆</span>
                       <span className="grow">
-                        <span className="rt">{shortPath(p)}</span>
+                        <span className="rt"><span className="rt-text">{shortPath(p)}</span></span>
                         <span className="rm">{p}</span>
                       </span>
                       <span className="chev">›</span>
@@ -3193,7 +3212,7 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
               {entries.map((e) => (
                 <button key={e.path} className="row" onClick={() => onInto(e.path)}>
                   <span className={`glyph${e.isRepo ? ' repo' : ''}`}>{e.isRepo ? '◆' : '▸'}</span>
-                  <span className="grow"><span className="rt">{e.name}</span></span>
+                  <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
                   <span className="chev">›</span>
                 </button>
               ))}
@@ -3290,7 +3309,7 @@ function MediaView({ client, env, onBack }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={backTo}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={backTo}>‹</button>
         <div className="titles">
           <h1>{playing ? playing.entry.name : env.name}</h1>
           <span className="sub">{playing ? 'playing' : crumbs || 'media'}</span>
@@ -3318,7 +3337,7 @@ function MediaView({ client, env, onBack }: {
               <button key={r.id} className="row" onClick={() => { setRoot(r); setPath(''); }}>
                 <span className="glyph repo">◆</span>
                 <span className="grow">
-                  <span className="rt">{r.name}</span>
+                  <span className="rt"><span className="rt-text">{r.name}</span></span>
                   <span className="rm">{r.path}</span>
                 </span>
                 <span className="chev">›</span>
@@ -3349,7 +3368,7 @@ function MediaView({ client, env, onBack }: {
               >
                 <span className={`glyph${e.dir ? ' repo' : ''}`}>{e.dir ? '▸' : e.media ? '▶' : '·'}</span>
                 <span className="grow">
-                  <span className="rt">{e.name}</span>
+                  <span className="rt"><span className="rt-text">{e.name}</span></span>
                   {!e.dir && e.size != null && <span className="rm">{bytes(e.size)}</span>}
                 </span>
                 {e.dir && <span className="chev">›</span>}
@@ -3442,7 +3461,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles"><h1>New session</h1><span className="sub">{cwd}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -3506,6 +3525,7 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [menu, setMenu] = useState(false);
+  useDismiss(menu, useCallback(() => setMenu(false), []));
   const eng = engineOf(session.engine);
 
   // Read back from the CLI's own transcript, so this chat costs a round trip
@@ -3591,7 +3611,7 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles">
           <h1>{session.title}</h1>
           <span className="sub">{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''} · {env.name}</span>
@@ -3602,7 +3622,7 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
             {raw ? '¶' : '❯_'}
           </button>
         )}
-        <button className="iconbtn" title="more" onClick={() => setMenu((v) => !v)}>⋯</button>
+        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>⋯</button>
         {menu && (
           <div className="menu" onClick={() => setMenu(false)}>
             <button onClick={() => setNaming(true)}>Rename thread</button>
@@ -3640,9 +3660,11 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
           draft={draft} setDraft={setDraft} onSend={send} onKey={key}
           waiting={status === 'blocked'} engine={eng.label}
           history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
-        />
+        >
+          {error && <div className="error floating" role="alert" onClick={() => setError('')}>{error}</div>}
+        </Composer>
       )}
-      {error && <div className="error floating">{error}</div>}
+      {raw && error && <div className="error floating" role="alert" onClick={() => setError('')}>{error}</div>}
     </>
   );
 }

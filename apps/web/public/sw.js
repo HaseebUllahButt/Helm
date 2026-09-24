@@ -8,7 +8,14 @@
  */
 // Bump this whenever the shell changes so an installed PWA cannot stay on a
 // previous bundle forever when its page has been left open for days.
-const CACHE = 'helm-shell-v7';
+const CACHE = 'helm-shell-v8';
+/**
+ * Hashed bundles live apart from the shell: their names change every deploy,
+ * so they only ever accumulate. Capped by count, oldest out, since a worker
+ * cannot know which chunks a future index.html will still ask for.
+ */
+const ASSETS = 'helm-assets';
+const MAX_ASSETS = 60;
 const SHELL = [
   '/', '/index.html', '/manifest.webmanifest',
   '/icon.svg', '/icon-180.png', '/icon-192.png', '/favicon-32.png',
@@ -32,7 +39,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== ASSETS).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -48,6 +55,10 @@ self.addEventListener('fetch', (event) => {
   // excluded under one of its two names.
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/helm/')) return;
   if (url.pathname === '/ws') return;
+  // Media is streamed with range requests under single-use tickets: a 206
+  // cannot be cached at all, and a whole 200 film stored under a URL that is
+  // never asked for again is just the phone's storage gone.
+  if (url.pathname.startsWith('/media/')) return;
 
   // Navigations resolve to the app shell: this is a single-page app, so every
   // path is a route rather than a document on disk.
@@ -73,18 +84,42 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(request).then((hit) =>
-      hit ??
-      fetch(request).then((res) => {
-        if (res.ok && res.type === 'basic') {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(request, copy));
-        }
-        return res;
-      })
-    )
-  );
+  // A hashed bundle never changes under its name: cache-first, forever.
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      caches.match(request).then((hit) =>
+        hit ??
+        fetch(request).then((res) => {
+          if (res.ok && res.type === 'basic') {
+            const copy = res.clone();
+            caches.open(ASSETS).then(async (c) => {
+              await c.put(request, copy);
+              const keys = await c.keys();
+              for (const k of keys.slice(0, Math.max(0, keys.length - MAX_ASSETS))) await c.delete(k);
+            }).catch(() => {});
+          }
+          return res;
+        })
+      )
+    );
+    return;
+  }
+
+  // Icons and the manifest keep their names across deploys, so cache-first
+  // froze them until someone remembered to bump CACHE. Network first, with
+  // the copy as the offline answer.
+  event.respondWith((async () => {
+    try {
+      const res = await fetch(request);
+      if (res.ok && res.type === 'basic') {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(request, copy)).catch(() => {});
+      }
+      return res;
+    } catch {
+      return (await caches.match(request)) ?? Response.error();
+    }
+  })());
 });
 
 /**

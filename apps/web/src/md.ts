@@ -47,8 +47,18 @@ const codeBlock = ({ text, lang }: { text: string; lang?: string }) => {
 };
 marked.use({ gfm: true, breaks: true, renderer: { code: codeBlock } });
 
-/** Sanitised because an agent's output includes whatever it read from the web. */
+/**
+ * Sanitised because an agent's output includes whatever it read from the web.
+ * No `style` and no form controls either: no script runs without them, but a
+ * link styled `position:fixed; inset:0` lies over the permission card, and
+ * the tap meant for Allow opens someone else's page. `button` and task-list
+ * checkboxes stay: the code blocks' copy button is one, and without a form
+ * neither submits anything.
+ */
 export function render(text: string): string {
   const raw = marked.parse(text, { async: false }) as string;
-  return DOMPurify.sanitize(raw, { USE_PROFILES: { html: true }, ADD_ATTR: ['data-copy'] });
+  return DOMPurify.sanitize(raw, {
+    USE_PROFILES: { html: true }, ADD_ATTR: ['data-copy'],
+    FORBID_ATTR: ['style'], FORBID_TAGS: ['form', 'textarea', 'select', 'style'],
+  });
 }

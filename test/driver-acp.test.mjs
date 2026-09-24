@@ -194,3 +194,14 @@ test('opencode2: the separate v2 driver starts an ACP session and exposes comman
   assert.equal(modeCall.params.value, 'plan');
   await driver.kill();
 });
+
+test('a missing folder is named, not reported as a missing CLI', async () => {
+  // Node says `spawn devin ENOENT` for a cwd that is not there, which read as
+  // "devin is not installed" while devin sat on PATH.
+  const { DevinDriver } = await import('../packages/connect/src/drivers/devin.js');
+  const d = new DevinDriver({ cmd: 'devin', env: {}, args: [], cwd: '/no/such/folder/for/helm', mode: 'edit' });
+  const seen = [];
+  d.on('event', (e) => seen.push(e));
+  await assert.rejects(d.start(), /folder \/no\/such\/folder\/for\/helm does not exist/);
+  assert.equal(seen[0]?.type, 'error');
+});

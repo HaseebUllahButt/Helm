@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Driver, checkVersion } from './index.js';
+import { Driver, checkVersion, assertFolder } from './index.js';
 import { modeFor } from '../modes.js';
 
 /**
@@ -83,6 +83,7 @@ export class ClaudeDriver extends Driver {
 
   async start() {
     if (this.#pipe) return;
+    assertFolder(this);
     await checkVersion('claude', this.cmd, this.env, CLAUDE_MIN_VERSION, this.log);
     if (this.procId && this.procHost?.hasProc(this.procId)) {
       const pipe = this.procHost.procPipe(this.procId);
@@ -507,7 +508,10 @@ export class ClaudeDriver extends Driver {
     this.push('turn.done', {
       turnId: this.#turnId,
       status: interrupted ? 'interrupted' : m.is_error ? 'error' : 'ok',
-      costUsd: m.total_cost_usd,
+      // A running total for the conversation, not this turn's cost - the
+      // CLI says to read the latest rather than sum them. Sessions turns it
+      // back into a per-turn figure against the last total it saw.
+      costTotalUsd: m.total_cost_usd,
       usage: m.usage && { input: m.usage.input_tokens, output: m.usage.output_tokens, cacheRead: m.usage.cache_read_input_tokens },
       durationMs: m.duration_ms,
       error: m.is_error && !interrupted ? (m.errors?.join('; ') || m.result || m.subtype) : undefined,

@@ -114,6 +114,30 @@ export class UsageReader {
    * does not double its own usage.
    */
   async collect(profiles = [], opts = {}) {
+    // One scan at a time. The file caches are shared, and two scans reading
+    // the same entry from the same byte offset each fold the tail in - every
+    // turn counted twice, then saved that way. Several hub links opening at
+    // once, or two phones on the Usage screen, is all it took. A caller that
+    // arrives mid-scan waits for it and then runs its own (cheap: everything
+    // is a cache hit by then), so a rebuild or a new profile is never lost.
+    const run = (this.#queue ?? Promise.resolve()).then(() => this.#collect(profiles, opts));
+    this.#queue = run.catch(() => {});
+    return run;
+  }
+
+  #queue = null;
+
+  /**
+   * Abandon a scan in progress, between files. A cold scan reads gigabytes
+   * and outlived the daemon that asked for it - a stopped daemon kept its
+   * process alive for minutes. What was read so far is whole per file, so
+   * nothing half-counted is kept.
+   */
+  stop() {
+    for (const c of this.scanners.caches) c.stopped = true;
+  }
+
+  async #collect(profiles, opts) {
     await this.prime();
     const seen = new Set();
     const buckets = new Map();
@@ -255,7 +279,7 @@ export function foldBuckets(buckets, {
 
 function blankTotals() {
   return {
-    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 0, turns: 0,
+    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, reasoning: 0, total: 0, turns: 0,
     costUsd: 0, unpriced: false,
     // What the cached reads would have cost as fresh input, and what writing
     // the cache cost above the fresh rate. The difference is the saving.
@@ -264,14 +288,15 @@ function blankTotals() {
 }
 
 function addInto(acc, b, cost, rates) {
-  for (const k of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'total', 'turns']) {
+  for (const k of ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoning', 'total', 'turns']) {
     acc[k] += b[k] || 0;
   }
   if (cost) acc.costUsd += cost.total;
   else acc.unpriced = true;
   if (rates) {
     acc.cacheSavedUsd += ((b.cacheRead || 0) * (rates.input - rates.cacheRead)) / 1e6;
-    acc.cacheWritePremiumUsd += ((b.cacheWrite || 0) * (rates.cacheWrite - rates.input)) / 1e6;
+    const hour = Math.min(b.cacheWrite1h || 0, b.cacheWrite || 0);
+    acc.cacheWritePremiumUsd += (((b.cacheWrite || 0) - hour) * (rates.cacheWrite - rates.input) + hour * rates.input) / 1e6;
   }
 }
 

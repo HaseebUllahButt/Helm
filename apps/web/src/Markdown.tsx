@@ -45,10 +45,36 @@ function useEngine() {
   return engine;
 }
 
-export function Markdown({ text, className = '' }: { text: string; className?: string }) {
+/**
+ * Where a streaming reply's settled part ends: the last blank line that is
+ * not inside a code fence. Everything before it is finished markdown that
+ * the next token cannot change.
+ */
+function settledEnd(text: string): number {
+  let fence = false, end = 0, at = 0;
+  for (const line of text.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    else if (!fence && !line.trim() && at > 0) end = at;
+    at += line.length + 1;
+  }
+  return end;
+}
+
+export function Markdown({ text, className = '', live = false }: { text: string; className?: string; live?: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const ready = useEngine();
-  const html = useMemo(() => (ready ? ready.render(text) : null), [text, ready]);
+  // While a reply streams it is re-rendered every reveal step, and a whole
+  // parse (marked, highlight.js, DOMPurify) of a long reply is tens of ms on
+  // a phone - a saturated main thread for as long as the reply lasts. The
+  // settled blocks are parsed once and kept; only the growing tail is new
+  // work each step. A finished message goes back to one whole parse.
+  const cut = live ? settledEnd(text) : 0;
+  const head = cut ? text.slice(0, cut) : '';
+  const headHtml = useMemo(() => (ready && head ? ready.render(head) : ''), [head, ready]);
+  const html = useMemo(
+    () => (ready ? headHtml + ready.render(cut ? text.slice(cut) : text) : null),
+    [text, cut, headHtml, ready],
+  );
 
   // One delegated handler for every copy button in this message.
   useEffect(() => {

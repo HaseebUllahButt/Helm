@@ -110,9 +110,23 @@ function turnStartFor(events, from) {
   return -1;
 }
 
+/**
+ * How many logs stay parsed in memory. Every append is on disk before it
+ * returns, so a log dropped here is just re-read when next asked for. Without
+ * a bound the daemon held every thread it had ever touched - ~1.4MB each -
+ * and `list()` touched them all.
+ */
+const OPEN_LOGS = 24;
+
 export class EventLog {
-  /** sessionId -> { seq, events[] } */
+  /** sessionId -> { seq, events[] }, least recently used first */
   #logs = new Map();
+  /**
+   * sessionId -> unanswered permission requests, kept past eviction: the
+   * session list asks for every thread's count, and answering that must not
+   * mean parsing every log.
+   */
+  #pending = new Map();
 
   constructor(dir = EVENTS_DIR) {
     this.dir = dir;
@@ -122,7 +136,11 @@ export class EventLog {
 
   #open(id) {
     let log = this.#logs.get(id);
-    if (log) return log;
+    if (log) {
+      this.#logs.delete(id);
+      this.#logs.set(id, log);
+      return log;
+    }
     log = { seq: 0, events: [] };
     const file = this.#file(id);
     if (existsSync(file)) {
@@ -138,7 +156,16 @@ export class EventLog {
       }
     }
     this.#logs.set(id, log);
+    const open = new Map();
+    for (const e of log.events) this.#track(open, e);
+    this.#pending.set(id, open);
+    while (this.#logs.size > OPEN_LOGS) this.#logs.delete(this.#logs.keys().next().value);
     return log;
+  }
+
+  #track(open, e) {
+    if (e.type === 'permission.request') open.set(e.requestId, e);
+    else if (e.type === 'permission.resolved') open.delete(e.requestId);
   }
 
   #attDir(id) { return join(this.dir, `${id}.att`); }
@@ -199,6 +226,7 @@ export class EventLog {
     const log = this.#open(id);
     const full = { seq: ++log.seq, at: Date.now(), ...event };
     log.events.push(full);
+    this.#track(this.#pending.get(id), full);
     if (log.events.length > KEEP) {
       const dropped = log.events.splice(0, log.events.length - KEEP);
       if (dropped.some((e) => e.attachments?.length)) this.#sweep(id, log.events);
@@ -329,12 +357,8 @@ export class EventLog {
    * the agent is still holding open must not vanish from the phone.
    */
   pending(id) {
-    const open = new Map();
-    for (const e of this.#open(id).events) {
-      if (e.type === 'permission.request') open.set(e.requestId, e);
-      else if (e.type === 'permission.resolved') open.delete(e.requestId);
-    }
-    return [...open.values()];
+    if (!this.#pending.has(id)) this.#open(id);
+    return [...this.#pending.get(id).values()];
   }
 
   /** The turn still running, if the log ends without its turn.done. */
@@ -349,6 +373,7 @@ export class EventLog {
 
   remove(id) {
     this.#logs.delete(id);
+    this.#pending.delete(id);
     rmSync(this.#file(id), { force: true });
     rmSync(this.#attDir(id), { force: true, recursive: true });
   }

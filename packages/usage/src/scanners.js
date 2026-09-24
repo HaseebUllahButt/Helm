@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { readdir, stat } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { FileRollupCache, ResultCache, blankStats, bucketKey } from './scan-cache.js';
+import { offThread } from './off-thread.js';
 
 /**
  * Reading what each CLI already wrote about what it spent.
@@ -36,15 +37,6 @@ export const claudeParser = {
     const u = msg.usage || d.usage;
     if (!u) return;
 
-    // Claude Code occasionally writes the same assistant message twice in a
-    // row. The ring only has to look back a few lines to catch that, and it is
-    // bounded so an index entry cannot grow with the transcript.
-    const id = msg.id || d.requestId || d.uuid;
-    if (id) {
-      if (state.seen.includes(id)) return;
-      state.seen.push(id);
-    }
-
     const raw = msg.model || d.model || '';
     if (!raw || raw === '<synthetic>') return;
     const model = raw.replace(/-\d{8}$/, '');
@@ -56,16 +48,42 @@ export const claudeParser = {
     const date = ts.slice(0, 10);
     if (!date) return;
 
-    const input = Number(u.input_tokens ?? u.inputTokens) || 0;
-    const output = Number(u.output_tokens ?? u.outputTokens) || 0;
-    const cacheWrite = Number(u.cache_creation_input_tokens ?? u.cacheCreationTokens) || 0;
-    const cacheRead = Number(u.cache_read_input_tokens ?? u.cacheReadTokens) || 0;
+    let input = Number(u.input_tokens ?? u.inputTokens) || 0;
+    let output = Number(u.output_tokens ?? u.outputTokens) || 0;
+    let cacheWrite = Number(u.cache_creation_input_tokens ?? u.cacheCreationTokens) || 0;
+    let cacheRead = Number(u.cache_read_input_tokens ?? u.cacheReadTokens) || 0;
+    // The 1-hour share of the writes bills at 2x input, not 1.25x.
+    let cacheWrite1h = Math.min(cacheWrite, Number(u.cache_creation?.ephemeral_1h_input_tokens) || 0);
+    let turns = 1;
+
+    // Claude Code writes one message across several lines sharing an id,
+    // and the output count grows as it goes (8, then 420). Keeping the first
+    // line undercounted output; keeping each would count the input again per
+    // line. So: what each id has already been credited with, and only the
+    // growth past it. The ring only has to look back a few lines, and it is
+    // bounded so an index entry cannot grow with the transcript.
+    const id = msg.id || d.requestId || d.uuid;
+    if (id) {
+      const prev = state.seen.find((e) => (Array.isArray(e) ? e[0] : e) === id);
+      // A bare id is a ring entry from before this counted anything.
+      if (typeof prev === 'string') return;
+      const now = [input, output, cacheWrite, cacheRead, cacheWrite1h];
+      if (prev) {
+        const was = prev[1];
+        [input, output, cacheWrite, cacheRead, cacheWrite1h] = now.map((n, i) => Math.max(0, n - (was[i] ?? 0)));
+        prev[1] = now.map((n, i) => Math.max(n, was[i] ?? 0));
+        if (!(input || output || cacheWrite || cacheRead)) return;
+        turns = 0;
+      } else {
+        state.seen.push([id, now]);
+      }
+    }
     // The folder is part of the bucket's identity, so a machine can break its
     // spend down by project without a second pass over the transcripts.
     add({ date, model, project: d.cwd || '' }, {
-      input, output, cacheWrite, cacheRead,
+      input, output, cacheWrite, cacheWrite1h, cacheRead,
       total: input + output + cacheWrite + cacheRead,
-      turns: 1,
+      turns,
     });
   },
 };
@@ -92,6 +110,12 @@ export const codexParser = {
 
     const date = String(d.timestamp || '').slice(0, 10);
     if (!date) return;
+
+    // Codex sometimes writes the same token_count twice with the running
+    // total unchanged; the second one is not another turn.
+    const running = Number((p.info || {}).total_token_usage?.total_tokens) || null;
+    if (running && running === state.lastTotal) return;
+    if (running) state.lastTotal = running;
 
     const u = (p.info || {}).last_token_usage || {};
     const cacheRead = Number(u.cached_input_tokens) || 0;
@@ -175,6 +199,19 @@ function opencodeRows(dbPath, engine = 'opencode') {
   return Object.fromEntries(buckets);
 }
 
+/** One agent database read into buckets; what the worker thread runs. */
+export function readDatabase(kind, dbPath) {
+  return kind === 'devin' ? devinRows(dbPath) : opencodeRows(dbPath, kind);
+}
+
+/**
+ * A database read within this long is reused even though its `-wal` moved.
+ * The WAL moves on every turn of an agent in use, and Devin's full read is
+ * seconds of disk and CPU - a phone opening Usage while Devin worked paid it
+ * every time. A rebuild still reads it fresh.
+ */
+const DB_FRESH_MS = 5 * 60_000;
+
 function devinRows(dbPath) {
   const buckets = new Map();
   const seen = new Set();
@@ -249,15 +286,17 @@ export class Scanners {
   async scanDatabase(kind, dbPath, opts = {}) {
     const stats = blankStats();
     stats.dbs++;
-    const read = kind === 'devin' ? devinRows : (path) => opencodeRows(path, kind);
-    const { hit, sig, value } = await this.dbs.lookup(`${kind}:${dbPath}`, dbFiles(dbPath), { force: opts.rebuild });
-    if (hit) {
+    const key = `${kind}:${dbPath}`;
+    const { hit, sig, value } = await this.dbs.lookup(key, dbFiles(dbPath), { force: opts.rebuild });
+    const recent = !opts.rebuild && this.dbs.entries.get(key);
+    if (hit || (recent && Date.now() - (recent.at ?? 0) < DB_FRESH_MS)) {
       stats.dbHits++;
       try { stats.dbBytesSkipped += (await stat(dbPath)).size; } catch { /* gone */ }
-      return { buckets: new Map(Object.entries(value)), stats };
+      return { buckets: new Map(Object.entries(hit ? value : recent.value)), stats };
     }
-    const fresh = read(dbPath);
-    this.dbs.store(`${kind}:${dbPath}`, sig, fresh);
+    const fresh = await offThread(import.meta.url, 'readDatabase', [kind, dbPath])
+      .catch(() => readDatabase(kind, dbPath));
+    this.dbs.store(key, sig, fresh);
     stats.dbScans++;
     return { buckets: new Map(Object.entries(fresh)), stats };
   }

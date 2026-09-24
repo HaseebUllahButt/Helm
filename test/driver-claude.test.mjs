@@ -34,7 +34,8 @@ test('plain: text streams in as deltas, then the turn completes with its cost', 
   await driver.send('Reply with exactly the words: hello from helm');
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'ok');
-  assert.equal(done.costUsd, 0.016515);
+  // The CLI's figure is a running total; Sessions turns it into the turn's.
+  assert.equal(done.costTotalUsd, 0.016515);
   const turn = log.of('turn.start')[0];
   assert.equal(turn.text, 'Reply with exactly the words: hello from helm');
   const text = log.of('item.start').find((e) => e.kind === 'text');

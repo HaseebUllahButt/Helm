@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Markdown } from '../Markdown';
 import type { Change, Item, Turn } from './types';
 import { money, seconds } from '../format';
@@ -69,7 +69,7 @@ function TextItem({ item, commandOutput }: { item: Item; commandOutput?: boolean
   const live = item.status === 'streaming';
   const text = useTyped(item.text, live);
   if (!text && !live) return null;
-  return <Markdown text={text} className={`prose${commandOutput ? ' command-result' : ''}${live ? ' live' : ''}`} />;
+  return <Markdown text={text} live={live} className={`prose${commandOutput ? ' command-result' : ''}${live ? ' live' : ''}`} />;
 }
 
 function ThinkingItem({ item }: { item: Item }) {
@@ -408,11 +408,21 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     if (stuck.current) setUnread(false);
   };
-  useEffect(() => {
+  // Runs on every render, but only *growth* is news: a keystroke in the
+  // composer re-renders this too, and used to raise "↓ new" for nothing. Older
+  // turns arriving above keep the reader where they were - iOS Safari has no
+  // scroll anchoring to do it for us.
+  const seen = useRef<{ h: number; first?: string }>({ h: 0 });
+  useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    if (stuck.current) el.scrollTop = el.scrollHeight;
-    else setUnread(true);
+    const h = el.scrollHeight;
+    const first = turns[0]?.id;
+    const prev = seen.current;
+    seen.current = { h, first };
+    if (stuck.current) el.scrollTop = h;
+    else if (prev.first !== undefined && first !== prev.first) el.scrollTop += h - prev.h;
+    else if (h > prev.h) setUnread(true);
   });
 
   const jump = () => {

@@ -205,7 +205,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, onPick, o
         onClick={() => choose(c)}
       >
         <span className="grow">
-          <span className="rt">{c.label}</span>
+          <span className="rt"><span className="rt-text">{c.label}</span></span>
           {(armed || c.hint) && <span className="rm">{armed ? 'Tap again to confirm' : c.hint}</span>}
         </span>
         {on && <span className="check">✓</span>}

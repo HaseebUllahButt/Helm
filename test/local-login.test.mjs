@@ -150,6 +150,25 @@ test('the page this machine serves can fetch the local key; a proxied or foreign
   });
   assert.equal(proxied, 403);
 
+  // DNS rebinding: a name that merely *starts* like a loopback one, pointed
+  // at 127.0.0.1 after the page loaded, so the page is same-origin with us.
+  const rebound = await new Promise((resolve) => {
+    const req = request({
+      host: '127.0.0.1', port: PORT2, path: '/api/auth/local', method: 'POST',
+      headers: { host: `localhost.evil.example:${PORT2}`, origin: `http://localhost.evil.example:${PORT2}`, 'sec-fetch-site': 'same-origin' },
+    }, (res) => { res.resume(); resolve(res.statusCode); });
+    req.end();
+  });
+  assert.equal(rebound, 403);
+  const prefixed = await new Promise((resolve) => {
+    const req = request({
+      host: '127.0.0.1', port: PORT2, path: '/api/auth/local', method: 'POST',
+      headers: { host: `127.0.0.1.nip.example:${PORT2}` },
+    }, (res) => { res.resume(); resolve(res.statusCode); });
+    req.end();
+  });
+  assert.equal(prefixed, 403);
+
   // A foreign website's fetch declares itself.
   const foreign = await local({ 'sec-fetch-site': 'cross-site' });
   assert.equal(foreign.status, 403);
