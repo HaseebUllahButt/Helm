@@ -171,6 +171,9 @@ export const M = {
   HANDOFF_ACCEPT: 'handoff.accept',// { handoffId, sourceMachineId, targetMachineId, folder?, envelope, snapshotDigest, profileId, model?, mode?, title?, parent?, prompt, requestDigest, sourceSignature } -> receipt
   HANDOFF_STATUS: 'handoff.status',// { handoffId } -> receipt
 
+  TRANSFER_RECEIVE: 'transfer.receive',
+  TRANSFER_ACCEPT: 'transfer.accept',
+
   // Hub-owned queue operations: a hub intercepts these and answers from its
   // own durable store, so they are never dispatched to an environment. The
   // params the target will eventually run travel whole, unchanged - the hub

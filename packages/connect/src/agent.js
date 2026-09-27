@@ -30,6 +30,7 @@ import { hubRpc } from './hub-client.js';
 import { transcribe, canTranscribe } from './voice.js';
 import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
 import { Handoffs } from './handoffs.js';
+import { Transfers } from './transfers.js';
 
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30_000;
@@ -228,6 +229,9 @@ export class Daemon {
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
     this.handoffs = new Handoffs({
       sessions: this.sessions,
+      network: () => loadNetwork() ?? this.net,
+    });
+    this.transfers = new Transfers({
       network: () => loadNetwork() ?? this.net,
     });
     // The line the brain gets in front of what the owner types. Read from the
@@ -1341,6 +1345,10 @@ export class Daemon {
         return this.handoffs.accept(p, caller);
       case M.HANDOFF_STATUS:
         return this.handoffs.status(p.handoffId, caller);
+      case M.TRANSFER_RECEIVE:
+        return this.transfers.receive(p, caller);
+      case M.TRANSFER_ACCEPT:
+        return this.transfers.accept(p, caller);
 
       case M.PING:            return { t: Date.now() };
 

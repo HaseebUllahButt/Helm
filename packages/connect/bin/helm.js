@@ -22,8 +22,11 @@ import {
 } from '../src/brain.js';
 import {
   createCodeSnapshot, sealCodeSnapshot, beginCodeKeyProof, verifyCodeKeyProof,
-  signHandoffDigest,
+  signHandoffDigest, verifyHandoffSignature,
 } from '../src/code-transfer.js';
+import {
+  decodeTransferGrant, transferGrantDigest, transferRequestDigest,
+} from '../src/transfers.js';
 
 // Unix pipelines routinely close their read end early (`helm machines |
 // head`). Treat that as successful completion instead of printing an
@@ -90,6 +93,11 @@ const usage = () => {
     --handoff-id <id>               resume an interrupted handoff instead of starting a new one
   helm dispatch <machine> [text...]  queue this folder and task on another machine
   helm dispatch-status <id>         where a queued handoff got to
+  helm receive <source> [minutes]   grant this machine one incoming folder from <source>
+  helm send <machine> [folder] --grant <token>
+                                  send a folder to a machine that granted it
+    --target-folder <folder>        where it lands on the target
+    --include-env                   carry .env files too, written owner-only there
 
   helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
   helm proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
@@ -1032,6 +1040,84 @@ async function handoff() {
   console.log(`retry/status: helm dispatch-status ${handoffId}`);
 }
 
+async function send() {
+  const valueFlags = new Set(['--grant', '--target-folder']);
+  const args = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (!rest[i].startsWith('--')) { args.push(rest[i]); continue; }
+    if (valueFlags.has(rest[i])) i++;
+  }
+  const [who, folder] = args;
+  const grantToken = strFlag('grant', '');
+  if (!who || !grantToken) {
+    die('usage: helm send <machine> [folder] --grant <token>');
+  }
+
+  const net = requireNetwork();
+  const target = machineId(who);
+  const targetName = net.machines[target]?.name ?? who;
+
+  const grant = decodeTransferGrant(grantToken);
+  if (grant.targetMachineId !== target) {
+    die(`that grant is for a different machine, not ${targetName}`);
+  }
+  if (grant.sourceMachineId !== net.self) {
+    die('that grant is for a different source machine, not this one');
+  }
+  if (grant.expiresAt <= Date.now()) {
+    die('that grant has expired - run `helm receive` again on the target');
+  }
+  const signPubkey = net.machines[target]?.codeSignPubkey;
+  if (!signPubkey) {
+    die(`${targetName} has no pinned signing key yet; refresh the roster and retry`);
+  }
+  if (!verifyHandoffSignature(signPubkey, transferGrantDigest(grant), grant.signature)) {
+    die(`the grant did not verify against ${targetName}'s pinned signing key`);
+  }
+
+  const includeEnv = rest.includes('--include-env');
+  const transferId = randomBytes(12).toString('hex');
+  const snapshot = createCodeSnapshot(folder || process.cwd(), { includeEnv });
+  const targetFolder = strFlag('target-folder', '')
+    || `~/.helm/transfers/${snapshot.rootName}-${transferId.slice(0, 8)}`;
+  const envelope = sealCodeSnapshot(snapshot, grant.transferPubkey, transferId);
+  const params = {
+    transferId,
+    sourceMachineId: net.self,
+    targetMachineId: target,
+    folder: targetFolder,
+    envelope,
+    snapshotDigest: snapshot.digest,
+    grantSecret: grant.secret,
+  };
+  params.requestDigest = transferRequestDigest(params);
+  params.sourceSignature = signHandoffDigest(params.requestDigest);
+
+  const receipt = await brainRpc(target, M.TRANSFER_ACCEPT, params, 120_000);
+  console.log(`sent ${receipt.files} file${receipt.files === 1 ? '' : 's'} ` +
+    `(${receipt.bytes} bytes) to ${targetName}:${receipt.folder}` +
+    (receipt.skipped ? `; ${receipt.skipped} skipped` : ''));
+  if (includeEnv) {
+    const secrets = snapshot.files.filter((f) => f.secret).length;
+    console.log(`  ${secrets} .env file${secrets === 1 ? '' : 's'} included, written owner-only on the target`);
+  }
+}
+
+async function receive() {
+  const args = rest.filter((a) => !a.startsWith('--'));
+  if (!args[0]) die('usage: helm receive <source-machine> [minutes]');
+  const net = requireNetwork();
+  const sourceMachineId = machineId(args[0]);
+  const minutes = Number(args[1]);
+  const { grant, expiresAt } = await brainRpc(net.self, M.TRANSFER_RECEIVE, {
+    sourceMachineId,
+    ttlMs: Number.isFinite(minutes) ? minutes * 60_000 : undefined,
+  });
+  console.log(`\n  ${grant}\n`);
+  console.log(`  good for one transfer in the next ${Math.max(1, Math.round((expiresAt - Date.now()) / 60000))} minutes`);
+  console.log(`  on ${args[0]}:  helm send ${net.machines[net.self]?.name ?? net.self} [folder] --grant <token>\n`);
+}
+
 /** Where a queued handoff is: still waiting, delivered, running or failed. */
 async function dispatchStatus() {
   const id = rest.find((a) => !a.startsWith('--'));
@@ -1586,6 +1672,14 @@ try {
     case 'transfer':
     case 'dispatch':
       await handoff();
+      break;
+
+    case 'send':
+      await send();
+      break;
+
+    case 'receive':
+      await receive();
       break;
 
     case 'dispatch-status':

@@ -204,6 +204,8 @@ helm say <id> "<text>"            prompt an existing session
 helm spawn <machine> <folder> <account> "<text>"
 helm dispatch <machine> --account <target-profile> "<task>"
 helm dispatch-status <id>         where a queued handoff stands
+helm receive <machine> [minutes]  grant this machine one folder from it
+helm send <machine> [folder] --grant <token>
 ```
 
 `helm digest` keeps the last answer from every machine, so one that is asleep
@@ -218,6 +220,15 @@ rather than repeating them, and provider credentials stay on the machine the
 work runs on. Source and target must both run this protocol version - the
 envelope compression, request signing and queue frames are a wire change -
 so update homes and targets first, then sources.
+
+`helm receive` and `helm send` move one folder while both machines are
+online - no queue, no session. `receive` mints a single-use grant, signed
+by the target machine and bound to the named source, its one-time key and
+a few minutes of life; `send` checks that signature against the roster,
+seals the folder to the key inside, and the signed request itself is what
+authorizes the write on the target.
+`--include-env` carries `.env` files explicitly - they land owner-only
+(`0600`) - and `--target-folder` chooses where it lands.
 
 ## What it costs
 
@@ -275,6 +286,10 @@ Agents and credentials stay on the computer where the work runs.
 - Provider credentials never go to the VM unless the agent itself runs there.
 - Queued code is encrypted to the target machine; the task text and settings
   ride readable through your own home, the same as a live call.
+- A `helm send` transfer is end-to-end encrypted to a one-time key the
+  target issued inside a signed, single-use, short-lived grant bound to
+  the named source machine as well as the target; `.env`
+  files move only when the sender passes `--include-env` and land `0600`.
 - What a handoff leaves behind is decided by filename - a conservative
   filter, not a promise that nothing sensitive is inside the code itself.
 - Only HTTPS should be exposed publicly; port `8787` stays behind Caddy.

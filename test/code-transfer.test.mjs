@@ -449,3 +449,62 @@ test('a failed restore removes only .git and reports, never throws', async () =>
   assert.deepEqual(await restoreGitMetadata(folder, null), { restored: false });
   assert.deepEqual(await restoreGitMetadata(folder, { commit: 'zzz' }), { restored: false });
 });
+
+test('includeEnv carries every .env variant marked secret and writes them 0600', async () => {
+  const { codeKeyInfo, createCodeSnapshot, sealCodeSnapshot, materializeCode } =
+    await import('../packages/connect/src/code-transfer.js');
+  const source = join(helmDir, 'source-env');
+  mkdirSync(join(source, 'api'), { recursive: true });
+  mkdirSync(join(source, '.docker'), { recursive: true });
+  writeFileSync(join(source, '.env'), 'ROOT=1');
+  writeFileSync(join(source, '.env.local'), 'LOCAL=1');
+  writeFileSync(join(source, 'api', '.env.production'), 'PROD=1');
+  writeFileSync(join(source, 'api', '.env.example'), 'EXAMPLE=');
+  writeFileSync(join(source, 'api', 'index.js'), 'x = 1');
+  writeFileSync(join(source, '.docker', '.env.runtime'), 'RUNTIME=1');
+  writeFileSync(join(source, '.docker', 'config.json'), '{}');
+
+  const snapshot = createCodeSnapshot(source, { includeEnv: true });
+  assert.deepEqual(snapshot.files.map((x) => x.path).sort(), [
+    '.docker/.env.runtime', '.env', '.env.local',
+    'api/.env.example', 'api/.env.production', 'api/index.js',
+  ]);
+  for (const f of snapshot.files) {
+    assert.equal(f.secret, f.path === 'api/index.js' ? undefined : true, f.path);
+  }
+  assert.deepEqual(
+    snapshot.skippedEntries.filter((e) => e.path === '.docker'),
+    [{ path: '.docker', reason: 'secret-dir' }],
+  );
+  assert.deepEqual(
+    createCodeSnapshot(source).files.map((x) => x.path),
+    ['api/.env.example', 'api/index.js'],
+  );
+
+  const key = codeKeyInfo();
+  const destination = join(work, 'env-dest');
+  const envelope = sealCodeSnapshot(snapshot, key.codePubkey, 'env-move');
+  const result = await materializeCode(envelope, 'env-move', destination, { privateKey: key.privateKey });
+  assert.equal(result.files, 6);
+  assert.equal(readFileSync(join(result.folder, '.env'), 'utf8'), 'ROOT=1');
+  assert.equal(readFileSync(join(result.folder, '.docker', '.env.runtime'), 'utf8'), 'RUNTIME=1');
+  assert.equal(existsSync(join(result.folder, '.docker', 'config.json')), false);
+  for (const p of ['.env', '.env.local', '.docker/.env.runtime', 'api/.env.production', 'api/.env.example']) {
+    assert.equal(lstatSync(join(result.folder, p)).mode & 0o777, 0o600, `${p} is owner-only`);
+  }
+  assert.equal(lstatSync(join(result.folder, 'api', 'index.js')).mode & 0o777, 0o644);
+});
+
+test('a secret marker that is not exactly true refuses the file', async () => {
+  const { materializeCode } = await import('../packages/connect/src/code-transfer.js');
+  for (const [i, secret] of [false, 'yes', 1].entries()) {
+    const files = [{
+      path: 'a.txt', mode: 0o644, data: Buffer.from('x').toString('base64url'), secret,
+    }];
+    const envelope = await sealed(honestSnapshot({ files }), `secret-${i}`);
+    await assert.rejects(
+      () => materializeCode(envelope, `secret-${i}`, join(work, `secret-${i}`)),
+      /invalid secret flag/,
+    );
+  }
+});

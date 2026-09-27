@@ -59,6 +59,7 @@ const SKIP_DIRS = new Set([
 // handoff that drops them leaves the target unable to set the project up.
 const SECRET_NAME = /^(?:\.env(?!\.(?:example|sample|template)$)(?:\..*)?|\.npmrc|\.netrc|\.pypirc|credentials?(?:\..*)?|secrets?(?:\..*)?|.*\.tfvars|kubeconfig|id_rsa|id_ed25519|.*\.(?:pem|key|p12|pfx|jks|keystore|secret))$/i;
 const SECRET_DIR = /^(?:\.ssh|\.aws|\.azure|\.config|\.docker|\.kube|\.gnupg|\.terraform)$/i;
+const ENV_NAME = /^\.env(?:\..+)?$/i;
 
 const b64 = (value) => Buffer.from(value).toString('base64url');
 const unb64 = (value) => Buffer.from(String(value), 'base64url');
@@ -101,6 +102,14 @@ export function codeKeyInfo() {
   return {
     privateKey: pair.privateKey,
     publicKey: pair.publicKey,
+    codePubkey: b64(pair.publicKey.export({ type: 'spki', format: 'der' })),
+  };
+}
+
+export function createEphemeralCodeKey() {
+  const pair = generateKeyPairSync('x25519');
+  return {
+    privateKey: pair.privateKey,
     codePubkey: b64(pair.publicKey.export({ type: 'spki', format: 'der' })),
   };
 }
@@ -284,7 +293,7 @@ export function sealCodeSnapshot(snapshot, targetCodePubkey, handoffId) {
   };
 }
 
-function openEnvelope(envelope, handoffId) {
+function openEnvelope(envelope, handoffId, privateKey = null) {
   if (!envelope || envelope.v !== VERSION || envelope.alg !== 'X25519-A256GCM'
       || envelope.zip !== 'br') {
     throw new Error('unsupported code handoff envelope');
@@ -293,9 +302,9 @@ function openEnvelope(envelope, handoffId) {
   for (const name of ['epk', 'salt', 'iv', 'tag', 'data']) {
     if (!asB64(envelope[name])) throw new Error(`invalid code handoff ${name}`);
   }
-  const { privateKey } = codeKeyInfo();
+  const opening = privateKey ?? codeKeyInfo().privateKey;
   const ephemeral = createPublicKey({ key: unb64(envelope.epk), type: 'spki', format: 'der' });
-  const key = derive(diffieHellman({ privateKey, publicKey: ephemeral }), unb64(envelope.salt));
+  const key = derive(diffieHellman({ privateKey: opening, publicKey: ephemeral }), unb64(envelope.salt));
   const decipher = createDecipheriv('aes-256-gcm', createSecretKey(key), unb64(envelope.iv));
   decipher.setAAD(Buffer.from(`${AAD_PREFIX}${handoffId}`));
   decipher.setAuthTag(unb64(envelope.tag));
@@ -447,7 +456,7 @@ export async function restoreGitMetadata(folder, git, { exec = promisify(execFil
 }
 
 /** Build a bounded file map. Symlinks are skipped to prevent outside-tree reads. */
-export function createCodeSnapshot(root) {
+export function createCodeSnapshot(root, { includeEnv = false } = {}) {
   const source = resolve(expand(root || process.cwd()));
   const stat = lstatSync(source);
   if (!stat.isDirectory()) throw new Error(`code source is not a folder: ${source}`);
@@ -459,24 +468,42 @@ export function createCodeSnapshot(root) {
     skipped += 1;
     if (skippedEntries.length < MAX_SKIPPED_ENTRIES) skippedEntries.push({ path, reason });
   };
-  const visit = (dir) => {
+  const addFile = (full, secret) => {
+    if (files.length >= MAX_FILES) throw new Error(`code handoff exceeds ${MAX_FILES} files`);
+    const info = lstatSync(full);
+    if (info.size > MAX_FILE_BYTES) throw new Error(`${safeRelative(source, full)} is too large for a code handoff`);
+    bytes += info.size;
+    if (bytes > MAX_SNAPSHOT_BYTES) throw new Error(`code handoff exceeds ${MAX_SNAPSHOT_BYTES / 1024 / 1024} MB`);
+    files.push({
+      path: safeRelative(source, full),
+      mode: info.mode & 0o111 ? 0o755 : 0o644,
+      data: b64(readFileSync(full)),
+      ...(secret ? { secret: true } : {}),
+    });
+  };
+  const visit = (dir, envOnly = false) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
+      if (envOnly) {
+        if (entry.isDirectory()) {
+          const reason = skipReason(entry.name, true);
+          if (!reason || reason === 'secret-dir') visit(full, true);
+        } else if (entry.isFile() && ENV_NAME.test(entry.name)) {
+          addFile(full, true);
+        }
+        continue;
+      }
+      const envFile = includeEnv && !entry.isDirectory() && ENV_NAME.test(entry.name);
       const reason = skipReason(entry.name, entry.isDirectory());
-      if (reason) { note(safeRelative(source, full), reason); continue; }
+      if (reason && !envFile) {
+        note(safeRelative(source, full), reason);
+        if (includeEnv && reason === 'secret-dir' && entry.isDirectory()) visit(full, true);
+        continue;
+      }
       if (entry.isSymbolicLink()) { note(safeRelative(source, full), 'symlink'); continue; }
       if (entry.isDirectory()) { visit(full); continue; }
       if (!entry.isFile()) { note(safeRelative(source, full), 'special'); continue; }
-      if (files.length >= MAX_FILES) throw new Error(`code handoff exceeds ${MAX_FILES} files`);
-      const info = lstatSync(full);
-      if (info.size > MAX_FILE_BYTES) throw new Error(`${safeRelative(source, full)} is too large for a code handoff`);
-      bytes += info.size;
-      if (bytes > MAX_SNAPSHOT_BYTES) throw new Error(`code handoff exceeds ${MAX_SNAPSHOT_BYTES / 1024 / 1024} MB`);
-      files.push({
-        path: safeRelative(source, full),
-        mode: info.mode & 0o111 ? 0o755 : 0o644,
-        data: b64(readFileSync(full)),
-      });
+      addFile(full, envFile);
     }
   };
   visit(source);
@@ -557,6 +584,9 @@ function validateSnapshot(snapshot) {
     }
     if (seen.has(file.path)) throw new Error(`duplicate path in code handoff: ${file.path}`);
     seen.add(file.path);
+    if (file.secret !== undefined && file.secret !== true) {
+      throw new Error('invalid secret flag in code handoff');
+    }
     if (!asB64(file.data)) throw new Error(`invalid file data for ${file.path}`);
     const data = unb64(file.data);
     if (data.length > MAX_FILE_BYTES) throw new Error(`${file.path} is too large`);
@@ -589,8 +619,8 @@ async function readHandoffMarker(destination) {
  * daemon that stops answering heartbeats for its whole duration is a daemon
  * that looks dead while a handoff lands.
  */
-export async function materializeCode(envelope, handoffId, requestedFolder) {
-  const snapshot = validateSnapshot(openEnvelope(envelope, handoffId));
+export async function materializeCode(envelope, handoffId, requestedFolder, { privateKey = null } = {}) {
+  const snapshot = validateSnapshot(openEnvelope(envelope, handoffId, privateKey));
   const fallback = join(HELM_DIR, 'workspaces', `${snapshot.rootName}-${handoffId.slice(0, 8)}`);
   const destination = resolve(expand(requestedFolder || fallback));
   if (destination === resolve(HOME) || !destination.startsWith(`${resolve(HOME)}${sep}`)) {
@@ -643,7 +673,7 @@ export async function materializeCode(envelope, handoffId, requestedFolder) {
         if (i >= snapshot.files.length) return;
         const file = snapshot.files[i];
         const out = resolve(stage, file.path);
-        const mode = file.mode === 0o755 ? 0o755 : 0o644;
+        const mode = file.secret === true ? 0o600 : file.mode === 0o755 ? 0o755 : 0o644;
         await aWriteFile(out, unb64(file.data), { mode, flag: 'wx' });
         await aChmod(out, mode);
       }
