@@ -49,6 +49,46 @@ export const MODES = {
     { id: 'plan', label: 'Plan first', short: 'plan', hint: 'plans changes before implementing', acp: 'plan' },
     { id: 'yolo', label: 'Bypass all checks', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'bypass', danger: true },
   ],
+  // Grok's permission-mode vocabulary is Claude's (`grok --permission-mode`
+  // takes the same words); over ACP they land as the session mode picker or
+  // configOptions, whichever the running build advertises.
+  grok: [
+    { id: 'default', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', acp: 'default' },
+    { id: 'acceptEdits', label: 'Edit freely', short: 'edit', hint: 'edits go through, commands still ask', acp: 'acceptEdits' },
+    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', acp: 'plan' },
+    { id: 'auto', label: 'Act without asking', short: 'auto', hint: 'Grok blocks risky actions quietly; they will not ping your phone', acp: 'auto' },
+    { id: 'bypassPermissions', label: 'Bypass all checks', short: 'yolo', hint: 'permission checks are off', acp: 'bypassPermissions', approveAll: true, danger: true },
+  ],
+  // Cursor's execution modes are the ones its `--mode` flag documents; the
+  // agent is free to refuse a name it does not carry, and the correction
+  // lands as a settings update.
+  cursor: [
+    { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', acp: 'ask' },
+    { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'agent mode: edits and commands run', acp: 'agent' },
+    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', acp: 'plan' },
+    { id: 'auto', label: 'Act without asking', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'agent', autoAllow: 'all', danger: true },
+  ],
+  // agy's `--mode` flag knows accept-edits and plan; "everything" is the
+  // --dangerously-skip-permissions flag. There is no way to answer a
+  // permission prompt over stream-json, so ask relies on the account's own
+  // settings/allow rules - unapproved tools simply do not run.
+  agy: [
+    { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'tools follow your agy permission settings; unapproved ones are skipped' },
+    { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'accept-edits: file changes go through, the rest follows settings', agyMode: 'accept-edits' },
+    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', agyMode: 'plan' },
+    { id: 'yolo', label: 'Act without asking', short: 'yolo', hint: 'approves every tool call, including writes and commands', skipPermissions: true, danger: true },
+  ],
+  // The managed Google ACP agent carries default/auto_edit/yolo natively;
+  // planning is its own /plan command rather than a session mode.
+  antigravity: [
+    { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', acp: 'default' },
+    { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'file edits go through, commands still ask', acp: 'auto_edit' },
+    { id: 'yolo', label: 'Act without asking', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'yolo', danger: true },
+  ],
+  // Pi and OMP run their tools without asking; approval lives in extension
+  // dialogs, which arrive as permission requests whatever helm calls it -
+  // so they carry no entry and the app shows no mode picker for them.
+  // Rovo's ACP surface has no verified mode vocabulary yet either.
 };
 
 export const modesFor = (engine) => MODES[engine] ?? [];

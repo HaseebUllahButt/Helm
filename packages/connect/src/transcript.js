@@ -1,5 +1,5 @@
 import { readdir, stat, open } from 'node:fs/promises';
-import { createReadStream, existsSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join, basename } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -45,6 +45,43 @@ async function newestFile(dir, filter, since = 0) {
 /** Claude names a project directory after the working directory. */
 const claudeProject = (cwd) => expand(cwd).replace(/\//g, '-');
 
+/** Grok names a project directory the URL-encoded working directory. */
+const grokProject = (cwd) => encodeURIComponent(expand(cwd));
+
+/** First JSON record in a file - enough to read a session header. */
+async function firstJson(path) {
+  const fh = await open(path, 'r');
+  try {
+    const buf = Buffer.alloc(64 << 10);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    try { return JSON.parse(buf.subarray(0, bytesRead).toString('utf8').split('\n')[0]); }
+    catch { return null; }
+  } finally {
+    await fh.close();
+  }
+}
+
+/** The `limit` newest files under `dir` matching `filter`. */
+async function recentFiles(dir, filter, since = 0, limit = 12) {
+  const hits = [];
+  const walk = async (d, depth = 0) => {
+    if (depth > 5) return;
+    let entries;
+    try { entries = await readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = join(d, e.name);
+      if (e.isDirectory()) { await walk(full, depth + 1); continue; }
+      if (!filter(e.name)) continue;
+      try {
+        const s = await stat(full);
+        if (s.mtimeMs >= since) hits.push({ path: full, mtime: s.mtimeMs });
+      } catch { /* vanished mid-scan */ }
+    }
+  };
+  await walk(dir);
+  return hits.sort((a, b) => b.mtime - a.mtime).slice(0, limit);
+}
+
 /**
  * Find the transcript a running session is writing to.
  *
@@ -77,6 +114,57 @@ export async function locate({ engine, home, cwd, startedAt = 0 }) {
       if (existsSync(db)) return db;
     }
   }
+
+  if (engine === 'pi' || engine === 'omp') {
+    // Pi and omp name their per-directory folders differently (pi doubles the
+    // dashes), so the header record's own cwd is the identity worth trusting.
+    const dir = join(root, ENGINES[engine]?.sessionsDir ?? 'sessions');
+    if (!existsSync(dir)) return null;
+    for (const f of await recentFiles(dir, (n) => n.endsWith('.jsonl'), startedAt - slack)) {
+      const head = await firstJson(f.path);
+      if (head?.type === 'session' && head.cwd === expand(cwd)) return f.path;
+    }
+    return null;
+  }
+
+  if (engine === 'grok') {
+    const dir = join(root, 'sessions', grokProject(cwd));
+    if (!existsSync(dir)) return null;
+    const hit = await newestFile(dir, (n) => n === 'chat_history.jsonl', startedAt - slack);
+    return hit?.path ?? null;
+  }
+
+  if (engine === 'muse') {
+    const base = process.env.XDG_DATA_HOME || join(HOME, '.local', 'share');
+    const dir = join(base, 'muse', 'sessions');
+    if (!existsSync(dir)) return null;
+    const hit = await newestFile(dir, (n) => n === 'session.jsonl', startedAt - slack);
+    return hit?.path ?? null;
+  }
+  if (engine === 'agy') {
+    // conversations/<id>.db is protobuf - undecodable, but still the file a
+    // live writer holds open, so it pins the session to its process.
+    const dir = join(root, ENGINES.agy?.sessionsDir ?? 'conversations');
+    if (!existsSync(dir)) return null;
+    const hit = await newestFile(dir, (n) => n.endsWith('.db'), startedAt - slack);
+    return hit?.path ?? null;
+  }
+  if (engine === 'antigravity') {
+    // Same protobuf .db as agy, but the sibling .meta's cwd is the identity,
+    // so several folders' conversations under one home cannot cross-pair.
+    const dir = join(root, 'antigravity-acp', 'conversations');
+    if (!existsSync(dir)) return null;
+    for (const f of await recentFiles(dir, (n) => n.endsWith('.meta'), startedAt - slack)) {
+      try {
+        const meta = JSON.parse(readFileSync(f.path, 'utf8'));
+        if (meta?.cwd !== expand(cwd)) continue;
+        const db = f.path.slice(0, -'.meta'.length) + '.db';
+        if (existsSync(db)) return db;
+      } catch { /* not our shape */ }
+    }
+    return null;
+  }
+  // cursor's store.db is a protobuf blob helm cannot render - no transcript.
   return null;
 }
 
@@ -406,6 +494,85 @@ function devinMessages(db, sessionId, { all = false } = {}) {
   return out;
 }
 
+/**
+ * Pi-family records: one `message` record per turn half, with the message's
+ * content array carrying text, thinking and toolCall parts. `title` and
+ * `model_change` records carry the display name and the current model.
+ */
+async function piMessages(path, { all = false } = {}) {
+  const out = [];
+  await readLines(path, (rec) => {
+    if (rec.type !== 'message') return;
+    const m = rec.message;
+    if (!m || (m.role !== 'user' && m.role !== 'assistant')) return;
+    const parts = Array.isArray(m.content) ? m.content : [];
+    const text = parts.filter((p) => p?.type === 'text').map((p) => p.text).filter(Boolean).join('\n\n')
+      || (typeof m.content === 'string' ? m.content : '');
+    const tools = parts
+      .filter((p) => p?.type === 'toolCall' || p?.type === 'tool_use')
+      .map((p) => ({ name: p.name ?? p.toolName ?? 'tool', input: summariseTool(p.arguments ?? p.input) }));
+    const thinking = parts.some((p) => p?.type === 'thinking');
+    if (!text && !tools.length) return;
+    out.push({
+      role: m.role, text: clip(text), tools, thinking,
+      at: rec.timestamp ?? m.timestamp, sourceId: m.id,
+    });
+  }, { tailBytes: all ? Infinity : 4 << 20 });
+  return out;
+}
+
+/**
+ * Grok's chat_history.jsonl is flat `{type, content}` records - `type` is the
+ * role. Tool calls arrive either as content blocks or OpenAI-style
+ * `tool_calls` fields on the record.
+ */
+async function grokMessages(path, { all = false } = {}) {
+  const out = [];
+  await readLines(path, (rec) => {
+    const role = rec.role ?? rec.type;
+    if (role !== 'user' && role !== 'assistant') return;
+    const content = rec.content ?? rec.message?.content;
+    const { text, tools, thinking } = blocks(content);
+    const flat = text || (content && typeof content === 'object' && !Array.isArray(content) ? content.text ?? '' : '');
+    const extra = (rec.tool_calls ?? rec.message?.tool_calls ?? []).map((t) => ({
+      name: t.name ?? t.function?.name ?? 'tool',
+      input: summariseTool(t.arguments ?? t.function?.arguments ?? t.input),
+    }));
+    const allTools = [...tools, ...extra];
+    if (!flat && !allTools.length) return;
+    if (role === 'user' && flat.startsWith('<')) return; // injected context
+    out.push({
+      role, text: clip(flat), tools: allTools,
+      thinking: thinking || !!rec.reasoning || !!rec.reasoning_content,
+      at: rec.timestamp ?? rec.created_at, sourceId: rec.id ?? rec.uuid,
+    });
+  }, { tailBytes: all ? Infinity : 4 << 20 });
+  return out;
+}
+
+/**
+ * Muse's session.jsonl is a record-per-line event log; conversation rows look
+ * like `{record:{kind|role, content|text}}`. Read only what is plainly there.
+ */
+async function museMessages(path, { all = false } = {}) {
+  const out = [];
+  await readLines(path, (rec) => {
+    const r = rec.record ?? rec;
+    const role = r.role
+      ?? (r.kind === 'user_message' ? 'user' : r.kind === 'assistant_message' ? 'assistant' : null);
+    if (role !== 'user' && role !== 'assistant') return;
+    const content = r.content ?? r.text ?? r.message;
+    const { text, tools } = blocks(content);
+    const flat = text || (typeof content === 'string' ? content : '');
+    if (!flat && !tools.length) return;
+    out.push({
+      role, text: clip(flat), tools,
+      at: r.timestamp ?? r.at ?? rec.timestamp, sourceId: r.id,
+    });
+  }, { tailBytes: all ? Infinity : 4 << 20 });
+  return out;
+}
+
 /** A persisted, provider-neutral status answer for a session being monitored. */
 export async function sessionSnapshot({ engine, path, sessionId, cwd, monitored = true }) {
   const fmt = (n) => Number(n ?? 0).toLocaleString('en-US');
@@ -467,6 +634,29 @@ export async function sessionSnapshot({ engine, path, sessionId, cwd, monitored 
         usage.output += Number(x.output_tokens ?? 0);
         usage.cacheRead += Number(x.cache_read_tokens ?? 0);
       }
+    } else if (engine === 'pi' || engine === 'omp') {
+      // The last assistant message carries cumulative counters; model_change
+      // records carry the model the session ended on.
+      let model = null;
+      await readLines(path, (r) => {
+        if (r.type === 'model_change') model = r.modelId ?? model;
+        if (r.type !== 'message' || r.message?.role !== 'assistant') return;
+        model ??= r.message.model;
+        const u = r.message.usage;
+        if (u) usage = {
+          input: u.input_tokens ?? u.inputTokens ?? u.input ?? 0,
+          output: u.output_tokens ?? u.outputTokens ?? u.output ?? 0,
+          cacheRead: u.cache_read_input_tokens ?? u.cacheReadTokens ?? u.cacheRead ?? 0,
+          cost: u.cost?.total ?? u.cost,
+        };
+      }, { tailBytes: Infinity });
+      if (model) lines.splice(1, 0, `**Model:** ${esc(model)}`);
+    } else if (engine === 'grok') {
+      // summary.json sits beside chat_history.jsonl with the current model.
+      try {
+        const s = JSON.parse(readFileSync(join(path, '..', 'summary.json'), 'utf8'));
+        if (s?.current_model_id) lines.splice(1, 0, `**Model:** ${esc(s.current_model_id)}`);
+      } catch { /* no summary */ }
     }
   } catch { /* status remains useful even if a provider changes its schema */ }
   let out = `### Session status\n\n${lines.join('  \n')}`;
@@ -508,5 +698,8 @@ export async function messages({ engine, path, sessionId, limit = 120, all = fal
     found = await offThread(import.meta.url, 'databaseMessages', [engine, path, sessionId, { all }])
       .catch(() => databaseMessages(engine, path, sessionId, { all }));
   }
+  else if (engine === 'pi' || engine === 'omp') found = await piMessages(path, { all });
+  else if (engine === 'grok') found = await grokMessages(path, { all });
+  else if (engine === 'muse') found = await museMessages(path, { all });
   return all ? found : found.slice(-limit);
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -124,4 +124,47 @@ test('database-backed histories open on their latest window', async () => {
   assert.equal(openCode2History.length, 120);
   assert.equal(openCode2History[0].text, 'message-330');
   assert.equal(openCode2History.at(-1).text, 'message-449');
+});
+
+test('Pi history reads message records: text, tool calls, thinking and usage', async () => {
+  const path = join(root, 'pi-session.jsonl');
+  const lines = [
+    { type: 'session', id: 'pi-1', cwd: '/work', timestamp: 1 },
+    { type: 'message', message: { role: 'user', id: 'u1', content: [{ type: 'text', text: 'ship it' }] }, timestamp: 2 },
+    { type: 'message', message: { role: 'assistant', id: 'a1', content: [
+      { type: 'thinking', thinking: 'hmm' },
+      { type: 'toolCall', name: 'bash', arguments: { command: 'npm test' } },
+      { type: 'text', text: 'shipped' },
+    ], usage: { input: 40, output: 12, cacheRead: 5, cost: { total: 0.01 } } }, timestamp: 3 },
+    { type: 'model_change', modelId: 'opencode/spark-2', timestamp: 4 },
+  ];
+  writeFileSync(path, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+
+  const history = await messages({ engine: 'pi', path, all: true });
+  assert.deepEqual(history.map((m) => [m.role, m.text]), [['user', 'ship it'], ['assistant', 'shipped']]);
+  assert.deepEqual(history[1].tools, [{ name: 'bash', input: 'npm test' }]);
+  assert.equal(history[1].thinking, true);
+  const status = await sessionSnapshot({ engine: 'pi', path, cwd: '/work', monitored: false });
+  assert.match(status, /\*\*Model:\*\* opencode\/spark-2/);
+  assert.match(status, /\*\*Input:\*\* 40/);
+  assert.match(status, /\*\*Cost:\*\* \$0\.0100/);
+});
+
+test('Grok history reads flat chat_history records and summary.json model', async () => {
+  const dir = join(root, 'grok-sess');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'chat_history.jsonl');
+  const lines = [
+    { type: 'user', content: 'fix the flaky test', id: 'u1', timestamp: 1 },
+    { type: 'assistant', content: [{ type: 'text', text: 'fixed' }], tool_calls: [{ function: { name: 'bash', arguments: '{"command":"npm test"}' } }], id: 'a1', timestamp: 2 },
+    { type: 'user', content: '<system-reminder>injected</system-reminder>', id: 'u2', timestamp: 3 },
+  ];
+  writeFileSync(path, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  writeFileSync(join(dir, 'summary.json'), JSON.stringify({ info: { id: 'g-1', cwd: '/work' }, current_model_id: 'grok-4-fast', session_summary: 'Flaky test' }));
+
+  const history = await messages({ engine: 'grok', path, all: true });
+  assert.deepEqual(history.map((m) => [m.role, m.text]), [['user', 'fix the flaky test'], ['assistant', 'fixed']]);
+  assert.deepEqual(history[1].tools, [{ name: 'bash', input: 'npm test' }]);
+  const status = await sessionSnapshot({ engine: 'grok', path, cwd: '/work', monitored: false });
+  assert.match(status, /\*\*Model:\*\* grok-4-fast/);
 });

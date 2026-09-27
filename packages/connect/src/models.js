@@ -51,6 +51,12 @@ export async function listModels(engine, home, environment = {}) {
       value = await opencodeModels(root, ENGINES[engine]?.bin ?? engine, environment);
     }
     else if (engine === 'devin') value = await devinModels(root, environment);
+    else if (engine === 'grok') value = await grokModels(root, environment);
+    else if (engine === 'pi' || engine === 'omp') value = await piModels(engine, root, environment);
+    else if (engine === 'cursor') value = await cursorModels(environment);
+    else if (engine === 'gemini') value = await geminiModels();
+    else if (engine === 'agy') value = await agyModels(root, environment);
+    else if (engine === 'kimi') value = await kimiModels(environment);
   } catch {
     // A transient provider or CLI failure should not make a previously known
     // model disappear from the picker. The next expiry will try discovery
@@ -480,6 +486,231 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
 }
 
 /**
+ * `grok models` prints a "Default model:" line then `- id` rows with `*` on
+ * the current default. The same answer sits in config.toml under [models].
+ */
+async function grokModels(root, environment = {}) {
+  let def = null;
+  let effort = null;
+  try {
+    const toml = readFileSync(join(root, 'config.toml'), 'utf8');
+    const section = /^\s*\[models\]([\s\S]*?)(?=^\s*\[|\s*$)/m.exec(toml)?.[1] ?? '';
+    def = /^\s*default\s*=\s*"([^"]+)"/m.exec(section)?.[1] ?? null;
+    effort = /^\s*default_reasoning_effort\s*=\s*"([^"]+)"/m.exec(section)?.[1] ?? null;
+  } catch { /* no config */ }
+  let models = [];
+  const labels = {};
+  try {
+    const { stdout } = await exec(ENGINES.grok?.bin ?? 'grok', ['models'], {
+      timeout: 20_000,
+      env: { ...process.env, ...environment, GROK_HOME: root },
+    });
+    for (const line of stdout.split('\n')) {
+      const listed = /^\s*[*-]\s*(\S+)/.exec(line);
+      const namedDefault = /^\s*Default model:\s*(\S+)/.exec(line);
+      if (namedDefault) def ??= namedDefault[1];
+      if (listed) models.push(listed[1]);
+    }
+  } catch { /* `grok models` may still work unauthenticated; if not, empty */ }
+  models = [...new Set(models)];
+  if (def && !models.includes(def)) models.unshift(def);
+  return { default: def, models, labels, effort, efforts: ['low', 'medium', 'high'], images: false };
+}
+
+/**
+ * Pi keeps its provider catalog on disk at <home>/models.json - reading it
+ * costs no process at all. omp answers `omp models --json` with the same
+ * rows plus an explicit per-model thinking ladder and input list.
+ */
+async function piModels(engine, root, environment = {}) {
+  let def = null;
+  let effort = null;
+  if (engine === 'omp') {
+    try {
+      const yml = readFileSync(join(root, 'config.yml'), 'utf8');
+      const role = /^\s*default:\s*(\S+)/m.exec(yml)?.[1];
+      if (role) {
+        // `provider/model:thinking` - the suffix is the effort, not the name.
+        const [selector, level] = role.split(':');
+        def = selector;
+        effort = level ?? null;
+      }
+    } catch { /* no config */ }
+    try {
+      const { stdout } = await exec(ENGINES.omp?.bin ?? 'omp', ['models', '--json'], {
+        timeout: 20_000, maxBuffer: 8 << 20,
+        env: { ...process.env, ...environment },
+      });
+      const rows = JSON.parse(stdout)?.models ?? [];
+      const models = [], labels = {}, effortsByModel = {}, imagesByModel = {};
+      for (const m of rows) {
+        const sel = m?.selector ?? (m?.provider && m?.id ? `${m.provider}/${m.id}` : null);
+        if (!sel || models.includes(sel)) continue;
+        models.push(sel);
+        if (m.name) labels[sel] = m.name;
+        if (Array.isArray(m.thinking) && m.thinking.length) effortsByModel[sel] = m.thinking;
+        if (Array.isArray(m.input)) imagesByModel[sel] = m.input.includes('image');
+      }
+      if (def && !models.includes(def)) models.unshift(def);
+      return {
+        default: def, models, labels, effort,
+        efforts: [...new Set(Object.values(effortsByModel).flat())],
+        effortsByModel, images: Object.values(imagesByModel).some(Boolean), imagesByModel,
+      };
+    } catch { /* fall through to the pi-style disk read */ }
+  } else {
+    try {
+      const cfg = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8'));
+      if (cfg.defaultModel) def = cfg.defaultProvider ? `${cfg.defaultProvider}/${cfg.defaultModel}` : cfg.defaultModel;
+    } catch { /* no settings */ }
+  }
+
+  // pi's models.json: providers.<name>.models[] - id, name, reasoning,
+  // input, thinkingLevelMap (the levels the model actually accepts).
+  const models = [], labels = {}, effortsByModel = {}, imagesByModel = {};
+  for (const file of [join(root, 'models.json'), join(root, 'models-store.json')]) {
+    let cat = null;
+    try { cat = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }
+    for (const [provider, p] of Object.entries(cat?.providers ?? {})) {
+      for (const m of p?.models ?? []) {
+        const sel = `${provider}/${m.id}`;
+        if (!m.id || models.includes(sel)) continue;
+        models.push(sel);
+        if (m.name) labels[sel] = m.name;
+        const levels = m.thinkingLevelMap && typeof m.thinkingLevelMap === 'object'
+          ? Object.keys(m.thinkingLevelMap)
+          : (m.reasoning ? ['off', 'minimal', 'low', 'medium', 'high'] : null);
+        if (levels?.length) effortsByModel[sel] = levels;
+        if (Array.isArray(m.input)) imagesByModel[sel] = m.input.includes('image');
+      }
+    }
+    if (models.length) break;
+  }
+  if (def && !models.includes(def)) models.unshift(def);
+  return {
+    default: def, models, labels, effort,
+    efforts: [...new Set(Object.values(effortsByModel).flat())],
+    effortsByModel, images: Object.values(imagesByModel).some(Boolean), imagesByModel,
+  };
+}
+
+/**
+ * `cursor-agent models` lists the account's models as plain lines (the
+ * --format json shape is `[{"id","name",...}]`). Behind `agent login` - an
+ * unauthenticated box simply offers nothing until it signs in.
+ */
+async function cursorModels(environment = {}) {
+  const bins = [ENGINES.cursor?.bin ?? 'cursor-agent', 'agent'];
+  let stdout = null;
+  for (const bin of bins) {
+    for (const args of [['models', '--format', 'json'], ['models'], ['--list-models']]) {
+      try {
+        ({ stdout } = await exec(bin, args, { timeout: 20_000, env: { ...process.env, ...environment } }));
+        if (stdout?.trim()) break;
+      } catch { stdout = null; }
+    }
+    if (stdout?.trim()) break;
+  }
+  const models = [];
+  const labels = {};
+  const trimmed = (stdout ?? '').trim();
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    try {
+      const rows = JSON.parse(trimmed);
+      for (const r of Array.isArray(rows) ? rows : rows?.models ?? []) {
+        const id = typeof r === 'string' ? r : r?.id ?? r?.model ?? r?.slug;
+        if (id && !models.includes(id)) {
+          models.push(id);
+          const label = typeof r === 'object' && (r?.name ?? r?.displayName ?? r?.display_name);
+          if (label) labels[id] = label;
+        }
+      }
+    } catch { /* fall through to line parsing */ }
+  }
+  if (!models.length) {
+    for (const line of trimmed.split('\n')) {
+      const id = line.trim().replace(/^[*\-\s]+/, '').replace(/\s+\(default\)$/i, '');
+      if (id && !/^(available|default|error|usage)/i.test(id) && !models.includes(id)) models.push(id);
+    }
+  }
+  return { default: null, models, labels, images: true };
+}
+
+/** gemini has no listing command; the public catalog is the only honest list. */
+async function geminiModels() {
+  const published = await modelsDevProvider('google');
+  const models = published.models.filter((m) => m.startsWith('gemini'));
+  return { default: null, models, labels: published.labels, imagesByModel: published.imagesByModel, images: true };
+}
+
+/**
+ * `agy models` prints `slug<TAB>Display Name` rows. settings.json remembers
+ * the default by its *display name*, not the slug - resolve it back through
+ * the labels the list just printed. customModels entries are already slugs.
+ * An ineligible account gets an empty list; the rows still print on one that
+ * is merely signed out.
+ */
+async function agyModels(root, environment = {}) {
+  // `root` is the gemini home; agy's own store sits under it.
+  const home = join(root, 'antigravity-cli');
+  const models = [];
+  const labels = {};
+  let defLabel = null;
+  try {
+    const cfg = JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'));
+    if (typeof cfg.model === 'string') defLabel = cfg.model;
+    for (const m of cfg.customModels ?? []) {
+      if (m?.modelName && !models.includes(m.modelName)) models.push(m.modelName);
+      if (m?.modelName && m?.displayName) labels[m.modelName] = m.displayName;
+    }
+  } catch { /* no settings */ }
+  try {
+    const { stdout } = await exec(ENGINES.agy?.bin ?? 'agy', ['models'], {
+      timeout: 20_000, env: { ...process.env, ...environment },
+    });
+    for (const line of String(stdout ?? '').split('\n')) {
+      const row = line.trim();
+      if (!row) continue;
+      // `id\tLabel` - the label itself contains spaces, so only the first
+      // column break separates them.
+      const m = /^(\S+)(?:\t+|\s{2,})(.+)$/.exec(row);
+      const id = m?.[1] ?? row;
+      const label = m?.[2]?.trim();
+      if (/^(available|default|error|usage|eligibility)/i.test(id)) continue;
+      if (!models.includes(id)) models.push(id);
+      if (label) labels[id] ??= label;
+    }
+  } catch { /* `agy models` may still work unauthenticated; if not, empty */ }
+  let def = null;
+  if (defLabel) def = Object.keys(labels).find((id) => labels[id] === defLabel) ?? null;
+  if (def && !models.includes(def)) models.unshift(def);
+  // --effort takes low|medium|high|max; stream-json input is text-only.
+  return { default: def, models, labels, effort: null, efforts: ['low', 'medium', 'high', 'max'], images: false };
+}
+
+/** `kimi provider list --json` lists the configured providers' models. */
+async function kimiModels(environment = {}) {
+  const { stdout } = await exec(ENGINES.kimi?.bin ?? 'kimi', ['provider', 'list', '--json'], {
+    timeout: 20_000, maxBuffer: 4 << 20, env: { ...process.env, ...environment },
+  });
+  const models = [];
+  const labels = {};
+  try {
+    const rows = JSON.parse(stdout);
+    for (const p of Array.isArray(rows) ? rows : rows?.providers ?? []) {
+      for (const m of p?.models ?? []) {
+        const id = typeof m === 'string' ? m : m?.id ?? m?.model;
+        if (id && !models.includes(id)) {
+          models.push(id);
+          if (typeof m === 'object' && m?.name) labels[id] = m.name;
+        }
+      }
+    }
+  } catch { /* shape unknown - empty is honest */ }
+  return { default: null, models, labels };
+}
+
+/**
  * `devin models list` prints family headers ("Claude Opus 5 (claude-opus-5)")
  * then one indented line per model: `uid   Display Name   [meta]`. The
  * account's default sits in ~/.config/devin/config.json under agent.model.
@@ -582,6 +813,23 @@ export function optionArgs(engine, { model, auto, effort } = {}) {
   } else if (engine === 'opencode' || engine === 'opencode2') {
     if (model) args.push('-m', model);
     if (auto) args.push('--auto');
+  } else if (engine === 'grok') {
+    if (model) args.push('-m', model);
+    if (effort) args.push('--reasoning-effort', effort);
+    if (auto) args.push('--permission-mode', 'auto');
+  } else if (engine === 'cursor') {
+    if (model) args.push('--model', model);
+    if (auto) args.push('--force');
+  } else if (engine === 'gemini') {
+    if (model) args.push('-m', model);
+    if (auto) args.push('--yolo');
+  } else if (engine === 'agy') {
+    if (model) args.push('--model', model);
+    if (effort) args.push('--effort', effort);
+    if (auto) args.push('--dangerously-skip-permissions');
+  } else if (engine === 'muse') {
+    // muse has no model picker flag verified; --yolo is its "don't stop" switch.
+    if (auto) args.push('--yolo');
   }
   return args;
 }

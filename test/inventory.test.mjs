@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -131,4 +131,85 @@ test('OpenCode 2 inventory reads only native v2 sessions', async () => {
   const rows = found.filter((r) => r.engine === 'opencode2');
   assert.ok(rows.some((r) => r.id === 'v2-only' && r.model === 'new-model'));
   assert.ok(!rows.some((r) => r.id === 'v1-shared'), 'the V1 backfill is not listed twice');
+});
+
+test('pi inventory trusts each log\'s own session header, not its folder name', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-pi-home-'));
+  const dir = join(home, 'sessions', '--tmp-oddly-named--');
+  mkdirSync(dir, { recursive: true });
+  const log = join(dir, '2026-09-20_abc123.jsonl');
+  writeFileSync(log, [
+    { type: 'session', id: 'pi-1', cwd: '/work/real-folder', timestamp: SECONDS - 100 },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'rebuild the cache layer' }] }, timestamp: SECONDS - 90 },
+    { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] }, timestamp: SECONDS - 80 },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+  // A file without a session header is skipped, not guessed.
+  writeFileSync(join(dir, 'stray.jsonl'), '{"type":"message"}\n');
+
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const rows = await inventory([{ id: 'pi', engine: 'pi', env: { PI_CODING_AGENT_DIR: home } }]);
+  const found = rows.find((r) => r.id === 'pi-1');
+  assert.ok(found, 'the session is listed');
+  assert.equal(found.cwd, '/work/real-folder');
+  assert.equal(found.title, 'rebuild the cache layer');
+  assert.equal(found.transcript, log);
+  assert.equal(found.active, false);
+});
+
+test('agy inventory reads conversation_summaries.db under the gemini home', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-agy-home-'));
+  const root = join(home, 'antigravity-cli');
+  mkdirSync(join(root, 'conversations'), { recursive: true });
+  const db = new DatabaseSync(join(root, 'conversation_summaries.db'));
+  db.exec(`CREATE TABLE conversation_summaries (
+    conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, step_count INTEGER,
+    last_modified_time TEXT, workspace_uris TEXT, status TEXT, source TEXT,
+    project_id TEXT, agent_name TEXT, parent_conversation_id TEXT, nesting_depth INTEGER,
+    battle_id TEXT, winning_conversation_id TEXT, not_fully_idle INTEGER,
+    killed INTEGER, last_user_input_time TEXT, last_user_input_step_index INTEGER,
+    app_data_dir TEXT, raw_summary BLOB, group_id TEXT)`);
+  db.prepare('INSERT INTO conversation_summaries (conversation_id, title, preview, workspace_uris, last_modified_time, not_fully_idle, killed) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    'conv-agy-1', 'Add Antigravity IDE Integration', 'a preview',
+    '["file:///work/space%20dir"]', '2026-09-25 10:40:44.358828343+00:00', 0, 0);
+  db.prepare('INSERT INTO conversation_summaries (conversation_id, title, preview, workspace_uris, last_modified_time, not_fully_idle, killed) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    'conv-agy-2', '', '', '["file:///tmp"]', '2026-09-25 09:00:00+00:00', 0, 0);
+  db.close();
+  writeFileSync(join(root, 'conversations', 'conv-agy-1.db'), '');
+
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const rows = await inventory([{ id: 'agy', engine: 'agy', env: { GEMINI_CLI_HOME: home } }]);
+  const found = rows.find((r) => r.id === 'conv-agy-1');
+  assert.ok(found, 'the conversation is listed');
+  assert.equal(found.title, 'Add Antigravity IDE Integration');
+  assert.equal(found.cwd, '/work/space dir', 'file:// URI decoded');
+  assert.ok(found.updatedAt > 0, 'nanosecond timestamp parsed');
+  assert.equal(found.transcript, join(root, 'conversations', 'conv-agy-1.db'));
+  assert.equal(found.active, false, 'no live writer means not active');
+  const bare = rows.find((r) => r.id === 'conv-agy-2');
+  assert.equal(bare.title, 'tmp', 'falls back to the folder name');
+});
+
+test('grok inventory reads summary.json; no live writer means not active', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-grok-home-'));
+  const dir = join(home, 'sessions', '%2Fwork%2Fproj', 'uuid-1');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'summary.json'), JSON.stringify({
+    info: { id: 'grok-1', cwd: '/work/proj' },
+    session_summary: 'Fixing the pipeline',
+    current_model_id: 'grok-4',
+    updated_at: new Date((SECONDS - 60) * 1000).toISOString(),
+  }));
+  writeFileSync(join(dir, 'chat_history.jsonl'), '{"type":"user","content":"hey"}\n');
+  // The registry claims a live session, but no process owns it - the id
+  // alone must not light the row up as running.
+  writeFileSync(join(home, 'active_sessions.json'), JSON.stringify([{ id: 'grok-1' }]));
+
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const rows = await inventory([{ id: 'grok', engine: 'grok', env: { GROK_HOME: home } }]);
+  const found = rows.find((r) => r.id === 'grok-1');
+  assert.ok(found, 'the session is listed');
+  assert.equal(found.title, 'Fixing the pipeline');
+  assert.equal(found.cwd, '/work/proj');
+  assert.equal(found.model, 'grok-4');
+  assert.equal(found.active, false, 'a registry id without a process is not active');
 });

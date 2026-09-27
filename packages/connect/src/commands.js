@@ -56,6 +56,24 @@ function directories(engine, cwd, home) {
         { dir: join(root, 'opencode', 'commands'), source: 'yours', separator: '/' },
         { dir: join(root, 'opencode', 'command'), source: 'yours', separator: '/' },
       ];
+    case 'pi':
+    case 'omp': {
+      // Pi-family prompt files live under <root>/.{pi,omp}/agent/prompts in a
+      // project and <home>/prompts in the account's own home. Both CLIs also
+      // read skill directories the way Devin does.
+      const tag = engine === 'omp' ? '.omp' : '.pi';
+      return [
+        { dir: join(project, tag, 'agent', 'prompts'), source: 'project' },
+        { dir: join(project, tag, 'agent', 'skills'), source: 'project', skills: true },
+        { dir: join(root, 'prompts'), source: 'yours' },
+        { dir: join(root, 'skills'), source: 'yours', skills: true },
+      ];
+    }
+    case 'cursor':
+      return [
+        { dir: join(project, '.cursor', 'commands'), source: 'project' },
+        { dir: join(root, 'commands'), source: 'yours' },
+      ];
     case 'devin':
       // Devin's owner commands are skills: a named directory holding a
       // SKILL.md. `home` is devin's XDG_CONFIG_HOME, so the config copy of
