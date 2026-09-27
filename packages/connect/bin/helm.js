@@ -10,6 +10,7 @@ import {
   localKey, describeSelf, saveNetwork, machineKind, MACHINE_KINDS,
 } from '@helm/protocol/network';
 import { refreshProfiles, getProfiles } from '../src/profiles.js';
+import { ENGINES } from '../src/engines.js';
 import { proxy } from '../src/proxy.js';
 import { createRuntime } from '../src/runtime/index.js';
 import { HELM_DIR } from '../src/paths.js';
@@ -83,6 +84,7 @@ const usage = () => {
   helm login [minutes]              new short-lived password for signing in a device
   helm status                       membership, links and runtime
   helm profiles [--refresh]         the agent profiles found here
+  helm antigravity [install|login|status|remove]   the managed Google ACP agent
 
   helm brain [--on <machine>]       open a machine's own agent (prints how to reach it)
   helm digest [--json]              every machine, folder and running session
@@ -1151,7 +1153,7 @@ async function openBrain() {
   } catch (err) {
     if (!/needs a profileId/.test(err.message)) throw err;
     const { profiles } = await brainRpc(env, M.PROFILE_LIST, {});
-    const usable = profiles.filter((x) => ['claude', 'codex', 'opencode', 'devin'].includes(x.engine));
+    const usable = profiles.filter((x) => ENGINES[x.engine]?.driver);
     console.error(`helm: which account should be the brain on ${name}?\n`);
     for (const x of usable) console.error(`  helm brain --account ${x.id}${' '.repeat(Math.max(1, 22 - x.id.length))}${x.engine}`);
     exit(1);
@@ -1564,6 +1566,50 @@ try {
       console.log(r.restarting?.length
         ? `  updated - ${r.restarting.join(', ')} restart${r.restarting.length === 1 ? 's' : ''} in a few seconds`
         : '  updated - restart helm to pick it up');
+      break;
+    }
+
+    case 'antigravity': {
+      const ag = await import('../src/antigravity.js');
+      const sub = rest[0] ?? 'status';
+      if (sub === 'install') {
+        let reported = -1;
+        const r = await ag.installAntigravity({
+          onProgress: (phase, done, total) => {
+            if (phase === 'extract') { process.stdout.write('\n  verifying and unpacking…'); return; }
+            if (phase !== 'download') return;
+            const pct = Math.floor((done / total) * 100);
+            if (pct !== reported && pct % 5 === 0) {
+              reported = pct;
+              process.stdout.write(`\r  downloading antigravity runtime… ${pct}%`);
+            }
+          },
+        });
+        console.log(`\n\n  antigravity ${r.version ?? ''} installed.`);
+        console.log('  next: helm antigravity login   (or start a session - it signs in there too)\n');
+        // The profile cache predates the install; discovery adds the engine now.
+        try { await refreshProfiles(); } catch { /* the next discovery pass gets it */ }
+      } else if (sub === 'login') {
+        const at = rest.indexOf('--home');
+        const home = (at >= 0 && rest[at + 1]) || '~/.helm/antigravity';
+        const env = { GEMINI_HOME: home };
+        if (process.env.GEMINI_API_KEY) env.GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+        const r = await ag.antigravityLogin({
+          env,
+          onUrl: (u) => console.log(`\n  open this link to sign in to Antigravity:\n\n  ${u}\n\n  (waiting for Google to finish…)`),
+        });
+        console.log(r.alreadySignedIn
+          ? '\n  already signed in - Antigravity sessions can start.\n'
+          : '\n  signed in - Antigravity sessions can start.\n');
+      } else if (sub === 'remove' || sub === 'uninstall') {
+        await ag.uninstallAntigravity();
+        console.log('\n  removed the Antigravity runtime. Google sign-ins live under each profile home.\n');
+      } else {
+        const s = ag.antigravityStatus();
+        console.log(s.installed
+          ? `\n  antigravity ${s.version ?? ''} installed\n  ${s.exe}\n`
+          : '\n  the Antigravity runtime is not installed.\n  run: helm antigravity install\n');
+      }
       break;
     }
 

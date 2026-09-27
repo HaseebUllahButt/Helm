@@ -1,0 +1,8 @@
+{"id":"r1","result":{"protocolVersion":1,"agentCapabilities":{"promptCapabilities":{"image":true}},"authMethods":[{"id":"oauth-personal","name":"Google account"},{"id":"gemini-api-key","name":"Gemini API key"}]}}
+{"id":"r2","error":{"code":-32000,"message":"authentication required"}}
+{"print_on_request":"authenticate","line":"Open the following link to authenticate the ACP server: https://accounts.google.com/o/oauth2/v2/auth?client_id=test-client&redirect_uri=http%3A%2F%2F127.0.0.1%3A51123%2F&response_type=code&state=state-abc-123&scope=openid"}
+{"id":"r3","result":{}}
+{"id":"r4","result":{"sessionId":"conv-acp-1","configOptions":[{"id":"model","type":"select","currentValue":"gemini-3.8-flash","options":[{"value":"gemini-3.8-flash","name":"Gemini 3.8 Flash"},{"value":"gemini-3.8-pro","name":"Gemini 3.8 Pro"}]},{"id":"mode","type":"select","currentValue":"default","options":[{"value":"default","name":"Default"},{"value":"auto_edit","name":"Auto Edit"},{"value":"yolo","name":"Yolo"}]}]}}
+{"id":"r45","result":{}}
+{"method":"session/update","params":{"sessionId":"conv-acp-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"helm-acp-ok"}}}}
+{"id":"r5","result":{"stopReason":"end_turn","usage":{"inputTokens":50,"outputTokens":5}}}
