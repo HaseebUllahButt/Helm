@@ -9,6 +9,23 @@ import {
 import { fanOut, isNew } from './notify.js';
 
 const HEARTBEAT_MS = 30_000;
+// Longer than the CLI's 120s call timeout: the relay must not report a
+// failure while the target machine can still complete the operation.
+const RPC_TIMEOUT_MS = 130_000;
+
+const HANDOFF_ID = /^[a-f0-9]{24}$/;
+const DIGEST = /^[a-f0-9]{64}$/;
+// A whole serialized handoff.accept request - the encrypted snapshot is
+// almost all of it, so this is sized for a workspace, not a chat line.
+const MAX_DISPATCH_BYTES = 80 * 1024 * 1024;
+// A target's own answer is bounded too: one receipt, not a dump.
+const MAX_DISPATCH_RESULT = 1024 * 1024;
+const MAX_DISPATCH_ERROR = 500;
+const REDELIVER_MS = 30_000;
+// Running means answered; a result that never landed is swept after a
+// week, and any row is history after thirty days.
+const HANDOFF_RUNNING_TTL = 7 * 24 * 60 * 60 * 1000;
+const HANDOFF_TTL = 30 * 24 * 60 * 60 * 1000;
 
 export function createWsLayer() {
   /** envId -> socket of the connected daemon */
@@ -81,6 +98,160 @@ export function createWsLayer() {
       report.stale = true;
       return report;
     } catch { return null; }
+  }
+
+  // -------------------------------------------------------- handoff queue
+  //
+  // dispatch.submit / dispatch.status are hub-owned methods: the store they
+  // read and write is this hub's own. A task lands here from whichever home
+  // the source could reach and is handed to the target daemon the next time
+  // it connects. The same job may be stored on several hubs and delivered
+  // more than once - the target's idempotent accept absorbs that.
+
+  /** What a submit or status call answers with. */
+  const queueReceipt = (row) => {
+    if (!row) return null;
+    const out = {
+      handoffId: row.id,
+      sourceMachineId: row.source_id,
+      targetMachineId: row.target_id,
+      snapshotDigest: row.snapshot_digest,
+      status: row.status,
+      attempts: row.attempts,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+    if (row.result) {
+      try { out.receipt = JSON.parse(row.result); } catch { /* unreadable result is just absent */ }
+    }
+    if (row.error) out.error = row.error;
+    return out;
+  };
+
+  const sweepHandoffs = () => {
+    const t = now();
+    try {
+      q.handoffSweep.run(t - HANDOFF_RUNNING_TTL, t - HANDOFF_TTL);
+    } catch { /* a store that cannot sweep is no reason to refuse work */ }
+  };
+
+  /**
+   * Hand a target's waiting tasks to it - on connect, and right after a
+   * submit if it happens to be online now. Delivered rows stay queryable as
+   * delivered until the daemon's HANDOFF_RESULT lands.
+   */
+  function deliverPending(targetId) {
+    const sock = online.get(targetId);
+    if (!sock) return;
+    for (const row of q.handoffPending.all(targetId)) {
+      let params;
+      try { params = JSON.parse(row.payload); } catch { continue; }
+      send(sock, T.HANDOFF_JOB, {
+        handoffId: row.id, sourceMachineId: row.source_id, params,
+      });
+      q.handoffDelivered.run(now(), row.id);
+    }
+  }
+
+  /**
+   * The other half of a queued handoff: when the target reports a result,
+   * the machine that asked for the work is told where its child session
+   * landed. Delivered every time the source connects and each time one of
+   * its tasks finishes - no ack exists, but the session link underneath
+   * dedupes by handoffId, so repeats cost nothing.
+   */
+  function deliverCompletions(sourceId) {
+    const sock = online.get(sourceId);
+    if (!sock) return;
+    for (const row of q.handoffCompletions.all(sourceId)) {
+      let params; let receipt;
+      try {
+        params = JSON.parse(row.payload);
+        receipt = JSON.parse(row.result);
+      } catch { continue; }
+      if (!params?.parent?.sessionId) continue;
+      if (!receipt?.sessionId || !receipt?.folder || !receipt?.digest) continue;
+      send(sock, T.HANDOFF_COMPLETE, {
+        handoffId: row.id,
+        targetMachineId: row.target_id,
+        parentSessionId: params.parent.sessionId,
+        title: params.title ?? null,
+        receipt,
+      });
+    }
+  }
+
+  /**
+   * `dispatch.submit` validation. The params inside the wrapper are opaque
+   * to us - the target's own Handoffs validates them fully before acting;
+   * here we check only what the queue itself promises: who may submit,
+   * which machine the work is for, and that the id/digest/payload are sane.
+   */
+  function dispatchValidate(sock, wrap) {
+    if (!sock.isMachine) {
+      throw new Error('a handoff is submitted by a machine of this network only');
+    }
+    const params = wrap?.params;
+    if (!wrap || typeof wrap !== 'object' || !params || typeof params !== 'object') {
+      throw new Error('invalid dispatch request');
+    }
+    const net = loadNetwork();
+    if (!net?.machines?.[wrap.targetMachineId] || net?.revoked?.[wrap.targetMachineId]) {
+      throw new Error('the dispatch target is not a machine in this network');
+    }
+    if (params.targetMachineId !== wrap.targetMachineId
+        || params.sourceMachineId !== sock.sub
+        || !HANDOFF_ID.test(params.handoffId ?? '')) {
+      throw new Error('the dispatch wrapper does not match the request inside it');
+    }
+    if (!DIGEST.test(params.snapshotDigest ?? '')) {
+      throw new Error('invalid handoff snapshot digest');
+    }
+    if (!DIGEST.test(params.requestDigest ?? '')) {
+      throw new Error('invalid handoff request digest');
+    }
+    const payload = JSON.stringify(params);
+    if (payload.length > MAX_DISPATCH_BYTES) throw new Error('a handoff is too large to queue');
+    return { params, payload, targetId: wrap.targetMachineId };
+  }
+
+  function dispatchSubmit(sock, msg) {
+    sweepHandoffs();
+    const { params, payload, targetId } = dispatchValidate(sock, msg.params);
+    const id = params.handoffId;
+    let row = q.handoffGet.get(id);
+    if (!row) {
+      q.handoffInsert.run(
+        id, sock.sub, targetId, params.snapshotDigest, payload, now(), now()
+      );
+    } else {
+      // An id belongs to the request that first presented it: a retry
+      // repeats it, never replaces the stored payload. The hub cannot
+      // recompute the request digest - the fields live inside the opaque
+      // payload - so it binds the stored digest the first sender claimed.
+      let stored = null;
+      try { stored = JSON.parse(row.payload); } catch { /* an unparsable row cannot prove a match */ }
+      if (row.source_id !== sock.sub || row.target_id !== targetId
+          || row.snapshot_digest !== params.snapshotDigest
+          || stored?.requestDigest !== params.requestDigest) {
+        throw new Error('dispatch retry does not match its original request');
+      }
+      if (row.status === 'failed') q.handoffRequeue.run(now(), id);
+    }
+    deliverPending(targetId);
+    return queueReceipt(q.handoffGet.get(id));
+  }
+
+  function dispatchStatus(sock, msg) {
+    if (!sock.isMachine) {
+      throw new Error('a handoff is queried by a machine of this network only');
+    }
+    const id = msg.params?.handoffId;
+    if (!HANDOFF_ID.test(id ?? '')) throw new Error('invalid handoff id');
+    const row = q.handoffGet.get(id);
+    // The queue answers only the machine that sourced the task.
+    if (!row || row.source_id !== sock.sub) throw new Error('unknown handoff');
+    return queueReceipt(row);
   }
 
   // ------------------------------------------------------------- daemon side
@@ -194,6 +365,31 @@ export function createWsLayer() {
         return;
       }
 
+      case T.HANDOFF_RESULT: {
+        // Only the machine a task was queued for may answer it, and a row
+        // nobody queued is nobody's business.
+        const row = q.handoffGet.get(msg.handoffId);
+        if (!row || row.target_id !== envId) return;
+        if (msg.ok) {
+          // A connected target answers for itself, so bound what it may
+          // leave in our database rather than trusting its politeness.
+          const result = JSON.stringify(msg.receipt ?? null);
+          if (result.length > MAX_DISPATCH_RESULT) {
+            q.handoffFailed.run('the handoff receipt was too large to store', now(), msg.handoffId);
+          } else {
+            q.handoffRunning.run(result, now(), msg.handoffId);
+            deliverCompletions(row.source_id);
+          }
+        } else {
+          q.handoffFailed.run(
+            String(msg.error ?? 'the target refused the handoff')
+              .slice(0, MAX_DISPATCH_ERROR),
+            now(), msg.handoffId
+          );
+        }
+        return;
+      }
+
       case T.SIGNAL:
       case T.SIGNAL_READY: {
         // Opaque to us: hand it to whichever client is negotiating.
@@ -230,6 +426,22 @@ export function createWsLayer() {
         return;
 
       case T.RPC: {
+        // Hub-owned methods are answered from this hub's own store and are
+        // never dispatched to an environment.
+        if (msg.method === M.DISPATCH_SUBMIT || msg.method === M.DISPATCH_STATUS) {
+          try {
+            const result = msg.method === M.DISPATCH_SUBMIT
+              ? dispatchSubmit(sock, msg)
+              : dispatchStatus(sock, msg);
+            send(sock, T.RPC_RESULT, { id: msg.id, ok: true, result });
+          } catch (err) {
+            send(sock, T.RPC_RESULT, {
+              id: msg.id, ok: false,
+              error: { code: err.code || 'error', message: String(err?.message || err) },
+            });
+          }
+          return;
+        }
         const target = online.get(msg.env);
         if (!target) {
           // A sleeping machine is not zero usage. If it left its rollup with
@@ -255,7 +467,7 @@ export function createWsLayer() {
             id: msg.id, ok: false,
             error: { code: 'timeout', message: 'daemon did not respond' },
           });
-        }, 60_000).unref?.();
+        }, RPC_TIMEOUT_MS).unref?.();
         send(target, T.RPC, {
           id: relayId, method: msg.method, params: msg.params ?? {},
           // Who is asking travels with the call, so methods that answer
@@ -404,8 +616,16 @@ export function createWsLayer() {
       });
       broadcastPeers();
       notifyPresence(envId, true);
+      // A machine that just connected may have queued handoffs waiting for
+      // it; handing them over is part of joining, not a separate command.
+      sweepHandoffs();
+      deliverPending(envId);
+      // A machine that sourced queued work may also have finished children
+      // waiting to be linked while it was away.
+      deliverCompletions(envId);
     } else {
       sock.sub = auth.sub;
+      sock.isMachine = !!auth.machine;
       clients.set(sock, new Set());
       send(sock, T.WELCOME, { version: PROTOCOL_VERSION, role: 'client' });
     }
@@ -468,6 +688,19 @@ export function createWsLayer() {
     }
   }, HEARTBEAT_MS);
   heartbeat.unref?.();
+
+  // A delivered row stays pending until its result lands, so resending the
+  // pending set recovers a job frame lost while the socket stayed open -
+  // the target's idempotent accept absorbs every duplicate.
+  const redeliver = setInterval(() => {
+    for (const id of online.keys()) deliverPending(id);
+  }, REDELIVER_MS);
+  redeliver.unref?.();
+
+  const stop = () => {
+    clearInterval(heartbeat);
+    clearInterval(redeliver);
+  };
 
   // --------------------------------------------------- the hub itself asking
   //
@@ -580,5 +813,5 @@ export function createWsLayer() {
     });
   }
 
-  return { wss, online, broadcastPeers, kick, routeTunnel, callEnv, openTcp };
+  return { wss, online, broadcastPeers, kick, routeTunnel, callEnv, openTcp, stop };
 }

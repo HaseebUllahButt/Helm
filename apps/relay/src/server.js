@@ -49,7 +49,7 @@ export async function startRelay({
     ? rotatePassword(password, passwordTtlMs)
     : { password: null, expiresAt: 0 };
 
-  const { wss, online, kick, callEnv, openTcp } = createWsLayer();
+  const { wss, online, kick, callEnv, openTcp, stop: stopWs } = createWsLayer();
   const api = makeHttpHandler({ online, kick });
   // The byte-stream half of a nas - a real HTTP surface, mounted on every
   // hub but answering only where a nas designation and a valid media
@@ -220,7 +220,12 @@ export async function startRelay({
       wss.handleUpgrade(req, socket, head, (ws) =>
         // `sub` is who this socket authenticated as, kept so a revocation can
         // cut the live connection instead of only refusing the next one.
-        wss.emit('connection', ws, req, { role: 'client', sub: claims.sub })
+        // `machine` remembers which kind of credential that was - a client
+        // socket holding a machine credential may submit to the handoff
+        // queue, which a device token never may.
+        wss.emit('connection', ws, req, {
+          role: 'client', sub: claims.sub, machine: claims.role === ROLE.MACHINE,
+        })
       );
 
     // A machine attaches as an environment - unless it is asking to drive
@@ -253,6 +258,6 @@ export async function startRelay({
     server, port, online,
     password: auth.password,
     expiresAt: auth.expiresAt,
-    stop: () => server.close(),
+    stop: () => { stopWs(); server.close(); },
   };
 }

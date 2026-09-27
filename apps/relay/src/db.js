@@ -6,10 +6,14 @@
  * (`@helm/protocol/network`), because every machine needs a full copy of it.
  * What is left here is genuinely local: the login window this hub is offering
  * right now, invites it has issued, a cache of what it last saw each machine
- * reporting, and the digest stream.
+ * reporting, the digest stream, and the queue of handoffs waiting for a
+ * machine to come online.
  *
- * Deleting this file costs you nothing but history. That is the point: the
- * network survives in the roster, not here.
+ * Almost everything here is disposable: the network survives in the roster,
+ * not here. The exception is `handoff_queue` - a stored row is the task
+ * itself, encrypted for the target but still real work in flight, so unlike
+ * the cache rows it is intentionally durable. Deleting this file can drop a
+ * queued handoff; everything else it holds is only history.
  */
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes } from 'node:crypto';
@@ -113,6 +117,30 @@ db.exec(`
     label      TEXT,
     created_at INTEGER NOT NULL
   );
+
+  -- A code handoff waiting for its target machine to connect. payload is
+  -- the whole handoff.accept params object, opaque to us: the code inside
+  -- its envelope is encrypted to the target's machine key, and the task
+  -- text is exactly what the live RPC would have carried anyway.
+  --
+  -- status walks queued -> delivered -> running, or -> failed; a failed row
+  -- is reset to queued when the source resubmits the same request. Unlike
+  -- every other table here this is durable state, not a cache: losing it is
+  -- losing someone's queued work.
+  CREATE TABLE IF NOT EXISTS handoff_queue (
+    id              TEXT PRIMARY KEY,
+    source_id       TEXT NOT NULL,
+    target_id       TEXT NOT NULL,
+    snapshot_digest TEXT NOT NULL,
+    payload         TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    result          TEXT,
+    error           TEXT,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS handoff_target_status ON handoff_queue(target_id, status, created_at);
 `);
 
 // `CREATE TABLE IF NOT EXISTS` leaves an existing table alone, so a hub that
@@ -201,4 +229,45 @@ export const q = {
   pushAll: db.prepare('SELECT * FROM push_subs'),
   pushForDevice: db.prepare('SELECT * FROM push_subs WHERE device_id = ?'),
   pushDelete: db.prepare('DELETE FROM push_subs WHERE endpoint = ?'),
+
+  // The handoff queue. Insert is a plain INSERT on purpose: a same-id retry
+  // must never replace the stored payload, so a conflict is the caller's
+  // signal to compare rather than overwrite.
+  handoffGet: db.prepare('SELECT * FROM handoff_queue WHERE id = ?'),
+  handoffInsert: db.prepare(
+    `INSERT INTO handoff_queue (id, source_id, target_id, snapshot_digest, payload, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`
+  ),
+  handoffPending: db.prepare(
+    `SELECT * FROM handoff_queue
+     WHERE target_id = ? AND status IN ('queued', 'delivered')
+     ORDER BY created_at LIMIT 100`
+  ),
+  handoffDelivered: db.prepare(
+    `UPDATE handoff_queue SET status = 'delivered', attempts = attempts + 1, updated_at = ?
+     WHERE id = ?`
+  ),
+  // Finished work travelling back: a source machine's answered queue, newest
+  // first, so reconnecting can be told where its children landed.
+  handoffCompletions: db.prepare(
+    `SELECT * FROM handoff_queue WHERE source_id = ? AND status = 'running'
+     ORDER BY updated_at DESC LIMIT 100`
+  ),
+  handoffRunning: db.prepare(
+    `UPDATE handoff_queue SET status = 'running', result = ?, error = NULL, updated_at = ?
+     WHERE id = ?`
+  ),
+  handoffFailed: db.prepare(
+    `UPDATE handoff_queue SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`
+  ),
+  // A resubmitted failure goes back to waiting; the original payload stays.
+  handoffRequeue: db.prepare(
+    `UPDATE handoff_queue SET status = 'queued', error = NULL, updated_at = ? WHERE id = ?`
+  ),
+  // A result that never arrived is swept after a week; everything else has
+  // thirty days before the row is history either way.
+  handoffSweep: db.prepare(
+    `DELETE FROM handoff_queue
+     WHERE (status = 'running' AND updated_at < ?) OR created_at < ?`
+  ),
 };

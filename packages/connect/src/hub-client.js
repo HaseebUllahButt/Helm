@@ -27,6 +27,43 @@ export async function hubRpc(net, env, method, params = {}, { timeout = 20_000 }
   throw new Error(`could not reach that machine through any hub\n  ${failures.join('\n  ')}`);
 }
 
+/**
+ * The same RPC to every home at once, for work that is durable on each hub
+ * that takes it. A queued handoff only needs one home to have it; the rest
+ * accepting too is free redundancy, and the target's idempotent accept is
+ * what makes the resulting duplicate deliveries harmless. Throws only when
+ * not a single hub answered.
+ */
+export async function hubBroadcastRpc(net, env, method, params = {}, { timeout = 20_000 } = {}) {
+  const successes = [];
+  const failures = [];
+  await Promise.all([...new Set(hubUrls(net))].map(async (hub) => {
+    try {
+      successes.push({ hub, value: await rpcVia(hub, net, env, method, params, timeout) });
+    } catch (err) {
+      failures.push({ hub, error: err });
+    }
+  }));
+  if (!successes.length) {
+    throw new Error(
+      `could not reach any hub\n  ${failures.map((f) => `${f.hub}: ${f.error.message}`).join('\n  ')}`
+    );
+  }
+  return { successes, failures };
+}
+
+/**
+ * The furthest-along copy of one queued handoff across the homes that
+ * answered. 'failed' ranks lowest on purpose: a stale failure on one hub
+ * must not drown a live copy on another - failure only means something
+ * when every answering hub agrees on it.
+ */
+export function mergeQueueReceipts(rows) {
+  const rank = { running: 3, delivered: 2, queued: 1, failed: 0 };
+  return (rows ?? []).filter(Boolean)
+    .sort((a, b) => (rank[b.status] ?? 0) - (rank[a.status] ?? 0))[0] ?? null;
+}
+
 function rpcVia(hub, net, env, method, params, timeout) {
   // helm's protocol lives at /helm/ws now; a hub from before the move still
   // answers at /ws, so a transport failure there is worth one retry.

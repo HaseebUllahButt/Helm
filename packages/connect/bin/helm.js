@@ -14,12 +14,16 @@ import { proxy } from '../src/proxy.js';
 import { createRuntime } from '../src/runtime/index.js';
 import { HELM_DIR } from '../src/paths.js';
 import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
-import { hubRpc } from '../src/hub-client.js';
+import { hubRpc, hubBroadcastRpc, mergeQueueReceipts } from '../src/hub-client.js';
+import { handoffRequestDigest } from '../src/handoffs.js';
 import { levelOfWav, SILENCE_RMS } from '../src/voice.js';
 import {
   render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot,
 } from '../src/brain.js';
-import { createCodeSnapshot, sealCodeSnapshot } from '../src/code-transfer.js';
+import {
+  createCodeSnapshot, sealCodeSnapshot, beginCodeKeyProof, verifyCodeKeyProof,
+  signHandoffDigest,
+} from '../src/code-transfer.js';
 
 // Unix pipelines routinely close their read end early (`helm machines |
 // head`). Treat that as successful completion instead of printing an
@@ -83,6 +87,9 @@ const usage = () => {
   helm say <id> <text...>           send a prompt into an existing session
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
   helm handoff <machine> [text...]  move code and this task to another machine
+    --handoff-id <id>               resume an interrupted handoff instead of starting a new one
+  helm dispatch <machine> [text...]  queue this folder and task on another machine
+  helm dispatch-status <id>         where a queued handoff got to
 
   helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
   helm proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
@@ -794,116 +801,253 @@ async function spawn_() {
 }
 
 /**
- * Start the current task on another machine.
+ * Queue the current task on another machine.
  *
  * The provider credential deliberately does not travel. The target uses one
- * of its own profiles, which must already be authenticated there. The source
- * session tail is useful context, but it is redacted and bounded because a
- * transcript can contain things an agent read from the workspace.
+ * of its own profiles, which must already be authenticated there. When this
+ * runs inside a Helm session the source session's tail becomes bounded,
+ * redacted context in the prompt; from a plain shell it carries the folder
+ * and the typed text, nothing more.
+ *
+ * The request is durably stored on every reachable home, so the target only
+ * has to connect to one of them to receive it. A queued task outlives this
+ * process: "queued" is a result, not a failure.
  */
 async function handoff() {
-  const valueFlags = new Set(['--folder', '--target-folder', '--source-folder', '--account', '--model', '--mode', '--title']);
+  const valueFlags = new Set(['--folder', '--target-folder', '--source-folder', '--account', '--model', '--mode', '--title', '--handoff-id']);
   const args = [];
   for (let i = 0; i < rest.length; i++) {
     if (!rest[i].startsWith('--')) { args.push(rest[i]); continue; }
     if (valueFlags.has(rest[i])) i++;
   }
   const who = args.shift();
-  if (!who) die('usage: helm handoff <machine> [text...]');
-
-  const sourceId = process.env.HELM_SESSION_ID;
-  if (!sourceId) {
-    die('handoff must be run by a Helm-managed headless agent session');
-  }
+  if (!who) die('usage: helm dispatch <machine> [text...]');
 
   const net = requireNetwork();
   const target = machineId(who);
   if (target === net.self) die('the handoff target is this machine');
 
+  // Inside a Helm-managed session the source session's context and parent
+  // link travel with the work. Outside one there is nothing to link back
+  // to, and the target profile has to be named explicitly.
+  const sourceId = process.env.HELM_SESSION_ID;
+  const explicitAccount = rest.includes('--account');
+
   const sourceFolder = strFlag('source-folder', process.env.HELM_CWD || process.cwd());
-  const handoffId = randomBytes(12).toString('hex');
+  const handoffId = strFlag('handoff-id', randomBytes(12).toString('hex'));
+  if (!/^[a-f0-9]{24}$/.test(handoffId)) {
+    die('--handoff-id must be 24 lowercase hexadecimal characters');
+  }
   const requestedTargetFolder = strFlag('target-folder', strFlag('folder', ''));
-  const account = strFlag('account', process.env.HELM_PROFILE_ID || '');
   const sourceName = net.machines[net.self]?.name ?? 'the source machine';
   const targetName = net.machines[target]?.name ?? who;
-  const targetProfiles = (await brainRpc(target, M.PROFILE_LIST, {})).profiles ?? [];
-  const engine = process.env.HELM_ENGINE;
-  const wanted = account.toLowerCase();
-  const profile = targetProfiles.find((p) => p.id === account)
-    || targetProfiles.find((p) => String(p.account ?? '').toLowerCase() === wanted)
-    || targetProfiles.find((p) => String(p.id).toLowerCase().startsWith(wanted))
-    || targetProfiles.find((p) => p.engine === engine);
-  if (!profile) {
-    die(`no matching authenticated account on ${targetName}; pass --account <profile>`);
+
+  // Which of the target's profiles runs the work. An explicit --account is
+  // taken verbatim - the target validates it when the job lands, which is
+  // also the fallback when the target cannot be asked right now.
+  let profile = null;
+  let profileId;
+  if (explicitAccount) {
+    profileId = strFlag('account', '');
+    if (!profileId) die('--account needs a profile id');
+  } else if (sourceId) {
+    const account = strFlag('account', process.env.HELM_PROFILE_ID || '');
+    let targetProfiles = null;
+    try {
+      targetProfiles = (await brainRpc(target, M.PROFILE_LIST, {})).profiles ?? [];
+    } catch (err) {
+      if (!/offline|not connected|reach|timed out|ECONN|socket|closed/i.test(err.message)) throw err;
+      if (!process.env.HELM_PROFILE_ID) {
+        die(`${targetName} is unreachable; pass --account <target-profile-id>`);
+      }
+      console.error(`helm: warning: ${targetName} is unreachable; the profile is used as-is and the target validates it when it connects`);
+      profileId = process.env.HELM_PROFILE_ID;
+    }
+    if (targetProfiles) {
+      const wanted = account.toLowerCase();
+      const prefixHits = targetProfiles.filter((p) => String(p.id).toLowerCase().startsWith(wanted));
+      profile = targetProfiles.find((p) => p.id === account)
+        || targetProfiles.find((p) => String(p.account ?? '').toLowerCase() === wanted)
+        || (prefixHits.length === 1 ? prefixHits[0] : null);
+      if (!profile) {
+        die(prefixHits.length > 1
+          ? `"${account}" matches ${prefixHits.length} accounts on ${targetName}; pass --account <profile>`
+          : `no matching authenticated account on ${targetName}; pass --account <profile>`);
+      }
+      profileId = profile.id;
+    }
+  } else {
+    die('outside a Helm-managed session, pass --account <target-profile-id>');
   }
 
-  // The roster record is authored by the target machine. Comparing it with
-  // the live answer prevents a relay from swapping in its own public key and
-  // turning the encrypted envelope into something it can decrypt.
+  // Read the source session first: it is where the inherited mode comes
+  // from, and its tail becomes the bounded context in the prompt.
+  const source = sourceId
+    ? await brainRpc(net.self, M.SESSION_EVENTS, { id: sourceId, tail: 500, limit: 500 })
+    : null;
+  const engine = process.env.HELM_ENGINE;
+  const inheritedMode = profile?.engine === engine ? source?.session?.mode : undefined;
+
+  // The roster key is TOFU-pinned: the first code key gossip teaches for a
+  // machine is the one trusted from then on, and a later record cannot
+  // swap or drop it. The proof is what makes that pinning worth anything:
+  // after the key is learned, nobody can substitute an answer for it
+  // without holding the private half. It is opportunistic here - a target
+  // that cannot answer right now still gets the work, encrypted to the
+  // pinned key - but an answer that proves the wrong key stops the handoff.
   const advertisedCodeKey = net.machines[target]?.codePubkey;
   if (!advertisedCodeKey) {
     die(`${targetName} has no code-transfer key yet; restart Helm on that machine and try again`);
   }
-  const liveCodeKey = (await brainRpc(target, M.CODE_KEY, {})).codePubkey;
-  if (liveCodeKey !== advertisedCodeKey) {
-    die(`the code-transfer key for ${targetName} changed; refresh the machine roster and retry`);
+  let proof = null;
+  try {
+    const challenge = beginCodeKeyProof(advertisedCodeKey);
+    proof = {
+      challenge,
+      response: await brainRpc(target, M.CODE_KEY, challenge.request, 8_000),
+    };
+  } catch (err) {
+    if (!/offline|not connected|reach|timed out|ECONN|socket|closed/i.test(err.message)) throw err;
+    console.error(`helm: warning: ${targetName} did not answer the key proof; trusting its TOFU-pinned key as-is`);
+  }
+  if (proof) {
+    try {
+      verifyCodeKeyProof(advertisedCodeKey, proof.challenge.secret, proof.response);
+    } catch (err) {
+      die(`the code-transfer key for ${targetName} could not be verified; refresh the machine roster and retry (${err.message})`);
+    }
   }
 
   const snapshot = createCodeSnapshot(sourceFolder);
   const targetFolder = requestedTargetFolder ||
     `~/.helm/workspaces/${snapshot.rootName}-${handoffId.slice(0, 8)}`;
   const envelope = sealCodeSnapshot(snapshot, advertisedCodeKey, handoffId);
-  const transfer = await brainRpc(target, M.CODE_TRANSFER, {
-    handoffId,
-    folder: targetFolder,
-    envelope,
-  }, 120_000);
-  const inheritedMode = profile.engine === engine ? process.env.HELM_MODE : undefined;
 
-  const source = await brainRpc(net.self, M.SESSION_EVENTS, {
-    id: sourceId, tail: 500, limit: 500,
-  });
-  const context = readThread(source.events ?? [], { limit: 28 })
-    .join('\n')
-    .replace(/\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi, '[redacted]')
-    .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\b(?:ghp|gho|github_pat|xox[baprs])-?[A-Za-z0-9_-]{12,}\b/gi, '[redacted]')
-    .replace(/((?:api[_ -]?key|token|secret|password|private[_ -]?key)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
-    .replace(/(?:sk|pk|api|auth|token|secret|key)[-_ ]?[a-z0-9]{8,}/gi, '[redacted]')
-    .slice(-12_000);
+  const context = source
+    ? readThread(source.events ?? [], { limit: 28 })
+      .join('\n')
+      .replace(/\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi, '[redacted]')
+      .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\b(?:ghp|gho|github_pat|xox[baprs])-?[A-Za-z0-9_-]{12,}\b/gi, '[redacted]')
+      .replace(/((?:api[_ -]?key|token|secret|password|private[_ -]?key)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+      .replace(/(?:sk|pk|api|auth|token|secret|key)[-_ ]?[a-z0-9]{8,}/gi, '[redacted]')
+      .slice(-12_000)
+    : '';
   const request = args.join(' ').trim();
   const prompt = [
     `You are taking over a task from ${sourceName} on ${targetName}.`,
     request || 'Continue the task from the handoff context.',
-    `Work in ${transfer.folder}. No provider credentials or environment files were transferred; use the authenticated account available on this machine.`,
+    `Work in ${targetFolder}. No provider credentials or environment files were transferred; use the authenticated account available on this machine.`,
     context ? `\nHandoff context:\n${context}` : '',
   ].filter(Boolean).join('\n\n');
 
-  const { session } = await brainRpc(target, M.SESSION_START, {
-    cwd: transfer.folder, profileId: profile.id, model: flagOf('model'),
+  // One idempotent request, stored on every reachable home under the same
+  // handoff id. Whichever home the target next connects to delivers it;
+  // duplicate deliveries converge on the target's own handoff record.
+  const sessionTitle = flagOf('title') || `Handoff · ${source?.session?.title ?? 'task'}`;
+  const params = {
+    handoffId,
+    sourceMachineId: net.self,
+    targetMachineId: target,
+    folder: targetFolder,
+    envelope,
+    snapshotDigest: snapshot.digest,
+    profileId,
+    model: flagOf('model'),
     mode: rest.includes('--mode') ? flagOf('mode') : inheritedMode,
-    title: flagOf('title') || `Handoff · ${source.session?.title ?? 'task'}`,
-    parent: {
+    title: sessionTitle,
+    prompt,
+  };
+  if (sourceId) {
+    params.parent = {
       handoffId,
       machineId: net.self,
       sessionId: sourceId,
       sourceFolder,
-      digest: transfer.digest,
-    },
-  }, 60_000);
-  await brainRpc(net.self, M.SESSION_LINK, {
-    id: sourceId,
-    child: {
-      handoffId,
-      machineId: target,
-      sessionId: session.id,
-      title: session.title,
-      folder: transfer.folder,
-      digest: transfer.digest,
-    },
-  });
-  await brainRpc(target, M.SESSION_INPUT, { id: session.id, data: prompt });
-  console.log(`${shortId(session.id)}  ${session.title}  (${profile.engine} on ${targetName}, ${transfer.folder})`);
-  console.log(`handed off ${transfer.files} code files; ${transfer.skipped} sensitive/generated entries skipped.`);
+      digest: snapshot.digest,
+    };
+  }
+  // The digest travels inside the request and binds every field above: a
+  // hub stores the first payload it saw under this id and refuses any
+  // retry whose digest - hence whose contents - differs.
+  params.requestDigest = handoffRequestDigest(params);
+  // And we sign the digest: at the target, the pinned signing key of the
+  // source machine is what proves this request is really ours.
+  params.sourceSignature = signHandoffDigest(params.requestDigest);
+  const submitted = await hubBroadcastRpc(
+    net, target, M.DISPATCH_SUBMIT, { targetMachineId: target, params }, { timeout: 120_000 }
+  );
+
+  // The target may be online already: give it a few seconds to run before
+  // reporting the task as merely queued. Every home keeps its own copy of
+  // the row, so poll them all and take the furthest-along answer - the
+  // first hub to fail is not a verdict on the rest.
+  const seen = new Map(submitted.successes.map((s) => [s.hub, s.value]));
+  let accepted = null;
+  for (let i = 0; ; i += 1) {
+    const rows = [...seen.values()].filter(Boolean);
+    const best = mergeQueueReceipts(rows);
+    if (best?.status === 'running' && best.receipt) { accepted = best.receipt; break; }
+    if (rows.length && rows.every((r) => r.status === 'failed')) {
+      die(`handoff ${handoffId} failed on ${targetName}: ${best?.error ?? 'the target refused it'}`);
+    }
+    if (i >= 16) break;
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      const round = await hubBroadcastRpc(net, target, M.DISPATCH_STATUS, { handoffId }, { timeout: 5_000 });
+      for (const s of round.successes) seen.set(s.hub, s.value);
+    } catch { /* every home quiet this round; the next may answer */ }
+  }
+
+  if (accepted) {
+    // Linking is bookkeeping, not the handoff itself: a failed link must
+    // not turn a running target session into a reported failure.
+    if (sourceId) {
+      try {
+        await brainRpc(net.self, M.SESSION_LINK, {
+          id: sourceId,
+          child: {
+            handoffId,
+            machineId: target,
+            sessionId: accepted.sessionId,
+            title: sessionTitle,
+            folder: accepted.folder,
+            digest: accepted.digest,
+          },
+        });
+      } catch (err) {
+        console.error(`helm: warning: the target session is running but the source could not record the link (${err.message})`);
+      }
+    }
+    console.log(`handoff ${handoffId} is running on ${targetName}:`);
+    console.log(`  ${shortId(accepted.sessionId)}  ${sessionTitle}  (${profile?.engine ?? profileId} on ${targetName}, ${accepted.folder})`);
+    const entries = (accepted.skippedEntries ?? []).slice(0, 10);
+    console.log(`  handed off ${accepted.files} code files; ${accepted.skipped} entr${accepted.skipped === 1 ? 'y' : 'ies'} skipped${entries.length ? ':' : '.'}`);
+    for (const e of entries) console.log(`    - ${e.path} (${e.reason})`);
+    const omitted = (accepted.skipped ?? 0) - entries.length;
+    if (omitted > 0) console.log(`    - … and ${omitted} more`);
+    return;
+  }
+
+  console.log(`queued ${handoffId} for ${targetName}; it will start when that machine connects.`);
+  console.log(`retry/status: helm dispatch-status ${handoffId}`);
+}
+
+/** Where a queued handoff is: still waiting, delivered, running or failed. */
+async function dispatchStatus() {
+  const id = rest.find((a) => !a.startsWith('--'));
+  if (!id || !/^[a-f0-9]{24}$/.test(id)) die('usage: helm dispatch-status <handoff-id>');
+  const net = requireNetwork();
+  // Each home keeps its own copy of the queue; the furthest-along answer
+  // wins, so a hub that only ever queued it cannot hide a finished one.
+  const { successes } = await hubBroadcastRpc(net, net.self, M.DISPATCH_STATUS, { handoffId: id });
+  const row = mergeQueueReceipts(successes.map((s) => s.value));
+  if (!row) die('no hub answered');
+  const targetName = net.machines[row.targetMachineId]?.name ?? row.targetMachineId;
+  console.log(`handoff ${row.handoffId} for ${targetName}: ${row.status}`);
+  if (row.receipt?.sessionId) {
+    console.log(`  session ${row.receipt.sessionId}${row.receipt.folder ? ` in ${row.receipt.folder}` : ''}`);
+  }
+  if (row.error) console.log(`  error: ${row.error}`);
 }
 
 async function openBrain() {
@@ -1440,7 +1584,12 @@ try {
 
     case 'handoff':
     case 'transfer':
+    case 'dispatch':
       await handoff();
+      break;
+
+    case 'dispatch-status':
+      await dispatchStatus();
       break;
 
     case 'dictate':

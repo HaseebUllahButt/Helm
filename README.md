@@ -202,10 +202,22 @@ helm digest                       every machine, folder and running session
 helm thread <id>                  one conversation
 helm say <id> "<text>"            prompt an existing session
 helm spawn <machine> <folder> <account> "<text>"
+helm dispatch <machine> --account <target-profile> "<task>"
+helm dispatch-status <id>         where a queued handoff stands
 ```
 
 `helm digest` keeps the last answer from every machine, so one that is asleep
 is listed with when it was last seen rather than left out.
+
+`helm dispatch` runs from any joined machine - inside a session or from a
+plain shell. It packs the current folder, encrypts it to the target's own
+key and queues it on every reachable home, so a machine that is offline
+picks the work up the next time it connects; `dispatch-status` asks the same
+question later. Retries are idempotent: the same handoff resumes its steps
+rather than repeating them, and provider credentials stay on the machine the
+work runs on. Source and target must both run this protocol version - the
+envelope compression, request signing and queue frames are a wire change -
+so update homes and targets first, then sources.
 
 ## What it costs
 
@@ -261,6 +273,10 @@ Agents and credentials stay on the computer where the work runs.
 - Machine invites are single-use.
 - The network key stays in files readable only by the local user.
 - Provider credentials never go to the VM unless the agent itself runs there.
+- Queued code is encrypted to the target machine; the task text and settings
+  ride readable through your own home, the same as a live call.
+- What a handoff leaves behind is decided by filename - a conservative
+  filter, not a promise that nothing sensitive is inside the code itself.
 - Only HTTPS should be exposed publicly; port `8787` stays behind Caddy.
 
 The current design is for one trusted owner per Helm home. Do not put unrelated

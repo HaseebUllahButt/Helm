@@ -71,6 +71,15 @@ export const T = {
   // rollup, so a hub can keep answering for it after it goes to sleep. Small
   // by design - day-by-model rows, never transcript bytes.
   USAGE_SYNC: 'usage.sync',       // { buckets: {key: bucket}, accounts, scan, at }
+
+  // --- durable handoff dispatch ----------------------------------------
+  // A handoff stored on a hub is delivered to the target daemon the next
+  // time it connects, and answered with the result of the idempotent
+  // accept. The same job can arrive from several hubs; the target's
+  // handoff record is what makes duplicates harmless.
+  HANDOFF_JOB: 'handoff.job',     // hub -> target daemon { handoffId, sourceMachineId, params }
+  HANDOFF_RESULT: 'handoff.result', // target daemon -> hub { handoffId, ok, receipt? | error? }
+  HANDOFF_COMPLETE: 'handoff.complete', // hub -> source daemon { handoffId, targetMachineId, parentSessionId, receipt, title }
 };
 
 // ------------------------------------------------------------- daemon methods
@@ -152,9 +161,22 @@ export const M = {
   USAGE_BUCKETS: 'usage.buckets',  // { rebuild? } -> { buckets, accounts, scan, at }
 
   // Code-only handoff. The envelope is end-to-end encrypted to the target's
-  // machine key; no provider profile or environment is part of it.
-  CODE_KEY: 'code.key',            // {} -> { codePubkey }
-  CODE_TRANSFER: 'code.transfer',  // { handoffId, folder?, envelope } -> { folder, files, bytes }
+  // machine key; no provider profile or environment is part of it. The key
+  // is only ever *proved*, never sent: code.key is a challenge the target
+  // answers with an HMAC over the caller's nonce, which takes holding the
+  // private half. Acceptance is one idempotent operation, so a retry after
+  // any failure picks the handoff up where it left off rather than
+  // materializing the folder or starting the session a second time.
+  CODE_KEY: 'code.key',            // { epk, nonce } -> { codePubkey, proof }
+  HANDOFF_ACCEPT: 'handoff.accept',// { handoffId, sourceMachineId, targetMachineId, folder?, envelope, snapshotDigest, profileId, model?, mode?, title?, parent?, prompt, requestDigest, sourceSignature } -> receipt
+  HANDOFF_STATUS: 'handoff.status',// { handoffId } -> receipt
+
+  // Hub-owned queue operations: a hub intercepts these and answers from its
+  // own durable store, so they are never dispatched to an environment. The
+  // params the target will eventually run travel whole, unchanged - the hub
+  // stores the opaque handoff.accept payload but does not perform it.
+  DISPATCH_SUBMIT: 'dispatch.submit', // { targetMachineId, params } -> queue receipt
+  DISPATCH_STATUS: 'dispatch.status', // { handoffId } -> queue receipt
 
   // A machine designated 'nas'. Browsing is RPC (small JSON, fits the
   // channel), but the bytes themselves are not: streaming is real HTTP at

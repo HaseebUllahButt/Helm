@@ -28,7 +28,8 @@ import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot 
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { transcribe, canTranscribe } from './voice.js';
-import { codeKeyInfo, materializeCode } from './code-transfer.js';
+import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
+import { Handoffs } from './handoffs.js';
 
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30_000;
@@ -225,6 +226,10 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    this.handoffs = new Handoffs({
+      sessions: this.sessions,
+      network: () => loadNetwork() ?? this.net,
+    });
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
     // path: a message must not wait on every machine answering. The refresh
@@ -450,12 +455,14 @@ export class Daemon {
     ])];
     const ssh = await sshInfo().catch(() => ({}));
     const code = codeKeyInfo();
+    const signing = codeSigningInfo();
     this.net = describeSelf(net, {
       endpoints,
       pubkey: ssh.pubkey,
       sshUser: ssh.sshUser,
       sshPort: ssh.sshPort,
       codePubkey: code.codePubkey,
+      codeSignPubkey: signing.codeSignPubkey,
     });
   }
 
@@ -795,6 +802,65 @@ export class Daemon {
         return;
       }
 
+      // A queued handoff arriving from a hub's store. The same job can be
+      // delivered by several hubs and more than once by each - the accept
+      // underneath is idempotent, so the work is only ever done once.
+      case T.HANDOFF_JOB: {
+        const p = msg.params;
+        const malformed = !p || typeof p !== 'object'
+          || p.handoffId !== msg.handoffId
+          || p.sourceMachineId !== msg.sourceMachineId
+          || p.targetMachineId !== this.id;
+        if (malformed) {
+          link.send(T.HANDOFF_RESULT, {
+            handoffId: msg.handoffId, ok: false,
+            error: 'the handoff job does not match this machine',
+          });
+          return;
+        }
+        this.handoffs.accept(p, msg.sourceMachineId)
+          .then((receipt) => link.send(T.HANDOFF_RESULT, { handoffId: msg.handoffId, ok: true, receipt }))
+          .catch((err) => link.send(T.HANDOFF_RESULT, {
+            handoffId: msg.handoffId, ok: false,
+            error: String(err?.message || err).slice(0, 500),
+          }));
+        return;
+      }
+
+      // A queued handoff that finished while this machine was a target of
+      // nothing - it was the source. The hub tells us where the child
+      // session landed; linkChild dedupes by handoffId, so every reconnect
+      // may repeat this harmlessly.
+      case T.HANDOFF_COMPLETE: {
+        try {
+          const receipt = msg.receipt;
+          const net = loadNetwork() ?? this.net;
+          const clean = typeof msg.handoffId === 'string' && /^[a-f0-9]{24}$/.test(msg.handoffId)
+            && !!net?.machines?.[msg.targetMachineId] && !net?.revoked?.[msg.targetMachineId]
+            && typeof msg.parentSessionId === 'string'
+            && msg.parentSessionId.length > 0 && msg.parentSessionId.length <= 80
+            && receipt && typeof receipt === 'object'
+            && typeof receipt.sessionId === 'string'
+            && receipt.sessionId.length > 0 && receipt.sessionId.length <= 80
+            && typeof receipt.folder === 'string' && receipt.folder.length <= 1024
+            && typeof receipt.digest === 'string' && /^[a-f0-9]{64}$/.test(receipt.digest);
+          if (!clean) throw new Error('malformed handoff completion');
+          this.sessions.linkChild(msg.parentSessionId, {
+            handoffId: msg.handoffId,
+            machineId: msg.targetMachineId,
+            sessionId: receipt.sessionId,
+            title: typeof msg.title === 'string' ? msg.title : null,
+            folder: receipt.folder,
+            digest: receipt.digest,
+          });
+        } catch (err) {
+          // A stale or malformed completion is noise, not a reason to drop
+          // the link carrying it.
+          console.error(`[helm] handoff completion ignored: ${err?.message || err}`);
+        }
+        return;
+      }
+
       case T.SIGNAL:
         return this.peers.signal(msg.peer, msg.payload, link, msg.device);
 
@@ -1116,7 +1182,10 @@ export class Daemon {
       }
 
       case M.SESSION_LIST:    return { sessions: await this.sessions.list() };
-      case M.SESSION_START:   return { session: await this.sessions.start(p) };
+      case M.SESSION_START: {
+        const { originHandoffId: _originHandoffId, ...start } = p;
+        return { session: await this.sessions.start(start) };
+      }
       case M.SESSION_LINK:    return this.sessions.linkChild(p.id, p.child);
       // Attaching starts a push stream of the screen (E.SESSION_DATA); the
       // reply carries the current screen so the viewer has something at once.
@@ -1258,11 +1327,20 @@ export class Daemon {
         return this.#usageRollup(!!p.rebuild);
 
       case M.CODE_KEY: {
-        const { codePubkey } = codeKeyInfo();
-        return { codePubkey };
+        // Proving the code key is for machines: a handoff's whole chain of
+        // custody is machine-to-machine, and a device holds no key anyone
+        // would encrypt a workspace to. Missing or revoked callers get the
+        // same refusal as devices.
+        const net = loadNetwork() ?? this.net;
+        if (!caller || !net.machines?.[caller] || net.revoked?.[caller]) {
+          throw new Error('code.key is answered for machines of this network only');
+        }
+        return answerCodeKeyProof(p);
       }
-      case M.CODE_TRANSFER:
-        return materializeCode(p.envelope, p.handoffId, p.folder);
+      case M.HANDOFF_ACCEPT:
+        return this.handoffs.accept(p, caller);
+      case M.HANDOFF_STATUS:
+        return this.handoffs.status(p.handoffId, caller);
 
       case M.PING:            return { t: Date.now() };
 
