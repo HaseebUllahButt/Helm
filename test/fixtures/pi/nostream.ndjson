@@ -1,0 +1,9 @@
+{"type":"response","command":"get_state","success":true,"data":{"sessionId":"sess-nostream","model":{"provider":"openai-codex","id":"gpt-9"},"isStreaming":false}}
+{"type":"response","command":"get_commands","success":true,"data":{"commands":[]}}
+{"type":"response","command":"get_available_thinking_levels","success":false,"error":"Unknown command: get_available_thinking_levels"}
+{"type":"response","command":"prompt","success":true}
+{"type":"agent_start"}
+{"type":"message_start","message":{"role":"assistant"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"let me think"},{"type":"text","text":"final only"}],"usage":{"input":50,"output":9,"cost":{"total":0.002}}}}
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"let me think"},{"type":"text","text":"final only"}],"usage":{"input":50,"output":9,"cost":{"total":0.002}}}]}
+{"type":"agent_settled"}

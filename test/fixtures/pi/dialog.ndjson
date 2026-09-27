@@ -1,0 +1,14 @@
+{"type":"response","command":"get_state","success":true,"data":{"sessionId":"sess-dialog","isStreaming":false}}
+{"type":"response","command":"get_commands","success":true,"data":{"commands":[]}}
+{"type":"response","command":"get_available_thinking_levels","success":false,"error":"Unknown command: get_available_thinking_levels"}
+{"type":"response","command":"prompt","success":true}
+{"type":"agent_start"}
+{"type":"extension_ui_request","id":"req-9","method":"confirm","title":"Run shell command?","message":"rm -rf ./build"}
+{"type":"await","on":"extension_ui_response","id":"req-9"}
+{"type":"message_start","message":{"role":"assistant"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"done it"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":0}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done it"}]}}
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"done it"}]}]}
+{"type":"agent_settled"}

@@ -1,0 +1,8 @@
+{"type":"response","command":"get_state","success":true,"data":{"sessionId":"sess-abort","isStreaming":false}}
+{"type":"response","command":"get_commands","success":true,"data":{"commands":[]}}
+{"type":"response","command":"get_available_thinking_levels","success":false,"error":"Unknown command: get_available_thinking_levels"}
+{"type":"response","command":"prompt","success":true}
+{"type":"agent_start"}
+{"type":"await","on":"abort"}
+{"type":"agent_end","messages":[{"role":"assistant","content":[]}]}
+{"type":"agent_settled"}
