@@ -14,7 +14,9 @@ import { modeFor, modesFor } from '../modes.js';
  *
  * Everything engine-specific lives in `spec`, set by the subclass:
  *   args()            argv after the binary ('acp', '--cwd', ...)
- *   min               the CLI version this driver was written against
+ *   min               the CLI version this driver was written against; null
+ *                     skips the `--version` probe entirely (antigravity's
+ *                     PyInstaller bundle unpacks ~1GB to answer it)
  *   acpMode(mode)     a helm mode's value for configId 'mode' (or null)
  *   effortId          configId that carries thinking level ('effort'), if any
  *   fallbackCommands  static palette entries for an agent that advertises none
@@ -25,6 +27,17 @@ import { modeFor, modesFor } from '../modes.js';
  *   localCommand(driver, text)  null, or () => Promise<markdown> for a
  *                     command helm answers itself - devin's /usage reads the
  *                     account quota API, which `devin acp` never exposes
+ *   prepare(driver)   async, before spawn: create dirs/write settings the
+ *                     binary needs (antigravity's GEMINI_HOME profile)
+ *   spawnEnv(driver, merged)  the final child env, when the agent wants the
+ *                     inherited environment scrubbed or rewritten
+ *   authMethod        string or (driver) => methodId: when session/new and
+ *                     session/load both refuse with an auth error, call
+ *                     `authenticate` with this id and retry once
+ *   onStdoutLine(driver, line)  consume a non-JSON stdout line (antigravity
+ *                     prints its OAuth URL outside the protocol)
+ *   onExit(driver)    after the process dies: clean up what prepare made
+ *   resumeVerb        the session-resume method to try before 'session/load'
  *
  * helm's own permission modes may be wider than what the agent's modes
  * express; a mode with `autoAllow` in modes.js is enforced here by answering
@@ -131,10 +144,17 @@ export class AcpDriver extends Driver {
     return extra.length ? [...base, ...extra] : base;
   }
 
+  /** The env the agent actually gets - scrubbed if the spec says so. */
+  #spawnEnv() {
+    const merged = { ...process.env, ...this.env };
+    return this.spec.spawnEnv ? this.spec.spawnEnv(this, merged) : merged;
+  }
+
   async start() {
     if (this.#pipe) return;
     assertFolder(this);
-    await checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
+    if (this.spec.min) await checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
+    await this.spec.prepare?.(this);
 
     // The process may already be running: the terminal host holds agent
     // processes the way it holds ptys, so a daemon restart leaves the
@@ -148,7 +168,7 @@ export class AcpDriver extends Driver {
     if (this.procId && this.procHost) {
       try {
         await this.procHost.openProc(this.procId, {
-          cmd: this.cmd, args: this.args, cwd: this.cwd, env: this.env,
+          cmd: this.cmd, args: this.args, cwd: this.cwd, env: this.#spawnEnv(),
         });
         pipe = this.procHost.procPipe(this.procId);
       } catch (e) {
@@ -159,7 +179,7 @@ export class AcpDriver extends Driver {
     if (!pipe) {
       const child = spawn(this.cmd, this.args, {
         cwd: this.cwd,
-        env: { ...process.env, ...this.env },
+        env: this.#spawnEnv(),
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       pipe = this.#localPipe(child);
@@ -183,18 +203,27 @@ export class AcpDriver extends Driver {
     }
     this.#imagePrompts = init.result?.agentCapabilities?.promptCapabilities?.image === true;
 
-    const res = this.engineSessionId ? await this.#load(this.engineSessionId) : null;
+    let res = this.engineSessionId ? await this.#load(this.engineSessionId) : null;
     if (res?.result) {
       this.#takeOptions(res.result);
+      this.#takeCommands(res.result);
     } else {
       if (res?.error) this.log(`${this.engine}: session/load failed (${res.error.message}); starting fresh`);
-      const created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
+      let created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
+      // An agent that wants sign-in answers auth_required until a client
+      // calls `authenticate` - antigravity is the case today. The method
+      // may run a browser flow while we wait, so this can take minutes.
+      if (created.error && this.spec.authMethod && this.#needsAuth(created.error)) {
+        const authed = await this.#authenticate();
+        if (authed) created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
+      }
       if (created.error) {
         this.push('error', { message: `${this.engine} session/new failed: ${created.error.message}`, kind: 'init' });
         throw new Error(`${this.engine} session/new failed: ${created.error.message}`);
       }
       this.engineSessionId = created.result.sessionId;
       this.#takeOptions(created.result);
+      this.#takeCommands(created.result);
     }
 
     // The choices made in the app land on the live session. The agent may
@@ -207,7 +236,7 @@ export class AcpDriver extends Driver {
       [this.spec.effortId, this.spec.effortId ? this.effort : null],
     ]) {
       if (!configId || !value) continue;
-      const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId, value });
+      const r = await this.#setOption(configId, value);
       if (r.error) this.#refused(configId, value, r.error);
       else this.#takeOptions(r.result);
     }
@@ -223,10 +252,50 @@ export class AcpDriver extends Driver {
   async #load(sessionId) {
     this.#loading = true;
     try {
-      return await this.#call('session/load', { sessionId, cwd: this.cwd, mcpServers: [] });
+      // Agents disagree on the resume verb: ACP v1 is session/load, Google's
+      // antigravity agent answers session/resume. Try the spec's choice,
+      // then both, once each.
+      const verbs = [this.spec.resumeVerb, 'session/load', 'session/resume']
+        .filter((v, i, a) => v && a.indexOf(v) === i);
+      let last = null;
+      for (const verb of verbs) {
+        const res = await this.#call(verb, { sessionId, cwd: this.cwd, mcpServers: [] });
+        if (!res.error) return res;
+        last = res;
+      }
+      return last;
     } finally {
       this.#loading = false;
     }
+  }
+
+  /** True when the refusal is the agent asking for sign-in, not a failure. */
+  #needsAuth(error) {
+    return !!error && (error.code === -32000 || /auth|sign.?in/i.test(error.message ?? ''));
+  }
+
+  /**
+   * Run `authenticate` with the spec's method and report the outcome as an
+   * event - the URL itself arrives off-protocol through onStdoutLine while
+   * this call is pending, so `authPending` tells that hook it is live.
+   */
+  async #authenticate() {
+    const methodId = typeof this.spec.authMethod === 'function'
+      ? this.spec.authMethod(this)
+      : this.spec.authMethod;
+    if (!methodId) return false;
+    this.authPending = true;
+    this.push('error', {
+      message: `${this.spec.label ?? this.engine} needs a sign-in before it can start a session.`,
+      kind: 'auth',
+    });
+    const res = await this.#call('authenticate', { methodId });
+    this.authPending = false;
+    if (res.error) {
+      this.push('error', { message: `${this.spec.label ?? this.engine} sign-in failed: ${res.error.message}`, kind: 'auth' });
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -260,22 +329,79 @@ export class AcpDriver extends Driver {
   }
 
   /**
-   * Merge freshly advertised configOptions into the known set - an update
-   * may carry the whole picker set or just the one that changed. Returns
-   * the entries whose value actually moved: first sight of a picker is its
+   * Merge freshly advertised pickers into the known set - an update may
+   * carry the whole picker set or just the one that changed. Returns the
+   * entries whose value actually moved: first sight of a picker is its
    * baseline, not a change.
+   *
+   * ACP has two ways to expose pickers. Current agents answer with
+   * `configOptions`; earlier ones - and several third-party harnesses -
+   * carry `modes`/`models` blocks on session/new and take set_mode/set_model
+   * calls. Fold them into the same option shape, flagged with the verb the
+   * wire actually wants, so everything downstream (catalog, setModel,
+   * setMode, refusal handling) treats them identically.
    */
   #takeOptions(result) {
-    if (!Array.isArray(result?.configOptions)) return [];
+    const merged = [...(Array.isArray(result?.configOptions) ? result.configOptions : [])];
+    // Agents that answer with both - devin does - carry modes/models as a
+    // legacy mirror of the same pickers. They fill a picker only when
+    // configOptions never carried one; overwriting it would silently switch
+    // the wire verb to set_mode/set_model.
+    const present = (id) =>
+      merged.some((o) => o?.id === id) || this.#options.some((o) => o.id === id && !o._legacy);
+    if (!present('mode') && Array.isArray(result?.modes?.availableModes)) {
+      merged.push({
+        id: 'mode',
+        currentValue: result.modes.currentModeId,
+        options: result.modes.availableModes
+          .map((m) => ({ value: m?.id, name: m?.name ?? m?.id }))
+          .filter((o) => o.value),
+        _legacy: 'session/set_mode',
+      });
+    }
+    if (!present('model') && Array.isArray(result?.models?.availableModels)) {
+      merged.push({
+        id: 'model',
+        currentValue: result.models.currentModelId,
+        options: result.models.availableModels
+          .map((m) => ({ value: m?.modelId ?? m?.id, name: m?.name ?? m?.modelId ?? m?.id }))
+          .filter((o) => o.value),
+        _legacy: 'session/set_model',
+      });
+    }
+    if (!merged.length) return [];
     const byId = new Map(this.#options.map((o) => [o.id, o]));
     const changed = [];
-    for (const o of result.configOptions) {
-      const known = byId.get(o?.id);
+    for (const o of merged) {
+      if (!o?.id) continue;
+      const known = byId.get(o.id);
       if (known && o.currentValue !== known.currentValue) changed.push(o);
       byId.set(o.id, o);
     }
     this.#options = [...byId.values()];
     return changed;
+  }
+
+  /**
+   * Some agents put the slash-command palette on the session result itself
+   * instead of pushing available_commands_update - same fields, same fold.
+   */
+  #takeCommands(result) {
+    const list = result?.availableCommands ?? result?.commands;
+    if (!Array.isArray(list)) return;
+    this.#onUpdate({ update: { sessionUpdate: 'available_commands_update', availableCommands: list } });
+  }
+
+  /** Set a picker value by whichever verb this session advertised. */
+  async #setOption(configId, value) {
+    const option = this.#options.find((o) => o.id === configId);
+    if (option?._legacy === 'session/set_mode') {
+      return this.#call('session/set_mode', { sessionId: this.engineSessionId, modeId: value });
+    }
+    if (option?._legacy === 'session/set_model') {
+      return this.#call('session/set_model', { sessionId: this.engineSessionId, modelId: value });
+    }
+    return this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId, value });
   }
 
   /**
@@ -329,6 +455,7 @@ export class AcpDriver extends Driver {
           this.push('error', { message: `${this.engine} exited with code ${code}${stderr ? `: ${stderr}` : ''}`, kind: 'exit' });
         }
         this.push('status', { status: 'exited' });
+        try { this.spec.onExit?.(this); } catch { /* cleanup is best effort */ }
         resolve({ code });
       });
     });
@@ -339,6 +466,9 @@ export class AcpDriver extends Driver {
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
         if (!line.trim()) continue;
+        // Some agents print outside the protocol - antigravity's OAuth URL
+        // is a plain stdout line, not JSON-RPC. The spec claims those.
+        if (this.spec.onStdoutLine?.(this, line)) continue;
         try { this.#onMessage(JSON.parse(line)); }
         catch { this.log(`${this.engine}: ${line.slice(0, 200)}`); }
       }
@@ -531,7 +661,7 @@ export class AcpDriver extends Driver {
   async setModel(model) {
     this.model = model || null;
     if (this.#pipe && this.engineSessionId && model) {
-      const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: 'model', value: model });
+      const r = await this.#setOption('model', model);
       if (r.error) this.#refused('model', model, r.error);
       else this.#takeOptions(r.result);
     }
@@ -541,7 +671,7 @@ export class AcpDriver extends Driver {
     this.mode = id;
     const mode = this.spec.acpMode(id);
     if (this.#pipe && this.engineSessionId && mode) {
-      const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: 'mode', value: mode });
+      const r = await this.#setOption('mode', mode);
       if (r.error) this.#refused('mode', mode, r.error);
       else this.#takeOptions(r.result);
     }
@@ -550,7 +680,7 @@ export class AcpDriver extends Driver {
   async setEffort(effort) {
     this.effort = effort || null;
     if (this.#pipe && this.engineSessionId && this.spec.effortId && effort) {
-      const r = await this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId: this.spec.effortId, value: effort });
+      const r = await this.#setOption(this.spec.effortId, effort);
       if (r.error) this.#refused(this.spec.effortId, effort, r.error);
       else this.#takeOptions(r.result);
     }
