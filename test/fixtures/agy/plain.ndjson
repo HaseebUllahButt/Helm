@@ -1,0 +1,8 @@
+{"event":"init","conversation_id":"conv-agy-1","init":{"cwd":"/tmp/x","tools":["run_command","write_to_file"],"permission_mode":"request-review"}}
+{"event":"user"}
+{"event":"step_update","step_update":{"conversation_id":"conv-agy-1","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"conv-agy-1","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"helm"}}
+{"event":"step_update","step_update":{"conversation_id":"conv-agy-1","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"-agy"}}
+{"event":"step_update","step_update":{"conversation_id":"conv-agy-1","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"-ok","duration_seconds":1.1,"usage":{"input_tokens":90,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":40,"total_tokens":95}}}
+{"event":"step_update","step_update":{"conversation_id":"conv-agy-1","step_index":2,"state":"DONE","step_type":"checkpoint","duration_seconds":0.1,"usage":{"input_tokens":5,"output_tokens":1,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":6}}}
+{"event":"result","result":{"conversation_id":"conv-agy-1","status":"SUCCESS","response":"helm-agy-ok\n","duration_seconds":1.2,"num_turns":1,"usage":{"input_tokens":100,"output_tokens":10,"thinking_tokens":0,"cache_read_tokens":40,"total_tokens":110}}}

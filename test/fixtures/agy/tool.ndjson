@@ -1,0 +1,7 @@
+{"event":"init","conversation_id":"conv-agy-5","init":{"cwd":"/tmp/x","tools":["run_command"],"permission_mode":"request-review"}}
+{"event":"user"}
+{"event":"step_update","step_update":{"conversation_id":"conv-agy-5","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"conv-agy-5","step_index":1,"state":"ACTIVE","step_type":"tool","tool_info":{"name":"run_command","parameters":{"command":"ls"}}}}
+{"event":"step_update","step_update":{"conversation_id":"conv-agy-5","step_index":1,"state":"DONE","step_type":"tool","tool_info":{"name":"run_command","parameters":{"command":"ls"},"output":"file.txt\n"}}}
+{"event":"step_update","step_update":{"conversation_id":"conv-agy-5","step_index":2,"state":"DONE","step_type":"agent_response","text_delta":"listed","usage":{"input_tokens":30,"output_tokens":4,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":34}}}
+{"event":"result","result":{"conversation_id":"conv-agy-5","status":"SUCCESS","response":"listed","duration_seconds":0.6,"num_turns":1,"usage":{"input_tokens":30,"output_tokens":4,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":34}}}

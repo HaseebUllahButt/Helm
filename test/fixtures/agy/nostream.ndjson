@@ -1,0 +1,4 @@
+{"event":"init","conversation_id":"conv-agy-2","init":{"cwd":"/tmp/x","tools":[],"permission_mode":"request-review"}}
+{"event":"user"}
+{"event":"step_update","step_update":{"conversation_id":"conv-agy-2","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"result","result":{"conversation_id":"conv-agy-2","status":"SUCCESS","response":"one shot answer\n","duration_seconds":0.8,"num_turns":1,"usage":{"input_tokens":50,"output_tokens":7,"thinking_tokens":0,"cache_read_tokens":10,"total_tokens":57}}}
