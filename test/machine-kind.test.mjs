@@ -95,6 +95,68 @@ test('a merge carries a peer\u2019s kind but not a made-up one', () => {
   assert.equal(net.machines.ff00ee11dd22.kind, undefined);
 });
 
+test('a learned code key is pinned: gossip can neither replace nor remove it', () => {
+  N.forgetNetwork();
+  const net = N.createNetwork({ name: 'self', port: 8787 });
+  const id = 'aa11bb22cc33';
+  const keyA = 'A'.repeat(43);
+  const keyB = 'B'.repeat(43);
+  const signA = 'S'.repeat(43);
+  const signB = 'T'.repeat(43);
+
+  // The first key a peer shows us is learned like any other field.
+  assert.equal(N.mergeRoster(net, {
+    id: net.id,
+    machines: { [id]: machine({ codePubkey: keyA }) },
+    devices: {}, revoked: {},
+  }), true);
+  assert.equal(net.machines[id].codePubkey, keyA);
+
+  // A forged record, newer and carrying another key, loses only that field:
+  // the rest of the merge still happens.
+  assert.equal(N.mergeRoster(net, {
+    id: net.id,
+    machines: { [id]: machine({ codePubkey: keyB, name: 'forged', updatedAt: Date.now() + 1000 }) },
+    devices: {}, revoked: {},
+  }), true);
+  assert.equal(net.machines[id].codePubkey, keyA);
+  assert.equal(net.machines[id].name, 'forged');
+
+  // And a newer record that drops the field does not remove it either.
+  N.mergeRoster(net, {
+    id: net.id,
+    machines: { [id]: machine({ updatedAt: Date.now() + 2000 }) },
+    devices: {}, revoked: {},
+  });
+  assert.equal(net.machines[id].codePubkey, keyA);
+
+  // The signing key pins the same way, and independently: a record that
+  // only ever learned the cipher key can still learn the signer.
+  assert.equal(net.machines[id].codeSignPubkey, undefined);
+  N.mergeRoster(net, {
+    id: net.id,
+    machines: { [id]: machine({ codeSignPubkey: signA, updatedAt: Date.now() + 3000 }) },
+    devices: {}, revoked: {},
+  });
+  assert.equal(net.machines[id].codeSignPubkey, signA);
+  N.mergeRoster(net, {
+    id: net.id,
+    machines: {
+      [id]: machine({ codeSignPubkey: signB, codePubkey: keyB, updatedAt: Date.now() + 4000 }),
+    },
+    devices: {}, revoked: {},
+  });
+  assert.equal(net.machines[id].codeSignPubkey, signA, 'a newer record cannot swap it');
+  assert.equal(net.machines[id].codePubkey, keyA, 'the cipher pin holds the whole time');
+  // And dropping it does not remove it.
+  N.mergeRoster(net, {
+    id: net.id,
+    machines: { [id]: machine({ updatedAt: Date.now() + 5000 }) },
+    devices: {}, revoked: {},
+  });
+  assert.equal(net.machines[id].codeSignPubkey, signA);
+});
+
 // ---------------------------------------------------------------- join
 
 /** A join answer, canned for the one fetch serve.join makes. */

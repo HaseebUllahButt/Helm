@@ -473,6 +473,9 @@ function machineRecord(id, their, ceiling) {
   keep(out, 'addedAt', stampOf(their.addedAt, ceiling));
   keep(out, 'pubkey', pubkeyOf(their.pubkey));
   keep(out, 'codePubkey', codePubkeyOf(their.codePubkey));
+  // Ed25519 half of the same identity - same shape, same checks, pinned the
+  // same way in mergeRoster.
+  keep(out, 'codeSignPubkey', codePubkeyOf(their.codeSignPubkey));
   keep(out, 'sshUser', text(their.sshUser, 32) && sshUsers.test(their.sshUser) ? their.sshUser : null);
   keep(out, 'sshPort', Number.isInteger(their.sshPort) && their.sshPort > 0 && their.sshPort < 65536
     ? their.sshPort : null);
@@ -553,8 +556,21 @@ export function mergeRoster(net, unchecked) {
     // we overwrite our own address list with nothing. We then advertise no
     // way to reach us, and nothing can dial us until a restart.
     if (id === net.self) continue;
-    const won = newer(net.machines[id], their);
-    if (won !== net.machines[id]) { net.machines[id] = won; changed = true; }
+    const current = net.machines[id];
+    // A code key once learned is pinned to the machine it was learned for
+    // (TOFU): it is what code handoffs are encrypted to, so a forged newer
+    // record - or one that simply omits the field - must never swap or
+    // remove it. The signing key is pinned the same way, and independently:
+    // a record learned before the second key existed keeps the one it has
+    // while still being able to learn the other. Every other field still
+    // merges last-writer-wins.
+    const candidate = {
+      ...their,
+      ...(current?.codePubkey ? { codePubkey: current.codePubkey } : {}),
+      ...(current?.codeSignPubkey ? { codeSignPubkey: current.codeSignPubkey } : {}),
+    };
+    const won = newer(current, candidate);
+    if (won !== current) { net.machines[id] = won; changed = true; }
   }
   for (const [id, their] of Object.entries(incoming.devices ?? {})) {
     if (net.revoked[id]) continue;
