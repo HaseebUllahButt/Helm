@@ -18,7 +18,7 @@
 
 import { readFileSync, appendFileSync } from 'node:fs';
 
-const VERSIONS = { codex: 'codex-cli 0.154.0', devin: 'devin 3000.10.21', opencode: '1.18.26' };
+const VERSIONS = { codex: 'codex-cli 0.154.0', devin: 'devin 3000.10.21', opencode: '1.18.26', agy: 'agy 1.2.12' };
 const kind = process.argv[2];
 if (process.argv.includes('--version')) {
   console.log(VERSIONS[kind] ?? '2.1.260 (Claude Code)');
@@ -81,6 +81,67 @@ if (kind === 'claude') {
     await sleep(2);
   }
   // Like the CLI: stay alive until stdin closes.
+} else if (kind === 'pi' || kind === 'omp') {
+  // Pi-family RPC: driver commands are `{id, type}` and answer as
+  // `{type:"response", command:<that type>}`. A `{"type":"await","on":X}`
+  // fixture record pauses the replay until the driver writes a matching
+  // stdin frame (abort, extension_ui_response) - the same request/answer
+  // pairing the ACP fixtures get from id+method.
+  for (const m of lines) {
+    if (m.type === 'await') {
+      await next((x) => x.type === m.on && (m.id === undefined || x.id === m.id));
+      continue;
+    }
+    if (m.type === 'response') {
+      const req = await next((x) => x.id !== undefined && x.type === m.command);
+      out({ ...m, id: req.id });
+      continue;
+    }
+    out(m);
+    await sleep(2);
+  }
+} else if (kind === 'agy') {
+  // agy stream-json: init/result events print when their turn comes; a
+  // {"event":"user"} fixture record waits for the driver's stdin user
+  // message; {"event":"await","on":"interrupt"} waits for that stdin frame.
+  for (const m of lines) {
+    if (m.event === 'user') {
+      await next((x) => x.event === 'user');
+      continue;
+    }
+    if (m.event === 'await') {
+      await next((x) => x.event === m.on);
+      continue;
+    }
+    out(m);
+    await sleep(2);
+  }
+} else if (kind === 'antigravity') {
+  // The managed Google agent is plain ACP plus one off-protocol habit: it
+  // prints its OAuth URL as a raw stdout line while `authenticate` is still
+  // pending. {"print_on_request":"authenticate","line":"..."} waits for that
+  // request, prints the line verbatim, and leaves the request unanswered -
+  // so a fixture can end right there and keep the sign-in open.
+  for (const m of lines) {
+    if (m.print_on_request) {
+      const req = await next((x) => x.id !== undefined && x.method === m.print_on_request);
+      inbox.unshift(req);
+      process.stdout.write(m.line + '\n');
+      continue;
+    }
+    if (m.id !== undefined && m.method) {
+      out(m);
+      await next((x) => x.id === m.id && ('result' in x || 'error' in x));
+      continue;
+    }
+    if (m.id !== undefined) {
+      const req = await next((x) => x.id !== undefined && x.method);
+      out({ ...m, id: req.id });
+      continue;
+    }
+    out(m);
+    await sleep(2);
+  }
 } else {
   for (const m of lines) {
     if (m.id !== undefined && m.method) {
