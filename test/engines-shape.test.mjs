@@ -22,14 +22,14 @@ test('no engine is declared twice', () => {
 });
 
 test('every engine helm drives names a driver it has', async () => {
-  const { DRIVERS } = await import('../packages/connect/src/drivers/index.js');
+  const { DRIVERS } = await import('../packages/connect/src/sessions.js');
   for (const [id, e] of Object.entries(ENGINES)) {
     if (!e.driver) continue;
-    assert.ok(DRIVERS?.[e.driver] ?? true, `${id} names driver ${e.driver}`);
+    assert.ok(DRIVERS[e.driver], `${id} names driver ${e.driver}, which sessions.js does not register`);
   }
-  // The five agents helm runs headless, so a dropped driver is caught here.
+  // The agents helm runs headless, so a dropped driver is caught here.
   assert.deepEqual(
     Object.entries(ENGINES).filter(([, e]) => e.driver).map(([id]) => id).sort(),
-    ['claude', 'codex', 'devin', 'opencode', 'opencode2'],
+    ['agy', 'antigravity', 'claude', 'codex', 'cursor', 'devin', 'grok', 'omp', 'opencode', 'opencode2', 'pi', 'rovo'],
   );
 });

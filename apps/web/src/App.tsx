@@ -61,6 +61,16 @@ const ENGINE: Record<string, { label: string; cls: string }> = {
   opencode: { label: 'opencode',    cls: 'opencode' },
   opencode2:{ label: 'OpenCode 2',  cls: 'opencode2' },
   devin:    { label: 'Devin',       cls: 'devin' },
+  grok:     { label: 'Grok',        cls: 'grok' },
+  cursor:   { label: 'Cursor',      cls: 'cursor' },
+  pi:       { label: 'Pi',          cls: 'pi' },
+  omp:      { label: 'OMP',         cls: 'omp' },
+  rovo:     { label: 'Rovo Dev',    cls: 'rovo' },
+  agy:      { label: 'Antigravity CLI', cls: 'agy' },
+  antigravity: { label: 'Antigravity', cls: 'agy' },
+  gemini:   { label: 'Gemini',      cls: 'gemini' },
+  kimi:     { label: 'Kimi',        cls: 'kimi' },
+  muse:     { label: 'Muse',        cls: 'muse' },
   shell:    { label: 'Terminal',    cls: 'shell' },
 };
 /**
@@ -136,7 +146,7 @@ function accountsFrom(profiles: Profile[]): Account[] {
     // daemon computes the same key, which is what its model prefs index by.
     const key = p.account ?? [p.engine, home ?? '', [...(p.envFrom ?? [])].sort().join(',')].join('|');
     const leaf = home?.split('/').pop() ?? '';
-    const suffix = leaf.replace(/^\.?(claude|codex|opencode2|opencode|devin|config)-?/, '');
+    const suffix = leaf.replace(/^\.?(claude|codex|opencode2|opencode|devin|config|grok|cursor|rovodev|gemini|kimi-code|kimi|muse|omp|pi|agent)-?/, '');
     const existing = by.get(key);
     if (existing) {
       existing.aliases.push(p.id);
@@ -153,9 +163,10 @@ function accountsFrom(profiles: Profile[]): Account[] {
       profile: p, aliases: [p.id], prefs: p.prefs, defaults: p.defaults,
     });
   }
-  const order = ['claude', 'codex', 'opencode', 'opencode2', 'devin'];
+  const order = ['claude', 'codex', 'opencode', 'opencode2', 'devin', 'grok', 'cursor', 'pi', 'omp', 'rovo', 'antigravity', 'agy', 'gemini', 'kimi', 'muse'];
+  const rank = (e: string) => { const i = order.indexOf(e); return i < 0 ? order.length : i; };
   return [...by.values()].sort((a, b) =>
-    (order.indexOf(a.engine) - order.indexOf(b.engine)) || a.account.localeCompare(b.account));
+    (rank(a.engine) - rank(b.engine)) || a.account.localeCompare(b.account));
 }
 
 /**
@@ -3469,7 +3480,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
         {accounts?.length === 0 && (
           <div className="empty quiet">
             no agents on {env.name}
-            <div className="note" style={{ marginTop: 6 }}>install claude, codex, opencode, opencode2 or devin there and run <code>helm profiles --refresh</code></div>
+            <div className="note" style={{ marginTop: 6 }}>install an agent CLI there - claude, codex, opencode, devin, grok, cursor, pi, omp, rovo and more - and run <code>helm profiles --refresh</code></div>
           </div>
         )}
 

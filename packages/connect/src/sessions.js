@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { HELM_DIR, expand } from './paths.js';
 import { getProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages, sessionSnapshot } from './transcript.js';
-import { ENGINES } from './engines.js';
+import { ENGINES, isInteractiveProc } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
 import { optionArgs } from './models.js';
@@ -16,6 +16,12 @@ import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver, canInspectExternalCodex } from './drivers/codex.js';
 import { OpencodeDriver, Opencode2Driver } from './drivers/opencode.js';
 import { DevinDriver } from './drivers/devin.js';
+import { GrokDriver } from './drivers/grok.js';
+import { CursorDriver } from './drivers/cursor.js';
+import { RovoDriver } from './drivers/rovo.js';
+import { AgyDriver } from './drivers/agy.js';
+import { AntigravityDriver } from './drivers/antigravity.js';
+import { PiDriver, OmpDriver } from './drivers/pi.js';
 import { devinUsageReport } from './devin-usage.js';
 import { defaultMode, modeFromAuto } from './modes.js';
 import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
@@ -33,12 +39,20 @@ const WATCH_TTL_MS = 60_000;
 // resumes the same conversation, so nothing is lost but the warm process.
 const IDLE_REAP_MS = 30 * 60_000;
 
-const DRIVERS = {
+/** engine id -> its headless driver class; ENGINES[id].driver names one. */
+export const DRIVERS = {
   claude: ClaudeDriver,
   codex: CodexDriver,
   opencode: OpencodeDriver,
   opencode2: Opencode2Driver,
   devin: DevinDriver,
+  grok: GrokDriver,
+  cursor: CursorDriver,
+  rovo: RovoDriver,
+  agy: AgyDriver,
+  antigravity: AntigravityDriver,
+  pi: PiDriver,
+  omp: OmpDriver,
 };
 
 /**
@@ -1090,23 +1104,24 @@ export class Sessions extends EventEmitter {
 
   #processOwnsTranscript(s) {
     if (!s.externalPid || !s.transcript) return false;
-    if (s.engine === 'opencode' || s.engine === 'opencode2' || s.engine === 'devin') {
-      try {
-        const argv = readFileSync(`/proc/${s.externalPid}/cmdline`, 'utf8').split('\0').filter(Boolean);
-        const engineAt = argv.findIndex((x) => basename(x) === s.engine || basename(x).startsWith(`${s.engine}.`));
-        if (engineAt < 0 || readlinkSync(`/proc/${s.externalPid}/cwd`) !== s.cwd) return false;
-        const sub = argv[engineAt + 1];
-        if ((s.engine === 'opencode' || s.engine === 'opencode2')
-            && ['acp', 'serve', 'run', 'stats', 'api', 'service'].includes(sub)) return false;
-        return !(s.engine === 'devin' && sub === 'acp');
-      } catch { return false; }
-    }
+    // An open file descriptor is the strongest claim - it names the exact
+    // transcript. Database stores and append-per-write logs are not held
+    // open though, so for those engines inventory matched the process by
+    // its interactive argv and directory instead; re-check the same way.
     const dir = `/proc/${s.externalPid}/fd`;
-    let fds;
-    try { fds = readdirSync(dir); } catch { return false; }
-    return fds.some((fd) => {
+    let fds = [];
+    try { fds = readdirSync(dir); } catch { /* process exited */ }
+    const held = fds.some((fd) => {
       try { return readlinkSync(join(dir, fd)) === s.transcript; } catch { return false; }
     });
+    if (held) return true;
+    const byProc = ['opencode', 'opencode2', 'devin', 'pi', 'omp', 'grok', 'cursor', 'muse'].includes(s.engine);
+    if (!byProc) return false;
+    try {
+      const argv = readFileSync(`/proc/${s.externalPid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+      if (!isInteractiveProc(s.engine, argv)) return false;
+      return readlinkSync(`/proc/${s.externalPid}/cwd`) === s.cwd;
+    } catch { return false; }
   }
 
   /** Release the external writer as part of the first send from Helm. */

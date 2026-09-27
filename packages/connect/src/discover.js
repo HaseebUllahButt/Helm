@@ -3,6 +3,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { ENGINES, engineForCommand } from './engines.js';
+import { antigravityInstall } from './antigravity.js';
 import { HOME, expand, collapse } from './paths.js';
 
 const exec = promisify(execFile);
@@ -264,34 +265,54 @@ export async function discoverProfiles() {
   };
 
   // 1. Engines actually installed on this box. One `command -v` each, asked
-  // at once - they are the same question, not four.
+  // at once - they are the same question, not four. An engine may ship under
+  // an older name (cursor-agent used to be `agent`), so probe its altBins.
   const installed = {};
   const paths = await Promise.all(
-    Object.values(ENGINES).map((e) => (e.bin ? which(e.bin) : null))
+    Object.values(ENGINES).map(async (e) => {
+      // A managed engine ships no PATH binary; it is "installed" when the
+      // runtime helm downloaded is in place (antigravity's ACP agent).
+      if (e.managed) {
+        const install = antigravityInstall();
+        return install ? { bin: install.exe, path: install.exe } : null;
+      }
+      if (!e.bin) return null;
+      for (const bin of [e.bin, ...(e.altBins ?? [])]) {
+        const path = await which(bin);
+        if (path) return { bin, path };
+      }
+      return null;
+    })
   );
   for (const [i, engine] of Object.values(ENGINES).entries()) {
-    const path = paths[i];
-    if (!path) continue;
-    installed[engine.id] = path;
+    const hit = paths[i];
+    if (!hit) continue;
+    installed[engine.id] = hit.path;
 
     add({
       id: engine.id,
       label: engine.label,
       engine: engine.id,
-      cmd: engine.bin,
+      cmd: hit.bin,
       args: [],
-      env: {},
+      // A managed engine's own home must be set on every profile: with no
+      // GEMINI_HOME the agent would share the user's real ~/.gemini.
+      env: engine.managed && engine.homeEnv ? { [engine.homeEnv]: engine.defaultHome } : {},
       source: 'detected',
     });
 
-    // 2. Extra accounts, inferred from sibling home directories.
-    for (const home of altHomes(engine)) {
+    // 2. Extra accounts, inferred from sibling home directories. Only an
+    // engine with an env-isolated home can run a second account this way;
+    // without one there is no variable to point at the sibling directory.
+    for (const home of engine.homeEnv ? altHomes(engine) : []) {
       const suffix = home.split('/').pop().split('-').slice(1).join('-');
       add({
         id: `${engine.id}-${suffix}`,
         label: `${engine.label} · ${suffix}`,
         engine: engine.id,
-        cmd: engine.bin,
+        // hit.bin is the engine's own bin, or the managed exe path when
+        // there is no PATH binary at all (antigravity's ACP agent).
+        cmd: hit.bin,
         args: [],
         env: { [engine.homeEnv]: home },
         source: 'detected',

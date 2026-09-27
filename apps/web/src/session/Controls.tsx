@@ -81,10 +81,11 @@ interface Group {
 const shortModel = (slug: string, labels?: Record<string, string>, engine?: string) => {
   const name = labels?.[slug] ?? slug;
   // devin bakes the thinking tier into the model's name ("SWE-2 Max") and
-  // opencode puts the provider first ("OpenCode Go/Kimi K2.7") - for both,
-  // the last word is a tier or a suffix, not the model, so the chip is the
-  // whole name minus a "provider/" prefix.
-  if (engine === 'devin' || engine === 'opencode' || engine === 'opencode2') return name.replace(/^[^/]+\//, '');
+  // opencode puts the provider first ("OpenCode Go/Kimi K2.7") - pi, omp and
+  // grok do the same with "provider/" selectors, and antigravity's labels
+  // already carry their tier ("Gemini 3.8 Flash (High)") - so the chip is
+  // the whole name minus a "provider/" prefix.
+  if (['devin', 'opencode', 'opencode2', 'pi', 'omp', 'grok', 'antigravity'].includes(engine ?? '')) return name.replace(/^[^/]+\//, '');
   // "GPT-5.6-Luna" -> "Luna"; "claude-fable-5-1" -> "fable"
   const tail = name.split(/[-\s]/).filter(Boolean).pop() ?? name;
   return /^\d/.test(tail) ? name.replace(/^(gpt|claude)[-\s]?/i, '') : tail.toLowerCase();

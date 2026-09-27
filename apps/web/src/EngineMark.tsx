@@ -11,7 +11,11 @@
  * square mark and adds a small v2 badge so the two CLIs are distinguishable.
  */
 
-const shell = { claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin' };
+const shell = {
+  claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
+  grok: 'Grok', cursor: 'Cursor', pi: 'Pi', omp: 'OMP', rovo: 'Rovo Dev',
+  agy: 'Antigravity CLI', antigravity: 'Antigravity', gemini: 'Gemini', kimi: 'Kimi', muse: 'Muse',
+};
 
 const common = {
   width: 16,
@@ -81,5 +85,7 @@ export function EngineMark({ engine, className = '' }: { engine?: string; classN
     return <span className={`mark shell ${className}`} title="Terminal">❯</span>;
   }
 
-  return <span className={`mark other ${className}`} title={label}>·</span>;
+  // Engines without a drawn mark get their initial - recognisable without
+  // pretending to be the vendor's logo.
+  return <span className={`mark other ${className}`} title={label}>{label === 'agent' ? '·' : label[0].toLowerCase()}</span>;
 }
