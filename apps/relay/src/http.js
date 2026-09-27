@@ -465,6 +465,9 @@ export function makeHttpHandler({ online, kick }) {
     }
 
     if (path === '/api/invite' && req.method === 'POST') {
+      if (claims.role !== ROLE.MACHINE) {
+        return json(res, 403, { error: 'only a machine can invite another machine' });
+      }
       q.inviteSweep.run(now());
       const body = await readBody(req).catch(() => ({}));
       // The kind the inviter says the machine will be. Anything outside the

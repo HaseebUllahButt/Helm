@@ -1297,34 +1297,18 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
   );
 }
 
-function AddMachine({ client }: { client: Client }) {
-  const [code, setCode] = useState<string | null>(null);
-  const [error, setError] = useState('');
-
+function AddMachine() {
   return (
     <>
-      {code ? (
-        <div className="setup-open">
-          <div className="code">{code}</div>
-          <pre className="snippet">helm join {code} {client.relay}</pre>
-          <p className="note" style={{ marginTop: 8 }}>
-            Run that on the machine you are adding. Expires in 10 minutes and
-            carries the network key: treat it like a password.
-          </p>
-        </div>
-      ) : (
-        <button
-          className="row"
-          onClick={() => client.invite().then((r) => setCode(r.code)).catch((e) => setError(e.message))}
-        >
-          <span className="grow">
-            <span className="rt">Add a computer</span>
-            <span className="rm">create a join code</span>
-          </span>
-          <span className="chev">›</span>
-        </button>
-      )}
-      {error && <div className="error">{error}</div>}
+      <div className="row">
+        <span className="grow">
+          <span className="rt">Add a computer</span>
+          <span className="rm">join codes are minted by machines, not phones - run one of these on a machine already in the network</span>
+        </span>
+      </div>
+      <pre className="snippet">{`helm add pc
+helm add vm
+helm add nas`}</pre>
     </>
   );
 }
@@ -2754,7 +2738,7 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
             </span>
             <span className="chev">›</span>
           </button>
-          <AddMachine client={client} />
+          <AddMachine />
           <Notifications client={client} />
           <InstallPwa />
           <button className="row destructive" onClick={onUnpair}>

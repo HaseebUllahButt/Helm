@@ -79,14 +79,16 @@ test('a machine still gossips, and still reconciles both directions', async () =
   assert.ok(N.loadNetwork().machines.deadbeefcafe, 'a machine may introduce a machine');
 });
 
-test('a controller can still read the network and add a computer', async () => {
+test('a controller can still read the network, but only a machine invites one', async () => {
   // The product surface a phone actually has. Gating gossip must not touch it.
   const network = await (await fetch(`${BASE}/api/network`, {
     headers: { authorization: `Bearer ${DEVICE}` },
   })).json();
   assert.equal(network.id, net.id);
 
-  const invite = await (await post('/api/invite', {}, DEVICE)).json();
+  const denied = await post('/api/invite', {}, DEVICE);
+  assert.equal(denied.status, 403);
+  const invite = await (await post('/api/invite', {}, MACHINE)).json();
   assert.match(invite.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
 });
 
