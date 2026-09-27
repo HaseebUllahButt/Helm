@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-antigravity-'));
 const { AntigravityDriver } = await import('../packages/connect/src/drivers/antigravity.js');
 const {
   antigravityEnv, validateAntigravityRedirect, prepareAntigravityProfile,
-  antigravityAuthMethod, unzipMembers,
+  antigravityAuthMethod, unzipMembers, tmpParent,
 } = await import('../packages/connect/src/antigravity.js');
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -119,6 +119,48 @@ test('antigravity: resume speaks session/resume first', async () => {
   assert.ok(!methods.includes('session/load'));
   assert.equal(driver.engineSessionId, 'conv-resumed-1');
   await driver.kill();
+});
+
+test('antigravity: a resume refused for auth authenticates and retries the same session', async () => {
+  const { driver, log, fake } = make('resume-auth', { engineSessionId: 'conv-resumed-1' });
+  await driver.send('hello again');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+
+  // authenticate sits between the refused resume and its retry; the
+  // session is never rebuilt with session/new, and an auth refusal does
+  // not fall through to the session/load probe.
+  const methods = fake.stdinLines().map((m) => m.method).filter(Boolean);
+  assert.deepEqual(methods.slice(0, 4),
+    ['initialize', 'session/resume', 'authenticate', 'session/resume'],
+    `wrong wire sequence: ${methods.join(',')}`);
+  assert.ok(!methods.includes('session/new'), `no session/new on an auth-refused resume: ${methods.join(',')}`);
+  assert.ok(!methods.includes('session/load'), `no session/load once auth is refused: ${methods.join(',')}`);
+
+  assert.equal(driver.engineSessionId, 'conv-resumed-1');
+  const deltas = log.of('item.delta').map((e) => e.text).join('');
+  assert.equal(deltas, 'resumed-ok');
+  await driver.kill();
+});
+
+test('antigravity: starting a session leaves another launch\'s unpack dir alone', async () => {
+  // A second live session's TMPDIR: prepare must not sweep it, and this
+  // driver's exit must not either - each launch removes only its own.
+  const parent = tmpParent();
+  mkdirSync(parent, { recursive: true });
+  const other = join(parent, 'run-0-foreign');
+  mkdirSync(other);
+
+  const { driver } = make('resume', { engineSessionId: 'conv-resumed-1' });
+  await driver.send('hello again'); // start() ran prepare by the time this returns
+  const own = driver._agy?.tmpDir;
+  assert.ok(own && existsSync(own), 'the session got its own unpack dir');
+  assert.ok(existsSync(other), 'a neighbouring run-* dir must survive prepare');
+
+  await driver.kill();
+  assert.ok(existsSync(other), 'a neighbouring run-* dir must survive exit');
+  for (let i = 0; i < 50 && existsSync(own); i++) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(!existsSync(own), 'the session\'s own unpack dir is removed on exit');
 });
 
 test('antigravity: the spawn env scrubs ambient Google vars and keeps the profile credential', async () => {

@@ -213,3 +213,27 @@ test('grok inventory reads summary.json; no live writer means not active', async
   assert.equal(found.model, 'grok-4');
   assert.equal(found.active, false, 'a registry id without a process is not active');
 });
+
+test('antigravity inventory sorts before it caps: the newest db survives a crowded folder', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-agy-managed-'));
+  const dir = join(home, 'antigravity-acp', 'conversations');
+  mkdirSync(dir, { recursive: true });
+  const total = 90; // past the PER_ENGINE*2 scan window
+  const base = SECONDS * 1000 - total * 60_000;
+  for (let i = 0; i < total; i++) {
+    const id = `conv-${String(i).padStart(3, '0')}`;
+    writeFileSync(join(dir, `${id}.meta`), JSON.stringify({ cwd: `/work/${id}` }));
+    const db = join(dir, `${id}.db`);
+    writeFileSync(db, '');
+    const at = new Date(base + i * 60_000);
+    utimesSync(db, at, at);
+  }
+
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const rows = (await inventory([{ id: 'agym', engine: 'antigravity', env: { GEMINI_HOME: home } }]))
+    .filter((r) => r.engine === 'antigravity');
+  assert.equal(rows.length, 40, 'only PER_ENGINE conversations are listed');
+  assert.equal(rows[0].id, 'conv-089', 'the newest conversation leads the list');
+  assert.equal(rows.at(-1).id, 'conv-050', 'the cut keeps the newest 40');
+  assert.ok(!rows.some((r) => r.id === 'conv-049'), 'older conversations stay out');
+});

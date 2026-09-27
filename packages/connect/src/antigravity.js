@@ -13,8 +13,8 @@
 //   ANTIGRAVITY_HARNESS_PATH  the localharness_external sibling of the exe
 //   AGY_ACP_FORCE_FILE_STORAGE file-backed tokens instead of a keychain
 //   TMPDIR                    the exe is a PyInstaller one-file bundle that
-//                             unpacks ~1GB per launch; helm owns the dir so
-//                             a force kill's leftovers can be reclaimed
+//                             unpacks ~1GB per launch; each launch gets a
+//                             fresh helm-owned dir it removes on exit
 //   ambient Google vars       scrubbed so the chosen auth method is the
 //                             only credential the agent sees
 //
@@ -342,7 +342,7 @@ export function antigravityEnv(merged, { exe, geminiHome, tmpDir }) {
  * Create the profile's directories (0700 - the Google token lands here) and
  * rewrite settings.json so a method change takes effect on this launch.
  * Returns { geminiHome, tmpDir }; tmpDir is per-process under a helm-owned
- * parent, swept of dead unpack dirs first.
+ * parent, removed by its own driver when the process exits.
  */
 export async function prepareAntigravityProfile(env = {}) {
   const geminiHome = expand(env.GEMINI_HOME || '~/.helm/antigravity');
@@ -354,22 +354,13 @@ export async function prepareAntigravityProfile(env = {}) {
   const settings = { auth: { type: method } };
   await writeFile(join(acpDir, 'settings.json'), JSON.stringify(settings) + '\n');
 
-  // A fresh unpack dir per process; sweep whatever dead launches left.
+  // A fresh unpack dir per process - a live launch's dir is never another
+  // launch's to clean up.
   const parent = tmpParent();
   await mkdir(parent, { recursive: true });
   const tmpDir = join(parent, `run-${process.pid}-${Date.now().toString(36)}`);
   await mkdir(tmpDir, { recursive: true, mode: 0o700 });
   return { geminiHome, tmpDir };
-}
-
-/** Reclaim unpack dirs whose process is gone - run on driver start. */
-export async function sweepAntigravityTmp() {
-  const parent = tmpParent();
-  let entries;
-  try { entries = await readdir(parent, { withFileTypes: true }); } catch { return; }
-  await Promise.all(entries
-    .filter((e) => e.isDirectory() && e.name.startsWith('run-'))
-    .map((e) => rm(join(parent, e.name), { recursive: true, force: true }).catch(() => {})));
 }
 
 // ------------------------------------------------------------------ auth

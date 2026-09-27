@@ -631,27 +631,20 @@ async function antigravity(home, account) {
   const root = join(expand(home), 'antigravity-acp', 'conversations');
   if (!existsSync(root)) return [];
 
-  let metas;
-  try {
-    metas = readdirSync(root, { withFileTypes: true })
-      .filter((e) => e.isFile() && e.name.endsWith('.meta'))
-      .map((e) => e.name.slice(0, -'.meta'.length));
-  } catch { return []; }
-
   const active = interactiveProcesses('antigravity');
   const claimed = new Set();
   const out = [];
-  for (const id of metas.slice(0, PER_ENGINE * 2)) {
-    const conv = join(root, `${id}.db`);
-    const meta = join(root, `${id}.meta`);
-    let stat = null;
-    try { stat = statSync(conv); } catch { /* meta without its db */ }
-    if (!stat) continue;
+  // The .db's mtime is the recency signal, so it is what gets sorted and
+  // capped - an unsorted readdir page could keep the newest conversation
+  // out of the list entirely.
+  for (const f of await newest(root, (n) => n.endsWith('.db'), PER_ENGINE * 2)) {
+    const id = basename(f.path, '.db');
+    const conv = f.path;
     let cwd = HOME;
     try {
-      const m = JSON.parse(readFileSync(meta, 'utf8'));
+      const m = JSON.parse(readFileSync(join(root, `${id}.meta`), 'utf8'));
       if (typeof m.cwd === 'string' && m.cwd) cwd = m.cwd;
-    } catch { /* bare meta */ }
+    } catch { /* a db without a readable meta */ }
     const dir = cwd;
     let pid = writerPid(conv);
     if (!pid) {
@@ -664,13 +657,14 @@ async function antigravity(home, account) {
       id,
       title: basename(dir) || 'antigravity session',
       cwd: collapse(dir),
-      updatedAt: Math.floor(stat.mtimeMs),
+      updatedAt: Math.floor(f.mtime),
       transcript: conv,
       active: !!pid,
       writerPid: pid,
     });
+    if (out.length >= PER_ENGINE) break;
   }
-  return out.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, PER_ENGINE);
+  return out;
 }
 
 // -------------------------------------------------------------------- muse

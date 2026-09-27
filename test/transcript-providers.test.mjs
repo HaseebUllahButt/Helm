@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { messages, sessionSnapshot } from '../packages/connect/src/transcript.js';
+import { messages, sessionSnapshot, locate } from '../packages/connect/src/transcript.js';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-provider-transcripts-'));
 test.after(() => rmSync(root, { recursive: true, force: true }));
@@ -167,4 +167,21 @@ test('Grok history reads flat chat_history records and summary.json model', asyn
   assert.deepEqual(history[1].tools, [{ name: 'bash', input: 'npm test' }]);
   const status = await sessionSnapshot({ engine: 'grok', path, cwd: '/work', monitored: false });
   assert.match(status, /\*\*Model:\*\* grok-4-fast/);
+});
+
+test('omp locate reads past a leading title record to the session header', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-omp-locate-'));
+  const dir = join(home, 'sessions', '-work-proj');
+  mkdirSync(dir, { recursive: true });
+  // omp writes a title record ahead of the session header; locating by the
+  // first line alone would never see the header's cwd.
+  const path = join(dir, '2026-10-01_abc123.jsonl');
+  writeFileSync(path, [
+    JSON.stringify({ type: 'title', title: 'omp chat' }),
+    JSON.stringify({ type: 'session', id: 'omp-1', cwd: '/work/proj' }),
+    JSON.stringify({ type: 'message', message: { role: 'user', content: 'hi' } }),
+  ].join('\n') + '\n');
+
+  assert.equal(await locate({ engine: 'omp', home, cwd: '/work/proj' }), path);
+  assert.equal(await locate({ engine: 'omp', home, cwd: '/work/other' }), null);
 });

@@ -203,19 +203,26 @@ export class AcpDriver extends Driver {
     }
     this.#imagePrompts = init.result?.agentCapabilities?.promptCapabilities?.image === true;
 
+    // An agent that wants sign-in answers auth_required until a client
+    // calls `authenticate` - antigravity is the case today. That refusal
+    // can come back from session/load just as well as session/new, so the
+    // resume gets the same authenticate-and-retry as the fresh start; the
+    // method may run a browser flow while we wait, so this can take minutes.
+    let authenticated = false;
     let res = this.engineSessionId ? await this.#load(this.engineSessionId) : null;
+    if (res?.error && this.spec.authMethod && this.#needsAuth(res.error)) {
+      authenticated = await this.#authenticate();
+      if (authenticated) res = await this.#load(this.engineSessionId);
+    }
     if (res?.result) {
       this.#takeOptions(res.result);
       this.#takeCommands(res.result);
     } else {
       if (res?.error) this.log(`${this.engine}: session/load failed (${res.error.message}); starting fresh`);
       let created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
-      // An agent that wants sign-in answers auth_required until a client
-      // calls `authenticate` - antigravity is the case today. The method
-      // may run a browser flow while we wait, so this can take minutes.
-      if (created.error && this.spec.authMethod && this.#needsAuth(created.error)) {
-        const authed = await this.#authenticate();
-        if (authed) created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
+      if (created.error && this.spec.authMethod && !authenticated && this.#needsAuth(created.error)) {
+        authenticated = await this.#authenticate();
+        if (authenticated) created = await this.#call('session/new', { cwd: this.cwd, mcpServers: [] });
       }
       if (created.error) {
         this.push('error', { message: `${this.engine} session/new failed: ${created.error.message}`, kind: 'init' });
@@ -262,6 +269,9 @@ export class AcpDriver extends Driver {
         const res = await this.#call(verb, { sessionId, cwd: this.cwd, mcpServers: [] });
         if (!res.error) return res;
         last = res;
+        // An auth refusal needs `authenticate`, not another verb - letting
+        // a fallback's method-not-found overwrite it would hide the ask.
+        if (this.spec.authMethod && this.#needsAuth(res.error)) return res;
       }
       return last;
     } finally {

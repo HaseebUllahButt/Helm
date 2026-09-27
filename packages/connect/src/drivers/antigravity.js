@@ -7,7 +7,6 @@ import {
   antigravityEnv,
   forwardAntigravityRedirect,
   prepareAntigravityProfile,
-  sweepAntigravityTmp,
   validateAntigravityRedirect,
 } from '../antigravity.js';
 import { expand } from '../paths.js';
@@ -54,11 +53,11 @@ export class AntigravityDriver extends AcpDriver {
       authMethod: (d) => antigravityAuthMethod(d.env ?? {}),
 
       prepare: async (d) => {
-        // Anything a killed launch left behind is reclaimed first - sweep
-        // before prepare or it deletes the tmpdir it just made.
-        await sweepAntigravityTmp();
-        const prepared = await prepareAntigravityProfile(d.env ?? {});
-        d._agy = prepared;
+        // Each launch gets its own unpack dir; it is removed by onExit.
+        // There is deliberately no sweep of the shared parent - a second
+        // live session's TMPDIR sits there too, and deleting it from under
+        // a running PyInstaller bundle kills that agent.
+        d._agy = await prepareAntigravityProfile(d.env ?? {});
       },
 
       spawnEnv: (d, merged) => antigravityEnv(merged, {

@@ -1,0 +1,7 @@
+{"id":"r1","result":{"protocolVersion":1,"agentCapabilities":{}}}
+{"id":"r2","error":{"code":-32000,"message":"authentication required"}}
+{"id":"r3","result":{}}
+{"id":"r4","result":{"sessionId":"conv-resumed-1","configOptions":[{"id":"model","type":"select","currentValue":"gemini-3.8-flash","options":[{"value":"gemini-3.8-flash","name":"Gemini 3.8 Flash"}]}]}}
+{"id":"r5","result":{}}
+{"print_on_request":"session/prompt","line":"{\"method\":\"session/update\",\"params\":{\"sessionId\":\"conv-resumed-1\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"resumed-ok\"}}}}"}
+{"id":"r6","result":{"stopReason":"end_turn"}}

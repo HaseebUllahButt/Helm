@@ -48,14 +48,24 @@ const claudeProject = (cwd) => expand(cwd).replace(/\//g, '-');
 /** Grok names a project directory the URL-encoded working directory. */
 const grokProject = (cwd) => encodeURIComponent(expand(cwd));
 
-/** First JSON record in a file - enough to read a session header. */
-async function firstJson(path) {
+/**
+ * The `session` header record of a pi-family log. omp writes a `title`
+ * record ahead of it, so the header is the first *session* line, not the
+ * first line - malformed or unrelated leading lines are skipped, still
+ * within the same bounded head read.
+ */
+async function sessionHeader(path) {
   const fh = await open(path, 'r');
   try {
     const buf = Buffer.alloc(64 << 10);
     const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
-    try { return JSON.parse(buf.subarray(0, bytesRead).toString('utf8').split('\n')[0]); }
-    catch { return null; }
+    for (const line of buf.subarray(0, bytesRead).toString('utf8').split('\n')) {
+      try {
+        const rec = JSON.parse(line);
+        if (rec?.type === 'session') return rec;
+      } catch { /* malformed or partial line */ }
+    }
+    return null;
   } finally {
     await fh.close();
   }
@@ -121,8 +131,8 @@ export async function locate({ engine, home, cwd, startedAt = 0 }) {
     const dir = join(root, ENGINES[engine]?.sessionsDir ?? 'sessions');
     if (!existsSync(dir)) return null;
     for (const f of await recentFiles(dir, (n) => n.endsWith('.jsonl'), startedAt - slack)) {
-      const head = await firstJson(f.path);
-      if (head?.type === 'session' && head.cwd === expand(cwd)) return f.path;
+      const head = await sessionHeader(f.path);
+      if (head?.cwd === expand(cwd)) return f.path;
     }
     return null;
   }
