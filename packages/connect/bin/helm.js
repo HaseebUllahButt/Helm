@@ -2,6 +2,7 @@
 import { hostname, platform } from 'node:os';
 import { rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { argv, exit } from 'node:process';
 import {
@@ -18,6 +19,7 @@ import { levelOfWav, SILENCE_RMS } from '../src/voice.js';
 import {
   render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot,
 } from '../src/brain.js';
+import { createCodeSnapshot, sealCodeSnapshot } from '../src/code-transfer.js';
 
 // Unix pipelines routinely close their read end early (`helm machines |
 // head`). Treat that as successful completion instead of printing an
@@ -80,6 +82,7 @@ const usage = () => {
   helm thread <id> [-n 40]          the recent conversation of one session
   helm say <id> <text...>           send a prompt into an existing session
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
+  helm handoff <machine> [text...]  move code and this task to another machine
 
   helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
   helm proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
@@ -743,8 +746,14 @@ async function printThread() {
   // budgeted in bytes now - asking from event 1 would spend it on the oldest
   // part of a long thread and print none of what was asked for.
   const r = await brainRpc(env, M.SESSION_EVENTS, { id: session.id, tail: 1000, limit: 1000 });
+  const linked = r.session ?? session;
   console.log(`${machine}  ${session.id}  ${session.title}`);
-  console.log(`${session.engine}${session.model ? ` (${session.model})` : ''} in ${session.cwd} - ${session.status}\n`);
+  console.log(`${session.engine}${session.model ? ` (${session.model})` : ''} in ${session.cwd} - ${session.status}`);
+  if (linked.parent) console.log(`handoff parent: ${linked.parent.machineId}/${linked.parent.sessionId}`);
+  if (linked.children?.length) {
+    console.log(`handoff children: ${linked.children.map((x) => `${x.machineId}/${x.sessionId}`).join(', ')}`);
+  }
+  console.log('');
   for (const line of readThread(r.events ?? [], { limit: Math.max(1, n) })) console.log(line);
   const open = (r.pending ?? []).length;
   if (open) console.log(`\n${open} permission request${open === 1 ? '' : 's'} waiting - answer in the app, or with \`helm say\` if it takes words.`);
@@ -782,6 +791,119 @@ async function spawn_() {
   if (text) await brainRpc(env, M.SESSION_INPUT, { id: session.id, data: text });
   console.log(`${shortId(session.id)}  ${session.title}  (${profile.engine} on ${who}, ${folder})`);
   if (text) console.log('prompted.');
+}
+
+/**
+ * Start the current task on another machine.
+ *
+ * The provider credential deliberately does not travel. The target uses one
+ * of its own profiles, which must already be authenticated there. The source
+ * session tail is useful context, but it is redacted and bounded because a
+ * transcript can contain things an agent read from the workspace.
+ */
+async function handoff() {
+  const valueFlags = new Set(['--folder', '--target-folder', '--source-folder', '--account', '--model', '--mode', '--title']);
+  const args = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (!rest[i].startsWith('--')) { args.push(rest[i]); continue; }
+    if (valueFlags.has(rest[i])) i++;
+  }
+  const who = args.shift();
+  if (!who) die('usage: helm handoff <machine> [text...]');
+
+  const sourceId = process.env.HELM_SESSION_ID;
+  if (!sourceId) {
+    die('handoff must be run by a Helm-managed headless agent session');
+  }
+
+  const net = requireNetwork();
+  const target = machineId(who);
+  if (target === net.self) die('the handoff target is this machine');
+
+  const sourceFolder = strFlag('source-folder', process.env.HELM_CWD || process.cwd());
+  const handoffId = randomBytes(12).toString('hex');
+  const requestedTargetFolder = strFlag('target-folder', strFlag('folder', ''));
+  const account = strFlag('account', process.env.HELM_PROFILE_ID || '');
+  const sourceName = net.machines[net.self]?.name ?? 'the source machine';
+  const targetName = net.machines[target]?.name ?? who;
+  const targetProfiles = (await brainRpc(target, M.PROFILE_LIST, {})).profiles ?? [];
+  const engine = process.env.HELM_ENGINE;
+  const wanted = account.toLowerCase();
+  const profile = targetProfiles.find((p) => p.id === account)
+    || targetProfiles.find((p) => String(p.account ?? '').toLowerCase() === wanted)
+    || targetProfiles.find((p) => String(p.id).toLowerCase().startsWith(wanted))
+    || targetProfiles.find((p) => p.engine === engine);
+  if (!profile) {
+    die(`no matching authenticated account on ${targetName}; pass --account <profile>`);
+  }
+
+  // The roster record is authored by the target machine. Comparing it with
+  // the live answer prevents a relay from swapping in its own public key and
+  // turning the encrypted envelope into something it can decrypt.
+  const advertisedCodeKey = net.machines[target]?.codePubkey;
+  if (!advertisedCodeKey) {
+    die(`${targetName} has no code-transfer key yet; restart Helm on that machine and try again`);
+  }
+  const liveCodeKey = (await brainRpc(target, M.CODE_KEY, {})).codePubkey;
+  if (liveCodeKey !== advertisedCodeKey) {
+    die(`the code-transfer key for ${targetName} changed; refresh the machine roster and retry`);
+  }
+
+  const snapshot = createCodeSnapshot(sourceFolder);
+  const targetFolder = requestedTargetFolder ||
+    `~/.helm/workspaces/${snapshot.rootName}-${handoffId.slice(0, 8)}`;
+  const envelope = sealCodeSnapshot(snapshot, advertisedCodeKey, handoffId);
+  const transfer = await brainRpc(target, M.CODE_TRANSFER, {
+    handoffId,
+    folder: targetFolder,
+    envelope,
+  }, 120_000);
+  const inheritedMode = profile.engine === engine ? process.env.HELM_MODE : undefined;
+
+  const source = await brainRpc(net.self, M.SESSION_EVENTS, {
+    id: sourceId, tail: 500, limit: 500,
+  });
+  const context = readThread(source.events ?? [], { limit: 28 })
+    .join('\n')
+    .replace(/\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi, '[redacted]')
+    .replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\b(?:ghp|gho|github_pat|xox[baprs])-?[A-Za-z0-9_-]{12,}\b/gi, '[redacted]')
+    .replace(/((?:api[_ -]?key|token|secret|password|private[_ -]?key)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .replace(/(?:sk|pk|api|auth|token|secret|key)[-_ ]?[a-z0-9]{8,}/gi, '[redacted]')
+    .slice(-12_000);
+  const request = args.join(' ').trim();
+  const prompt = [
+    `You are taking over a task from ${sourceName} on ${targetName}.`,
+    request || 'Continue the task from the handoff context.',
+    `Work in ${transfer.folder}. No provider credentials or environment files were transferred; use the authenticated account available on this machine.`,
+    context ? `\nHandoff context:\n${context}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  const { session } = await brainRpc(target, M.SESSION_START, {
+    cwd: transfer.folder, profileId: profile.id, model: flagOf('model'),
+    mode: rest.includes('--mode') ? flagOf('mode') : inheritedMode,
+    title: flagOf('title') || `Handoff · ${source.session?.title ?? 'task'}`,
+    parent: {
+      handoffId,
+      machineId: net.self,
+      sessionId: sourceId,
+      sourceFolder,
+      digest: transfer.digest,
+    },
+  }, 60_000);
+  await brainRpc(net.self, M.SESSION_LINK, {
+    id: sourceId,
+    child: {
+      handoffId,
+      machineId: target,
+      sessionId: session.id,
+      title: session.title,
+      folder: transfer.folder,
+      digest: transfer.digest,
+    },
+  });
+  await brainRpc(target, M.SESSION_INPUT, { id: session.id, data: prompt });
+  console.log(`${shortId(session.id)}  ${session.title}  (${profile.engine} on ${targetName}, ${transfer.folder})`);
+  console.log(`handed off ${transfer.files} code files; ${transfer.skipped} sensitive/generated entries skipped.`);
 }
 
 async function openBrain() {
@@ -1314,6 +1436,11 @@ try {
 
     case 'spawn':
       await spawn_();
+      break;
+
+    case 'handoff':
+    case 'transfer':
+      await handoff();
       break;
 
     case 'dictate':

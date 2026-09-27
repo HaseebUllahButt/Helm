@@ -28,6 +28,7 @@ import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot 
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { transcribe, canTranscribe } from './voice.js';
+import { codeKeyInfo, materializeCode } from './code-transfer.js';
 
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30_000;
@@ -448,11 +449,13 @@ export class Daemon {
         : []),
     ])];
     const ssh = await sshInfo().catch(() => ({}));
+    const code = codeKeyInfo();
     this.net = describeSelf(net, {
       endpoints,
       pubkey: ssh.pubkey,
       sshUser: ssh.sshUser,
       sshPort: ssh.sshPort,
+      codePubkey: code.codePubkey,
     });
   }
 
@@ -1114,6 +1117,7 @@ export class Daemon {
 
       case M.SESSION_LIST:    return { sessions: await this.sessions.list() };
       case M.SESSION_START:   return { session: await this.sessions.start(p) };
+      case M.SESSION_LINK:    return this.sessions.linkChild(p.id, p.child);
       // Attaching starts a push stream of the screen (E.SESSION_DATA); the
       // reply carries the current screen so the viewer has something at once.
       case M.SESSION_ATTACH:  return this.sessions.attach(p.id, {
@@ -1252,6 +1256,13 @@ export class Daemon {
       // ever asks for a folded report.
       case M.USAGE_BUCKETS:
         return this.#usageRollup(!!p.rebuild);
+
+      case M.CODE_KEY: {
+        const { codePubkey } = codeKeyInfo();
+        return { codePubkey };
+      }
+      case M.CODE_TRANSFER:
+        return materializeCode(p.envelope, p.handoffId, p.folder);
 
       case M.PING:            return { t: Date.now() };
 

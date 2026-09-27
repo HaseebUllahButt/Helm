@@ -59,6 +59,24 @@ const GREETING = /^(hi+|hey+|hello+|yo|sup|hiya|howdy|test(ing)?|ping|ok(ay)?|th
 /** A title cut to fit, with the cut said out loud. */
 const clip = (text, max) => (text.length > max ? text.slice(0, max - 1) + '…' : text);
 
+const linkText = (value, max = 200) => typeof value === 'string' && value.length > 0
+  && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
+
+const parentLink = (value) => {
+  if (!value || typeof value !== 'object') return undefined;
+  const handoffId = linkText(value.handoffId, 80);
+  const machineId = linkText(value.machineId, 80);
+  const sessionId = linkText(value.sessionId, 80);
+  if (!handoffId || !machineId || !sessionId) return undefined;
+  return {
+    handoffId,
+    machineId,
+    sessionId,
+    sourceFolder: linkText(value.sourceFolder, 1024) || null,
+    digest: linkText(value.digest, 128) || null,
+  };
+};
+
 /** A prompt's first non-empty line, unless the line says nothing. */
 const informative = (text) => {
   const line = String(text ?? '').split('\n').map((l) => l.trim()).find(Boolean);
@@ -478,7 +496,7 @@ export class Sessions extends EventEmitter {
     return out.sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 
-  async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false }) {
+  async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null }) {
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
@@ -489,7 +507,8 @@ export class Sessions extends EventEmitter {
     if (!effort) effort = defaults.effort ?? null;
     if (!mode) mode = defaults.mode ?? null;
     if (!speed) speed = defaults.speed ?? null;
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain });
+    const lineage = parentLink(parent);
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain, parent: lineage });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -502,7 +521,7 @@ export class Sessions extends EventEmitter {
     // than borrowing a herdr pane and reading its screen back. Where the pty
     // addon is missing the old path still works, slowly.
     if (spec.plain && await this.terminals.ensure()) {
-      return this.#startTerminal({ dir, profileId, title, env: spec.env });
+      return this.#startTerminal({ dir, profileId, title, env: spec.env, parent: lineage });
     }
 
     const handle = await this.runtime.createSession({
@@ -526,6 +545,7 @@ export class Sessions extends EventEmitter {
       status: 'starting',
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      parent: lineage,
     };
 
     if (spec.plain) {
@@ -574,7 +594,7 @@ export class Sessions extends EventEmitter {
     return `Terminal ${highest + 1}`;
   }
 
-  async #startTerminal({ dir, profileId, title, env }) {
+  async #startTerminal({ dir, profileId, title, env, parent = null }) {
     const session = {
       id: randomBytes(6).toString('hex'),
       pty: true,
@@ -586,6 +606,7 @@ export class Sessions extends EventEmitter {
       status: 'shell',
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      parent: parentLink(parent),
     };
     // Registered before the await, not after: the name is taken from this
     // same index, and two terminals opened at once would otherwise both read
@@ -604,7 +625,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null }) {
+  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null }) {
     const dir = expand(cwd);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -630,6 +651,7 @@ export class Sessions extends EventEmitter {
       transcript,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      parent: parentLink(parent),
     };
     this.#index.set(session.id, session);
     let driver = null;
@@ -695,7 +717,20 @@ export class Sessions extends EventEmitter {
     // the whole question. Give it this daemon's own, ahead of the installed
     // one: a machine that has not been upgraded yet would otherwise hand the
     // brain a CLI that does not have the verbs its brief promises.
-    if (s.brain) spec.env = { ...spec.env, PATH: pathWithShim(spec.env?.PATH) };
+    // Every headless agent can reach the network CLI. Brains get the same
+    // binary, but ordinary sessions need it too for `helm handoff`: an agent
+    // should be able to move its work to another machine without a special
+    // kind of conversation. The identity variables let that command recover
+    // the current session and its working folder without trusting prose.
+    spec.env = {
+      ...spec.env,
+      PATH: pathWithShim(spec.env?.PATH),
+      HELM_SESSION_ID: s.id,
+      HELM_PROFILE_ID: s.profileId,
+      HELM_ENGINE: s.engine,
+      HELM_CWD: s.cwd,
+      HELM_MODE: s.mode,
+    };
     d = this.makeDriver(s.driver, {
       cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
       model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
@@ -1263,6 +1298,35 @@ export class Sessions extends EventEmitter {
     const d = this.#drivers.get(id);
     if (d) await d.interrupt();
     return { ok: true };
+  }
+
+  /** Persist the child created by a remote code handoff on the parent host. */
+  linkChild(id, child = {}) {
+    const s = this.get(id);
+    if (String(id).startsWith('pane:')) throw new Error('a pane session cannot own a handoff link');
+    if (!child || typeof child !== 'object') throw new Error('invalid handoff child');
+    const text = (value, max = 200) => typeof value === 'string' && value.length > 0
+      && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
+    const handoffId = text(child.handoffId, 80);
+    const machineId = text(child.machineId, 80);
+    const sessionId = text(child.sessionId, 80);
+    if (!handoffId || !machineId || !sessionId) throw new Error('handoff link is missing its identity');
+    const record = {
+      handoffId,
+      machineId,
+      sessionId,
+      title: text(child.title, 120) || null,
+      folder: text(child.folder, 1024) || null,
+      digest: text(child.digest, 128) || null,
+      createdAt: Number.isFinite(child.createdAt) ? child.createdAt : Date.now(),
+    };
+    s.children = (Array.isArray(s.children) ? s.children.filter((x) => x?.handoffId !== handoffId) : []);
+    s.children.push(record);
+    s.children = s.children.slice(-100);
+    s.updatedAt = Date.now();
+    this.#save();
+    this.emit('session', s);
+    return { ok: true, session: s };
   }
 
   async setMode(id, mode) {

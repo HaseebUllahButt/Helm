@@ -393,6 +393,7 @@ export const MAX_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
 
 const ids = /^[a-f0-9]{1,64}$/;
 const sshUsers = /^[a-z_][a-z0-9_-]{0,31}$/i;
+const CODE_PUBKEY = /^[A-Za-z0-9_-]{40,512}$/;
 
 /** The key types OpenSSH actually accepts, and nothing that looks like one. */
 const PUBKEY =
@@ -444,6 +445,13 @@ const pubkeyOf = (v) => {
   return raw && PUBKEY.test(raw.trim()) ? raw.trim() : null;
 };
 
+// X25519 SPKI, base64url encoded. It is deliberately kept as one printable
+// roster field so it cannot become a line injection when gossiped or logged.
+const codePubkeyOf = (v) => {
+  const raw = text(v, 512);
+  return raw && CODE_PUBKEY.test(raw) ? raw : null;
+};
+
 const stampOf = (v, ceiling) =>
   Number.isFinite(v) && v >= 0 && v <= ceiling ? v : null;
 
@@ -464,6 +472,7 @@ function machineRecord(id, their, ceiling) {
   keep(out, 'kind', machineKind(their.kind));
   keep(out, 'addedAt', stampOf(their.addedAt, ceiling));
   keep(out, 'pubkey', pubkeyOf(their.pubkey));
+  keep(out, 'codePubkey', codePubkeyOf(their.codePubkey));
   keep(out, 'sshUser', text(their.sshUser, 32) && sshUsers.test(their.sshUser) ? their.sshUser : null);
   keep(out, 'sshPort', Number.isInteger(their.sshPort) && their.sshPort > 0 && their.sshPort < 65536
     ? their.sshPort : null);
@@ -610,4 +619,3 @@ export function allEndpoints(net) {
 }
 
 // ------------------------------------------------------------------ publish
-

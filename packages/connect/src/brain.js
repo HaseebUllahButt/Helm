@@ -226,6 +226,8 @@ export function localDigest(sessions, events) {
         costUsd: s.costUsd ?? null,
         updatedAt: s.updatedAt ?? null,
         pending: s.pending ?? 0,
+        parent: s.parent ?? null,
+        children: Array.isArray(s.children) ? s.children : [],
         last,
       };
     });

@@ -107,7 +107,8 @@ export const M = {
   MODEL_LIST: 'model.list',        // { profileId, id?, all? } -> { default, models[], more?[], prefs?, effort?, efforts? }
   MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[] } -> { prefs }  per-account picker filter
   SESSION_LIST: 'session.list',    // {} -> { sessions[] }
-  SESSION_START: 'session.start',  // { cwd, profileId, model?, effort?, mode?, speed?, title? } -> { session }
+  SESSION_START: 'session.start',  // { cwd, profileId, model?, effort?, mode?, speed?, title?, parent? } -> { session }
+  SESSION_LINK:  'session.link',   // { id, child } -> { session }  durable parent/child handoff link
   SESSION_ATTACH: 'session.attach',// { id, cols, rows } -> { session, scrollback }
   SESSION_DETACH: 'session.detach',// { id }
   SESSION_INPUT: 'session.input',  // { id, data }
@@ -149,6 +150,11 @@ export const M = {
   // The same scan as a raw bucket map - what a hub stores so it can still
   // answer usage.report for this machine after it disconnects.
   USAGE_BUCKETS: 'usage.buckets',  // { rebuild? } -> { buckets, accounts, scan, at }
+
+  // Code-only handoff. The envelope is end-to-end encrypted to the target's
+  // machine key; no provider profile or environment is part of it.
+  CODE_KEY: 'code.key',            // {} -> { codePubkey }
+  CODE_TRANSFER: 'code.transfer',  // { handoffId, folder?, envelope } -> { folder, files, bytes }
 
   // A machine designated 'nas'. Browsing is RPC (small JSON, fits the
   // channel), but the bytes themselves are not: streaming is real HTTP at
