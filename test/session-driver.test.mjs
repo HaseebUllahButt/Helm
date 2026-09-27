@@ -43,6 +43,7 @@ class FakeDriver extends EventEmitter {
   }
   async start() { this.started = true; }
   async send(text) {
+    if (this.failSend) { this.failSend = false; throw new Error('send refused'); }
     this.sent = (this.sent ?? []).concat(text);
     this.push('status', { status: 'working' });
     this.push('turn.start', { turnId: 't1', text });
@@ -440,6 +441,65 @@ test('a surviving agent process keeps its active turn while queued tickets retur
 
   await restarted.kill(s.id);
   await original.kill(s.id);
+});
+
+test('a caller-chosen turn id makes a retried input a no-op', async () => {
+  // The code handoff delivers its first prompt under a deterministic turn
+  // id so a retry after a failed RPC answers success without re-prompting.
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const log = new EventLog(join(process.env.HELM_DIR, 'events-turnid'));
+  const sessions = new Sessions(new StubRuntime(), {
+    events: log,
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const d = FakeDriver.made.at(-1);
+
+  assert.deepEqual(await sessions.input(s.id, 'do it once', { turnId: 'handoff-abc' }), { ok: true });
+  assert.equal(sessions.turnState(s.id, 'handoff-abc'), 'open');
+  assert.deepEqual(await sessions.input(s.id, 'do it once', { turnId: 'handoff-abc' }),
+    { ok: true, duplicate: true });
+  assert.deepEqual(d.sent, ['do it once'], 'the agent sees the prompt once');
+  assert.equal(
+    sessions.history(s.id).events.find((e) => e.type === 'turn.start').turnId,
+    'handoff-abc',
+  );
+
+  // A turn that finished still dedupes: the message reached the agent.
+  log.append(s.id, { type: 'turn.done', turnId: 'handoff-abc', status: 'ok' });
+  assert.equal(sessions.turnState(s.id, 'handoff-abc'), 'done');
+  assert.deepEqual(await sessions.input(s.id, 'again', { turnId: 'handoff-abc' }),
+    { ok: true, duplicate: true });
+  assert.deepEqual(d.sent, ['do it once']);
+
+  // A turn that logged a send failure is not a delivered message. The id
+  // refuses to dedupe so the caller can step to the next one instead of
+  // believing the prompt landed. (The session is idle again, so this send
+  // goes straight at the driver rather than taking a queue ticket.)
+  d.push('status', { status: 'idle' });
+  d.failSend = true;
+  await assert.rejects(() => sessions.input(s.id, 'broken', { turnId: 'handoff-bad' }), /send refused/);
+  assert.equal(sessions.turnState(s.id, 'handoff-bad'), 'failed');
+  const reused = await sessions.input(s.id, 'broken', { turnId: 'handoff-bad' }).then(() => null, (e) => e);
+  assert.equal(reused.code, 'turn_failed');
+  assert.deepEqual(d.sent, ['do it once'], 'a failed id is not sent again');
+
+  // A withdrawn queued turn answers the same way: it never reached the
+  // agent either.
+  d.push('status', { status: 'working' });
+  await sessions.input(s.id, 'queued', { turnId: 'handoff-gone' });
+  sessions.dequeue(s.id, 'handoff-gone');
+  assert.equal(sessions.turnState(s.id, 'handoff-gone'), 'removed');
+  const withdrawn = await sessions.input(s.id, 'queued', { turnId: 'handoff-gone' }).then(() => null, (e) => e);
+  assert.equal(withdrawn.code, 'turn_failed');
+  d.push('status', { status: 'idle' });
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+
+  await assert.rejects(() => sessions.input(s.id, 'x', { turnId: 'has spaces!' }), /turnId/);
+  await assert.rejects(() => sessions.input(s.id, 'x', { raw: true, turnId: 'handoff-abc' }), /turnId/);
+
+  await sessions.kill(s.id);
 });
 
 test('a prompt is logged before lazy driver startup yields', async () => {

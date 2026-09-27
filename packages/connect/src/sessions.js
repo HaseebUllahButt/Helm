@@ -111,7 +111,7 @@ const EXTERNAL = /^(pane:|found:)/;
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
-export const wire = ({ promptSample, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, ...s }) => s;
+export const wire = ({ promptSample, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, originHandoffId, ...s }) => s;
 
 const EXTERNAL_INFO_COMMANDS = [
   { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
@@ -496,7 +496,10 @@ export class Sessions extends EventEmitter {
     return out.sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 
-  async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null }) {
+  async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null }) {
+    if (originHandoffId !== null && !/^[a-f0-9]{24}$/.test(originHandoffId)) {
+      throw new Error('invalid origin handoff id');
+    }
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
@@ -508,7 +511,7 @@ export class Sessions extends EventEmitter {
     if (!mode) mode = defaults.mode ?? null;
     if (!speed) speed = defaults.speed ?? null;
     const lineage = parentLink(parent);
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain, parent: lineage });
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -521,7 +524,7 @@ export class Sessions extends EventEmitter {
     // than borrowing a herdr pane and reading its screen back. Where the pty
     // addon is missing the old path still works, slowly.
     if (spec.plain && await this.terminals.ensure()) {
-      return this.#startTerminal({ dir, profileId, title, env: spec.env, parent: lineage });
+      return this.#startTerminal({ dir, profileId, title, env: spec.env, parent: lineage, originHandoffId });
     }
 
     const handle = await this.runtime.createSession({
@@ -546,6 +549,7 @@ export class Sessions extends EventEmitter {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       parent: lineage,
+      originHandoffId: originHandoffId || undefined,
     };
 
     if (spec.plain) {
@@ -594,7 +598,7 @@ export class Sessions extends EventEmitter {
     return `Terminal ${highest + 1}`;
   }
 
-  async #startTerminal({ dir, profileId, title, env, parent = null }) {
+  async #startTerminal({ dir, profileId, title, env, parent = null, originHandoffId = null }) {
     const session = {
       id: randomBytes(6).toString('hex'),
       pty: true,
@@ -607,6 +611,7 @@ export class Sessions extends EventEmitter {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       parent: parentLink(parent),
+      originHandoffId: originHandoffId || undefined,
     };
     // Registered before the await, not after: the name is taken from this
     // same index, and two terminals opened at once would otherwise both read
@@ -625,7 +630,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null }) {
+  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null }) {
     const dir = expand(cwd);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -652,6 +657,7 @@ export class Sessions extends EventEmitter {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       parent: parentLink(parent),
+      originHandoffId: originHandoffId || undefined,
     };
     this.#index.set(session.id, session);
     let driver = null;
@@ -722,6 +728,9 @@ export class Sessions extends EventEmitter {
     // should be able to move its work to another machine without a special
     // kind of conversation. The identity variables let that command recover
     // the current session and its working folder without trusting prose.
+    // The mode is deliberately not among them: it changes while a session
+    // runs, so a stale copy in the environment would outrank the live
+    // record - `helm handoff` asks the session itself instead.
     spec.env = {
       ...spec.env,
       PATH: pathWithShim(spec.env?.PATH),
@@ -729,7 +738,6 @@ export class Sessions extends EventEmitter {
       HELM_PROFILE_ID: s.profileId,
       HELM_ENGINE: s.engine,
       HELM_CWD: s.cwd,
-      HELM_MODE: s.mode,
     };
     d = this.makeDriver(s.driver, {
       cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
@@ -1608,14 +1616,55 @@ export class Sessions extends EventEmitter {
   }
 
   /**
+   * The session a code handoff started, found by the handoff id on its
+   * record - or, for sessions from before that field existed, its parent
+   * link.
+   *
+   * A receipt written after the session exists can be lost to a crash;
+   * the handoff's own id on the session record is how a retry finds what
+   * the store never recorded.
+   */
+  handoffSession(handoffId) {
+    return [...this.#index.values()].find(
+      (s) => s.originHandoffId === handoffId || s.parent?.handoffId === handoffId,
+    ) ?? null;
+  }
+
+  /** What the retained log says about a caller-chosen turn id. */
+  turnState(id, turnId) {
+    return this.events.turnState(id, turnId);
+  }
+
+  /**
    * Send a prompt to the agent, or raw text to the terminal.
    *
    * `raw` matters: from the terminal view every keystroke - arrows, ctrl-c,
    * a bare newline - has to reach the pane untouched, whereas the chat view
    * wants a whole message handed to the agent as a prompt.
    */
-  async input(id, text, { raw = false, attachments = [] } = {}) {
+  async input(id, text, { raw = false, attachments = [], turnId: requestedTurnId = null } = {}) {
     const s = this.get(id);
+    // A caller-chosen turn id is how a retried operation (code handoff)
+    // delivers its first prompt exactly once: the id is deterministic, and
+    // the durable turn.start written below is the dedupe marker. An open
+    // or finished turn under it means the message was accepted before -
+    // answer success without prompting the agent a second time. A failed
+    // or removed turn never reached the agent, so answering success for
+    // it would lie: the caller has to move on to the next id.
+    if (requestedTurnId !== null) {
+      if (raw || !s.driver) throw new Error('a caller-chosen turnId only applies to driven sessions');
+      if (!/^[A-Za-z0-9._:-]{1,120}$/.test(requestedTurnId)) {
+        throw new Error('turnId must be 1-120 characters of [A-Za-z0-9._:-]');
+      }
+      const state = this.events.turnState(id, requestedTurnId);
+      if (state === 'open' || state === 'done') return { ok: true, duplicate: true };
+      if (state === 'failed' || state === 'removed') {
+        throw Object.assign(
+          new Error('turnId already belongs to a failed or removed turn'),
+          { code: 'turn_failed' },
+        );
+      }
+    }
     if (s.external) {
       await this.#importExternalTranscript(s);
       const portableInfo = !raw && !attachments.length ? await this.#providerInfo(s, text, true) : null;
@@ -1700,7 +1749,8 @@ export class Sessions extends EventEmitter {
       if (!raw && !clean.trimStart().startsWith('/')) this.#prompted(s, clean);
       if (brainLine) clean = `${brainLine}\n\n${clean}`;
 
-      const turnId = `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      const turnId = requestedTurnId
+        ?? `local-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       // Sideband commands are app-server or local reads that run beside an
       // active turn rather than behind it. Busy is a turn in flight, a
       // prompt waiting on the owner, or a send still being written - the

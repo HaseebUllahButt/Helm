@@ -352,6 +352,38 @@ export class EventLog {
   last(id) { return this.#open(id).seq; }
 
   /**
+   * Whether the retained log already holds this turn's start.
+   *
+   * Callers that mint their own turn ids (the code handoff is the one) ask
+   * this before delivering: a turn already in the log was already accepted,
+   * so asking again is a retry, not a new message.
+   */
+  hasTurn(id, turnId) {
+    return this.#open(id).events.some((e) => e.type === 'turn.start' && e.turnId === turnId);
+  }
+
+  /**
+   * What the log says about one turn id:
+   * null (never seen), 'open', 'done', 'failed' or 'removed'.
+   *
+   * A retried operation needs more than existence: a turn.start that was
+   * withdrawn or failed is a turn that never reached the agent, and only a
+   * turn still in flight or finished may dedupe into a no-op.
+   */
+  turnState(id, turnId) {
+    const events = this.#open(id).events;
+    const start = events.find((e) => e.type === 'turn.start' && e.turnId === turnId);
+    if (!start) return null;
+    const later = (type) => events.find(
+      (e) => e.type === type && e.turnId === turnId && e.seq > start.seq,
+    );
+    if (later('turn.remove')) return 'removed';
+    const done = later('turn.done');
+    if (done) return done.status === 'error' ? 'failed' : 'done';
+    return 'open';
+  }
+
+  /**
    * Permission requests nobody has answered yet. Derived from the log rather
    * than kept separately so that it is right after a restart too - a prompt
    * the agent is still holding open must not vanish from the phone.
