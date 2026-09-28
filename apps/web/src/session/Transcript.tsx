@@ -128,6 +128,44 @@ function ToolItem({ item }: { item: Item }) {
   );
 }
 
+/**
+ * What a run of finished tool calls did, in a few words - "Read 2 files ·
+ * Edited math.js" - in the order it happened. Nobody reads six lines of
+ * `Read /home/...` to learn the agent looked at some files.
+ */
+function stepsSummary(items: Item[]): string {
+  const order: string[] = [];
+  const count: Record<string, number> = {};
+  for (const it of items) {
+    const g = toolGlyph(it.name);
+    if (!(g in count)) { count[g] = 0; order.push(g); }
+    count[g] += 1;
+  }
+  const many = (n: number, one: string, more: string) => (n === 1 ? one : more.replace('#', String(n)));
+  return order.map((g) => {
+    const n = count[g];
+    if (g === '◎') return many(n, 'Read 1 file', 'Read # files');
+    if (g === '✎') return many(n, 'Edited 1 file', 'Edited # files');
+    if (g === '❯') return many(n, 'Ran 1 command', 'Ran # commands');
+    if (g === '⌕') return many(n, 'Searched', 'Searched # times');
+    return many(n, 'Used 1 tool', 'Used # tools');
+  }).join(' · ');
+}
+
+function ToolRun({ items, tools, byParent }: { items: Item[]; tools: Item[]; byParent: Map<string, Item[]> }) {
+  const failed = tools.filter((i) => i.status === 'error').length;
+  return (
+    <details className="actgroup steps">
+      <summary>
+        <span className="aicon">{toolGlyph(tools[0].name)}</span>
+        <span className="alabel">{stepsSummary(tools)}{failed ? ` · ${failed} failed` : ''}</span>
+        <span className="achev">›</span>
+      </summary>
+      <div className="steps-body">{items.map((it) => <ItemView key={it.id} item={it} byParent={byParent} />)}</div>
+    </details>
+  );
+}
+
 function CommandItem({ item }: { item: Item }) {
   const live = item.status === 'streaming';
   const out = (item.output ?? item.text ?? '').replace(/\s+$/, '');
@@ -362,7 +400,33 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
         </div></div>
       )}
       <div className="turn assistant">
-        {roots.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}
+        {(() => {
+          // Runs of finished tool calls fold into one line. A run still at
+          // the end of a turn in progress stays as lines: the newest call is
+          // the news, and a group that re-forms on every call would flicker.
+          const nodes: ReactNode[] = [];
+          const quiet = (it: Item) => it.kind === 'tool' || it.kind === 'thinking';
+          for (let i = 0; i < roots.length;) {
+            if (!quiet(roots[i])) {
+              nodes.push(<ItemView key={roots[i].id} item={roots[i]} byParent={byParent} commandOutput={commandOutput} />);
+              i += 1;
+              continue;
+            }
+            let j = i;
+            while (j < roots.length && quiet(roots[j])) j += 1;
+            const run = roots.slice(i, j);
+            const tools = run.filter((x) => x.kind === 'tool');
+            // Thinking rides along in the fold - "Thought" between two reads
+            // is not news - but a lone thought with no tool call stays as it is.
+            if (tools.length > 0 && run.length > 1 && (d || j < roots.length) && run.every((x) => x.status !== 'streaming')) {
+              nodes.push(<ToolRun key={run[0].id} items={run} tools={tools} byParent={byParent} />);
+            } else {
+              run.forEach((x) => nodes.push(<ItemView key={x.id} item={x} byParent={byParent} commandOutput={commandOutput} />));
+            }
+            i = j;
+          }
+          return nodes;
+        })()}
         {tail && !d && working && !turn.items.some((it) => it.status === 'streaming' && it.kind === 'text') && (
           blocked
             ? <div className="working quiet">Waiting for you</div>

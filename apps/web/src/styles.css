@@ -1344,3 +1344,99 @@ button.sheet-editlink:hover { color: var(--text); }
   align-self: flex-start; padding: 8px 2px; color: var(--mutedfg); font-size: var(--t-meta);
 }
 .linkish.more:hover, .linkish.addproject:hover { color: var(--text); }
+
+/* ===========================================================================
+   Quiet
+   One list across every machine, hairlines instead of boxes, one loud thing
+   at a time. The engine marks are untouched: same tiles, same tints, same
+   size everywhere they appear.
+   =========================================================================== */
+
+.sidebar { position: relative; }
+.side-pad { padding-bottom: 92px; }
+
+/* The lists: no fill per row, a hairline between them. */
+.rows.plain { gap: 0; }
+.rows.plain .row.tall,
+.rows.plain .row.rowx {
+  background: transparent; border: 0; border-radius: 0; min-height: 60px; padding: 9px 6px;
+}
+.rows.plain .row.rowx { padding: 0; }
+.rows.plain .row.tall + .row.tall,
+.rows.plain .row.rowx + .row.rowx { box-shadow: 0 -1px 0 var(--line); }
+.rows.plain .row.tall:hover:not(:disabled),
+.rows.plain .row.rowx:hover { background: var(--muted); border-radius: var(--radius); box-shadow: none; }
+.rows.plain .row.rowx .rowmain { padding: 9px 6px; }
+.rows.plain .row .rt { font-size: var(--t-read); font-weight: 550; }
+.row .when { flex: none; font-size: var(--t-micro); color: var(--mutedfg); }
+
+/* Needs you: the one thing on Home that is allowed to be loud. */
+.need {
+  display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left;
+  margin: 4px 0 12px; padding: 14px 15px; border-radius: 18px;
+  background: linear-gradient(160deg, #2a2110, #151109);
+  border: 1px solid color-mix(in srgb, var(--amber) 26%, transparent);
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.need:hover { border-color: color-mix(in srgb, var(--amber) 44%, transparent); }
+.need-k {
+  display: flex; align-items: center; gap: 8px; color: var(--amber);
+  font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.need-k i { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 4px rgb(240 181 74 / 13%); }
+.need-n {
+  margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--amber); color: #2a1d00; font-size: var(--t-micro); letter-spacing: 0;
+}
+.need-t { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.need-t .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.need-title {
+  font-size: var(--t-title); font-weight: 600; letter-spacing: -0.012em; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.need-m { font-size: var(--t-meta); color: #b7a583; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.need-go {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 42px; padding: 0 16px; border-radius: 13px;
+  background: var(--amber); color: #1a1305; font-size: var(--t-body); font-weight: 650;
+}
+.need-go b { font-weight: 500; font-size: 18px; }
+
+/* New session: a light pill, because it is the one thing you came to press. */
+.fab {
+  position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); z-index: 15;
+  display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 22px; border-radius: 24px;
+  width: max-content; white-space: nowrap;
+  background: var(--text); color: #0b0b0d; font-size: var(--t-body); font-weight: 650;
+  box-shadow: 0 12px 30px -8px rgb(0 0 0 / 80%);
+  transition: transform 0.12s var(--ease);
+}
+.fab span { font-size: 20px; font-weight: 400; line-height: 1; margin-top: -1px; }
+.fab:active { transform: translateX(-50%) scale(0.97); }
+
+/* A run of finished tool calls, folded into what it did. */
+.actgroup.steps > summary .alabel { color: var(--mutedfg); }
+.steps-body {
+  margin: 2px 0 6px 11px; padding-left: 10px; border-left: 1px solid var(--line);
+  display: flex; flex-direction: column;
+}
+
+/* Send is the same pale circle as New session. */
+.send { background: var(--text); color: #0b0b0d; box-shadow: none; }
+.send:hover:not(:disabled) { filter: none; transform: scale(1.06); }
+.send:disabled { opacity: 0.25; }
+
+/* Allow is amber, like the card that brought you here: one colour for
+   "this is waiting on you". */
+.sheet-actions button.primary {
+  background: var(--amber); color: #1a1305; border-color: transparent; box-shadow: none;
+}
+.sheet-actions button.primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* The machine screen's one action matches Home's: neutral, with a light tile. */
+.action {
+  background: var(--card); border: 1px solid var(--line);
+}
+.action:hover:not(:disabled) { background: var(--raised); border-color: var(--line-2); }
+.action .plus { background: var(--text); color: #0b0b0d; font-weight: 500; }

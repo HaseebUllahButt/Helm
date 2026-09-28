@@ -119,7 +119,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       choices,
       more,
       current: model,
-      currentLabel: model ? shortModel(model, options.labels, session.engine) : 'default',
+      currentLabel: model ? shortModel(model, options.labels, session.engine) : 'model',
     });
   }
 
@@ -133,7 +133,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       note: 'How long it reasons before answering. More is slower and costs more.',
       choices: efforts.map((e) => ({ id: e, label: e })),
       current: session.effort || session.engineEffort || options.effort || '',
-      currentLabel: session.effort || session.engineEffort || options.effort || 'default',
+      currentLabel: session.effort || session.engineEffort || options.effort || 'think',
     });
   }
 

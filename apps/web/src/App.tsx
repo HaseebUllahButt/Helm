@@ -372,6 +372,8 @@ function Shell({ client, conn, onSignOut }: {
   const [snap, setSnap] = useState<{ machines: Record<string, { name: string; at: number; sessions: Session[] }> } | null>(null);
   /** The one in-app yes/no currently up: unpairing this device. */
   const [unpairing, setUnpairing] = useState(false);
+  /** Choosing which machine a new session starts on, when there is a choice. */
+  const [picking, setPicking] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem('helm.sidebar-collapsed') === '1'; } catch { return false; }
   });
@@ -784,6 +786,18 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const blocked = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
+  // Home is one list across every machine: what needs you, what is running,
+  // and what you were last doing. A brain has its own place under "brains".
+  const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
+  const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
+  const runningNow = everyone.filter(({ s }) => s.status === 'working').sort(byNewest);
+  const lately = everyone.filter(({ s }) => s.status !== 'blocked' && s.status !== 'working').sort(byNewest).slice(0, 6);
+  const onlineEnvs = envs.filter((e) => e.online);
+  const newOn = (envId: string) => { setPicking(false); navigate([{ kind: 'env' }, { kind: 'new' }], envId); };
+  const startNew = () => {
+    if (onlineEnvs.length === 1) newOn(onlineEnvs[0].id);
+    else if (onlineEnvs.length > 1) setPicking(true);
+  };
   // On a phone the two panes are one screen at a time: the main pane is shown
   // once a machine is selected, and every view - the brain included - belongs
   // to one.
@@ -863,7 +877,7 @@ function Shell({ client, conn, onSignOut }: {
               return (
                 <>
                   <div className="section">everywhere</div>
-                  <div className="rows">
+                  <div className="rows plain">
                     {machines.map((e) => (
                       <button key={e.id} className="row" onClick={() => { setQuery(''); openEnv(e.id); }}>
                         <span className={`mdot ${e.online ? 'on' : 'off'}`} />
@@ -893,25 +907,38 @@ function Shell({ client, conn, onSignOut }: {
 
             {!query.trim() && (<>
 
-            {blocked.length > 0 && (
+            {blocked.map(({ env: e, s }) => (
+              <NeedCard key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)} />
+            ))}
+
+            {runningNow.length > 0 && (
               <>
-                <div className="section attention">needs you</div>
-                <div className="rows">
-                  {blocked.map(({ env: e, s }) => (
-                    <button key={s.id} className="row" onClick={() => openSession(e.id, s)}>
-                      <span className="sdot blocked" />
-                      <span className="grow">
-                        <span className="rt"><span className="rt-text">{s.title}</span></span>
-                        <span className="rm">{e.name} · {shortPath(s.cwd)}</span>
-                      </span>
-                    </button>
+                <div className="section">running</div>
+                <div className="rows plain">
+                  {runningNow.map(({ env: e, s }) => (
+                    <HomeRow key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)} />
                   ))}
                 </div>
               </>
             )}
 
+            {lately.length > 0 && (
+              <>
+                <div className="section">recent</div>
+                <div className="rows plain">
+                  {lately.map(({ env: e, s }) => (
+                    <HomeRow key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)} />
+                  ))}
+                </div>
+              </>
+            )}
+
+            {!blocked.length && !runningNow.length && !lately.length && onlineEnvs.length > 0 && (
+              <div className="empty quiet">nothing running - start something below</div>
+            )}
+
             <Fold title="machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
-              <div className="rows cards">
+              <div className="rows plain">
                 {envs.map((e) => {
                   const list = runningAgentsOf(e.id);
                   const working = list.filter((s) => s.status === 'working').length;
@@ -945,7 +972,7 @@ function Shell({ client, conn, onSignOut }: {
                 from the machines above because you come here for the brain,
                 not for the machine - and a machine with none says so, which
                 is the only way to start one. */}
-            <Fold title="brains" count={envs.length} defaultOpen remember="sidebar:brains" showEmpty>
+            <Fold title="brains" count={envs.length} remember="sidebar:brains" showEmpty>
               <div className="rows">
                 {envs.map((e) => {
                   const s = brainOn(e.id);
@@ -981,6 +1008,9 @@ function Shell({ client, conn, onSignOut }: {
             <span>{conn.online ? 'socket live' : conn.error || 'socket down'}</span>
           </div>
         </div>
+        {!query.trim() && onlineEnvs.length > 0 && (
+          <button className="fab" onClick={startNew}><span>+</span>New session</button>
+        )}
       </aside>
 
       <section className={`main${showMain ? ' showing' : ''}`}>
@@ -1112,6 +1142,26 @@ function Shell({ client, conn, onSignOut }: {
           </span>
           <span className="chev">›</span>
         </button>
+      )}
+
+      {picking && (
+        <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) setPicking(false); }}>
+          <div className="modal" role="dialog" aria-modal="true" aria-label="Start on which machine?">
+            <div className="modal-title">Start on…</div>
+            <div className="rows plain">
+              {onlineEnvs.map((e) => (
+                <button key={e.id} className="row tall" onClick={() => newOn(e.id)}>
+                  <span className="mdot on" />
+                  <span className="grow">
+                    <span className="rt"><span className="rt-text">{e.name}</span></span>
+                    <span className="rm">{e.kind ?? 'machine'}</span>
+                  </span>
+                  <span className="chev">›</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {unpairing && (
@@ -1740,9 +1790,22 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const [projectBusy, setProjectBusy] = useState(false);
   const reloadProjects = useCallback(() => {
     if (!env.online) { setProjects([]); return; }
+    let retried = false;
     client.rpc<{ projects: Project[] }>(env.id, 'project.list', {}, 20_000)
       .then((r) => setProjects(r.projects ?? []))
-      .catch((e) => setError(e.message));
+      .catch((e) => {
+        // On a wide screen this runs before the socket is up, and "not
+        // connected" is the socket saying so, not the machine failing: ask
+        // once more when it has had a moment, and stay quiet about it.
+        if (/not connected/i.test(e.message) && !retried) {
+          retried = true;
+          setTimeout(() => client.rpc<{ projects: Project[] }>(env.id, 'project.list', {}, 20_000)
+            .then((r) => setProjects(r.projects ?? []))
+            .catch((err) => setError(err.message)), 2000);
+          return;
+        }
+        setError(e.message);
+      });
   }, [client, env.id, env.online]);
   const projectCwds = sessions.filter((s) => s.engine !== 'shell').map((s) => s.cwd ?? '').sort().join('\n');
   useEffect(() => { reloadProjects(); }, [reloadProjects, projectCwds]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1802,9 +1865,12 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         ...rest.filter((s) => !recentIds.has(s.id) && sameDir(s.cwd || '~', p.path)),
         ...externalLive.filter((s) => !recentIds.has(s.id) && sameDir(s.cwd || '~', p.path)),
       ].sort(byRecent),
+      // Threads of this project already standing under "recent" above. They
+      // are counted, or the header said 0 next to a thread you can see.
+      above: recent.filter((s) => sameDir(s.cwd || '~', p.path)).length,
     }))
-    .filter(({ project: p, list }) =>
-      !q || list.length > 0 || `${p.title} ${p.path}`.toLowerCase().includes(q));
+    .filter(({ project: p, list, above }) =>
+      !q || list.length + above > 0 || `${p.title} ${p.path}`.toLowerCase().includes(q));
   const inProject = new Set(projectFolds.flatMap(({ list }) => list.map((s) => s.id)));
 
   // Threads from this week in folders helm has never started anything in,
@@ -2019,26 +2085,26 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         {blocked.length > 0 && (
           <div>
             <div className="section attention">needs you</div>
-            <div className="rows">{blocked.map(row)}</div>
+            <div className="rows plain">{blocked.map(row)}</div>
           </div>
         )}
         {working.length > 0 && (
           <div>
             <div className="section">working</div>
-            <div className="rows">{working.map(row)}</div>
+            <div className="rows plain">{working.map(row)}</div>
           </div>
         )}
         {recent.length > 0 && (
           <div>
             <div className="section">recent</div>
-            <div className="rows">{recent.map(row)}</div>
+            <div className="rows plain">{recent.map(row)}</div>
           </div>
         )}
-        {projectFolds.map(({ project: p, list }) => (
+        {projectFolds.map(({ project: p, list, above }) => (
           <Fold
             key={p.path}
             title={p.title}
-            count={list.length}
+            count={list.length + above}
             note={projectNote(p.path)}
             openWhen={!!q}
             remember={`${env.id}:${p.path}`}
@@ -2053,10 +2119,10 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             )}
           >
             {list.length ? (
-              <div className="rows">{list.map(row)}</div>
+              <div className="rows plain">{list.map(row)}</div>
             ) : (
               <div className="empty quiet">
-                no threads here yet
+                {above ? 'the latest is under recent' : 'no threads here yet'}
                 <div className="note" style={{ marginTop: 6 }}>
                   <button className="linkish" disabled={!env.online} onClick={() => onStart(p.path)}>
                     + New thread
@@ -2075,7 +2141,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           openWhen={!!q}
           remember={`${env.id}:~elsewhere`}
         >
-          <div className="rows">{elsewhere.map(row)}</div>
+          <div className="rows plain">{elsewhere.map(row)}</div>
           {strays.length > elsewhere.length && (
             <button className="linkish more" onClick={() => setAllElsewhere(true)}>
               show {strays.length - elsewhere.length} more
@@ -2083,10 +2149,10 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           )}
         </Fold>
         <Fold title="older" count={older.length} openWhen={!!q} remember={`${env.id}:~older`}>
-          <div className="rows">{older.map(row)}</div>
+          <div className="rows plain">{older.map(row)}</div>
         </Fold>
         <Fold title="archived" count={filed.length} openWhen={!!q} remember={`${env.id}:~archived`}>
-          <div className="rows">{filed.map(row)}</div>
+          <div className="rows plain">{filed.map(row)}</div>
         </Fold>
 
         {/* An offline machine keeps its last word, not a blank page: the
@@ -2097,7 +2163,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             <div className="section">
               last known{rememberedAt ? ` · seen ${waitingSince(rememberedAt, now)} ago` : ''}
             </div>
-            <div className="rows stale">
+            <div className="rows plain stale">
               {remembered!.map((s) => (
                 <div key={s.id} className="row tall">
                   <div className="rowmain">
@@ -2353,6 +2419,55 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
         />
       )}
     </>
+  );
+}
+
+const dirName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
+
+/**
+ * A session that is waiting on you, as the first thing on Home.
+ *
+ * It says what is asking and where, and how long it has been waiting; the
+ * answer itself lives in the session, where the diff or the command is on
+ * screen to be read before Allow is tapped.
+ */
+function NeedCard({ s, machine, onOpen }: { s: Session; machine: string; onOpen: () => void }) {
+  const now = useNow();
+  const eng = engineOf(s.engine);
+  const n = s.pending ?? 0;
+  return (
+    <button className="need" onClick={onOpen}>
+      <span className="need-k">
+        <i />Needs you{s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
+        {n > 1 && <span className="need-n">{n}</span>}
+      </span>
+      <span className="need-t">
+        <EngineMark engine={eng.cls} />
+        <span className="grow">
+          <span className="need-title">{s.title}</span>
+          <span className="need-m">{eng.label} · {dirName(s.cwd)} · {machine}</span>
+        </span>
+      </span>
+      <span className="need-go">Review and answer<b>›</b></span>
+    </button>
+  );
+}
+
+/** One line of Home: the mark, the thread, where it runs, and what it is doing. */
+function HomeRow({ s, machine, onOpen }: { s: Session; machine: string; onOpen: () => void }) {
+  const now = useNow();
+  const eng = engineOf(s.engine);
+  return (
+    <button className="row tall" onClick={onOpen}>
+      <EngineMark engine={eng.cls} />
+      <span className="grow">
+        <span className="rt"><span className="rt-text">{s.title}</span></span>
+        <span className="rm">{dirName(s.cwd)} · {machine}</span>
+      </span>
+      {s.status === 'working'
+        ? <StatusChip status="working" at={s.updatedAt} />
+        : s.updatedAt ? <span className="when">{waitingSince(s.updatedAt, now)}</span> : null}
+    </button>
   );
 }
 

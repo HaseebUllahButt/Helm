@@ -74,7 +74,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
           prompt - every denial takes a reason, not only plans. */}
       <input
         className="sheet-note" value={note} onChange={(e) => setNote(e.target.value)}
-        placeholder={p.kind === 'plan' ? 'What should change? (optional, sent with “Keep planning”)' : 'Say why, or what to do instead (optional, sent with deny)'}
+        placeholder={p.kind === 'plan' ? 'What should change? (optional)' : 'Add a note (optional)'}
       />
       <div className={`sheet-actions${denyFirst ? ' deny-first' : ''}`}>
         {allow && changed && (
@@ -90,6 +90,27 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
   );
 }
 
+/**
+ * Old text against new, as only the lines that differ.
+ *
+ * An edit is sent as the whole old string and the whole new one, so a
+ * one-line addition arrived as "remove the line above, add it back, add the
+ * new line" - and a trailing newline drew a lone `-` and `+` besides. The
+ * lines both sides share at the top and bottom are not the change.
+ */
+function changedLines(before: unknown, after: unknown): string {
+  const split = (v: unknown) => { const t = String(v ?? ''); return t === '' ? [] : t.replace(/\n$/, '').split('\n'); };
+  const a = split(before), b = split(after);
+  let top = 0;
+  while (top < a.length && top < b.length && a[top] === b[top]) top += 1;
+  let bottom = 0;
+  while (bottom < a.length - top && bottom < b.length - top && a[a.length - 1 - bottom] === b[b.length - 1 - bottom]) bottom += 1;
+  const gone = a.slice(top, a.length - bottom), came = b.slice(top, b.length - bottom);
+  // Nothing differs, or nothing was left to trim: show what was sent.
+  if (!gone.length && !came.length) return [...a.map((l) => '-' + l), ...b.map((l) => '+' + l)].join('\n');
+  return [...gone.map((l) => '-' + l), ...came.map((l) => '+' + l)].join('\n');
+}
+
 /** A file change as the CLI described it: a diff, or new content, or old/new. */
 function EditDetail({ detail }: { detail: any }) {
   if (!detail) return null;
@@ -103,7 +124,7 @@ function EditDetail({ detail }: { detail: any }) {
     );
   }
   if (detail.old != null || detail.new != null) {
-    const text = [...String(detail.old ?? '').split('\n').map((l: string) => '-' + l), ...String(detail.new ?? '').split('\n').map((l: string) => '+' + l)].join('\n');
+    const text = changedLines(detail.old, detail.new);
     return (
       <>
         <div className="sheet-path">{detail.path}{detail.all ? ' · every occurrence' : ''}</div>
@@ -116,7 +137,7 @@ function EditDetail({ detail }: { detail: any }) {
       <>
         <div className="sheet-path">{detail.path} · {detail.edits.length} edits</div>
         {detail.edits.map((e: any, i: number) => (
-          <Diff key={i} text={[...String(e.old ?? '').split('\n').map((l: string) => '-' + l), ...String(e.new ?? '').split('\n').map((l: string) => '+' + l)].join('\n')} />
+          <Diff key={i} text={changedLines(e.old, e.new)} />
         ))}
       </>
     );
