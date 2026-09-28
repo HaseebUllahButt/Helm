@@ -28,7 +28,8 @@ export function waitingSince(ts: number | undefined | null, now = Date.now()): s
   if (!ts) return '';
   const s = Math.max(0, Math.floor((now - ts) / 1000));
   if (s < 45) return 'just now';
-  const m = Math.floor(s / 60);
+  // 45-59s is past "just now" but not yet a minute; "0m" read as a bug.
+  const m = Math.max(1, Math.floor(s / 60));
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h`;

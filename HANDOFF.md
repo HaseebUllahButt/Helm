@@ -310,6 +310,141 @@ the report that started the latency work came from that phone. **Check
 `helm devices` before writing anything about what has or has not been
 tried.**
 
+## What changed in the Quiet UI pass
+
+A UI-only pass (`be38edd`, `39a5b95`). No daemon, relay or protocol change.
+Verified by running it: a sandboxed `helm up`, a real Claude session driven to a
+permission and answered, at 390px and at 1280px.
+
+- **Home** is one list across every machine: a session waiting on you is an amber
+  card at the top (`NeedCard`), then running, then the six most recent, then
+  machines and brains (brains start folded). New session is a light pill; it asks
+  which machine only when more than one is online. The card opens the session
+  rather than answering in place - the diff has to be on screen before Allow.
+- **Lists** use hairlines (`.rows.plain`), not boxes. Engine marks (`EngineMark`,
+  `.mark`) were deliberately not touched.
+- **Session**: runs of finished tool calls, and the thoughts between them, fold to
+  one line ("Read 2 files - Edited math.js"). A run at the end of a turn still in
+  progress stays as lines. Permission diffs show only the lines that differ
+  (`changedLines`), Allow is amber, send is pale.
+- **Smaller**: Start is pinned under the agent list; the composer's chips share
+  the row with attach/mic/send; the machine header reads "direct - 20ms"; a
+  project's count includes threads standing under "recent".
+- **Bugs found only by running it wide**: New session wrapped to two lines in the
+  300px desktop sidebar, and `project.list` fired before the socket was up and
+  left a red "not connected" on screen.
+
+**Review pass (`/code-review high`) on the whole tree**, which also covers the
+device-presence work above. Fixed: `this` device always shows online; the "unused
+30d+" tag now says "not seen here 30d+" because presence is per hub; the pairing
+snapshot is fetched fresh; `this.net` is refreshed by the roster watcher;
+`watchNetwork` retries once on a half-written file; presence rows are pruned when
+a device is revoked from the CLI or by gossip. Looked at and left: `/api/auth/close`
+has no role check, matching `/api/auth/rotate` beside it (any paired device can
+already mint a link); `kick` scanning every tombstone per roster change; a
+`device_seen` write per socket open/close; a `#devices` notification tap being lost
+if the app is on the login screen.
+
+## What changed on 2026-09-29
+
+A pass over the security *experience* rather than the security holes (those
+were the 09-17 and 09-24 audits): what the owner can see and do about who holds
+a key. Nothing here changes what a token can do. **Not deployed**; it is in the
+working tree, uncommitted. `npm run check` was 409 pass before and is 416 after
+(7 new, `test/device-presence.test.mjs`), and every UI claim below was driven in
+headless Chromium at 390x844 against a sandboxed hub.
+
+- **The Devices list tells the truth about presence.** The green dot used to
+  light for "this device" only, whatever anyone else was doing. It now means
+  *connected to the hub that answered*, and each row says `online now` or
+  `last seen 3h ago`, sorted this-device, then online, then most recent. A
+  device idle 30+ days is tagged `unused 30d+`: the top of the list is who
+  uses the network, the bottom is what is probably safe to remove.
+  **Presence is hub-local on purpose** (`device_seen` in `hub.sqlite`, written
+  on socket open/close). It is *not* in the roster: the roster gossips, and a
+  timestamp that moves whenever a phone wakes would make every machine re-send
+  it for ever (the same reason `sanitizeRoster` must be identity - see "The
+  regression this nearly caused"). The consequence, which the screen says: a
+  device talking only to another machine's hub shows as idle here. Devices
+  that existed before this shipped have no row until they next connect, and
+  read `not seen lately`.
+- **A pairing link can be closed, and closes itself when used.** A login does
+  not spend the password - it stays good for anyone holding the link until it
+  times out - so "my phone paired" and "nobody else can" were ten minutes
+  apart. `POST /api/auth/close` ends the window at once (paired devices are
+  untouched), the link shows a live "about N min" instead of "a few minutes",
+  has a **Close link** button, and while it is open the screen watches for a
+  new device: when one arrives it names it and closes the link. The banner
+  reports what the hub *confirmed*: against a hub without the route it warns
+  that the link still works, rather than claiming it is dead (checked by
+  faking a 404 and then logging in with the "closed" link: 200).
+- **A new pairing sends a push to the devices already paired**
+  (`announceNewDevice` in `http.js`, over the existing `fanOut`): "A new device
+  paired - <label> can now control your machines. Not you? Open Devices and
+  remove it." The link that leaked would look exactly like this, and a device
+  already paired is the only witness. Not sent for the local sign-in, which is
+  the owner arriving, not a new device; proved by a fake push service in the
+  test. Tapping it opens the Devices screen (`view: 'devices'` in the payload;
+  the worker sends `#devices` cold or a `helm:open` message when the app is up).
+- **"Sign out all other devices"** - the lost-phone answer, one confirm instead
+  of hunting for each row. It cannot include the device in hand, so it cannot
+  lock the owner out. It is the client looping `DELETE /api/devices/:id`; there
+  is still no network-key rotation (see the 09-24 note: tokens that already
+  leaked keep working until the key changes).
+- **Plain-http is named, calmly.** On the sign-in screen and the Devices screen,
+  an `http://` address that is not loopback gets one banner: not encrypted,
+  fine on your own wifi, not on one you do not trust. That is Known bad #0
+  made visible to the person about to pair on a cafe network; it does not
+  close it. Loopback gets no banner.
+- **The sign-in page's `isLocal` was the prefix regex the server had already
+  been fixed for** (`^(127\.|localhost|...)`, so `localhost.evil.com` counted).
+  The server never trusted it, so this was an inconsistency and a wasted
+  request rather than a hole, but there is now one `LOOPBACK_HOST` in
+  `client.ts` and a comment saying to keep it in step with `/api/auth/local`.
+- `waitingSince` said `0m` between 45 and 59 seconds ("paired 0m ago",
+  "waiting 0m"); it says `1m` now.
+
+One bug found in review before it shipped: tapping "Pair another device"
+before the list had loaded snapshotted an empty set of known devices, so every
+existing device would have looked like it had just used the link - a false
+"X paired" banner and a link closed for no reason. `pair()` now fetches the
+list itself if it has not arrived (verified by delaying `/api/devices` 2s).
+
+**Speed: a roster change no longer waits for the 15s tick.** Found by asking
+why one test took 30.7s of a 32.5s suite: it was not slow, it was waiting for
+real gossip. A device removed on one machine took up to two ticks (~30s) to
+stop working on the hub, and a device paired on the VM up to 15s to reach a
+laptop. `watchNetwork()` (`protocol/network.js`) fires when this machine's
+roster *fingerprint* changes; the daemon then offers its hash to its hubs at
+once, and the hub offers its hash to every attached machine and kicks anyone
+newly revoked (before, a revocation from the CLI waited for the 30s heartbeat).
+It only moves *when* the existing hash-then-reconcile exchange starts - what is
+exchanged and merged is unchanged, so the "sanitising must be identity" rule is
+untouched, and the 15s tick is still the net if inotify is unavailable. It is
+silent for a write that changes nothing (that is what stops two machines that
+just merged from answering each other), and a burst of writes is one event.
+Measured against unmodified `HEAD` in a clean worktree: the gossip test body
+30.4s -> 1.3s; whole suite 32.5s -> 10.6s; `npm run check` ~45s -> ~21s. The
+gossip test's timeouts are now 6s and 8s, and **fail on the old code** (checked),
+so this cannot quietly slide back. `test/roster-watch.test.mjs` pins the
+watcher's quiet cases. What this did *not* touch: the VPN path (see "The
+network"), which is what makes helm slow away from home and is not helm's code.
+A web bundle audit found nothing to cut - the highlighter and terminal are
+already lazy and first paint is ~115KB gzipped.
+
+**Deliberately not done.** A "this command looks destructive" tag on the
+permission sheet: a heuristic over shell strings is easy to walk around, and a
+missing warning would read as "safe". The "Allow always" label is already scoped
+by the driver (`#alwaysLabel`). A device rename, and an event log of who paired
+when, are the next things this screen would want.
+
+**Deploying.** Additive, and safe in either order: an upgraded app against an
+old hub degrades to "not seen lately" and an honest "could not close the link";
+an upgraded hub with an old app just gains a route nobody calls. Upgrade the VM
+first as usual, and hard-reopen the installed PWA (Known bad #8).
+
+---
+
 ## What changed on 2026-09-24
 
 A sweep for speed, cost, cache and security bugs, plus phone UI fixes. Four
@@ -2374,7 +2509,9 @@ add a third delivery path, it must carry the same id.**
    does not close it. On a network you do not trust:
    `helm up --install --host 127.0.0.1`. The real fix is TLS on the LAN hub,
    which needs a cert story for `192.168.x.y` and does not have one yet.
-   See "The security audit" under 2026-09-17.
+   See "The security audit" under 2026-09-17. Since 2026-09-29 the app
+   *says* so on the sign-in and Devices screens (see "What changed on
+   2026-09-29"); the cert story is still missing.
 
 1. ~~**Push has never reached a real device.**~~ **This was wrong, and was
    wrong for two days.** Checked properly on 2026-09-17: the VM's hub holds a

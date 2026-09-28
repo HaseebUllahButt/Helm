@@ -14,7 +14,7 @@
  * only editable fields are a machine's own self-description and an explicit
  * revocation - neither of which two people race on.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import { hostname, homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
@@ -353,6 +353,56 @@ export function rosterHash(net) {
     .update(JSON.stringify(stable({ m: r.machines, d: r.devices, v: r.revoked })))
     .digest('base64url')
     .slice(0, 16);
+}
+
+/**
+ * Call `onChange(net, hash)` soon after this machine's roster changes, however
+ * it changed: the CLI writing the file from another process, a login on the
+ * hub, a merge from gossip.
+ *
+ * Gossip used to notice only on its 15-second tick, so a device removed on one
+ * machine kept working on the others for up to two ticks - half a minute in
+ * which "remove" was a request rather than a decision. This only moves *when*
+ * the existing fingerprint exchange starts; what is exchanged, and who merges
+ * what, is untouched, and the tick stays as the net under it.
+ *
+ * It fires only when the roster's fingerprint really differs from the last one
+ * seen. That is what keeps two machines that just merged each other's records
+ * from answering each other for ever, and what keeps a machine's own periodic
+ * rewrites of an unchanged record quiet. The directory is watched rather than
+ * the file, because a watch on a file dies with the inode when it is replaced.
+ * Returns a stop function; where the platform cannot watch, it does nothing
+ * and the tick carries on alone.
+ */
+export function watchNetwork(onChange, { debounceMs = 150 } = {}) {
+  let last = null;
+  const read = () => { const net = loadNetwork(); return net ? rosterHash(net) : null; };
+  last = read();
+  let timer = null;
+  let watcher = null;
+  try {
+    watcher = watch(HELM_DIR, { persistent: false }, (_event, name) => {
+      if (name && name !== 'network.json') return;
+      clearTimeout(timer);
+      const settle = (retry) => {
+        const net = loadNetwork();
+        // A write in flight reads as unparseable. Look once more rather than
+        // leave the change to the next tick.
+        if (!net) {
+          if (retry) { timer = setTimeout(() => settle(false), debounceMs * 2); timer.unref?.(); }
+          return;
+        }
+        const hash = rosterHash(net);
+        if (hash === last) return;
+        last = hash;
+        try { onChange(net, hash); } catch { /* the tick is the fallback */ }
+      };
+      timer = setTimeout(() => settle(true), debounceMs);
+      timer.unref?.();
+    });
+    watcher.on('error', () => {});
+  } catch { /* no inotify here: the periodic tick still runs */ }
+  return () => { clearTimeout(timer); watcher?.close(); };
 }
 
 /** The shareable part of our state - never the key. */

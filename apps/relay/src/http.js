@@ -6,6 +6,7 @@ import {
   hubProof, issueChallenge, HELLO_PATH,
 } from '@helm/protocol/network';
 import { ROLE } from '@helm/protocol/identity';
+import { fanOut } from './notify.js';
 
 /** Compare two secrets without leaking where they first differ. */
 const safeEqual = (a, b) => {
@@ -222,7 +223,28 @@ export function listMachines(online) {
   });
 }
 
-export function makeHttpHandler({ online, kick }) {
+/**
+ * Tell every subscribed device that another one just paired.
+ *
+ * Best effort and never in the way of the login it reports on: the pairing
+ * has already happened, and a push service being slow must not hold a phone
+ * on the sign-in screen. The new device has no subscription yet, so it cannot
+ * be woken by its own arrival.
+ */
+function announceNewDevice(device) {
+  if (!device) return;
+  fanOut(q.pushAll.all(), {
+    tag: `device-paired-${device.id}`,
+    title: 'A new device paired',
+    view: 'devices', // where tapping it should land
+    body: `${device.label} can now control your machines. Not you? Open Devices and remove it.`,
+  }, {
+    drop: (endpoint) => q.pushDelete.run(endpoint),
+    log: (line) => console.error(`[helm] ${line}`),
+  }).catch(() => {});
+}
+
+export function makeHttpHandler({ online, kick, connectedDevices = () => new Set() }) {
   return async function handle(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
@@ -355,6 +377,11 @@ export function makeHttpHandler({ online, kick }) {
       }
 
       const { id, token } = issueDevice(net, body.label || 'web');
+      // Pairing is the first time this device was here, and the moment the
+      // owner most wants to hear about it: a link that leaked would look
+      // exactly like this, and the only witness is a device already paired.
+      q.seenSet.run(id, now());
+      announceNewDevice(net.devices[id]);
       return json(res, 200, {
         token, deviceId: id, network: net.id, endpoints: allEndpoints(net),
       });
@@ -464,6 +491,15 @@ export function makeHttpHandler({ online, kick }) {
       return json(res, 200, rotatePassword(null, passwordTtl(body.ttlMs)));
     }
 
+    // Close the pairing window now. The password is not spent by a login - it
+    // stays good for anyone holding the link until it times out - so "I have
+    // paired my phone" and "nobody else can" are two different facts, and this
+    // is what makes the second one true. Devices already paired are untouched.
+    if (path === '/api/auth/close' && req.method === 'POST') {
+      q.authExpire.run();
+      return json(res, 200, { ok: true });
+    }
+
     if (path === '/api/invite' && req.method === 'POST') {
       if (claims.role !== ROLE.MACHINE) {
         return json(res, 403, { error: 'only a machine can invite another machine' });
@@ -485,8 +521,18 @@ export function makeHttpHandler({ online, kick }) {
     }
 
     if (path === '/api/devices' && req.method === 'GET') {
+      // Presence is this hub's own: a device connected to another machine's
+      // hub shows as not online here. It is answered as "seen by this hub",
+      // not "seen", and kept out of the roster (see `device_seen`).
+      const live = connectedDevices();
+      const seen = new Map(q.seenAll.all().map((r) => [r.device_id, r.seen_at]));
       return json(res, 200, {
-        devices: Object.values(net.devices).map((d) => ({ ...d, self: d.id === claims.sub })),
+        devices: Object.values(net.devices).map((d) => ({
+          ...d,
+          self: d.id === claims.sub,
+          online: live.has(d.id),
+          lastSeen: live.has(d.id) ? now() : seen.get(d.id) ?? null,
+        })),
       });
     }
 
@@ -502,6 +548,7 @@ export function makeHttpHandler({ online, kick }) {
         });
       }
       revoke(net, id);
+      if (kind === 'devices') q.seenDelete.run(id);
       // Close what they have open, not just what they open next: a machine's
       // daemon socket, and every client socket a removed device holds.
       if (kick) kick(id);

@@ -415,6 +415,17 @@ button.primary.big {
   border-color: color-mix(in srgb, var(--primary) 30%, transparent);
 }
 .action:disabled { opacity: 0.45; }
+/* The one that cuts people off. Same shape as the other action so it sits in
+   the list without shouting, but the colour says which way it points. */
+.action.danger {
+  color: var(--red); margin-top: 12px;
+  background: color-mix(in srgb, var(--red) 6%, var(--card));
+  border-color: color-mix(in srgb, var(--red) 22%, transparent);
+}
+.action.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--red) 36%, transparent);
+}
 .action .plus {
   width: 26px; height: 26px; border-radius: 7px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;

@@ -102,6 +102,15 @@ db.exec(`
     device_id TEXT NOT NULL
   );
 
+  -- When each device was last connected to *this* hub. Deliberately not in the
+  -- roster: the roster gossips, and a timestamp that moves every time a phone
+  -- wakes would make every machine re-send it for ever. It is a fact about
+  -- this hub's own sockets, so it lives here and is answered as such.
+  CREATE TABLE IF NOT EXISTS device_seen (
+    device_id TEXT PRIMARY KEY,
+    seen_at   INTEGER NOT NULL
+  );
+
   -- Where to reach a device when the app is closed. One row per browser that
   -- turned notifications on; the endpoint is the browser vendor's, and the
   -- keys are that browser's, so nothing here is useful to anyone else.
@@ -188,6 +197,13 @@ export const q = {
     `INSERT INTO local_device (id, device_id) VALUES (1, ?)
      ON CONFLICT(id) DO UPDATE SET device_id = excluded.device_id`
   ),
+
+  seenSet: db.prepare(
+    `INSERT INTO device_seen (device_id, seen_at) VALUES (?, ?)
+     ON CONFLICT(device_id) DO UPDATE SET seen_at = excluded.seen_at`
+  ),
+  seenAll: db.prepare('SELECT device_id, seen_at FROM device_seen'),
+  seenDelete: db.prepare('DELETE FROM device_seen WHERE device_id = ?'),
 
   inviteInsert: db.prepare('INSERT INTO invites (code, expires_at, role) VALUES (?, ?, ?)'),
   inviteGet: db.prepare('SELECT * FROM invites WHERE code = ?'),

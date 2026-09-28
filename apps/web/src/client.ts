@@ -1121,6 +1121,9 @@ export class Client {
     );
   }
 
+  /** Close the pairing window now; devices already paired are untouched. */
+  closePairing() { return this.http('/api/auth/close', { method: 'POST' }); }
+
   /** A new short-lived password, for signing in another phone or browser. */
   newPassword(ttlMs?: number) {
     return this.http<{ password: string; expiresAt: number }>('/api/auth/rotate', {
@@ -1239,7 +1242,38 @@ export interface Device {
   label: string;
   addedAt: number;
   self?: boolean;
+  /** Connected to the hub that answered, right now. Not a claim about other hubs. */
+  online?: boolean;
+  /** When that hub last had it connected; null if it never has since tracking began. */
+  lastSeen?: number | null;
 }
+
+/**
+ * A host that is this computer talking to itself: the whole of what "local"
+ * means for a sign-in. Matched whole, never as a prefix - `localhost.evil.com`
+ * and `127.evil.com` both start like it, and the hub refuses them for exactly
+ * that reason (see `/api/auth/local`). Keep the two in step.
+ */
+export const LOOPBACK_HOST = /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])$/;
+
+/**
+ * Would a secret sent to this address cross a network in the clear?
+ *
+ * A machine's hub is plain http on its LAN address by design - a phone on the
+ * same wifi reaching a laptop directly is the fast path - so this is not an
+ * error, and the app says so calmly. It is the one thing worth telling a
+ * person before they pair or mint a link on a network they do not own.
+ */
+export function isCleartext(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' && !LOOPBACK_HOST.test(u.hostname);
+  } catch { return false; }
+}
+
+export const CLEARTEXT_NOTE =
+  'This connection is not encrypted. Fine on your own wifi; on a network you do not trust, '
+  + 'anyone on it could read what this device sends, including its key.';
 
 /**
  * Sign in.

@@ -187,13 +187,14 @@ self.addEventListener('push', (event) => {
  */
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const { envId, sessionId } = event.notification.data ?? {};
-  const target = envId && sessionId ? `/#open=${envId}/${sessionId}` : '/';
+  const { envId, sessionId, view } = event.notification.data ?? {};
+  const target = view === 'devices' ? '/#devices'
+    : envId && sessionId ? `/#open=${envId}/${sessionId}` : '/';
   event.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of all) {
       if (new URL(client.url).origin !== self.location.origin) continue;
-      client.postMessage({ type: 'helm:open', envId, sessionId });
+      client.postMessage({ type: 'helm:open', envId, sessionId, view });
       return client.focus();
     }
     return self.clients.openWindow(target);

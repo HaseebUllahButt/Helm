@@ -10,7 +10,7 @@ import { UsageView } from './Usage';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import {
-  Client, login, validMachineName, MACHINE_NAME_RULE,
+  Client, login, validMachineName, MACHINE_NAME_RULE, LOOPBACK_HOST, isCleartext, CLEARTEXT_NOTE,
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
   type InventorySession, type Device, type Project, type MediaRoot, type MediaEntry,
 } from './client';
@@ -466,13 +466,20 @@ function Shell({ client, conn, onSignOut }: {
       wanted.current = { envId, sessionId };
       setSelected(envId);
     };
+    // "A new device paired" is about the list of devices, not a session.
+    const devicesScreen = () => navigate([{ kind: 'app-settings' }, { kind: 'devices' }]);
     const m = /^#open=([^/]+)\/(.+)$/.exec(location.hash);
     if (m) {
       take(m[1], m[2]);
       history.replaceState(history.state, '', location.pathname + location.search);
+    } else if (location.hash === '#devices') {
+      devicesScreen();
+      history.replaceState(history.state, '', location.pathname + location.search);
     }
     const onMessage = (e: MessageEvent) => {
-      if (e.data?.type === 'helm:open') take(e.data.envId, e.data.sessionId);
+      if (e.data?.type !== 'helm:open') return;
+      if (e.data.view === 'devices') devicesScreen();
+      else take(e.data.envId, e.data.sessionId);
     };
     navigator.serviceWorker?.addEventListener('message', onMessage);
     return () => navigator.serviceWorker?.removeEventListener('message', onMessage);
@@ -1215,7 +1222,8 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
     connect(location.origin, '', local);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isLocal = /^(127\.|localhost|\[::1\])/.test(location.hostname);
+  // Whole-host match, as the hub does it: a prefix let `localhost.evil.com` count.
+  const isLocal = LOOPBACK_HOST.test(location.hostname);
 
   useEffect(() => {
     let cancelled = false;
@@ -1341,6 +1349,7 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
             </>
           )}
 
+          {isCleartext(endpoint) && <div className="banner warn">{CLEARTEXT_NOTE}</div>}
           <button className="primary" disabled={busy || !endpoint || !secret}>
             {busy ? 'pairing…' : 'pair this device'}
           </button>
@@ -1611,9 +1620,15 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [error, setError] = useState('');
   const [removing, setRemoving] = useState<Device | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
   const [busy, setBusy] = useState(false);
   const [invite, setInvite] = useState<{ link: string; expiresAt: number } | null>(null);
   const [copied, setCopied] = useState(false);
+  /** Someone used the link: said once. `closed` is whether the hub confirmed it. */
+  const [arrived, setArrived] = useState<{ label: string; closed: boolean } | null>(null);
+  // Who was already paired when the link was made, so anyone else who shows
+  // up while it is open is known to have come through it.
+  const knownAtInvite = useRef<Set<string>>(new Set());
   const now = useNow();
 
   const load = useCallback(() => {
@@ -1623,9 +1638,46 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   }, [client]);
   useEffect(load, [load]);
 
+  // Resolves to whether the hub really closed it. The screen leaves the link
+  // either way - it also dies on its own, and a failure must not strand the
+  // person on a link they have finished with - but what it *says* follows the
+  // answer: a hub that has not been upgraded has no such route, and claiming
+  // a link is dead while it still works would be the one lie this screen
+  // cannot afford.
+  const closeLink = useCallback(async () => {
+    setInvite(null); setCopied(false);
+    return client.closePairing().then(() => true, () => false);
+  }, [client]);
+
+  // While a link is out, watch for it being used. The password is not spent by
+  // a login, so a link that has done its job is still a way in until it times
+  // out - closing it the moment someone arrives makes "my phone paired" and
+  // "nobody else can" the same fact instead of ten minutes apart.
+  useEffect(() => {
+    if (!invite) return;
+    const timer = setInterval(async () => {
+      try {
+        const r = await client.devices();
+        setDevices(r.devices);
+        const fresh = r.devices.find((d) => !knownAtInvite.current.has(d.id));
+        if (fresh) {
+          setInvite(null);
+          setArrived({ label: fresh.label, closed: await closeLink() });
+        }
+      } catch { /* the next tick tries again */ }
+    }, 4_000);
+    return () => clearInterval(timer);
+  }, [client, invite, closeLink]);
+
   const pair = async () => {
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setArrived(null);
     try {
+      // Never from a list that has not arrived: an empty snapshot would make
+      // every device already paired look like it had just used the link.
+      // Asked fresh, not read from what the screen last drew: a device that
+      // paired since would look like it had just used this link, and close it.
+      const current = (await client.devices()).devices;
+      knownAtInvite.current = new Set(current.map((d) => d.id));
       const r = await client.newPassword(10 * 60_000);
       setInvite({ link: `${client.relay}/#pair=${r.password}`, expiresAt: r.expiresAt });
     } catch (e: any) { setError(e.message); }
@@ -1645,6 +1697,35 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
     finally { setBusy(false); }
   };
 
+  // Everything except the device in hand. The lost-phone answer: one tap
+  // instead of finding each old entry, and it cannot lock you out because it
+  // cannot include the device doing the asking.
+  const others = (devices ?? []).filter((d) => !d.self);
+  const signOutOthers = async () => {
+    setBusy(true); setError('');
+    const results = await Promise.allSettled(others.map((d) => client.removeDevice(d.id)));
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    setBusy(false); setSigningOut(false);
+    if (failed) setError(`${failed} of ${others.length} could not be removed - try again`);
+    load();
+  };
+
+  // This device first, then whoever is connected, then the most recently seen:
+  // the top of the list is who is using the network, the bottom is what might
+  // be safe to remove.
+  const ordered = [...(devices ?? [])].sort((a, b) =>
+    Number(!!b.self) - Number(!!a.self)
+    || Number(!!b.online) - Number(!!a.online)
+    || (b.lastSeen ?? b.addedAt) - (a.lastSeen ?? a.addedAt));
+  const ago = (ts: number) => (waitingSince(ts, now) === 'just now' ? 'just now' : `${waitingSince(ts, now)} ago`);
+  const STALE_MS = 30 * 24 * 3600_000;
+
+  // The clock is read here, not taken from the shared ticker: that one can be
+  // fifteen seconds old, which turned a ten-minute link into "about 11 min".
+  const msLeft = invite ? invite.expiresAt - Date.now() : 0;
+  const minutesLeft = Math.max(1, Math.round(msLeft / 60_000));
+  const expired = !!invite && msLeft <= 0;
+
   return (
     <>
       <div className="bar">
@@ -1652,23 +1733,38 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
         <div className="titles"><h1>Devices</h1><span className="sub">what holds a key to this network</span></div>
       </div>
       <div className="scroll"><div className="pad column">
+        {isCleartext(client.relay) && <div className="banner warn">{CLEARTEXT_NOTE}</div>}
+        {arrived && (
+          <div className={`banner${arrived.closed ? '' : ' warn'}`}>
+            <b>{arrived.label}</b> paired with your link.{' '}
+            {arrived.closed
+              ? 'The link is closed now - make another to add more.'
+              : 'This machine could not close the link, so it works until it expires. Was this you?'}
+          </div>
+        )}
         {invite ? (
           <div className="setup-open">
-            <p className="note">
-              Open this link on the device you are pairing. It expires in a
-              few minutes and carries a pairing secret - treat it like a
-              password.
-            </p>
-            <pre className="snippet">{invite.link}</pre>
+            {expired ? (
+              <p className="note">This link has expired and no longer works.</p>
+            ) : (
+              <p className="note">
+                Open this link on the device you are pairing. It carries a
+                pairing secret - treat it like a password. It stops working
+                in about {minutesLeft} min, or as soon as someone uses it.
+              </p>
+            )}
+            {!expired && <pre className="snippet">{invite.link}</pre>}
             <div className="rows">
-              <button className="row" onClick={async () => {
-                try { await navigator.clipboard.writeText(invite.link); setCopied(true); }
-                catch { setError('could not copy - long-press the link instead'); }
-              }}>
-                <span className="grow"><span className="rt"><span className="rt-text">{copied ? 'copied' : 'Copy link'}</span></span></span>
-              </button>
-              <button className="row" onClick={() => { setInvite(null); setCopied(false); }}>
-                <span className="grow"><span className="rt">Done</span></span>
+              {!expired && (
+                <button className="row" onClick={async () => {
+                  try { await navigator.clipboard.writeText(invite.link); setCopied(true); }
+                  catch { setError('could not copy - long-press the link instead'); }
+                }}>
+                  <span className="grow"><span className="rt"><span className="rt-text">{copied ? 'copied' : 'Copy link'}</span></span></span>
+                </button>
+              )}
+              <button className="row" onClick={() => { void closeLink(); }}>
+                <span className="grow"><span className="rt">{expired ? 'Done' : 'Close link'}</span></span>
               </button>
             </div>
           </div>
@@ -1681,13 +1777,20 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
         <div className="section">paired</div>
         <div className="rows">
           {devices === null && !error && <div className="empty quiet">asking the hub…</div>}
-          {devices?.map((d) => (
+          {ordered.map((d) => (
             <div key={d.id} className="row tall rowx">
               <div className="rowmain">
-                <span className={`mdot ${d.self ? 'on' : 'off'}`} />
+                <span className={`mdot ${d.online || d.self ? 'on' : 'off'}`} />
                 <span className="grow">
-                  <span className="rt">{d.label}{d.self && <span className="tag key">this device</span>}</span>
-                  <span className="rm">paired {waitingSince(d.addedAt, now) === 'just now' ? 'just now' : `${waitingSince(d.addedAt, now)} ago`}</span>
+                  <span className="rt">
+                    {d.label}{d.self && <span className="tag key">this device</span>}
+                    {!d.online && !d.self && d.lastSeen != null && now - d.lastSeen > STALE_MS
+                      && <span className="tag">not seen here 30d+</span>}
+                  </span>
+                  <span className="rm">
+                    {d.online || d.self ? 'online now' : d.lastSeen != null ? `last seen ${ago(d.lastSeen)}` : 'not seen lately'}
+                    {' · '}paired {ago(d.addedAt)}
+                  </span>
                 </span>
               </div>
               <button className="rowend" title={`remove ${d.label}`} aria-label={`remove ${d.label}`}
@@ -1696,9 +1799,16 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
           ))}
           {devices?.length === 0 && <div className="empty quiet">no devices paired</div>}
         </div>
+        {others.length > 0 && (
+          <button className="action danger" disabled={busy} onClick={() => setSigningOut(true)}>
+            Sign out {others.length === 1 ? 'the other device' : `all ${others.length} other devices`}
+          </button>
+        )}
         <p className="note">
           Removing a device revokes its key everywhere - it asks for a fresh
-          pairing link the next time it opens helm.
+          pairing link the next time it opens helm. Online and last seen are
+          what this machine can see; a device talking only to another machine
+          shows as idle here.
         </p>
         {error && <div className="error">{error}</div>}
       </div></div>
@@ -1712,6 +1822,15 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
           confirmLabel="Remove" danger busy={busy}
           onCancel={() => setRemoving(null)}
           onConfirm={remove}
+        />
+      )}
+      {signingOut && (
+        <Confirm
+          title={others.length === 1 ? 'Sign out the other device?' : `Sign out ${others.length} other devices?`}
+          body={`Their keys stop working at once, on every machine in the network. This device stays signed in. Use this if a phone was lost or a link went somewhere it should not have.`}
+          confirmLabel="Sign out" danger busy={busy}
+          onCancel={() => setSigningOut(false)}
+          onConfirm={signOutOthers}
         />
       )}
     </>

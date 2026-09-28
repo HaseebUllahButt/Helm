@@ -4,7 +4,7 @@ import { T, E, M, PROTOCOL_VERSION } from '@helm/protocol';
 import { foldBuckets } from '@helm/usage';
 import { q, now, newId } from './db.js';
 import {
-  loadNetwork, saveNetwork, roster, mergeRoster, rosterHash,
+  loadNetwork, saveNetwork, roster, mergeRoster, rosterHash, watchNetwork,
 } from '@helm/protocol/network';
 import { fanOut, isNew } from './notify.js';
 
@@ -627,6 +627,7 @@ export function createWsLayer() {
       sock.sub = auth.sub;
       sock.isMachine = !!auth.machine;
       clients.set(sock, new Set());
+      markSeen(sock.sub);
       send(sock, T.WELCOME, { version: PROTOCOL_VERSION, role: 'client' });
     }
 
@@ -652,6 +653,10 @@ export function createWsLayer() {
         }
       } else {
         clients.delete(sock);
+        // Leaving is the last moment it was here. Skipped for a member that
+        // has just been removed: its socket closing is the kick, and writing
+        // a row for it would leave a trace of someone the owner cut.
+        if (sock.sub && !loadNetwork()?.revoked?.[sock.sub]) markSeen(sock.sub);
         if (sock.peerId) signalPeers.delete(sock.peerId);
         for (const [id, route] of pending) {
           if (route.socket === sock) pending.delete(id);
@@ -659,6 +664,18 @@ export function createWsLayer() {
       }
     });
   });
+
+  /** Remember that this member was connected to this hub just now. */
+  function markSeen(id) {
+    try { q.seenSet.run(id, now()); } catch { /* presence is a courtesy */ }
+  }
+
+  /** Who holds an open client socket to this hub right now. */
+  function connectedDevices() {
+    const ids = new Set();
+    for (const sock of clients.keys()) if (sock.sub) ids.add(sock.sub);
+    return ids;
+  }
 
   /**
    * Cut every live connection a member holds, immediately.
@@ -697,9 +714,26 @@ export function createWsLayer() {
   }, REDELIVER_MS);
   redeliver.unref?.();
 
+  // A roster that changed here - a login, a removal from the app or the CLI, a
+  // merge from another hub - is news to every machine attached to us, and they
+  // used to hear it only when their own 15s tick came round. Offer the
+  // fingerprint now; a machine that disagrees answers with its roster, and the
+  // usual reconcile does the rest. Anyone just revoked loses their sockets in
+  // the same breath rather than at the next heartbeat.
+  const stopWatch = watchNetwork((net, hash) => {
+    for (const id of Object.keys(net.revoked ?? {})) {
+      kick(id);
+      // Removed from the CLI or by gossip rather than through this hub's own
+      // DELETE: without this its presence row would outlive it for ever.
+      try { q.seenDelete.run(id); } catch { /* presence is a courtesy */ }
+    }
+    for (const sock of online.values()) send(sock, T.ROSTER, { hash });
+  });
+
   const stop = () => {
     clearInterval(heartbeat);
     clearInterval(redeliver);
+    stopWatch();
   };
 
   // --------------------------------------------------- the hub itself asking
@@ -813,5 +847,5 @@ export function createWsLayer() {
     });
   }
 
-  return { wss, online, broadcastPeers, kick, routeTunnel, callEnv, openTcp, stop };
+  return { wss, online, connectedDevices, broadcastPeers, kick, routeTunnel, callEnv, openTcp, stop };
 }

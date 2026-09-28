@@ -5,7 +5,7 @@ import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import {
   loadNetwork, mergeRoster, allEndpoints, describeSelf, hubCredential,
   roster as rosterOf, rosterHash, machineName, NAME_RULE, machineKind,
-  MACHINE_KINDS, saveNetwork,
+  MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
 import { modesFor } from './modes.js';
@@ -181,6 +181,7 @@ export class Daemon {
   #brainTimer = null;
   #stopped = false;
   #reconcile = null;
+  #stopWatch = null;
   /** This process's half of an event id; a restart must not reuse ids. */
   #boot = Math.random().toString(36).slice(2, 8);
   #emitted = 0;
@@ -298,6 +299,18 @@ export class Daemon {
     this.#brainTimer.unref?.();
 
     await this.#tick();
+    // Start the fingerprint exchange the moment our roster changes instead of
+    // at the next tick: a removal typed on this machine reaches the hubs in a
+    // second, not up to fifteen. The tick below remains the net under it.
+    this.#stopWatch = watchNetwork((net) => {
+      if (this.#stopped) return;
+      // The later `rosterOf(this.net)` broadcasts must not offer a roster from
+      // before the change that woke us.
+      this.net = net;
+      for (const link of this.#links.values()) link.offered = false;
+      this.broadcastFrame(T.ROSTER, { hash: rosterHash(net) });
+      this.peers?.dropRevoked(net.revoked);
+    });
     this.#reconcile = setInterval(
       () => this.#tick().catch((err) =>
         console.error('[helm] reconcile:', err?.message || err)),
@@ -355,6 +368,7 @@ export class Daemon {
     this.#stopped = true;
     clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
+    this.#stopWatch?.();
     for (const link of this.#links.values()) link.stop();
     // A locally terminated tunnel is a live socket even after every hub link
     // is gone. Close those too, or stopping the daemon can leave connections

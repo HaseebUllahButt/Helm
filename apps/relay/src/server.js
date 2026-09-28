@@ -49,8 +49,8 @@ export async function startRelay({
     ? rotatePassword(password, passwordTtlMs)
     : { password: null, expiresAt: 0 };
 
-  const { wss, online, kick, callEnv, openTcp, stop: stopWs } = createWsLayer();
-  const api = makeHttpHandler({ online, kick });
+  const { wss, online, connectedDevices, kick, callEnv, openTcp, stop: stopWs } = createWsLayer();
+  const api = makeHttpHandler({ online, kick, connectedDevices });
   // The byte-stream half of a nas - a real HTTP surface, mounted on every
   // hub but answering only where a nas designation and a valid media
   // credential say it may.

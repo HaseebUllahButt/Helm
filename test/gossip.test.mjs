@@ -87,16 +87,19 @@ test('a revocation made on a dialling-out machine reaches the hub it dials', {
   })).status;
   assert.equal(await phoneOnA(), 200);
 
-  // B learns the device from A on its next tick (15s).
-  for (let i = 0; i < 80 && !N.loadNetwork().devices[device.id]; i++) await sleep(250);
-  assert.ok(N.loadNetwork().devices[device.id], 'B should learn the device from A');
+  // B learns the device from A when A's roster changes, not on B's next 15s
+  // tick - so seconds, and a run that needs the tick is a regression.
+  for (let i = 0; i < 24 && !N.loadNetwork().devices[device.id]; i++) await sleep(250);
+  assert.ok(N.loadNetwork().devices[device.id], 'B should learn the device from A within 6s');
 
   // `helm remove` on B.
   N.revoke(N.loadNetwork(), device.id);
 
-  // Two full reconcile ticks is more than enough if the gossip is symmetric.
-  const deadline = Date.now() + 35_000;
+  // A removal has to be a decision, not a request: it starts moving the moment
+  // the roster changes, so a few seconds - never the 15-30s of waiting for
+  // ticks, which is what this used to take.
+  const deadline = Date.now() + 8_000;
   let code = await phoneOnA();
   while (code !== 401 && Date.now() < deadline) { await sleep(250); code = await phoneOnA(); }
-  assert.equal(code, 401, 'hub A must honour a revocation made on B within two ticks');
+  assert.equal(code, 401, 'hub A must honour a revocation made on B within 8s');
 });
