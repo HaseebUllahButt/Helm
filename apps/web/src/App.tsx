@@ -1812,7 +1812,8 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   // thing standing between them and what they are looking for.
   const strays = [...rest, ...externalLive]
     .filter((s) => !inProject.has(s.id) && !recentIds.has(s.id) && thisWeek(s)).sort(byRecent);
-  const elsewhere = q ? strays : strays.slice(0, 8);
+  const [allElsewhere, setAllElsewhere] = useState(false);
+  const elsewhere = q || allElsewhere ? strays : strays.slice(0, 8);
 
   // Everything either side of the week, in one flat list rather than a second
   // set of folders: what is in here is, by definition, not what you are
@@ -1925,12 +1926,12 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         <div className="titles">
           <h1>{env.name}</h1>
           <span className="sub">
+            {/* "direct" over two srflx candidates went out to the internet and
+                back; that is worth saying, the ordinary same-wifi case is not. */}
             {env.online
               ? (direct
-                ? (route?.local === 'host' && route?.remote === 'host'
-                  ? 'direct, same network'
-                  : route ? `direct, out and back (${route.local}/${route.remote})` : 'direct connection')
-                : 'via your Helm home')
+                ? (route && !(route.local === 'host' && route.remote === 'host') ? 'direct, over the internet' : 'direct')
+                : 'via home')
               : 'offline'}
             {env.online && ping != null && (
               // The number matters because the two routes differ by two
@@ -1939,8 +1940,6 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
               // between "helm is slow" and "this connection is slow".
               <span className={ping > 250 ? 'quiet slow' : 'quiet'}> · {Math.round(ping)}ms</span>
             )}
-            {env.info.host && env.info.host !== env.name ? ` \u00b7 ${env.info.host}` : ''}
-            {env.kind ? ` \u00b7 ${env.kind}` : ''}
           </span>
         </div>
         {/* The media view only exists on a machine that is a nas: elsewhere
@@ -1986,12 +1985,6 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         <button className="action" disabled={!env.online} onClick={onNewSession}>
           <span className="plus">+</span>New session
         </button>
-
-        {env.online && (
-          <div className="note" style={{ textAlign: 'center', marginTop: -6 }}>
-            <button className="linkish" onClick={onAddProject}>Add a project shortcut</button>
-          </div>
-        )}
 
         {searchable && (
           <div className="filterbar">
@@ -2078,14 +2071,18 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             a CLI run by hand in a scratch directory. Worth keeping, not worth
             a project of its own. */}
         <Fold
-          title="elsewhere on this machine" count={elsewhere.length}
-          note={strays.length > elsewhere.length ? `${elsewhere.length} of ${strays.length}` : undefined}
+          title="elsewhere" count={strays.length}
           openWhen={!!q}
           remember={`${env.id}:~elsewhere`}
         >
           <div className="rows">{elsewhere.map(row)}</div>
+          {strays.length > elsewhere.length && (
+            <button className="linkish more" onClick={() => setAllElsewhere(true)}>
+              show {strays.length - elsewhere.length} more
+            </button>
+          )}
         </Fold>
-        <Fold title="older" count={older.length} note="before this week" openWhen={!!q} remember={`${env.id}:~older`}>
+        <Fold title="older" count={older.length} openWhen={!!q} remember={`${env.id}:~older`}>
           <div className="rows">{older.map(row)}</div>
         </Fold>
         <Fold title="archived" count={filed.length} openWhen={!!q} remember={`${env.id}:~archived`}>
@@ -2124,18 +2121,18 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             that found an archived thread and only an archived thread is a
             search that worked, and "nothing matches" underneath the thing
             that matched is just wrong. */}
-        {!blocked.length && !working.length && !projectFolds.length &&
-          !(q && (filed.length || older.length || elsewhere.length)) && (
+        {!blocked.length && !working.length && !recent.length && !projectFolds.length && !strays.length &&
+          !(q && (filed.length || older.length)) && (
           <div className="empty quiet">
-            {q ? 'nothing matches' : older.length || filed.length || strays.length ? 'nothing from this week' : `nothing running on ${env.name}`}
-            <div className="note" style={{ marginTop: 6 }}>
-              {q
-                ? 'titles, folders and engines, on this machine'
-                : older.length || filed.length || strays.length
-                  ? 'older threads are folded below'
-                  : 'pick a folder, then an agent'}
-            </div>
+            {q ? 'nothing matches' : `nothing running on ${env.name}`}
+            {!q && !older.length && !filed.length && (
+              <div className="note" style={{ marginTop: 6 }}>pick a folder, then an agent</div>
+            )}
           </div>
+        )}
+
+        {env.online && !q && (
+          <button className="linkish addproject" onClick={onAddProject}>+ Add a project shortcut</button>
         )}
 
         {error && <div className="error">{error}</div>}
@@ -2294,7 +2291,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
           <span className="grow">
             <span className="rt">
               <span className="rt-text">{s.title}</span>
-              {adopted && <span className="tag">external</span>}
+              {adopted && !found && <span className="tag">external</span>}
               {s.archived && <span className="tag">archived</span>}
             </span>
             <span className="rm">
@@ -3466,11 +3463,10 @@ function Start({ client, env, cwd, onBack, onStarted }: {
           {accounts?.map((a) => {
             const e = engineOf(a.engine);
             return (
-              <button key={a.key} className={`row tall${a.key === key ? ' active' : ''}`} onClick={() => setKey(a.key)}>
+              <button key={a.key} title={a.aliases.join(', ')} className={`row tall${a.key === key ? ' active' : ''}`} onClick={() => setKey(a.key)}>
                 <EngineMark engine={e.cls} />
                 <span className="grow">
                   <span className="rt">{e.label} <span className="dim">· {a.account}</span>{a.token && <span className="tag key">token</span>}</span>
-                  <span className="rm">{a.aliases.join(', ')}</span>
                 </span>
                 {a.key === key && <span className="check">✓</span>}
               </button>
@@ -3484,20 +3480,18 @@ function Start({ client, env, cwd, onBack, onStarted }: {
           </div>
         )}
 
-        {account && (
-          <>
-            <div className="note start-note">
-              Model, thinking, permissions and speed are all changeable inside
-              the session.
-            </div>
-
-            <button className="primary big" disabled={busy} onClick={start} style={{ marginTop: 22 }}>
-              {busy ? 'starting…' : `Start ${eng?.label}`}
-            </button>
-          </>
-        )}
         {error && <div className="error">{error}</div>}
       </div></div>
+      {/* Pinned, because the choice is already made - the last account you
+          used is selected - and thirteen rows should not push the only
+          button off the screen. */}
+      {account && (
+        <div className="startbar">
+          <button className="primary big" disabled={busy} onClick={start}>
+            {busy ? 'starting…' : `Start ${eng?.label}`}
+          </button>
+        </div>
+      )}
     </>
   );
 }

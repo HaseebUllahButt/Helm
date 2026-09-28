@@ -658,7 +658,7 @@ pre.snippet {
   padding: 12px 15px 5px; min-height: 42px; max-height: 180px; line-height: 1.5; font-size: 16px; color: var(--text);
 }
 .slab textarea:focus { box-shadow: none; outline: none; }
-.slab-foot { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; }
+.slab-foot { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; }
 .slab-foot .spacer { flex: 1; }
 .attach-status { color: var(--mutedfg); font-size: var(--t-micro); white-space: nowrap; }
 .attach-previews { display: flex; gap: 8px; padding: 8px 10px 0; flex-wrap: wrap; }
@@ -923,10 +923,7 @@ pre.snippet {
    no way to forget which one you are in. */
 /* The control row: model, thinking, permissions, speed - one tap each, and
    it scrolls sideways rather than wrapping and pushing the composer up. */
-.slab-controls {
-  display: flex; padding: 8px 10px 0; min-width: 0;
-  border-top: 1px solid transparent;
-}
+.slab-controls { display: flex; flex: 1; min-width: 0; }
 .chips {
   display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;
   overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
@@ -1328,3 +1325,22 @@ button.sheet-editlink:hover { color: var(--text); }
 @media (prefers-reduced-motion: reduce) {
   .toast, .terminal-copied { animation: none; }
 }
+
+/* ------------------------------------------------------------ list tails */
+
+/* Pinned under the agent list: the choice is made before you scroll. */
+.startbar {
+  flex: none; padding: 10px 14px max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line); background: var(--bg);
+}
+.startbar button.primary.big {
+  display: block; width: 100%; max-width: var(--measure); min-width: 0;
+  margin: 0 auto; align-self: auto;
+}
+
+/* Quiet tails: "show N more" and "add a project" are the rare taps, so they
+   sit at the end of the list in the dimmest text that still reads as a link. */
+.linkish.more, .linkish.addproject {
+  align-self: flex-start; padding: 8px 2px; color: var(--mutedfg); font-size: var(--t-meta);
+}
+.linkish.more:hover, .linkish.addproject:hover { color: var(--text); }

@@ -329,7 +329,6 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
               if (e.key === 'Enter' && !e.shiftKey && !touch) { e.preventDefault(); submit(); }
             }}
           />
-          {foot && <div className="slab-controls">{foot}</div>}
           <div className="slab-foot">
             {onAttach && canAttach && (
               <>
@@ -380,7 +379,10 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             )}
             {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>⌨ keys</button>}
             {preparing && <span className="attach-status">compressing…</span>}
-            <span className="spacer" />
+            {/* The pickers share the row the buttons are on: a second row of
+                chips under the box cost a line of screen on every visit to
+                say what never changes between messages. */}
+            {foot ? <div className="slab-controls">{foot}</div> : <span className="spacer" />}
             {working && onStop && (
               <button className="stop" onClick={onStop} title="stop the agent">
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>
