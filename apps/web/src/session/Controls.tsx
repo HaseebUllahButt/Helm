@@ -55,6 +55,7 @@ export function Controls({ options, session, busy, onPick }: {
         more={group.more}
         current={group.current}
         busy={busy}
+        favKey={group.kind === 'model' ? session.engine : undefined}
         onClose={() => setOpen(null)}
         onPick={(id) => { setOpen(null); onPick(group.kind, id); }}
       />
@@ -179,18 +180,32 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
  * for everyday use, and the rest of what the CLI offers sits behind one row -
  * or one search - rather than being hidden entirely.
  */
-function ChoiceSheet({ title, note, choices, more = [], current, busy, onPick, onClose }: {
+const favsOf = (key: string): string[] => { try { return JSON.parse(localStorage.getItem(`helm.favmodels:${key}`) || '[]'); } catch { return []; } };
+
+function ChoiceSheet({ title, note, choices, more = [], current, busy, favKey, onPick, onClose }: {
   title: string; note?: string; choices: Choice[]; more?: Choice[]; current: string;
   busy?: boolean; onPick: (id: string) => void; onClose: () => void;
+  /** Models can be starred, per engine: the ones you use sit at the top. */
+  favKey?: string;
 }) {
+  const [favs, setFavs] = useState<string[]>(() => (favKey ? favsOf(favKey) : []));
+  const toggleFav = (id: string) => {
+    if (!favKey) return;
+    const next = favs.includes(id) ? favs.filter((f) => f !== id) : [...favs, id];
+    setFavs(next);
+    try { localStorage.setItem(`helm.favmodels:${favKey}`, JSON.stringify(next)); } catch { /* full */ }
+  };
   const [arming, setArming] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
   const match = (c: Choice) =>
     !q || c.label.toLowerCase().includes(q) || c.id.toLowerCase().includes(q);
-  const main = choices.filter(match);
-  const rest = more.filter(match);
+  // A starred model is lifted out of whichever list it was in, so it is one
+  // tap away even when the account's long tail is folded.
+  const starred = favKey ? [...choices, ...more].filter((c) => favs.includes(c.id) && match(c)) : [];
+  const main = choices.filter(match).filter((c) => !starred.includes(c));
+  const rest = more.filter(match).filter((c) => !starred.includes(c));
   const choose = (c: Choice) => {
     if (c.id === current) return onClose();
     if (c.danger && arming !== c.id) return setArming(c.id);
@@ -199,7 +214,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, onPick, o
   const row = (c: Choice) => {
     const on = c.id === current;
     const armed = arming === c.id;
-    return (
+    const button = (
       <button
         key={c.id || 'default'} role="option" aria-selected={on} disabled={busy}
         className={`moderow${on ? ' on' : ''}${c.danger ? ' danger' : ''}${armed ? ' armed' : ''}`}
@@ -211,6 +226,18 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, onPick, o
         </span>
         {on && <span className="check">✓</span>}
       </button>
+    );
+    if (!favKey || !c.id) return button;
+    const fav = favs.includes(c.id);
+    return (
+      <div className="rowfav" key={c.id}>
+        {button}
+        <button
+          className={`star${fav ? ' on' : ''}`} aria-pressed={fav}
+          aria-label={fav ? `remove ${c.label} from favourites` : `add ${c.label} to favourites`}
+          onClick={() => toggleFav(c.id)}
+        >{fav ? '★' : '☆'}</button>
+      </div>
     );
   };
   return (
@@ -227,6 +254,9 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, onPick, o
           onChange={(e) => setQuery(e.target.value)}
         />
       )}
+      {starred.length > 0 && <div className="modesheet-label">favourites</div>}
+      {starred.map(row)}
+      {starred.length > 0 && main.length > 0 && <div className="modesheet-label">all</div>}
       {main.map(row)}
       {rest.length > 0 && (q || expanded ? rest.map(row) : (
         <button className="moderow more" onClick={() => setExpanded(true)}>

@@ -1717,3 +1717,13 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
   position: absolute; top: max(14px, env(safe-area-inset-top)); right: 14px; width: 40px; height: 40px; border-radius: 50%;
   background: rgb(255 255 255 / 14%); color: #fff; font-size: 22px; line-height: 1;
 }
+
+
+/* ------------------------------------------------------------------ favourites */
+
+.rowfav { display: flex; align-items: stretch; }
+.rowfav .moderow { flex: 1; min-width: 0; }
+.star { flex: none; width: 44px; font-size: 17px; color: var(--icon); border-radius: var(--radius-sm); }
+.star.on { color: var(--amber); }
+.star:hover { background: var(--accent); }
+.modesheet-label { padding: 8px 12px 2px; font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.055em; text-transform: uppercase; color: var(--mutedfg); }
