@@ -1652,3 +1652,13 @@ button.sheet-editlink:hover { color: var(--text); }
 .viewedbox.on { background: var(--pill-bg); border-color: var(--pill-bg); }
 .filediff { margin: 0 0 8px; }
 .filediff .diff { max-height: 60vh; overflow: auto; }
+
+
+/* ---------------------------------------------------------------- start options */
+
+.startopts { margin-top: 6px; }
+.startopts .segmented { margin-bottom: 10px; }
+.check-row { display: flex; gap: 12px; align-items: flex-start; padding: 6px 2px; font-size: var(--t-body); cursor: pointer; }
+.check-row input { width: 20px; height: 20px; margin-top: 2px; padding: 0; flex: none; accent-color: var(--primary); }
+.check-row small { display: block; color: var(--mutedfg); font-size: var(--t-meta); line-height: 1.45; margin-top: 2px; }
+.taskbox { resize: none; min-height: 84px; line-height: 1.5; }
