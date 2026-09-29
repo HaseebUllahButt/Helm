@@ -1662,3 +1662,31 @@ button.sheet-editlink:hover { color: var(--text); }
 .check-row input { width: 20px; height: 20px; margin-top: 2px; padding: 0; flex: none; accent-color: var(--primary); }
 .check-row small { display: block; color: var(--mutedfg); font-size: var(--t-meta); line-height: 1.45; margin-top: 2px; }
 .taskbox { resize: none; min-height: 84px; line-height: 1.5; }
+
+
+/* ------------------------------------------------------------------ palette */
+
+.palette-back { align-items: flex-start; padding-top: 12vh; }
+.palette-box {
+  width: min(620px, 100%); display: flex; flex-direction: column; max-height: 70vh; overflow: hidden;
+  background: var(--raised); border: 1px solid var(--line-2); border-radius: 16px;
+  box-shadow: 0 30px 90px -24px rgb(0 0 0 / 70%);
+}
+.palette-input {
+  border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent;
+  padding: 16px 18px; font-size: 17px;
+}
+.palette-input:focus { box-shadow: none; border-bottom-color: var(--line-2); }
+.palette-list { overflow-y: auto; padding: 6px; }
+.palette-group { padding: 10px 12px 4px; font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.055em; text-transform: uppercase; color: var(--mutedfg); }
+.palette-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 12px; border-radius: 10px; text-align: left; }
+.palette-row.on { background: var(--hover); }
+.palette-row .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.palette-title { font-size: var(--t-body); font-weight: 550; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.palette-sub { font-size: var(--t-meta); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pglyph { width: 26px; height: 26px; border-radius: 7px; flex: none; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: var(--icon); font-size: 13px; }
+.palette-foot { display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--line); font-size: var(--t-micro); color: var(--mutedfg); }
+
+.shortcuts { display: grid; gap: 8px; }
+.shortcuts div { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: var(--t-body); color: var(--text-dim); }
+kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; background: var(--accent); border: 1px solid var(--line-2); color: var(--text); white-space: nowrap; }

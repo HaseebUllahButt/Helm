@@ -4,6 +4,8 @@ import { Confirm, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
 import { UpdatesView } from './Updates';
 import { AppearanceSettings } from './AppearanceSettings';
+import { Palette, ShortcutsHelp, type PaletteItem } from './Palette';
+import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
@@ -373,6 +375,8 @@ function Shell({ client, conn, onSignOut }: {
   /** Search every machine's threads from the sidebar, not only the open one. */
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const [palette, setPalette] = useState(false);
+  const [help, setHelp] = useState(false);
   /** Every machine's last-said session list, for the ones that are asleep. */
   const [snap, setSnap] = useState<{ machines: Record<string, { name: string; at: number; sessions: Session[] }> } | null>(null);
   /** The one in-app yes/no currently up: unpairing this device. */
@@ -585,22 +589,69 @@ function Shell({ client, conn, onSignOut }: {
     if (wide && !selected && envs.length) setSelected(envs[0].id);
   }, [wide, selected, envs]);
 
-  // Ctrl/Cmd+K, or "/" when nothing is being typed into, goes to the search box
-  // on a keyboard. A phone has no such key and never runs this.
+  // Keys, on a keyboard. Ctrl/Cmd+K opens the palette; "/" goes to the search
+  // box; Ctrl/Cmd+[ and ] walk back and forward; "?" lists them. None of them
+  // fire while you are typing into something, and a phone never sends them.
   useEffect(() => {
-    if (!wide) return;
     const onKey = (e: KeyboardEvent) => {
-      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement)?.tagName ?? '')
-        || (e.target as HTMLElement)?.isContentEditable;
-      const combo = (e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey);
-      if (!combo && !(e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey)) return;
-      e.preventDefault();
-      collapseSidebar(false);
-      requestAnimationFrame(() => { searchRef.current?.focus(); searchRef.current?.select(); });
+      const el = e.target as HTMLElement | null;
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName ?? '') || !!el?.isContentEditable;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); setPalette((v) => !v); return; }
+      if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
+      if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
+      if (typing || mod || e.altKey) return;
+      if (e.key === '?') { e.preventDefault(); setHelp(true); return; }
+      if (e.key === '/' && wide) {
+        e.preventDefault();
+        collapseSidebar(false);
+        requestAnimationFrame(() => { searchRef.current?.focus(); searchRef.current?.select(); });
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [wide]);
+
+  /** Everything the palette can find, built when it opens. */
+  const paletteItems = (): PaletteItem[] => {
+    const items: PaletteItem[] = [];
+    for (const e of envs) {
+      items.push({
+        id: `m:${e.id}`, group: 'machine', title: e.name,
+        sub: `${e.kind ?? 'machine'} · ${e.online ? 'online' : 'offline'}`, keywords: 'machine computer',
+        run: () => openEnv(e.id),
+      });
+      for (const s of agentsOf(e.id)) {
+        items.push({
+          id: `t:${e.id}:${s.id}`, group: 'thread', title: s.title, engine: s.engine, at: s.updatedAt,
+          sub: `${dirName(s.cwd)} · ${e.name}${s.status === 'blocked' ? ' · needs you' : s.status === 'working' ? ' · working' : ''}`,
+          keywords: s.cwd,
+          run: () => openSession(e.id, s),
+        });
+      }
+      if (e.online) {
+        items.push({
+          id: `new:${e.id}`, group: 'action', title: `New session on ${e.name}`, keywords: 'start create agent',
+          run: () => navigate([{ kind: 'env' }, { kind: 'new' }], e.id),
+        });
+      }
+    }
+    const go = (id: string, title: string, keywords: string, stack: MainView[]) =>
+      items.push({ id, group: 'action', title, keywords, run: () => navigate(stack) });
+    go('a:settings', 'Settings', 'preferences', [{ kind: 'app-settings' }]);
+    go('a:updates', 'Updates', 'version upgrade machines', [{ kind: 'app-settings' }, { kind: 'updates' }]);
+    go('a:devices', 'Devices & pairing', 'phone key link', [{ kind: 'app-settings' }, { kind: 'devices' }]);
+    go('a:cost', 'What it has cost', 'usage tokens spend', [{ kind: 'usage' }]);
+    go('a:defaults', 'CLI defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
+    for (const t of ['light', 'dark', 'system'] as Theme[]) {
+      items.push({
+        id: `theme:${t}`, group: 'action', title: `Theme: ${t[0].toUpperCase()}${t.slice(1)}`, keywords: 'appearance colour',
+        run: () => saveAppearance({ ...loadAppearance(), theme: t }),
+      });
+    }
+    items.push({ id: 'a:keys', group: 'action', title: 'Keyboard shortcuts', keywords: 'keys help', run: () => setHelp(true) });
+    return items;
+  };
 
   const env = envs.find((e) => e.id === selected) ?? null;
   const view = stack[stack.length - 1];
@@ -1151,6 +1202,9 @@ function Shell({ client, conn, onSignOut }: {
           <span className="chev">›</span>
         </button>
       )}
+
+      {palette && <Palette items={paletteItems()} onClose={() => setPalette(false)} engineOf={engineOf} />}
+      {help && <ShortcutsHelp onClose={() => setHelp(false)} />}
 
       {unpairing && (
         <Confirm
