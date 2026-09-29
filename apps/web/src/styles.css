@@ -1690,3 +1690,30 @@ button.sheet-editlink:hover { color: var(--text); }
 .shortcuts { display: grid; gap: 8px; }
 .shortcuts div { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: var(--t-body); color: var(--text-dim); }
 kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; background: var(--accent); border: 1px solid var(--line-2); color: var(--text); white-space: nowrap; }
+
+
+/* ------------------------------------------------------------- reading a thread */
+
+.turnnav {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%); z-index: 12;
+  display: flex; flex-direction: column; border-radius: 999px; overflow: hidden;
+  background: color-mix(in srgb, var(--raised) 88%, transparent); backdrop-filter: blur(10px);
+  border: 1px solid var(--line-2); opacity: 0.55; transition: opacity 0.15s var(--ease);
+}
+.turnnav:hover, .turnnav:focus-within, .turnnav:active { opacity: 1; }
+.turnnav button { width: 30px; height: 32px; font-size: 10px; color: var(--text-dim); }
+.turnnav button:hover { background: var(--hover); color: var(--text); }
+.turnnav button:active { background: var(--hover); }
+
+.turn-image { cursor: zoom-in; }
+.lightbox {
+  position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center;
+  background: rgb(0 0 0 / 88%); animation: screen-in 0.14s var(--ease);
+}
+.lightbox-pan { max-width: 100%; max-height: 100%; overflow: auto; display: flex; }
+.lightbox-pan img { margin: auto; max-width: 100vw; max-height: 100vh; object-fit: contain; cursor: zoom-in; }
+.lightbox-pan.zoomed img { max-width: none; max-height: none; width: 220vw; cursor: zoom-out; }
+.lightbox-x {
+  position: absolute; top: max(14px, env(safe-area-inset-top)); right: 14px; width: 40px; height: 40px; border-radius: 50%;
+  background: rgb(255 255 255 / 14%); color: #fff; font-size: 22px; line-height: 1;
+}

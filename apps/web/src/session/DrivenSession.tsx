@@ -9,6 +9,7 @@ import { PermissionSheet } from './PermissionSheet';
 import { Controls, type Kind } from './Controls';
 import { Transcript, splitNote } from './Transcript';
 import { ChangesPanel, useGitStatus } from './Changes';
+import { expandPastes } from './pasteStore';
 import { Confirm, TextPrompt } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
@@ -166,7 +167,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     catch (e: any) { setError(e.message); setDraft(body); setAttachments(atts); }
   };
   const send = async () => {
-    const body = draft.trim();
+    const body = expandPastes(draft.trim());
     if (preparingImages) return;
     if (!body && !attachments.length) return;
     await sendText(body, attachments);

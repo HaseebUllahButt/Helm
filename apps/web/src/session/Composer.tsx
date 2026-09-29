@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { IMAGE_ACCEPT, looksLikeImage } from './image';
 import { useDictation } from './voice';
 import type { Turn } from './types';
+import { isBigPaste, stashPaste } from './pasteStore';
 
 const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -303,7 +304,19 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             enterKeyHint={touch ? 'enter' : 'send'}
             placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
             onChange={(e) => { historyAt.current = null; setDraft(e.target.value); }}
-            onPaste={(e) => { if (take(e.clipboardData?.files)) e.preventDefault(); }}
+            onPaste={(e) => {
+              if (take(e.clipboardData?.files)) { e.preventDefault(); return; }
+              // A wall of text goes in as a token, not into the box.
+              const text = e.clipboardData?.getData('text/plain') ?? '';
+              if (text && isBigPaste(text)) {
+                e.preventDefault();
+                const el = e.currentTarget;
+                const from = el.selectionStart, to = el.selectionEnd;
+                const token = stashPaste(text);
+                setDraft(draft.slice(0, from) + token + draft.slice(to));
+                requestAnimationFrame(() => { const at = from + token.length; el.focus(); el.setSelectionRange(at, at); });
+              }
+            }}
             onKeyDown={(e) => {
               if (open) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setPick((p) => (p + 1) % matches.length); return; }

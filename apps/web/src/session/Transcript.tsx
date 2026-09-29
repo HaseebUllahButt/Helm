@@ -152,6 +152,31 @@ function stepsSummary(items: Item[]): string {
   }).join(' · ');
 }
 
+/** "12s" from the first call to the last, when the timestamps are there. */
+function spanOf(items: Item[]): string {
+  const start = Math.min(...items.map((i) => i.startedAt).filter(Boolean));
+  const end = Math.max(...items.map((i) => i.doneAt ?? i.startedAt).filter(Boolean));
+  return Number.isFinite(start) && end - start >= 2000 ? seconds(end - start) : '';
+}
+
+/** A picture, full screen: tap to zoom in, tap again to zoom out, scroll to pan. */
+function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  const [big, setBig] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="lightbox" onClick={onClose} role="dialog" aria-modal="true" aria-label={alt || 'image'}>
+      <div className={`lightbox-pan${big ? ' zoomed' : ''}`}>
+        <img src={src} alt={alt} onClick={(e) => { e.stopPropagation(); setBig((v) => !v); }} />
+      </div>
+      <button className="lightbox-x" onClick={onClose} aria-label="close">×</button>
+    </div>
+  );
+}
+
 function ToolRun({ items, tools, byParent }: { items: Item[]; tools: Item[]; byParent: Map<string, Item[]> }) {
   const failed = tools.filter((i) => i.status === 'error').length;
   return (
@@ -159,6 +184,7 @@ function ToolRun({ items, tools, byParent }: { items: Item[]; tools: Item[]; byP
       <summary>
         <span className="aicon">{toolGlyph(tools[0].name)}</span>
         <span className="alabel">{stepsSummary(tools)}{failed ? ` · ${failed} failed` : ''}</span>
+        {spanOf(items) && <span className="ameta">{spanOf(items)}</span>}
         <span className="achev">›</span>
       </summary>
       <div className="steps-body">{items.map((it) => <ItemView key={it.id} item={it} byParent={byParent} />)}</div>
@@ -489,6 +515,21 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     else if (h > prev.h) setUnread(true);
   });
 
+  /** Jump to the previous or next thing you asked - the landmarks of a long thread. */
+  const step = (dir: -1 | 1) => {
+    const el = box.current;
+    if (!el) return;
+    const base = el.getBoundingClientRect().top - el.scrollTop;
+    const ys = [...el.querySelectorAll<HTMLElement>('.turn.user')].map((n) => n.getBoundingClientRect().top - base);
+    const here = el.scrollTop;
+    const target = dir < 0 ? [...ys].reverse().find((y) => y < here - 12) : ys.find((y) => y > here + 12);
+    if (target == null) { el.scrollTo({ top: dir < 0 ? 0 : el.scrollHeight, behavior: 'smooth' }); return; }
+    stuck.current = false;
+    el.scrollTo({ top: Math.max(0, target - 10), behavior: 'smooth' });
+  };
+  const prompts = turns.filter((t) => t.text).length;
+  const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null);
+
   const jump = () => {
     const el = box.current;
     if (el) { el.scrollTop = el.scrollHeight; stuck.current = true; setUnread(false); }
@@ -530,7 +571,10 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   return (
     <div className="chat-wrap">
       <div className="chat" ref={box} onScroll={onScroll}>
-        <div className="timeline">
+        <div className="timeline" onClick={(e) => {
+          const img = (e.target as HTMLElement).closest?.('img.turn-image') as HTMLImageElement | null;
+          if (img) setZoom({ src: img.src, alt: img.alt });
+        }}>
           {/* A chat opens on its last screenful, because that is what you came
               for; the rest of it is a tap away rather than a wait. */}
           {loaded && earlier && (
@@ -544,6 +588,13 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
         </div>
       </div>
       {unread && <button className="jump" onClick={jump}>↓ new</button>}
+      {prompts >= 3 && (
+        <div className="turnnav" role="group" aria-label="jump between your messages">
+          <button onClick={() => step(-1)} aria-label="previous message of yours" title="previous message">▲</button>
+          <button onClick={() => step(1)} aria-label="next message of yours" title="next message">▼</button>
+        </div>
+      )}
+      {zoom && <Lightbox src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}
     </div>
   );
 }
