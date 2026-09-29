@@ -15,7 +15,11 @@ import { CONFIG_FILE } from './paths.js';
  * daemon consults.
  */
 export function accountKey(profile) {
-  const home = Object.values(profile.env ?? {}).find((v) => /^[~/]/.test(v)) ?? '';
+  // A wrapper script (`agy-profile 1`) picks its login itself; the command is
+  // all that tells one of its accounts from another.
+  const home = profile.wraps
+    ? [profile.cmd, ...(profile.args ?? [])].join(' ')
+    : Object.values(profile.env ?? {}).find((v) => /^[~/]/.test(v)) ?? '';
   const creds = [...(profile.envFrom ?? [])].sort().join(',');
   return `${profile.engine}|${home}|${creds}`;
 }

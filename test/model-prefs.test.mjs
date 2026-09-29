@@ -54,6 +54,14 @@ test('the account key is the login, not the alias', async () => {
   assert.equal(accountKey(dv), 'devin|~/.config|DEVIN_TOKEN', 'a different credential is a different account');
 });
 
+test('each wrapper-script login is its own account', async () => {
+  const { accountKey } = await import('../packages/connect/src/settings.js');
+  const wrapper = (id, n) => ({ id, engine: 'agy', cmd: '~/.local/bin/agy-profile', args: [n], env: {}, wraps: 'agy' });
+  assert.equal(accountKey(wrapper('a1', '1')), 'agy|~/.local/bin/agy-profile 1|');
+  assert.notEqual(accountKey(wrapper('a1', '1')), accountKey(wrapper('a2', '2')));
+  assert.equal(accountKey({ id: 'agy', engine: 'agy', cmd: 'agy', args: [], env: {} }), 'agy||', 'plain installs keep their key');
+});
+
 test('prefs save, read back, and clear', async () => {
   const { modelPrefs, saveModelPrefs } = await import('../packages/connect/src/settings.js');
   const { getProfiles } = await import('../packages/connect/src/profiles.js');

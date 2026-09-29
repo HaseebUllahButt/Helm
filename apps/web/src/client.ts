@@ -53,6 +53,10 @@ export interface Profile {
   env?: Record<string, string>;
   envFrom?: string[];
   source: string;
+  /** Set when the account is launched through a wrapper script that picks its login. */
+  wraps?: string;
+  /** authenticated / unknown - signed-out profiles never reach the app. */
+  auth?: string;
   /** Account key every alias of the same login shares, from the daemon. */
   account?: string;
   prefs?: ModelPrefs | null;
