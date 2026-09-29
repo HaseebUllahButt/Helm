@@ -372,8 +372,6 @@ function Shell({ client, conn, onSignOut }: {
   const [snap, setSnap] = useState<{ machines: Record<string, { name: string; at: number; sessions: Session[] }> } | null>(null);
   /** The one in-app yes/no currently up: unpairing this device. */
   const [unpairing, setUnpairing] = useState(false);
-  /** Choosing which machine a new session starts on, when there is a choice. */
-  const [picking, setPicking] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem('helm.sidebar-collapsed') === '1'; } catch { return false; }
   });
@@ -793,18 +791,12 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const blocked = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
-  // Home is one list across every machine: what needs you, what is running,
-  // and what you were last doing. A brain has its own place under "brains".
+  // Home is one list across every machine: what needs you, and what is
+  // running. A brain has its own place under "brains".
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
   const runningNow = everyone.filter(({ s }) => s.status === 'working').sort(byNewest);
-  const lately = everyone.filter(({ s }) => s.status !== 'blocked' && s.status !== 'working').sort(byNewest).slice(0, 6);
-  const onlineEnvs = envs.filter((e) => e.online);
-  const newOn = (envId: string) => { setPicking(false); navigate([{ kind: 'env' }, { kind: 'new' }], envId); };
-  const startNew = () => {
-    if (onlineEnvs.length === 1) newOn(onlineEnvs[0].id);
-    else if (onlineEnvs.length > 1) setPicking(true);
-  };
+
   // On a phone the two panes are one screen at a time: the main pane is shown
   // once a machine is selected, and every view - the brain included - belongs
   // to one.
@@ -929,21 +921,6 @@ function Shell({ client, conn, onSignOut }: {
               </>
             )}
 
-            {lately.length > 0 && (
-              <>
-                <div className="section">recent</div>
-                <div className="rows plain">
-                  {lately.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)} />
-                  ))}
-                </div>
-              </>
-            )}
-
-            {!blocked.length && !runningNow.length && !lately.length && onlineEnvs.length > 0 && (
-              <div className="empty quiet">nothing running - start something below</div>
-            )}
-
             <Fold title="machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
               <div className="rows plain">
                 {envs.map((e) => {
@@ -1015,9 +992,6 @@ function Shell({ client, conn, onSignOut }: {
             <span>{conn.online ? 'socket live' : conn.error || 'socket down'}</span>
           </div>
         </div>
-        {!query.trim() && onlineEnvs.length > 0 && (
-          <button className="fab" onClick={startNew}><span>+</span>New session</button>
-        )}
       </aside>
 
       <section className={`main${showMain ? ' showing' : ''}`}>
@@ -1149,26 +1123,6 @@ function Shell({ client, conn, onSignOut }: {
           </span>
           <span className="chev">›</span>
         </button>
-      )}
-
-      {picking && (
-        <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) setPicking(false); }}>
-          <div className="modal" role="dialog" aria-modal="true" aria-label="Start on which machine?">
-            <div className="modal-title">Start on…</div>
-            <div className="rows plain">
-              {onlineEnvs.map((e) => (
-                <button key={e.id} className="row tall" onClick={() => newOn(e.id)}>
-                  <span className="mdot on" />
-                  <span className="grow">
-                    <span className="rt"><span className="rt-text">{e.name}</span></span>
-                    <span className="rm">{e.kind ?? 'machine'}</span>
-                  </span>
-                  <span className="chev">›</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
       )}
 
       {unpairing && (

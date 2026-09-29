@@ -1364,7 +1364,6 @@ button.sheet-editlink:hover { color: var(--text); }
    =========================================================================== */
 
 .sidebar { position: relative; }
-.side-pad { padding-bottom: 92px; }
 
 /* The lists: no fill per row, a hairline between them. */
 .rows.plain { gap: 0; }
@@ -1413,18 +1412,6 @@ button.sheet-editlink:hover { color: var(--text); }
   background: var(--amber); color: #1a1305; font-size: var(--t-body); font-weight: 650;
 }
 .need-go b { font-weight: 500; font-size: 18px; }
-
-/* New session: a light pill, because it is the one thing you came to press. */
-.fab {
-  position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); z-index: 15;
-  display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 22px; border-radius: 24px;
-  width: max-content; white-space: nowrap;
-  background: var(--text); color: #0b0b0d; font-size: var(--t-body); font-weight: 650;
-  box-shadow: 0 12px 30px -8px rgb(0 0 0 / 80%);
-  transition: transform 0.12s var(--ease);
-}
-.fab span { font-size: 20px; font-weight: 400; line-height: 1; margin-top: -1px; }
-.fab:active { transform: translateX(-50%) scale(0.97); }
 
 /* A run of finished tool calls, folded into what it did. */
 .actgroup.steps > summary .alabel { color: var(--mutedfg); }
