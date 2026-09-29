@@ -363,7 +363,7 @@ function clock(ts?: number) {
   return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
 }
 
-function TurnView({ turn, items, head = true, tail = true, working, blocked, onResend, onWithdraw }: {
+function TurnView({ turn, items, head = true, tail = true, working, blocked, onResend, onWithdraw, onBranch }: {
   turn: Turn;
   /**
    * A slice of the turn's items, when it renders around a helm answer hosted
@@ -374,6 +374,8 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
   head?: boolean;
   tail?: boolean;
   working: boolean; blocked: boolean; onResend?: (turn: Turn) => void; onWithdraw?: (turn: Turn) => void;
+  /** Start a new thread from the conversation as it was before this message. */
+  onBranch?: (turn: Turn) => void;
 }) {
   const said = splitNote(turn.text);
   // A prompt that is itself a command means the turn's text is that
@@ -420,6 +422,9 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
                 the composer, the way a CLI lets you pull a queued line up. */}
             {queued && onWithdraw && (
               <button className="withdraw" onClick={() => onWithdraw(turn)}>withdraw</button>
+            )}
+            {onBranch && !queued && !turn.id.startsWith('local-') && (
+              <button className="branch" onClick={() => onBranch(turn)} title="a new thread from before this message" aria-label="branch from before this message">⑂ branch</button>
             )}
             {clock(turn.at)}
           </span>
@@ -475,7 +480,7 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
   );
 }
 
-export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw }: {
+export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch }: {
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
   /** The machine holds more of this conversation than is on screen. */
   earlier?: boolean; loadingEarlier?: boolean; onEarlier?: () => void;
@@ -483,6 +488,8 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   onResend?: (turn: Turn) => void;
   /** Offered while a message is still queued: take it back into the draft. */
   onWithdraw?: (turn: Turn) => void;
+  /** Offered on every message but the first: branch the conversation from before it. */
+  onBranch?: (turn: Turn) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
@@ -551,7 +558,8 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   const view = (t: Turn, items?: Item[], head = true, tail = true, key: string = t.id) => (
     <TurnView key={key} turn={t} items={items} head={head} tail={tail}
       working={working && t === openTurn} blocked={status === 'blocked'}
-      onResend={onResend} onWithdraw={onWithdraw} />
+      onResend={onResend} onWithdraw={onWithdraw}
+      onBranch={onBranch && turns.indexOf(t) > 0 ? onBranch : undefined} />
   );
   const flow: ReactNode[] = [];
   for (const t of turns) {

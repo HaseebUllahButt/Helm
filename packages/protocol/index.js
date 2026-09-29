@@ -134,6 +134,7 @@ export const M = {
   SESSION_DISCARD_EMPTY: 'session.discard-empty', // { id } -> { discarded }  safe navigation cleanup
   SESSION_TITLE:   'session.title',  // { id, title } -> { session }  the name the owner typed
   SESSION_ARCHIVE: 'session.archive', // { id, archived? } -> { session }
+  SESSION_FORK: 'session.fork',       // { id, turnId } -> { session }  a new thread, as this one was before that message
   DIGEST_LIST: 'digest.list',      // { limit? } -> { digests[] }
   SESSION_KEYS: 'session.keys',    // { id, keys[] }  e.g. ["Enter"], ["C-c"]
   SESSION_MESSAGES: 'session.messages', // { id, limit? } -> { messages[], source }

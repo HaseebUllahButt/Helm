@@ -1221,6 +1221,7 @@ function Shell({ client, conn, onSignOut }: {
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
+            onOpenSession={(s) => { loadSessions(env.id); navigate([{ kind: 'env' }, { kind: 'session', session: s }], env.id); }}
             onClosed={() => { if (view.session.brain) dropBrain(env.id); loadSessions(env.id); back(); }}
             onArchived={() => { loadSessions(env.id); back(); }}
             onSession={onSessionChanged(env.id)}

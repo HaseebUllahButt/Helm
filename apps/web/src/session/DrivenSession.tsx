@@ -30,7 +30,7 @@ const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split(
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
-export function DrivenSession({ client, env, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings }: {
+export function DrivenSession({ client, env, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession }: {
   client: Client; env: Environment; session: Session;
   /** The socket's own health, so a dropped connection shows where it matters. */
   conn?: { online: boolean; reachable: boolean };
@@ -39,6 +39,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   onTranscribe?: (audio: string, mime: string) => Promise<string>;
   /** Only on the brain: the way to what it is made of. */
   onSettings?: () => void;
+  /** Go to another thread - the one a branch just made. */
+  onOpenSession?: (s: Session) => void;
 }) {
   const { log, error: logError, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
   // The draft outlives the view: leaving to answer another thread and coming
@@ -54,6 +56,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [showChanges, setShowChanges] = useState(false);
+  /** The message a branch was asked for from, while the confirmation is up. */
+  const [branching, setBranching] = useState<Turn | null>(null);
   useDismiss(menu !== null, useCallback(() => setMenu(null), []));
   const [options, setOptions] = useState<ModelList | null>(null);
   const [commands, setCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
@@ -440,6 +444,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         turns={transcriptTurns} status={status} loaded={log.loaded}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
         onResend={resend} onWithdraw={withdraw}
+        onBranch={session.engine === 'claude' && onOpenSession ? setBranching : undefined}
         empty={session.alive === false ? 'This conversation resumes with your next message.' : undefined}
       />
 
@@ -467,6 +472,23 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>
+
+      {branching && (
+        <Confirm
+          title="Branch from here?"
+          body="A new thread that starts as this conversation was before that message, so you can ask it differently. This one stays as it is, and so do your files - the branch sees them as they are now."
+          confirmLabel="Branch" busy={busy}
+          onCancel={() => setBranching(null)}
+          onConfirm={async () => {
+            const turn = branching;
+            setBranching(null);
+            await call(async () => {
+              const r = await client.rpc<{ session: Session }>(env.id, 'session.fork', { id: session.id, turnId: turn.id }, 70_000);
+              onOpenSession?.(r.session);
+            });
+          }}
+        />
+      )}
 
       {showChanges && git.status?.repo && (
         <ChangesPanel

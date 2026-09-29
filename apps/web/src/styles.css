@@ -1745,3 +1745,6 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .snooze-custom { display: inline-flex; gap: 6px; align-items: center; }
 .snooze-custom input { width: auto; padding: 4px 8px; font-size: var(--t-meta); border-radius: 15px; height: 30px; }
 .snooze-opts .snooze-x { margin-left: auto; width: 30px; padding: 0; }
+
+.bubble-meta .branch { font-size: var(--t-micro); color: var(--mutedfg); padding: 0 6px 0 0; border-radius: 6px; }
+.bubble-meta .branch:hover { color: var(--text); }

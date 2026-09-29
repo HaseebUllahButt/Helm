@@ -255,3 +255,39 @@ test('deltas to one item are coalesced into fewer events', async () => {
   assert.equal(JSON.parse(parts.map((p) => p.text).join('')).command, 'echo helm-test');
   await driver.kill();
 });
+
+// ------------------------------------------------------------------ branching
+
+const A = '11111111-1111-4111-8111-111111111111';
+const B = '22222222-2222-4222-8222-222222222222';
+
+test('a branch starts as a fork of the parent, cut at a message, into its own id', () => {
+  const d = new ClaudeDriver({ cmd: 'claude', env: {}, cwd: '/x', mode: 'default', forkFrom: { sessionId: A, at: B } });
+  const a = d.args;
+  assert.ok(a.includes(`--resume=${A}`));
+  assert.ok(a.includes('--fork-session'));
+  assert.ok(a.includes(`--resume-session-at=${B}`));
+  const own = a.find((x) => x.startsWith('--session-id='));
+  assert.match(own, /^--session-id=[0-9a-f-]{36}$/);
+  assert.notEqual(own, `--session-id=${A}`, 'the branch gets an id of its own');
+  assert.ok(!a.some((x) => x === `--resume=${d.engineSessionId}`), 'it does not resume itself');
+});
+
+test('a fork with an id that is not a uuid is dropped, never turned into an argument', () => {
+  for (const bad of [{ sessionId: 'x; rm -rf ~', at: B }, { sessionId: A, at: '--dangerous' }, { sessionId: A }, null, {}]) {
+    const d = new ClaudeDriver({ cmd: 'claude', env: {}, cwd: '/x', mode: 'default', forkFrom: bad });
+    assert.ok(!d.args.includes('--fork-session'), JSON.stringify(bad));
+    assert.ok(!d.args.some((x) => x.includes('rm -rf') || x.includes('--dangerous')));
+  }
+});
+
+test('a finished turn says where a branch could be cut, and the branch stands alone after it', async () => {
+  const { driver, log } = make('plain', { forkFrom: { sessionId: A, at: B } });
+  assert.ok(driver.args.includes('--fork-session'));
+  await driver.send('hi');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.match(done.resumeAt ?? '', /^[0-9a-f-]{36}$/, 'the last assistant message of the turn');
+  assert.equal(driver.forkFrom, null, 'after its first turn a branch resumes like any thread');
+  assert.ok(!driver.args.includes('--fork-session'));
+  await driver.kill();
+});

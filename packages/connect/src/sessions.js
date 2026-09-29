@@ -510,6 +510,37 @@ export class Sessions extends EventEmitter {
     return out.sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 
+  /**
+   * Branch a conversation: a new thread that starts as this one was just
+   * before `turnId`, so the same question can be put differently.
+   *
+   * Only the conversation is rewound, and only in the copy. This thread is
+   * left exactly as it is, and the files in the folder are not touched - the
+   * branch sees them as they are now, which is the point of keeping them.
+   * Claude Code only: it is the CLI that can cut a conversation at a message.
+   */
+  async fork(id, turnId) {
+    const s = this.#index.get(id);
+    if (!s?.driver) throw new Error('no such thread');
+    if (s.engine !== 'claude') throw new Error('only Claude Code threads can be branched so far');
+    let at = null;
+    let seen = false;
+    for (const e of this.events.tail(id, 100_000)) {
+      if (e.type === 'turn.start' && e.turnId === turnId) { seen = true; break; }
+      if (e.type === 'turn.done' && e.resumeAt) at = e.resumeAt;
+    }
+    if (!seen) throw new Error('that message is not in this conversation');
+    if (!at) throw new Error('nothing comes before that message, so there is nothing to branch from');
+    if (!s.engineSessionId) throw new Error('this thread has no conversation to branch yet');
+    const profile = (await getProfiles()).find((p) => p.id === s.profileId);
+    if (!profile) throw new Error(`unknown profile: ${s.profileId}`);
+    return this.#startDriven({
+      cwd: s.cwd, profile, title: `${s.title} (branch)`,
+      model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
+      forkFrom: { sessionId: s.engineSessionId, at },
+    });
+  }
+
   async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null }) {
     if (originHandoffId !== null && !/^[a-f0-9]{24}$/.test(originHandoffId)) {
       throw new Error('invalid origin handoff id');
@@ -644,7 +675,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null }) {
+  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null }) {
     const dir = expand(cwd);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -668,6 +699,9 @@ export class Sessions extends EventEmitter {
       // reads this as "resume", not "start".
       engineSessionId,
       transcript,
+      // A branch's first conversation is a copy of another's; cleared once it
+      // has had a turn of its own.
+      forkFrom: forkFrom || undefined,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       parent: parentLink(parent),
@@ -757,6 +791,7 @@ export class Sessions extends EventEmitter {
       cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
       model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
       engineSessionId: s.engineSessionId,
+      forkFrom: s.forkFrom,
       transcript: s.transcript,
       monitorOnly: !!s.external,
       // Held on the proc host, the process outlives this daemon. The
@@ -848,12 +883,19 @@ export class Sessions extends EventEmitter {
     // turn one again on every later turn - twenty equal turns showed ~10x.
     // The difference from the last total is the turn; a total that went
     // *down* is a fresh count (a /clear, or a conversation that was lost).
-    if (e.type === 'turn.done' && e.costTotalUsd != null) {
+    if (e.type === 'turn.done' && e.costTotalUsd != null && s.forkFrom && s.costTotalUsd == null) {
+      // A branch's first result carries the running total of the conversation
+      // it was copied from. Start counting from it rather than bill the
+      // branch for everything its parent ever cost.
+      s.costTotalUsd = e.costTotalUsd;
+      forwarded = { ...forwarded, costUsd: 0 };
+    } else if (e.type === 'turn.done' && e.costTotalUsd != null) {
       const last = s.costTotalUsd ?? 0;
       const turn = e.costTotalUsd >= last ? e.costTotalUsd - last : e.costTotalUsd;
       s.costTotalUsd = e.costTotalUsd;
       forwarded = { ...forwarded, costUsd: Math.round(turn * 1e6) / 1e6 };
     }
+    if (e.type === 'turn.done' && s.forkFrom) delete s.forkFrom;
     if (e.type === 'turn.done' && this.#index.has(s.id)) {
       s.turns = (s.turns ?? 0) + 1;
       const cost = forwarded.costUsd;

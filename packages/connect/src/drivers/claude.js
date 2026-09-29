@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { Driver, checkVersion, assertFolder } from './index.js';
 import { modeFor } from '../modes.js';
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Claude Code, headless.
  *
@@ -58,6 +60,8 @@ export class ClaudeDriver extends Driver {
   /** task_id -> tool_use_id, from task_started system frames */
   #tasks = new Map();
   #turnId = null;
+  /** The last top-level assistant message, which is where a branch can be cut. */
+  #lastAssistant = null;
   #interrupting = false;
   #capabilities = new Set();
   /** Commands advertised by this exact Claude Code process at init. */
@@ -70,6 +74,11 @@ export class ClaudeDriver extends Driver {
     super({ engine: 'claude', ...opts });
     this.engineSessionId ??= randomUUID();
     this.resume = !!opts.engineSessionId;
+    // A thread branched from another: begin as that conversation was at `at`.
+    // Both ids are checked here as well as by whoever asked - they end up as
+    // arguments to a process.
+    const f = opts.forkFrom;
+    this.forkFrom = f && UUID.test(f.sessionId ?? '') && UUID.test(f.at ?? '') ? { sessionId: f.sessionId, at: f.at } : null;
   }
 
   get args() {
@@ -77,7 +86,15 @@ export class ClaudeDriver extends Driver {
     const args = [...this.profileArgs, ...BASE_ARGS, '--permission-mode', mode?.cli ?? 'manual'];
     if (this.model) args.push('--model', this.model);
     if (this.effort) args.push('--effort', this.effort);
-    args.push(this.resume ? `--resume=${this.engineSessionId}` : `--session-id=${this.engineSessionId}`);
+    if (this.forkFrom) {
+      // Until the branch has said its first word it is not yet a conversation
+      // of its own, so every start - including one after a restart - is the
+      // fork, into the id this thread already has.
+      args.push(`--resume=${this.forkFrom.sessionId}`, '--fork-session',
+        `--resume-session-at=${this.forkFrom.at}`, `--session-id=${this.engineSessionId}`);
+    } else {
+      args.push(this.resume ? `--resume=${this.engineSessionId}` : `--session-id=${this.engineSessionId}`);
+    }
     return args;
   }
 
@@ -485,6 +502,7 @@ export class ClaudeDriver extends Driver {
   }
 
   #onAssistant(m, parentId) {
+    if (!parentId && m.uuid) this.#lastAssistant = m.uuid;
     if (m.error) this.push('error', { message: resultText(m.message?.content) || m.error, kind: m.error });
     for (const block of m.message?.content ?? []) {
       if (block.type === 'tool_use') {
@@ -505,8 +523,13 @@ export class ClaudeDriver extends Driver {
   #onResult(m) {
     const interrupted = this.#interrupting && m.is_error;
     this.#interrupting = false;
+    // From here the thread stands on its own; a restart resumes it as usual.
+    this.forkFrom = null;
     this.push('turn.done', {
       turnId: this.#turnId,
+      // Where a branch could be cut so that it holds everything up to and
+      // including this turn's answer.
+      resumeAt: this.#lastAssistant ?? undefined,
       status: interrupted ? 'interrupted' : m.is_error ? 'error' : 'ok',
       // A running total for the conversation, not this turn's cost - the
       // CLI says to read the latest rather than sum them. Sessions turns it
