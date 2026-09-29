@@ -92,10 +92,8 @@ export function UpdatesView({ client, envs, onBack, onRefresh }: {
                 <span className={`mdot ${env.online ? 'on' : 'off'}`} />
                 <span className="grow">
                   <span className="rt"><span className="rt-text">{env.name}</span>{env.kind && <span className="tag">{env.kind}</span>}</span>
-                  <span className="rm">
-                    {v ? <><code>{v.commit}</code> · {v.subject}</> : 'unknown version'}
-                    {(o?.text || note) ? ` — ${o?.text ?? note}` : ''}
-                  </span>
+                  <span className="rm">{v ? <><code>{v.commit}</code> · {v.subject}</> : 'unknown version'}</span>
+                  {(o?.text || note) && <span className={`rm wrap up-${o?.state ?? 'note'}`}>{o?.text ?? note}</span>}
                 </span>
                 {env.online && v?.updatable && (
                   <button

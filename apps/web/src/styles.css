@@ -1472,3 +1472,8 @@ button.sheet-editlink:hover { color: var(--text); }
   flex: none; height: 36px; padding: 0 16px; border-radius: 10px;
   background: var(--text); color: #0b0b0d; font-size: var(--t-body); font-weight: 650;
 }
+
+/* An outcome is a sentence, not a caption: it wraps instead of trailing off. */
+.row .rm.wrap { white-space: normal; overflow: visible; }
+.rm.up-done { color: var(--emerald); }
+.rm.up-refused, .rm.up-failed { color: var(--amber); }
