@@ -61,6 +61,7 @@
   --opencode:  #b3abd8;
   --opencode2: #9ebbe7;
   --devin:     #a3cdb9;
+  --agy:       #93b1ee;
 
   /* A type scale, so sizes are chosen from a set rather than invented at
      each call site. The old sheet had sixteen distinct font sizes between
@@ -319,6 +320,7 @@ code, pre, kbd { font-family: var(--mono); }
 .mark.opencode { background: color-mix(in srgb, var(--opencode) 11%, transparent); color: var(--opencode); }
 .mark.opencode2 { background: color-mix(in srgb, var(--opencode2) 11%, transparent); color: var(--opencode2); }
 .mark.devin    { background: color-mix(in srgb, var(--devin) 10%, transparent);    color: var(--devin); }
+.mark.agy      { background: color-mix(in srgb, var(--agy) 10%, transparent);      color: var(--agy); }
 .mark.shell    { background: color-mix(in srgb, var(--emerald) 11%, transparent);  color: var(--emerald); }
 
 .mdot { width: 7px; height: 7px; border-radius: 50%; flex: none; margin: 0 4px; }
@@ -1554,12 +1556,13 @@ button.sheet-editlink:hover { color: var(--text); }
 /* The marks keep their dark tile and their own colours in every theme. */
 :root[data-theme="light"] .mark { background: #1a1a1d; }
 /* A letter mark takes its colour from the text token, which is dark here. */
-:root[data-theme="light"] .mark:not(.claude):not(.codex):not(.opencode):not(.opencode2):not(.devin):not(.shell) { color: #a9a9b3; }
+:root[data-theme="light"] .mark:not(.claude):not(.codex):not(.opencode):not(.opencode2):not(.devin):not(.agy):not(.shell) { color: #a9a9b3; }
 :root[data-theme="light"] .mark.claude    { background: color-mix(in srgb, #d3a186 11%, #0a0a0b); }
 :root[data-theme="light"] .mark.codex     { background: color-mix(in srgb, #b9c1d6 10%, #0a0a0b); }
 :root[data-theme="light"] .mark.opencode  { background: color-mix(in srgb, #b3abd8 11%, #0a0a0b); }
 :root[data-theme="light"] .mark.opencode2 { background: color-mix(in srgb, #9ebbe7 11%, #0a0a0b); }
 :root[data-theme="light"] .mark.devin     { background: color-mix(in srgb, #a3cdb9 10%, #0a0a0b); }
+:root[data-theme="light"] .mark.agy       { background: color-mix(in srgb, #93b1ee 10%, #0a0a0b); }
 :root[data-theme="light"] .mark.shell     { background: color-mix(in srgb, #7fc7a4 11%, #0a0a0b); }
 
 /* Surfaces that were dark glass over a dark page. */
