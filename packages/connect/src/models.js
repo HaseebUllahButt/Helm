@@ -38,9 +38,13 @@ const MODELS_DEV_URL = 'https://models.dev/api.json';
 let codexManifestCache = { at: 0, models: [] };
 let modelsDevCache = { at: 0, catalog: null };
 
-export async function listModels(engine, home, environment = {}) {
+/**
+ * `launcher` is the {cmd, args} of an account run through a wrapper script
+ * (discover.js wrappedEngine): its own binary can only be reached that way.
+ */
+export async function listModels(engine, home, environment = {}, launcher = null) {
   const root = expand(home ?? ENGINES[engine]?.defaultHome ?? '~');
-  const key = `${engine}|${root}`;
+  const key = `${engine}|${root}|${launcher ? [launcher.cmd, ...launcher.args].join(' ') : ''}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
   let value = { default: null, models: [] };
@@ -55,7 +59,7 @@ export async function listModels(engine, home, environment = {}) {
     else if (engine === 'pi' || engine === 'omp') value = await piModels(engine, root, environment);
     else if (engine === 'cursor') value = await cursorModels(environment);
     else if (engine === 'gemini') value = await geminiModels();
-    else if (engine === 'agy') value = await agyModels(root, environment);
+    else if (engine === 'agy') value = await agyModels(root, environment, launcher);
     else if (engine === 'kimi') value = await kimiModels(environment);
   } catch {
     // A transient provider or CLI failure should not make a previously known
@@ -650,7 +654,7 @@ async function geminiModels() {
  * An ineligible account gets an empty list; the rows still print on one that
  * is merely signed out.
  */
-async function agyModels(root, environment = {}) {
+async function agyModels(root, environment = {}, launcher = null) {
   // `root` is the gemini home; agy's own store sits under it.
   const home = join(root, 'antigravity-cli');
   const models = [];
@@ -665,7 +669,8 @@ async function agyModels(root, environment = {}) {
     }
   } catch { /* no settings */ }
   try {
-    const { stdout } = await exec(ENGINES.agy?.bin ?? 'agy', ['models'], {
+    const cmd = launcher ? expand(launcher.cmd) : ENGINES.agy?.bin ?? 'agy';
+    const { stdout } = await exec(cmd, [...(launcher?.args ?? []), 'models'], {
       timeout: 20_000, env: { ...process.env, ...environment },
     });
     for (const line of String(stdout ?? '').split('\n')) {

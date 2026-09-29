@@ -1167,6 +1167,7 @@ export class Daemon {
           profile.engine,
           spec.env?.[engine?.homeEnv] ?? engine?.defaultHome,
           spec.env,
+          profile.wraps ? { cmd: spec.cmd, args: spec.args } : null,
         );
         // A live agent reports the pickers it actually has - real display
         // names, the levels this session offers - which beats what the CLI
