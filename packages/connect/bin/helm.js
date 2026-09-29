@@ -9,26 +9,12 @@ import {
   loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, hubCredential,
   localKey, describeSelf, saveNetwork, machineKind, MACHINE_KINDS,
 } from '@helm/protocol/network';
-import { refreshProfiles, getProfiles } from '../src/profiles.js';
-import { authStatuses } from '../src/auth.js';
-import { ENGINES } from '../src/engines.js';
-import { proxy } from '../src/proxy.js';
-import { createRuntime } from '../src/runtime/index.js';
 import { HELM_DIR } from '../src/paths.js';
 import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { hubRpc, hubBroadcastRpc, mergeQueueReceipts } from '../src/hub-client.js';
-import { handoffRequestDigest } from '../src/handoffs.js';
-import { levelOfWav, SILENCE_RMS } from '../src/voice.js';
 import {
   render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot,
 } from '../src/brain.js';
-import {
-  createCodeSnapshot, sealCodeSnapshot, beginCodeKeyProof, verifyCodeKeyProof,
-  signHandoffDigest, verifyHandoffSignature,
-} from '../src/code-transfer.js';
-import {
-  decodeTransferGrant, transferGrantDigest, transferRequestDigest,
-} from '../src/transfers.js';
 
 // Unix pipelines routinely close their read end early (`helm machines |
 // head`). Treat that as successful completion instead of printing an
@@ -345,6 +331,7 @@ async function joinCmd() {
   // agents never shows up in the app as one that can.
   process.stdout.write('checking session runtime... ');
   try {
+    const { createRuntime } = await import('../src/runtime/index.js');
     const rt = await createRuntime();
     const info = await rt.ensureReady();
     rt.stop();
@@ -355,6 +342,7 @@ async function joinCmd() {
   }
 
   process.stdout.write('discovering agent profiles... ');
+  const { refreshProfiles } = await import('../src/profiles.js');
   const { profiles } = await refreshProfiles();
   console.log(`${profiles.length} found`);
 
@@ -631,6 +619,7 @@ async function dictate() {
 
     // Nothing reached the microphone: say so here rather than paying Groq to
     // hallucinate a "Thank you." into the owner's prompt.
+    const { levelOfWav, SILENCE_RMS } = await import('../src/voice.js');
     const level = levelOfWav(audio);
     if (level && level.rms < SILENCE_RMS) {
       rmSync(DICTATE_WAV, { force: true });
@@ -825,6 +814,11 @@ async function spawn_() {
  * process: "queued" is a result, not a failure.
  */
 async function handoff() {
+  const {
+    createCodeSnapshot, sealCodeSnapshot, beginCodeKeyProof, verifyCodeKeyProof,
+    signHandoffDigest,
+  } = await import('../src/code-transfer.js');
+  const { handoffRequestDigest } = await import('../src/handoffs.js');
   const valueFlags = new Set(['--folder', '--target-folder', '--source-folder', '--account', '--model', '--mode', '--title', '--handoff-id']);
   const args = [];
   for (let i = 0; i < rest.length; i++) {
@@ -1044,6 +1038,11 @@ async function handoff() {
 }
 
 async function send() {
+  const {
+    createCodeSnapshot, sealCodeSnapshot, signHandoffDigest, verifyHandoffSignature,
+  } = await import('../src/code-transfer.js');
+  const { decodeTransferGrant, transferGrantDigest, transferRequestDigest } =
+    await import('../src/transfers.js');
   const valueFlags = new Set(['--grant', '--target-folder']);
   const args = [];
   for (let i = 0; i < rest.length; i++) {
@@ -1140,6 +1139,7 @@ async function dispatchStatus() {
 }
 
 async function openBrain() {
+  const { ENGINES } = await import('../src/engines.js');
   const env = brainHome();
   const net = requireNetwork();
   const name = net.machines[env]?.name ?? env;
@@ -1556,7 +1556,7 @@ try {
 
     case 'proxy':
       if (!rest[0]) die('usage: helm proxy <host>');
-      await proxy(rest[0]);
+      await (await import('../src/proxy.js')).proxy(rest[0]);
       break;
 
     case 'self-update':
@@ -1589,7 +1589,7 @@ try {
         console.log(`\n\n  antigravity ${r.version ?? ''} installed.`);
         console.log('  next: helm antigravity login   (or start a session - it signs in there too)\n');
         // The profile cache predates the install; discovery adds the engine now.
-        try { await refreshProfiles(); } catch { /* the next discovery pass gets it */ }
+        try { await (await import('../src/profiles.js')).refreshProfiles(); } catch { /* the next discovery pass gets it */ }
       } else if (sub === 'login') {
         const at = rest.indexOf('--home');
         const home = (at >= 0 && rest[at + 1]) || '~/.helm/antigravity';
@@ -1615,6 +1615,8 @@ try {
     }
 
     case 'profiles': {
+      const { refreshProfiles, getProfiles } = await import('../src/profiles.js');
+      const { authStatuses } = await import('../src/auth.js');
       const profiles = rest.includes('--refresh')
         ? (await refreshProfiles()).profiles
         : await getProfiles();
@@ -1663,6 +1665,7 @@ try {
       const peers = allEndpoints(net).filter((e) => !(me?.endpoints ?? []).includes(e));
       if (peers.length) console.log(`other hubs:   ${peers.join(' ')}`);
       try {
+        const { createRuntime } = await import('../src/runtime/index.js');
         const rt = await createRuntime();
         const info = await rt.ensureReady();
         rt.stop();

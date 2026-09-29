@@ -2,15 +2,12 @@ import { useDismiss } from './useDismiss';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
-import { UpdatesView } from './Updates';
-import { AppearanceSettings } from './AppearanceSettings';
 import { Palette, ShortcutsHelp, type PaletteItem } from './Palette';
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
 import { EngineMark } from './EngineMark';
-import { UsageView } from './Usage';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import {
@@ -83,6 +80,21 @@ const ENGINE: Record<string, { label: string; cls: string }> = {
  * hidden behind the round trip that opens the pty anyway.
  */
 const Terminal = lazy(() => import('./Terminal').then((m) => ({ default: m.Terminal })));
+const UsageView = lazy(() => import('./Usage').then((m) => ({ default: m.UsageView })));
+const UpdatesView = lazy(() => import('./Updates').then((m) => ({ default: m.UpdatesView })));
+const AppearanceSettings = lazy(() => import('./AppearanceSettings').then((m) => ({ default: m.AppearanceSettings })));
+
+function ViewLoading({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <>
+      <div className="bar">
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <b>{title}</b>
+      </div>
+      <div className="scroll"><div className="pad"><div className="empty quiet">loading…</div></div></div>
+    </>
+  );
+}
 
 const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', cls: 'other' };
 
@@ -1131,11 +1143,15 @@ function Shell({ client, conn, onSignOut }: {
             onOpen={(v) => push(v)} onUnpair={() => setUnpairing(true)}
           />
         ) : view.kind === 'usage' ? (
-          <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
+          <Suspense fallback={<ViewLoading title="Usage" onBack={back} />}>
+            <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
+          </Suspense>
         ) : view.kind === 'devices' ? (
           <DevicesView client={client} onBack={back} />
         ) : view.kind === 'updates' ? (
-          <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} />
+          <Suspense fallback={<ViewLoading title="Updates" onBack={back} />}>
+            <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} />
+          </Suspense>
         ) : view.kind === 'network-settings' ? (
           <NetworkSettings
             client={client} envs={envs} onBack={back}
@@ -3143,7 +3159,13 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
 
         <div className="section">appearance</div>
         <div className="rows">
-          <AppearanceSettings />
+          <Suspense fallback={(
+            <div className="row appearance">
+              <span className="grow"><span className="rt">Appearance settings</span><span className="rm">loading…</span></span>
+            </div>
+          )}>
+            <AppearanceSettings />
+          </Suspense>
         </div>
 
         <div className="section">this device</div>

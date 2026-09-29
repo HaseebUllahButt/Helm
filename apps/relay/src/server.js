@@ -1,18 +1,6 @@
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
-import { join, extname, normalize } from 'node:path';
-
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.webmanifest': 'application/manifest+json',
-  '.svg': 'image/svg+xml',
-  '.map': 'application/json',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-};
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 /**
  * Start a hub.
@@ -40,6 +28,7 @@ export async function startRelay({
   const {
     makeHttpHandler, clientTokenFrom, identify, rotatePassword, ROLE, SECURITY_HEADERS,
   } = http;
+  const { createStaticHandler } = await import('./static.js');
   const { createWsLayer } = await import('./ws.js');
 
   // Starting up opens a fresh login window so there is always a way in from a
@@ -56,35 +45,7 @@ export async function startRelay({
   // credential say it may.
   const media = (await import('./media.js')).createMediaRoute({ online, callEnv, openTcp });
 
-  const serveStatic = async (req, res) => {
-    if (!webRoot) return false;
-    const url = new URL(req.url, 'http://localhost');
-    // Any unknown path is an app route, not a missing file.
-    let rel = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
-    if (rel === '/' || !extname(rel)) rel = '/index.html';
-
-    const file = join(webRoot, rel);
-    if (!file.startsWith(webRoot)) return false;
-    try {
-      if (!(await stat(file)).isFile()) return false;
-      res.writeHead(200, {
-        'content-type': MIME[extname(file)] ?? 'application/octet-stream',
-        // The worker is the update mechanism for installed PWAs. It must be
-        // revalidated so a phone that has been backgrounded cannot keep an
-        // old shell and old engine marks after a deploy.
-        // Hashed bundles are named by their content, so they never change
-        // under a name and can be kept for good.
-        'cache-control': rel === '/index.html' || rel === '/sw.js' ? 'no-cache'
-          : rel.startsWith('/assets/') ? 'public, max-age=31536000, immutable'
-          : 'public, max-age=3600',
-        ...SECURITY_HEADERS,
-      });
-      res.end(await readFile(file));
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const serveStatic = createStaticHandler({ webRoot, securityHeaders: SECURITY_HEADERS });
 
   // What the app checks against its own bundle: the hashed asset this hub's
   // index.html points at. An installed PWA resumes the page it loaded rather

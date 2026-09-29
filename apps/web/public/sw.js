@@ -8,7 +8,8 @@
  */
 // Bump this whenever the shell changes so an installed PWA cannot stay on a
 // previous bundle forever when its page has been left open for days.
-const CACHE = 'helm-shell-v9';
+const CACHE = 'helm-shell-v10';
+const NAVIGATION_TIMEOUT_MS = 1200;
 /**
  * Hashed bundles live apart from the shell: their names change every deploy,
  * so they only ever accumulate. Capped by count, oldest out, since a worker
@@ -62,23 +63,42 @@ self.addEventListener('fetch', (event) => {
 
   // Navigations resolve to the app shell: this is a single-page app, so every
   // path is a route rather than a document on disk.
-  // Navigations are network-first, and what comes back replaces the copy we
-  // fall back to. Without that write the cached shell is frozen at whatever
-  // was current when this worker installed: every later deploy leaves it
-  // pointing at hashed bundles that no longer exist, so the first open on a
-  // bad connection loads an index.html whose scripts all 404 - a blank app,
-  // and a deploy that looks like it worked everywhere except the phone.
+  // Navigations are network-first. If the network stalls, use the last good
+  // shell after a short deadline, while keeping the fetch alive so a newer
+  // shell still replaces it when the response finally arrives. A cold cache
+  // keeps waiting for the network because there is no useful fallback yet.
   if (request.mode === 'navigate') {
+    let cacheWrite = Promise.resolve();
+    const network = fetch(request).then((res) => {
+      if (res.ok && res.type === 'basic') {
+        const copy = res.clone();
+        cacheWrite = caches.open(CACHE).then((c) => c.put('/index.html', copy)).catch(() => {});
+      }
+      return res;
+    });
+    const refresh = network.then(() => cacheWrite);
+    event.waitUntil(refresh.then(() => {}, () => {}));
+
+    const cachedShell = () => caches.match('/index.html').then((res) =>
+      res?.ok && res.type !== 'error' ? res : undefined
+    ).catch(() => undefined);
+
     event.respondWith((async () => {
+      let timer;
+      const deadline = new Promise((resolve) => {
+        timer = setTimeout(() => resolve(undefined), NAVIGATION_TIMEOUT_MS);
+      });
       try {
-        const res = await fetch(request);
-        if (res.ok && res.type === 'basic') {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put('/index.html', copy)).catch(() => {});
-        }
-        return res;
+        const response = await Promise.race([network, deadline]);
+        if (response) return response;
+        const cached = await cachedShell();
+        // A first visit has no shell to show. Keep the pending request alive
+        // rather than turning a slow connection into an immediate failure.
+        return cached ?? await network;
       } catch {
-        return (await caches.match('/index.html')) ?? Response.error();
+        return (await cachedShell()) ?? Response.error();
+      } finally {
+        clearTimeout(timer);
       }
     })());
     return;

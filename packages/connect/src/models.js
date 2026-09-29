@@ -14,8 +14,8 @@ const exec = promisify(execFile);
  *   codex     `codex debug models`, falling back to a model_catalog.json
  *   claude    the account's .claude.json remembers the last model per project;
  *             Models.dev supplies the current public Anthropic catalog
- *   opencode  `opencode models --refresh`, which refreshes every configured
- *             provider through OpenCode's Models.dev catalog
+ *   opencode  `opencode models` reads the local catalog; `--refresh` is only
+ *             used when the local command cannot provide model rows
  *   devin     `devin models list --format json` (with text fallback) - uid plus
  *             display name; thinking level is baked into each model name
  *
@@ -35,8 +35,14 @@ const CODEX_MANIFEST_TTL_MS = 10 * 60_000;
 const CODEX_MANIFEST_URL = 'https://raw.githubusercontent.com/pingdotgg/t3code/main/apps/server/src/provider/model-manifest.json';
 const MODELS_DEV_TTL_MS = 10 * 60_000;
 const MODELS_DEV_URL = 'https://models.dev/api.json';
-let codexManifestCache = { at: 0, models: [] };
-let modelsDevCache = { at: 0, catalog: null };
+const PUBLIC_CATALOG_RETRY_MS = 30_000;
+const CODEX_RETRY_MS = 60_000;
+let codexManifestCache = { at: 0, checkedAt: 0, models: [] };
+let codexManifestInflight = null;
+let modelsDevCache = { at: 0, checkedAt: 0, catalog: null };
+let modelsDevInflight = null;
+const discoveries = new Map();
+const codexRetryAt = new Map();
 
 /**
  * `launcher` is the {cmd, args} of an account run through a wrapper script
@@ -70,11 +76,12 @@ const inflight = new Map();
 
 function refreshModels(key, engine, home, environment, launcher, hit) {
   if (inflight.has(key)) return inflight.get(key);
+  discoveries.set(key, { engine, home, environment, launcher });
   const root = expand(home ?? ENGINES[engine]?.defaultHome ?? '~');
   const job = (async () => {
     let value = { default: null, models: [] };
     try {
-      if (engine === 'codex') value = await codexModels(root, environment);
+      if (engine === 'codex') value = await codexModels(root, environment, key);
       else if (engine === 'claude') value = await claudeModels(root, environment);
       else if (engine === 'opencode' || engine === 'opencode2') {
         value = await opencodeModels(root, ENGINES[engine]?.bin ?? engine, environment);
@@ -101,7 +108,23 @@ function refreshModels(key, engine, home, environment, launcher, hit) {
   return job;
 }
 
-async function codexModels(root, environment) {
+/** Rebuild already-listed account caches after an optional public catalog updates. */
+function refreshDiscoveredModels(engines) {
+  setImmediate(async () => {
+    for (const [key, discovery] of discoveries) {
+      if (!engines.has(discovery.engine)) continue;
+      const current = inflight.get(key);
+      if (current) await current.catch(() => {});
+      const hit = cache.get(key);
+      try {
+        await refreshModels(key, discovery.engine, discovery.home,
+          discovery.environment, discovery.launcher, hit);
+      } catch { /* keep the prior account-specific answer */ }
+    }
+  });
+}
+
+async function codexModels(root, environment, key) {
   let def = null;
   let effort = null;
   try {
@@ -110,15 +133,34 @@ async function codexModels(root, environment) {
     effort = /^model_reasoning_effort\s*=\s*"([^"]+)"/m.exec(toml)?.[1] ?? null;
   } catch { /* no config */ }
 
-  // The catalog file is written by the TUI and simply does not exist on a
-  // machine where codex has only ever run headless - which is how a VM ends
-  // up offering one model, the default from config.toml. Ask app-server first;
-  // its model/list response is the provider-backed answer for this account.
-  const catalog = await codexCatalog(root, environment);
+  // The catalog file belongs to this account. It is already useful offline,
+  // so return it immediately and let app-server refresh the cached answer.
+  const disk = readCodexDiskCatalog(root);
+  if (disk?.models?.length) {
+    // Start the public overlay refresh too, but neither catalog is allowed to
+    // hold up the usable local answer.
+    const catalog = mergeCodexPublishedModels(disk, await codexPublishedModels());
+    scheduleCodexRefresh(key, root, environment, def, effort);
+    return codexValue(catalog, def, effort);
+  }
+
+  // On a headless-only account there is no disk catalog; app-server remains
+  // the only account-aware source. Public manifest fetches are nonblocking.
+  const { catalog } = await codexCatalog(root, environment);
+  return codexValue(catalog, def, effort);
+}
+
+function readCodexDiskCatalog(root) {
+  try {
+    const catalog = JSON.parse(readFileSync(join(root, 'model_catalog.json'), 'utf8'));
+    return Array.isArray(catalog?.models) && catalog.models.length ? catalog : null;
+  } catch { return null; }
+}
+
+function codexValue(catalog, def = null, effort = null) {
   const parsed = parseCodexModelList(catalog?.models ?? []);
   const models = [...parsed.models];
   if (def && !models.includes(def)) models.unshift(def);
-
   return {
     default: def ?? parsed.default ?? null,
     models,
@@ -131,6 +173,24 @@ async function codexModels(root, environment) {
     images: parsed.images,
     imagesByModel: Object.fromEntries(models.map((m) => [m, parsed.imagesByModel?.[m] ?? true])),
   };
+}
+
+function scheduleCodexRefresh(key, root, environment, def, effort) {
+  if (Date.now() < (codexRetryAt.get(key) ?? 0)) return;
+  codexRetryAt.set(key, Date.now() + CODEX_RETRY_MS);
+  setImmediate(async () => {
+    try {
+      const result = await codexCatalog(root, environment);
+      if (!['app-server', 'debug'].includes(result?.source) || !result.catalog?.models?.length) return;
+      const catalog = result.catalog;
+      const fresh = codexValue(catalog, def, effort);
+      // Provider discovery can fail or return less than the last usable local
+      // cache. Never turn that transient result into an empty picker.
+      const prior = cache.get(key)?.value;
+      if (prior?.models?.length && !fresh.models.length) return;
+      cache.set(key, { at: Date.now(), value: fresh });
+    } catch { /* keep local data and throttle the next provider probe */ }
+  });
 }
 
 /**
@@ -227,24 +287,60 @@ export function mergeCodexPublishedModels(catalog, published) {
   return out;
 }
 
-/** Fetch T3's provider-maintained current-model overlay; stale data is safe. */
-async function codexPublishedModels() {
-  if (Date.now() - codexManifestCache.at < CODEX_MANIFEST_TTL_MS) {
-    return codexManifestCache.models;
+/** Keep provider answers available while refreshing the optional public overlay. */
+function codexPublishedModels() {
+  const now = Date.now();
+  if (now - codexManifestCache.at >= CODEX_MANIFEST_TTL_MS
+      && now - codexManifestCache.checkedAt >= PUBLIC_CATALOG_RETRY_MS
+      && !codexManifestInflight) {
+    codexManifestCache.checkedAt = now;
+    codexManifestInflight = (async () => {
+      try {
+        const response = await fetch(process.env.HELM_CODEX_MODEL_MANIFEST_URL || CODEX_MANIFEST_URL, {
+          headers: { accept: 'application/json' },
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!response.ok) throw new Error(`model manifest returned ${response.status}`);
+        const manifest = await response.json();
+        const models = [...new Set((manifest?.currentModels?.codex ?? [])
+          .filter((model) => typeof model === 'string' && model.trim()))];
+        if (!models.length) throw new Error('model manifest contained no Codex models');
+        codexManifestCache = { at: Date.now(), checkedAt: Date.now(), models };
+        for (const [key, row] of cache) {
+          if (discoveries.get(key)?.engine !== 'codex') continue;
+          const value = withPublishedCodexModels(row.value, models);
+          cache.set(key, { at: Date.now(), value });
+        }
+      } catch { /* retain stale data and back off before trying again */ }
+    })().finally(() => { codexManifestInflight = null; });
   }
-  try {
-    const response = await fetch(process.env.HELM_CODEX_MODEL_MANIFEST_URL || CODEX_MANIFEST_URL, {
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (!response.ok) throw new Error(`model manifest returned ${response.status}`);
-    const manifest = await response.json();
-    const models = [...new Set((manifest?.currentModels?.codex ?? [])
-      .filter((model) => typeof model === 'string' && model.trim()))];
-    if (!models.length) throw new Error('model manifest contained no Codex models');
-    codexManifestCache = { at: Date.now(), models };
-  } catch { /* the last good manifest or the provider catalog is enough */ }
-  return codexManifestCache.models;
+  return Promise.resolve(codexManifestCache.models);
+}
+
+function withPublishedCodexModels(value, published) {
+  const merged = mergeCodexPublishedModels({ models: value?.models ?? [] }, published);
+  const models = [...(value?.models ?? [])];
+  const labels = { ...(value?.labels ?? {}) };
+  const effortsByModel = { ...(value?.effortsByModel ?? {}) };
+  const imagesByModel = { ...(value?.imagesByModel ?? {}) };
+  const addedEfforts = [];
+  for (const row of merged.models) {
+    if (!row || typeof row === 'string' || models.includes(row.model)) continue;
+    models.push(row.model);
+    labels[row.model] = row.displayName;
+    effortsByModel[row.model] = row.supportedReasoningEfforts;
+    imagesByModel[row.model] = true;
+    addedEfforts.push(...row.supportedReasoningEfforts);
+  }
+  return {
+    ...value,
+    models,
+    labels,
+    effortsByModel,
+    efforts: [...new Set([...(value?.efforts ?? []), ...addedEfforts])],
+    imagesByModel,
+    images: Boolean(value?.images || addedEfforts.length),
+  };
 }
 
 /**
@@ -271,7 +367,18 @@ async function codexAppServerCatalog(root, environment = {}) {
     pending.clear();
   };
 
+  const fail = (error) => {
+    if (exited) return;
+    exited = true;
+    rejectPending(error);
+  };
+
   child.stdout.setEncoding('utf8');
+  // A provider may exit between app-server startup and the next request. A
+  // write to its closed stdin then raises EPIPE asynchronously on the stream,
+  // outside the try/catch around `write`; consume it and reject pending calls.
+  child.stdin.on('error', fail);
+  child.stdout.on('error', fail);
   child.stdout.on('data', (chunk) => {
     buffer += chunk;
     let end;
@@ -289,14 +396,8 @@ async function codexAppServerCatalog(root, environment = {}) {
       call.resolve(message);
     }
   });
-  child.on('error', (error) => {
-    exited = true;
-    rejectPending(error);
-  });
-  child.on('exit', () => {
-    exited = true;
-    rejectPending(new Error('codex app-server exited'));
-  });
+  child.on('error', fail);
+  child.on('exit', () => fail(new Error('codex app-server exited')));
 
   const call = (method, params = {}) => new Promise((resolve, reject) => {
     if (exited) return reject(new Error('codex app-server exited'));
@@ -342,13 +443,13 @@ async function codexAppServerCatalog(root, environment = {}) {
   }
 }
 
-/** codex's model catalog: live app-server first, CLI/disk fallback. */
+/** Codex provider catalog with its source attached for safe cache promotion. */
 async function codexCatalog(root, environment = {}) {
-  const [live, published] = await Promise.all([
-    codexAppServerCatalog(root, environment).catch(() => null),
-    codexPublishedModels(),
-  ]);
-  if (live?.models?.length) return mergeCodexPublishedModels(live, published);
+  void codexPublishedModels();
+  const live = await codexAppServerCatalog(root, environment).catch(() => null);
+  if (live?.models?.length) {
+    return { catalog: mergeCodexPublishedModels(live, codexManifestCache.models), source: 'app-server' };
+  }
 
   const bin = ENGINES.codex?.bin ?? 'codex';
   try {
@@ -358,16 +459,15 @@ async function codexCatalog(root, environment = {}) {
       env: { ...process.env, ...environment, CODEX_HOME: root },
     });
     const cat = JSON.parse(stdout);
-    if (cat?.models?.length) return mergeCodexPublishedModels(cat, published);
+    if (cat?.models?.length) {
+      return { catalog: mergeCodexPublishedModels(cat, codexManifestCache.models), source: 'debug' };
+    }
   } catch { /* not installed, too old, or no network - fall back to disk */ }
-  for (const file of [join(root, 'model_catalog.json'), expand('~/.codex/model_catalog.json')]) {
-    if (!existsSync(file)) continue;
-    try {
-      const cat = JSON.parse(readFileSync(file, 'utf8'));
-      if (cat?.models?.length) return mergeCodexPublishedModels(cat, published);
-    } catch { /* try the next */ }
-  }
-  return published.length ? mergeCodexPublishedModels(null, published) : null;
+  const cat = readCodexDiskCatalog(root);
+  if (cat) return { catalog: mergeCodexPublishedModels(cat, codexManifestCache.models), source: 'disk' };
+  return codexManifestCache.models.length
+    ? { catalog: mergeCodexPublishedModels(null, codexManifestCache.models), source: 'public' }
+    : { catalog: null, source: null };
 }
 
 const CLAUDE_FALLBACK_FAMILY = [
@@ -420,22 +520,28 @@ export function parseModelsDevProvider(catalog, provider) {
   return { models, labels, imagesByModel };
 }
 
-/** Fetch the shared public provider catalog, retaining the last good copy. */
-async function modelsDevCatalog() {
-  if (Date.now() - modelsDevCache.at < MODELS_DEV_TTL_MS && modelsDevCache.catalog) {
-    return modelsDevCache.catalog;
+/** Return stale public data immediately and refresh it once in the background. */
+function modelsDevCatalog() {
+  const now = Date.now();
+  if (now - modelsDevCache.at >= MODELS_DEV_TTL_MS
+      && now - modelsDevCache.checkedAt >= PUBLIC_CATALOG_RETRY_MS
+      && !modelsDevInflight) {
+    modelsDevCache.checkedAt = now;
+    modelsDevInflight = (async () => {
+      try {
+        const response = await fetch(process.env.HELM_MODELS_DEV_URL || MODELS_DEV_URL, {
+          headers: { accept: 'application/json' },
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
+        const catalog = await response.json();
+        if (!catalog || typeof catalog !== 'object') throw new Error('models.dev returned no catalog');
+        modelsDevCache = { at: Date.now(), checkedAt: Date.now(), catalog };
+        refreshDiscoveredModels(new Set(['claude', 'gemini']));
+      } catch { /* keep the last good catalog and back off before retrying */ }
+    })().finally(() => { modelsDevInflight = null; });
   }
-  try {
-    const response = await fetch(process.env.HELM_MODELS_DEV_URL || MODELS_DEV_URL, {
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
-    const catalog = await response.json();
-    if (!catalog || typeof catalog !== 'object') throw new Error('models.dev returned no catalog');
-    modelsDevCache = { at: Date.now(), catalog };
-  } catch { /* provider CLI/local cache remains authoritative when available */ }
-  return modelsDevCache.catalog ?? {};
+  return Promise.resolve(modelsDevCache.catalog ?? {});
 }
 
 async function modelsDevProvider(provider) {
@@ -457,15 +563,19 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
   }
   let stdout;
   try {
-    // OpenCode documents --refresh as the way to update its Models.dev cache.
-    ({ stdout } = await exec(bin, ['models', '--refresh'], {
-      timeout: 20_000,
+    // The normal command reads OpenCode's existing local catalog. Only try
+    // its network-refresh path when there is no usable local answer.
+    ({ stdout } = await exec(bin, ['models'], {
+      timeout: 8_000,
       env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
     }));
+    if (!stdout.split('\n').some((line) => line.trim().includes('/'))) {
+      throw new Error('opencode returned no local model rows');
+    }
   } catch {
-    // Older OpenCode builds may not know --refresh; their normal command still
-    // reads the best local/provider catalog they have.
-    ({ stdout } = await exec(bin, ['models'], {
+    // `--refresh` is a fallback for an empty/broken local catalog, never the
+    // first step on every picker request.
+    ({ stdout } = await exec(bin, ['models', '--refresh'], {
       timeout: 20_000,
       env: { ...process.env, ...environment, XDG_CONFIG_HOME: root },
     }));

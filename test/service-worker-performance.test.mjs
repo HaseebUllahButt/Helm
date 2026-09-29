@@ -1,0 +1,128 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+
+const workerSource = readFileSync(new URL('../apps/web/public/sw.js', import.meta.url), 'utf8');
+
+function response(body, { ok = true, type = 'basic' } = {}) {
+  return { body, ok, type, status: ok ? 200 : 500, clone() { return response(body, { ok, type }); } };
+}
+
+function setup({ fetch, shell } = {}) {
+  const listeners = new Map();
+  const entries = new Map(shell ? [['/index.html', shell]] : []);
+  const timers = new Map();
+  const lifetime = [];
+  let timerId = 0;
+  const cache = {
+    add: async () => {},
+    put: async (key, value) => { entries.set(typeof key === 'string' ? key : new URL(key.url).pathname, value); },
+    match: async (key) => entries.get(typeof key === 'string' ? key : new URL(key.url).pathname),
+    keys: async () => [...entries.keys()],
+    delete: async (key) => entries.delete(key),
+  };
+  const caches = {
+    open: async () => cache,
+    match: async (key) => cache.match(key),
+    keys: async () => ['helm-shell-v9', 'helm-assets'],
+    delete: async () => true,
+  };
+  const self = {
+    location: { origin: 'https://helm.test' },
+    addEventListener: (name, handler) => listeners.set(name, handler),
+    skipWaiting: async () => {},
+    clients: { claim: async () => {}, matchAll: async () => [], openWindow: async () => {} },
+    registration: { getNotifications: async () => [], showNotification: async () => {} },
+  };
+  class TestResponse {
+    static error() { return response('network error', { ok: false, type: 'error' }); }
+  }
+  const context = {
+    self, caches, fetch, URL, Map, Promise,
+    Response: TestResponse,
+    setTimeout(callback, delay) {
+      const id = ++timerId;
+      timers.set(id, { callback, delay });
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
+  };
+  vm.runInNewContext(workerSource, context, { filename: 'sw.js' });
+  return {
+    entries, listeners, lifetime, timers,
+    dispatchNavigation() {
+      let result;
+      const event = {
+        request: { method: 'GET', url: 'https://helm.test/agent/abc', mode: 'navigate' },
+        respondWith(promise) { result = Promise.resolve(promise); },
+        waitUntil(promise) { lifetime.push(Promise.resolve(promise)); },
+      };
+      listeners.get('fetch')(event);
+      return result;
+    },
+    fireDeadline() {
+      const [id, timer] = [...timers.entries()].find(([, t]) => t.delay === 1200) ?? [];
+      assert.ok(timer, 'navigation deadline was scheduled');
+      timers.delete(id);
+      timer.callback();
+    },
+  };
+}
+
+test('a stalled navigation serves the cached shell and late network response refreshes it', async () => {
+  let resolveFetch;
+  const network = new Promise((resolve) => { resolveFetch = resolve; });
+  const worker = setup({ fetch: () => network, shell: response('old shell') });
+  const page = worker.dispatchNavigation();
+
+  worker.fireDeadline();
+  assert.equal((await page).body, 'old shell');
+
+  resolveFetch(response('new shell'));
+  await Promise.all(worker.lifetime);
+  assert.equal(worker.entries.get('/index.html').body, 'new shell');
+});
+
+test('a fast network response clears the pending fallback timer', async () => {
+  const worker = setup({ fetch: async () => response('fresh shell') });
+  const page = worker.dispatchNavigation();
+
+  assert.equal((await page).body, 'fresh shell');
+  assert.equal(worker.timers.size, 0);
+  await Promise.all(worker.lifetime);
+});
+
+test('a cold cache keeps waiting past the deadline for the network shell', async () => {
+  let resolveFetch;
+  const network = new Promise((resolve) => { resolveFetch = resolve; });
+  const worker = setup({ fetch: () => network });
+  const page = worker.dispatchNavigation();
+  let settled = false;
+  page.finally(() => { settled = true; });
+
+  worker.fireDeadline();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(settled, false, 'no cached shell means no early offline error');
+
+  resolveFetch(response('first shell'));
+  assert.equal((await page).body, 'first shell');
+  await Promise.all(worker.lifetime);
+});
+
+test('a rejected fetch uses a good cached shell and never returns a cached error', async () => {
+  const worker = setup({ fetch: () => Promise.reject(new Error('offline')), shell: response('last good shell') });
+  assert.equal((await worker.dispatchNavigation()).body, 'last good shell');
+  await Promise.all(worker.lifetime);
+
+  let resolveFetch;
+  const pending = new Promise((resolve) => { resolveFetch = resolve; });
+  const badShell = setup({ fetch: () => pending, shell: response('cached error', { ok: false, type: 'error' }) });
+  const page = badShell.dispatchNavigation();
+  badShell.fireDeadline();
+  await Promise.resolve();
+  await Promise.resolve();
+  resolveFetch(response('network shell'));
+  assert.equal((await page).body, 'network shell');
+});

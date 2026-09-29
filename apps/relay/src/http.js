@@ -169,17 +169,86 @@ const reply = (res, code, body, origin = null) => {
   res.end(JSON.stringify(body));
 };
 
-const readBody = (req) =>
+export const readBody = (req, maxBytes = 1_000_000) =>
   new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (c) => {
-      raw += c;
-      if (raw.length > 1e6) reject(new Error('body too large'));
-    });
-    req.on('end', () => {
-      try { resolve(raw ? JSON.parse(raw) : {}); } catch { reject(new Error('invalid json')); }
-    });
-    req.on('error', reject);
+    let chunks = [];
+    let byteLength = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      req.off('data', onData);
+      req.off('end', onEnd);
+      req.off('aborted', onAborted);
+      req.off('error', onError);
+      req.off('close', onClose);
+    };
+
+    const rejectAndRelease = (error, { drain = false } = {}) => {
+      if (settled) return;
+      settled = true;
+      chunks = null;
+      byteLength = 0;
+      // Keep the end, error, and close listeners until the incoming request
+      // terminates. Oversized bodies are drained without retaining their data,
+      // and any late stream error remains handled.
+      req.off('data', onData);
+      req.off('aborted', onAborted);
+      reject(error);
+      if (drain) req.resume();
+    };
+
+    const onData = (chunk) => {
+      if (settled) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      byteLength += bytes.length;
+      if (byteLength > maxBytes) {
+        rejectAndRelease(new Error('body too large'), { drain: true });
+        return;
+      }
+      chunks.push(bytes);
+    };
+
+    const onEnd = () => {
+      if (settled) {
+        cleanup();
+        return;
+      }
+      const bytes = Buffer.concat(chunks, byteLength);
+      chunks = null;
+      byteLength = 0;
+      try {
+        const raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        const body = raw ? JSON.parse(raw) : {};
+        settled = true;
+        cleanup();
+        resolve(body);
+      } catch {
+        settled = true;
+        cleanup();
+        reject(new Error('invalid json'));
+      }
+    };
+
+    const onAborted = () => {
+      rejectAndRelease(new Error('request aborted'));
+    };
+
+    const onError = (error) => {
+      rejectAndRelease(error);
+      // A stream can emit an error after it was rejected for size. Keep this
+      // listener through close so it is consumed, then release all listeners.
+    };
+
+    const onClose = () => {
+      if (!settled && !req.complete) rejectAndRelease(new Error('request aborted'));
+      cleanup();
+    };
+
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('aborted', onAborted);
+    req.on('error', onError);
+    req.on('close', onClose);
   });
 
 export const clientTokenFrom = (header) => {
