@@ -376,6 +376,35 @@ function Shell({ client, conn, onSignOut }: {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const [palette, setPalette] = useState(false);
+  /**
+   * Threads put off until later, on this device. A thread waiting on you that
+   * you cannot get to yet should stop being the loudest thing on Home and stop
+   * raising toasts - and come back on its own, because forgetting it would
+   * make snoozing the same as ignoring.
+   */
+  const [snoozed, setSnoozed] = useState<Record<string, number>>(() => {
+    try { return JSON.parse(localStorage.getItem('helm.snoozed') || '{}'); } catch { return {}; }
+  });
+  const snoozedRef = useRef(snoozed);
+  snoozedRef.current = snoozed;
+  const tick = useNow(30_000);
+  const [snoozeUndo, setSnoozeUndo] = useState<{ key: string; title: string; until: number } | null>(null);
+  const setSnooze = (key: string, until: number | null) => {
+    setSnoozed((all) => {
+      const next = { ...all };
+      if (until == null) delete next[key]; else next[key] = until;
+      // Forget the ones whose time has passed, so the store does not grow for ever.
+      for (const k of Object.keys(next)) if (next[k] <= Date.now()) delete next[k];
+      try { localStorage.setItem('helm.snoozed', JSON.stringify(next)); } catch { /* full */ }
+      return next;
+    });
+  };
+  const snoozedNow = (envId: string, id: string) => (snoozed[`${envId}:${id}`] ?? 0) > tick;
+  useEffect(() => {
+    if (!snoozeUndo) return;
+    const timer = setTimeout(() => setSnoozeUndo(null), 7000);
+    return () => clearTimeout(timer);
+  }, [snoozeUndo]);
   const [help, setHelp] = useState(false);
   /** Every machine's last-said session list, for the ones that are asleep. */
   const [snap, setSnap] = useState<{ machines: Record<string, { name: string; at: number; sessions: Session[] }> } | null>(null);
@@ -557,7 +586,8 @@ function Shell({ client, conn, onSignOut }: {
         if (payload?.transition?.to === 'blocked' && s) {
           const top = nav.current.stack[nav.current.stack.length - 1];
           const looking = top?.kind === 'session' && top.session.id === s.id;
-          if (!looking) {
+          const asleep = (snoozedRef.current[`${e}:${s.id}`] ?? 0) > Date.now();
+          if (!looking && !asleep) {
             setToast({ envId: e, session: s, at: Date.now() });
             try { navigator.vibrate?.(60); } catch { /* no haptics here */ }
           }
@@ -730,6 +760,7 @@ function Shell({ client, conn, onSignOut }: {
     navigate([{ kind: 'env' }], id);
   };
   const openSession = (envId: string, s: Session) => {
+    if (snoozed[`${envId}:${s.id}`]) setSnooze(`${envId}:${s.id}`, null);
     navigate([{ kind: 'env' }, { kind: 'session', session: s }], envId);
   };
   // A session that changed under an open view: refresh the machine's list and
@@ -863,12 +894,18 @@ function Shell({ client, conn, onSignOut }: {
     setRemembered((prev) => prev.filter((b) => b.envId !== envId));
   };
 
-  const blocked = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
+  const blockedAll = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
+  const blocked = blockedAll.filter(({ env: e, s }) => !snoozedNow(e.id, s.id));
+  const asleep = blockedAll.filter(({ env: e, s }) => snoozedNow(e.id, s.id));
   // Home is one list across every machine: what needs you, and what is
   // running. A brain has its own place under "brains".
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
   const runningNow = everyone.filter(({ s }) => s.status === 'working').sort(byNewest);
+  const snoozeThread = (envId: string, s: Session, until: number) => {
+    setSnooze(`${envId}:${s.id}`, until);
+    setSnoozeUndo({ key: `${envId}:${s.id}`, title: s.title, until });
+  };
 
   // On a phone the two panes are one screen at a time: the main pane is shown
   // once a machine is selected, and every view - the brain included - belongs
@@ -983,8 +1020,24 @@ function Shell({ client, conn, onSignOut }: {
             {!query.trim() && (<>
 
             {blocked.map(({ env: e, s }) => (
-              <NeedCard key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)} />
+              <NeedCard
+                key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)}
+                onSnooze={(until) => snoozeThread(e.id, s, until)}
+              />
             ))}
+
+            {asleep.length > 0 && (
+              <Fold title="snoozed" count={asleep.length} remember="sidebar:snoozed">
+                <div className="rows plain">
+                  {asleep.map(({ env: e, s }) => (
+                    <HomeRow
+                      key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)}
+                      note={`back ${when(snoozed[`${e.id}:${s.id}`])}`}
+                    />
+                  ))}
+                </div>
+              </Fold>
+            )}
 
             {runningNow.length > 0 && (
               <>
@@ -1203,6 +1256,12 @@ function Shell({ client, conn, onSignOut }: {
         </button>
       )}
 
+      {snoozeUndo && (
+        <div className="undo" role="status">
+          <span className="undo-text">Snoozed <b>{snoozeUndo.title}</b> until {when(snoozeUndo.until)}</span>
+          <button onClick={() => { setSnooze(snoozeUndo.key, null); setSnoozeUndo(null); }}>Undo</button>
+        </div>
+      )}
       {palette && <Palette items={paletteItems()} onClose={() => setPalette(false)} engineOf={engineOf} />}
       {help && <ShortcutsHelp onClose={() => setHelp(false)} />}
 
@@ -2603,30 +2662,75 @@ const dirName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
  * answer itself lives in the session, where the diff or the command is on
  * screen to be read before Allow is tapped.
  */
-function NeedCard({ s, machine, onOpen }: { s: Session; machine: string; onOpen: () => void }) {
+/** "3:40 pm", "tomorrow 9:00 am", "Mon 9:00 am" - when a snooze ends, in words. */
+const when = (ts: number) => {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const days = Math.round((new Date(d.toDateString()).getTime() - new Date(new Date().toDateString()).getTime()) / 86_400_000);
+  return days <= 0 ? time : days === 1 ? `tomorrow ${time}` : `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+};
+
+/** Later today, tomorrow morning, next week: the ways a thread usually gets put off. */
+function snoozeChoices(): { label: string; at: number }[] {
+  const now = new Date();
+  const at = (days: number, hour: number) => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(hour, 0, 0, 0); return d.getTime(); };
+  const dow = now.getDay();
+  return [
+    { label: '1 hour', at: Date.now() + 3_600_000 },
+    { label: '3 hours', at: Date.now() + 3 * 3_600_000 },
+    { label: 'Tomorrow, 9 am', at: at(1, 9) },
+    { label: 'Next week', at: at(((8 - dow) % 7) || 7, 9) },
+  ];
+}
+
+function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: string; onOpen: () => void; onSnooze: (until: number) => void }) {
   const now = useNow();
+  const [choosing, setChoosing] = useState(false);
+  const [custom, setCustom] = useState('');
   const eng = engineOf(s.engine);
   const n = s.pending ?? 0;
   return (
-    <button className="need" onClick={onOpen}>
-      <span className="need-k">
-        <i />Needs you{s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
-        {n > 1 && <span className="need-n">{n}</span>}
-      </span>
-      <span className="need-t">
-        <EngineMark engine={eng.cls} />
-        <span className="grow">
-          <span className="need-title">{s.title}</span>
-          <span className="need-m">{eng.label} · {dirName(s.cwd)} · {machine}</span>
+    <div className="need">
+      <button className="need-main" onClick={onOpen}>
+        <span className="need-k">
+          <i />Needs you{s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
+          {n > 1 && <span className="need-n">{n}</span>}
         </span>
-      </span>
-      <span className="need-go">Review and answer<b>›</b></span>
-    </button>
+        <span className="need-t">
+          <EngineMark engine={eng.cls} />
+          <span className="grow">
+            <span className="need-title">{s.title}</span>
+            <span className="need-m">{eng.label} · {dirName(s.cwd)} · {machine}</span>
+          </span>
+        </span>
+        <span className="need-go">Review and answer<b>›</b></span>
+      </button>
+      <div className="need-foot">
+        {!choosing ? (
+          <button className="need-snooze" onClick={() => setChoosing(true)}>Snooze…</button>
+        ) : (
+          <div className="snooze-opts">
+            {snoozeChoices().map((c) => (
+              <button key={c.label} onClick={() => onSnooze(c.at)}>{c.label}</button>
+            ))}
+            <span className="snooze-custom">
+              <input
+                type="datetime-local" value={custom} aria-label="snooze until"
+                min={new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16)}
+                onChange={(e) => setCustom(e.target.value)}
+              />
+              <button disabled={!custom || new Date(custom).getTime() <= Date.now()} onClick={() => onSnooze(new Date(custom).getTime())}>Set</button>
+            </span>
+            <button className="snooze-x" onClick={() => setChoosing(false)} aria-label="cancel">×</button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
 /** One line of Home: the mark, the thread, where it runs, and what it is doing. */
-function HomeRow({ s, machine, onOpen }: { s: Session; machine: string; onOpen: () => void }) {
+function HomeRow({ s, machine, onOpen, note }: { s: Session; machine: string; onOpen: () => void; note?: string }) {
   const now = useNow();
   const eng = engineOf(s.engine);
   return (
@@ -2636,7 +2740,8 @@ function HomeRow({ s, machine, onOpen }: { s: Session; machine: string; onOpen: 
         <span className="rt"><span className="rt-text">{s.title}</span></span>
         <span className="rm">{dirName(s.cwd)} · {machine}</span>
       </span>
-      {s.status === 'working'
+      {note ? <span className="when">{note}</span>
+        : s.status === 'working'
         ? <StatusChip status="working" at={s.updatedAt} />
         : s.updatedAt ? <span className="when">{waitingSince(s.updatedAt, now)}</span> : null}
     </button>

@@ -1402,8 +1402,8 @@ button.sheet-editlink:hover { color: var(--text); }
 
 /* Needs you: the one thing on Home that is allowed to be loud. */
 .need {
-  display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left;
-  margin: 4px 0 12px; padding: 14px 15px; border-radius: 18px;
+  display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left;
+  margin: 4px 0 12px; padding: 14px 15px 8px; border-radius: 18px;
   background: linear-gradient(160deg, var(--need-a), var(--need-b));
   border: 1px solid color-mix(in srgb, var(--amber) 26%, transparent);
   transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
@@ -1727,3 +1727,21 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .star.on { color: var(--amber); }
 .star:hover { background: var(--accent); }
 .modesheet-label { padding: 8px 12px 2px; font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.055em; text-transform: uppercase; color: var(--mutedfg); }
+
+
+/* A card that is a container: the main tap area, and a quiet row under it. */
+.need-main { display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left; color: inherit; }
+.need-foot { display: flex; justify-content: flex-end; min-height: 30px; }
+.need-snooze { font-size: var(--t-meta); color: var(--need-m); padding: 4px 8px; border-radius: 8px; }
+.need-snooze:hover { background: rgb(255 255 255 / 6%); }
+:root[data-theme="light"] .need-snooze:hover { background: rgb(0 0 0 / 6%); }
+.snooze-opts { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center; }
+.snooze-opts button {
+  height: 30px; padding: 0 12px; border-radius: 15px; font-size: var(--t-meta);
+  background: rgb(255 255 255 / 8%); color: var(--text);
+}
+:root[data-theme="light"] .snooze-opts button { background: rgb(0 0 0 / 7%); }
+.snooze-opts button:disabled { opacity: 0.4; }
+.snooze-custom { display: inline-flex; gap: 6px; align-items: center; }
+.snooze-custom input { width: auto; padding: 4px 8px; font-size: var(--t-meta); border-radius: 15px; height: 30px; }
+.snooze-opts .snooze-x { margin-left: auto; width: 30px; padding: 0; }
