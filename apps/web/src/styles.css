@@ -92,6 +92,26 @@
 
   --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   --ease: cubic-bezier(0.2, 0, 0, 1);
+  /* Colours that used to be written out where they were used. Named so a
+     second theme can answer them. Dark values are what they always were. */
+  --scroll:    rgb(255 255 255 / 8%);
+  --scroll-h:  rgb(255 255 255 / 12%);
+  --dot-off:   rgb(255 255 255 / 14%);
+  --pill-bg:   var(--text);
+  --pill-fg:   #0b0b0d;
+  --toast-bg:  #17171a;
+  --need-a:    #2a2110;
+  --need-b:    #151109;
+  --need-a-on: #33280f;
+  --need-b-on: #1a1409;
+  --need-m:    #b7a583;
+  --link:      #60a5fa;
+  --diff-add:  var(--emerald);
+  --diff-del:  var(--red);
+  --diff-add-fg: #a7f3d0;
+  --diff-del-fg: #fecaca;
+  --hl-comment: #6b7280; --hl-keyword: #c4b5fd; --hl-string: #86efac; --hl-number: #fcd34d;
+  --hl-title: #93c5fd; --hl-type: #7dd3fc; --hl-meta: #9ca3af; --hl-del: #fca5a5;
   color-scheme: dark;
 }
 
@@ -114,8 +134,8 @@ button { cursor: pointer; background: none; border: 0; padding: 0; }
 button:disabled { cursor: default; }
 code, pre, kbd { font-family: var(--mono); }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-thumb { background: rgb(255 255 255 / 8%); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgb(255 255 255 / 12%); }
+::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-h); }
 
 /* ------------------------------------------------------------------ shell */
 
@@ -303,7 +323,7 @@ code, pre, kbd { font-family: var(--mono); }
 
 .mdot { width: 7px; height: 7px; border-radius: 50%; flex: none; margin: 0 4px; }
 .mdot.on { background: var(--emerald); }
-.mdot.off { background: rgb(255 255 255 / 14%); }
+.mdot.off { background: var(--dot-off); }
 .sdot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin: 0 3px; display: inline-block; }
 .sdot.blocked { background: color-mix(in srgb, var(--amber) 90%, transparent); }
 .badge {
@@ -614,7 +634,7 @@ pre.snippet {
 .md ul { padding-left: 1.25rem; } .md ol { padding-left: 1.4rem; }
 .md li + li { margin-top: 0.3rem; }
 .md li > p { margin: 0; }
-.md a { color: #60a5fa; text-decoration: none; }
+.md a { color: var(--link); text-decoration: none; }
 .md a:hover { text-decoration: underline dotted; }
 .md strong { font-weight: 600; color: var(--text); }
 .md code { font-size: 0.88em; background: var(--input); padding: 0.1em 0.35em; border-radius: 4px; color: var(--text); }
@@ -791,15 +811,15 @@ pre.snippet {
 .codehead .copy:hover { color: var(--text); background: var(--accent); }
 .codeblock pre { margin: 0; background: none; border: 0; padding: 6px 12px 10px; }
 .hljs { color: var(--text-80); }
-.hljs-comment, .hljs-quote { color: #6b7280; font-style: italic; }
-.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-name { color: #c4b5fd; }
-.hljs-string, .hljs-attr, .hljs-template-tag, .hljs-addition { color: #86efac; }
-.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-regexp { color: #fcd34d; }
-.hljs-title, .hljs-section, .hljs-function .hljs-title, .hljs-title.function_ { color: #93c5fd; }
-.hljs-type, .hljs-class .hljs-title, .hljs-title.class_, .hljs-built_in { color: #7dd3fc; }
+.hljs-comment, .hljs-quote { color: var(--hl-comment); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-name { color: var(--hl-keyword); }
+.hljs-string, .hljs-attr, .hljs-template-tag, .hljs-addition { color: var(--hl-string); }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-regexp { color: var(--hl-number); }
+.hljs-title, .hljs-section, .hljs-function .hljs-title, .hljs-title.function_ { color: var(--hl-title); }
+.hljs-type, .hljs-class .hljs-title, .hljs-title.class_, .hljs-built_in { color: var(--hl-type); }
 .hljs-variable, .hljs-template-variable, .hljs-params { color: var(--text-80); }
-.hljs-meta, .hljs-doctag, .hljs-tag { color: #9ca3af; }
-.hljs-deletion { color: #fca5a5; }
+.hljs-meta, .hljs-doctag, .hljs-tag { color: var(--hl-meta); }
+.hljs-deletion { color: var(--hl-del); }
 .hljs-emphasis { font-style: italic; } .hljs-strong { font-weight: 600; }
 
 /* ------------------------------------------------------ headless sessions */
@@ -860,8 +880,8 @@ pre.snippet {
   border-top: 1px solid var(--line); color: var(--text-dim); max-height: 50dvh;
 }
 .diff span { display: block; padding: 0 12px; white-space: pre; }
-.diff .add { background: color-mix(in srgb, var(--emerald) 10%, transparent); color: #a7f3d0; }
-.diff .del { background: color-mix(in srgb, var(--red) 10%, transparent); color: #fecaca; }
+.diff .add { background: color-mix(in srgb, var(--diff-add) 10%, transparent); color: var(--diff-add-fg); }
+.diff .del { background: color-mix(in srgb, var(--diff-del) 10%, transparent); color: var(--diff-del-fg); }
 .diff .hunk { color: var(--sky); }
 
 .turn-meta { font-size: var(--t-micro); color: var(--mutedfg); padding: 2px 4px 0; }
@@ -1247,7 +1267,7 @@ button.primary.danger { background: color-mix(in srgb, var(--red) 22%, var(--rai
   position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 58px); transform: translateX(-50%);
   z-index: 55; display: flex; align-items: center; gap: 12px; width: min(440px, calc(100vw - 28px));
   padding: 12px 14px; border-radius: 12px; text-align: left;
-  background: color-mix(in srgb, var(--amber) 8%, #17171a);
+  background: color-mix(in srgb, var(--amber) 8%, var(--toast-bg));
   border: 1px solid color-mix(in srgb, var(--amber) 32%, transparent);
   box-shadow: 0 18px 52px -14px rgb(0 0 0 / 82%), 0 2px 8px rgb(0 0 0 / 35%);
   animation: toast-in 0.25s var(--ease);
@@ -1384,7 +1404,7 @@ button.sheet-editlink:hover { color: var(--text); }
 .need {
   display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left;
   margin: 4px 0 12px; padding: 14px 15px; border-radius: 18px;
-  background: linear-gradient(160deg, #2a2110, #151109);
+  background: linear-gradient(160deg, var(--need-a), var(--need-b));
   border: 1px solid color-mix(in srgb, var(--amber) 26%, transparent);
   transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
 }
@@ -1405,7 +1425,7 @@ button.sheet-editlink:hover { color: var(--text); }
   font-size: var(--t-title); font-weight: 600; letter-spacing: -0.012em; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.need-m { font-size: var(--t-meta); color: #b7a583; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.need-m { font-size: var(--t-meta); color: var(--need-m); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .need-go {
   display: flex; align-items: center; justify-content: space-between;
   height: 42px; padding: 0 16px; border-radius: 13px;
@@ -1421,7 +1441,7 @@ button.sheet-editlink:hover { color: var(--text); }
 }
 
 /* Send is the same pale circle as New session. */
-.send { background: var(--text); color: #0b0b0d; box-shadow: none; }
+.send { background: var(--pill-bg); color: var(--pill-fg); box-shadow: none; }
 .send:hover:not(:disabled) { filter: none; transform: scale(1.06); }
 .send:disabled { opacity: 0.25; }
 
@@ -1437,7 +1457,7 @@ button.sheet-editlink:hover { color: var(--text); }
   background: var(--card); border: 1px solid var(--line);
 }
 .action:hover:not(:disabled) { background: var(--raised); border-color: var(--line-2); }
-.action .plus { background: var(--text); color: #0b0b0d; font-weight: 500; }
+.action .plus { background: var(--pill-bg); color: var(--pill-fg); font-weight: 500; }
 
 
 /* ------------------------------------------------------------ small things */
@@ -1448,7 +1468,7 @@ button.sheet-editlink:hover { color: var(--text); }
 .chip-pick:active, .iconbtn:active:not(:disabled) {
   background: var(--hover); transition-duration: 0s;
 }
-.need:active { background: linear-gradient(160deg, #33280f, #1a1409); }
+.need:active { background: linear-gradient(160deg, var(--need-a-on), var(--need-b-on)); }
 
 /* A new screen arrives rather than snapping in. Opacity only: nothing moves,
    so nothing can land in the wrong place under a thumb. */
@@ -1470,10 +1490,115 @@ button.sheet-editlink:hover { color: var(--text); }
 .undo-text b { font-weight: 550; color: var(--text); }
 .undo button {
   flex: none; height: 36px; padding: 0 16px; border-radius: 10px;
-  background: var(--text); color: #0b0b0d; font-size: var(--t-body); font-weight: 650;
+  background: var(--pill-bg); color: var(--pill-fg); font-size: var(--t-body); font-weight: 650;
 }
 
 /* An outcome is a sentence, not a caption: it wraps instead of trailing off. */
 .row .rm.wrap { white-space: normal; overflow: visible; }
 .rm.up-done { color: var(--emerald); }
 .rm.up-refused, .rm.up-failed { color: var(--amber); }
+
+
+/* ===========================================================================
+   Appearance
+   Light theme, a colour-blind diff palette, a wider chat and compact lists.
+   Each is an attribute on <html> set by appearance.ts. The engine marks are
+   not themed: in the light theme their tiles stay dark, so every logo looks
+   exactly as it does everywhere else.
+   =========================================================================== */
+
+:root[data-theme="light"] {
+  --bg:        #f6f6f4;
+  --card:      #ffffff;
+  --sidebar:   #efeeea;
+  --raised:    #ffffff;
+  --muted:     rgb(0 0 0 / 4%);
+  --accent:    rgb(0 0 0 / 5%);
+  --hover:     rgb(0 0 0 / 7%);
+  --line:      rgb(0 0 0 / 9%);
+  --line-2:    rgb(0 0 0 / 15%);
+  --input:     rgb(0 0 0 / 15%);
+  --text:      #18181b;
+  --text-80:   rgb(24 24 27 / 86%);
+  --text-dim:  #4b4b55;
+  --mutedfg:   #6b6b76;
+  --icon:      #86868f;
+  --primary:   oklch(0.52 0.19 264);
+  --primary-t: oklch(0.5 0.19 264);
+  --primary-h: oklch(0.56 0.19 264);
+  --primary-q: oklch(0.48 0.17 264);
+  --amber:     #b5760f;
+  --sky:       #2f6f9e;
+  --emerald:   oklch(0.5 0.1 165);
+  --red:       #c0392b;
+
+  --scroll:    rgb(0 0 0 / 14%);
+  --scroll-h:  rgb(0 0 0 / 22%);
+  --dot-off:   rgb(0 0 0 / 18%);
+  --pill-bg:   #18181b;
+  --pill-fg:   #ffffff;
+  --toast-bg:  #ffffff;
+  --need-a:    #fff3d6;
+  --need-b:    #fde9bd;
+  --need-a-on: #ffedc7;
+  --need-b-on: #fbe2a8;
+  --need-m:    #7a5a1a;
+  --link:      #2563eb;
+  --diff-add-fg: #166534;
+  --diff-del-fg: #991b1b;
+  --hl-comment: #6b7280; --hl-keyword: #7c3aed; --hl-string: #15803d; --hl-number: #b45309;
+  --hl-title: #1d4ed8; --hl-type: #0369a1; --hl-meta: #6b7280; --hl-del: #b91c1c;
+  color-scheme: light;
+}
+
+/* The marks keep their dark tile and their own colours in every theme. */
+:root[data-theme="light"] .mark { background: #1a1a1d; }
+/* A letter mark takes its colour from the text token, which is dark here. */
+:root[data-theme="light"] .mark:not(.claude):not(.codex):not(.opencode):not(.opencode2):not(.devin):not(.shell) { color: #a9a9b3; }
+:root[data-theme="light"] .mark.claude    { background: color-mix(in srgb, #d3a186 11%, #0a0a0b); }
+:root[data-theme="light"] .mark.codex     { background: color-mix(in srgb, #b9c1d6 10%, #0a0a0b); }
+:root[data-theme="light"] .mark.opencode  { background: color-mix(in srgb, #b3abd8 11%, #0a0a0b); }
+:root[data-theme="light"] .mark.opencode2 { background: color-mix(in srgb, #9ebbe7 11%, #0a0a0b); }
+:root[data-theme="light"] .mark.devin     { background: color-mix(in srgb, #a3cdb9 10%, #0a0a0b); }
+:root[data-theme="light"] .mark.shell     { background: color-mix(in srgb, #7fc7a4 11%, #0a0a0b); }
+
+/* Surfaces that were dark glass over a dark page. */
+:root[data-theme="light"] .bar { background: color-mix(in srgb, var(--bg) 82%, transparent); }
+:root[data-theme="light"] .bar.side { background: color-mix(in srgb, var(--sidebar) 82%, transparent); }
+:root[data-theme="light"] .slab { background: color-mix(in srgb, var(--card) 94%, transparent); box-shadow: 0 1px 2px rgb(0 0 0 / 8%), 0 12px 28px -16px rgb(0 0 0 / 22%); }
+:root[data-theme="light"] .slab::after { border-color: rgb(0 0 0 / 8%); box-shadow: none; }
+:root[data-theme="light"] .menu, :root[data-theme="light"] .modal, :root[data-theme="light"] .undo, :root[data-theme="light"] .toast {
+  box-shadow: 0 18px 52px -18px rgb(0 0 0 / 28%), 0 2px 8px rgb(0 0 0 / 10%);
+}
+:root[data-theme="light"] .need { border-color: color-mix(in srgb, var(--amber) 38%, transparent); }
+:root[data-theme="light"] .need-title { color: #2a1d05; }
+:root[data-theme="light"] .need-k i { box-shadow: 0 0 0 4px rgb(181 118 15 / 16%); }
+:root[data-theme="light"] .need-go, :root[data-theme="light"] .sheet-actions button.primary { color: #fff; }
+:root[data-theme="light"] .badge, :root[data-theme="light"] .need-n { color: #fff; }
+:root[data-theme="light"] button.primary { color: #fff; }
+:root[data-theme="light"] .row.tall { box-shadow: 0 1px 0 rgb(0 0 0 / 3%); }
+:root[data-theme="light"] .rows.plain .row.tall { box-shadow: none; }
+:root[data-theme="light"] .rows.plain .row.tall + .row.tall { box-shadow: 0 -1px 0 var(--line); }
+:root[data-theme="light"] .turn.user .bubble { background: #ffffff; }
+:root[data-theme="light"] .diff .add { background: color-mix(in srgb, var(--diff-add) 12%, transparent); }
+:root[data-theme="light"] .diff .del { background: color-mix(in srgb, var(--diff-del) 11%, transparent); }
+:root[data-theme="light"] .md code, :root[data-theme="light"] .prose code { background: rgb(0 0 0 / 6%); }
+:root[data-theme="light"] .sheet { border-color: color-mix(in srgb, var(--amber) 34%, transparent); }
+
+/* Red-green colour blindness: added is blue, removed is orange. */
+:root[data-diff="blue"] { --diff-add: #3b82f6; --diff-del: #f97316; --diff-add-fg: #bfdbfe; --diff-del-fg: #fed7aa; }
+:root[data-theme="light"][data-diff="blue"] { --diff-add-fg: #1d4ed8; --diff-del-fg: #c2410c; }
+
+/* A wider reading column for a wide screen. */
+:root[data-width="wide"] { --measure: 68rem; }
+
+/* Compact lists: the same rows, less air. */
+:root[data-density="compact"] .rows.plain .row.tall,
+:root[data-density="compact"] .rows.plain .row.rowx { min-height: 44px; }
+:root[data-density="compact"] .rows.plain .row.tall { padding-block: 5px; }
+:root[data-density="compact"] .rows.plain .row.rowx .rowmain { padding-block: 5px; }
+:root[data-density="compact"] .row .rm { font-size: var(--t-micro); }
+
+/* The appearance controls sit inside a settings row. */
+.row.appearance { align-items: flex-start; height: auto; padding-block: 10px; }
+.row.appearance .segmented { margin-top: 8px; }

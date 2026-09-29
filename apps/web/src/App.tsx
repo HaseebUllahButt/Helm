@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEven
 import { Confirm, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
 import { UpdatesView } from './Updates';
+import { AppearanceSettings } from './AppearanceSettings';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
@@ -2974,6 +2975,11 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
             </span>
             <span className="chev">›</span>
           </button>
+        </div>
+
+        <div className="section">appearance</div>
+        <div className="rows">
+          <AppearanceSettings />
         </div>
 
         <div className="section">this device</div>
