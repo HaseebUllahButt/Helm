@@ -1438,3 +1438,37 @@ button.sheet-editlink:hover { color: var(--text); }
 }
 .action:hover:not(:disabled) { background: var(--raised); border-color: var(--line-2); }
 .action .plus { background: var(--text); color: #0b0b0d; font-weight: 500; }
+
+
+/* ------------------------------------------------------------ small things */
+
+/* A tap should answer back. Hover does not exist on a phone, so without this
+   a row acknowledges nothing until the next screen has already loaded. */
+.row:active:not(:disabled), .need:active, .action:active:not(:disabled),
+.chip-pick:active, .iconbtn:active:not(:disabled) {
+  background: var(--hover); transition-duration: 0s;
+}
+.need:active { background: linear-gradient(160deg, #33280f, #1a1409); }
+
+/* A new screen arrives rather than snapping in. Opacity only: nothing moves,
+   so nothing can land in the wrong place under a thumb. */
+.main > .scroll { animation: screen-in 0.16s var(--ease); }
+@keyframes screen-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .main > .scroll { animation: none; } }
+
+/* Archived, with the way back. */
+.undo {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 20px); transform: translateX(-50%);
+  z-index: 55; display: flex; align-items: center; gap: 14px; width: min(420px, calc(100vw - 28px));
+  padding: 8px 8px 8px 16px; border-radius: 14px;
+  background: var(--raised); border: 1px solid var(--line-2);
+  box-shadow: 0 18px 52px -14px rgb(0 0 0 / 82%);
+  animation: undo-in 0.2s var(--ease);
+}
+@keyframes undo-in { from { opacity: 0; transform: translateX(-50%) translateY(8px); } }
+.undo-text { flex: 1; min-width: 0; font-size: var(--t-body); color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.undo-text b { font-weight: 550; color: var(--text); }
+.undo button {
+  flex: none; height: 36px; padding: 0 16px; border-radius: 10px;
+  background: var(--text); color: #0b0b0d; font-size: var(--t-body); font-weight: 650;
+}

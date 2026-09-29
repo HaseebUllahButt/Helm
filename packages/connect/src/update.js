@@ -22,6 +22,27 @@ const DAEMON_UNITS = ['helm-serve.service', 'helm-agent.service'];
 
 const say = (m) => console.log(`  ${m}`);
 
+/**
+ * Which helm this is, for the machine list: the commit it runs and whether an
+ * update from the app could touch it. `updatable` is the same guard
+ * `selfUpdate` applies - a clean checkout on the update branch - so the button
+ * is never offered for a development tree or a pinned release worktree.
+ */
+export async function currentVersion(dir = ROOT) {
+  const git = (args) => exec('git', ['-C', dir, ...args]).then((r) => r.stdout.trim());
+  try {
+    const [commit, branch, subject, dirty] = await Promise.all([
+      git(['rev-parse', '--short', 'HEAD']),
+      git(['rev-parse', '--abbrev-ref', 'HEAD']),
+      git(['log', '-1', '--format=%s']),
+      git(['status', '--porcelain']),
+    ]);
+    return { commit, branch, subject, updatable: branch === BRANCH && !dirty };
+  } catch {
+    return null;
+  }
+}
+
 const unitActive = (unit) =>
   exec('systemctl', ['--user', 'is-active', '--quiet', unit]).then(() => true).catch(() => false);
 
@@ -47,6 +68,11 @@ export async function selfUpdate(dir = ROOT, { rebuild = true, restart = true } 
   await git(['fetch', '--quiet', 'origin', BRANCH]);
   const [head, tip] = await Promise.all([git(['rev-parse', 'HEAD']), git(['rev-parse', `origin/${BRANCH}`])]);
   if (head === tip) return { updated: false, reason: `already at ${tip.slice(0, 7)}` };
+  // Commits made here and not pushed would be thrown away by the reset below.
+  // The VM's checkout is one you commit from, and an update asked for from a
+  // phone must never be the thing that eats them.
+  const ahead = Number(await git(['rev-list', '--count', `origin/${BRANCH}..HEAD`]).catch(() => '0'));
+  if (ahead > 0) return { updated: false, reason: `${ahead} commit${ahead === 1 ? '' : 's'} not pushed yet` };
 
   say(`updating ${head.slice(0, 7)} -> ${tip.slice(0, 7)}`);
   await git(['reset', '--hard', '--quiet', `origin/${BRANCH}`]);

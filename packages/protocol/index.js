@@ -101,6 +101,9 @@ export const M = {
   // Renaming goes to the machine being renamed, never to the hub the phone
   // happened to reach: a machine's roster record has exactly one author.
   ENV_RENAME: 'env.rename',        // { name } -> { id, name }
+  // Pull this machine to the newest helm and restart it. Asked of the machine
+  // itself: an update is a git reset and a restart, and only it can do either.
+  ENV_UPDATE: 'env.update',        // {} -> { updated, reason?, restarting?, version }
   // What a machine is for ('pc' | 'vm' | 'nas'), asked of the machine itself
   // for the same reason as a rename: `kind` lives on its own roster record.
   MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }

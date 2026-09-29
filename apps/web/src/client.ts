@@ -33,6 +33,8 @@ export interface Environment {
     /** This machine holds a Groq key, so it can transcribe what you say. */
     voice?: boolean;
     runtime?: { version: string };
+    /** Which helm this machine runs; null where it is not a git checkout. */
+    version?: { commit: string; branch: string; subject: string; updatable: boolean } | null;
   };
 }
 
@@ -877,6 +879,12 @@ export class Client {
    */
   usage(env: string, opts: { since?: string; until?: string; by?: string[]; rebuild?: boolean } = {}) {
     return this.rpc<UsageReport>(env, 'usage.report', opts, 120_000);
+  }
+
+  /** Pull a machine to the newest helm. It restarts a few seconds after answering. */
+  updateEnv(env: string) {
+    return this.rpc<{ updated: boolean; reason?: string; restarting?: string[]; failed?: string[] }>(
+      env, 'env.update', {}, 140_000);
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {

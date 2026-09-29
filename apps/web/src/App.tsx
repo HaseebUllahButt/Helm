@@ -2,6 +2,7 @@ import { useDismiss } from './useDismiss';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Confirm, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
+import { UpdatesView } from './Updates';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
@@ -313,6 +314,8 @@ type MainView =
   | { kind: 'start'; cwd: string }
   | { kind: 'settings' }
   | { kind: 'network-settings' }
+  // Which helm each machine runs, and updating them from here.
+  | { kind: 'updates' }
   | { kind: 'models'; account: Account }
   // Which phones and browsers hold a key to this network: pair another, or
   // stop trusting one.
@@ -368,6 +371,7 @@ function Shell({ client, conn, onSignOut }: {
   const [toast, setToast] = useState<Toast | null>(null);
   /** Search every machine's threads from the sidebar, not only the open one. */
   const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
   /** Every machine's last-said session list, for the ones that are asleep. */
   const [snap, setSnap] = useState<{ machines: Record<string, { name: string; at: number; sessions: Session[] }> } | null>(null);
   /** The one in-app yes/no currently up: unpairing this device. */
@@ -579,6 +583,23 @@ function Shell({ client, conn, onSignOut }: {
   useEffect(() => {
     if (wide && !selected && envs.length) setSelected(envs[0].id);
   }, [wide, selected, envs]);
+
+  // Ctrl/Cmd+K, or "/" when nothing is being typed into, goes to the search box
+  // on a keyboard. A phone has no such key and never runs this.
+  useEffect(() => {
+    if (!wide) return;
+    const onKey = (e: KeyboardEvent) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement)?.tagName ?? '')
+        || (e.target as HTMLElement)?.isContentEditable;
+      const combo = (e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey);
+      if (!combo && !(e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey)) return;
+      e.preventDefault();
+      collapseSidebar(false);
+      requestAnimationFrame(() => { searchRef.current?.focus(); searchRef.current?.select(); });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [wide]);
 
   const env = envs.find((e) => e.id === selected) ?? null;
   const view = stack[stack.length - 1];
@@ -805,7 +826,7 @@ function Shell({ client, conn, onSignOut }: {
   // and what devices hold keys, and the settings they live under, belong to
   // no machine either.
   const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'devices'
-    || view.kind === 'network-settings' || view.kind === 'app-settings';
+    || view.kind === 'network-settings' || view.kind === 'app-settings' || view.kind === 'updates';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -852,9 +873,12 @@ function Shell({ client, conn, onSignOut }: {
                 remembered threads of machines that are asleep. */}
             <div className="filterbar">
               <input
-                className="sheetfilter grow" value={query} placeholder="search threads & machines"
+                ref={searchRef}
+                className="sheetfilter grow" value={query}
+                placeholder={wide ? 'search threads & machines  (/)' : 'search threads & machines'}
                 autoCapitalize="off" autoCorrect="off" autoComplete="off"
                 onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') { setQuery(''); e.currentTarget.blur(); } }}
               />
             </div>
 
@@ -1004,6 +1028,8 @@ function Shell({ client, conn, onSignOut }: {
           <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
         ) : view.kind === 'devices' ? (
           <DevicesView client={client} onBack={back} />
+        ) : view.kind === 'updates' ? (
+          <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} />
         ) : view.kind === 'network-settings' ? (
           <NetworkSettings
             client={client} envs={envs} onBack={back}
@@ -1968,11 +1994,22 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   // once something is typed in it, however few rows the typing leaves.
   const searchable = rows.length > 5 || !!q;
 
-  const setArchived = async (s: Session, archived: boolean) => {
+  /** The thread just filed away, for as long as taking it back is one tap. */
+  const [undo, setUndo] = useState<Session | null>(null);
+  useEffect(() => {
+    if (!undo) return;
+    const timer = setTimeout(() => setUndo(null), 7000);
+    return () => clearTimeout(timer);
+  }, [undo]);
+
+  const setArchived = async (s: Session, archived: boolean, offerUndo = true) => {
     setError('');
     try {
       await client.rpc(env.id, 'session.archive', { id: s.id, archived }, 20_000);
       reload(); reloadEarlier();
+      // Archiving is a tap on a small ⋯ menu item with nothing to confirm it:
+      // say what happened and leave the way back in reach.
+      setUndo(archived && offerUndo ? s : null);
     } catch (e: any) { setError(e.message); }
   };
 
@@ -2276,6 +2313,13 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
 
         {error && <div className="error">{error}</div>}
       </div></div>
+
+      {undo && (
+        <div className="undo" role="status">
+          <span className="undo-text">Archived <b>{undo.title}</b></span>
+          <button onClick={() => { const s = undo; setUndo(null); setArchived(s, false, false); }}>Undo</button>
+        </div>
+      )}
 
       {renaming && (
         <TextPrompt
@@ -2913,6 +2957,13 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
             <span className="grow">
               <span className="rt">CLI defaults</span>
               <span className="rm">model, thinking and permissions on every machine</span>
+            </span>
+            <span className="chev">›</span>
+          </button>
+          <button className="row" onClick={() => onOpen({ kind: 'updates' })}>
+            <span className="grow">
+              <span className="rt">Updates</span>
+              <span className="rm">which helm each machine runs, and update them</span>
             </span>
             <span className="chev">›</span>
           </button>

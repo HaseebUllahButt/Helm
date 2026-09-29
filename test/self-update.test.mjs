@@ -78,3 +78,46 @@ test('a directory that is not a checkout is reported, not crashed', async () => 
   assert.equal(r.updated, false);
   assert.match(r.reason, /not a git checkout/);
 });
+
+// ------------------------------------------------------------- what the app is told
+
+const { currentVersion } = await import('../packages/connect/src/update.js');
+
+test('the machine list is told which commit runs, and whether the app may update it', async () => {
+  const { remote, installed } = make();
+  const v = await currentVersion(installed);
+  assert.equal(v.commit, git(installed, ['rev-parse', '--short', 'HEAD']));
+  assert.equal(v.branch, 'main');
+  assert.equal(v.subject, 'one');
+  assert.equal(v.updatable, true);
+
+  // A dirty tree is somebody's development checkout: no button for it.
+  writeFileSync(join(installed, 'v'), 'edited\n');
+  assert.equal((await currentVersion(installed)).updatable, false);
+  git(installed, ['checkout', '--', 'v']);
+
+  // Nor a checkout pinned to a commit, as a release worktree is.
+  git(installed, ['checkout', '-q', '--detach', 'HEAD']);
+  assert.equal((await currentVersion(installed)).updatable, false);
+  void remote;
+});
+
+test('something that is not a checkout reports no version rather than failing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-nogit-'));
+  assert.equal(await currentVersion(dir), null);
+});
+
+test('commits made here and not pushed are never reset away', async () => {
+  const { remote, installed } = make();
+  git(installed, ['config', 'user.email', 't@t']);
+  git(installed, ['config', 'user.name', 't']);
+  writeFileSync(join(installed, 'mine.txt'), 'unpushed work\n');
+  git(installed, ['add', '.']);
+  git(installed, ['commit', '-qm', 'mine']);
+  const head = git(installed, ['rev-parse', 'HEAD']);
+  commit(remote, 'two'); // origin moved on too, so head !== tip
+  const r = await update(installed);
+  assert.equal(r.updated, false);
+  assert.match(r.reason, /1 commit not pushed/);
+  assert.equal(git(installed, ['rev-parse', 'HEAD']), head, 'the local commit survives');
+});

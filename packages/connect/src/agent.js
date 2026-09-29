@@ -31,6 +31,7 @@ import { transcribe, canTranscribe } from './voice.js';
 import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
 import { Handoffs } from './handoffs.js';
 import { Transfers } from './transfers.js';
+import { selfUpdate, currentVersion } from './update.js';
 
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30_000;
@@ -784,7 +785,11 @@ export class Daemon {
   }
 
   async describe() {
+    // Read once per connection: it changes only when an update lands, and an
+    // update restarts the daemon.
+    this.version ??= await currentVersion().catch(() => null);
     return {
+      version: this.version,
       host: hostname(),
       platform: platform(),
       arch: arch(),
@@ -1013,6 +1018,12 @@ export class Daemon {
     switch (method) {
       case M.ENV_INFO:
         return { ...(await this.describe()), name: this.name };
+
+      case M.ENV_UPDATE: {
+        const r = await selfUpdate();
+        // The restart is on a five second timer, so this reply gets out first.
+        return { ...r, version: r.updated ? null : this.version };
+      }
 
       /**
        * What this machine is called, changed from the app.
