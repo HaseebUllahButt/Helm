@@ -2072,16 +2072,19 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const recent = [...rest, ...externalLive].filter((s) => !botThread(s)).sort(byRecent).slice(0, 3);
   const recentIds = new Set(recent.map((s) => s.id));
 
+  // A thread belongs to a project by its folder - or by being in a worktree of it.
+  const belongsTo = (s: Session, p: Project) =>
+    sameDir(s.cwd || '~', p.path) || (p.worktrees ?? []).some((w) => sameDir(s.cwd || '~', w));
   const projectFolds = projects
     .map((p) => ({
       project: p,
       list: [
-        ...rest.filter((s) => !recentIds.has(s.id) && sameDir(s.cwd || '~', p.path)),
-        ...externalLive.filter((s) => !recentIds.has(s.id) && sameDir(s.cwd || '~', p.path)),
+        ...rest.filter((s) => !recentIds.has(s.id) && belongsTo(s, p)),
+        ...externalLive.filter((s) => !recentIds.has(s.id) && belongsTo(s, p)),
       ].sort(byRecent),
       // Threads of this project already standing under "recent" above. They
       // are counted, or the header said 0 next to a thread you can see.
-      above: recent.filter((s) => sameDir(s.cwd || '~', p.path)).length,
+      above: recent.filter((s) => belongsTo(s, p)).length,
     }))
     .filter(({ project: p, list, above }) =>
       !q || list.length + above > 0 || `${p.title} ${p.path}`.toLowerCase().includes(q));

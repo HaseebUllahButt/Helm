@@ -111,3 +111,14 @@ test('a worktree name can never become anything but a slug', async () => {
 test('a worktree of something that is not a repository is refused', async () => {
   await assert.rejects(addWorktree(mkdtempSync(join(tmpdir(), 'helm-nogit-')), 'x'), /not a git repository/);
 });
+
+test('a linked worktree knows the repository it belongs to; nothing else does', async () => {
+  const { worktreeBase } = await import('../packages/connect/src/git.js');
+  const dir = repo();
+  const w = await addWorktree(dir, 'feature');
+  assert.equal(worktreeBase(w.path), dir, 'the worktree points home');
+  assert.equal(worktreeBase(dir), null, 'the main checkout is not a worktree');
+  assert.equal(worktreeBase(mkdtempSync(join(tmpdir(), 'helm-nogit-'))), null, 'nor is a plain folder');
+  assert.equal(worktreeBase('/definitely/not/here'), null, 'nor a folder that is not there');
+  rmSync(w.path, { recursive: true, force: true });
+});

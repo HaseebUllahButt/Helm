@@ -310,6 +310,57 @@ the report that started the latency work came from that phone. **Check
 `helm devices` before writing anything about what has or has not been
 tried.**
 
+## What changed in the T3 comparison pass
+
+Ideas from T3 Code (its README and ~100 release notes; no code, per the
+2026-09-14 rule), ranked in the `helm-t3-feature-gap` memory. Every piece below
+was verified by running it - a sandboxed `helm up`, a real Claude/Codex session,
+the phone at 390px and the desktop at 1280px - and has tests where it touches the
+daemon (`npm test`: 447 pass).
+
+- **Update from the app** (Settings > Updates). `env.info.version` is the commit a
+  machine runs; `env.update` runs `selfUpdate` on the machine itself and restarts it
+  five seconds later. Update-every-machine goes VM first. A machine that is pinned
+  (a release worktree, like the laptop's `~/.helm-release`), dirty, or has unpushed
+  commits says so and is left alone. **`selfUpdate` now refuses a checkout with
+  unpushed commits** - its `reset --hard` would have destroyed them, and the VM's
+  clone is one the owner commits from. Verified end to end on a throwaway origin.
+- **Appearance** (Settings): system/dark/light, blue-orange diffs for red-green
+  colour blindness, wide chat, compact lists - per device, applied to `<html>`
+  before first paint. About fifty hard-coded colours became tokens. Engine marks are
+  not themed: in light their tiles stay dark so every logo is unchanged.
+- **Git**: `git.status/diff/worktree/pr` (`packages/connect/src/git.js`, tested on
+  real repos; paths from a phone are validated, a branch name is only a derived
+  slug). A Changes button in the session header opens the files with +/-, each diff,
+  a *viewed* tick that resets when the file changes again, and the branch's PR when
+  `gh` is there. Start offers **its own worktree**, or **several agents to compare**:
+  each gets a worktree and the same task (verified with Claude and Codex).
+  Worktree threads file under their repo (`worktrees` on `project.list`).
+- **Branch from here** (Claude only): a *branch* action on each of your messages
+  starts a new thread as the conversation was just before it. The driver records
+  `resumeAt` (the last assistant message of each turn) and `session.fork` uses the
+  CLI's `--fork-session --resume-session-at`. Non-destructive: the original thread
+  and the files are untouched. A fork's inherited cost total is a baseline, not a
+  charge. Verified on the real CLI (the branch remembered only the first word).
+  This is the safe stand-in for T3's destructive rewind.
+- **Command palette** Ctrl/Cmd+K (threads, machines, actions), Ctrl/Cmd+[ and ],
+  `/`, `?`. **Reading**: previous/next-message buttons, tap-to-zoom images, tool-run
+  durations, big pastes folded into a token and put back whole on send (tested for
+  exact round-trips). **Favourite models** (star, per engine). **Snooze** a waiting
+  thread (presets or a time), undo-archive, tap feedback, a fade between screens.
+
+**Not built, and why.** PR list/merge/rebase (needs a `gh` write path and
+account routing - only "the branch's PR" is shown); auto-settle (no clear meaning
+in helm); a searchable keybindings page (there is a shortcuts list); the turn
+*minimap* graphic (prev/next exists); a destructive rewind (branch covers it, and
+only Claude has a cut-at-a-message flag). Default permissions per new thread
+already exist under CLI defaults.
+
+**Traps found.** `kill $pid` and launching the daemon in one command matched the
+agent's own shell again (exit 144) - separate calls, as the notes say. A daemon left
+running from a deleted throwaway clone kept port 8790 and served 404s; find it by
+its own PID, not its shell's.
+
 ## What changed in the Quiet UI pass
 
 A UI-only pass (`be38edd`, `39a5b95`). No daemon, relay or protocol change.

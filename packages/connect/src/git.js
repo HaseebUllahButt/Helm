@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stat, readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync, readFileSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { expand, collapse } from './paths.js';
 
@@ -153,6 +153,28 @@ export async function addWorktree(cwd, name) {
   const base = (await git(root, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
   await git(root, ['worktree', 'add', '-b', branch, path]);
   return { path: collapse(path), branch, base };
+}
+
+/**
+ * If `cwd` is a linked worktree, the repository it belongs to; otherwise null.
+ *
+ * A linked worktree has a `.git` *file* pointing into the main repository's
+ * `.git/worktrees/<name>`, so this is a read of one small file - it is called
+ * for every session when the machine screen asks for its projects. That is how
+ * a comparison's five worktrees can sit under the one repo they came from.
+ */
+export function worktreeBase(cwd) {
+  try {
+    const dir = resolve(expand(String(cwd ?? '')));
+    const marker = join(dir, '.git');
+    if (!statSync(marker).isFile()) return null;
+    const m = /^gitdir:\s*(.+)$/m.exec(readFileSync(marker, 'utf8'));
+    if (!m) return null;
+    const parts = resolve(dir, m[1].trim()).split('/');
+    const at = parts.lastIndexOf('worktrees');
+    if (at < 2 || parts[at - 1] !== '.git') return null;
+    return collapse(parts.slice(0, at - 1).join('/') || '/');
+  } catch { return null; }
 }
 
 /** The pull request for this branch, if `gh` is here and there is one. Never throws. */

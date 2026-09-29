@@ -1092,14 +1092,27 @@ export class Daemon {
 
       case M.PROJECT_LIST: {
         const byPath = new Map(listProjects().map((x) => [x.path, x]));
+        // A worktree is a checkout of a repo that already has a project, so
+        // its threads belong under that one rather than under a project each.
+        const worktrees = new Map();
         for (const s of await this.sessions.list()) {
           if (s.engine === 'shell' || !s.cwd) continue;
           try {
-            const found = await fsApi.project(s.cwd);
+            const base = gitq.worktreeBase(s.cwd);
+            const found = await fsApi.project(base ?? s.cwd);
             if (!byPath.has(found.path)) byPath.set(found.path, found);
+            if (base) {
+              const set = worktrees.get(found.path) ?? new Set();
+              set.add(collapse(expand(s.cwd)));
+              worktrees.set(found.path, set);
+            }
           } catch {}
         }
-        return { projects: [...byPath.values()].sort((a, b) => a.title.localeCompare(b.title)) };
+        return {
+          projects: [...byPath.values()]
+            .map((x) => (worktrees.has(x.path) ? { ...x, worktrees: [...worktrees.get(x.path)] } : x))
+            .sort((a, b) => a.title.localeCompare(b.title)),
+        };
       }
 
       case M.PROJECT_SAVE: {

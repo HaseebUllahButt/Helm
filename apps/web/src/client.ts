@@ -215,7 +215,8 @@ export interface MediaEntry {
   media: boolean;
 }
 
-export interface Project { path: string; title: string }
+/** `worktrees` are other checkouts of this repo that have threads in them. */
+export interface Project { path: string; title: string; worktrees?: string[] }
 
 export interface Tool { name: string; input: string }
 export interface Message {
