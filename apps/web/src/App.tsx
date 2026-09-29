@@ -930,7 +930,7 @@ function Shell({ client, conn, onSignOut }: {
       <aside className={`sidebar${!showMain ? ' showing' : ''}${wide && sidebarCollapsed ? ' collapsed' : ''}`}>
         <div className="bar side">
           <div className="brand">
-            <img src="/icon.svg" alt="" />
+            <img src="/favicon.svg" alt="" />
             <b>helm</b>
           </div>
           <span className={`conn ${status}`} title={conn.error || status}>
