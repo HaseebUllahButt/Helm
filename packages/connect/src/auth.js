@@ -1,5 +1,10 @@
 import { execFile } from 'node:child_process';
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { join } from 'node:path';
 import { materialize } from './profiles.js';
+import { ENGINES } from './engines.js';
+import { HELM_DIR, expand } from './paths.js';
+import { agyModelsFromOutput, primeModels } from './models.js';
 
 /**
  * Whether each profile can actually sign in, so the app offers only accounts
@@ -41,12 +46,21 @@ const PROBES = {
     },
   },
   agy: {
-    // Signed out, agy refuses to list models and says so.
+    // Signed out, agy refuses to list models and says so. Signed in, the
+    // answer *is* the model list - the picker's, which costs agy the same
+    // several seconds to fetch, so it is handed to models.js below.
     args: ['models'],
     read(out, err) {
       const text = `${out}\n${err}`;
       if (/sign in/i.test(text)) return 'unauthenticated';
       return /^\S+\t/m.test(out) ? 'authenticated' : 'unknown';
+    },
+    prime(profile, spec, out) {
+      const engine = ENGINES.agy;
+      const home = spec.env?.[engine.homeEnv] ?? engine.defaultHome;
+      const launcher = profile.wraps ? { cmd: spec.cmd, args: spec.args } : null;
+      const value = agyModelsFromOutput(expand(home), out);
+      if (value.models.length) primeModels('agy', home, launcher, value);
     },
   },
 };
@@ -71,41 +85,80 @@ export async function probeAuth(profile) {
   // flags (`--model x`) would only get in the way of a subcommand.
   const lead = profile.wraps ? spec.args : [];
   const result = await run(spec.cmd, [...lead, ...probe.args], spec.env);
-  return result ? probe.read(result.out, result.err, result.code) : 'unknown';
+  if (!result) return 'unknown';
+  const status = probe.read(result.out, result.err, result.code);
+  if (status === 'authenticated') probe.prime?.(profile, spec, result.out);
+  return status;
 }
 
-// profile identity -> { status, at, pending }
+// profile identity -> { status, at, pending }. Kept on disk too: a restarted
+// daemon should not greet the picker with a round of five-second probes.
 const cache = new Map();
 const keyOf = (p) => JSON.stringify([p.id, p.engine, p.cmd, p.args ?? [], p.env ?? {}, p.envFrom ?? [], p.unset ?? []]);
+const AUTH_FILE = () => join(HELM_DIR, 'auth.json');
+let loaded = false;
 
-function check(profile, refresh) {
+function load() {
+  if (loaded) return;
+  loaded = true;
+  try {
+    for (const [key, v] of Object.entries(JSON.parse(readFileSync(AUTH_FILE(), 'utf8')))) {
+      if (v && typeof v.status === 'string' && typeof v.at === 'number') cache.set(key, { status: v.status, at: v.at });
+    }
+  } catch { /* first run */ }
+}
+
+function save() {
+  const out = {};
+  for (const [key, v] of cache) if (v.at) out[key] = { status: v.status, at: v.at };
+  try {
+    const tmp = `${AUTH_FILE()}.tmp`;
+    writeFileSync(tmp, JSON.stringify(out), { mode: 0o600 });
+    renameSync(tmp, AUTH_FILE());
+  } catch { /* the in-memory answer still stands */ }
+}
+
+function check(profile) {
   const key = keyOf(profile);
   const hit = cache.get(key);
   if (hit?.pending) return hit.pending;
-  if (hit && !refresh && Date.now() - hit.at < TTL_MS) return Promise.resolve(hit.status);
   const pending = probeAuth(profile)
     .catch(() => 'unknown')
     .then((status) => {
       cache.set(key, { status, at: Date.now() });
+      save();
       return status;
     });
-  cache.set(key, { status: hit?.status ?? 'unknown', at: hit?.at ?? 0, pending });
+  cache.set(key, { status: hit?.status, at: hit?.at ?? 0, pending });
   return pending;
 }
 
 /**
- * Each profile's auth status, waiting at most `waitMs` for probes that are
- * still running; those answer with what was known before (or `unknown`) and
- * are cached for next time.
+ * Each profile's auth status. Probes take seconds (agy asks its server), and
+ * the picker is waiting, so this answers from what is already known and
+ * re-probes anything older than the TTL behind the answer. It waits - at
+ * most `waitMs` - only for a profile never probed before, or for all of them
+ * when the caller asked for a refresh.
  */
 export async function authStatuses(profiles, { refresh = false, waitMs = 4000 } = {}) {
-  const checks = profiles.map((p) => check(p, refresh));
-  let timer;
-  await Promise.race([
-    Promise.all(checks),
-    new Promise((resolve) => { timer = setTimeout(resolve, waitMs); }),
-  ]);
-  clearTimeout(timer);
+  load();
+  const waitFor = [];
+  for (const p of profiles) {
+    const hit = cache.get(keyOf(p));
+    const known = hit && typeof hit.status === 'string';
+    if (refresh || !known || Date.now() - hit.at >= TTL_MS) {
+      const job = check(p);
+      if (refresh || !known) waitFor.push(job);
+    }
+  }
+  if (waitFor.length) {
+    let timer;
+    await Promise.race([
+      Promise.all(waitFor),
+      new Promise((resolve) => { timer = setTimeout(resolve, waitMs); }),
+    ]);
+    clearTimeout(timer);
+  }
   return new Map(profiles.map((p) => [p.id, cache.get(keyOf(p))?.status ?? 'unknown']));
 }
 
@@ -120,4 +173,5 @@ export async function usableProfiles(profiles, options) {
 /** Tests only. */
 export function _resetAuthCache() {
   cache.clear();
+  loaded = true;
 }

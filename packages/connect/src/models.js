@@ -43,32 +43,62 @@ let modelsDevCache = { at: 0, catalog: null };
  * (discover.js wrappedEngine): its own binary can only be reached that way.
  */
 export async function listModels(engine, home, environment = {}, launcher = null) {
-  const root = expand(home ?? ENGINES[engine]?.defaultHome ?? '~');
-  const key = `${engine}|${root}|${launcher ? [launcher.cmd, ...launcher.args].join(' ') : ''}`;
+  const key = modelsKey(engine, home, launcher);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
-  let value = { default: null, models: [] };
-  try {
-    if (engine === 'codex') value = await codexModels(root, environment);
-    else if (engine === 'claude') value = await claudeModels(root, environment);
-    else if (engine === 'opencode' || engine === 'opencode2') {
-      value = await opencodeModels(root, ENGINES[engine]?.bin ?? engine, environment);
-    }
-    else if (engine === 'devin') value = await devinModels(root, environment);
-    else if (engine === 'grok') value = await grokModels(root, environment);
-    else if (engine === 'pi' || engine === 'omp') value = await piModels(engine, root, environment);
-    else if (engine === 'cursor') value = await cursorModels(environment);
-    else if (engine === 'gemini') value = await geminiModels();
-    else if (engine === 'agy') value = await agyModels(root, environment, launcher);
-    else if (engine === 'kimi') value = await kimiModels(environment);
-  } catch {
-    // A transient provider or CLI failure should not make a previously known
-    // model disappear from the picker. The next expiry will try discovery
-    // again, while this answer keeps the app useful in the meantime.
-    if (hit?.value) return hit.value;
+  // Some CLIs take seconds to list (agy asks the server every time). A list
+  // that has aged out is still a far better answer than a spinner: hand it
+  // back and fetch the new one behind it.
+  if (hit?.value) {
+    refreshModels(key, engine, home, environment, launcher, hit).catch(() => {});
+    return hit.value;
   }
-  cache.set(key, { at: Date.now(), value });
-  return value;
+  return refreshModels(key, engine, home, environment, launcher, hit);
+}
+
+const modelsKey = (engine, home, launcher) => {
+  const root = expand(home ?? ENGINES[engine]?.defaultHome ?? '~');
+  return `${engine}|${root}|${launcher ? [launcher.cmd, ...launcher.args].join(' ') : ''}`;
+};
+
+/** Fill the cache from output something else already fetched (auth.js). */
+export function primeModels(engine, home, launcher, value) {
+  cache.set(modelsKey(engine, home, launcher), { at: Date.now(), value });
+}
+
+const inflight = new Map();
+
+function refreshModels(key, engine, home, environment, launcher, hit) {
+  if (inflight.has(key)) return inflight.get(key);
+  const root = expand(home ?? ENGINES[engine]?.defaultHome ?? '~');
+  const job = (async () => {
+    let value = { default: null, models: [] };
+    try {
+      if (engine === 'codex') value = await codexModels(root, environment);
+      else if (engine === 'claude') value = await claudeModels(root, environment);
+      else if (engine === 'opencode' || engine === 'opencode2') {
+        value = await opencodeModels(root, ENGINES[engine]?.bin ?? engine, environment);
+      }
+      else if (engine === 'devin') value = await devinModels(root, environment);
+      else if (engine === 'grok') value = await grokModels(root, environment);
+      else if (engine === 'pi' || engine === 'omp') value = await piModels(engine, root, environment);
+      else if (engine === 'cursor') value = await cursorModels(environment);
+      else if (engine === 'gemini') value = await geminiModels();
+      else if (engine === 'agy') value = await agyModels(root, environment, launcher);
+      else if (engine === 'kimi') value = await kimiModels(environment);
+    } catch {
+      // A transient provider or CLI failure should not make a previously known
+      // model disappear from the picker. The next expiry will try discovery
+      // again, while this answer keeps the app useful in the meantime.
+      if (hit?.value) return hit.value;
+    }
+    // An empty answer from a CLI that listed models before is a hiccup, not news.
+    if (!value.models?.length && hit?.value?.models?.length) return hit.value;
+    cache.set(key, { at: Date.now(), value });
+    return value;
+  })().finally(() => inflight.delete(key));
+  inflight.set(key, job);
+  return job;
 }
 
 async function codexModels(root, environment) {
@@ -655,6 +685,21 @@ async function geminiModels() {
  * is merely signed out.
  */
 async function agyModels(root, environment = {}, launcher = null) {
+  let stdout = '';
+  try {
+    const cmd = launcher ? expand(launcher.cmd) : ENGINES.agy?.bin ?? 'agy';
+    ({ stdout } = await exec(cmd, [...(launcher?.args ?? []), 'models'], {
+      timeout: 20_000, env: { ...process.env, ...environment },
+    }));
+  } catch { /* `agy models` may still work unauthenticated; if not, empty */ }
+  return agyModelsFromOutput(root, stdout);
+}
+
+/**
+ * `agy models` prints `slug<TAB>Display Name` rows; `root` is the gemini home,
+ * whose settings.json remembers the default by display name.
+ */
+export function agyModelsFromOutput(root, stdout) {
   // `root` is the gemini home; agy's own store sits under it.
   const home = join(root, 'antigravity-cli');
   const models = [];
@@ -668,24 +713,18 @@ async function agyModels(root, environment = {}, launcher = null) {
       if (m?.modelName && m?.displayName) labels[m.modelName] = m.displayName;
     }
   } catch { /* no settings */ }
-  try {
-    const cmd = launcher ? expand(launcher.cmd) : ENGINES.agy?.bin ?? 'agy';
-    const { stdout } = await exec(cmd, [...(launcher?.args ?? []), 'models'], {
-      timeout: 20_000, env: { ...process.env, ...environment },
-    });
-    for (const line of String(stdout ?? '').split('\n')) {
-      const row = line.trim();
-      if (!row) continue;
-      // `id\tLabel` - the label itself contains spaces, so only the first
-      // column break separates them.
-      const m = /^(\S+)(?:\t+|\s{2,})(.+)$/.exec(row);
-      const id = m?.[1] ?? row;
-      const label = m?.[2]?.trim();
-      if (/^(available|default|error|usage|eligibility)/i.test(id)) continue;
-      if (!models.includes(id)) models.push(id);
-      if (label) labels[id] ??= label;
-    }
-  } catch { /* `agy models` may still work unauthenticated; if not, empty */ }
+  for (const line of String(stdout ?? '').split('\n')) {
+    const row = line.trim();
+    if (!row) continue;
+    // `id\tLabel` - the label itself contains spaces, so only the first
+    // column break separates them.
+    const m = /^(\S+)(?:\t+|\s{2,})(.+)$/.exec(row);
+    const id = m?.[1] ?? row;
+    const label = m?.[2]?.trim();
+    if (/^(available|default|error|usage|eligibility|fetching)/i.test(id)) continue;
+    if (!models.includes(id)) models.push(id);
+    if (label) labels[id] ??= label;
+  }
   let def = null;
   if (defLabel) def = Object.keys(labels).find((id) => labels[id] === defLabel) ?? null;
   if (def && !models.includes(def)) models.unshift(def);

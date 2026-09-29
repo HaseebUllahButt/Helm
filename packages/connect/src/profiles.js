@@ -87,14 +87,27 @@ export function profilesStale() {
   }
 }
 
+let rediscovering = null;
+
 /**
  * getProfiles, but rediscovers when the saved list is old enough to predate
  * a CLI installed after this machine joined. Anything that answers "what
  * can this machine run" should ask this, not getProfiles.
+ *
+ * Discovery takes a second or two (an interactive shell for the aliases, a
+ * login shell per engine), and the picker is waiting on this answer. So a
+ * stale list is answered as saved and rediscovered behind it; the next ask
+ * gets the new one. Only a machine with no list at all waits for discovery.
  */
 export async function currentProfiles() {
-  if (profilesStale()) return (await refreshProfiles()).profiles;
-  return getProfiles();
+  const saved = loadProfiles();
+  if (!saved?.profiles?.length) return (await refreshProfiles()).profiles;
+  if (profilesStale() && !rediscovering) {
+    rediscovering = refreshProfiles()
+      .catch(() => {})
+      .finally(() => { rediscovering = null; });
+  }
+  return saved.profiles;
 }
 
 /**

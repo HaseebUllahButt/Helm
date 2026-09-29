@@ -12,7 +12,7 @@ import { modesFor } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
 import { listModels } from './models.js';
-import { usableProfiles } from './auth.js';
+import { usableProfiles, authStatuses } from './auth.js';
 import { listCommands } from './commands.js';
 import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
 import { ENGINES } from './engines.js';
@@ -261,6 +261,10 @@ export class Daemon {
     // The folder index behind `fs.search`: one background walk now, so the
     // first query is answered from memory rather than starting the walk then.
     fsApi.warmIndex?.();
+    // Likewise which accounts are signed in - and, as a side effect of asking
+    // agy, their model lists - so opening the picker or choosing an account
+    // right after a restart answers from memory instead of from the CLIs.
+    currentProfiles().then((profiles) => authStatuses(profiles, { waitMs: 0 })).catch(() => {});
     this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session: wire(session) }));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
