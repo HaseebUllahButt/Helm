@@ -10,6 +10,7 @@ import {
   localKey, describeSelf, saveNetwork, machineKind, MACHINE_KINDS,
 } from '@helm/protocol/network';
 import { refreshProfiles, getProfiles } from '../src/profiles.js';
+import { authStatuses } from '../src/auth.js';
 import { ENGINES } from '../src/engines.js';
 import { proxy } from '../src/proxy.js';
 import { createRuntime } from '../src/runtime/index.js';
@@ -1617,10 +1618,13 @@ try {
       const profiles = rest.includes('--refresh')
         ? (await refreshProfiles()).profiles
         : await getProfiles();
+      // The app hides signed-out accounts; list them here, marked, so it's clear why.
+      const auth = await authStatuses(profiles, { refresh: rest.includes('--refresh'), waitMs: 30_000 });
       for (const p of profiles) {
         const env = Object.entries(p.env || {}).map(([k, v]) => `${k}=${v}`).join(' ');
+        const status = auth.get(p.id) === 'unauthenticated' ? '  (signed out - hidden in the app)' : '';
         console.log(
-          `${p.id.padEnd(16)} ${p.engine.padEnd(9)} ${env} ${p.cmd} ${(p.args || []).join(' ')}`
+          `${p.id.padEnd(16)} ${p.engine.padEnd(9)} ${env} ${p.cmd} ${(p.args || []).join(' ')}${status}`
         );
       }
       break;

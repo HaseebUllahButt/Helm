@@ -12,6 +12,7 @@ import { modesFor } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
 import { listModels } from './models.js';
+import { usableProfiles } from './auth.js';
 import { listCommands } from './commands.js';
 import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
 import { ENGINES } from './engines.js';
@@ -1139,9 +1140,12 @@ export class Daemon {
         // can run - the one moment a stale answer is a wrong one. Discovery
         // is cheap enough to redo every few minutes; between those the saved
         // file answers.
-        const profiles = p.refresh
+        const found = p.refresh
           ? (await refreshProfiles()).profiles
           : await currentProfiles();
+        // Offer only accounts that can sign in: a profile whose CLI says it is
+        // signed out is left out until it isn't (auth.js).
+        const profiles = await usableProfiles(found, { refresh: !!p.refresh });
         // Each profile carries its account key and model prefs, so the app
         // groups aliases and renders the picker filter with no extra call.
         const cfg = loadSettings();
