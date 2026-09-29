@@ -32,6 +32,7 @@ import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfe
 import { Handoffs } from './handoffs.js';
 import { Transfers } from './transfers.js';
 import { selfUpdate, currentVersion } from './update.js';
+import * as gitq from './git.js';
 
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30_000;
@@ -1018,6 +1019,11 @@ export class Daemon {
     switch (method) {
       case M.ENV_INFO:
         return { ...(await this.describe()), name: this.name };
+
+      case M.GIT_STATUS: return gitq.status(p.cwd);
+      case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
+      case M.GIT_WORKTREE: return gitq.addWorktree(p.cwd, p.name);
+      case M.GIT_PR: return { pr: await gitq.pullRequest(p.cwd) };
 
       case M.ENV_UPDATE: {
         const r = await selfUpdate();

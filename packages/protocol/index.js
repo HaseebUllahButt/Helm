@@ -107,6 +107,11 @@ export const M = {
   // What a machine is for ('pc' | 'vm' | 'nas'), asked of the machine itself
   // for the same reason as a rename: `kind` lives on its own roster record.
   MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }
+  // What a session did to its folder, as git sees it.
+  GIT_STATUS: 'git.status',        // { cwd } -> { repo, branch?, ahead?, behind?, files[], worktree?, head? }
+  GIT_DIFF: 'git.diff',            // { cwd, path } -> { path, diff, truncated }
+  GIT_WORKTREE: 'git.worktree',    // { cwd, name? } -> { path, branch, base }  a sibling checkout on a new branch
+  GIT_PR: 'git.pr',                // { cwd } -> the branch's pull request, or null
   FS_LIST: 'fs.list',              // { path } -> { path, parent, entries[] }
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }

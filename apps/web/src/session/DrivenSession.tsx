@@ -8,6 +8,7 @@ import { EngineMark } from '../EngineMark';
 import { PermissionSheet } from './PermissionSheet';
 import { Controls, type Kind } from './Controls';
 import { Transcript, splitNote } from './Transcript';
+import { ChangesPanel, useGitStatus } from './Changes';
 import { Confirm, TextPrompt } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
@@ -51,6 +52,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
+  const [showChanges, setShowChanges] = useState(false);
   useDismiss(menu !== null, useCallback(() => setMenu(null), []));
   const [options, setOptions] = useState<ModelList | null>(null);
   const [commands, setCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
@@ -342,6 +344,10 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   };
 
   const controls = Controls({ options, session, busy, onPick: pick });
+  // What the folder looks like to git. Asked again whenever a turn ends,
+  // which is when something has usually just changed.
+  const git = useGitStatus(client, env, session.cwd, status === 'working' ? 'working' : `rest:${session.updatedAt ?? 0}`);
+  const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
 
   // The clip is only offered when the running model can see images;
   // the daemon enforces the same rule, so this is presentation, not trust.
@@ -371,6 +377,21 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           </span>
         </div>
         {chip(status)}
+        {git.status?.repo && !session.brain && (
+          <button
+            className={`iconbtn changesbtn${changed ? ' has' : ''}`}
+            title={changed ? `${changed} changed file${changed === 1 ? '' : 's'}` : 'no changes yet'}
+            aria-label={changed ? `${changed} changed files` : 'changes'}
+            onClick={() => setShowChanges(true)}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="9" r="2" />
+              <path d="M6 7v10M18 11c0 4-6 3-10 7" />
+            </svg>
+            {changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}
+          </button>
+        )}
         {/* Completion notifications are on for new threads. The daemon holds
             the preference, so it is the same on every device and survives
             this one closing. */}
@@ -445,6 +466,13 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>
+
+      {showChanges && git.status?.repo && (
+        <ChangesPanel
+          client={client} env={env} cwd={session.cwd} status={git.status} reload={git.reload}
+          onClose={() => setShowChanges(false)}
+        />
+      )}
 
       {ask === 'kill' && (
         <Confirm
