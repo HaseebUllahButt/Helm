@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   createEphemeralCodeKey, materializeCode, signHandoffDigest, verifyHandoffSignature,
 } from './code-transfer.js';
+import { inspectTransferReadiness } from './transfer-check.js';
 
 const TRANSFER_ID = /^[a-f0-9]{24}$/;
 const MACHINE_ID = /^[a-f0-9]{1,64}$/;
@@ -183,13 +184,28 @@ export class Transfers {
     try {
       const receipt = await materializeCode(p.envelope, p.transferId, p.folder, {
         privateKey: grant.privateKey,
+        expectedDigest: p.snapshotDigest,
       });
+      const readiness = await inspectTransferReadiness(receipt.folder, {
+        skippedEntries: receipt.skippedEntries,
+        skipped: receipt.skipped,
+      }).catch(() => ({
+        status: 'unverified',
+        verified: false,
+        checks: [{
+          code: 'inspection-failed',
+          status: 'warning',
+          message: 'Readiness inspection failed; run helm verify on the target.',
+        }],
+      }));
       const result = {
         folder: receipt.folder,
         files: receipt.files,
         bytes: receipt.bytes,
         skipped: receipt.skipped,
+        skippedEntries: receipt.skippedEntries,
         digest: receipt.digest,
+        readiness,
       };
       grant.result = result;
       grant.privateKey = null;

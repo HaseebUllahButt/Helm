@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-transfers-'));
 process.env.HELM_DIR = join(root, 'helm');
@@ -140,8 +142,13 @@ test('a signed source request lands the snapshot and answers the minimal receipt
   const p = requestFor(grant);
   const r = await t.accept(p, SRC);
 
-  assert.deepEqual(Object.keys(r).sort(), ['bytes', 'digest', 'files', 'folder', 'skipped']);
+  assert.deepEqual(Object.keys(r).sort(), [
+    'bytes', 'digest', 'files', 'folder', 'readiness', 'skipped', 'skippedEntries',
+  ]);
   assert.equal(r.files, 1);
+  assert.ok(Array.isArray(r.skippedEntries));
+  assert.equal(r.readiness.verified, false);
+  assert.ok(r.readiness.checks.some((c) => c.code === 'runtime-not-verified'));
   assert.equal(readFileSync(join(r.folder, 'a.txt'), 'utf8'), 'code');
   assert.equal(r.folder, p.folder);
 
@@ -208,6 +215,107 @@ test('a wrong caller or signature fails before a byte is written', async () => {
   await assert.rejects(
     () => t.accept({ ...p, sourceSignature: 'AAAA' }, SRC), /source signature/);
   assert.equal(existsSync(p.folder), false);
+});
+
+test('a sealed snapshot that is not the claimed digest fails cleanly and the grant retries', async () => {
+  const t = make();
+  const { grant } = t.receive(forSrc, net.self);
+  const p = requestFor(grant);
+
+  const otherDir = join(work, 'other-src');
+  mkdirSync(otherDir, { recursive: true });
+  writeFileSync(join(otherDir, 'b.txt'), 'different code');
+  const otherSnapshot = CT.createCodeSnapshot(otherDir);
+  const sneaky = {
+    ...p,
+    envelope: CT.sealCodeSnapshot(
+      otherSnapshot, decodeTransferGrant(grant).transferPubkey, p.transferId),
+  };
+  assert.notEqual(otherSnapshot.digest, p.snapshotDigest);
+
+  await assert.rejects(() => t.accept(sneaky, SRC), /digest/);
+  assert.equal(existsSync(p.folder), false, 'no destination was created');
+  assert.equal(existsSync(`${p.folder}.helm-stage-${p.transferId}`), false, 'no stage either');
+
+  const good = await t.accept(p, SRC);
+  assert.equal(readFileSync(join(good.folder, 'a.txt'), 'utf8'), 'code');
+});
+
+test('a sealed grant carries a repo and its env files across the accept boundary', async () => {
+  const src = join(work, 'env-source');
+  mkdirSync(join(src, 'sub'), { recursive: true });
+  writeFileSync(join(src, 'index.js'), 'console.log(1)\n');
+  writeFileSync(join(src, 'package.json'), JSON.stringify({
+    dependencies: { leftpad: '1.0.0' },
+    engines: { node: '>=22' },
+  }));
+  writeFileSync(join(src, '.env'), 'SYNTHETIC_ROOT=synthetic-one\n');
+  writeFileSync(join(src, 'sub', '.env.production'), 'SYNTHETIC_NESTED=synthetic-two\n');
+  writeFileSync(join(src, 'empty.txt'), '');
+  writeFileSync(join(src, 'credentials.json'), '{"synthetic":"fixture"}');
+  const outside = join(work, 'outside.env');
+  writeFileSync(outside, 'SYNTHETIC_OUTSIDE=outside\n');
+  symlinkSync(outside, join(src, '.env.shared'));
+
+  const plain = CT.createCodeSnapshot(src);
+  assert.equal(
+    plain.files.every((f) => !/^\.env(?:\..+)?$/i.test(basename(f.path))),
+    true,
+    'an ordinary snapshot keeps the env files home',
+  );
+
+  const t = make();
+  const { grant } = t.receive(forSrc, net.self);
+  const decoded = decodeTransferGrant(grant);
+  assert.equal(
+    CT.verifyHandoffSignature(signPub, transferGrantDigest(decoded), decoded.signature),
+    true,
+  );
+
+  const snapshot = CT.createCodeSnapshot(src, { includeEnv: true });
+  const transferId = 'ee'.repeat(12);
+  const envelope = CT.sealCodeSnapshot(snapshot, decoded.transferPubkey, transferId);
+  for (const marker of ['SYNTHETIC_ROOT=synthetic-one', 'SYNTHETIC_NESTED=synthetic-two']) {
+    assert.equal(envelope.data.includes(marker), false);
+    assert.equal(envelope.data.includes(Buffer.from(`${marker}\n`).toString('base64url')), false);
+  }
+
+  const p = {
+    transferId,
+    sourceMachineId: SRC,
+    targetMachineId: net.self,
+    folder: join(work, `env-dest-${transferId}`),
+    envelope,
+    snapshotDigest: snapshot.digest,
+    grantSecret: decoded.secret,
+  };
+  p.requestDigest = transferRequestDigest(p);
+  p.sourceSignature = CT.signHandoffDigest(p.requestDigest);
+  const r = await t.accept(p, SRC);
+
+  assert.equal(r.digest, snapshot.digest);
+  assert.equal(readFileSync(join(r.folder, 'index.js'), 'utf8'), 'console.log(1)\n');
+  assert.equal(readFileSync(join(r.folder, '.env'), 'utf8'), 'SYNTHETIC_ROOT=synthetic-one\n');
+  assert.equal(
+    readFileSync(join(r.folder, 'sub', '.env.production'), 'utf8'),
+    'SYNTHETIC_NESTED=synthetic-two\n',
+  );
+  assert.equal(readFileSync(join(r.folder, 'empty.txt'), 'utf8'), '');
+  assert.equal(lstatSync(join(r.folder, '.env')).mode & 0o777, 0o600);
+  assert.equal(lstatSync(join(r.folder, 'sub', '.env.production')).mode & 0o777, 0o600);
+  assert.equal(lstatSync(r.folder).mode & 0o777, 0o700);
+  assert.equal(lstatSync(join(r.folder, 'sub')).mode & 0o777, 0o700);
+  assert.equal(existsSync(join(r.folder, 'credentials.json')), false);
+  assert.equal(existsSync(join(r.folder, '.env.shared')), false);
+  assert.equal(r.skipped, snapshot.skipped);
+  assert.ok(snapshot.skippedEntries.some(
+    (e) => e.path === 'credentials.json' && e.reason === 'secret-name'));
+  assert.ok(snapshot.skippedEntries.some(
+    (e) => e.path === '.env.shared' && e.reason === 'symlink'));
+  assert.equal(r.readiness.status, 'needs-setup');
+  assert.ok(r.readiness.checks.some(
+    (c) => c.code === 'missing-dependencies' && c.status === 'warning'));
+  assert.equal(r.readiness.verified, false);
 });
 
 test('dispatch: devices cannot receive or accept, and session.start cannot plant a handoff id', async (t) => {
