@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { hostname, platform } from 'node:os';
 import { rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { argv, exit } from 'node:process';
@@ -9,7 +9,7 @@ import {
   loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, hubCredential,
   localKey, describeSelf, saveNetwork, machineKind, MACHINE_KINDS,
 } from '@helm/protocol/network';
-import { HELM_DIR } from '../src/paths.js';
+import { HELM_DIR, expand } from '../src/paths.js';
 import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { hubRpc, hubBroadcastRpc, mergeQueueReceipts } from '../src/hub-client.js';
 import {
@@ -87,6 +87,9 @@ const usage = () => {
                                   send a folder to a machine that granted it
     --target-folder <folder>        where it lands on the target
     --include-env                   carry .env files too, written owner-only there
+    --dry-run                       report what a send would carry - no grant needed
+    --allow-skipped                 send even though some files stay behind
+  helm verify <folder> [-- cmd...]  inspect what a received folder still needs
 
   helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
   helm proxy <host>                 ssh ProxyCommand (used by ~/.ssh/config)
@@ -321,11 +324,11 @@ async function inviteMachine(role) {
 
 async function joinCmd() {
   const code = rest.find((a) => !a.startsWith('--'));
-  if (!code) die('an invite code is required: helm join ABCD-1234 --at http://host:8787');
+  if (!code) die('an invite code is required: helm join ABCD-1234 --at https://host.example');
   const codeIndex = rest.indexOf(code);
   const positionalAt = rest[codeIndex + 1]?.startsWith('--') ? null : rest[codeIndex + 1];
   const at = strFlag('at', positionalAt || process.env.HELM_AT);
-  if (!at) die('where should I join? pass --at http://host:8787');
+  if (!at) die('where should I join? pass --at https://host.example (or http://127.0.0.1:8787 on the same machine)');
 
   // Check the runtime before joining, so a machine that cannot actually run
   // agents never shows up in the app as one that can.
@@ -1043,16 +1046,45 @@ async function send() {
   } = await import('../src/code-transfer.js');
   const { decodeTransferGrant, transferGrantDigest, transferRequestDigest } =
     await import('../src/transfers.js');
+  const { transferPreflight, preflightLines, readinessLines } =
+    await import('../src/transfer-check.js');
   const valueFlags = new Set(['--grant', '--target-folder']);
+  const boolFlags = new Set(['--include-env', '--dry-run', '--allow-skipped']);
   const args = [];
+  const seen = new Set();
   for (let i = 0; i < rest.length; i++) {
-    if (!rest[i].startsWith('--')) { args.push(rest[i]); continue; }
-    if (valueFlags.has(rest[i])) i++;
+    const a = rest[i];
+    if (!a.startsWith('-')) { args.push(a); continue; }
+    if (boolFlags.has(a)) continue;
+    if (valueFlags.has(a)) {
+      if (seen.has(a)) die(`${a} was given more than once`);
+      seen.add(a);
+      const v = rest[i + 1];
+      if (v === undefined || v === '' || v.startsWith('-')) die(`${a} needs a value`);
+      i++;
+      continue;
+    }
+    die(`helm send: unknown flag ${a}`);
+  }
+  if (args.length > 2) {
+    die(`helm send: unexpected argument ${JSON.stringify(args[2])}`);
   }
   const [who, folder] = args;
+  const dryRun = rest.includes('--dry-run');
+  const includeEnv = rest.includes('--include-env');
   const grantToken = strFlag('grant', '');
-  if (!who || !grantToken) {
-    die('usage: helm send <machine> [folder] --grant <token>');
+  if (!who || (!dryRun && !grantToken)) {
+    die('usage: helm send <machine> [folder] --grant <token> [--include-env] [--dry-run] [--allow-skipped]');
+  }
+
+  const snapshot = createCodeSnapshot(folder || process.cwd(), { includeEnv });
+  const preflight = transferPreflight(snapshot);
+  for (const line of preflightLines(preflight)) console.log(line);
+  if (dryRun) return;
+  if (preflight.requiresAcknowledgement && !rest.includes('--allow-skipped')) {
+    die('some files will stay behind - rerun with --allow-skipped to send anyway'
+      + (preflight.warnings.some((w) => w.code === 'env-omitted')
+        ? ', or --include-env to carry the .env files' : ''));
   }
 
   const net = requireNetwork();
@@ -1077,9 +1109,7 @@ async function send() {
     die(`the grant did not verify against ${targetName}'s pinned signing key`);
   }
 
-  const includeEnv = rest.includes('--include-env');
   const transferId = randomBytes(12).toString('hex');
-  const snapshot = createCodeSnapshot(folder || process.cwd(), { includeEnv });
   const targetFolder = strFlag('target-folder', '')
     || `~/.helm/transfers/${snapshot.rootName}-${transferId.slice(0, 8)}`;
   const envelope = sealCodeSnapshot(snapshot, grant.transferPubkey, transferId);
@@ -1103,6 +1133,59 @@ async function send() {
     const secrets = snapshot.files.filter((f) => f.secret).length;
     console.log(`  ${secrets} .env file${secrets === 1 ? '' : 's'} included, written owner-only on the target`);
   }
+  if (receipt?.readiness && Array.isArray(receipt.readiness.checks)) {
+    for (const line of readinessLines(receipt.readiness)) console.log(line);
+  } else {
+    console.log('  the receiver did not report readiness; run `helm verify` on the target');
+  }
+}
+
+async function verifyFolder() {
+  const separator = rest.indexOf('--');
+  const before = separator === -1 ? rest : rest.slice(0, separator);
+  const runArgs = separator === -1 ? null : rest.slice(separator + 1);
+  const badFlag = before.find((a) => a.startsWith('-'));
+  if (badFlag) die(`helm verify: unknown flag ${badFlag}`);
+  if (before.length !== 1) {
+    die('usage: helm verify <folder> [-- <program> [args...]]');
+  }
+  const folder = before[0];
+  if (runArgs !== null && runArgs.length === 0) {
+    die('helm verify: `--` needs a program to run');
+  }
+
+  const { inspectTransferReadiness, readHandoffSkipped, readinessLines } =
+    await import('../src/transfer-check.js');
+  const target = resolve(expand(folder));
+  const marker = readHandoffSkipped(target);
+  const readiness = await inspectTransferReadiness(target, {
+    skippedEntries: marker?.skippedEntries ?? [],
+    skipped: marker?.skipped ?? 0,
+  });
+  for (const line of readinessLines(readiness)) console.log(line);
+  if (marker?.malformed) {
+    console.log('  the handoff manifest could not be read; skipped-file history is unknown');
+  }
+  if (runArgs === null) return;
+
+  const code = await new Promise((settle) => {
+    const child = spawn(runArgs[0], runArgs.slice(1), {
+      cwd: target, stdio: 'inherit', shell: false,
+    });
+    child.on('error', () => settle(null));
+    child.on('close', (status) => settle(status));
+  });
+  if (code === 0) {
+    console.log('  explicit check passed');
+    if (readiness.status === 'needs-setup') {
+      console.log('  setup gaps remain - see the checks above');
+    }
+    return;
+  }
+  console.error(code === null
+    ? `helm verify: the check could not be started: ${JSON.stringify(runArgs[0])}`
+    : `helm verify: the check exited with status ${code}`);
+  exit(code ?? 1);
 }
 
 async function receive() {
@@ -1733,6 +1816,10 @@ try {
 
     case 'receive':
       await receive();
+      break;
+
+    case 'verify':
+      await verifyFolder();
       break;
 
     case 'dispatch-status':
