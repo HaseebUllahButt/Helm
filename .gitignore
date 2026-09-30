@@ -3,6 +3,10 @@ dist/
 *.sqlite
 *.sqlite-*
 .env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
 .helm/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
