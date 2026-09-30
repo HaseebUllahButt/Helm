@@ -82,6 +82,8 @@ const ENGINE: Record<string, { label: string; cls: string }> = {
 const Terminal = lazy(() => import('./Terminal').then((m) => ({ default: m.Terminal })));
 const UsageView = lazy(() => import('./Usage').then((m) => ({ default: m.UsageView })));
 const UpdatesView = lazy(() => import('./Updates').then((m) => ({ default: m.UpdatesView })));
+const TransferView = lazy(() => import('./Transfer').then((m) => ({ default: m.TransferView })));
+const VerifyView = lazy(() => import('./Transfer').then((m) => ({ default: m.VerifyView })));
 const AppearanceSettings = lazy(() => import('./AppearanceSettings').then((m) => ({ default: m.AppearanceSettings })));
 
 function ViewLoading({ title, onBack }: { title: string; onBack: () => void }) {
@@ -327,6 +329,9 @@ type MainView =
   | { kind: 'brain' }
   | { kind: 'new'; path?: string }
   | { kind: 'browse'; path?: string }
+  | { kind: 'transfer-browse'; path?: string }
+  | { kind: 'transfer'; cwd: string }
+  | { kind: 'verify'; path: string }
   | { kind: 'start'; cwd: string }
   | { kind: 'settings' }
   | { kind: 'network-settings' }
@@ -676,6 +681,10 @@ function Shell({ client, conn, onSignOut }: {
         items.push({
           id: `new:${e.id}`, group: 'action', title: `New session on ${e.name}`, keywords: 'start create agent',
           run: () => navigate([{ kind: 'env' }, { kind: 'new' }], e.id),
+        });
+        items.push({
+          id: `send:${e.id}`, group: 'action', title: `Send a project from ${e.name}`,
+          keywords: 'transfer env copy move folder', run: () => navigate([{ kind: 'env' }, { kind: 'transfer-browse' }], e.id),
         });
       }
     }
@@ -1187,6 +1196,8 @@ function Shell({ client, conn, onSignOut }: {
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
             onNewSession={() => push({ kind: 'new' })}
             onAddProject={() => push({ kind: 'browse' })}
+            onSendProject={(cwd) => push(cwd ? { kind: 'transfer', cwd } : { kind: 'transfer-browse' })}
+            onCheckProject={(path) => push({ kind: 'verify', path })}
             onStart={(cwd) => push({ kind: 'start', cwd })}
             onSettings={() => push({ kind: 'settings' })}
             onUsage={() => push({ kind: 'usage', envId: env.id })}
@@ -1220,6 +1231,31 @@ function Shell({ client, conn, onSignOut }: {
               restate([{ kind: 'env' }]);
             }}
           />
+        ) : view.kind === 'transfer-browse' ? (
+          <Browse
+            client={client} env={env} path={view.path} onBack={back}
+            title="Send a project" action="Choose this folder"
+            onInto={(path) => push({ kind: 'transfer-browse', path })}
+            onPick={(cwd) => push({ kind: 'transfer', cwd })}
+          />
+        ) : view.kind === 'transfer' ? (
+          <Suspense fallback={<ViewLoading title="Send a project" onBack={back} />}>
+            <TransferView
+              client={client} source={env} envs={envs} folder={view.cwd} onBack={back}
+              onOpenSession={(targetId, session) => navigate([
+                { kind: 'env' }, { kind: 'session', session },
+              ], targetId)}
+            />
+          </Suspense>
+        ) : view.kind === 'verify' ? (
+          <Suspense fallback={<ViewLoading title="Check setup" onBack={back} />}>
+            <VerifyView
+              client={client} env={env} folder={view.path} onBack={back}
+              onOpenSession={(envId, session) => navigate([
+                { kind: 'env' }, { kind: 'session', session },
+              ], envId)}
+            />
+          </Suspense>
         ) : view.kind === 'start' ? (
           <Start
             client={client} env={env} cwd={view.cwd} onBack={back}
@@ -1949,11 +1985,13 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   );
 }
 
-function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming }: {
+function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[];
   /** What this machine last said it was running, while it cannot be asked. */
   remembered?: Session[]; rememberedAt?: number;
-  reload: () => void; onBack: () => void; onNewSession: () => void; onAddProject: () => void; onStart: (cwd: string) => void;
+  reload: () => void; onBack: () => void; onNewSession: () => void; onAddProject: () => void;
+  onSendProject: (cwd?: string) => void; onCheckProject: (path: string) => void;
+  onStart: (cwd: string) => void;
   onSettings: () => void;
   onUsage: () => void; onMedia: () => void; onOpen: (s: Session) => void;
   /** Continue a conversation a CLI recorded on its own; starts the engine. */
@@ -2296,6 +2334,9 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         <button className="action" disabled={!env.online} onClick={onNewSession}>
           <span className="plus">+</span>New session
         </button>
+        <button className="action" disabled={!env.online} onClick={() => onSendProject()}>
+          <span className="plus">⇄</span>Send a project
+        </button>
 
         {searchable && (
           <div className="filterbar">
@@ -2356,8 +2397,10 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             showEmpty
             actions={(
               <ProjectActions
-                title={p.title}
+                title={p.title} online={env.online}
                 onStart={() => onStart(p.path)}
+                onSend={() => onSendProject(p.path)}
+                onCheck={() => onCheckProject(p.path)}
                 onRename={() => setRenaming(p)}
                 onRemove={() => setRemoving(p)}
               />
@@ -2539,8 +2582,9 @@ function Fold({ title, count, note, openWhen = false, defaultOpen = false, atten
   );
 }
 
-function ProjectActions({ title, onStart, onRename, onRemove }: {
-  title: string; onStart: () => void; onRename: () => void; onRemove: () => void;
+function ProjectActions({ title, online, onStart, onSend, onCheck, onRename, onRemove }: {
+  title: string; online: boolean; onStart: () => void; onSend: () => void; onCheck: () => void;
+  onRename: () => void; onRemove: () => void;
 }) {
   const [menu, setMenu] = useState(false);
   useDismiss(menu, useCallback(() => setMenu(false), []));
@@ -2558,6 +2602,8 @@ function ProjectActions({ title, onStart, onRename, onRemove }: {
       >⋯</button>
       {menu && (
         <div className="menu">
+          <button disabled={!online} onClick={() => { setMenu(false); onSend(); }}>Send project</button>
+          <button disabled={!online} onClick={() => { setMenu(false); onCheck(); }}>Check setup</button>
           <button onClick={() => { setMenu(false); onRename(); }}>Rename project</button>
           <button className="destructive" onClick={() => { setMenu(false); onRemove(); }}>Remove project</button>
         </div>

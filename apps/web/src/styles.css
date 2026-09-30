@@ -1461,6 +1461,59 @@ button.sheet-editlink:hover { color: var(--text); }
 .action:hover:not(:disabled) { background: var(--raised); border-color: var(--line-2); }
 .action .plus { background: var(--pill-bg); color: var(--pill-fg); font-weight: 500; }
 
+/* ------------------------------------------------------------- transfers */
+
+.transfer-hero {
+  padding: 13px 14px; margin-bottom: 12px; border-radius: var(--radius-xl);
+  background: var(--card); border: 1px solid var(--line);
+}
+.transfer-name { font-size: var(--t-title); font-weight: 600; color: var(--text); }
+.transfer-path { margin-top: 2px; font-family: var(--mono); font-size: var(--t-micro); color: var(--mutedfg); overflow-wrap: anywhere; }
+.transfer-stats { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; color: var(--mutedfg); font-size: var(--t-meta); }
+.transfer-stats b { color: var(--text); font-weight: 650; }
+.check-row.disabled { opacity: 0.55; }
+.check-row.ack { margin-top: 8px; padding: 10px 12px; border-radius: var(--radius); background: color-mix(in srgb, var(--amber) 7%, transparent); }
+.transfer-warnings {
+  display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px;
+}
+.transfer-warning {
+  display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px;
+  border-radius: var(--radius); background: var(--card); border: 1px solid var(--line);
+}
+.transfer-warning .rt, .readiness-row .rt { display: block; font-size: var(--t-meta); color: var(--text-80); line-height: 1.45; }
+.transfer-warning .rm, .readiness-row .rm { display: block; margin-top: 3px; font-family: var(--mono); font-size: var(--t-micro); color: var(--mutedfg); overflow-wrap: anywhere; }
+.warn-mark {
+  flex: none; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); font-size: 12px; font-weight: 700;
+}
+.transfer-done {
+  display: flex; align-items: center; gap: 12px; padding: 14px; margin-bottom: 12px;
+  border-radius: var(--radius-xl); background: var(--card); border: 1px solid color-mix(in srgb, var(--emerald) 24%, transparent);
+}
+.done-mark {
+  flex: none; width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--emerald) 14%, transparent); color: var(--emerald); font-size: 18px; font-weight: 650;
+}
+.done-title { display: block; font-size: var(--t-title); font-weight: 600; color: var(--text); }
+.done-sub { display: block; margin-top: 2px; font-size: var(--t-meta); color: var(--mutedfg); }
+.transfer-status {
+  margin-left: 8px; padding: 1px 7px; border-radius: 999px; font-size: var(--t-micro); font-weight: 600; letter-spacing: 0;
+}
+.transfer-status.needs-setup { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+.transfer-status.unverified { color: var(--sky); background: color-mix(in srgb, var(--sky) 12%, transparent); }
+.transfer-readiness { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.readiness-row {
+  display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px;
+  border-radius: var(--radius); background: var(--card); border: 1px solid var(--line);
+}
+.readiness-mark { flex: none; width: 20px; text-align: center; font-weight: 700; }
+.readiness-row.pass .readiness-mark { color: var(--emerald); }
+.readiness-row.warn .readiness-mark { color: var(--amber); }
+.readiness-row.fail .readiness-mark { color: var(--red); }
+.transfer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
+.transfer-actions .primary.big { margin-bottom: 0; }
+.transfer-actions .linkish { width: auto; padding: 8px 0; }
+
 
 /* ------------------------------------------------------------ small things */
 
