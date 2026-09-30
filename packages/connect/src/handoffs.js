@@ -248,7 +248,9 @@ export class Handoffs {
         // A retried request may carry a freshly sealed envelope over the
         // same snapshot - the digest check is what ties the ciphertext we
         // just decrypted to the code this handoff claims to carry.
-        const receipt = await materializeCode(p.envelope, p.handoffId, p.folder);
+        const receipt = await materializeCode(p.envelope, p.handoffId, p.folder, {
+          expectedDigest: p.snapshotDigest,
+        });
         if (receipt.digest !== p.snapshotDigest) {
           throw new Error('handoff snapshot digest does not match the request');
         }

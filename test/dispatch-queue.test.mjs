@@ -32,11 +32,13 @@ const net = N.createNetwork({ name: 'source-pc', port: PORT });
 // bystander used to prove a row only answers to the machine it is for.
 const TARGET = 'bb22cc33dd44ee55';
 const OTHER = 'cc33dd44ee556677';
+const PHONE = 'de71ce0001';
 for (const [id, name] of [[TARGET, 'target-vm'], [OTHER, 'other-pc']]) {
   net.machines[id] = {
     id, name, endpoints: [], addedAt: Date.now(), updatedAt: Date.now(),
   };
 }
+net.devices[PHONE] = { id: PHONE, label: 'phone', addedAt: Date.now(), updatedAt: Date.now() };
 N.saveNetwork(net);
 
 const { startRelay } = await import('@helm/relay');
@@ -148,7 +150,7 @@ test('a machine queues work for a machine that is not connected', async () => {
 });
 
 test('a device credential cannot submit or query the queue', async () => {
-  const ws = await openWs(deviceToken('ph0ne1'));
+  const ws = await openWs(deviceToken(PHONE));
   try {
     const params = jobParams();
     const res = await rpc(ws, M.DISPATCH_SUBMIT, { targetMachineId: TARGET, params });

@@ -14,7 +14,7 @@
  * only editable fields are a machine's own self-description and an explicit
  * revocation - neither of which two people race on.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import { hostname, homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
@@ -30,8 +30,10 @@ export const NETWORK_FILE = join(HELM_DIR, 'network.json');
 
 const write = (net) => {
   mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(HELM_DIR, 0o700);
   // 0600: the file contains the network key, which is the whole ballgame.
   writeFileSync(NETWORK_FILE, JSON.stringify(net, null, 2), { mode: 0o600 });
+  chmodSync(NETWORK_FILE, 0o600);
   return net;
 };
 
@@ -52,13 +54,16 @@ const LOCAL_KEY_FILE = join(HELM_DIR, 'local.key');
  * anyone who can read it can already read the network key sitting beside it.
  */
 export function localKey() {
+  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(HELM_DIR, 0o700);
   if (existsSync(LOCAL_KEY_FILE)) {
+    chmodSync(LOCAL_KEY_FILE, 0o600);
     const v = readFileSync(LOCAL_KEY_FILE, 'utf8').trim();
     if (v) return v;
   }
-  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
   const v = newNetworkKey();
   writeFileSync(LOCAL_KEY_FILE, v, { mode: 0o600 });
+  chmodSync(LOCAL_KEY_FILE, 0o600);
   return v;
 }
 
@@ -283,9 +288,12 @@ export function deviceToken(net, id) {
  */
 export function authenticate(net, token) {
   const claims = verifyToken(net.key, token);
-  if (!claims) return null;
+  if (!claims || typeof claims !== 'object' || Array.isArray(claims)) return null;
   if (claims.net !== net.id) return null;
+  if (claims.role !== ROLE.MACHINE && claims.role !== ROLE.DEVICE) return null;
+  if (typeof claims.sub !== 'string' || !ids.test(claims.sub)) return null;
   if (net.revoked[claims.sub]) return null;
+  if (claims.role === ROLE.DEVICE && !Object.hasOwn(net.devices ?? {}, claims.sub)) return null;
   if (claims.exp !== undefined && !(claims.exp > Date.now())) return null;
   // A handshake credential is good once, and only here: the challenge it
   // answers must be one this process issued and nobody has spent.

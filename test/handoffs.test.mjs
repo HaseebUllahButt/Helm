@@ -371,6 +371,31 @@ test('a falsely claimed snapshot digest fails before any session starts', async 
   assert.equal(record.folder, null, 'the materialized folder is not claimed by the record');
 });
 
+test('a different snapshot inside a validly sealed envelope fails before any write', async () => {
+  const sessions = new FakeSessions();
+  const h = new Handoffs({ sessions, network: () => net, profiles: knownProfiles });
+  const p = request();
+
+  const otherDir = join(handoffsDir, 'other-source');
+  mkdirSync(otherDir, { recursive: true });
+  writeFileSync(join(otherDir, 'b.txt'), 'different code');
+  const otherSnapshot = CT.createCodeSnapshot(otherDir);
+  assert.notEqual(otherSnapshot.digest, p.snapshotDigest);
+  const sneaky = {
+    ...p,
+    envelope: CT.sealCodeSnapshot(otherSnapshot, CT.codeKeyInfo().codePubkey, p.handoffId),
+  };
+
+  await assert.rejects(() => h.accept(sneaky, SRC), /digest/);
+  assert.equal(sessions.starts.length, 0, 'no session was started');
+  assert.equal(existsSync(p.folder), false, 'no destination was created');
+  assert.equal(existsSync(`${p.folder}.helm-stage-${p.handoffId}`), false, 'no stage either');
+  const record = JSON.parse(readFileSync(join(helmDir, 'handoffs.json'), 'utf8'))
+    .handoffs[p.handoffId];
+  assert.equal(record.status, 'failed');
+  assert.equal(record.folder, null);
+});
+
 test('a session orphaned by a crashed accept is adopted, not duplicated', async () => {
   const sessions = new FakeSessions();
   const h = new Handoffs({ sessions, network: () => net, profiles: knownProfiles });

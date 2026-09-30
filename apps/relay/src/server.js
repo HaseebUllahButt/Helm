@@ -154,11 +154,10 @@ export async function startRelay({
     // reach us before any gossip does, and turning it away - or quietly
     // demoting it to a client, which is what a roster lookup used to do -
     // would leave it permanently invisible as somewhere you can run agents.
-    const machine = net.machines[claims.sub] ?? (
-      claims.role === ROLE.MACHINE
-        ? { id: claims.sub, name: url.searchParams.get('name') || claims.sub.slice(0, 8) }
-        : null
-    );
+    const machine = claims.role === ROLE.MACHINE
+      ? net.machines[claims.sub]
+        ?? { id: claims.sub, name: url.searchParams.get('name') || claims.sub.slice(0, 8) }
+      : null;
 
     // A machine attaches to exactly one hub as *itself*: its own, over
     // loopback, which is what lets a phone reach this machine through the hub
@@ -171,7 +170,7 @@ export async function startRelay({
     // already excludes its own endpoints from what it dials; this is the
     // backstop for when it does not.
     const role = url.searchParams.get('role');
-    if (machine && claims.sub === net.self && claims.role === ROLE.MACHINE
+    if (machine && claims.sub === net.self
         && role !== 'client' && role !== 'proxy' && role !== 'self') {
       socket.write('HTTP/1.1 409 Conflict\r\nConnection: close\r\n\r\n');
       return socket.destroy();

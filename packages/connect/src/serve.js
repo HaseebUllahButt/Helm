@@ -138,13 +138,32 @@ export async function up({
  * machine authenticate every device in the network from the first second -
  * including ones it will never meet.
  */
+const JOIN_REFUSAL =
+  'the hub address must be a bare https origin - http is allowed only on loopback';
+
+const joinOrigin = (at) => {
+  let url;
+  try { url = new URL(String(at ?? '')); } catch { throw new Error(JOIN_REFUSAL); }
+  if (url.username || url.password || url.search || url.hash || url.pathname !== '/') {
+    throw new Error(JOIN_REFUSAL);
+  }
+  const host = url.hostname;
+  const loopback = host === 'localhost' || host === '[::1]' || host === '::1'
+    || (/^127(?:\.\d{1,3}){3}$/.test(host)
+      && host.split('.').every((o) => Number(o) >= 0 && Number(o) <= 255));
+  if (url.protocol === 'https:' || (url.protocol === 'http:' && loopback)) return url.origin;
+  throw new Error(JOIN_REFUSAL);
+};
+
 export async function join({ code, at, name, port = 8787 }) {
   if (loadNetwork()) {
     throw new Error('this machine is already in a network - run `helm leave` first');
   }
-  const base = at.replace(/\/$/, '');
+  const base = joinOrigin(at);
   const res = await fetch(`${base}/api/join`, {
     method: 'POST',
+    redirect: 'error',
+    signal: AbortSignal.timeout(10_000),
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code, name: name || hostname() }),
   });

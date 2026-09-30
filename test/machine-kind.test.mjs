@@ -178,7 +178,7 @@ test('a join writes the invited kind onto the self record and the local note', a
     N.forgetNetwork();
     const restore = stubJoin(role);
     try {
-      const net = await joinNet({ code: 'AAAA-BBBB', at: 'http://home:8787', name: 'joined', port: 8787 });
+      const net = await joinNet({ code: 'AAAA-BBBB', at: 'https://home.example:8787', name: 'joined', port: 8787 });
       assert.equal(net.role, want, `role ${role}`);
       assert.equal(net.machines[net.self].kind, want, `role ${role}`);
       // And what we wrote is something a peer accepts back unchanged.

@@ -66,6 +66,9 @@ const unb64 = (value) => Buffer.from(String(value), 'base64url');
 const asB64 = (value, max = MAX_SNAPSHOT_BYTES * 2) =>
   typeof value === 'string' && value.length > 0 && value.length <= max
     && /^[A-Za-z0-9_-]+$/.test(value) ? value : null;
+const asFileData = (value, max = MAX_SNAPSHOT_BYTES * 2) =>
+  typeof value === 'string' && value.length <= max
+    && /^[A-Za-z0-9_-]*$/.test(value) ? value : null;
 const safeName = (value) => String(value || 'workspace').replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 80) || 'workspace';
 
 const pathExists = (path) => {
@@ -96,9 +99,11 @@ export function codeKeyInfo() {
     pair = generateKeyPairSync('x25519');
     writeFileSync(KEY_FILE, pair.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600, flag: 'wx' });
     writeFileSync(`${KEY_FILE}.pub`, pair.publicKey.export({ type: 'spki', format: 'der' }), { mode: 0o600, flag: 'wx' });
-    chmodSync(KEY_FILE, 0o600);
-    chmodSync(`${KEY_FILE}.pub`, 0o600);
   }
+  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(HELM_DIR, 0o700);
+  chmodSync(KEY_FILE, 0o600);
+  chmodSync(`${KEY_FILE}.pub`, 0o600);
   return {
     privateKey: pair.privateKey,
     publicKey: pair.publicKey,
@@ -147,9 +152,11 @@ export function codeSigningInfo() {
     pair = generateKeyPairSync('ed25519');
     writeFileSync(SIGN_KEY_FILE, pair.privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600, flag: 'wx' });
     writeFileSync(`${SIGN_KEY_FILE}.pub`, pair.publicKey.export({ type: 'spki', format: 'der' }), { mode: 0o600, flag: 'wx' });
-    chmodSync(SIGN_KEY_FILE, 0o600);
-    chmodSync(`${SIGN_KEY_FILE}.pub`, 0o600);
   }
+  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(HELM_DIR, 0o700);
+  chmodSync(SIGN_KEY_FILE, 0o600);
+  chmodSync(`${SIGN_KEY_FILE}.pub`, 0o600);
   return {
     privateKey: pair.privateKey,
     publicKey: pair.publicKey,
@@ -587,7 +594,7 @@ function validateSnapshot(snapshot) {
     if (file.secret !== undefined && file.secret !== true) {
       throw new Error('invalid secret flag in code handoff');
     }
-    if (!asB64(file.data)) throw new Error(`invalid file data for ${file.path}`);
+    if (asFileData(file.data) === null) throw new Error(`invalid file data for ${file.path}`);
     const data = unb64(file.data);
     if (data.length > MAX_FILE_BYTES) throw new Error(`${file.path} is too large`);
     bytes += data.length;
@@ -619,8 +626,11 @@ async function readHandoffMarker(destination) {
  * daemon that stops answering heartbeats for its whole duration is a daemon
  * that looks dead while a handoff lands.
  */
-export async function materializeCode(envelope, handoffId, requestedFolder, { privateKey = null } = {}) {
+export async function materializeCode(envelope, handoffId, requestedFolder, { privateKey = null, expectedDigest = null } = {}) {
   const snapshot = validateSnapshot(openEnvelope(envelope, handoffId, privateKey));
+  if (expectedDigest !== null && expectedDigest !== snapshot.digest) {
+    throw new Error('snapshot digest does not match the request');
+  }
   const fallback = join(HELM_DIR, 'workspaces', `${snapshot.rootName}-${handoffId.slice(0, 8)}`);
   const destination = resolve(expand(requestedFolder || fallback));
   if (destination === resolve(HOME) || !destination.startsWith(`${resolve(HOME)}${sep}`)) {
@@ -673,7 +683,8 @@ export async function materializeCode(envelope, handoffId, requestedFolder, { pr
         if (i >= snapshot.files.length) return;
         const file = snapshot.files[i];
         const out = resolve(stage, file.path);
-        const mode = file.secret === true ? 0o600 : file.mode === 0o755 ? 0o755 : 0o644;
+        const secret = file.secret === true || ENV_NAME.test(basename(file.path));
+        const mode = secret ? 0o600 : file.mode === 0o755 ? 0o755 : 0o644;
         await aWriteFile(out, unb64(file.data), { mode, flag: 'wx' });
         await aChmod(out, mode);
       }

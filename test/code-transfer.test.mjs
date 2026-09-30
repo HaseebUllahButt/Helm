@@ -495,6 +495,73 @@ test('includeEnv carries every .env variant marked secret and writes them 0600',
   assert.equal(lstatSync(join(result.folder, 'api', 'index.js')).mode & 0o777, 0o644);
 });
 
+test('an env-named file always lands 0600, whatever the snapshot claims', async () => {
+  const { materializeCode } = await import('../packages/connect/src/code-transfer.js');
+  const files = [
+    { path: '.env', mode: 0o755, data: Buffer.from('TOKEN=x').toString('base64url') },
+    { path: 'sub/.env.local', mode: 0o755, data: Buffer.from('L=1').toString('base64url'), secret: true },
+    { path: 'sub/.env.empty', mode: 0o644, data: '' },
+    { path: 'run.sh', mode: 0o755, data: Buffer.from('#!/bin/sh\n').toString('base64url') },
+  ];
+  const envelope = await sealed(honestSnapshot({ files }), 'env-mode');
+  const out = await materializeCode(envelope, 'env-mode', join(work, 'env-mode-dest'));
+  for (const p of ['.env', 'sub/.env.local', 'sub/.env.empty']) {
+    assert.equal(lstatSync(join(out.folder, p)).mode & 0o777, 0o600, p);
+  }
+  assert.equal(lstatSync(join(out.folder, 'run.sh')).mode & 0o777, 0o755);
+});
+
+test('materializeCode checks the expected digest before anything touches disk', async () => {
+  const { materializeCode } = await import('../packages/connect/src/code-transfer.js');
+  const snapshot = honestSnapshot({
+    files: [{ path: 'a.txt', mode: 0o644, data: Buffer.from('x').toString('base64url') }],
+  });
+  const envelope = await sealed(snapshot, 'expect-test');
+
+  for (const folder of [join(work, 'expect-dest'), join(work, 'no-such-parent', 'dest')]) {
+    await assert.rejects(
+      () => materializeCode(envelope, 'expect-test', folder, { expectedDigest: 'f'.repeat(64) }),
+      /digest does not match/,
+    );
+    assert.equal(existsSync(folder), false, 'no destination');
+    assert.equal(existsSync(`${folder}.helm-stage-expect-test`), false, 'no staging dir');
+  }
+  assert.equal(existsSync(join(work, 'no-such-parent')), false, 'no parent made either');
+
+  const out = await materializeCode(
+    envelope, 'expect-test', join(work, 'expect-ok'), { expectedDigest: snapshot.digest });
+  assert.equal(out.digest, snapshot.digest);
+});
+
+test('an empty file travels; malformed file data does not', async () => {
+  const { codeKeyInfo, createCodeSnapshot, sealCodeSnapshot, materializeCode } =
+    await import('../packages/connect/src/code-transfer.js');
+  const source = join(helmDir, 'source-empty');
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, 'empty.txt'), '');
+  writeFileSync(join(source, '.env'), '');
+  writeFileSync(join(source, 'full.txt'), 'x');
+
+  const snapshot = createCodeSnapshot(source, { includeEnv: true });
+  const out = await materializeCode(
+    sealCodeSnapshot(snapshot, codeKeyInfo().codePubkey, 'empty-ok'),
+    'empty-ok', join(work, 'empty-ok'),
+  );
+  assert.equal(out.files, 3);
+  assert.equal(readFileSync(join(out.folder, 'empty.txt'), 'utf8'), '');
+  assert.equal(readFileSync(join(out.folder, '.env'), 'utf8'), '');
+  assert.equal(lstatSync(join(out.folder, '.env')).mode & 0o777, 0o600);
+
+  for (const [i, data] of [42, 'not b64!!', null].entries()) {
+    const files = [{ path: 'a.txt', mode: 0o644, data }];
+    const envelope = await sealed(honestSnapshot({ files }), `bad-data-${i}`);
+    await assert.rejects(
+      () => materializeCode(envelope, `bad-data-${i}`, join(work, `bad-data-${i}`)),
+      /invalid file data/,
+    );
+  }
+});
+
 test('a secret marker that is not exactly true refuses the file', async () => {
   const { materializeCode } = await import('../packages/connect/src/code-transfer.js');
   for (const [i, secret] of [false, 'yes', 1].entries()) {

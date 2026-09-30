@@ -1,12 +1,13 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, chmodSync } from 'node:fs';
 import { discoverProfiles } from './discover.js';
 import { ENGINES } from './engines.js';
-import { PROFILES_FILE, SECRETS_FILE, expand } from './paths.js';
+import { HELM_DIR, PROFILES_FILE, SECRETS_FILE, expand } from './paths.js';
 
 const write = (file, body, mode = 0o600) => {
-  mkdirSync(dirname(file), { recursive: true });
+  mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(HELM_DIR, 0o700);
   writeFileSync(file, body, { mode });
+  chmodSync(file, mode);
 };
 
 export function loadProfiles() {
