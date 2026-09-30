@@ -205,6 +205,56 @@ export const cacheSaved = (t: Pick<UsageTotals, 'cacheSavedUsd' | 'cacheWritePre
 
 export interface DirEntry { name: string; path: string; isRepo: boolean; skip: boolean }
 
+/** What a send will carry - and what it deliberately will not. */
+export interface TransferSkipped { path: string; reason: string }
+export interface TransferWarning { code: string; path?: string; message: string }
+export interface TransferPreflight {
+  files: number;
+  bytes: number;
+  envFiles: string[];
+  skipped: number;
+  skippedEntries: TransferSkipped[];
+  omittedEntries: number;
+  warnings: TransferWarning[];
+  requiresAcknowledgement: boolean;
+}
+export interface TransferPreview {
+  sourceMachineId: string;
+  rootName: string;
+  digest: string;
+  git?: { commit?: string; branch?: string; remote?: string } | null;
+  preflight: TransferPreflight;
+}
+export interface ReadinessCheck {
+  code: string;
+  status: 'pass' | 'warning' | 'fail' | string;
+  path?: string;
+  message: string;
+}
+export interface TransferReadiness {
+  status: 'needs-setup' | 'unverified' | string;
+  verified: boolean;
+  checks: ReadinessCheck[];
+}
+export interface TransferReceipt {
+  folder: string;
+  files: number;
+  bytes: number;
+  skipped: number;
+  skippedEntries: TransferSkipped[];
+  digest: string;
+  readiness: TransferReadiness;
+}
+export interface TransferResult {
+  sent: boolean;
+  requiresAcknowledgement?: boolean;
+  transferId?: string;
+  targetMachineId?: string;
+  targetName?: string;
+  preflight: TransferPreflight;
+  receipt?: TransferReceipt;
+}
+
 /** A folder a machine designated 'nas' has agreed to serve. */
 export interface MediaRoot { id: number; name: string; path: string }
 
@@ -890,6 +940,30 @@ export class Client {
   updateEnv(env: string) {
     return this.rpc<{ updated: boolean; reason?: string; restarting?: string[]; failed?: string[] }>(
       env, 'env.update', {}, 140_000);
+  }
+
+  /** What a project send would carry, before any grant is minted. */
+  transferPreview(env: string, folder: string, includeEnv = false) {
+    return this.rpc<TransferPreview>(env, 'transfer.preview', { folder, includeEnv }, 120_000);
+  }
+
+  /** Ask the target for the one-time invitation this send will be bound to. */
+  transferInvite(env: string, sourceMachineId: string) {
+    return this.rpc<{ grant: string; expiresAt: number }>(
+      env, 'transfer.invite', { sourceMachineId }, 30_000);
+  }
+
+  /** Source-side send: snapshot, sign, seal to the grant key and deliver. */
+  transferSend(env: string, params: {
+    folder: string; targetMachineId: string; targetFolder?: string;
+    includeEnv?: boolean; grant: string; allowSkipped?: boolean;
+  }) {
+    return this.rpc<TransferResult>(env, 'transfer.send', params, 300_000);
+  }
+
+  /** Static setup inspection on the machine holding the folder. Never runs it. */
+  transferVerify(env: string, folder: string) {
+    return this.rpc<TransferReadiness>(env, 'transfer.verify', { folder }, 60_000);
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
