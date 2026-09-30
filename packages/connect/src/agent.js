@@ -237,6 +237,8 @@ export class Daemon {
     });
     this.transfers = new Transfers({
       network: () => loadNetwork() ?? this.net,
+      rpc: (env, method, params, opts) =>
+        hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
     });
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
@@ -1401,6 +1403,14 @@ export class Daemon {
         return this.handoffs.status(p.handoffId, caller);
       case M.TRANSFER_RECEIVE:
         return this.transfers.receive(p, caller);
+      case M.TRANSFER_PREVIEW:
+        return this.transfers.preview(p, caller);
+      case M.TRANSFER_INVITE:
+        return this.transfers.invite(p, caller);
+      case M.TRANSFER_SEND:
+        return this.transfers.send(p, caller);
+      case M.TRANSFER_VERIFY:
+        return this.transfers.verify(p, caller);
       case M.TRANSFER_ACCEPT:
         return this.transfers.accept(p, caller);
 

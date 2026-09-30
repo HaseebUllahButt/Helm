@@ -94,6 +94,87 @@ test('a grant is issued by this machine only - never a device or a peer', () => 
   );
 });
 
+test('preview, invite and verify are controller paths, not peer paths', async () => {
+  const t = make();
+  for (const caller of [SRC, undefined, 'eeff00112233']) {
+    assert.throws(() => t.preview({ folder: sourceDir }, caller), /paired device/, String(caller));
+    assert.throws(() => t.invite(forSrc, caller), /paired device/, String(caller));
+    await assert.rejects(() => t.verify({ folder: sourceDir }, caller), /paired device/, String(caller));
+  }
+
+  const preview = t.preview({ folder: sourceDir }, 'dev1');
+  assert.equal(preview.sourceMachineId, net.self);
+  assert.equal(preview.preflight.files, 1);
+  const { grant } = t.invite(forSrc, 'dev1');
+  const decoded = decodeTransferGrant(grant);
+  assert.equal(decoded.targetMachineId, net.self);
+  assert.equal(decoded.sourceMachineId, SRC);
+  const readiness = await t.verify({ folder: sourceDir }, 'dev1');
+  assert.equal(readiness.status, 'unverified');
+});
+
+test('a controller-driven send signs, encrypts and lands through the invitation', async () => {
+  const target = make();
+  const { grant } = target.invite(forSrc, 'dev1');
+  const sourceNet = { ...net, self: SRC };
+  const calls = [];
+  const sender = new Transfers({
+    network: () => sourceNet,
+    rpc: async (env, method, p) => {
+      calls.push({ env, method });
+      return target.accept(p, SRC);
+    },
+  });
+  const dest = join(work, 'controller-dest');
+  const r = await sender.send({
+    folder: sourceDir,
+    targetMachineId: net.self,
+    targetFolder: dest,
+    grant,
+  }, 'dev1');
+
+  assert.equal(r.sent, true);
+  assert.equal(r.targetName, 'target');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].env, net.self);
+  assert.equal(readFileSync(join(dest, 'a.txt'), 'utf8'), 'code');
+  assert.equal(r.receipt.files, 1);
+  assert.equal(r.receipt.readiness.verified, false);
+});
+
+test('a controller send returns to review instead of sending unacknowledged omissions', async () => {
+  const risky = join(work, 'controller-risky');
+  mkdirSync(risky, { recursive: true });
+  writeFileSync(join(risky, 'index.js'), 'console.log(1)\n');
+  writeFileSync(join(risky, '.env'), 'SYNTHETIC_UI=1\n');
+
+  const target = make();
+  const { grant } = target.invite(forSrc, 'dev1');
+  const sourceNet = { ...net, self: SRC };
+  let called = 0;
+  const sender = new Transfers({
+    network: () => sourceNet,
+    rpc: async (_env, _method, p) => { called += 1; return target.accept(p, SRC); },
+  });
+  const dest = join(work, 'controller-risky-dest');
+  const held = await sender.send({
+    folder: risky, targetMachineId: net.self, targetFolder: dest, grant,
+  }, 'dev1');
+  assert.equal(held.sent, false);
+  assert.equal(held.requiresAcknowledgement, true);
+  assert.equal(called, 0);
+  assert.equal(existsSync(dest), false);
+
+  const sent = await sender.send({
+    folder: risky, targetMachineId: net.self, targetFolder: dest,
+    grant, allowSkipped: true,
+  }, 'dev1');
+  assert.equal(sent.sent, true);
+  assert.equal(called, 1);
+  assert.equal(readFileSync(join(dest, 'index.js'), 'utf8'), 'console.log(1)\n');
+  assert.equal(existsSync(join(dest, '.env')), false);
+});
+
 test('a grant must name a real, unrevoked source machine', () => {
   const t = make();
   for (const sourceMachineId of [undefined, 'dev1', 'eeff00112233', 42]) {
@@ -318,21 +399,26 @@ test('a sealed grant carries a repo and its env files across the accept boundary
   assert.equal(r.readiness.verified, false);
 });
 
-test('dispatch: devices cannot receive or accept, and session.start cannot plant a handoff id', async (t) => {
+test('dispatch: a paired device can invite but never accept, and session.start cannot plant a handoff id', async (t) => {
   const N = await import('@helm/protocol/network');
   const { M } = await import('@helm/protocol');
   const { Daemon } = await import('../packages/connect/src/agent.js');
   N.forgetNetwork();
   const realNet = N.createNetwork({ name: 'testbox', port: 8999 });
+  const device = N.issueDevice(realNet, 'phone');
   const d = new Daemon({ name: 'testbox', port: 8999, advertiseLan: false });
   t.after(() => d.stop());
   d.transfers = new Transfers({ network: () => N.loadNetwork() });
 
   await assert.rejects(
-    () => d.dispatch(M.TRANSFER_RECEIVE, { sourceMachineId: realNet.self }, 'dev1'),
+    () => d.dispatch(M.TRANSFER_RECEIVE, { sourceMachineId: realNet.self }, device.id),
     /this machine only/);
+  const invited = await d.dispatch(
+    M.TRANSFER_INVITE, { sourceMachineId: realNet.self }, device.id);
+  const invitedGrant = decodeTransferGrant(invited.grant);
+  assert.equal(invitedGrant.targetMachineId, realNet.self);
   await assert.rejects(
-    () => d.dispatch(M.TRANSFER_ACCEPT, { transferId: 'a'.repeat(24) }, 'dev1'),
+    () => d.dispatch(M.TRANSFER_ACCEPT, { transferId: 'a'.repeat(24) }, device.id),
     /machines? of this network/);
   const offered = await d.dispatch(
     M.TRANSFER_RECEIVE, { sourceMachineId: realNet.self }, realNet.self);

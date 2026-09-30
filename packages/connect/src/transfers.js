@@ -1,8 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { M } from '@helm/protocol';
 import {
-  createEphemeralCodeKey, materializeCode, signHandoffDigest, verifyHandoffSignature,
+  createCodeSnapshot, createEphemeralCodeKey, materializeCode, sealCodeSnapshot,
+  signHandoffDigest, verifyHandoffSignature,
 } from './code-transfer.js';
-import { inspectTransferReadiness } from './transfer-check.js';
+import {
+  inspectTransferReadiness, readHandoffSkipped, transferPreflight,
+} from './transfer-check.js';
 
 const TRANSFER_ID = /^[a-f0-9]{24}$/;
 const MACHINE_ID = /^[a-f0-9]{1,64}$/;
@@ -68,9 +72,10 @@ export const decodeTransferGrant = (token) => {
 };
 
 export class Transfers {
-  constructor({ network, now = Date.now } = {}) {
+  constructor({ network, now = Date.now, rpc = null } = {}) {
     this.network = network;
     this.now = now;
+    this.rpc = rpc;
     this.grants = new Map();
   }
 
@@ -78,11 +83,122 @@ export class Transfers {
     return typeof this.network === 'function' ? this.network() : this.network;
   }
 
+  /**
+   * The person driving the app is allowed to ask a machine about its own
+   * folders and to carry a grant between two machines. Other machines are not:
+   * machine-to-machine calls stay on the signed accept boundary below.
+   */
+  #controller(caller, what) {
+    const net = this.#net();
+    if (!caller || net?.revoked?.[caller]
+        || !(caller === net?.self || net?.devices?.[caller])) {
+      throw new Error(`${what} is for this machine or a paired device only`);
+    }
+    return net;
+  }
+
   #sweep() {
     const t = this.now();
     for (const [secret, grant] of this.grants) {
       if (grant.expiresAt <= t) this.grants.delete(secret);
     }
+  }
+
+  preview(params = {}, caller) {
+    const net = this.#controller(caller, 'a transfer preview');
+    const folder = line(params?.folder);
+    if (!folder) throw new Error('a transfer preview needs a folder');
+    const snapshot = createCodeSnapshot(folder, { includeEnv: params?.includeEnv === true });
+    return {
+      sourceMachineId: net.self,
+      rootName: snapshot.rootName,
+      digest: snapshot.digest,
+      git: snapshot.git ?? null,
+      preflight: transferPreflight(snapshot),
+    };
+  }
+
+  invite(params = {}, caller) {
+    const net = this.#controller(caller, 'a transfer invitation');
+    // The grant remains the target's own signed object - an invite only lets
+    // the paired controller ask this machine to mint one for the send it is
+    // about to drive.
+    return this.receive(params, net.self);
+  }
+
+  async send(params = {}, caller) {
+    const net = this.#controller(caller, 'a transfer send');
+    if (typeof this.rpc !== 'function') throw new Error('this machine cannot send transfers');
+    const folder = line(params?.folder);
+    if (!folder) throw new Error('a transfer send needs a source folder');
+    const target = params?.targetMachineId;
+    if (!MACHINE_ID.test(target ?? '') || !net.machines?.[target] || net.revoked?.[target]
+        || target === net.self) {
+      throw new Error('a transfer send names another machine of this network');
+    }
+
+    const includeEnv = params?.includeEnv === true;
+    const snapshot = createCodeSnapshot(folder, { includeEnv });
+    const preflight = transferPreflight(snapshot);
+    if (preflight.requiresAcknowledgement && params?.allowSkipped !== true) {
+      return { sent: false, requiresAcknowledgement: true, preflight };
+    }
+
+    const grant = decodeTransferGrant(line(params?.grant, MAX_TOKEN) ?? '');
+    if (grant.targetMachineId !== target) {
+      throw new Error('that grant is for a different machine');
+    }
+    if (grant.sourceMachineId !== net.self) {
+      throw new Error('that grant is for a different source machine');
+    }
+    if (grant.expiresAt <= this.now()) {
+      throw new Error('that grant has expired; ask for a fresh invitation');
+    }
+    const signPubkey = net.machines[target]?.codeSignPubkey;
+    if (!signPubkey) throw new Error('the target has no pinned signing key yet');
+    if (!verifyHandoffSignature(signPubkey, transferGrantDigest(grant), grant.signature)) {
+      throw new Error('the transfer invitation did not verify against the target');
+    }
+
+    const transferId = randomBytes(12).toString('hex');
+    const requested = params?.targetFolder === undefined ? null : line(params.targetFolder);
+    if (params?.targetFolder !== undefined && requested === null) {
+      throw new Error('invalid target folder');
+    }
+    const targetFolder = requested
+      || `~/.helm/transfers/${snapshot.rootName}-${transferId.slice(0, 8)}`;
+    const request = {
+      transferId,
+      sourceMachineId: net.self,
+      targetMachineId: target,
+      folder: targetFolder,
+      envelope: sealCodeSnapshot(snapshot, grant.transferPubkey, transferId),
+      snapshotDigest: snapshot.digest,
+      grantSecret: grant.secret,
+    };
+    request.requestDigest = transferRequestDigest(request);
+    request.sourceSignature = signHandoffDigest(request.requestDigest);
+    const receipt = await this.rpc(target, M.TRANSFER_ACCEPT, request, { timeout: 240_000 });
+    return {
+      sent: true,
+      transferId,
+      sourceMachineId: net.self,
+      targetMachineId: target,
+      targetName: net.machines[target]?.name ?? target,
+      preflight,
+      receipt,
+    };
+  }
+
+  async verify(params = {}, caller) {
+    this.#controller(caller, 'transfer verification');
+    const folder = line(params?.folder);
+    if (!folder) throw new Error('transfer verification needs a folder');
+    const skipped = readHandoffSkipped(folder);
+    return inspectTransferReadiness(folder, {
+      skippedEntries: skipped?.skippedEntries ?? [],
+      skipped: skipped?.skipped ?? 0,
+    });
   }
 
   receive(params = {}, caller) {

@@ -181,6 +181,13 @@ export const M = {
   HANDOFF_STATUS: 'handoff.status',// { handoffId } -> receipt
 
   TRANSFER_RECEIVE: 'transfer.receive',
+  // The controller-driven path: preview on the source, invite on the target,
+  // then one signed send from source to target. The device sees choices and
+  // receipts - never the snapshot or the grant's private key.
+  TRANSFER_PREVIEW: 'transfer.preview',  // { folder, includeEnv? } -> { rootName, digest, preflight }
+  TRANSFER_INVITE: 'transfer.invite',    // { sourceMachineId, ttlMs? } -> { grant, expiresAt }
+  TRANSFER_SEND: 'transfer.send',        // { folder, targetMachineId, targetFolder?, includeEnv?, grant, allowSkipped? } -> { preflight, receipt }
+  TRANSFER_VERIFY: 'transfer.verify',    // { folder } -> readiness
   TRANSFER_ACCEPT: 'transfer.accept',
 
   // Hub-owned queue operations: a hub intercepts these and answers from its
