@@ -973,6 +973,9 @@ function Shell({ client, conn, onSignOut }: {
 
         <div className="scroll">
           <div className="side-pad">
+            <button className="quick-switch" onClick={() => setPalette(true)} aria-label="Open command palette">
+              <span>Jump to a thread or machine</span><kbd>⌘ / Ctrl K</kbd>
+            </button>
             {status === 'offline' && (
               <div className="banner error">
                 No machine answered for a while. Check the VM, or that this phone has internet.

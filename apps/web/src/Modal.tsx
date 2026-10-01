@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useDialog } from './useDialog';
+import { useState, type FormEvent, type ReactNode } from 'react';
 
 /**
  * helm's own confirm/ask sheets.
@@ -10,19 +11,10 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
  * dismissable the way the rest of the app is.
  */
 function Sheet({ children, onClose, label }: { children: ReactNode; onClose: () => void; label: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    // Focus lands inside the sheet so Escape and Enter both behave, and so a
-    // screen reader is told what appeared rather than left reading the page
-    // behind it.
-    ref.current?.querySelector<HTMLElement>('input, textarea, button.primary, button')?.focus();
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  const ref = useDialog(onClose);
   return (
     <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={label} ref={ref}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={label} ref={ref} tabIndex={-1}>
         {children}
       </div>
     </div>
@@ -40,7 +32,7 @@ export function Confirm({ title, body, confirmLabel = 'Confirm', danger, busy, o
       {body && <div className="modal-body">{body}</div>}
       <div className="modal-actions">
         <button className="ghost" onClick={onCancel} disabled={busy}>Cancel</button>
-        <button className={danger ? 'primary danger' : 'primary'} onClick={onConfirm} disabled={busy} autoFocus>
+        <button className={danger ? 'primary danger' : 'primary'} onClick={onConfirm} disabled={busy}>
           {busy ? '…' : confirmLabel}
         </button>
       </div>
@@ -64,7 +56,7 @@ export function TextPrompt({ title, value, placeholder, submitLabel = 'Save', bu
       <form onSubmit={submit}>
         <div className="modal-title">{title}</div>
         <input
-          className="modal-input" value={text} placeholder={placeholder} autoFocus
+          className="modal-input" value={text} placeholder={placeholder}
           onChange={(e) => setText(e.target.value)}
           onFocus={(e) => e.target.select()}
         />

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDialog } from './useDialog';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { EngineMark } from './EngineMark';
 
 /**
@@ -47,6 +48,8 @@ function score(item: PaletteItem, q: string): number {
 export function Palette({ items, onClose, engineOf }: {
   items: PaletteItem[]; onClose: () => void; engineOf: (id?: string) => { cls: string };
 }) {
+  const dialog = useDialog(onClose);
+  const listId = useId();
   const [q, setQ] = useState('');
   const [at, setAt] = useState(0);
   const list = useRef<HTMLDivElement>(null);
@@ -68,36 +71,41 @@ export function Palette({ items, onClose, engineOf }: {
       .map((x) => x.item);
   }, [items, q]);
 
-  useEffect(() => { setAt(0); }, [q]);
+  const selected = Math.max(0, Math.min(at, shown.length - 1));
   useEffect(() => {
     list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
-  }, [at, shown]);
+  }, [selected, shown]);
 
   const go = (item?: PaletteItem) => { if (!item) return; onClose(); item.run(); };
 
   return (
     <div className="modal-back palette-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="palette-box" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div className="palette-box" role="dialog" aria-modal="true" aria-label="Command palette" ref={dialog} tabIndex={-1}>
+        <div className="palette-heading"><span>Go anywhere</span><button className="ghost" onClick={onClose} aria-label="Close command palette">Close</button></div>
         <input
-          autoFocus className="palette-input" value={q} placeholder="Search threads, machines, actions"
+          className="palette-input" value={q} placeholder="Search threads, machines, actions"
           autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
-          onChange={(e) => setQ(e.target.value)}
+          role="combobox" aria-label="Search threads, machines, actions"
+          aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
+          aria-activedescendant={shown.length ? `${listId}-${selected}` : undefined}
+          onChange={(e) => { setQ(e.target.value); setAt(0); }}
           onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return;
             if (e.key === 'Escape') { e.preventDefault(); onClose(); }
-            else if (e.key === 'ArrowDown') { e.preventDefault(); setAt((a) => Math.min(a + 1, shown.length - 1)); }
-            else if (e.key === 'ArrowUp') { e.preventDefault(); setAt((a) => Math.max(a - 1, 0)); }
-            else if (e.key === 'Enter') { e.preventDefault(); go(shown[at]); }
+            else if (e.key === 'ArrowDown') { e.preventDefault(); setAt(shown.length ? (selected + 1) % shown.length : 0); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); setAt(shown.length ? (selected + shown.length - 1) % shown.length : 0); }
+            else if (e.key === 'Enter') { e.preventDefault(); go(shown[selected]); }
           }}
         />
-        <div className="palette-list" ref={list} role="listbox">
-          {shown.length === 0 && <div className="empty quiet">nothing matches</div>}
+        <div className="palette-list" ref={list} role="listbox" id={listId} aria-label="Search results">
+          {shown.length === 0 && <div className="empty quiet">No matches. Try a machine, folder, or thread name.</div>}
           {shown.map((item, i) => {
             const head = i === 0 || shown[i - 1].group !== item.group;
             return (
               <div key={item.id}>
                 {head && <div className="palette-group">{GROUP[item.group]}</div>}
                 <button
-                  role="option" aria-selected={i === at} className={`palette-row${i === at ? ' on' : ''}`}
+                  role="option" id={`${listId}-${i}`} tabIndex={-1} aria-selected={i === selected} className={`palette-row${i === selected ? ' on' : ''}`}
                   onMouseMove={() => setAt(i)} onClick={() => go(item)}
                 >
                   {item.engine ? <EngineMark engine={engineOf(item.engine).cls} /> : <span className={`pglyph ${item.group}`}>{item.group === 'machine' ? '▣' : '›'}</span>}
@@ -129,14 +137,11 @@ const SHORTCUTS: [string, string][] = [
 ];
 
 export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const dialog = useDialog(onClose);
   return (
     <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" ref={dialog} tabIndex={-1}>
+        <button className="ghost" onClick={onClose}>Close</button>
         <div className="modal-title">Keyboard shortcuts</div>
         <div className="shortcuts">
           {SHORTCUTS.map(([keys, what]) => (

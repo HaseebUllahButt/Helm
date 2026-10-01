@@ -1804,3 +1804,19 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 
 .bubble-meta .branch { font-size: var(--t-micro); color: var(--mutedfg); padding: 0 6px 0 0; border-radius: 6px; }
 .bubble-meta .branch:hover { color: var(--text); }
+
+/* Helm's cross-machine switcher: visible on touch, quick from the keyboard. */
+.quick-switch { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 44px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--raised); color: var(--text-dim); text-align: left; font-size: var(--t-meta); }
+.quick-switch kbd { font-size: 10px; padding: 2px 5px; }
+.quick-switch:hover { background: var(--hover); color: var(--text); }
+.palette-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 0 18px; color: var(--mutedfg); font-size: var(--t-meta); }
+.palette-heading button { min-height: 36px; }
+
+.palette-row { min-height: 48px; }
+.palette-box:focus { outline: none; }
+.quick-switch:focus-visible, .palette-row:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 2px; }
+@media (max-width: 599px) {
+  .palette-back { padding-top: max(12px, env(safe-area-inset-top)); }
+  .palette-box { max-height: calc(100dvh - 32px); }
+  .quick-switch kbd { display: none; }
+}
