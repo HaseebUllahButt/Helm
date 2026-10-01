@@ -433,7 +433,10 @@ test('a surviving agent process keeps its active turn while queued tickets retur
   const restarted = new Sessions(new StubRuntime(), {
     events: new EventLog(dir), makeDriver, procHost: procHost(true),
   });
-  restarted.resume();
+  await restarted.resume();
+  const rebound = FakeDriver.made.at(-1);
+  assert.equal(rebound.started, true, 'a surviving agent is reattached without opening its thread');
+  assert.equal(rebound.openTurn(), activeTurn.turnId, 'queued messages do not replace the active turn');
   assert.equal(restarted.get(s.id).status, 'working', 'the host process is still in the active turn');
   assert.equal(restarted.history(s.id).events.some((e) =>
     e.type === 'turn.done' && e.turnId === activeTurn.turnId), false, 'the live turn stays open');

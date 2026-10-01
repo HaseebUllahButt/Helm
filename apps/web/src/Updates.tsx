@@ -43,7 +43,7 @@ export function UpdatesView({ client, envs, onBack, onRefresh }: {
       setOut((o) => ({
         ...o,
         [env.id]: r.updated
-          ? { state: 'done', text: 'updated - restarting' }
+          ? { state: 'done', text: 'updated - restarting safely' }
           : { state: r.reason?.startsWith('already') ? 'same' : 'refused', text: said(r.reason) },
       }));
     } catch (e: any) {

@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
  * ~/.helm-src. rebuild and restart stay off - they are npm and systemd, and
  * what needs proving here is that only a clean main checkout ever moves.
  */
-const { selfUpdate } = await import('../packages/connect/src/update.js');
+const { selfUpdate, unsafeRestartSessions } = await import('../packages/connect/src/update.js');
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
@@ -35,6 +35,19 @@ const commit = (remote, text) => {
 };
 
 const update = (dir) => selfUpdate(dir, { rebuild: false, restart: false });
+
+test('update restart waits for busy unhosted agents while hosted threads continue', () => {
+  const sessions = [
+    { id: 'hosted', driver: 'claude', status: 'working' },
+    { id: 'working', driver: 'agy', status: 'working' },
+    { id: 'question', driver: 'claude', status: 'blocked' },
+    { id: 'idle', driver: 'claude', status: 'idle' },
+    { id: 'shell', pty: true, status: 'shell' },
+    { id: 'external', driver: 'codex', external: true, status: 'working' },
+  ];
+  assert.deepEqual(unsafeRestartSessions(sessions, (id) => id === 'hosted').map((s) => s.id), ['working', 'question']);
+  assert.deepEqual(unsafeRestartSessions(sessions.map((s) => ({ ...s, status: 'idle' })), () => false), []);
+});
 
 test('a current checkout is a no-op', async () => {
   const { installed } = make();

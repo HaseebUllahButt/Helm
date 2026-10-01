@@ -167,6 +167,20 @@ export class ClaudeDriver extends Driver {
     this.#ready = new Promise((r) => { markReady = r; });
     if (adopted) {
       this.resume = true;
+      this.#turnId = this.openTurn?.() ?? null;
+      for (const e of this.pendingEvents?.() ?? []) this.pending.set(e.requestId, e);
+      // A restart can land between a block's start and its next delta. Recover
+      // those stream ids so the remaining text still appends to the same item.
+      for (const e of this.resumeEvents?.() ?? []) {
+        if (e.type !== 'item.start' || e.turnId !== this.#turnId || !['text', 'thinking'].includes(e.kind)) continue;
+        const match = /^(.*)#(\d+)$/.exec(e.id);
+        if (!match) continue;
+        const scope = this.#scope(e.parentId);
+        if (scope.messageId !== match[1]) scope.blocks.clear();
+        scope.messageId = match[1];
+        scope.blocks.set(Number(match[2]), e.id);
+      }
+      this.push('status', { status: this.pending.size ? 'blocked' : this.#turnId ? 'working' : 'idle' });
       markReady();
       this.emit('init', this.info ?? { model: this.model, effort: this.effort });
     } else {

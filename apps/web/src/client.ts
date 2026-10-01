@@ -142,6 +142,8 @@ export interface Mode { id: string; label: string; short?: string; hint?: string
 export interface ModelList {
   default: string | null;
   models: string[];
+  /** Public catalog is still arriving; fetch again after showing this answer. */
+  refreshing?: boolean;
   /** What the account's approved list filtered out - reachable, not offered first. */
   more?: string[];
   prefs?: ModelPrefs | null;

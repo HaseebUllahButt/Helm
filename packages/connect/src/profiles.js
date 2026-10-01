@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, chmodSync
 import { discoverProfiles } from './discover.js';
 import { ENGINES } from './engines.js';
 import { HELM_DIR, PROFILES_FILE, SECRETS_FILE, expand } from './paths.js';
+import { migrateProfileSettings } from './settings.js';
 
 const write = (file, body, mode = 0o600) => {
   mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
@@ -63,6 +64,7 @@ export async function refreshProfiles({ keepCustom = true } = {}) {
     for (const p of found) if (disabled.has(p.id)) p.disabled = true;
     found.push(...custom);
   }
+  if (saved?.profiles) migrateProfileSettings(saved.profiles, found);
   saveProfiles(found);
   return { profiles: found, installed };
 }
@@ -123,7 +125,8 @@ export function materialize(profile) {
     env[k] = expand(v);
   }
   for (const name of profile.envFrom || []) {
-    if (secrets[name]) env[name] = secrets[name];
+    const ref = profile.secretRefs?.[name] ?? name;
+    if (secrets[ref]) env[name] = secrets[ref];
   }
   // herdr's env map cannot remove an inherited variable, so an alias that did
   // `unset FOO` is honoured by blanking it - which is what the CLIs check.

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { ENGINES, engineForCommand } from './engines.js';
 import { antigravityInstall } from './antigravity.js';
@@ -290,6 +291,7 @@ export async function discoverProfiles() {
       (p.args || []).join(' '),
       JSON.stringify(p.env || {}),
       (p.envFrom || []).join(','),
+      JSON.stringify(p.secretRefs || {}),
       (p.unset || []).join(','),
     ].join('|');
     const existing = byKey.get(key);
@@ -304,6 +306,9 @@ export async function discoverProfiles() {
       existing.id = p.id;
       existing.label = p.label;
       existing.source = 'alias';
+    } else if (p.source === 'alias' && existing.source === 'alias') {
+      // Preserve the names people use even when two aliases launch alike.
+      profiles.push(p);
     }
   };
 
@@ -376,6 +381,17 @@ export async function discoverProfiles() {
 
   // 4. Whatever the user's shell config already says.
   const symbols = await shellSymbols();
+  const aliases = await discoverAliasProfiles(symbols, installed);
+  Object.assign(secrets, aliases.secrets);
+  for (const profile of aliases.profiles) add(profile);
+
+  return { profiles, secrets, installed };
+}
+
+/** Import alias credentials by reference, preserving distinct token accounts. */
+export async function discoverAliasProfiles(symbols, installed) {
+  const profiles = [];
+  const secrets = {};
   for (const name of symbols.keys()) {
     const resolved = resolve(name, symbols);
     if (!resolved) continue;
@@ -392,17 +408,23 @@ export async function discoverProfiles() {
 
     const env = {};
     const envFrom = [];
+    const secretRefs = {};
     for (const [k, v] of Object.entries(resolved.env)) {
       if (looksSecret(k, v)) {
         // Keep the name, bank the value outside the profile.
-        secrets[k] = v;
+        // The same variable can hold a different token in every alias. A
+        // content-addressed local slot also lets aliases of one token share
+        // their account settings, without putting the token in a profile.
+        const ref = `HELM_SECRET_${createHash('sha256').update(k + '\0' + v).digest('hex')}`;
+        secrets[ref] = v;
         envFrom.push(k);
+        secretRefs[k] = ref;
       } else {
         env[k] = collapse(v.replace(/^\$HOME/, HOME));
       }
     }
 
-    add({
+    profiles.push({
       id: name,
       label: name,
       engine: engineId,
@@ -410,6 +432,7 @@ export async function discoverProfiles() {
       args: resolved.argv.slice(1),
       env,
       envFrom,
+      ...(envFrom.length ? { secretRefs } : {}),
       unset: resolved.unset || [],
       source: 'alias',
       // Launched through a script: anything that runs the engine's own binary
@@ -418,5 +441,5 @@ export async function discoverProfiles() {
     });
   }
 
-  return { profiles, secrets, installed };
+  return { profiles, secrets };
 }

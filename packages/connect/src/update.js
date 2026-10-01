@@ -4,7 +4,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node
 import { dirname, join, resolve } from 'node:path';
 import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { HOME } from './paths.js';
+import { HOME, HELM_DIR } from './paths.js';
+import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
 import { systemdArg } from './service.js';
 
 const exec = promisify(execFile);
@@ -45,6 +46,39 @@ export async function currentVersion(dir = ROOT) {
 
 const unitActive = (unit) =>
   exec('systemctl', ['--user', 'is-active', '--quiet', unit]).then(() => true).catch(() => false);
+
+/** Hosted processes can survive replacement; other busy agents must finish first. */
+export function unsafeRestartSessions(sessions, hasProc) {
+  return sessions.filter((s) => s.driver && !s.external
+    && ['working', 'blocked'].includes(s.status) && !hasProc(s.id));
+}
+
+async function restartBlockers(host) {
+  await host.ensure({ spawn: false });
+  const file = join(HELM_DIR, 'sessions.json');
+  if (!existsSync(file)) return [];
+  const stored = JSON.parse(readFileSync(file, 'utf8'));
+  if (!Array.isArray(stored.sessions)) throw new Error('cannot verify active sessions before update restart');
+  return unsafeRestartSessions(stored.sessions, (id) => host.hasProc(id));
+}
+
+/** Runs outside the daemon, so waiting never interrupts the thread requesting an update. */
+export async function restartWhenSafe(units) {
+  if (!units.length || units.some((unit) => !DAEMON_UNITS.includes(unit))) throw new Error('invalid Helm restart service');
+  const host = new TerminalHost({ socketPath: PROC_SOCKET_PATH, unit: 'helm-procs' });
+  try {
+    let waiting = false;
+    while ((await restartBlockers(host)).length) {
+      if (!waiting) say('waiting for active agents that cannot survive a restart');
+      waiting = true;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    // A second socket client must not consume output during the handover:
+    // with no clients the host keeps the backlog for the replacement daemon.
+    host.detach();
+    await exec('systemctl', ['--user', 'restart', ...units]);
+  } finally { host.detach(); }
+}
 
 /**
  * Pull the deployed checkout to the newest origin/BRANCH, rebuild the app and
@@ -90,14 +124,18 @@ export async function selfUpdate(dir = ROOT, { rebuild = true, restart = true } 
   // to the user manager and outlives the stop it requests.
   const restarting = [];
   const failed = [];
-  for (const unit of DAEMON_UNITS) {
-    if (!(await unitActive(unit))) continue;
+  for (const unit of DAEMON_UNITS) if (await unitActive(unit)) restarting.push(unit);
+  if (restarting.length) {
     try {
-      await exec('systemd-run', ['--user', '--on-active=5', '--unit=helm-self-restart',
-        'systemctl', '--user', 'restart', unit]);
-      restarting.push(unit);
+      // One worker handles both services and drains any unhosted active turn.
+      // Hosted conversations continue in the process host while we reconnect.
+      if (!(await unitActive('helm-self-restart.service')) && !(await unitActive('helm-self-restart.timer'))) {
+        await exec('systemd-run', ['--user', '--collect', '--on-active=5', '--unit=helm-self-restart', `--setenv=HELM_DIR=${HELM_DIR}`,
+          process.execPath, binPath, 'restart-services', ...restarting]);
+      }
     } catch {
-      failed.push(unit);
+      failed.push(...restarting);
+      restarting.length = 0;
     }
   }
   return { updated: true, restarting, failed };

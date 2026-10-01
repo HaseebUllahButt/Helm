@@ -1653,8 +1653,14 @@ try {
       const r = await selfUpdate();
       if (!r.updated) { console.log(`  not updated - ${r.reason}`); break; }
       console.log(r.restarting?.length
-        ? `  updated - ${r.restarting.join(', ')} restart${r.restarting.length === 1 ? 's' : ''} in a few seconds`
+        ? `  updated - ${r.restarting.join(', ')} will restart safely; active threads are preserved`
         : '  updated - restart helm to pick it up');
+      break;
+    }
+
+    case 'restart-services': {
+      const { restartWhenSafe } = await import('../src/update.js');
+      await restartWhenSafe(rest);
       break;
     }
 

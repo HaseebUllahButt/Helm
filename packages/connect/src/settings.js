@@ -20,13 +20,32 @@ export function accountKey(profile) {
   const home = profile.wraps
     ? [profile.cmd, ...(profile.args ?? [])].join(' ')
     : Object.values(profile.env ?? {}).find((v) => /^[~/]/.test(v)) ?? '';
-  const creds = [...(profile.envFrom ?? [])].sort().join(',');
+  const creds = [...(profile.envFrom ?? [])].map((name) => profile.secretRefs?.[name] ?? name).sort().join(',');
   return `${profile.engine}|${home}|${creds}`;
 }
 
 export function loadSettings() {
   if (!existsSync(CONFIG_FILE)) return {};
   try { return JSON.parse(readFileSync(CONFIG_FILE, 'utf8')); } catch { return {}; }
+}
+
+/** Retain saved choices when rediscovery separates formerly shared token slots. */
+export function migrateProfileSettings(previous, next) {
+  const cfg = loadSettings();
+  let changed = false;
+  for (const profile of next) {
+    const old = previous.find((p) => p.id === profile.id);
+    if (!old) continue;
+    const before = accountKey(old), after = accountKey(profile);
+    if (before === after) continue;
+    for (const section of ['models', 'starts']) {
+      if (cfg[section]?.[before] && !Object.hasOwn(cfg[section], after)) {
+        cfg[section][after] = { ...cfg[section][before] };
+        changed = true;
+      }
+    }
+  }
+  if (changed) writeSettings(cfg);
 }
 
 /** The account's model prefs, or null - an absent entry means "offer all". */

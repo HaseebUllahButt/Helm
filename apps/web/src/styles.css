@@ -1415,6 +1415,13 @@ pre.snippet {
 /* "Another machine needs you" while a session is open. Under the header: at
    the bottom it sat on the composer, and a tap meant for the textarea opened
    a different session. */
+.app-update {
+  position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 12px);
+  z-index: 55; display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  max-width: calc(100vw - 24px); border-radius: var(--radius-xl);
+  background: var(--toast-bg); border: 1px solid var(--line-2); box-shadow: var(--shadow);
+  color: var(--text); font-size: var(--t-meta);
+}
 .toast {
   position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 58px); transform: translateX(-50%);
   z-index: 55; display: flex; align-items: center; width: min(400px, calc(100vw - 24px));

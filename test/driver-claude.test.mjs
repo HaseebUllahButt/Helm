@@ -58,6 +58,41 @@ test('delegated Claude tasks cannot enter a plan approval workflow', () => {
   assert.equal(driver.args[flag + 1], 'EnterPlanMode,ExitPlanMode');
 });
 
+test('reattaching Claude restores its active text block and completes the original turn', async () => {
+  let receive;
+  const pipe = { onData: (cb) => { receive = cb; }, onExit: () => {}, detach: () => {} };
+  const { driver, log } = make('plain', {
+    procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => 'original-turn',
+    resumeEvents: () => [{ type: 'item.start', id: 'message-1#0', kind: 'text', turnId: 'original-turn' }],
+  });
+  await driver.start();
+  receive(JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'continued' } } }) + '\n');
+  receive(JSON.stringify({ type: 'result', is_error: false, total_cost_usd: 0 }) + '\n');
+  assert.equal(log.of('item.delta')[0].id, 'message-1#0');
+  assert.equal(log.of('item.delta')[0].text, 'continued');
+  assert.equal(log.of('turn.done')[0].turnId, 'original-turn');
+  assert.equal(log.of('turn.done')[0].status, 'ok');
+  await driver.suspend();
+});
+
+test('a Claude question remains answerable after the daemon is replaced', async () => {
+  const writes = [];
+  const pipe = { onData: () => {}, onExit: () => {}, detach: () => {}, write: (data) => writes.push(JSON.parse(data)) };
+  const { driver } = make('plain', {
+    procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => 'original-turn', pendingEvents: () => [{
+      requestId: 'question-before-update', kind: 'question', raw: { input: { questions: [{ question: 'Continue?' }] } },
+    }],
+  });
+  await driver.start();
+  assert.equal(driver.status, 'blocked');
+  await driver.answer('question-before-update', { option: 'allow', answers: { 'Continue?': 'Yes' } });
+  assert.equal(writes[0].response.request_id, 'question-before-update');
+  assert.equal(writes[0].response.response.updatedInput.answers['Continue?'], 'Yes');
+  await driver.suspend();
+});
+
 test('tool: a Bash call becomes a tool item with streamed input and its output; a Write asks permission', async () => {
   const { driver, log, fake } = make('tool');
   await driver.send('Use the Bash tool…');

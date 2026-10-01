@@ -900,8 +900,9 @@ export class Sessions extends EventEmitter {
       // getters answer what the log still has open - read only when the
       // driver actually finds its process there to rebind.
       procHost: this.procs, procId: s.id,
-      openTurn: () => this.events.openTurn(s.id)?.turnId ?? null,
+      openTurn: () => this.events.activeTurn(s.id)?.turnId ?? null,
       pendingEvents: () => this.events.pending(s.id),
+      resumeEvents: () => this.events.tail(s.id, 0),
       log: (m) => this.log(`[${s.id}] ${m}`),
     });
     this.#drivers.set(s.id, d);
@@ -2473,7 +2474,8 @@ export class Sessions extends EventEmitter {
   }
 
   /** Re-watch every surviving pane after a daemon restart. */
-  resume() {
+  async resume() {
+    const reattaching = [];
     for (const s of this.#index.values()) {
       // A terminal lives in the host process, which outlives us - so its
       // record stays until `adoptTerminals()` has asked what really survived.
@@ -2486,7 +2488,13 @@ export class Sessions extends EventEmitter {
         const tail = this.events.tail(s.id, 0);
         this.#restoreOpenTurns(s, tail, true);
         s.lastSeq = this.events.last(s.id);
-        this.#pump(s);
+        // Listen immediately, including to unattended threads. Otherwise a
+        // turn that finishes during the update stays busy until someone opens
+        // the thread, and its queued messages never get delivered.
+        reattaching.push(this.#driver(s).then(async (d) => {
+          await d.start();
+          this.#pump(s);
+        }).catch((err) => this.log(`[${s.id}] could not reattach surviving agent: ${err.message}`)));
         continue;
       }
       // The process that asked died with the previous daemon; a prompt it
@@ -2515,11 +2523,15 @@ export class Sessions extends EventEmitter {
       this.#pump(s);
     }
     this.#save();
+    await Promise.allSettled(reattaching);
   }
 
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
-    await Promise.allSettled([...this.#drivers.values()].map((d) => d.suspend?.() ?? d.kill()));
+    await Promise.allSettled([...this.#drivers.values()].map((d) => {
+      d.flush?.();
+      return d.suspend?.() ?? d.kill();
+    }));
     this.#drivers.clear();
     // Let go of the hosts, without closing what they hold: their shells and
     // agents outlive this daemon by design. A socket left open here kept a

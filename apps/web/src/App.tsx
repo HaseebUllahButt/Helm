@@ -20,6 +20,7 @@ import {
 } from './client';
 import { money, bytes } from './format';
 import { loadModels, saveModels } from './modelCache';
+import { followModelRefresh } from './modelRefresh';
 import { loadMessages, saveMessages } from './session/logCache';
 
 type Auth = StoredAuth;
@@ -3450,20 +3451,26 @@ function ModelPrefsView({ client, env, account, onBack }: {
 
   useEffect(() => {
     let stale = false;
+    let initialized = false;
     const take = (r: ModelList, remembered?: boolean) => {
       if (stale) return;
       setList(r);
-      setApproved(new Set(r.prefs?.approved ?? []));
-      setDef(r.prefs?.default ?? '');
+      if (!initialized) {
+        setApproved(new Set(r.prefs?.approved ?? []));
+        setDef(r.prefs?.default ?? '');
+      }
+      if (!remembered) initialized = true;
       if (!remembered) saveModels(env.id, account.profile.id, r, true);
     };
     // Paint the catalogue this device already knows - the whole list, which is
     // the slowest thing the app asks for - and let the real answer replace it.
-    loadModels(env.id, account.profile.id, true).then((c) => { if (c && !list) take(c, true); });
-    client.rpc(env.id, 'model.list', { profileId: account.profile.id, all: true }, 45_000)
-      .then((r: ModelList) => take(r))
-      .catch((e) => { if (!stale && !list) setError(e.message); });
-    return () => { stale = true; };
+    loadModels(env.id, account.profile.id, true).then((c) => { if (c && !initialized) take(c, true); });
+    const catalog = followModelRefresh(
+      () => client.rpc<ModelList>(env.id, 'model.list', { profileId: account.profile.id, all: true }, 45_000),
+      (r) => take(r),
+      (e) => { if (!list) setError(e instanceof Error ? e.message : String(e)); },
+    );
+    return () => { stale = true; catalog.stop(); };
   }, [client, env.id, account.profile.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = (m: string) => {

@@ -138,6 +138,9 @@ test('Claude returns its local account answer before Models.dev and refreshes th
     const first = await listModels('claude', home);
     assert.ok(Date.now() - began < 1000, 'local Claude data should not wait for Models.dev');
     assert.ok(first.models.includes('account-model'));
+    assert.ok(first.models.includes('claude-opus-5-5'), 'Opus 5.5 remains selectable before public discovery');
+    assert.equal(first.labels['claude-opus-5-5'], 'Claude Opus 5.5');
+    assert.equal(first.refreshing, true);
     await barrier.started;
     barrier.release({ anthropic: { models: {
       'published-test-model': { name: 'Published test model', attachment: true },
@@ -147,6 +150,7 @@ test('Claude returns its local account answer before Models.dev and refreshes th
       return current.models.includes('published-test-model') ? current : null;
     });
     assert.equal(refreshed.labels['published-test-model'], 'Published test model');
+    assert.equal(refreshed.refreshing, false);
   } finally {
     if (prior === undefined) delete process.env.HELM_MODELS_DEV_URL;
     else process.env.HELM_MODELS_DEV_URL = prior;

@@ -403,6 +403,15 @@ export class EventLog {
     return null;
   }
 
+  /** The agent's live turn, even when unsent queued messages follow it. */
+  activeTurn(id) {
+    const events = this.#open(id).events;
+    const closed = new Set(events.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
+    const open = events.filter((e) => e.type === 'turn.start' && !closed.has(e.turnId));
+    return [...open].reverse().find((e) => !String(e.turnId).startsWith('local-'))
+      ?? [...open].reverse().find((e) => e.queued !== true) ?? null;
+  }
+
   remove(id) {
     this.#logs.delete(id);
     this.#pending.delete(id);

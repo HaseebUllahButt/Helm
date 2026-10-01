@@ -15,6 +15,7 @@ import { loadDraft, saveDraft } from '../draftStore';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
 import { money } from '../format';
 import { loadModels, saveModels } from '../modelCache';
+import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
 import type { Decision, Turn } from './types';
 import { Subagents } from './Subagents';
@@ -78,14 +79,20 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // empty until a CLI has been spawned and a round trip has come back.
   useEffect(() => {
     let stale = false;
+    setOptions(null);
     loadModels(env.id, session.profileId).then((cached) => {
       if (!stale && cached) setOptions((now) => now ?? cached);
     });
-    client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id }, 30_000)
-      .then((r) => { if (!stale) { setOptions(r); saveModels(env.id, session.profileId, r); } })
-      .catch(() => setOptions((now) => now ?? { default: null, models: [] }));
-    return () => { stale = true; };
-  }, [client, env.id, session.profileId]);
+    const catalog = followModelRefresh(
+      () => client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id }, 30_000),
+      (r) => { setOptions(r); saveModels(env.id, session.profileId, r); },
+      () => setOptions((now) => now ?? { default: null, models: [] }),
+    );
+    const off = client.on((e, kind, payload: any) => {
+      if ((kind === 'connection' && payload?.online) || (e === env.id && kind === 'transport' && payload?.direct)) void catalog.refresh();
+    });
+    return () => { stale = true; catalog.stop(); off(); };
+  }, [client, env.id, session.profileId, session.id]);
 
   // What `/` offers. Read from the machine because that is where the
   // commands are: files beside the project, or in that account's config.

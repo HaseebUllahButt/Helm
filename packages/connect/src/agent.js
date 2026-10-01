@@ -394,7 +394,7 @@ export class Daemon {
     this.peers?.stop();
     this.runtime?.stop();
     this.usage?.stop();
-    // Hosted agents are detached by Sessions.stop() and resume on demand;
+    // Hosted agents are detached by Sessions.stop() and rebound at boot;
     // local ones are stopped as before. Awaiting this is important during a
     // systemd restart: the daemon must release its side of every session
     // before the service exits.
