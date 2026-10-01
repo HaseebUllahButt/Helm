@@ -24,6 +24,8 @@ import { AntigravityDriver } from './drivers/antigravity.js';
 import { PiDriver, OmpDriver } from './drivers/pi.js';
 import { devinUsageReport } from './devin-usage.js';
 import { defaultMode, modeFromAuto } from './modes.js';
+import { delegationMode, delegationOutput, trackDelegationReply } from './delegation.js';
+import { authStatuses } from './auth.js';
 import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory } from './inventory.js';
 
@@ -125,7 +127,7 @@ const EXTERNAL = /^(pane:|found:)/;
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
-export const wire = ({ promptSample, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, originHandoffId, ...s }) => s;
+export const wire = ({ promptSample, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, originHandoffId, delegationReply, ...s }) => s;
 
 const EXTERNAL_INFO_COMMANDS = [
   { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
@@ -220,6 +222,7 @@ export function acceptImages(attachments) {
 }
 
 export class Sessions extends EventEmitter {
+  #delegationStarts = 0;
   #index = new Map();
   /** paneId -> what the runtime last told us about a pane we do not own */
   #adopted = new Map();
@@ -616,6 +619,75 @@ export class Sessions extends EventEmitter {
     return session;
   }
 
+  /** A CLI child in the same folder, with durable lineage and its own approvals. */
+  async delegate({ id, cwd, profileId, model, mode, effort, task }) {
+    if (typeof task !== 'string' || !task.trim() || task.length > 32_000) {
+      throw new Error('a subagent task must contain 1–32000 characters');
+    }
+    const parent = id ? this.get(id) : null;
+    if (parent && !parent.driver) throw new Error('the parent must be an agent session');
+    const folder = parent?.cwd ?? cwd;
+    if (typeof folder !== 'string' || !folder.trim()) throw new Error('delegation needs a working folder');
+    let depth = 1, ancestor = parent;
+    while (ancestor?.delegation) {
+      if (++depth > 3) throw new Error('subagents can nest at most three levels');
+      ancestor = this.#index.get(ancestor.delegation.parentId);
+    }
+    const active = [...this.#index.values()].filter((s) => s.delegation
+      && ['working', 'blocked', 'starting'].includes(s.delegation.status ?? s.status)).length;
+    if (active + this.#delegationStarts >= 4) throw new Error('four subagents are already running; wait for one to finish');
+    this.#delegationStarts++;
+    try {
+      const profile = (await getProfiles()).find((p) => p.id === profileId && !p.disabled);
+      if (!profile || !ENGINES[profile.engine]?.driver) throw new Error('choose a CLI account with a headless driver');
+      if ((profile.args ?? []).some((arg) => /^--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo)(?:=|$)/.test(arg))) {
+        throw new Error('that CLI profile bypasses permissions; choose a profile without bypass flags');
+      }
+      const auth = (await authStatuses([profile])).get(profile.id);
+      if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
+      const selectedMode = delegationMode(profile.engine, parent?.mode, mode);
+      const child = await this.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
+        title: clip(task.trim().split('\n')[0], 80) });
+      if ((model && child.model !== model) || (selectedMode && child.mode !== selectedMode)) {
+        await this.kill(child.id);
+        throw new Error('the CLI refused the selected subagent model or permissions; no task was sent');
+      }
+      child.delegation = { parentId: parent?.id ?? null, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting' };
+      if (parent) {
+        parent.delegations = [...(parent.delegations ?? []), child.id].slice(-100);
+        parent.updatedAt = Date.now();
+      }
+      this.#save();
+      this.emit('session', child);
+      if (parent) this.emit('session', parent);
+      // The task is the bounded context. A child never silently copies the
+      // parent's transcript, credentials, or unrelated local conversations.
+      try { await this.input(child.id, task.trim()); }
+      catch (error) {
+        throw new Error(`subagent ${child.id} could not receive its task: ${error.message}; read it with helm delegate-result ${child.id}`);
+      }
+      return { session: wire(child) };
+    } finally { this.#delegationStarts--; }
+  }
+
+  delegationResult(id) {
+    const session = this.get(id);
+    if (!session.delegation) throw new Error('that session is not a delegated CLI task');
+    const events = this.events.tail(id, 2000);
+    const result = delegationOutput(wire(session), events);
+    const reply = session.delegationReply;
+    const start = events.findLast((e) => e.type === 'turn.start');
+    if (reply && (!start || start.turnId === reply.turnId)) {
+      result.output = reply.output;
+      result.truncated = reply.truncated;
+      const status = session.delegation.status;
+      if (['done', 'error', 'interrupted'].includes(status)) {
+        result.status = status; result.complete = true;
+      }
+    }
+    return result;
+  }
+
   // ---------------------------------------------------------------- terminals
 
   /**
@@ -824,6 +896,7 @@ export class Sessions extends EventEmitter {
 
   #onDriverEvent(s, d, e) {
     if (this.#drivers.get(s.id) !== d && e.type !== 'status') return;
+    trackDelegationReply(s, e);
     let forwarded = e;
     const staleClaudeConversation = s.engine === 'claude'
       && e.type === 'turn.done'
@@ -855,6 +928,7 @@ export class Sessions extends EventEmitter {
       // A closed process is not a closed conversation: the next message
       // resumes it. Only an explicit kill removes the session.
       const status = e.status === 'exited' ? 'idle' : e.status;
+      if (s.delegation && ['working', 'blocked'].includes(status)) s.delegation.status = status;
       if (e.status === 'exited' && this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
       this.#reap(s, status);
       if (status !== s.status && this.#index.has(s.id)) {
@@ -897,10 +971,12 @@ export class Sessions extends EventEmitter {
     }
     if (e.type === 'turn.done' && s.forkFrom) delete s.forkFrom;
     if (e.type === 'turn.done' && this.#index.has(s.id)) {
+      if (s.delegation) s.delegation.status = e.status === 'ok' ? 'done' : e.status;
       s.turns = (s.turns ?? 0) + 1;
       const cost = forwarded.costUsd;
       if (cost > 0) s.costUsd = Math.round(((s.costUsd ?? 0) + cost) * 1e6) / 1e6;
       this.#save();
+      if (s.delegation) this.emit('session', s);
     }
     if (!staleClaudeConversation && d.engineSessionId && d.engineSessionId !== s.engineSessionId) {
       s.engineSessionId = d.engineSessionId;
@@ -1804,6 +1880,14 @@ export class Sessions extends EventEmitter {
       // is a verb for the CLI, not a description of the work - "/status"
       // must never become the thread's title.
       if (!raw && !clean.trimStart().startsWith('/')) this.#prompted(s, clean);
+      if (!raw && !clean.trimStart().startsWith('/') && !s.delegationIntroduced && this.delegationBrief) {
+        const note = this.delegationBrief();
+        if (note) {
+          clean = `${note}\n\n${clean}`;
+          s.delegationIntroduced = true;
+          this.#save();
+        }
+      }
       if (brainLine) clean = `${brainLine}\n\n${clean}`;
 
       const turnId = requestedTurnId
@@ -1944,6 +2028,11 @@ export class Sessions extends EventEmitter {
         await d.send(msg);
       }
     } catch (err) {
+      if (s.delegation) {
+        s.delegation.status = 'error';
+        this.#save();
+        this.emit('session', s);
+      }
       // The send never reached the agent. The bubble stays - it is what
       // the owner wrote - but it closes failed rather than hanging as a
       // message that looks merely unanswered, and the error travels back
@@ -2292,6 +2381,7 @@ export class Sessions extends EventEmitter {
       : null;
     const revive = [];
     const settle = (turnId, status, error) => {
+      if (s.delegation) s.delegation.status = status === 'ok' ? 'done' : status;
       const event = this.events.append(s.id, { type: 'turn.done', turnId, status, ...(error ? { error } : {}) });
       s.lastSeq = event.seq;
       this.emit('event', { id: s.id, event });

@@ -120,12 +120,15 @@ export const M = {
   PROJECT_SAVE: 'project.save',
   PROJECT_REMOVE: 'project.remove',
   PROFILE_LIST: 'profile.list',    // {} -> { profiles[] }
+  AGENT_LIST: 'agent.list',        // { refresh?, models? } -> { agents[] } credential-free CLI capabilities
   PROFILE_DEFAULTS: 'profile.defaults', // { profileId, effort?, mode?, speed? } -> { defaults }
   MODEL_LIST: 'model.list',        // { profileId, id?, all? } -> { default, models[], more?[], prefs?, effort?, efforts? }
   MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[] } -> { prefs }  per-account picker filter
   SESSION_LIST: 'session.list',    // {} -> { sessions[] }
   SESSION_START: 'session.start',  // { cwd, profileId, model?, effort?, mode?, speed?, title?, parent? } -> { session }
   SESSION_LINK:  'session.link',   // { id, child } -> { session }  durable parent/child handoff link
+  SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task } -> { session }
+  SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id } -> { session, status, complete, output, pending }
   SESSION_ATTACH: 'session.attach',// { id, cols, rows } -> { session, scrollback }
   SESSION_DETACH: 'session.detach',// { id }
   SESSION_INPUT: 'session.input',  // { id, data }

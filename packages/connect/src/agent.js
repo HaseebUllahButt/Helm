@@ -34,6 +34,7 @@ import { Handoffs } from './handoffs.js';
 import { Transfers } from './transfers.js';
 import { selfUpdate, currentVersion } from './update.js';
 import * as gitq from './git.js';
+import { agentCatalog, delegationNote } from './delegation.js';
 
 const RECONNECT_MIN = 1000;
 const RECONNECT_MAX = 30_000;
@@ -231,6 +232,7 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    this.sessions.delegationBrief = () => delegationNote(this.cliAgents ?? []);
     this.handoffs = new Handoffs({
       sessions: this.sessions,
       network: () => loadNetwork() ?? this.net,
@@ -266,7 +268,10 @@ export class Daemon {
     // Likewise which accounts are signed in - and, as a side effect of asking
     // agy, their model lists - so opening the picker or choosing an account
     // right after a restart answers from memory instead of from the CLIs.
-    currentProfiles().then((profiles) => authStatuses(profiles, { waitMs: 0 })).catch(() => {});
+    currentProfiles().then(async (profiles) => {
+      const statuses = await authStatuses(profiles);
+      this.cliAgents = await agentCatalog(profiles, statuses, { models: false });
+    }).catch(() => {});
     this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session: wire(session) }));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
@@ -1162,6 +1167,13 @@ export class Daemon {
         };
       }
 
+      case M.AGENT_LIST: {
+        const profiles = p.refresh ? (await refreshProfiles()).profiles : await currentProfiles();
+        const statuses = await authStatuses(profiles, { refresh: !!p.refresh });
+        this.cliAgents = await agentCatalog(profiles, statuses, { models: p.models !== false });
+        return { agents: this.cliAgents };
+      }
+
       case M.PROFILE_DEFAULTS: {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
@@ -1241,6 +1253,8 @@ export class Daemon {
       }
 
       case M.SESSION_LIST:    return { sessions: await this.sessions.list() };
+      case M.SESSION_DELEGATE: return this.sessions.delegate(p);
+      case M.SESSION_DELEGATION_RESULT: return this.sessions.delegationResult(p.id);
       case M.SESSION_START: {
         const { originHandoffId: _originHandoffId, ...start } = p;
         return { session: await this.sessions.start(start) };

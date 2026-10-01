@@ -228,6 +228,8 @@ export function localDigest(sessions, events) {
         pending: s.pending ?? 0,
         parent: s.parent ?? null,
         children: Array.isArray(s.children) ? s.children : [],
+        delegation: s.delegation ?? null,
+        delegations: s.delegations ?? [],
         last,
       };
     });
@@ -365,6 +367,9 @@ You are running on ${name}. Your tools for the network are the \`helm\` CLI, thr
   helm thread <id>         the recent conversation of one session (-n for more lines)
   helm say <id> <text>     send a prompt into an existing session
   helm spawn <machine> <folder> <account> <text>   start a new session and prompt it
+  helm agents --json       CLI accounts, sign-in status and selectable models here
+  helm delegate <account> --model <id> --wait --json -- "<task>"   run a CLI subagent in this folder
+  helm delegate-result <id> --wait --json   read a child's result or pending approval
   helm machines            the roster
 
 Session ids are the short ids \`helm digest\` prints. Ordinary shell commands run on ${name}; to do something on another machine, spawn or talk to a session there.

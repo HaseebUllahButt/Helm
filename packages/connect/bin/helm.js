@@ -71,6 +71,7 @@ const usage = () => {
   helm login [minutes]              new short-lived password for signing in a device
   helm status                       membership, links and runtime
   helm profiles [--refresh]         the agent profiles found here
+  helm agents [--json] [--refresh]  CLI accounts, sign-in status and model IDs
   helm antigravity [install|login|status|remove]   the managed Google ACP agent
 
   helm brain [--on <machine>]       open a machine's own agent (prints how to reach it)
@@ -78,6 +79,9 @@ const usage = () => {
   helm thread <id> [-n 40]          the recent conversation of one session
   helm say <id> <text...>           send a prompt into an existing session
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
+  helm delegate <account> --model <id> --wait --json -- "<task>"
+                                    run a CLI subagent in the current folder
+  helm delegate-result <id> [--wait] [--json]   read its result or pending approval
   helm handoff <machine> [text...]  move code and this task to another machine
     --handoff-id <id>               resume an interrupted handoff instead of starting a new one
   helm dispatch <machine> [text...]  queue this folder and task on another machine
@@ -779,7 +783,8 @@ async function say() {
 }
 
 async function spawn_() {
-  const args = rest.filter((x) => !x.startsWith('--'));
+  const { parseAgentArgs } = await import('../src/delegation.js');
+  const { words: args, options } = parseAgentArgs(rest, { values: ['model', 'mode', 'effort', 'title'] });
   const [who, folder, account, ...words] = args;
   const text = words.join(' ');
   if (!who || !folder || !account) {
@@ -795,8 +800,8 @@ async function spawn_() {
     die(`no account "${account}" on that machine - it has: ${profiles.map((x) => x.id).join(', ')}`);
   }
   const { session } = await brainRpc(env, M.SESSION_START, {
-    cwd: folder, profileId: profile.id, model: flagOf('model'), mode: flagOf('mode'),
-    title: flagOf('title'),
+    cwd: folder, profileId: profile.id, model: options.model, mode: options.mode,
+    effort: options.effort, title: options.title,
   }, 60_000);
   if (text) await brainRpc(env, M.SESSION_INPUT, { id: session.id, data: text });
   console.log(`${shortId(session.id)}  ${session.title}  (${profile.engine} on ${who}, ${folder})`);
@@ -1784,6 +1789,13 @@ try {
     // Claude Code, Codex, opencode and Devin without a line of driver code -
     // and why the permission card the owner already answers on their phone
     // is the brain's guardrail too.
+    case 'agents':
+    case 'delegate':
+    case 'delegate-result': {
+      const { runAgentCommand } = await import('../src/agent-cli.js');
+      exit(await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self }));
+      break;
+    }
     case 'brain':
       await openBrain();
       break;
