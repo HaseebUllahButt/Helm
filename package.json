@@ -12,7 +12,7 @@
   "scripts": {
     "test": "node --test test/*.test.mjs && bash test/network.sh",
     "check": "npm exec --workspace @helm/web -- tsc --noEmit && npm --workspace @helm/web run build && npm test",
-    "web": "npm --workspace @helm/web run dev"
-
+    "web": "npm --workspace @helm/web run dev",
+    "test:browser": "node --test test/browser/*.test.mjs"
   }
 }

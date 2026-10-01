@@ -321,3 +321,15 @@ npm run check
 
 `npm run check` type-checks and builds the web app, then runs the CLI and
 network regression tests.
+
+Browser regressions for Markdown safety, dialog focus, the command palette,
+and CLI subagent controls:
+
+```bash
+npm exec --workspace @helm/web -- playwright install chromium
+npm run test:browser
+```
+
+To use an installed Chromium instead, run
+`HELM_TEST_CHROMIUM=/usr/bin/chromium npm run test:browser`.
+These checks use isolated fixtures and do not connect to your Helm network.
