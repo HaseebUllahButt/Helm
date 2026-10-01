@@ -175,6 +175,52 @@ Closing helm does not end a conversation: sessions resume on the next message
 Plain terminals, and agents you started at the keyboard, still run in
 [herdr](https://herdr.dev) panes and show as a terminal.
 
+## CLI subagents
+
+Open **Subagents** (⧉) inside a conversation to choose a CLI account, model,
+permissions, and a task. Each task opens its own child thread in the same
+folder. Its account, model, status, reply, and pending approvals are visible
+in the panel; open the child to answer an approval or continue the work.
+The child's menu can take you back to its parent.
+
+Helm-managed agents receive a short introduction to these tools on their next
+ordinary message. Any local CLI with shell access can also use them directly
+on a joined machine with the Helm daemon running:
+
+```bash
+helm agents --json
+helm delegate claudea --model opus --wait --json -- "Review the security changes"
+helm delegate-result <child-id> --wait --json
+```
+
+`helm agents` reports discovered accounts, sign-in status, and model IDs
+without publishing credentials or launcher environments. Use `--refresh`
+after logging in or installing a CLI. Unknown sign-in state is shown as
+unverified; a signed-out account cannot be delegated to. Use an exact account
+ID when more than one profile uses the same CLI.
+
+Inside a Helm session, `helm delegate` automatically links the task to that
+session and uses its folder. From an ordinary terminal or native Codex CLI,
+it uses the current folder; `--cwd <folder>` chooses another. `--model` selects
+the child's model through its own CLI, so Codex can ask Claude Opus for work
+using an existing Claude login. The supplied task is the child's context;
+the parent conversation is not copied automatically. Children share the
+folder, so assign distinct work when delegating edits.
+
+Children start with the CLI's safe default permissions; `--mode` and
+`--effort` select supported settings. A read-only parent requires a read-only
+child, and delegation rejects permission-bypass modes. Up to four children
+can run at once, with at most three levels of nesting.
+CLIs without a permission picker use their own configured permission policy.
+
+`--wait` returns the reply when finished, or returns immediately when the
+child needs approval. Read it again after answering in Helm. The default
+wait limit is five minutes; `--timeout <milliseconds>` changes it. Timing
+out stops waiting while the child continues. Exit codes are 0 for success,
+1 for failure or interruption, 2 for a pending approval, and 3 for a wait
+timeout. JSON includes the full child ID and its status; replies are bounded
+to the last 32,000 characters. Open the thread for the full conversation.
+
 ## Brains (optional)
 
 Sessions are the main way to use helm: open a machine, pick a folder, start an

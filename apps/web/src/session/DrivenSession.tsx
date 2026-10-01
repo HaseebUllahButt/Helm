@@ -17,6 +17,7 @@ import { money } from '../format';
 import { loadModels, saveModels } from '../modelCache';
 import { useSessionLog } from './useSessionLog';
 import type { Decision, Turn } from './types';
+import { Subagents } from './Subagents';
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
@@ -56,6 +57,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [showChanges, setShowChanges] = useState(false);
+  const [showSubagents, setShowSubagents] = useState(false);
   /** The message a branch was asked for from, while the confirmation is up. */
   const [branching, setBranching] = useState<Turn | null>(null);
   useDismiss(menu !== null, useCallback(() => setMenu(null), []));
@@ -327,7 +329,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab' || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key !== 'Tab' || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || document.querySelector('[aria-modal="true"]')) return;
       e.preventDefault();
       cycle();
     };
@@ -382,6 +384,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           </span>
         </div>
         {chip(status)}
+        <button className="iconbtn subagents-launch" aria-label="Subagents" title="Delegate to another CLI or model"
+          onClick={() => setShowSubagents(true)}>⧉{(session.delegations?.length ?? 0) > 0 && <b className="cbadge">{session.delegations!.length}</b>}</button>
         {git.status?.repo && !session.brain && (
           <button
             className={`iconbtn changesbtn${changed ? ' has' : ''}`}
@@ -429,6 +433,10 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
+            {session.delegation?.parentId && onOpenSession && <button onClick={() => call(async () => {
+              const r = await client.rpc<{ session: Session }>(env.id, 'session.events', { id: session.delegation!.parentId, limit: 1 });
+              onOpenSession(r.session);
+            })}>Open parent thread</button>}
             {wakeable && (
               <button aria-pressed={keepAwake} onClick={() => setKeepAwake((v) => !v)}>
                 {keepAwake ? 'Let the screen sleep' : 'Keep the screen awake'}
@@ -472,6 +480,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>
+
+      {showSubagents && <Subagents client={client} env={env} parent={session} onClose={() => setShowSubagents(false)} onOpen={onOpenSession} />}
 
       {branching && (
         <Confirm

@@ -258,6 +258,7 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
   const out = item.output ?? item.agent?.summary ?? '';
   const used = tokens(item.agent?.tokens);
   const calls = item.agent?.toolUses;
+  const model = input?.model ?? item.agent?.model;
   // While it runs, what it is doing now beats what it was asked: the engine
   // rewrites `description` as the child works, and nothing showed it.
   const doing = live && item.agent?.description ? item.agent.description : task;
@@ -268,6 +269,7 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
         <b>{who}</b>{doing && <> {typeof doing === 'string' && doing.length > 140 ? doing.slice(0, 140) + '…' : String(doing)}</>}
       </span>
       {live && item.agent?.lastTool && <span className="ameta">{item.agent.lastTool}</span>}
+      {model && <span className="ameta">{String(model)}</span>}
       {!live && !!calls && <span className="ameta">{calls} {calls === 1 ? 'tool' : 'tools'}</span>}
       {used && <span className="ameta">{used}</span>}
       {live && item.elapsed != null && item.elapsed > 2 && <span className="ameta">{Math.round(item.elapsed)}s</span>}
@@ -312,10 +314,10 @@ function ItemView({ item, byParent, commandOutput }: { item: Item; byParent: Map
  * bubble in their own words it reads as though they typed it. It gets its
  * own quiet line instead.
  */
-const HELM_NOTE = /^(\[helm [^\]\n]*\])\n\n([\s\S]*)$/;
+const HELM_NOTE = /^((?:\[helm [^\]\n]*\]\n\n)+)([\s\S]*)$/;
 export function splitNote(text?: string): { note?: string; text?: string } {
   const m = text ? HELM_NOTE.exec(text) : null;
-  return m ? { note: m[1], text: m[2] } : { text };
+  return m ? { note: m[1].trim(), text: m[2] } : { text };
 }
 
 /** How long ago a bubble was sent, in the transcript's own quiet type. */

@@ -104,6 +104,21 @@ export interface Session {
   externalActive?: boolean;
   /** This is a transcript monitor which can become driven after handoff. */
   external?: boolean;
+  delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string };
+  delegations?: string[];
+}
+
+export interface CliAgent {
+  id: string; label: string; engine: string; account: string;
+  auth: 'authenticated' | 'unauthenticated' | 'unknown'; available: boolean;
+  models?: string[]; labels?: Record<string, string>; defaultModel?: string | null;
+  modes: Mode[];
+}
+
+export interface DelegationResult {
+  session: Session; status: string; complete: boolean; output: string;
+  truncated?: boolean; error?: string | null;
+  pending?: { requestId: string; title?: string; kind: string } | null;
 }
 
 /** A thread a CLI recorded on its own, whether or not helm started it. */

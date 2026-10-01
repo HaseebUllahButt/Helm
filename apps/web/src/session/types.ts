@@ -16,6 +16,7 @@ export interface Change { path: string; kind: string; diff: string }
 /** What the engine says about a spawned agent, while it runs and when it lands. */
 export interface AgentInfo {
   id?: string;
+  model?: string;
   status?: string;
   /** What it is doing *now*. Claude rewrites this as the child works. */
   description?: string;

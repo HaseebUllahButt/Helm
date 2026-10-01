@@ -1812,6 +1812,39 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .palette-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 0 18px; color: var(--mutedfg); font-size: var(--t-meta); }
 .palette-heading button { min-height: 36px; }
 
+/* A branch rail identifies the account and model behind every delegated task. */
+.subagents-launch { position: relative; }
+.delegation-panel { width: min(680px, calc(100vw - 24px)); max-width: 680px; max-height: calc(100dvh - 32px); overflow-y: auto; }
+.delegation-heading, .delegation-account-label, .delegation-start { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.delegation-heading h2 { margin: 0; font-size: var(--t-title); }
+.delegation-heading p, .delegation-intro { color: var(--mutedfg); font-size: var(--t-meta); line-height: 1.5; }
+.delegation-heading p { margin: 4px 0 0; }
+.delegation-form { display: grid; gap: 8px; margin: 18px 0; }
+.delegation-form label { display: grid; gap: 6px; font-size: var(--t-meta); color: var(--text-dim); }
+.delegation-form input, .delegation-form select, .delegation-form textarea { width: 100%; min-width: 0; margin: 0; padding: 9px 10px; }
+.delegation-form textarea { resize: vertical; }
+.delegation-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 6px 0; }
+.delegation-start { margin-top: 6px; }
+.delegation-start span { color: var(--mutedfg); font-size: var(--t-micro); }
+.delegation-start button { width: auto; margin: 0; flex-shrink: 0; }
+.delegation-branches h3 { font-size: var(--t-meta); margin: 22px 0 12px; }
+.delegation-branches h3 span { color: var(--mutedfg); font-weight: 400; margin-left: 6px; }
+.delegation-branch { border-left: 2px solid var(--line-2); margin-left: 9px; padding-left: 14px; }
+.delegation-branch.selected { border-left-color: var(--primary-q); }
+.delegation-task { display: flex; gap: 10px; align-items: center; width: 100%; background: none; border: 0; text-align: left; padding: 12px 0; }
+.delegation-task .grow { min-width: 0; }
+.delegation-task b { display: block; font-weight: 500; overflow-wrap: anywhere; }
+.delegation-task small { display: block; font: var(--t-micro) var(--mono); color: var(--mutedfg); margin-top: 5px; overflow-wrap: anywhere; }
+.delegation-status { color: var(--mutedfg); font-size: var(--t-micro); flex-shrink: 0; }
+.delegation-status.working { color: var(--sky); }
+.delegation-status.blocked { color: var(--amber); }
+.delegation-result { padding: 0 0 16px; font-size: var(--t-body); }
+.delegation-request { color: var(--mutedfg); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-meta); }
+.delegation-result .linkish { margin: 12px 18px 0 0; }
+@media (max-width: 520px) {
+  .delegation-pickers { grid-template-columns: 1fr; gap: 8px; }
+  .delegation-start { align-items: flex-start; }
+}
 .palette-row { min-height: 48px; }
 .palette-box:focus { outline: none; }
 .quick-switch:focus-visible, .palette-row:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 2px; }
