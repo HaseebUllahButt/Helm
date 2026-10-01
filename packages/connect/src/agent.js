@@ -13,6 +13,7 @@ import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
 import { listModels } from './models.js';
 import { usableProfiles, authStatuses } from './auth.js';
+import { credentialScan, shellEnv } from './credentials.js';
 import { listCommands } from './commands.js';
 import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
 import { ENGINES } from './engines.js';
@@ -1160,9 +1161,11 @@ export class Daemon {
         // Each profile carries its account key and model prefs, so the app
         // groups aliases and renders the picker filter with no extra call.
         const cfg = loadSettings();
+        const shellNames = await shellEnv();
         return {
           profiles: profiles.map((x) => ({
             ...x, account: accountKey(x), prefs: modelPrefs(x, cfg), defaults: startPrefs(x, cfg),
+            credentials: credentialScan(x, { shellNames }),
           })),
         };
       }

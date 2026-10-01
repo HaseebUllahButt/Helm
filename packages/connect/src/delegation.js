@@ -3,16 +3,19 @@ import { materialize } from './profiles.js';
 import { listModels } from './models.js';
 import { modelPrefs, accountKey } from './settings.js';
 import { modesFor, defaultMode } from './modes.js';
+import { credentialScan, shellEnv } from './credentials.js';
 import { fold } from './brain.js';
 import { createHash } from 'node:crypto';
 
 /** Public capabilities, never launch arguments, environment, or credentials. */
 export async function agentCatalog(profiles, statuses, { models = true } = {}) {
+  const shellNames = await shellEnv();
   return Promise.all(profiles.filter((p) => !p.disabled && ENGINES[p.engine]?.driver).map(async (p) => {
     const auth = statuses.get(p.id) ?? 'unknown';
     const account = createHash('sha256').update(accountKey(p)).digest('hex').slice(0, 16);
     const row = { id: p.id, label: p.label, engine: p.engine, account, auth,
-      available: auth !== 'unauthenticated', modes: modesFor(p.engine).filter((m) => !m.danger) };
+      available: auth !== 'unauthenticated', modes: modesFor(p.engine).filter((m) => !m.danger),
+      credentials: credentialScan(p, { shellNames }) };
     if (!models || !row.available) return row;
     const spec = materialize(p);
     const engine = ENGINES[p.engine];
