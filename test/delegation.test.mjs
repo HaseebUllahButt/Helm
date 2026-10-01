@@ -213,7 +213,9 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
   const { T } = await import('@helm/protocol');
   const { primeModels } = await import('../packages/connect/src/models.js');
   primeModels('codex', '~/.codex', null, { default: 'gpt-test', models: ['gpt-test'] });
-  primeModels('claude', '~/.claude-test', null, { default: 'opus', models: ['opus', 'sonnet'] });
+  const largeCatalog = Array.from({ length: 6000 }, (_, i) => `catalog-model-${i}`);
+  primeModels('claude', '~/.claude-test', null, { default: 'opus', models: ['opus', 'sonnet', ...largeCatalog],
+    labels: { opus: 'Opus', [largeCatalog.at(-1)]: 'Last model', 'unlisted-model': 'Omit from this account' } });
   const hub = await startRelay({ port: 0, host: '127.0.0.1', openLogin: false });
   const port = hub.server.address().port;
   const net = N.createNetwork({ name: 'test-box', port });
@@ -246,7 +248,12 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
     });
     const discovered = await invoke(['agents', '--json']);
     assert.equal(discovered.code, 0, discovered.err);
-    assert.ok(JSON.parse(discovered.out).agents.some((a) => a.id === 'claude-main'));
+    assert.ok(discovered.out.length > 100_000, 'a large JSON catalog must drain completely through stdout');
+    const account = JSON.parse(discovered.out).agents.find((a) => a.id === 'claude-main');
+    assert.ok(account);
+    assert.equal(account.models.length, 6002);
+    assert.equal(account.models.at(-1), largeCatalog.at(-1));
+    assert.deepEqual(account.labels, { opus: 'Opus', [largeCatalog.at(-1)]: 'Last model' });
     assert.equal(discovered.out.includes('never-advertise-me'), false);
     const run = await invoke(['delegate', 'claude-main', '--model', 'opus', '--wait', '--json', '--', 'Review the changes']);
     assert.equal(run.code, 0, run.err);

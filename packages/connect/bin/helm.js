@@ -1793,7 +1793,9 @@ try {
     case 'delegate':
     case 'delegate-result': {
       const { runAgentCommand } = await import('../src/agent-cli.js');
-      exit(await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self }));
+      // Catalogs and JSON replies can exceed a pipe's buffer. Let stdout
+      // drain naturally instead of truncating them with process.exit().
+      process.exitCode = await runAgentCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self });
       break;
     }
     case 'brain':

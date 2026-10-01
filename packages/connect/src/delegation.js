@@ -19,7 +19,9 @@ export async function agentCatalog(profiles, statuses, { models = true } = {}) {
     try {
       const catalog = await listModels(p.engine, spec.env?.[engine.homeEnv] ?? engine.defaultHome,
         spec.env, p.wraps ? { cmd: spec.cmd, args: spec.args } : null);
-      return { ...row, models: catalog.models, labels: catalog.labels ?? {},
+      const labels = Object.fromEntries((catalog.models ?? []).filter((id) => catalog.labels?.[id])
+        .map((id) => [id, catalog.labels[id]]));
+      return { ...row, models: catalog.models, labels,
         defaultModel: modelPrefs(p)?.default ?? catalog.default ?? null };
     } catch { return { ...row, models: [], defaultModel: null }; }
   }));
