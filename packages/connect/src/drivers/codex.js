@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { codexProcId } from '../hosted-process.js';
 import { Driver, readJsonLines, checkVersion } from './index.js';
 import { modeFor } from '../modes.js';
 import { expand } from '../paths.js';
@@ -224,7 +225,7 @@ class CodexServer {
 
   constructor(cmd, env, log, procHost) {
     Object.assign(this, { cmd, env, log, procHost });
-    this.procId = `codex-server-${createHash('sha256').update(`${cmd}|${env.CODEX_HOME ?? ''}`).digest('hex').slice(0, 20)}`;
+    this.procId = codexProcId(cmd, env);
   }
 
   static for(cmd, env, log, procHost) {
@@ -511,9 +512,16 @@ export class CodexDriver extends Driver {
   async #connectOnly() {
     if (this.#server) return this.#server;
     const server = CodexServer.for(this.cmd, this.env, this.log, this.procHost);
-    this.#serverAdopted = await server.ensure();
-    this.#server = server;
+    // Register before binding the pipe: ensure() synchronously replays the
+    // host's buffered notifications, including completions during downtime.
     server.attach(this);
+    try {
+      this.#serverAdopted = await server.ensure();
+      this.#server = server;
+    } catch (err) {
+      server.detach(this, { stop: false });
+      throw err;
+    }
     return server;
   }
 

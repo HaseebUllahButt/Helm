@@ -17,7 +17,10 @@ process.env.HELM_NO_SERVICE = '1';
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
   version: 1,
-  profiles: [{ id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: ['--model', 'x'], env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' }, source: 'alias' }],
+  profiles: [
+    { id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: ['--model', 'x'], env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' }, source: 'alias' },
+    { id: 'codex', engine: 'codex', cmd: 'codex', env: { CODEX_HOME: '/tmp/helm-test-account' }, source: 'alias' },
+  ],
 }));
 
 class StubRuntime extends EventEmitter {
@@ -415,16 +418,20 @@ test('queued prompts and attachments are replayed after a daemon restart', async
   await original.kill(s.id);
 });
 
-test('a surviving agent process keeps its active turn while queued tickets return', async () => {
+for (const profileId of ['claudea', 'codex']) test(`a surviving ${profileId} process keeps its active turn while queued tickets return`, async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
-  const dir = join(process.env.HELM_DIR, 'events-queued-hosted-restart');
+  const dir = join(process.env.HELM_DIR, `events-queued-hosted-restart-${profileId}`);
   const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
-  const procHost = (alive) => Object.assign(new EventEmitter(), { hasProc: () => alive });
+  const { codexProcId } = await import('../packages/connect/src/hosted-process.js');
+  const sharedId = codexProcId('codex', { CODEX_HOME: '/tmp/helm-test-account' });
+  const procHost = (alive) => Object.assign(new EventEmitter(), {
+    hasProc: (id) => alive && (profileId !== 'codex' || id === sharedId),
+  });
   const original = new Sessions(new StubRuntime(), {
     events: new EventLog(dir), makeDriver, procHost: procHost(false),
   });
-  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  const s = await original.start({ cwd: '/tmp', profileId });
   await original.input(s.id, 'active turn');
   await original.input(s.id, 'still queued');
   const activeTurn = original.history(s.id).events.find((e) => e.type === 'turn.start' && e.turnId === 't1');

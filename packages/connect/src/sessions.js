@@ -4,7 +4,7 @@ import { join, basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { HELM_DIR, expand } from './paths.js';
-import { getProfiles, materialize } from './profiles.js';
+import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages, sessionSnapshot } from './transcript.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
@@ -28,6 +28,7 @@ import { delegationMode, delegationOutput, trackDelegationReply } from './delega
 import { authStatuses } from './auth.js';
 import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory } from './inventory.js';
+import { hostedProcId } from './hosted-process.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -2476,6 +2477,7 @@ export class Sessions extends EventEmitter {
   /** Re-watch every surviving pane after a daemon restart. */
   async resume() {
     const reattaching = [];
+    const profiles = loadProfiles()?.profiles ?? [];
     for (const s of this.#index.values()) {
       // A terminal lives in the host process, which outlives us - so its
       // record stays until `adoptTerminals()` has asked what really survived.
@@ -2484,7 +2486,9 @@ export class Sessions extends EventEmitter {
       // An agent process the host kept is still running whatever it was
       // running: its active turn and questions are still answerable. Any
       // unmatched queued tickets are rebuilt from the log for when it settles.
-      if (this.procs.hasProc(s.id)) {
+      const profile = profiles.find((p) => p.id === s.profileId);
+      const procId = hostedProcId(s, s.driver === 'codex' && profile ? materialize(profile) : null);
+      if (procId && this.procs.hasProc(procId)) {
         const tail = this.events.tail(s.id, 0);
         this.#restoreOpenTurns(s, tail, true);
         s.lastSeq = this.events.last(s.id);

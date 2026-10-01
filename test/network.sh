@@ -9,6 +9,7 @@
 # End-to-end: does a device survive a restart, and does it work on a machine
 # that has never seen it?
 set -u
+unset HELM_TERMINALS_SOCKET HELM_PROCS_SOCKET
 cd "$(dirname "$0")/.."
 S="${TMPDIR:-/tmp}/helm-test-$$"
 rm -rf "$S"; mkdir -p "$S/A" "$S/B"

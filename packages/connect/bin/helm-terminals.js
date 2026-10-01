@@ -19,6 +19,11 @@ import { HELM_DIR } from '../src/paths.js';
 import { Terminals, loadPty, ptyUnavailable } from '../src/pty.js';
 import { SOCKET_PATH } from '../src/terminals.js';
 
+// Socket selectors belong to this host, not its shells or agents. Leaking
+// them makes nested Helm commands (including tests) reach the parent host.
+delete process.env.HELM_TERMINALS_SOCKET;
+delete process.env.HELM_PROCS_SOCKET;
+
 /** With nothing left to hold, there is no reason to stay resident. */
 const IDLE_EXIT_MS = 60_000;
 /** Per-proc output kept while nobody is attached - a restart's worth, not a history. */

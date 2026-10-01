@@ -12,6 +12,8 @@ import { join } from 'node:path';
 // testing against a real shell rather than a stub.
 const dir = mkdtempSync(join(tmpdir(), 'helm-term-host-'));
 process.env.HELM_DIR = dir;
+delete process.env.HELM_TERMINALS_SOCKET;
+delete process.env.HELM_PROCS_SOCKET;
 process.env.HELM_NO_SERVICE = '1';
 // systemd-run would put the host in a transient unit that outlives the test
 // run; here the plain detached child is what we want.

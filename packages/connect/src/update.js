@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { HOME, HELM_DIR } from './paths.js';
 import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
 import { systemdArg } from './service.js';
+import { getProfiles, materialize } from './profiles.js';
+import { hostedProcId } from './hosted-process.js';
 
 const exec = promisify(execFile);
 const binPath = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
@@ -48,9 +50,13 @@ const unitActive = (unit) =>
   exec('systemctl', ['--user', 'is-active', '--quiet', unit]).then(() => true).catch(() => false);
 
 /** Hosted processes can survive replacement; other busy agents must finish first. */
-export function unsafeRestartSessions(sessions, hasProc) {
-  return sessions.filter((s) => s.driver && !s.external
-    && ['working', 'blocked'].includes(s.status) && !hasProc(s.id));
+export function unsafeRestartSessions(sessions, hasProc, profiles = []) {
+  return sessions.filter((s) => {
+    if (!s.driver || s.external || !['working', 'blocked'].includes(s.status)) return false;
+    const profile = s.driver === 'codex' && profiles.find((p) => p.id === s.profileId);
+    const id = hostedProcId(s, profile ? materialize(profile) : null);
+    return !id || !hasProc(id);
+  });
 }
 
 async function restartBlockers(host) {
@@ -59,7 +65,7 @@ async function restartBlockers(host) {
   if (!existsSync(file)) return [];
   const stored = JSON.parse(readFileSync(file, 'utf8'));
   if (!Array.isArray(stored.sessions)) throw new Error('cannot verify active sessions before update restart');
-  return unsafeRestartSessions(stored.sessions, (id) => host.hasProc(id));
+  return unsafeRestartSessions(stored.sessions, (id) => !!id && host.hasProc(id), await getProfiles());
 }
 
 /** Runs outside the daemon, so waiting never interrupts the thread requesting an update. */

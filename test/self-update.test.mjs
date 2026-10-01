@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
  * what needs proving here is that only a clean main checkout ever moves.
  */
 const { selfUpdate, unsafeRestartSessions } = await import('../packages/connect/src/update.js');
+const { codexProcId } = await import('../packages/connect/src/hosted-process.js');
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
@@ -47,6 +48,15 @@ test('update restart waits for busy unhosted agents while hosted threads continu
   ];
   assert.deepEqual(unsafeRestartSessions(sessions, (id) => id === 'hosted').map((s) => s.id), ['working', 'question']);
   assert.deepEqual(unsafeRestartSessions(sessions.map((s) => ({ ...s, status: 'idle' })), () => false), []);
+});
+
+test('restart guard recognizes Codex threads in their shared account process', () => {
+  const profiles = [{ id: 'codex', engine: 'codex', cmd: '/usr/bin/codex', env: { CODEX_HOME: '/tmp/account' } }];
+  const sessions = [{ id: 'thread', profileId: 'codex', driver: 'codex', status: 'working' }];
+  const procId = codexProcId('/usr/bin/codex', profiles[0].env);
+  assert.deepEqual(unsafeRestartSessions(sessions, (id) => id === procId, profiles), []);
+  assert.deepEqual(unsafeRestartSessions(sessions, () => false, profiles), sessions);
+  assert.deepEqual(unsafeRestartSessions(sessions, () => false), sessions);
 });
 
 test('a current checkout is a no-op', async () => {

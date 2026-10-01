@@ -16,6 +16,8 @@ import { collect, fakeCli } from './helpers.mjs';
 // gap still reports its end.
 const dir = mkdtempSync(join(tmpdir(), 'helm-proc-host-'));
 process.env.HELM_DIR = dir;
+delete process.env.HELM_TERMINALS_SOCKET;
+delete process.env.HELM_PROCS_SOCKET;
 process.env.HELM_NO_SERVICE = '1';
 // systemd-run would put the host in a transient unit that outlives the test
 // run; here the plain detached child is what we want.
@@ -57,6 +59,26 @@ test('a missing hosted command fails proc.open instead of creating a ghost', asy
     /ENOENT|could not start/,
   );
   assert.equal(host.hasProc('missing-command'), false);
+});
+
+test('host socket selectors do not leak into agent commands', async (t) => {
+  const host = procHost();
+  t.after(() => host.detach());
+  assert.equal(await host.ensure(), true);
+  await host.openProc('env-isolation', {
+    cmd: process.execPath,
+    args: ['-e', `process.stdin.once('data', () => {
+      console.log(JSON.stringify({ terminal: !!process.env.HELM_TERMINALS_SOCKET,
+        proc: !!process.env.HELM_PROCS_SOCKET, custom: process.env.HELM_TEST_CUSTOM }));
+    })`],
+    env: { HELM_TEST_CUSTOM: 'preserved' },
+  });
+  const pipe = host.procPipe('env-isolation');
+  let seen = '';
+  pipe.onData((d) => { seen += d; });
+  pipe.write('go');
+  await until(() => seen.includes('\n'));
+  assert.deepEqual(JSON.parse(seen.trim()), { terminal: false, proc: false, custom: 'preserved' });
 });
 
 test('a proc survives the daemon that started it, backlog intact', async (t) => {
@@ -218,6 +240,31 @@ test('a hosted Codex app-server survives and is rebound by the next daemon', asy
   assert.equal(d2.threadId, threadId, 'the replacement driver should attach to the same thread');
   await d2.kill();
   await until(() => !host2.hasProc(procId));
+});
+
+test('Codex completion buffered during downtime reaches the replacement driver', async (t) => {
+  const fake = fakeCli('codex', 'plain');
+  const env = { CODEX_HOME: join(fake.dir, 'home'), FAKE_EVENT_MS: '15' };
+  const first = procHost();
+  t.after(() => first.detach());
+  assert.equal(await first.ensure(), true);
+  const d1 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask', procHost: first });
+  await d1.send('hello');
+  const threadId = d1.threadId;
+  await d1.suspend();
+  first.detach();
+  await new Promise((r) => setTimeout(r, 1200));
+  const second = procHost();
+  t.after(() => second.detach());
+  assert.equal(await second.ensure(), true);
+  const d2 = new CodexDriver({ cmd: fake.cmd, env, cwd: fake.dir, mode: 'ask',
+    engineSessionId: threadId, procHost: second });
+  const log = collect(d2);
+  await d2.start();
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.equal(d2.status, 'idle');
+  await d2.kill();
 });
 
 test('a hosted Claude process survives and is rebound by the next daemon', async (t) => {
