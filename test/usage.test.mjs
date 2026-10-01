@@ -273,15 +273,24 @@ test('a second report reads no bytes and still agrees', async () => {
 test('the index survives a restart', async () => {
   const m = machine();
   const indexPath = join(m.dir, 'usage-index.json');
-  const before = new UsageReader({ indexPath });
+  // report starts a background save. Track those exact promises so cleanup
+  // cannot delete the directory while either reader is creating a temp file.
+  const saves = [];
+  const trackSaves = (reader) => {
+    const persist = reader.persist.bind(reader);
+    reader.persist = () => { const save = persist(); saves.push(save); return save; };
+    return reader;
+  };
+  const before = trackSaves(new UsageReader({ indexPath }));
   const first = await before.report(m.profiles, {});
   await before.persist();
 
   // A fresh reader is what a restarted daemon has.
-  const after = new UsageReader({ indexPath });
+  const after = trackSaves(new UsageReader({ indexPath }));
   const second = await after.report(m.profiles, {});
   assert.equal(second.totals.costUsd, first.totals.costUsd);
   assert.equal(second.scan.parsed, 0, 'a restored index must not re-parse the transcripts');
+  await Promise.all(saves);
   rmSync(m.dir, { recursive: true, force: true });
 });
 
