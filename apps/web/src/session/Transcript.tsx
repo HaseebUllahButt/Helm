@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { Markdown } from '../Markdown';
 import type { Change, Item, Turn } from './types';
 import { money, seconds } from '../format';
+import { Icon, toolKind } from '../Icon';
 
 /**
  * The conversation, live.
@@ -11,16 +12,8 @@ import { money, seconds } from '../format';
  * file changes get a little more room because what they did is the point.
  */
 
-const TOOL_GLYPH: Record<string, string> = {
-  Read: '◎', Write: '✎', Edit: '✎', MultiEdit: '✎', NotebookEdit: '✎', Bash: '❯', Grep: '⌕', Glob: '⌕',
-  WebFetch: '⇣', WebSearch: '⌕', Task: '⚙', Agent: '⚙', AskUserQuestion: '?', ExitPlanMode: '☰',
-  ToolSearch: '⌕', mcpToolCall: '⚙', webSearch: '⌕',
-};
-export const toolGlyph = (name = '') =>
-  TOOL_GLYPH[name] ?? (/read|cat|view/i.test(name) ? '◎'
-    : /search|grep|glob|list|find/i.test(name) ? '⌕'
-    : /write|edit|patch|create/i.test(name) ? '✎'
-    : /bash|shell|exec|run|command/i.test(name) ? '❯' : '⚙');
+/** A tool call's icon, by what kind of thing it did. */
+const ToolIcon = ({ name = '' }: { name?: string }) => <Icon name={toolKind(name)} size={15} />;
 
 const shortPath = (p = '') => {
   const parts = p.replace(/\/$/, '').split('/');
@@ -41,13 +34,13 @@ function ThinkingItem({ item }: { item: Item }) {
   const live = item.status === 'streaming';
   const took = item.doneAt && item.startedAt ? item.doneAt - item.startedAt : 0;
   const label = live ? 'Thinking' : took > 1500 ? `Thought for ${seconds(took)}` : 'Thought';
-  if (!live && !item.text) return <div className="act quiet"><span className="aicon">◌</span><span className="alabel">{label}</span></div>;
+  if (!live && !item.text) return <div className="act quiet"><span className="aicon"><Icon name="think" size={15} /></span><span className="alabel">{label}</span></div>;
   return (
     <details className="actgroup think">
       <summary>
-        <span className="aicon">◌</span>
+        <span className="aicon"><Icon name="think" size={15} /></span>
         <span className={`alabel${live ? ' shine' : ''}`}>{label}</span>
-        {item.text && <span className="achev">›</span>}
+        {item.text && <span className="achev"><Icon name="forward" size={13} /></span>}
       </summary>
       {item.text && <div className="think-body">{item.text}</div>}
     </details>
@@ -75,7 +68,7 @@ function ToolItem({ item }: { item: Item }) {
   const body = out || item.error;
   const head = (
     <>
-      <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}>{toolGlyph(item.name)}</span>
+      <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}><ToolIcon name={item.name} /></span>
       <span className={`alabel${live ? ' shine' : ''}`}>
         <b>{item.name}</b>{summary && <> {summary}</>}
       </span>
@@ -87,7 +80,7 @@ function ToolItem({ item }: { item: Item }) {
   if (!body) return <div className="act">{head}</div>;
   return (
     <details className="actgroup">
-      <summary>{head}<span className="achev">›</span></summary>
+      <summary>{head}<span className="achev"><Icon name="forward" size={13} /></span></summary>
       <pre className="aout">{body.length > 4000 ? body.slice(0, 4000) + '\n…' : body}</pre>
     </details>
   );
@@ -102,17 +95,17 @@ function stepsSummary(items: Item[]): string {
   const order: string[] = [];
   const count: Record<string, number> = {};
   for (const it of items) {
-    const g = toolGlyph(it.name);
+    const g = toolKind(it.name ?? '');
     if (!(g in count)) { count[g] = 0; order.push(g); }
     count[g] += 1;
   }
   const many = (n: number, one: string, more: string) => (n === 1 ? one : more.replace('#', String(n)));
   return order.map((g) => {
     const n = count[g];
-    if (g === '◎') return many(n, 'Read 1 file', 'Read # files');
-    if (g === '✎') return many(n, 'Edited 1 file', 'Edited # files');
-    if (g === '❯') return many(n, 'Ran 1 command', 'Ran # commands');
-    if (g === '⌕') return many(n, 'Searched', 'Searched # times');
+    if (g === 'read') return many(n, 'Read 1 file', 'Read # files');
+    if (g === 'edit') return many(n, 'Edited 1 file', 'Edited # files');
+    if (g === 'run') return many(n, 'Ran 1 command', 'Ran # commands');
+    if (g === 'search') return many(n, 'Searched', 'Searched # times');
     return many(n, 'Used 1 tool', 'Used # tools');
   }).join(' · ');
 }
@@ -137,7 +130,7 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
       <div className={`lightbox-pan${big ? ' zoomed' : ''}`}>
         <img src={src} alt={alt} onClick={(e) => { e.stopPropagation(); setBig((v) => !v); }} />
       </div>
-      <button className="lightbox-x" onClick={onClose} aria-label="close">×</button>
+      <button className="lightbox-x" onClick={onClose} aria-label="close"><Icon name="close" size={20} /></button>
     </div>
   );
 }
@@ -147,10 +140,10 @@ function ToolRun({ items, tools, byParent }: { items: Item[]; tools: Item[]; byP
   return (
     <details className="actgroup steps">
       <summary>
-        <span className="aicon">{toolGlyph(tools[0].name)}</span>
+        <span className="aicon"><ToolIcon name={tools[0].name} /></span>
         <span className="alabel">{stepsSummary(tools)}{failed ? ` · ${failed} failed` : ''}</span>
         {spanOf(items) && <span className="ameta">{spanOf(items)}</span>}
-        <span className="achev">›</span>
+        <span className="achev"><Icon name="forward" size={13} /></span>
       </summary>
       <div className="steps-body">{items.map((it) => <ItemView key={it.id} item={it} byParent={byParent} />)}</div>
     </details>
@@ -166,7 +159,7 @@ function CommandItem({ item }: { item: Item }) {
   return (
     <div className={`cmd${item.status === 'error' ? ' bad' : ''}`}>
       <div className="cmd-head">
-        <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}>❯</span>
+        <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}><Icon name="run" size={15} /></span>
         <code className={`cmd-line${live ? ' shine' : ''}`}>{item.command}</code>
         {item.status === 'declined' && <span className="ameta">declined</span>}
         {item.exitCode != null && item.exitCode !== 0 && <span className="ameta bad">exit {item.exitCode}</span>}
@@ -212,10 +205,10 @@ export function ChangeList({ changes, open = false }: { changes: Change[]; open?
         return (
           <details key={i} className="edit" open={open}>
             <summary>
-              <span className="aicon">✎</span>
+              <span className="aicon"><Icon name="edit" size={15} /></span>
               <span className="alabel"><b>{c.kind === 'add' ? 'Create' : c.kind === 'delete' ? 'Delete' : 'Edit'}</b> {shortPath(c.path)}</span>
               <span className="ameta"><i className="add">+{add}</i> <i className="del">−{del}</i></span>
-              <span className="achev">›</span>
+              <span className="achev"><Icon name="forward" size={13} /></span>
             </summary>
             <Diff text={shown} />
           </details>
@@ -227,7 +220,7 @@ export function ChangeList({ changes, open = false }: { changes: Change[]; open?
 
 function EditItem({ item }: { item: Item }) {
   const changes = item.changes ?? [];
-  if (!changes.length) return <div className="act"><span className="aicon">✎</span><span className="alabel"><b>Edit</b></span></div>;
+  if (!changes.length) return <div className="act"><span className="aicon"><Icon name="edit" size={15} /></span><span className="alabel"><b>Edit</b></span></div>;
   return <div className={`edits${item.status === 'declined' ? ' declined' : item.status === 'error' ? ' bad' : ''}`}><ChangeList changes={changes} /></div>;
 }
 
@@ -264,7 +257,7 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
   const doing = live && item.agent?.description ? item.agent.description : task;
   const head = (
     <>
-      <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}>⧉</span>
+      <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}><Icon name="subagents" size={15} /></span>
       <span className={`alabel${live ? ' shine' : ''}`}>
         <b>{who}</b>{doing && <> {typeof doing === 'string' && doing.length > 140 ? doing.slice(0, 140) + '…' : String(doing)}</>}
       </span>
@@ -280,7 +273,7 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
   if (!kids.length && !out) return <div className="act">{head}</div>;
   return (
     <details className="actgroup subagent" open={live || undefined}>
-      <summary>{head}<span className="achev">›</span></summary>
+      <summary>{head}<span className="achev"><Icon name="forward" size={13} /></span></summary>
       <div className="sub-body">
         {kids.map((k) => <ItemView key={k.id} item={k} byParent={byParent} />)}
         {out && <pre className="aout">{out.length > 4000 ? out.slice(0, 4000) + '\n…' : out}</pre>}
@@ -297,7 +290,7 @@ function ItemView({ item, byParent, commandOutput }: { item: Item; byParent: Map
     case 'command': return <CommandItem item={item} />;
     case 'edit': return <EditItem item={item} />;
     case 'subagent': return <SubagentItem item={item} byParent={byParent} />;
-    case 'error': return <div className="act bad"><span className="aicon bad">!</span><span className="alabel wrap">{item.text}</span></div>;
+    case 'error': return <div className="act bad"><span className="aicon bad"><Icon name="alert" size={15} /></span><span className="alabel wrap">{item.text}</span></div>;
     default: return null;
   }
 }
@@ -380,7 +373,7 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
             // A blob the log has swept past still has its name, and saying
             // so beats a browser's broken-image glyph.
             ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={a.filename} loading="lazy" />
-            : <span key={i} className="turn-image-gone" title={a.filename}>🖼 {a.filename || 'image'} — no longer stored</span>
+            : <span key={i} className="turn-image-gone" title={a.filename}><Icon name="image" size={14} /> {a.filename || 'image'} — no longer stored</span>
           ))}
           <span className="bubble-meta">
             {queued && <span className="tag">queued</span>}
@@ -391,7 +384,7 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
               <button className="withdraw" onClick={() => onWithdraw(turn)}>withdraw</button>
             )}
             {onBranch && !queued && !turn.id.startsWith('local-') && (
-              <button className="branch" onClick={() => onBranch(turn)} title="a new thread from before this message" aria-label="branch from before this message">⑂ branch</button>
+              <button className="branch" onClick={() => onBranch(turn)} title="a new thread from before this message" aria-label="branch from before this message"><Icon name="branch" size={13} />branch</button>
             )}
             {clock(turn.at)}
           </span>
@@ -562,11 +555,11 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
           {flow}
         </div>
       </div>
-      {unread && <button className="jump" onClick={jump}>↓ new</button>}
+      {unread && <button className="jump" onClick={jump}><Icon name="arrow-down" size={14} />new</button>}
       {prompts >= 3 && (
         <div className="turnnav" role="group" aria-label="jump between your messages">
-          <button onClick={() => step(-1)} aria-label="previous message of yours" title="previous message">▲</button>
-          <button onClick={() => step(1)} aria-label="next message of yours" title="next message">▼</button>
+          <button onClick={() => step(-1)} aria-label="previous message of yours" title="previous message"><Icon name="up" size={16} /></button>
+          <button onClick={() => step(1)} aria-label="next message of yours" title="next message"><Icon name="down" size={16} /></button>
         </div>
       )}
       {zoom && <Lightbox src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}

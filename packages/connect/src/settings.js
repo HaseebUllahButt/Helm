@@ -55,6 +55,7 @@ export function saveStartPrefs(profile, values = {}) {
   const clean = {};
   for (const key of ['effort', 'mode', 'speed']) {
     const value = typeof values[key] === 'string' ? values[key].trim() : '';
+    if (key === 'mode' && value === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
     if (value) clean[key] = value;
   }
   const key = accountKey(profile);

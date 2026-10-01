@@ -1,6 +1,7 @@
 import { useDialog } from './useDialog';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { EngineMark } from './EngineMark';
+import { Icon } from './Icon';
 
 /**
  * One box for everything: threads on every machine, the machines themselves,
@@ -81,7 +82,7 @@ export function Palette({ items, onClose, engineOf }: {
   return (
     <div className="modal-back palette-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="palette-box" role="dialog" aria-modal="true" aria-label="Command palette" ref={dialog} tabIndex={-1}>
-        <div className="palette-heading"><span>Go anywhere</span><button className="ghost" onClick={onClose} aria-label="Close command palette">Close</button></div>
+        <div className="palette-heading"><span>Go anywhere</span><button className="iconbtn" onClick={onClose} aria-label="Close command palette" title="Close"><Icon name="close" size={16} /></button></div>
         <input
           className="palette-input" value={q} placeholder="Search threads, machines, actions"
           autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
@@ -108,7 +109,7 @@ export function Palette({ items, onClose, engineOf }: {
                   role="option" id={`${listId}-${i}`} tabIndex={-1} aria-selected={i === selected} className={`palette-row${i === selected ? ' on' : ''}`}
                   onMouseMove={() => setAt(i)} onClick={() => go(item)}
                 >
-                  {item.engine ? <EngineMark engine={engineOf(item.engine).cls} /> : <span className={`pglyph ${item.group}`}>{item.group === 'machine' ? '▣' : '›'}</span>}
+                  {item.engine ? <EngineMark engine={engineOf(item.engine).cls} /> : <span className={`pglyph ${item.group}`}><Icon name={item.group === 'machine' ? 'machine' : 'forward'} size={15} /></span>}
                   <span className="grow">
                     <span className="palette-title">{item.title}</span>
                     {item.sub && <span className="palette-sub">{item.sub}</span>}
@@ -118,7 +119,7 @@ export function Palette({ items, onClose, engineOf }: {
             );
           })}
         </div>
-        <div className="palette-foot"><span>↑↓ move</span><span>↵ open</span><span>esc close</span></div>
+        <div className="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
       </div>
     </div>
   );
@@ -141,8 +142,10 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" ref={dialog} tabIndex={-1}>
-        <button className="ghost" onClick={onClose}>Close</button>
-        <div className="modal-title">Keyboard shortcuts</div>
+        <div className="modal-head">
+          <div className="modal-title">Keyboard shortcuts</div>
+          <button className="iconbtn" onClick={onClose} aria-label="Close keyboard shortcuts" title="Close"><Icon name="close" size={16} /></button>
+        </div>
         <div className="shortcuts">
           {SHORTCUTS.map(([keys, what]) => (
             <div key={keys}><kbd>{keys}</kbd><span>{what}</span></div>

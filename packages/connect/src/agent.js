@@ -8,7 +8,7 @@ import {
   MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
-import { modesFor } from './modes.js';
+import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
 import { listModels } from './models.js';
@@ -283,7 +283,7 @@ export class Daemon {
       // pauses to ask: a completion notification means finished - a thread
       // that is merely blocked has its own notification already. Done,
       // interrupted and errored all land on idle, so any of them rings it.
-      if (session.notifyDone && to === 'idle' && from !== 'idle') {
+      if (!session.delegation && !this.sessions.hasActiveDelegations(session.id) && session.notifyDone && to === 'idle' && from !== 'idle') {
         this.#notifyDone(session);
       }
     });
@@ -773,6 +773,7 @@ export class Daemon {
   #notify(id, event) {
     let session = null;
     try { session = this.sessions.get(id); } catch { /* gone already */ }
+    if (session?.delegation) return;
     const payload = describeAsk({ ...session, envId: this.id }, event);
     // Each connected hub receives the small, already-redacted notification.
     // The hub that accepted the phone's subscription is the one that can
@@ -1238,7 +1239,7 @@ export class Daemon {
           filtered.default = live.current ?? filtered.default;
         }
         // The permission modes this engine offers, so the app never has to know the flags.
-        return { ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [] };
+        return { ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine) };
       }
 
       case M.MODEL_PREFS: {
@@ -1247,11 +1248,12 @@ export class Daemon {
         return { ok: true, prefs: saveModelPrefs(profile, { default: p.default, approved: p.approved }) };
       }
 
-      case M.SESSION_LIST:    return { sessions: await this.sessions.list() };
+      case M.SESSION_LIST:    return { sessions: await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true }) };
       case M.SESSION_DELEGATE: return this.sessions.delegate(p);
       case M.SESSION_DELEGATION_RESULT: return this.sessions.delegationResult(p.id);
+      case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
       case M.SESSION_START: {
-        const { originHandoffId: _originHandoffId, ...start } = p;
+        const { originHandoffId: _originHandoffId, delegation: _delegation, ...start } = p;
         return { session: await this.sessions.start(start) };
       }
       case M.SESSION_LINK:    return this.sessions.linkChild(p.id, p.child);
@@ -1296,6 +1298,7 @@ export class Daemon {
         const marks = this.sessions.marks();
         const recent = [];
         for (const x of await inventory(await currentProfiles())) {
+          if (this.sessions.isDelegatedConversation(x.engine, x.id)) continue;
           const mark = marks[`found:${x.engine}:${x.id}`];
           if (mark === 'removed') continue;
           // Transcript paths are machine-private. The app only needs the

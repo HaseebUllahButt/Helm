@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Mode, ModelList, Session } from '../client';
+import { Icon, type IconName } from '../Icon';
 
 /** One thing you can change while the agent is running. */
 export interface Choice {
@@ -41,7 +42,7 @@ export function Controls({ options, session, busy, onPick }: {
             title={`${g.title}: ${g.currentLabel}`}
             onClick={() => setOpen(open === g.kind ? null : g.kind)}
           >
-            {g.glyph && <i className={`cg ${g.kind}`}>{g.glyph}</i>}
+            {g.glyph && <i className={`cg ${g.kind}`}><Icon name={g.glyph} size={13} /></i>}
             {g.currentLabel}
           </button>
         ))}
@@ -68,7 +69,7 @@ export type Kind = 'model' | 'effort' | 'mode' | 'speed';
 interface Group {
   kind: Kind;
   title: string;
-  glyph?: string;
+  glyph?: IconName;
   note?: string;
   choices: Choice[];
   /** The long tail the account's approved list hides - one tap away, not offered first. */
@@ -116,7 +117,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     out.push({
       kind: 'model',
       title: 'model',
-      glyph: '◆',
+      glyph: 'model',
       choices,
       more,
       current: model,
@@ -130,7 +131,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     out.push({
       kind: 'effort',
       title: 'thinking',
-      glyph: '◇',
+      glyph: 'effort',
       note: 'How long it reasons before answering. More is slower and costs more.',
       choices: efforts.map((e) => ({ id: e, label: e })),
       current: session.effort || session.engineEffort || options.effort || '',
@@ -138,13 +139,15 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     });
   }
 
-  const modes = options.modes ?? [];
+  const modes = (options.modes ?? []).filter((m) => m.id !== 'plan');
   if (modes.length) {
-    const current = modes.find((m: Mode) => m.id === session.mode) ?? modes[0];
+    const current = modes.find((m: Mode) => m.id === session.mode)
+      ?? modes.find((m) => m.id === options.defaultMode)
+      ?? modes.find((m) => m.short === 'yolo') ?? modes[0];
     out.push({
       kind: 'mode',
       title: 'permissions',
-      glyph: '⦿',
+      glyph: 'shield',
       choices: modes.map((m) => ({ id: m.id, label: m.label, hint: m.hint, danger: m.danger })),
       current: current?.id ?? '',
       currentLabel: current?.short ?? current?.label ?? 'mode',
@@ -158,7 +161,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     out.push({
       kind: 'speed',
       title: 'speed',
-      glyph: '⚡',
+      glyph: 'bolt',
       note: 'The fast tier answers sooner and uses more of your plan.',
       choices: [
         { id: '', label: 'Normal', hint: 'the usual tier' },
@@ -224,7 +227,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, favKey, o
           <span className="rt"><span className="rt-text">{c.label}</span></span>
           {(armed || c.hint) && <span className="rm">{armed ? 'Tap again to confirm' : c.hint}</span>}
         </span>
-        {on && <span className="check">✓</span>}
+        {on && <span className="check"><Icon name="check" size={16} /></span>}
       </button>
     );
     if (!favKey || !c.id) return button;
@@ -236,7 +239,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, favKey, o
           className={`star${fav ? ' on' : ''}`} aria-pressed={fav}
           aria-label={fav ? `remove ${c.label} from favourites` : `add ${c.label} to favourites`}
           onClick={() => toggleFav(c.id)}
-        >{fav ? '★' : '☆'}</button>
+        ><Icon name={fav ? 'star-on' : 'star'} size={17} /></button>
       </div>
     );
   };
@@ -244,7 +247,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, favKey, o
     <div className="modesheet" role="listbox" aria-label={title}>
       <div className="modesheet-head">
         <span>{title}</span>
-        <button className="x" onClick={onClose} aria-label="close">✕</button>
+        <button className="x" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button>
       </div>
       {note && <div className="modesheet-note">{note}</div>}
       {more.length > 0 && (

@@ -18,13 +18,14 @@ import { loadModels, saveModels } from '../modelCache';
 import { useSessionLog } from './useSessionLog';
 import type { Decision, Turn } from './types';
 import { Subagents } from './Subagents';
+import { BackIcon, Icon } from '../Icon';
+import { Route } from '../Route';
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
   grok: 'Grok', cursor: 'Cursor', pi: 'Pi', omp: 'OMP', rovo: 'Rovo Dev',
   agy: 'Antigravity CLI', antigravity: 'Antigravity', gemini: 'Gemini', kimi: 'Kimi', muse: 'Muse',
 };
-const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split('/').slice(-2).join('/');
 
 /**
  * A headless agent session: the transcript built from helm's own events,
@@ -370,13 +371,16 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
 
   return (
     <>
-      <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+      <div className="bar session-bar">
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
           <h1>{session.title}</h1>
           <span className="sub">
             <EngineMark engine={session.engine} />
-            {[engine, shortPath(session.cwd), money(session.costUsd)].filter(Boolean).join(' · ')}
+            <Route machine={env.name} folder={session.brain ? undefined : session.cwd} />
+            {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
+              <span key={part}><span className="sep"> · </span>{part}</span>
+            ))}
             {!env.online && <span className="offline"> · machine offline</span>}
             {env.online && conn && !conn.online && (
               <span className="offline"> · {conn.reachable ? 'reconnecting' : 'connection down'}</span>
@@ -384,8 +388,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           </span>
         </div>
         {chip(status)}
-        <button className="iconbtn subagents-launch" aria-label="Subagents" title="Delegate to another CLI or model"
-          onClick={() => setShowSubagents(true)}>⧉{(session.delegations?.length ?? 0) > 0 && <b className="cbadge">{session.delegations!.length}</b>}</button>
+        <button className="iconbtn subagents-launch wide-only" aria-label="Subagents" title="Delegate to another CLI or model"
+          onClick={() => setShowSubagents(true)}><Icon name="subagents" size={17} />{(session.delegations?.length ?? 0) > 0 && <b className="cbadge">{session.delegations!.length}</b>}</button>
         {git.status?.repo && !session.brain && (
           <button
             className={`iconbtn changesbtn${changed ? ' has' : ''}`}
@@ -393,11 +397,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             aria-label="Git graph and changes"
             onClick={() => setShowChanges(true)}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="9" r="2" />
-              <path d="M6 7v10M18 11c0 4-6 3-10 7" />
-            </svg>
+            <Icon name="git" size={17} />
             {changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}
           </button>
         )}
@@ -405,7 +405,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             the preference, so it is the same on every device and survives
             this one closing. */}
         <button
-          className={`iconbtn bell${session.notifyDone ? ' on' : ''}`}
+          className={`iconbtn bell wide-only${session.notifyDone ? ' on' : ''}`}
           title={session.notifyDone ? 'completion notifications on — tap to turn off' : 'completion notifications off — tap to turn on'}
           aria-label={session.notifyDone ? 'turn completion notifications off' : 'turn completion notifications on'}
           aria-pressed={!!session.notifyDone}
@@ -429,9 +429,17 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             </svg>
           </button>
         )}
-        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}>⋯</button>
+        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} />{(session.delegations?.length ?? 0) > 0 && <i className="moredot narrow-only" aria-hidden="true" />}</button>
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
+            {/* On a phone the header keeps the title, the state and Git;
+                these two ride in here instead of squeezing the title. */}
+            <button className="narrow-only" onClick={() => setShowSubagents(true)}>
+              Subagents{(session.delegations?.length ?? 0) > 0 ? ` · ${session.delegations!.length}` : ''}
+            </button>
+            <button className="narrow-only" aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
+              {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
+            </button>
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
             {session.delegation?.parentId && onOpenSession && <button onClick={() => call(async () => {
               const r = await client.rpc<{ session: Session }>(env.id, 'session.events', { id: session.delegation!.parentId, limit: 1 });

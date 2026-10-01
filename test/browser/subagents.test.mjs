@@ -18,7 +18,7 @@ before(async () => {
       delegation:{ parentId:'parent', task:'Review the vulnerability', requestedModel:'opus', depth:1, status:'blocked' } };
     const agents = [
       { id:'codex-main', label:'Codex personal', engine:'codex', auth:'authenticated', available:true, models:['gpt-6-astra'], modes:[{id:'ask',label:'Ask before acting'}] },
-      { id:'claude-main', label:'Claude personal', engine:'claude', auth:'authenticated', available:true, defaultModel:'sonnet', models:['opus','sonnet'], modes:[{id:'default',label:'Ask before acting'},{id:'plan',label:'Plan first'}] },
+      { id:'claude-main', label:'Claude personal', engine:'claude', auth:'authenticated', available:true, defaultModel:'sonnet', defaultMode:'bypassPermissions', models:['opus','sonnet'], modes:[{id:'default',label:'Ask before acting'},{id:'bypassPermissions',label:'Bypass all checks'},{id:'plan',label:'Plan first'}] },
       { id:'claude-out', label:'Claude work', engine:'claude', auth:'unauthenticated', available:false, modes:[] },
     ];
     const client = {
@@ -33,6 +33,7 @@ before(async () => {
           return { session:child };
         }
         if(method === 'session.delegation-result') return { session:child,status:'blocked',complete:false,output:'I need to inspect the changed files.',pending:{kind:'command',title:'Read the diff',requestId:'permission'} };
+        if(method === 'session.events') return { events:[], pending:[{requestId:'permission',kind:'command',title:'Read the diff',detail:'git diff',options:[{id:'allow',role:'allow',label:'Allow'},{id:'deny',role:'deny',label:'Deny'}],defaultTo:'deny'}] };
         return { ok:true };
       }
     };
@@ -51,17 +52,27 @@ test('account and model choices create a linked child and expose its approval', 
   await page.locator('#launcher').focus();
   await page.evaluate(() => window.showSubagents());
   await page.getByLabel('CLI account').selectOption('claude-main');
+  assert.equal(await page.getByLabel('Subagent permissions').locator('option[value="plan"]').count(), 0);
+  assert.equal(await page.getByLabel('Subagent permissions').locator('option[value="bypassPermissions"]').count(), 1);
   assert.equal(await page.locator('option[value="claude-out"]').isDisabled(), true);
   await page.getByLabel('Subagent model').fill('opus');
   await page.getByLabel('Task', {exact:true}).fill('Review the vulnerability');
   await page.getByRole('button', {name:'Start subagent'}).click();
-  await page.getByText('Needs approval: Read the diff', {exact:true}).waitFor();
+  await page.getByText('Read the diff', {exact:true}).waitFor();
+  assert.deepEqual(await page.locator('.sheet-actions button').allTextContents(), ['Deny', 'Allow'], 'safe visual order must also be the keyboard order');
   const request = await page.evaluate(() => JSON.parse(JSON.stringify(window.calls.find((c)=>c.method==='session.delegate'))));
   assert.deepEqual(request.params, {id:'parent',profileId:'claude-main',model:'opus',task:'Review the vulnerability'});
   assert.equal(await page.getByText('claude-main · opus', {exact:true}).count(),1);
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({path:join(process.env.HELM_TEST_SCREENSHOT_DIR,'subagents-desktop.png')});
-  await page.getByRole('button',{name:'Open child thread →'}).click();
-  assert.equal(await page.evaluate(()=>window.opened),'child');
+  assert.equal(await page.getByRole('button',{name:'Open child thread →'}).count(), 0);
+  assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.list'&&c.params.parentId==='parent')));
+  await page.getByRole('button',{name:'Deny',exact:true}).click();
+  assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.answer'&&c.params.id==='child'&&c.params.decision.option==='deny')));
+  await page.getByLabel('Message subagent').fill('Keep the security checks intact');
+  await page.getByRole('button',{name:'Send message',exact:true}).click();
+  assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.delegation-message'&&c.params.parentId==='parent'&&c.params.id==='child'&&c.params.data==='Keep the security checks intact')));
+  assert.equal(await page.evaluate(()=>window.opened),undefined);
+  await page.getByRole('button',{name:'Close subagents'}).click();
   await page.getByRole('dialog').waitFor({state:'detached'});
 });
 

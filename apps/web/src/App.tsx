@@ -9,6 +9,8 @@ import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
 import { EngineMark } from './EngineMark';
 import { NotificationToast } from './NotificationToast';
+import { BackIcon, Icon, toolKind } from './Icon';
+import { Route } from './Route';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import {
@@ -91,7 +93,7 @@ function ViewLoading({ title, onBack }: { title: string; onBack: () => void }) {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <b>{title}</b>
       </div>
       <div className="scroll"><div className="pad"><div className="empty quiet">loading…</div></div></div>
@@ -546,7 +548,10 @@ function Shell({ client, conn, onSignOut }: {
     const found = (sessions[want.envId] ?? []).find((x) => x.id === want.sessionId);
     if (!found) return;
     wanted.current = null;
-    navigate([{ kind: 'env' }, { kind: 'session', session: found }], want.envId);
+    const orchestrator = found.delegation?.parentId
+      ? (sessions[want.envId] ?? []).find((s) => s.id === found.delegation?.parentId) : null;
+    if (found.delegation && !orchestrator) return;
+    navigate([{ kind: 'env' }, { kind: 'session', session: orchestrator ?? found }], want.envId);
   }, [sessions]);
 
   useEffect(() => {
@@ -602,7 +607,7 @@ function Shell({ client, conn, onSignOut }: {
         // session you are in. The sheet inside that session is the notice
         // for the one you are looking at, so it is not toasted about.
         const s = payload?.session;
-        if (payload?.transition?.to === 'blocked' && s) {
+        if (payload?.transition?.to === 'blocked' && s && !s.delegation) {
           const top = nav.current.stack[nav.current.stack.length - 1];
           const looking = top?.kind === 'session' && top.session.id === s.id;
           const asleep = (snoozedRef.current[`${e}:${s.id}`] ?? 0) > Date.now();
@@ -729,7 +734,7 @@ function Shell({ client, conn, onSignOut }: {
    * session's name matters outside the app itself.
    */
   const blockedCount = envs.reduce((n, e) =>
-    n + (sessions[e.id] ?? []).filter((s) => s.engine !== 'shell' && !s.archived && s.status === 'blocked').length, 0);
+    n + (sessions[e.id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived && s.status === 'blocked').length, 0);
   useEffect(() => {
     const parts: string[] = [];
     if (view?.kind === 'session') parts.push(view.session.title);
@@ -803,7 +808,7 @@ function Shell({ client, conn, onSignOut }: {
     else if (!wide) setSelected(null);
   };
 
-  const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => s.engine !== 'shell' && !s.archived);
+  const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived);
   // The machine card says "running", so count processes that are actually
   // alive. `session.list` also includes finished threads so they remain
   // reachable from the machine view; counting those made old machines look
@@ -953,7 +958,7 @@ function Shell({ client, conn, onSignOut }: {
         <div className="bar side">
           <div className="brand">
             <img src="/favicon.svg" alt="" />
-            <b>helm</b>
+            <b className="wordmark">helm</b>
           </div>
           <span className={`conn ${status}`} title={conn.error || status}>
             <i />{status === 'live' ? `${envs.filter((e) => e.online).length}/${envs.length} online` : status}
@@ -968,15 +973,12 @@ function Shell({ client, conn, onSignOut }: {
               title={sidebarCollapsed ? 'expand sidebar' : 'collapse sidebar'}
               aria-label={sidebarCollapsed ? 'expand sidebar' : 'collapse sidebar'}
               onClick={() => collapseSidebar(!sidebarCollapsed)}
-            >{sidebarCollapsed ? '›' : '‹'}</button>
+            ><Icon name="sidebar" size={17} /></button>
           </span>
         </div>
 
         <div className="scroll">
           <div className="side-pad">
-            <button className="quick-switch" onClick={() => setPalette(true)} aria-label="Open command palette">
-              <span>Jump to a thread or machine</span><kbd>⌘ / Ctrl K</kbd>
-            </button>
             {status === 'offline' && (
               <div className="banner error">
                 No machine answered for a while. Check the VM, or that this phone has internet.
@@ -986,15 +988,26 @@ function Shell({ client, conn, onSignOut }: {
             {/* "Which machine has the thread about X" is one question, not
                 one per machine. The box searches every live list, and the
                 remembered threads of machines that are asleep. */}
-            <div className="filterbar">
-              <input
-                ref={searchRef}
-                className="sheetfilter grow" value={query}
-                placeholder={wide ? 'search threads & machines  (/)' : 'search threads & machines'}
-                autoCapitalize="off" autoCorrect="off" autoComplete="off"
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Escape') { setQuery(''); e.currentTarget.blur(); } }}
-              />
+            {/* Two tools, side by side because they do different things: the
+                box filters this list in place, the button opens the palette
+                that goes anywhere - threads, machines and actions. */}
+            <div className="filterbar home-find">
+              <label className="findbox">
+                <Icon name="search" size={15} />
+                <input
+                  ref={searchRef}
+                  className="sheetfilter grow" value={query}
+                  placeholder="Filter threads and machines"
+                  aria-label="Filter threads and machines"
+                  autoCapitalize="off" autoCorrect="off" autoComplete="off"
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Escape') { setQuery(''); e.currentTarget.blur(); } }}
+                />
+                {wide && <kbd aria-hidden="true">/</kbd>}
+              </label>
+              <button className="quick-switch" onClick={() => setPalette(true)} aria-label="Open command palette" title="Go anywhere (Ctrl or ⌘ K)">
+                <Icon name="jump" size={15} /><span className="qs-label">Go to</span><kbd>⌘K</kbd>
+              </button>
             </div>
 
             {(() => {
@@ -1006,7 +1019,7 @@ function Shell({ client, conn, onSignOut }: {
                   .map((s) => ({ e, s, stale: false }));
                 const remembered = !e.online
                   ? (snap?.machines?.[e.id]?.sessions ?? [])
-                    .filter((s) => `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q))
+                    .filter((s) => !s.delegation && `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q))
                     .map((s) => ({ e, s, stale: true }))
                   : [];
                 return [...live, ...remembered];
@@ -1014,13 +1027,13 @@ function Shell({ client, conn, onSignOut }: {
               const machines = envs.filter((e) => e.name.toLowerCase().includes(q));
               return (
                 <>
-                  <div className="section">everywhere</div>
+                  <div className="section">Everywhere</div>
                   <div className="rows plain">
                     {machines.map((e) => (
                       <button key={e.id} className="row" onClick={() => { setQuery(''); openEnv(e.id); }}>
                         <span className={`mdot ${e.online ? 'on' : 'off'}`} />
                         <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span><span className="rm">{e.kind ?? 'machine'}</span></span>
-                        <span className="chev">›</span>
+                        <span className="chev"><Icon name="forward" size={15} /></span>
                       </button>
                     ))}
                     {hits.map(({ e, s, stale }) => (
@@ -1037,7 +1050,7 @@ function Shell({ client, conn, onSignOut }: {
                         <StatusChip status={s.status} />
                       </button>
                     ))}
-                    {!hits.length && !machines.length && <div className="empty quiet">nothing anywhere matches</div>}
+                    {!hits.length && !machines.length && <div className="empty quiet">Nothing on any machine matches “{query.trim()}”</div>}
                   </div>
                 </>
               );
@@ -1085,7 +1098,8 @@ function Shell({ client, conn, onSignOut }: {
                   return (
                     <button
                       key={e.id}
-                      className={`row tall${e.id === selected && wide ? ' active' : ''}`}
+                      className={`row tall machine${e.id === selected && wide ? ' active' : ''}${e.online ? '' : ' offline'}`}
+                      aria-current={e.id === selected && wide ? 'true' : undefined}
                       onClick={() => openEnv(e.id)}
                     >
                       <span className={`mdot ${e.online ? 'on' : 'off'}`} />
@@ -1098,11 +1112,16 @@ function Shell({ client, conn, onSignOut }: {
                         </span>
                       </span>
                       {waiting > 0 && <span className="badge">{waiting}</span>}
-                      <span className="chev">›</span>
+                      <span className="chev"><Icon name="forward" size={15} /></span>
                     </button>
                   );
                 })}
-                {!envs.length && !error && <div className="empty quiet">no machines yet</div>}
+                {!envs.length && !error && (
+                  <div className="empty quiet">
+                    No machines yet
+                    <div className="note">Run <code>helm add pc</code> on a machine that is already in your network.</div>
+                  </div>
+                )}
               </div>
             </Fold>
 
@@ -1112,11 +1131,11 @@ function Shell({ client, conn, onSignOut }: {
                 not for the machine - and a machine with none says so, which
                 is the only way to start one. */}
             <Fold title="brains" count={envs.length} remember="sidebar:brains" showEmpty>
-              <div className="rows">
+              <div className="rows plain">
                 {envs.map((e) => {
                   const s = brainOn(e.id);
                   return (
-                    <button key={e.id} className="row" onClick={() => openBrain(e.id)}>
+                    <button key={e.id} className="row tall" onClick={() => openBrain(e.id)}>
                       {/* An empty slot rather than no slot: the rows line up
                           with each other, and with the machines above. */}
                       <EngineMark engine={s ? engineOf(s.engine).cls : undefined} />
@@ -1128,7 +1147,7 @@ function Shell({ client, conn, onSignOut }: {
                             : e.online ? 'no brain here yet' : 'no brain here yet · offline'}
                         </span>
                       </span>
-                      <span className="chev">›</span>
+                      <span className="chev"><Icon name="forward" size={15} /></span>
                     </button>
                   );
                 })}
@@ -1173,8 +1192,44 @@ function Shell({ client, conn, onSignOut }: {
             ], envId)}
           />
         ) : !env ? (
-          <div className="scroll"><div className="pad">
-            <div className="empty quiet">select a machine</div>
+          // A wide screen with no machine open yet: the machines themselves,
+          // as large rows, rather than a whisper in an empty pane.
+          <div className="scroll"><div className="pad column chooser">
+            <h2 className="screen-title">Machines</h2>
+            <p className="readout">
+              {envs.length === 1 ? '1 machine' : `${envs.length} machines`}
+              {' · '}{envs.filter((e) => e.online).length} online
+              {runningNow.length > 0 && ` · ${runningNow.length} running`}
+              {blocked.length > 0 && <span className="attention"> · {blocked.length} {blocked.length === 1 ? 'needs' : 'need'} you</span>}
+            </p>
+            {envs.length > 0 ? (
+              <div className="rows plain">
+                {envs.map((e) => {
+                  const list = runningAgentsOf(e.id);
+                  const waiting = list.filter((s) => s.status === 'blocked').length;
+                  return (
+                    <button key={e.id} className={`row tall machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
+                      <span className={`mdot ${e.online ? 'on' : 'off'}`} />
+                      <span className="grow">
+                        <span className="rt"><span className="rt-text">{e.name}</span>{e.kind && <span className="tag">{e.kind}</span>}</span>
+                        <span className="rm">
+                          {e.online
+                            ? (list.length ? `${list.length} running` : 'Nothing running')
+                            : e.lastSeen ? `Offline · seen ${ago(e.lastSeen)}` : 'Never connected'}
+                        </span>
+                      </span>
+                      {waiting > 0 && <span className="badge">{waiting}</span>}
+                      <span className="chev"><Icon name="forward" size={15} /></span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="empty quiet">
+                {error ? 'The hub did not answer' : 'No machines yet'}
+                {!error && <div className="note">Run <code>helm add pc</code> on a machine that is already in your network.</div>}
+              </div>
+            )}
           </div></div>
         ) : view.kind === 'brain' ? (
           <BrainView
@@ -1194,8 +1249,8 @@ function Shell({ client, conn, onSignOut }: {
           <EnvView
             key={env.id}
             client={client} env={env} wide={wide} onBack={back}
-            sessions={sessions[env.id] ?? []} reload={reloadEnv}
-            remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions}
+            sessions={(sessions[env.id] ?? []).filter((s) => !s.delegation)} reload={reloadEnv}
+            remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions.filter((s) => !s.delegation)}
             rememberedAt={env.online ? undefined : snap?.machines?.[env.id]?.at}
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
             onNewSession={() => push({ kind: 'new' })}
@@ -1736,7 +1791,7 @@ function InstallPwa() {
             <span className="rt">Install Helm app</span>
             <span className="rm">run it like a native app</span>
           </span>
-          <span className="chev">›</span>
+          <span className="chev"><Icon name="forward" size={15} /></span>
         </button>
       ) : (
         <p className="note install-note setup-open">On iPhone or iPad: tap Share, then Add to Home Screen.</p>
@@ -1870,7 +1925,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles"><h1>Devices</h1><span className="sub">what holds a key to this network</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -1911,7 +1966,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
           </div>
         ) : (
           <button className="action" disabled={busy} onClick={pair}>
-            <span className="plus">+</span>{busy ? 'making a link…' : 'Pair another device'}
+            <span className="plus"><Icon name="plus" size={15} /></span>{busy ? 'making a link…' : 'Pair another device'}
           </button>
         )}
 
@@ -1924,7 +1979,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
                 <span className={`mdot ${d.online || d.self ? 'on' : 'off'}`} />
                 <span className="grow">
                   <span className="rt">
-                    {d.label}{d.self && <span className="tag key">this device</span>}
+                    {d.label}{d.self && <span className="tag">this device</span>}
                     {!d.online && !d.self && d.lastSeen != null && now - d.lastSeen > STALE_MS
                       && <span className="tag">not seen here 30d+</span>}
                   </span>
@@ -1935,7 +1990,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
                 </span>
               </div>
               <button className="rowend" title={`remove ${d.label}`} aria-label={`remove ${d.label}`}
-                onClick={() => setRemoving(d)}>×</button>
+                onClick={() => setRemoving(d)}><Icon name="close" size={15} /></button>
             </div>
           ))}
           {devices?.length === 0 && <div className="empty quiet">no devices paired</div>}
@@ -2263,11 +2318,12 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
 
   return (
     <>
-      <div className="bar">
-        {!wide && <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>}
+      <div className="bar machine-bar">
+        {!wide && <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>}
         <div className="titles">
           <h1>{env.name}</h1>
-          <span className="sub">
+          <span className={`sub netline${env.online ? '' : ' down'}`}>
+            <i className={`mdot ${env.online ? 'on' : 'off'}`} />
             {/* "direct" over two srflx candidates went out to the internet and
                 back; that is worth saying, the ordinary same-wifi case is not. */}
             {env.online
@@ -2287,7 +2343,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         {/* The media view only exists on a machine that is a nas: elsewhere
             the button would be an offer the daemon has to refuse. */}
         {env.kind === 'nas' && (
-          <button className="iconbtn" title={`media on ${env.name}`} onClick={onMedia}><Play /></button>
+          <button className="iconbtn" title={`media on ${env.name}`} aria-label={`media on ${env.name}`} onClick={onMedia}><Play /></button>
         )}
         <button
           className="iconbtn mono"
@@ -2295,11 +2351,12 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           // screen, which is slow enough to be worth saying before you open
           // one and wonder what is wrong with it.
           title={env.info.terminals === 'panes' ? 'terminal (slow: no pty on this machine)' : 'terminal'}
+          aria-label={env.info.terminals === 'panes' ? 'terminal (slow: no pty on this machine)' : 'terminal'}
           disabled={!env.online || opening}
           onClick={openTerminal}
-        >{env.info.terminals === 'panes' ? '❯!' : '❯_'}</button>
-        <button className="iconbtn" title={`what ${env.name} has cost`} onClick={onUsage}><Meter /></button>
-        <button className="iconbtn" title={`${env.name} settings`} onClick={onSettings}><Sliders /></button>
+        ><Icon name="terminal" size={18} />{env.info.terminals === 'panes' && <b className="slowmark" aria-hidden="true">!</b>}</button>
+        <button className="iconbtn" title={`what ${env.name} has cost`} aria-label={`what ${env.name} has cost`} onClick={onUsage}><Meter /></button>
+        <button className="iconbtn" title={`${env.name} settings`} aria-label={`${env.name} settings`} onClick={onSettings}><Sliders /></button>
       </div>
 
       <div
@@ -2322,14 +2379,22 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             {pull > 70 ? 'release to refresh' : ''}
           </div>
         )}
-        {!env.online && <div className="banner warn">this machine is offline</div>}
+        {!env.online && (
+          <div className="banner warn">
+            {env.name} is offline{env.lastSeen ? ` · last seen ${ago(env.lastSeen)}` : ''}. Threads open again when it reconnects.
+          </div>
+        )}
 
-        <button className="action" disabled={!env.online} onClick={onNewSession}>
-          <span className="plus">+</span>New session
-        </button>
-        <button className="action" disabled={!env.online} onClick={() => onSendProject()}>
-          <span className="plus">⇄</span>Send a project
-        </button>
+        {/* One main action. Sending a project elsewhere is the rarer errand,
+            so it rides beside it rather than stacking a second banner. */}
+        <div className="actionrow">
+          <button className="action lead" disabled={!env.online} onClick={onNewSession}>
+            <span className="plus"><Icon name="plus" size={16} /></span>New session
+          </button>
+          <button className="action second" disabled={!env.online} onClick={() => onSendProject()} title="Send a project to another machine" aria-label="Send a project">
+            <Icon name="transfer" size={16} /><span>Send a project</span>
+          </button>
+        </div>
 
         {searchable && (
           <div className="filterbar">
@@ -2382,6 +2447,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         {projectFolds.map(({ project: p, list, above }) => (
           <Fold
             key={p.path}
+            kind="folder"
             title={p.title}
             count={list.length + above}
             note={projectNote(p.path)}
@@ -2402,11 +2468,11 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             {list.length ? (
               <div className="rows plain">{list.map(row)}</div>
             ) : (
-              <div className="empty quiet">
-                {above ? 'the latest is under recent' : 'no threads here yet'}
-                <div className="note" style={{ marginTop: 6 }}>
+              <div className="empty quiet folder-empty">
+                {above ? `The latest thread in ${p.title} is under recent` : `No threads in ${p.title} yet`}
+                <div className="note">
                   <button className="linkish" disabled={!env.online} onClick={() => onStart(p.path)}>
-                    + New thread
+                    Start one here
                   </button>
                 </div>
               </div>
@@ -2471,15 +2537,17 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         {!blocked.length && !working.length && !recent.length && !projectFolds.length && !strays.length &&
           !(q && (filed.length || older.length)) && (
           <div className="empty quiet">
-            {q ? 'nothing matches' : `nothing running on ${env.name}`}
-            {!q && !older.length && !filed.length && (
-              <div className="note" style={{ marginTop: 6 }}>pick a folder, then an agent</div>
+            {q ? `Nothing on ${env.name} matches “${query.trim()}”` : `Nothing running on ${env.name}`}
+            {!q && !older.length && !filed.length && env.online && (
+              <div className="note">
+                <button className="linkish" onClick={onNewSession}>Start a session</button>
+              </div>
             )}
           </div>
         )}
 
         {env.online && !q && (
-          <button className="linkish addproject" onClick={onAddProject}>+ Add a project shortcut</button>
+          <button className="linkish addproject" onClick={onAddProject}><Icon name="plus" size={14} />Add a project shortcut</button>
         )}
 
         {error && <div className="error">{error}</div>}
@@ -2526,8 +2594,10 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
  * not you remember archiving it - and it stays open afterwards if you closed
  * it yourself, which is the one case where guessing would be rude.
  */
-function Fold({ title, count, note, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, children }: {
+function Fold({ title, count, note, kind, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, children }: {
   title: string; count: number; openWhen?: boolean; children: ReactNode;
+  /** A project folder reads as a place, not as a category like "archived". */
+  kind?: 'folder';
   /** A word beside the count - a machine name, the newest thread's age. */
   note?: string;
   /** Groups that are the reason you opened the screen start open. */
@@ -2559,13 +2629,15 @@ function Fold({ title, count, note, openWhen = false, defaultOpen = false, atten
   useEffect(() => { if (openWhen) setOpen(true); }, [openWhen, setOpen]);
   if (!count && !showEmpty) return null;
   return (
-    <div>
-      <div className={`section fold${open ? ' open' : ''}${attention ? ' attention' : ''}`}>
+    <div className={`foldwrap${kind ? ` ${kind}` : ''}`}>
+      <div className={`section fold${open ? ' open' : ''}${attention ? ' attention' : ''}${kind ? ` ${kind}` : ''}`}>
         <button
           className="fold-toggle" aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
         >
-          <span className="caret">›</span>{title}<span className="count">{count}</span>
+          <span className="caret"><Icon name="forward" size={13} /></span>
+          {kind === 'folder' && <Icon name="folder" size={15} className="foldicon" />}
+          <span className="fold-title">{title}</span><span className="count">{count}</span>
           {note && <span className="note-inline">{note}</span>}
         </button>
         {actions && <span className="fold-actions">{actions}</span>}
@@ -2587,12 +2659,12 @@ function ProjectActions({ title, online, onStart, onSend, onCheck, onRename, onR
         type="button" className="foldbtn"
         title={`new thread in ${title}`} aria-label={`new thread in ${title}`}
         onClick={onStart}
-      >+</button>
+      ><Icon name="plus" size={16} /></button>
       <button
         type="button" className="foldbtn"
         title={`actions for ${title}`} aria-label={`actions for ${title}`} aria-haspopup="menu" aria-expanded={menu}
         onClick={() => setMenu((v) => !v)}
-      >⋯</button>
+      ><Icon name="more" size={16} /></button>
       {menu && (
         <div className="menu">
           <button disabled={!online} onClick={() => { setMenu(false); onSend(); }}>Send project</button>
@@ -2665,7 +2737,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
             <button
               className="rowend" title="thread actions" aria-label={`actions for ${s.title}`} aria-haspopup="menu" aria-expanded={menu}
               onClick={(e) => { e.stopPropagation(); setMenu((open) => !open); }}
-            >⋯</button>
+            ><Icon name="more" size={16} /></button>
             {menu && (
               <div className="menu row-menu" onClick={(e) => e.stopPropagation()}>
                 {onRename && !adopted && (
@@ -2763,7 +2835,7 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
             <span className="need-m">{eng.label} · {dirName(s.cwd)} · {machine}</span>
           </span>
         </span>
-        <span className="need-go">Review and answer<b>›</b></span>
+        <span className="need-go">Review and answer<Icon name="forward" size={17} /></span>
       </button>
       <div className="need-foot">
         {!choosing ? (
@@ -2781,7 +2853,7 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
               />
               <button disabled={!custom || new Date(custom).getTime() <= Date.now()} onClick={() => onSnooze(new Date(custom).getTime())}>Set</button>
             </span>
-            <button className="snooze-x" onClick={() => setChoosing(false)} aria-label="cancel">×</button>
+            <button className="snooze-x" onClick={() => setChoosing(false)} aria-label="cancel"><Icon name="close" size={14} /></button>
           </div>
         )}
       </div>
@@ -2896,7 +2968,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles"><h1>{title}</h1><span className="sub">{sub}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -2927,7 +2999,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
                     <span className="rt"><span className="rt-text">{engineOf(a.engine).label}</span></span>
                     <span className="rm">{[a.account, a.prefs?.default].filter(Boolean).join(' · ')}</span>
                   </span>
-                  {busy === a.key ? <span className="chip working"><i />starting</span> : <span className="chev">›</span>}
+                  {busy === a.key ? <span className="chip working"><i />starting</span> : <span className="chev"><Icon name="forward" size={15} /></span>}
                 </button>
               ))}
             </div>
@@ -2952,7 +3024,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
                       <span className="rt"><span className="rt-text">{models?.labels?.[m] ?? m}</span></span>
                       {current && <span className="rm">what it thinks with now</span>}
                     </span>
-                    {busy === m ? <span className="chip working"><i />changing</span> : current ? <span className="tag key">current</span> : <span className="chev">›</span>}
+                    {busy === m ? <span className="chip working"><i />changing</span> : current ? <span className="tag key">current</span> : <span className="chev"><Icon name="forward" size={15} /></span>}
                   </button>
                 );
               })}
@@ -2981,7 +3053,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
                   <span className="rt">Start a different brain</span>
                   <span className="rm">ends this one and everything it has learned</span>
                 </span>
-                <span className="chev">›</span>
+                <span className="chev"><Icon name="forward" size={15} /></span>
               </button>
             </div>
           </>
@@ -3121,7 +3193,7 @@ function MachineKind({ client, env, onChanged }: {
               </span>
               <span className="rm">{k.hint}</span>
             </span>
-            {busy === k.id ? <span className="chip working"><i />changing</span> : <span className="chev">›</span>}
+            {busy === k.id ? <span className="chip working"><i />changing</span> : <span className="chev"><Icon name="forward" size={15} /></span>}
           </button>
         ))}
       </div>
@@ -3167,7 +3239,7 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles"><h1>Settings</h1><span className="sub">this network, this device</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -3178,21 +3250,21 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
               <span className="rt">CLI defaults</span>
               <span className="rm">model, thinking and permissions on every machine</span>
             </span>
-            <span className="chev">›</span>
+            <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
           <button className="row" onClick={() => onOpen({ kind: 'updates' })}>
             <span className="grow">
               <span className="rt">Updates</span>
               <span className="rm">which helm each machine runs, and update them</span>
             </span>
-            <span className="chev">›</span>
+            <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
           <button className="row" onClick={() => onOpen({ kind: 'usage' })}>
             <span className="grow">
               <span className="rt">What it has cost</span>
               <span className="rm">tokens, spend and cache across every machine</span>
             </span>
-            <span className="chev">›</span>
+            <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
         </div>
 
@@ -3214,7 +3286,7 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
               <span className="rt">Devices & pairing</span>
               <span className="rm">what holds a key to this network</span>
             </span>
-            <span className="chev">›</span>
+            <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
           <AddMachine />
           <Notifications client={client} />
@@ -3248,7 +3320,7 @@ function NetworkSettings({ client, envs, onBack, onOpen }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles"><h1>CLI defaults</h1><span className="sub">all machines</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -3277,7 +3349,7 @@ function NetworkSettings({ client, envs, onBack, onOpen }: {
                       <span className="rt">{engineOf(a.engine).label} <span className="dim">· {a.account}</span></span>
                       <span className="rm">{startSummary(a)}</span>
                     </span>
-                    <span className="chev">›</span>
+                    <span className="chev"><Icon name="forward" size={15} /></span>
                   </button>
                 ))}
               </div>
@@ -3311,7 +3383,7 @@ function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles"><h1>Settings</h1><span className="sub">{env.name}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -3340,7 +3412,7 @@ function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
                   <span className="rt">{e.label} <span className="dim">· {a.account}</span></span>
                   <span className="rm">{[short, starts].filter(Boolean).join(' · ')}</span>
                 </span>
-                <span className="chev">›</span>
+                <span className="chev"><Icon name="forward" size={15} /></span>
               </button>
             );
           })}
@@ -3369,7 +3441,7 @@ function ModelPrefsView({ client, env, account, onBack }: {
   const [approved, setApproved] = useState<Set<string>>(new Set());
   const [def, setDef] = useState('');
   const [effort, setEffort] = useState(account.defaults?.effort ?? '');
-  const [mode, setMode] = useState(account.defaults?.mode ?? '');
+  const [mode, setMode] = useState(account.defaults?.mode === 'plan' ? '' : account.defaults?.mode ?? '');
   const [speed, setSpeed] = useState(account.defaults?.speed ?? '');
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
@@ -3448,8 +3520,8 @@ function ModelPrefsView({ client, env, account, onBack }: {
     ...(list?.speedByModel?.[selectedModel] ?? list?.speeds ?? []),
     ...(speed ? [speed] : []),
   ])];
-  const modes = [...(list?.modes ?? [])];
-  if (mode && !modes.some((m) => m.id === mode)) modes.push({ id: mode, label: mode });
+  const modes = (list?.modes ?? []).filter((m) => m.id !== 'plan');
+  if (mode && mode !== 'plan' && !modes.some((m) => m.id === mode)) modes.push({ id: mode, label: mode });
 
   const row = (m: string, checked: boolean) => (
     <button key={m} className={`row tall${checked ? ' active' : ''}`} onClick={() => toggle(m)}>
@@ -3458,14 +3530,14 @@ function ModelPrefsView({ client, env, account, onBack }: {
         {(list?.labels?.[m] && list.labels[m] !== m) && <span className="rm">{m}</span>}
         {!all.includes(m) && <span className="rm">not offered by the CLI anymore</span>}
       </span>
-      {checked && <span className="check">✓</span>}
+      {checked && <span className="check"><Icon name="check" size={16} /></span>}
     </button>
   );
 
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles"><h1>CLI defaults</h1><span className="sub">{eng.label} · {account.account} · {env.name}</span></div>
       </div>
       <div className="scroll"><div className="pad column">
@@ -3489,7 +3561,7 @@ function ModelPrefsView({ client, env, account, onBack }: {
             {modes.length > 0 && (
               <label className="field-label">Permissions
                 <select value={mode} onChange={(e) => setMode(e.target.value)}>
-                  <option value="">the CLI's default</option>
+                  <option value="">YOLO (default)</option>
                   {modes.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
                 </select>
               </label>
@@ -3597,8 +3669,8 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>{title}</h1><span className="sub">{here}</span></div>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
+        <div className="titles"><h1>{title}</h1><span className="sub"><Route machine={env.name} folder={here} full /></span></div>
       </div>
       <div className="scroll"><div className="pad column">
         <button className="primary big" disabled={picking} onClick={() => pick(here)}>
@@ -3618,12 +3690,12 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
           <div className="rows">
             {(hits ?? []).map((h) => (
               <button key={h.path} className="row" onClick={() => pick(h.path)}>
-                <span className={`glyph${h.repo ? ' repo' : ''}`}>{h.repo ? '◆' : '▸'}</span>
+                <span className={`glyph${h.repo ? ' repo' : ''}`}><Icon name={h.repo ? 'repo' : 'folder'} size={16} /></span>
                 <span className="grow">
                   <span className="rt"><span className="rt-text">{h.name}</span></span>
                   <span className="rm">{h.path}</span>
                 </span>
-                <span className="chev">›</span>
+                <span className="chev"><Icon name="forward" size={15} /></span>
               </button>
             ))}
             {hits === null
@@ -3640,12 +3712,12 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
                 <div className="rows">
                   {recent.slice(0, 3).map((p) => (
                     <button key={p} className="row" onClick={() => pick(p)}>
-                      <span className="glyph repo">◆</span>
+                      <span className="glyph repo"><Icon name="folder" size={16} /></span>
                       <span className="grow">
                         <span className="rt"><span className="rt-text">{shortPath(p)}</span></span>
                         <span className="rm">{p}</span>
                       </span>
-                      <span className="chev">›</span>
+                      <span className="chev"><Icon name="forward" size={15} /></span>
                     </button>
                   ))}
                 </div>
@@ -3655,7 +3727,7 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
             <div className="section">
               folders<span className="spacer" />
               <button className="linkish" onClick={() => setCreating((v) => !v)}>
-                {creating ? 'cancel' : '+ new folder'}
+                {creating ? 'Cancel' : 'New folder'}
               </button>
             </div>
 
@@ -3666,16 +3738,16 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
                   onChange={(e) => setFolder(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') makeFolder(); }}
                 />
-                <button className="send" onClick={makeFolder} disabled={!folder.trim()}>↑</button>
+                <button className="send" onClick={makeFolder} disabled={!folder.trim()} aria-label="create folder" title="create folder"><Icon name="arrow-up" size={16} /></button>
               </div>
             )}
 
             <div className="rows">
               {entries.map((e) => (
                 <button key={e.path} className="row" onClick={() => onInto(e.path)}>
-                  <span className={`glyph${e.isRepo ? ' repo' : ''}`}>{e.isRepo ? '◆' : '▸'}</span>
+                  <span className={`glyph${e.isRepo ? ' repo' : ''}`}><Icon name={e.isRepo ? 'repo' : 'folder'} size={16} /></span>
                   <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
-                  <span className="chev">›</span>
+                  <span className="chev"><Icon name="forward" size={15} /></span>
                 </button>
               ))}
               {!entries.length && !error && <div className="empty quiet">no subfolders</div>}
@@ -3771,7 +3843,7 @@ function MediaView({ client, env, onBack }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={backTo}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={backTo}><BackIcon /></button>
         <div className="titles">
           <h1>{playing ? playing.entry.name : env.name}</h1>
           <span className="sub">{playing ? 'playing' : crumbs || 'media'}</span>
@@ -3797,12 +3869,12 @@ function MediaView({ client, env, onBack }: {
           <div className="rows">
             {(roots ?? []).map((r) => (
               <button key={r.id} className="row" onClick={() => { setRoot(r); setPath(''); }}>
-                <span className="glyph repo">◆</span>
+                <span className="glyph repo"><Icon name="folder" size={16} /></span>
                 <span className="grow">
                   <span className="rt"><span className="rt-text">{r.name}</span></span>
                   <span className="rm">{r.path}</span>
                 </span>
-                <span className="chev">›</span>
+                <span className="chev"><Icon name="forward" size={15} /></span>
               </button>
             ))}
             {roots === null
@@ -3817,7 +3889,7 @@ function MediaView({ client, env, onBack }: {
           <div className="rows">
             {path && (
               <button className="row" onClick={() => setPath(path.split('/').slice(0, -1).join('/'))}>
-                <span className="glyph">‹</span>
+                <span className="glyph"><Icon name="back" size={16} /></span>
                 <span className="grow"><span className="rt">up a folder</span></span>
               </button>
             )}
@@ -3828,12 +3900,12 @@ function MediaView({ client, env, onBack }: {
                 disabled={!e.dir && !e.media}
                 onClick={() => (e.dir ? setPath(e.path) : play(e))}
               >
-                <span className={`glyph${e.dir ? ' repo' : ''}`}>{e.dir ? '▸' : e.media ? '▶' : '·'}</span>
+                <span className={`glyph${e.dir ? ' repo' : ''}`}>{e.dir ? <Icon name="folder" size={16} /> : e.media ? <Play /> : '·'}</span>
                 <span className="grow">
                   <span className="rt"><span className="rt-text">{e.name}</span></span>
                   {!e.dir && e.size != null && <span className="rm">{bytes(e.size)}</span>}
                 </span>
-                {e.dir && <span className="chev">›</span>}
+                {e.dir && <span className="chev"><Icon name="forward" size={15} /></span>}
               </button>
             ))}
             {entries === null && !error && <div className="empty quiet">listing…</div>}
@@ -3916,7 +3988,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
     if (!account) return;
     setModel(account.prefs?.default ?? '');
     setEffort(account.defaults?.effort ?? '');
-    setMode(account.defaults?.mode ?? '');
+    setMode(account.defaults?.mode === 'plan' ? '' : account.defaults?.mode ?? '');
     setSpeed(account.defaults?.speed ?? '');
   }, [account?.key]);
 
@@ -3943,8 +4015,8 @@ function Start({ client, env, cwd, onBack, onStarted }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>New session</h1><span className="sub">{cwd}</span></div>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
+        <div className="titles"><h1>New session</h1><span className="sub"><Route machine={env.name} folder={cwd} /></span></div>
         {(accounts?.length ?? 0) > 0 && (
           <button
             className="iconbtn" title="choose which agents show" aria-label="choose which agents show"
@@ -3969,9 +4041,9 @@ function Start({ client, env, cwd, onBack, onStarted }: {
               >
                 <EngineMark engine={e.cls} />
                 <span className="grow">
-                  <span className="rt">{e.label} <span className="dim">· {a.account}</span>{a.token && <span className="tag key">token</span>}</span>
+                  <span className="rt">{e.label} <span className="dim">· {a.account}</span>{a.token && <span className="tag">API key</span>}</span>
                 </span>
-                {a.key === key && <span className="check">✓</span>}
+                {a.key === key && <span className="check"><Icon name="check" size={16} /></span>}
               </button>
             );
           })}
@@ -4015,7 +4087,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
                   <span className="grow">
                     <span className="rt">{e.label} <span className="dim">· {a.account}</span></span>
                   </span>
-                  {on && <span className="check">✓</span>}
+                  {on && <span className="check"><Icon name="check" size={16} /></span>}
                 </button>
               );
             })}
@@ -4133,18 +4205,22 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
           <h1>{session.title}</h1>
-          <span className="sub">{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''} · {env.name}</span>
+          <span className="sub">
+            <EngineMark engine={eng.cls} />
+            <Route machine={env.name} folder={session.cwd} />
+            <span className="sep"> · </span>{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''}
+          </span>
         </div>
         <StatusChip status={status} at={statusAt} />
         {!isShell && !isExternal && (
-          <button className="iconbtn mono" title={raw ? 'conversation' : 'terminal'} onClick={() => setRaw((v) => !v)}>
-            {raw ? '¶' : '❯_'}
+          <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
+            <Icon name={raw ? 'raw' : 'terminal'} size={18} />
           </button>
         )}
-        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}>⋯</button>
+        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}><Icon name="more" size={18} /></button>
         {menu && (
           <div className="menu" onClick={() => setMenu(false)}>
             <button onClick={() => setNaming(true)}>Rename thread</button>
@@ -4193,15 +4269,6 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
 
 // --------------------------------------------------------------------- chat
 
-const TOOL_GLYPH: Record<string, string> = {
-  Read: '◎', Write: '✎', Edit: '✎', MultiEdit: '✎', Bash: '❯', Grep: '⌕', Glob: '⌕',
-  WebFetch: '⇣', WebSearch: '⌕', Task: '⚙', Agent: '⚙', shell: '❯', apply_patch: '✎',
-};
-const toolGlyph = (name: string) =>
-  TOOL_GLYPH[name] ?? (/read|cat|view/i.test(name) ? '◎'
-    : /search|grep|glob|list|find/i.test(name) ? '⌕'
-    : /write|edit|patch|create/i.test(name) ? '✎'
-    : /bash|shell|exec|run|command/i.test(name) ? '❯' : '⚙');
 
 function ago(ts: number | null | undefined) {
   if (!ts || !Number.isFinite(ts)) return '';
@@ -4251,7 +4318,7 @@ function Chat({ messages, status }: { messages: Message[] | null; status: string
           {status === 'working' && <div className="working"><span className="shine">Working…</span></div>}
         </div>
       </div>
-      {unread && <button className="jump" onClick={jump}>↓ new</button>}
+      {unread && <button className="jump" onClick={jump}><Icon name="arrow-down" size={14} />new</button>}
     </div>
   );
 }
@@ -4267,17 +4334,17 @@ function Turn({ m }: { m: Message }) {
   const many = m.tools.length > 3;
   const rows = m.tools.map((t, j) => (
     <div key={j} className="act">
-      <span className="aicon">{toolGlyph(t.name)}</span>
+      <span className="aicon"><Icon name={toolKind(t.name)} size={15} /></span>
       <span className="alabel"><b>{t.name}</b>{t.input && <> {t.input}</>}</span>
     </div>
   ));
   return (
     <div className="turn assistant">
       {m.tools.length > 0 && (many
-        ? <details className="actgroup"><summary><span className="aicon">⚙</span><span className="alabel">{m.tools.length} steps</span><span className="achev">›</span></summary>{rows}</details>
+        ? <details className="actgroup"><summary><span className="aicon"><Icon name="tool" size={15} /></span><span className="alabel">{m.tools.length} steps</span><span className="achev"><Icon name="forward" size={13} /></span></summary>{rows}</details>
         : rows)}
       {m.text && <Markdown text={m.text} className="prose" />}
-      {!m.text && !m.tools.length && m.thinking && <div className="act"><span className="aicon">◌</span><span className="alabel">Thinking</span></div>}
+      {!m.text && !m.tools.length && m.thinking && <div className="act"><span className="aicon"><Icon name="think" size={15} /></span><span className="alabel">Thinking</span></div>}
     </div>
   );
 }

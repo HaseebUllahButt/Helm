@@ -13,6 +13,22 @@ process.env.XDG_DATA_HOME = XDG;
 
 const SECONDS = Math.floor(Date.now() / 1000);
 
+test('Codex native subagent rollouts stay out of recent history without hiding user forks', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-codex-inventory-'));
+  const dir = join(home, 'sessions');
+  mkdirSync(dir);
+  const entries = [
+    { id: 'root', source: 'cli' },
+    { id: 'child', source: { subagent: { thread_spawn: { parent_thread_id: 'root', depth: 1 } } } },
+    { id: 'review', source: { subagent: 'review' } },
+    { id: 'fork', source: 'vscode', forked_from_id: 'root' },
+  ];
+  for (const p of entries) writeFileSync(join(dir, `${p.id}.jsonl`), JSON.stringify({ type: 'session_meta', payload: { ...p, cwd: '/tmp/project' } }) + '\n');
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const rows = await inventory([{ id: 'test-codex', engine: 'codex', env: { CODEX_HOME: home } }]);
+  assert.deepEqual(rows.filter((r) => r.engine === 'codex').map((r) => r.id).sort(), ['fork', 'root']);
+});
+
 function devinStore(accountDir, { hiddenColumn = true } = {}) {
   const dir = join(XDG, accountDir, 'cli');
   mkdirSync(dir, { recursive: true });

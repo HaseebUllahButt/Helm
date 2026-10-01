@@ -161,9 +161,11 @@ text, tool calls, permission prompts, models, modes, images and slash commands.
 Stop interrupts the turn.
 
 **How much the agent may do without asking** is a chip in the composer, next
-to Send: `ask` · `edit` · `plan` · `auto` · `yolo` for Claude Code, `ask` ·
+to Send: `ask` · `edit` · `auto` · `yolo` for Claude Code, `ask` ·
 `edit` · `yolo` · `read` for Codex. Tap it for the list with what each one
-means; shift+tab cycles the safe ones from the keyboard. A mode that removes
+means. New sessions default to YOLO unless the account is configured otherwise;
+plan mode is not supported. Shift+tab cycles the restricted modes from the
+keyboard. Switching to a mode that removes
 the guardrails takes two taps and then colours the chip and the box you type
 in, so it is never a surprise. Changing it mid-conversation is real, not
 cosmetic: Claude gets `set_permission_mode`, and every Codex turn carries the
@@ -177,11 +179,11 @@ Plain terminals, and agents you started at the keyboard, still run in
 
 ## CLI subagents
 
-Open **Subagents** (⧉) inside a conversation to choose a CLI account, model,
-permissions, and a task. Each task opens its own child thread in the same
-folder. Its account, model, status, reply, and pending approvals are visible
-in the panel; open the child to answer an approval or continue the work.
-The child's menu can take you back to its parent.
+Open **Subagents** inside a conversation to choose a CLI account, model,
+permissions, and a bounded task. Tasks stay attached to that orchestrator
+and do not appear as separate recent chats, search results, or provider-history
+rows. Inspect replies, stop work, send follow-up messages, and answer any
+explicitly configured approval prompts in the parent task panel.
 
 Helm-managed agents receive a short introduction to these tools on their next
 ordinary message. Any local CLI with shell access can also use them directly
@@ -207,9 +209,11 @@ using an existing Claude login. The supplied task is the child's context;
 the parent conversation is not copied automatically. Children share the
 folder, so assign distinct work when delegating edits.
 
-Children start with the CLI's safe default permissions; `--mode` and
+Children default to YOLO execution; `--mode` and
 `--effort` select supported settings. A read-only parent requires a read-only
-child, and delegation rejects permission-bypass modes. Up to four children
+child; account defaults and explicit permission choices remain configurable.
+Plan mode is not offered: dispatch tasks directly instead of waiting for plan
+approval. Up to four children
 can run at once, with at most three levels of nesting.
 CLIs without a permission picker use their own configured permission policy.
 

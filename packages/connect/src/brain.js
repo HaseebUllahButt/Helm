@@ -201,7 +201,7 @@ export function readThread(events = [], { limit = 40 } = {}) {
  */
 export function localDigest(sessions, events) {
   return sessions
-    .filter((s) => !s.archived && s.status !== 'exited')
+    .filter((s) => !s.delegation && !s.archived && s.status !== 'exited')
     .map((s) => {
       let last = null;
       // `since` returns the events themselves, not a wrapper around them.

@@ -3,6 +3,7 @@ import { Markdown } from '../Markdown';
 import { ChangeList, Diff } from './Transcript';
 import { useNow, waitingSince } from '../useNow';
 import type { Decision, Permission, Question } from './types';
+import { Icon } from '../Icon';
 
 /**
  * The agent stopped to ask. This is the whole reason helm exists, so the
@@ -38,6 +39,14 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
     ? { ...(typeof p.input === 'object' && p.input ? p.input : {}), command: edited }
     : { plan: edited };
   const changed = editing && edited.trim() !== original.trim();
+
+  const allowButton = allow && (changed ? (
+    <button className="primary" disabled={busy || !edited.trim()} onClick={() => answer('allow', updatedInput())}>
+      {p.kind === 'plan' ? 'Approve edited plan' : 'Allow edited command'}
+    </button>
+  ) : <button className="primary" disabled={busy} onClick={() => answer('allow')}>{allow.label}</button>);
+  const alwaysButton = always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{always.label}</button>;
+  const denyButton = deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{deny.label}</button>;
 
   return (
     <div className={`sheet ${p.kind}`}>
@@ -76,15 +85,16 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
         className="sheet-note" value={note} onChange={(e) => setNote(e.target.value)}
         placeholder={p.kind === 'plan' ? 'What should change? (optional)' : 'Add a note (optional)'}
       />
-      <div className={`sheet-actions${denyFirst ? ' deny-first' : ''}`}>
-        {allow && changed && (
-          <button className="primary" disabled={busy || !edited.trim()} onClick={() => answer('allow', updatedInput())}>
-            {p.kind === 'plan' ? 'Approve edited plan' : 'Allow edited command'}
-          </button>
-        )}
-        {allow && !changed && <button className="primary" disabled={busy} onClick={() => answer('allow')}>{allow.label}</button>}
-        {always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{always.label}</button>}
-        {deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{deny.label}</button>}
+      {/* Built in the order it is seen, so Tab walks the buttons the way the
+          eye does. A prompt whose safe answer is "no" leads with Deny; it
+          used to get there with row-reverse, which left Allow first in the
+          Tab order of a sheet that was showing it last. */}
+      <div className="sheet-actions">
+        {denyFirst && denyButton}
+        {denyFirst && alwaysButton}
+        {allowButton}
+        {!denyFirst && alwaysButton}
+        {!denyFirst && denyButton}
       </div>
     </div>
   );
@@ -189,7 +199,7 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
                 const on = (picked[key(q)] ?? []).includes(o.label);
                 return (
                   <button key={o.label} className={`q-opt${on ? ' on' : ''}`} onClick={() => toggle(q, o.label)}>
-                    <span className={`q-mark${q.multiSelect ? ' box' : ''}`}>{on ? '✓' : ''}</span>
+                    <span className={`q-mark${q.multiSelect ? ' box' : ''}`}>{on && <Icon name="check" size={12} />}</span>
                     <span className="grow">
                       <span className="rt"><span className="rt-text">{o.label}</span></span>
                       {o.description && <span className="rm">{o.description}</span>}

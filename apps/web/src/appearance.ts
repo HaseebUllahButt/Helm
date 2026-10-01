@@ -44,7 +44,7 @@ export function applyAppearance(a: Appearance = loadAppearance()) {
   root.dataset.density = a.density;
   // The browser bar and the installed app's status area take the page's colour.
   document.querySelector('meta[name="theme-color"]')
-    ?.setAttribute('content', theme === 'light' ? '#f6f6f4' : '#0a0a0b');
+    ?.setAttribute('content', theme === 'light' ? '#f3f4f7' : '#14161b');
 }
 
 export function saveAppearance(a: Appearance) {

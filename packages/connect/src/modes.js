@@ -3,7 +3,8 @@
  *
  * The app offers the same four ideas everywhere - ask, edit freely, act
  * without asking, read only - and each engine maps them onto its actual
- * flags. The first entry is the default. `short` is the one word the
+ * flags. YOLO is the default unless an account explicitly configures another
+ * mode. `short` is the one word the
  * composer's chip shows; `danger` marks a mode the app makes the owner
  * confirm and never reaches by the cycle shortcut.
  *
@@ -16,7 +17,6 @@ export const MODES = {
   claude: [
     { id: 'default', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', cli: 'manual' },
     { id: 'acceptEdits', label: 'Edit freely', short: 'edit', hint: 'edits go through, commands still ask', cli: 'acceptEdits' },
-    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', cli: 'plan' },
     { id: 'auto', label: 'Act without asking', short: 'auto', hint: 'Claude blocks risky actions quietly; they will not ping your phone', cli: 'auto' },
     { id: 'bypassPermissions', label: 'Bypass all checks', short: 'yolo', hint: 'permission checks are off; direct questions from Claude still need an answer', cli: 'bypassPermissions', danger: true },
   ],
@@ -32,13 +32,11 @@ export const MODES = {
   opencode: [
     { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', acp: 'build' },
     { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'edits go through, commands still ask', acp: 'build', autoAllow: ['edit'] },
-    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', acp: 'plan' },
     { id: 'auto', label: 'Act without asking', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'build', autoAllow: 'all', danger: true },
   ],
   opencode2: [
     { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', acp: 'build' },
     { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'edits go through, commands still ask', acp: 'build', autoAllow: ['edit'] },
-    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', acp: 'plan' },
     { id: 'auto', label: 'Act without asking', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'build', autoAllow: 'all', danger: true },
   ],
   // devin's session modes are its own words: Code is its default and asks on
@@ -46,7 +44,6 @@ export const MODES = {
   devin: [
     { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'edits and safe commands go through, the rest ask', acp: 'accept-edits' },
     { id: 'read', label: 'Read only', short: 'read', hint: 'answers without touching anything', acp: 'ask' },
-    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'plans changes before implementing', acp: 'plan' },
     { id: 'yolo', label: 'Bypass all checks', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'bypass', danger: true },
   ],
   // Grok's permission-mode vocabulary is Claude's (`grok --permission-mode`
@@ -55,7 +52,6 @@ export const MODES = {
   grok: [
     { id: 'default', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', acp: 'default' },
     { id: 'acceptEdits', label: 'Edit freely', short: 'edit', hint: 'edits go through, commands still ask', acp: 'acceptEdits' },
-    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', acp: 'plan' },
     { id: 'auto', label: 'Act without asking', short: 'auto', hint: 'Grok blocks risky actions quietly; they will not ping your phone', acp: 'auto' },
     { id: 'bypassPermissions', label: 'Bypass all checks', short: 'yolo', hint: 'permission checks are off', acp: 'bypassPermissions', approveAll: true, danger: true },
   ],
@@ -65,7 +61,6 @@ export const MODES = {
   cursor: [
     { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', acp: 'ask' },
     { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'agent mode: edits and commands run', acp: 'agent' },
-    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', acp: 'plan' },
     { id: 'auto', label: 'Act without asking', short: 'yolo', hint: 'nothing asks and nothing stops', acp: 'agent', autoAllow: 'all', danger: true },
   ],
   // agy's `--mode` flag knows accept-edits and plan; "everything" is the
@@ -75,7 +70,6 @@ export const MODES = {
   agy: [
     { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'tools follow your agy permission settings; unapproved ones are skipped' },
     { id: 'edit', label: 'Edit freely', short: 'edit', hint: 'accept-edits: file changes go through, the rest follows settings', agyMode: 'accept-edits' },
-    { id: 'plan', label: 'Plan first', short: 'plan', hint: 'read-only until you approve a plan', agyMode: 'plan' },
     { id: 'yolo', label: 'Act without asking', short: 'yolo', hint: 'approves every tool call, including writes and commands', skipPermissions: true, danger: true },
   ],
   // The managed Google ACP agent carries default/auto_edit/yolo natively;
@@ -92,9 +86,10 @@ export const MODES = {
 };
 
 export const modesFor = (engine) => MODES[engine] ?? [];
-export const defaultMode = (engine) => modesFor(engine)[0]?.id ?? null;
+export const defaultMode = (engine) =>
+  (modesFor(engine).find((m) => m.short === 'yolo') ?? modesFor(engine)[0])?.id ?? null;
 export const modeFor = (engine, id) =>
-  modesFor(engine).find((m) => m.id === id) ?? modesFor(engine)[0] ?? null;
+  modesFor(engine).find((m) => m.id === id) ?? modesFor(engine).find((m) => m.id === defaultMode(engine)) ?? null;
 
 /** What the old `auto` toggle meant, for callers that still send it. */
 export const modeFromAuto = (engine, auto) => {

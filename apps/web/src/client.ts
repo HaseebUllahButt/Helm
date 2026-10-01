@@ -113,6 +113,7 @@ export interface CliAgent {
   auth: 'authenticated' | 'unauthenticated' | 'unknown'; available: boolean;
   models?: string[]; labels?: Record<string, string>; defaultModel?: string | null;
   modes: Mode[];
+  defaultMode?: string | null;
 }
 
 export interface DelegationResult {
@@ -157,6 +158,7 @@ export interface ModelList {
   images?: boolean;
   imagesByModel?: Record<string, boolean>;
   modes?: Mode[];
+  defaultMode?: string | null;
 }
 
 /**

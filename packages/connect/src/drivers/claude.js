@@ -74,6 +74,7 @@ export class ClaudeDriver extends Driver {
     super({ engine: 'claude', ...opts });
     this.engineSessionId ??= randomUUID();
     this.resume = !!opts.engineSessionId;
+    this.delegated = !!opts.delegated;
     // A thread branched from another: begin as that conversation was at `at`.
     // Both ids are checked here as well as by whoever asked - they end up as
     // arguments to a process.
@@ -86,6 +87,7 @@ export class ClaudeDriver extends Driver {
     const args = [...this.profileArgs, ...BASE_ARGS, '--permission-mode', mode?.cli ?? 'manual'];
     if (this.model) args.push('--model', this.model);
     if (this.effort) args.push('--effort', this.effort);
+    args.push('--disallowedTools', 'EnterPlanMode,ExitPlanMode');
     if (this.forkFrom) {
       // Until the branch has said its first word it is not yet a conversation
       // of its own, so every start - including one after a restart - is the
@@ -550,6 +552,11 @@ export class ClaudeDriver extends Driver {
     }
     const tool = r.tool_name;
     const input = r.input ?? {};
+    if (tool === 'EnterPlanMode' || tool === 'ExitPlanMode') {
+      this.#write({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id,
+        response: { behavior: 'deny', message: 'Plan mode is disabled in Helm. Execute the assigned task directly; do not request plan approval.' } } });
+      return;
+    }
     const kind = tool === 'AskUserQuestion' ? 'question'
       : tool === 'ExitPlanMode' ? 'plan'
       : tool === 'Bash' ? 'command'

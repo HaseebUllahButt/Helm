@@ -1,7 +1,7 @@
 import { ENGINES } from './engines.js';
 import { materialize } from './profiles.js';
 import { listModels } from './models.js';
-import { modelPrefs, accountKey } from './settings.js';
+import { modelPrefs, startPrefs, accountKey } from './settings.js';
 import { modesFor, defaultMode } from './modes.js';
 import { fold } from './brain.js';
 import { createHash } from 'node:crypto';
@@ -12,7 +12,8 @@ export async function agentCatalog(profiles, statuses, { models = true } = {}) {
     const auth = statuses.get(p.id) ?? 'unknown';
     const account = createHash('sha256').update(accountKey(p)).digest('hex').slice(0, 16);
     const row = { id: p.id, label: p.label, engine: p.engine, account, auth,
-      available: auth !== 'unauthenticated', modes: modesFor(p.engine).filter((m) => !m.danger) };
+      available: auth !== 'unauthenticated', modes: modesFor(p.engine),
+      defaultMode: startPrefs(p)?.mode === 'plan' ? defaultMode(p.engine) : startPrefs(p)?.mode ?? defaultMode(p.engine) };
     if (!models || !row.available) return row;
     const spec = materialize(p);
     const engine = ENGINES[p.engine];
@@ -30,22 +31,26 @@ export async function agentCatalog(profiles, statuses, { models = true } = {}) {
 export function delegationNote(agents) {
   const accounts = agents.filter((a) => a.available).slice(0, 24)
     .map((a) => `${a.id} (${a.engine}, ${a.auth})`).join('; ');
-  return `[helm delegation: CLI accounts: ${accounts || 'discover with helm agents --json'}. Run helm agents --json for accounts and model IDs. When the owner asks for another CLI/model, use helm delegate <account> --model <model> --wait --json -- "<task>". Read a pending result with helm delegate-result <id> --wait --json. Children share this folder; give them a bounded task. Delegate only when requested or useful, and keep permission requests visible in Helm.]`;
+  return `[helm delegation: CLI accounts: ${accounts || 'discover with helm agents --json'}. Run helm agents --json for accounts and model IDs. Use helm delegate <account> --model <model> --wait --json -- "<task>" for a bounded task. Children belong to this orchestrator and share its folder; they are tasks, not ordinary chats. Read results with helm delegate-result <id> --wait --json and send follow-ups with helm say <id> <message>. Permissions default to YOLO and remain configurable. Never use plan mode or ask to approve a plan: dispatch the task and carry it to completion. Preserve explicitly configured read-only restrictions and surface any genuine user question in the parent workflow.]`;
 }
 
 /** Read-only parents cannot acquire write access through a different CLI. */
-export function delegationMode(engine, parentMode, requested) {
+export function delegationMode(engine, parentMode, requested, configured = null, parentEngine = engine) {
   const modes = modesFor(engine);
+  if (requested === 'plan') throw new Error('plan mode is not supported for subagents; dispatch a task instead');
   const readOnly = ['plan', 'readonly', 'read'].includes(parentMode);
-  const safe = readOnly ? modes.find((m) => ['plan', 'readonly', 'read'].includes(m.id)) : null;
+  const safe = readOnly ? modes.find((m) => ['readonly', 'read'].includes(m.id)) : null;
   if (readOnly && !safe) throw new Error(`${engine} has no verified read-only delegation mode`);
-  if (requested && !modes.some((m) => m.id === requested && !m.danger)) {
-    throw new Error(`invalid or unsafe subagent mode: ${requested}`);
+  if (requested && !modes.some((m) => m.id === requested)) {
+    throw new Error(`invalid subagent mode: ${requested}`);
   }
-  if (readOnly && requested && !['plan', 'readonly', 'read'].includes(requested)) {
+  if (readOnly && requested && !['readonly', 'read'].includes(requested)) {
     throw new Error('a read-only parent requires a read-only subagent');
   }
-  return requested || safe?.id || defaultMode(engine);
+  const parent = modesFor(parentEngine).find((m) => m.id === parentMode);
+  const inherited = parent && modes.find((m) => m.short === parent.short)?.id;
+  return requested || safe?.id || (configured !== 'plan' && modes.some((m) => m.id === configured) ? configured : null)
+    || inherited || defaultMode(engine);
 }
 
 export function delegationOutput(session, events) {

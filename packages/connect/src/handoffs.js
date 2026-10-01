@@ -282,9 +282,10 @@ export class Handoffs {
         if (!session) {
           // The named profile must exist here - the source may have picked
           // it while we were offline. And when the request does not name a
-          // mode the session gets the engine's safe default, never whatever
+          // mode the session gets the engine's default, never whatever
           // the profile's saved startPrefs happen to say: a queued job must
-          // not quietly run with permissions nobody asked for this time.
+          // not depend on a stale target preference. Explicit restrictions
+          // carried by the handoff still win.
           const profile = (await this.profiles()).find((x) => x.id === p.profileId);
           if (!profile) {
             throw new Error(`there is no agent profile ${p.profileId} on this machine`);

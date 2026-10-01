@@ -291,7 +291,7 @@ export class Sessions extends EventEmitter {
     // after Helm owns/resumes the session.
     if (s.external && s.engine !== 'codex') return EXTERNAL_INFO_COMMANDS;
     const driver = await this.#driver(s);
-    const available = await driver.availableCommands?.() ?? [];
+    const available = (await driver.availableCommands?.() ?? []).filter((c) => !['plan', 'plan-mode'].includes(c.name));
     return s.externalSource && s.engine !== 'codex'
       ? [...EXTERNAL_INFO_COMMANDS, ...available]
       : available;
@@ -330,7 +330,9 @@ export class Sessions extends EventEmitter {
       for (const s of raw.sessions || []) {
         // Completion notifications are the normal behaviour for driven
         // threads. Preserve an explicit opt-out from an older client.
-        if (s.driver && s.notifyDone == null) s.notifyDone = true;
+        if (s.driver && s.notifyDone == null) s.notifyDone = !s.delegation;
+        // Legacy planning sessions resume as executable tasks, not a plan gate.
+        if (s.driver && s.mode === 'plan') s.mode = defaultMode(s.engine);
         this.#index.set(s.id, s);
       }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
@@ -439,7 +441,7 @@ export class Sessions extends EventEmitter {
 
   // ------------------------------------------------------------------- verbs
 
-  async list() {
+  async list({ includeDelegations = false, parentId = null } = {}) {
     // The runtime is the authority on what is still alive; our index only
     // remembers which of those panes are ours.
     const live = await this.runtime.listLive();
@@ -510,7 +512,18 @@ export class Sessions extends EventEmitter {
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
-    return out.sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    return out.filter((s) => parentId ? s.delegation?.parentId === parentId : includeDelegations || !s.delegation)
+      .sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  }
+
+  /** Provider history must not rediscover a hidden task as an ordinary chat. */
+  isDelegatedConversation(engine, id) {
+    return [...this.#index.values()].some((s) => s.delegation && s.engine === engine && s.engineSessionId === id);
+  }
+
+  hasActiveDelegations(id) {
+    return [...this.#index.values()].some((s) => s.delegation?.parentId === id
+      && (['starting', 'working', 'blocked'].includes(s.delegation.status ?? s.status) || this.hasActiveDelegations(s.id)));
   }
 
   /**
@@ -544,7 +557,7 @@ export class Sessions extends EventEmitter {
     });
   }
 
-  async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null }) {
+  async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null }) {
     if (originHandoffId !== null && !/^[a-f0-9]{24}$/.test(originHandoffId)) {
       throw new Error('invalid origin handoff id');
     }
@@ -556,10 +569,11 @@ export class Sessions extends EventEmitter {
     if (!model) model = modelPrefs(profile)?.default ?? null;
     const defaults = startPrefs(profile) ?? {};
     if (!effort) effort = defaults.effort ?? null;
-    if (!mode) mode = defaults.mode ?? null;
+    if (mode === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
+    if (!mode) mode = defaults.mode === 'plan' ? defaultMode(profile.engine) : defaults.mode ?? null;
     if (!speed) speed = defaults.speed ?? null;
     const lineage = parentLink(parent);
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId });
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -619,7 +633,7 @@ export class Sessions extends EventEmitter {
     return session;
   }
 
-  /** A CLI child in the same folder, with durable lineage and its own approvals. */
+  /** A task owned by its orchestrator, with durable output and configurable permissions. */
   async delegate({ id, cwd, profileId, model, mode, effort, task }) {
     if (typeof task !== 'string' || !task.trim() || task.length > 32_000) {
       throw new Error('a subagent task must contain 1–32000 characters');
@@ -640,19 +654,19 @@ export class Sessions extends EventEmitter {
     try {
       const profile = (await getProfiles()).find((p) => p.id === profileId && !p.disabled);
       if (!profile || !ENGINES[profile.engine]?.driver) throw new Error('choose a CLI account with a headless driver');
-      if ((profile.args ?? []).some((arg) => /^--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo)(?:=|$)/.test(arg))) {
+      if (['plan', 'readonly', 'read'].includes(parent?.mode) && (profile.args ?? []).some((arg) => /^--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo)(?:=|$)/.test(arg))) {
         throw new Error('that CLI profile bypasses permissions; choose a profile without bypass flags');
       }
       const auth = (await authStatuses([profile])).get(profile.id);
       if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
-      const selectedMode = delegationMode(profile.engine, parent?.mode, mode);
+      const selectedMode = delegationMode(profile.engine, parent?.mode, mode, startPrefs(profile)?.mode, parent?.engine);
+      const delegation = { parentId: parent?.id ?? null, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting' };
       const child = await this.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
-        title: clip(task.trim().split('\n')[0], 80) });
+        title: clip(task.trim().split('\n')[0], 80), delegation });
       if ((model && child.model !== model) || (selectedMode && child.mode !== selectedMode)) {
         await this.kill(child.id);
         throw new Error('the CLI refused the selected subagent model or permissions; no task was sent');
       }
-      child.delegation = { parentId: parent?.id ?? null, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting' };
       if (parent) {
         parent.delegations = [...(parent.delegations ?? []), child.id].slice(-100);
         parent.updatedAt = Date.now();
@@ -686,6 +700,20 @@ export class Sessions extends EventEmitter {
       }
     }
     return result;
+  }
+
+  /** Follow-ups remain on the same task; running agents can be steered without opening a chat. */
+  async messageDelegation(parentId, id, data) {
+    const child = this.get(id);
+    if (!child.delegation || child.delegation.parentId !== parentId) throw new Error('that task does not belong to this orchestrator');
+    if (typeof data !== 'string' || !data.trim() || data.length > 32_000) throw new Error('a task message must contain 1–32000 characters');
+    const d = this.#drivers.get(id);
+    const turnId = `local-message-${randomBytes(6).toString('hex')}`;
+    await this.input(id, data.trim(), { turnId });
+    if (child.status === 'working' && typeof d?.steer === 'function') {
+      if (!this.#sending.has(id)) await this.sendNow(id, turnId);
+    }
+    return { ok: true };
   }
 
   // ---------------------------------------------------------------- terminals
@@ -747,7 +775,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null }) {
+  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null }) {
     const dir = expand(cwd);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -765,7 +793,8 @@ export class Sessions extends EventEmitter {
       // permission cards - marked so that it can be found again and so that
       // `input` knows to put the network's state in front of what is typed.
       brain: brain || undefined,
-      notifyDone: true,
+      notifyDone: !delegation,
+      delegation: delegation || undefined,
       status: 'idle',
       // Set when picking up a conversation the CLI already has: the driver
       // reads this as "resume", not "start".
@@ -866,6 +895,7 @@ export class Sessions extends EventEmitter {
       forkFrom: s.forkFrom,
       transcript: s.transcript,
       monitorOnly: !!s.external,
+      delegated: !!s.delegation,
       // Held on the proc host, the process outlives this daemon. The
       // getters answer what the log still has open - read only when the
       // driver actually finds its process there to rebind.
@@ -1471,6 +1501,7 @@ export class Sessions extends EventEmitter {
   }
 
   async setMode(id, mode) {
+    if (mode === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
     const s = this.get(id);
     if (!s.driver) throw new Error('not a headless session');
     s.mode = mode;
@@ -1777,6 +1808,9 @@ export class Sessions extends EventEmitter {
    */
   async input(id, text, { raw = false, attachments = [], turnId: requestedTurnId = null } = {}) {
     const s = this.get(id);
+    if (s.driver && !raw && /^\s*\/(?:plan|plan-mode)(?:\s|$)/i.test(text)) {
+      throw new Error('plan mode is not supported; dispatch the task directly');
+    }
     // A caller-chosen turn id is how a retried operation (code handoff)
     // delivers its first prompt exactly once: the id is deterministic, and
     // the durable turn.start written below is the dedupe marker. An open

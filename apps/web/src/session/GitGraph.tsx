@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Client, Environment, Session } from '../client';
 import { EngineMark } from '../EngineMark';
+import { Icon } from '../Icon';
 import { agentLabel } from '@helm/protocol/notifications';
 
 export interface GitCommit {
@@ -95,7 +96,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen }: {
           <div className="section">Agents in this repository <span>{data.worktrees.reduce((n, w) => n + w.agents.length, 0)}</span></div>
           {data.worktrees.filter((w) => w.current || w.agents.length).map((w) => (
             <div key={w.path} className={`git-checkout${w.current ? ' current' : ''}`}>
-              <div className="git-checkout-head"><span className="git-branch-symbol" aria-hidden="true">⑂</span>
+              <div className="git-checkout-head"><span className="git-branch-symbol" aria-hidden="true"><Icon name="branch" size={16} /></span>
                 <b>{w.branch || (w.head ? `Detached · ${w.head.slice(0, 7)}` : 'No commits yet')}</b>
                 {w.current && <span className="tag">This chat</span>}
                 <small title={w.path}>{folderName(w.path)}</small>

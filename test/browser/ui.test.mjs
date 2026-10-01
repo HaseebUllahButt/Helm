@@ -36,6 +36,46 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
+test('both themes keep secondary text readable and selected grouped rows visible', async () => {
+  for (const theme of ['dark', 'light']) {
+    const measured = await page.evaluate((theme) => {
+      document.documentElement.dataset.theme = theme;
+      const root = getComputedStyle(document.documentElement);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const ctx = canvas.getContext('2d');
+      const rgb = (token) => {
+        ctx.clearRect(0, 0, 1, 1);
+        ctx.fillStyle = root.getPropertyValue(token).trim();
+        ctx.fillRect(0, 0, 1, 1);
+        return Array.from(ctx.getImageData(0, 0, 1, 1).data).slice(0, 3);
+      };
+      const luminance = (channels) => channels.map((n) => {
+        const x = n / 255;
+        return x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4;
+      }).reduce((sum, n, i) => sum + n * [.2126, .7152, .0722][i], 0);
+      const ratios = [];
+      for (const surface of ['--bg', '--card', '--raised']) {
+        for (const text of ['--text', '--text-dim', '--mutedfg', '--amber-text']) {
+          const a = luminance(rgb(surface)), b = luminance(rgb(text));
+          ratios.push({ surface, text, ratio: (Math.max(a, b) + .05) / (Math.min(a, b) + .05) });
+        }
+      }
+      const list = document.createElement('div');
+      list.className = 'rows plain';
+      list.innerHTML = '<button class="row active">Selected account</button><button class="row">Other account</button>';
+      document.body.append(list);
+      const selected = getComputedStyle(list.children[0]).backgroundColor;
+      const ordinary = getComputedStyle(list.children[1]).backgroundColor;
+      list.remove();
+      return { ratios, selected, ordinary };
+    }, theme);
+    for (const r of measured.ratios) assert.ok(r.ratio >= 4.5, `${theme} ${r.text} on ${r.surface}: ${r.ratio.toFixed(2)}:1`);
+    assert.notEqual(measured.selected, measured.ordinary, `${theme}: grouped row reset must not erase selection`);
+  }
+  await page.evaluate(() => { delete document.documentElement.dataset.theme; });
+});
+
 test('untrusted Markdown cannot borrow app overlays or inject script/focus controls', async () => {
   const result = await page.evaluate(() => {
     const host = document.createElement('div');

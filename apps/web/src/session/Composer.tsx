@@ -3,6 +3,7 @@ import { IMAGE_ACCEPT, looksLikeImage } from './image';
 import { useDictation } from './voice';
 import type { Turn } from './types';
 import { isBigPaste, stashPaste } from './pasteStore';
+import { Icon } from '../Icon';
 
 const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -294,7 +295,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
               {attachments.map((a, i) => (
                 <span key={i} className="attach-preview" title={a.name}>
                   <img src={a.url} alt={a.name} />
-                  <button onClick={() => onRemoveAttachment?.(i)} title={`remove ${a.name}`} aria-label={`remove ${a.name}`}>×</button>
+                  <button onClick={() => onRemoveAttachment?.(i)} title={`remove ${a.name}`} aria-label={`remove ${a.name}`}><Icon name="close" size={12} /></button>
                 </span>
               ))}
             </div>
@@ -390,18 +391,18 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             {dictation.error && (
               <button className="attach-status bad" onClick={dictation.clearError} title="dismiss">{dictation.error}</button>
             )}
-            {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>⌨ keys</button>}
+            {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>keys</button>}
             {preparing && <span className="attach-status">compressing…</span>}
             {/* The pickers share the row the buttons are on: a second row of
                 chips under the box cost a line of screen on every visit to
                 say what never changes between messages. */}
             {foot ? <div className="slab-controls">{foot}</div> : <span className="spacer" />}
             {working && onStop && (
-              <button className="stop" onClick={onStop} title="stop the agent">
+              <button className="stop" onClick={onStop} title="stop the agent" aria-label="stop the agent">
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>
               </button>
             )}
-            <button className="send" onClick={submit} disabled={preparing || (!draft.trim() && !attachments?.length)} title="send">
+            <button className="send" onClick={submit} disabled={preparing || (!draft.trim() && !attachments?.length)} title="send" aria-label="send">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </div>

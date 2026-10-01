@@ -58,6 +58,9 @@ after(async () => {await browser?.close()});
 
 test('graph shows merges and live agents on their checkouts, and opens the selected thread', async () => {
   await page.evaluate(()=>window.showGit());
+  await page.getByRole('tab',{name:'Changes 1'}).waitFor();
+  assert.equal(await page.getByRole('tab',{name:'Changes 1'}).getAttribute('aria-selected'),'true');
+  await page.getByRole('tab',{name:'Graph',exact:true}).click();
   await page.getByText('2 agents share this checkout').waitFor();
   assert.equal(await page.locator('.git-node').count(),4);
   assert.equal(await page.locator('.git-checkout.current .git-agent').count(),2);
@@ -76,7 +79,7 @@ test('graph shows merges and live agents on their checkouts, and opens the selec
 
 test('Git tabs remain keyboard accessible and preserve the file diff view', async () => {
   await page.getByRole('tab',{name:'Graph',exact:true}).focus();
-  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowLeft');
   assert.equal(await page.getByRole('tab',{name:'Changes 1'}).getAttribute('aria-selected'),'true');
   await page.locator('.filemain').click();
   await page.getByText('+after',{exact:true}).waitFor();

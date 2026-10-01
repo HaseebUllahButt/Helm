@@ -145,6 +145,7 @@ test('a new session uses machine-held CLI defaults and starts notifications on',
   const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
   const [oc] = await getProfiles();
   saveStartPrefs(oc, { effort: 'high', mode: 'edit', speed: 'fast' });
+  assert.throws(() => saveStartPrefs(oc, { mode: 'plan' }), /plan mode is not supported/);
 
   const inherited = await sessions.start({ cwd: '/tmp', profileId: 'oc' });
   assert.equal(inherited.effort, 'high');
@@ -153,8 +154,9 @@ test('a new session uses machine-held CLI defaults and starts notifications on',
   assert.equal(inherited.notifyDone, true);
   assert.equal(FakeDriver.made.at(-1).speed, 'fast');
 
-  const picked = await sessions.start({ cwd: '/tmp', profileId: 'oc', effort: 'low', mode: 'plan', speed: 'normal' });
+  await assert.rejects(() => sessions.start({ cwd: '/tmp', profileId: 'oc', mode: 'plan' }), /plan mode is not supported/);
+  const picked = await sessions.start({ cwd: '/tmp', profileId: 'oc', effort: 'low', mode: 'ask', speed: 'normal' });
   assert.equal(picked.effort, 'low');
-  assert.equal(picked.mode, 'plan');
+  assert.equal(picked.mode, 'ask');
   assert.equal(picked.speed, 'normal');
 });

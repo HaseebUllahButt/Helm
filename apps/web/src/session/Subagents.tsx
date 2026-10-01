@@ -3,9 +3,11 @@ import { Client, type CliAgent, type Environment, type Session, type DelegationR
 import { EngineMark } from '../EngineMark';
 import { Markdown } from '../Markdown';
 import { useDialog } from '../useDialog';
+import { PermissionSheet } from './PermissionSheet';
+import type { Permission, Decision } from './types';
 
 /** Account → model → task, then a live branch list beside the parent thread. */
-export function Subagents({ client, env, parent, onClose, onOpen }: {
+export function Subagents({ client, env, parent, onClose }: {
   client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (s: Session) => void;
 }) {
   const [agents, setAgents] = useState<CliAgent[]>([]);
@@ -19,26 +21,32 @@ export function Subagents({ client, env, parent, onClose, onOpen }: {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState('');
   const [result, setResult] = useState<DelegationResult | null>(null);
+  const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [message, setMessage] = useState('');
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [revision, setRevision] = useState(0);
   const ref = useDialog(() => { if (!busy) onClose(); });
   const agent = agents.find((a) => a.id === account);
   const children = sessions.filter((s) => s.delegation?.parentId === parent.id);
   const readOnly = ['plan', 'readonly', 'read'].includes(parent.mode ?? '');
-  const modes = agent?.modes.filter((m) => !readOnly || ['plan', 'readonly', 'read'].includes(m.id)) ?? [];
+  const modes = agent?.modes.filter((m) => m.id !== 'plan' && (!readOnly || ['readonly', 'read'].includes(m.id))) ?? [];
 
   useEffect(() => {
     let stale = false;
-    const load = () => client.rpc<{ sessions: Session[] }>(env.id, 'session.list')
+    const load = () => client.rpc<{ sessions: Session[] }>(env.id, 'session.list', { parentId: parent.id })
       .then((r) => { if (!stale) setSessions(r.sessions); })
       .catch((e) => { if (!stale) setError(e.message); });
     void load();
     const off = client.on((e, kind, payload: any) => {
-      if (e === env.id && kind === 'session.update' && payload?.session) {
+      if (e === env.id && kind === 'session.update' && payload?.session?.delegation?.parentId === parent.id) {
         setSessions((all) => [...all.filter((s) => s.id !== payload.session.id), payload.session]);
+        setRevision((r) => r + 1);
       }
       if ((kind === 'connection' && payload?.online) || (e === env.id && kind === 'session.exit')) void load();
     });
     return () => { stale = true; off(); };
-  }, [client, env.id]);
+  }, [client, env.id, parent.id]);
 
   const loadAgents = async (refresh = false) => {
     setLoading(true); setError('');
@@ -52,23 +60,27 @@ export function Subagents({ client, env, parent, onClose, onOpen }: {
   };
   useEffect(() => { void loadAgents(); }, [client, env.id]);
   useEffect(() => { setModel(''); setMode(''); }, [account]);
+  useEffect(() => { setResult(null); setPermissions([]); setMessage(''); setNotice(''); }, [selected]);
 
   useEffect(() => {
     if (!selected) { setResult(null); return; }
     let stale = false;
     let timer: ReturnType<typeof setTimeout>;
-    setResult(null);
     const load = async () => {
       try {
         const r = await client.rpc<DelegationResult>(env.id, 'session.delegation-result', { id: selected });
         if (stale) return;
         setResult(r);
+        if (r.pending) {
+          const history = await client.rpc<{ pending: Permission[] }>(env.id, 'session.events', { id: selected, tail: 1 });
+          if (!stale) setPermissions(history.pending ?? []);
+        } else setPermissions([]);
         if (!r.complete) timer = setTimeout(load, 2500);
       } catch (e: any) { if (!stale) setError(e.message); }
     };
     void load();
     return () => { stale = true; clearTimeout(timer); };
-  }, [client, env.id, selected]);
+  }, [client, env.id, selected, revision]);
 
   const start = async () => {
     if (!agent?.available || !task.trim() || busy) return;
@@ -83,7 +95,25 @@ export function Subagents({ client, env, parent, onClose, onOpen }: {
     } catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
   };
-  const open = (s: Session) => { onClose(); onOpen?.(s); };
+  const sendMessage = async () => {
+    if (!message.trim() || sending) return;
+    setSending(true); setError('');
+    try {
+      await client.rpc(env.id, 'session.delegation-message', { parentId: parent.id, id: selected, data: message.trim() });
+      setMessage(''); setNotice('Message sent. A busy agent receives it as a steering message or on its next turn.');
+      setRevision((r) => r + 1);
+    } catch (e: any) { setError(e.message); }
+    finally { setSending(false); }
+  };
+  const answer = async (permission: Permission, decision: Decision) => {
+    setSending(true); setError('');
+    try {
+      await client.rpc(env.id, 'session.answer', { id: selected, requestId: permission.requestId, decision });
+      setPermissions((all) => all.filter((p) => p.requestId !== permission.requestId));
+      setRevision((r) => r + 1);
+    } catch (e: any) { setError(e.message); }
+    finally { setSending(false); }
+  };
 
   return <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
     <div className="modal delegation-panel" ref={ref} role="dialog" aria-modal="true" aria-label="Subagents" tabIndex={-1}>
@@ -91,7 +121,7 @@ export function Subagents({ client, env, parent, onClose, onOpen }: {
         <div><h2>Subagents</h2><p>{env.name} · {parent.title}</p></div>
         <button className="iconbtn" aria-label="Close subagents" disabled={busy} onClick={onClose}>×</button>
       </div>
-      <p className="delegation-intro">Give another CLI a task in this folder. Each child has its own conversation and approvals.</p>
+      <p className="delegation-intro">Dispatch a task in this folder. Subagents belong to this orchestrator, not your recent chats. Steer them here without opening another thread.</p>
       <form className="delegation-form" onSubmit={(e) => { e.preventDefault(); void start(); }}>
         <div className="delegation-account-label"><label htmlFor="delegate-account">CLI account</label>
           <button type="button" className="linkish" disabled={loading || busy} onClick={() => void loadAgents(true)}>Refresh accounts</button></div>
@@ -106,13 +136,13 @@ export function Subagents({ client, env, parent, onClose, onOpen }: {
             value={model} disabled={!agent || busy} onChange={(e) => setModel(e.target.value)} /></label>
           <datalist id="delegate-models">{agent?.models?.map((m) => <option key={m} value={m}>{agent.labels?.[m] || m}</option>)}</datalist>
           {!!modes.length && <label>Permissions<select aria-label="Subagent permissions" value={mode} disabled={busy} onChange={(e) => setMode(e.target.value)}>
-            <option value="">{readOnly ? 'Read only' : modes[0]?.label}</option>
+            <option value="">{readOnly ? 'Read only' : agent?.defaultMode && agent.defaultMode !== 'plan' ? `${modes.find((m) => m.id === agent.defaultMode)?.label || 'YOLO'} (account default)` : 'Inherit orchestrator · YOLO by default'}</option>
             {modes.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
           </select></label>}
         </div>
         {agent && !agent.modes.length && <p className="note">This CLI controls its own permissions.</p>}
         <label htmlFor="delegate-task">Task</label>
-        <textarea id="delegate-task" rows={3} maxLength={32000} placeholder="Ask Opus to review the security changes…"
+        <textarea id="delegate-task" rows={3} maxLength={32000} placeholder="Implement a specific, bounded task…"
           value={task} disabled={busy} onChange={(e) => setTask(e.target.value)} />
         <div className="delegation-start"><span>{readOnly ? 'This child will be read only.' : 'Works in the same folder as this thread.'}</span>
           <button className="primary" disabled={busy || loading || !agent?.available || !task.trim()}>{busy ? 'Starting…' : 'Start subagent'}</button></div>
@@ -133,9 +163,16 @@ export function Subagents({ client, env, parent, onClose, onOpen }: {
             {!result && <p className="note">Reading result…</p>}
             {result?.output && <Markdown text={result.output} live={!result.complete} />}
             {result?.error && <p className="error">{result.error}</p>}
-            {result?.pending && <p className="note">Needs approval: {result.pending.title || result.pending.kind}</p>}
-            {result?.truncated && <p className="note">Showing the end of the reply. Open the thread for the full conversation.</p>}
-            {onOpen && <button className="linkish" onClick={() => open(result?.session ?? s)}>Open child thread →</button>}
+            {result?.pending && !permissions.length && <p className="note">Needs approval: {result.pending.title || result.pending.kind}</p>}
+            {permissions.map((p) => <PermissionSheet key={p.requestId} permission={p} busy={sending} onAnswer={(d) => void answer(p, d)} />)}
+            {result?.truncated && <p className="note">Showing the most recent output from this task.</p>}
+            <form onSubmit={(e) => { e.preventDefault(); void sendMessage(); }}>
+              <label htmlFor={`message-${s.id}`}>Message subagent</label>
+              <textarea id={`message-${s.id}`} rows={2} maxLength={32000} value={message} disabled={sending}
+                placeholder="Clarify, redirect, or give a follow-up task…" onChange={(e) => setMessage(e.target.value)} />
+              <button className="primary" disabled={sending || !message.trim()}>{sending ? 'Sending…' : 'Send message'}</button>
+              {notice && <p className="note" role="status">{notice}</p>}
+            </form>
             {!result?.complete && <button className="linkish destructive" onClick={() => client.rpc(env.id, 'session.interrupt', { id: s.id }).catch((e) => setError(e.message))}>Stop subagent</button>}
           </div>}
         </div>)}

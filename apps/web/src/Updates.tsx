@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Client, Environment } from './client';
+import { BackIcon, Icon } from './Icon';
 
 /**
  * Which helm each machine runs, and a way to bring them all to the newest.
@@ -63,7 +64,7 @@ export function UpdatesView({ client, envs, onBack, onRefresh }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
           <h1>Updates</h1>
           <span className="sub">{versions.size > 1 ? `${versions.size} versions in use` : 'which helm each machine runs'}</span>
@@ -71,7 +72,7 @@ export function UpdatesView({ client, envs, onBack, onRefresh }: {
       </div>
       <div className="scroll"><div className="pad column">
         <button className="action" disabled={!canAny || all} onClick={everything}>
-          <span className="plus">↑</span>{all ? 'updating…' : 'Update every machine'}
+          <span className="plus"><Icon name="arrow-up" size={15} /></span>{all ? 'updating…' : 'Update every machine'}
         </button>
         <p className="note">
           The VM goes first. A machine only updates if its helm is a clean checkout of main; one that is
@@ -104,7 +105,7 @@ export function UpdatesView({ client, envs, onBack, onRefresh }: {
               </div>
             );
           })}
-          {!sorted.length && <div className="empty quiet">no machines</div>}
+          {!sorted.length && <div className="empty quiet">No machines are paired yet</div>}
         </div>
       </div></div>
     </>

@@ -51,6 +51,13 @@ test('plain: text streams in as deltas, then the turn completes with its cost', 
   assert.equal(log.of('status').pop().status, 'exited');
 });
 
+test('delegated Claude tasks cannot enter a plan approval workflow', () => {
+  const { driver } = make('plain', { mode: 'bypassPermissions', delegated: true });
+  const flag = driver.args.indexOf('--disallowedTools');
+  assert.ok(flag >= 0);
+  assert.equal(driver.args[flag + 1], 'EnterPlanMode,ExitPlanMode');
+});
+
 test('tool: a Bash call becomes a tool item with streamed input and its output; a Write asks permission', async () => {
   const { driver, log, fake } = make('tool');
   await driver.send('Use the Bash tool…');
@@ -168,14 +175,14 @@ test('question: AskUserQuestion is a question card; the answer goes back as upda
   await driver.kill();
 });
 
-test('plan: ExitPlanMode is a plan card with the plan text', async () => {
-  const { driver, log } = make('plan', { mode: 'plan' });
+test('legacy ExitPlanMode is denied locally without asking for plan approval', async () => {
+  const { driver, log, fake } = make('plan');
   await driver.send('plan it');
-  const ask = await log.until((e) => e.type === 'permission.request' && e.kind === 'plan');
-  assert.match(ask.detail, /^# Plan: Add LICENSE file/);
-  assert.deepEqual(ask.options.map((o) => o.label), ['Approve plan', 'Keep planning']);
-  await driver.answer(ask.requestId, { option: 'allow' });
   const write = await log.until((e) => e.type === 'permission.request' && e.kind === 'edit');
+  assert.equal(log.of('permission.request').some((e) => e.kind === 'plan'), false);
+  const response = fake.stdinLines().find((l) => l.type === 'control_response');
+  assert.equal(response.response.response.behavior, 'deny');
+  assert.match(response.response.response.message, /Plan mode is disabled/);
   assert.equal(write.tool, 'Write');
   await driver.answer(write.requestId, { option: 'deny', message: 'plan only' });
   const done = await log.until((e) => e.type === 'turn.done');

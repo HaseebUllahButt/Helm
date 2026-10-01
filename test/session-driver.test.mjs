@@ -189,11 +189,13 @@ test('a headless session: start, stream, watch, prompt, resume, kill', async (t)
   assert.equal(sessions.watching(s.id), false);
 
   // Mode and model changes reach the driver and the record.
-  await sessions.setMode(s.id, 'plan');
+  await assert.rejects(() => sessions.setMode(s.id, 'plan'), /plan mode is not supported/);
+  await assert.rejects(() => sessions.input(s.id, '/plan'), /plan mode is not supported/);
+  await sessions.setMode(s.id, 'acceptEdits');
   await sessions.setModel(s.id, 'sonnet');
-  assert.equal(d.mode, 'plan');
+  assert.equal(d.mode, 'acceptEdits');
   assert.equal(d.model, 'sonnet');
-  assert.equal(sessions.get(s.id).mode, 'plan');
+  assert.equal(sessions.get(s.id).mode, 'acceptEdits');
 
   // The process going away is not the end of the session: the next message resumes it.
   d.push('status', { status: 'idle' });
@@ -212,7 +214,7 @@ test('a headless session: start, stream, watch, prompt, resume, kill', async (t)
   const d2 = FakeDriver.made.at(-1);
   assert.notEqual(d2, d);
   assert.equal(d2.engineSessionId, 'engine-1', 'resumed with the same engine session');
-  assert.equal(d2.mode, 'plan');
+  assert.equal(d2.mode, 'acceptEdits');
 
   // Kill removes the record and the log.
   await sessions.kill(s.id);
@@ -253,7 +255,7 @@ test('a daemon restart lists a driven session as idle and resumable', async (t) 
   const listed = (await again.list()).find((x) => x.id === s.id);
   assert.equal(listed.alive, false);
   assert.equal(listed.status, 'idle');
-  assert.equal(listed.mode, 'default');
+  assert.equal(listed.mode, 'bypassPermissions');
   t.after(() => again.kill(s.id));
 });
 
