@@ -1,6 +1,6 @@
 import { useDismiss } from './useDismiss';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
-import { Confirm, TextPrompt } from './Modal';
+import { Confirm, Sheet, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
 import { Palette, ShortcutsHelp, type PaletteItem } from './Palette';
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
@@ -3859,7 +3859,7 @@ function MediaView({ client, env, onBack }: {
 // -------------------------------------------------------------------- start
 
 const PREFS = 'helm.prefs';
-type Prefs = Record<string, { account?: string }>;
+type Prefs = Record<string, { account?: string; hidden?: string[] }>;
 const loadPrefs = (): Prefs => { try { return JSON.parse(localStorage.getItem(PREFS) || '{}'); } catch { return {}; } };
 const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* full */ } };
 
@@ -3886,6 +3886,10 @@ function Start({ client, env, cwd, onBack, onStarted }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const prefs = useRef(loadPrefs());
+  // Accounts this device hides on this machine's picker, stored beside the
+  // remembered account in the same per-machine slot.
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set(prefs.current[env.id]?.hidden ?? []));
+  const [choosing, setChoosing] = useState(false);
   // Whether this folder is a git repository decides what else can be offered:
   // a checkout of its own for the agent, or several agents side by side.
   const [repo, setRepo] = useState<{ repo: boolean; worktree?: boolean; branch?: string | null } | null>(null);
@@ -3906,12 +3910,29 @@ function Start({ client, env, cwd, onBack, onStarted }: {
         const list = accountsFrom(r.profiles);
         setAccounts(list);
         const remembered = prefs.current[env.id]?.account;
-        setKey(list.find((a) => a.key === remembered)?.key ?? list[0]?.key ?? '');
+        // A hidden row cannot be the selected one: it is not on the screen.
+        const seen = new Set(prefs.current[env.id]?.hidden ?? []);
+        setKey(list.find((a) => a.key === remembered && !seen.has(a.key))?.key
+          ?? list.find((a) => !seen.has(a.key))?.key ?? '');
       })
       .catch((e) => setError(e.message));
   }, [client, env.id]);
 
-  const account = accounts?.find((a) => a.key === key) ?? null;
+  const shown = accounts?.filter((a) => !hidden.has(a.key)) ?? null;
+  const account = shown?.find((a) => a.key === key) ?? null;
+
+  const toggleShown = (a: Account) => {
+    const next = new Set(hidden);
+    if (next.has(a.key)) next.delete(a.key); else next.add(a.key);
+    setHidden(next);
+    prefs.current = { ...prefs.current, [env.id]: { ...prefs.current[env.id], hidden: [...next] } };
+    savePrefs(prefs.current);
+    // A row nobody can see cannot be the one that starts.
+    if (next.has(a.key)) {
+      if (a.key === key) setKey(accounts?.find((x) => !next.has(x.key))?.key ?? '');
+      setPicked((p) => { const n = new Set(p); n.delete(a.key); return n; });
+    }
+  };
 
   // The defaults belong to the machine/account, not this browser, so opening
   // the same picker from a phone or laptop starts the same CLI configuration.
@@ -3931,7 +3952,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
       [env.id]: { account: account.key },
     };
     savePrefs(prefs.current);
-    const targets = compare ? (accounts ?? []).filter((a) => picked.has(a.key)) : [account];
+    const targets = compare ? (shown ?? []).filter((a) => picked.has(a.key)) : [account];
     const started: Session[] = [];
     const failed: string[] = [];
     for (const t of targets) {
@@ -3977,12 +3998,21 @@ function Start({ client, env, cwd, onBack, onStarted }: {
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
         <div className="titles"><h1>New session</h1><span className="sub">{cwd}</span></div>
+        {(accounts?.length ?? 0) > 0 && (
+          <button
+            className="iconbtn" title="choose which agents show" aria-label="choose which agents show"
+            onClick={() => setChoosing(true)}
+          ><Sliders /></button>
+        )}
       </div>
       <div className="scroll"><div className="pad column">
         <div className="section">agent</div>
         {accounts === null && <div className="empty quiet">looking for agents…</div>}
+        {shown?.length === 0 && (accounts?.length ?? 0) > 0 && (
+          <div className="empty quiet">every agent is hidden — the sliders above turn them back on</div>
+        )}
         <div className="rows">
-          {accounts?.map((a) => {
+          {shown?.map((a) => {
             const e = engineOf(a.engine);
             return (
               <button
@@ -4054,6 +4084,32 @@ function Start({ client, env, cwd, onBack, onStarted }: {
               : worktree ? `Start ${eng?.label} in a worktree` : `Start ${eng?.label}`}
           </button>
         </div>
+      )}
+      {choosing && (
+        <Sheet onClose={() => setChoosing(false)} label="Choose which agents show">
+          <div className="modal-title">Agents on this screen</div>
+          <div className="modal-body">
+            Checked agents show in the list. Unchecking only hides one here — it stays installed on {env.name}.
+          </div>
+          <div className="sheetlist"><div className="rows">
+            {(accounts ?? []).map((a) => {
+              const e = engineOf(a.engine);
+              const on = !hidden.has(a.key);
+              return (
+                <button key={a.key} className={`row tall${on ? ' active' : ''}`} onClick={() => toggleShown(a)}>
+                  <EngineMark engine={e.cls} />
+                  <span className="grow">
+                    <span className="rt">{e.label} <span className="dim">· {a.account}</span></span>
+                  </span>
+                  {on && <span className="check">✓</span>}
+                </button>
+              );
+            })}
+          </div></div>
+          <div className="modal-actions">
+            <button className="primary" onClick={() => setChoosing(false)}>Done</button>
+          </div>
+        </Sheet>
       )}
     </>
   );

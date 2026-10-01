@@ -10,7 +10,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
  * like a crash report. These are the same question, styled, focusable, and
  * dismissable the way the rest of the app is.
  */
-function Sheet({ children, onClose, label }: { children: ReactNode; onClose: () => void; label: string }) {
+export function Sheet({ children, onClose, label }: { children: ReactNode; onClose: () => void; label: string }) {
   const ref = useDialog(onClose);
   return (
     <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
