@@ -2493,6 +2493,9 @@ export class Sessions extends EventEmitter {
         // turn that finishes during the update stays busy until someone opens
         // the thread, and its queued messages never get delivered.
         reattaching.push(this.#driver(s).then(async (d) => {
+          // Drivers start idle and suppress duplicate status events. Seed the
+          // persisted state so an adopted idle process corrects a stale busy row.
+          d.status = s.status;
           await d.start();
           this.#pump(s);
         }).catch((err) => this.log(`[${s.id}] could not reattach surviving agent: ${err.message}`)));

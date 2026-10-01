@@ -44,7 +44,12 @@ class FakeDriver extends EventEmitter {
     if (type === 'status') this.status = payload.status;
     this.emit('event', { type, ...payload });
   }
-  async start() { this.started = true; }
+  async start() {
+    this.started = true;
+    if (this.procHost?.hasProc?.(this.procId)) this.push('status', {
+      status: this.openTurn?.() ? 'working' : 'idle',
+    });
+  }
   async send(text) {
     if (this.failSend) { this.failSend = false; throw new Error('send refused'); }
     this.sent = (this.sent ?? []).concat(text);
@@ -467,6 +472,7 @@ test('a hosted completed turn is not revived by its optimistic local prompt', as
   const d = FakeDriver.made.at(-1);
   d.push('turn.done', { turnId: 't1', status: 'ok' });
   d.push('status', { status: 'idle' });
+  d.push('status', { status: 'working' }); // A row left busy by an older release.
   const restarted = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, procHost });
   await restarted.resume();
   assert.equal(FakeDriver.made.at(-1).openTurn(), null);
