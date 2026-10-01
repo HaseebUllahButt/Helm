@@ -60,7 +60,16 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     setEarlier(!!logFirst && !!firstSeq.current && logFirst < firstSeq.current);
   }, []);
 
-  const publish = useCallback(() => setState({ ...log.current, turns: log.current.turns, pending: [...log.current.pending] }), []);
+  const paint = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const publish = useCallback(() => {
+    if (paint.current !== null) { clearTimeout(paint.current); paint.current = null; }
+    setState({ ...log.current, turns: log.current.turns, pending: [...log.current.pending] });
+  }, []);
+  // Consume every event immediately, but paint the latest state at most 20
+  // times a second. Fast providers must not saturate a phone's main thread.
+  const publishSoon = useCallback(() => {
+    if (paint.current === null) paint.current = setTimeout(publish, 50);
+  }, [publish]);
 
   const dirty = useRef(false);
   const writer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -213,7 +222,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
           if (ev.seq > log.current.last) raw.current.push(ev);
           apply(log.current, ev);
         }
-        publish();
+        publishSoon();
         persistSoon();
       }
       if (kind === 'connection' && payload?.online) { watch(); fetchSince(log.current.last); }
@@ -221,6 +230,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
 
     return () => {
       stopped = true;
+      if (paint.current !== null) { clearTimeout(paint.current); paint.current = null; }
       clearInterval(renew);
       document.removeEventListener('visibilitychange', onHide);
       window.removeEventListener('pagehide', persist);
@@ -228,7 +238,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
       persist();
       client.rpc(env, 'session.unwatch', { id: sessionId }, 5_000).catch(() => {});
     };
-  }, [client, env, sessionId, fetchSince, publish, persist, persistSoon]);
+  }, [client, env, sessionId, fetchSince, publish, publishSoon, persist, persistSoon]);
 
   return { log: state, error, earlier, loadingEarlier, loadEarlier, refresh: () => fetchSince(log.current.last) };
 }

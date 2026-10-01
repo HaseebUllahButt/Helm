@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { render as Render } from './md';
 
 /**
@@ -60,10 +60,10 @@ function settledEnd(text: string): number {
   return end;
 }
 
-export function Markdown({ text, className = '', live = false }: { text: string; className?: string; live?: boolean }) {
+export const Markdown = memo(function Markdown({ text, className = '', live = false }: { text: string; className?: string; live?: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const ready = useEngine();
-  // While a reply streams it is re-rendered every reveal step, and a whole
+  // While a reply streams it is re-rendered as text arrives, and a whole
   // parse (marked, highlight.js, DOMPurify) of a long reply is tens of ms on
   // a phone - a saturated main thread for as long as the reply lasts. The
   // settled blocks are parsed once and kept; only the growing tail is new
@@ -94,4 +94,4 @@ export function Markdown({ text, className = '', live = false }: { text: string;
 
   if (html == null) return <div ref={host} className={`md raw ${className}`}>{text}</div>;
   return <div ref={host} className={`md ${className}`} dangerouslySetInnerHTML={{ __html: html }} />;
-}
+});

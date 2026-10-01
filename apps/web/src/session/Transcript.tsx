@@ -6,8 +6,7 @@ import { money, seconds } from '../format';
 /**
  * The conversation, live.
  *
- * Text arrives a few words at a time and is shown as it lands, eased so a
- * burst reads as typing rather than popping. Tool calls are one line each
+ * Text is shown as it lands, without an artificial typing queue. Tool calls are one line each
  * while they run and fold their output away when they finish; commands and
  * file changes get a little more room because what they did is the point.
  */
@@ -29,45 +28,11 @@ const shortPath = (p = '') => {
 };
 
 
-/**
- * Show text as it arrives, but never all at once: the visible length chases
- * the real length, faster when it falls behind.
- *
- * The cadence is deliberate. Every step re-renders this message, and a
- * re-render re-parses the whole thing through marked, DOMPurify and the
- * syntax highlighter - 1.5ms for a 3.5KB reply on a laptop, several times
- * that on a phone. Stepping once a frame spent all of it on an effect no
- * one can perceive: tokens arrive from the agent about fifteen times a
- * second, so revealing them twenty times a second is already smoother than
- * the source. Sixty was three times the cost for no visible gain.
- */
-const STEP_MS = 45;
-
-function useTyped(text: string, live: boolean) {
-  const [shown, setShown] = useState(live ? 0 : text.length);
-  const shownRef = useRef(shown);
-  useEffect(() => {
-    if (!live) { shownRef.current = text.length; setShown(text.length); return; }
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) { shownRef.current = text.length; setShown(text.length); return; }
-    if (shownRef.current >= text.length) return;
-    const timer = setInterval(() => {
-      const behind = text.length - shownRef.current;
-      if (behind <= 0) { clearInterval(timer); return; }
-      // Catch up within a few steps however far behind we are, so a burst
-      // of tokens never leaves the reveal trailing the agent.
-      shownRef.current += Math.max(3, Math.ceil(behind / 3));
-      setShown(Math.min(shownRef.current, text.length));
-    }, STEP_MS);
-    return () => clearInterval(timer);
-  }, [text, live]);
-  return live ? text.slice(0, Math.min(shown, text.length)) : text;
-}
-
 // ------------------------------------------------------------------- items
 
 function TextItem({ item, commandOutput }: { item: Item; commandOutput?: boolean }) {
   const live = item.status === 'streaming';
-  const text = useTyped(item.text, live);
+  const text = item.text;
   if (!text && !live) return null;
   return <Markdown text={text} live={live} className={`prose${commandOutput ? ' command-result' : ''}${live ? ' live' : ''}`} />;
 }
