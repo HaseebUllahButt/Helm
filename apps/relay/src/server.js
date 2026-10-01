@@ -125,7 +125,14 @@ export async function startRelay({
       .find((p) => p.startsWith('helm1.')) || null;
 
   server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url, 'http://localhost');
+    // Upgrade listeners are synchronous EventEmitter callbacks: a malformed
+    // request target must not throw out of this handler and kill the hub.
+    let url;
+    try { url = new URL(req.url, 'http://localhost'); }
+    catch {
+      socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      return socket.destroy();
+    }
     // /helm/ws is helm's protocol by any name; /ws is the same endpoint for
     // older clients.
     if (url.pathname !== '/helm/ws' && url.pathname !== '/ws') return socket.destroy();
