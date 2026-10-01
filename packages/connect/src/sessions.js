@@ -11,7 +11,7 @@ import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
 import { optionArgs } from './models.js';
 import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
-import { EventLog } from './events.js';
+import { EventLog, activeTurnFromEvents } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver, canInspectExternalCodex } from './drivers/codex.js';
 import { OpencodeDriver, Opencode2Driver } from './drivers/opencode.js';
@@ -2411,10 +2411,7 @@ export class Sessions extends EventEmitter {
     // A hosted process may still be in its current real turn. Queued local
     // turns can follow it in the log, so use the last real turn, not simply
     // the last open turn, as the one to leave running.
-    const active = processAlive
-      ? [...open].reverse().find((e) => !String(e.turnId).startsWith('local-'))
-        ?? [...open].reverse().find((e) => e.queued !== true)
-      : null;
+    const active = processAlive ? activeTurnFromEvents(tail) : null;
     const revive = [];
     const settle = (turnId, status, error) => {
       if (s.delegation) s.delegation.status = status === 'ok' ? 'done' : status;

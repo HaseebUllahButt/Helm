@@ -109,6 +109,19 @@ test('a page is measured in bytes, and a chat opens on its end', () => {
   assert.equal(log.window('s', { before: back.firstSeq }).logFirst, 1);
 });
 
+test('completed provider echoes and withdrawn tickets are not active local prompts', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  log.append('s', { type: 'turn.start', turnId: 'local-1', text: 'hello', queued: false });
+  assert.equal(log.activeTurn('s').turnId, 'local-1');
+  log.append('s', { type: 'turn.start', turnId: 'real-1', text: 'hello' });
+  assert.equal(log.activeTurn('s').turnId, 'real-1');
+  log.append('s', { type: 'turn.done', turnId: 'real-1', status: 'ok' });
+  assert.equal(log.activeTurn('s'), null);
+  log.append('s', { type: 'turn.start', turnId: 'local-2', text: 'again', queued: false });
+  log.append('s', { type: 'turn.remove', turnId: 'local-2' });
+  assert.equal(log.activeTurn('s'), null);
+});
+
 test('a short conversation is served whole, from its first event', () => {
   const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   log.append('s', { type: 'turn.start', turnId: 't1', text: 'hi' });

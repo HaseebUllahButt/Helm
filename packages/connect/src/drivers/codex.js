@@ -477,7 +477,7 @@ export class CodexDriver extends Driver {
         cliVersion: this.#rolloutState.cliVersion,
       };
       this.#started = true;
-      if (this.#turnId) this.push('status', { status: 'working' });
+      this.push('status', { status: this.pending.size ? 'blocked' : this.#turnId ? 'working' : 'idle' });
       this.emit('init', this.info);
       return;
     }

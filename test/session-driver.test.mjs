@@ -455,6 +455,26 @@ for (const profileId of ['claudea', 'codex']) test(`a surviving ${profileId} pro
   await original.kill(s.id);
 });
 
+test('a hosted completed turn is not revived by its optimistic local prompt', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-completed-hosted-restart');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const procHost = Object.assign(new EventEmitter(), { hasProc: () => true });
+  const original = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, procHost });
+  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  await original.input(s.id, 'finished turn');
+  const d = FakeDriver.made.at(-1);
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+  const restarted = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, procHost });
+  await restarted.resume();
+  assert.equal(FakeDriver.made.at(-1).openTurn(), null);
+  assert.equal(restarted.get(s.id).status, 'idle');
+  await restarted.kill(s.id);
+  await original.kill(s.id);
+});
+
 test('a caller-chosen turn id makes a retried input a no-op', async () => {
   // The code handoff delivers its first prompt under a deterministic turn
   // id so a retry after a failed RPC answers success without re-prompting.

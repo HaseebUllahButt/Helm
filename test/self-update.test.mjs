@@ -57,6 +57,8 @@ test('restart guard recognizes Codex threads in their shared account process', (
   assert.deepEqual(unsafeRestartSessions(sessions, (id) => id === procId, profiles), []);
   assert.deepEqual(unsafeRestartSessions(sessions, () => false, profiles), sessions);
   assert.deepEqual(unsafeRestartSessions(sessions, () => false), sessions);
+  const blocked = sessions.map((s) => ({ ...s, status: 'blocked' }));
+  assert.deepEqual(unsafeRestartSessions(blocked, (id) => id === procId, profiles), blocked);
 });
 
 test('a current checkout is a no-op', async () => {
