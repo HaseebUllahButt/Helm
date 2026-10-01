@@ -24,7 +24,7 @@ import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
-import { describe as describeAsk } from './notify.js';
+import { describe as describeAsk, describeDone } from './notify.js';
 import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
@@ -786,14 +786,8 @@ export class Daemon {
    * the thread's name and that it finished, nothing more.
    */
   #notifyDone(session) {
-    const where = session.title || session.cwd?.split('/').pop() || 'a session';
     this.broadcastFrame(T.NOTIFY, {
-      payload: {
-        title: `${where} · finished`,
-        body: `${session.engine ?? 'the agent'} is done`,
-        tag: `helm-done-${session.id}-${Date.now()}`,
-        envId: this.id, sessionId: session.id,
-      },
+      payload: describeDone({ ...session, envId: this.id }),
     });
   }
 
@@ -1033,6 +1027,7 @@ export class Daemon {
         return { ...(await this.describe()), name: this.name };
 
       case M.GIT_STATUS: return gitq.status(p.cwd);
+      case M.GIT_GRAPH: return gitq.graph(p.cwd, await this.sessions.list());
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
       case M.GIT_WORKTREE: return gitq.addWorktree(p.cwd, p.name);
       case M.GIT_PR: return { pr: await gitq.pullRequest(p.cwd) };

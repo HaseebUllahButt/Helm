@@ -188,11 +188,11 @@ self.addEventListener('push', (event) => {
       const v = viewing.get(client.id);
       if (v && v.sessionId === data.sessionId && v.envId === data.envId) return;
     }
-    await self.registration.showNotification(data.title || 'A session needs you', {
+    await self.registration.showNotification(data.title || 'Helm · Your agent needs you', {
       body: data.body || '',
       tag: data.tag || 'helm',
       renotify: true,
-      requireInteraction: true,
+      requireInteraction: !data.tag?.startsWith('helm-done-'),
       icon: '/icon-192.png',
       badge: '/favicon-32.png',
       data,

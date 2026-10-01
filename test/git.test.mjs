@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
  * status says what changed and by how much, a diff is only ever of a file
  * inside the folder, and a worktree is a new folder on a new derived branch.
  */
-const { status, diff, addWorktree } = await import('../packages/connect/src/git.js');
+const { status, diff, addWorktree, graph } = await import('../packages/connect/src/git.js');
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
 const repo = () => {
@@ -121,4 +121,64 @@ test('a linked worktree knows the repository it belongs to; nothing else does', 
   assert.equal(worktreeBase(mkdtempSync(join(tmpdir(), 'helm-nogit-'))), null, 'nor is a plain folder');
   assert.equal(worktreeBase('/definitely/not/here'), null, 'nor a folder that is not there');
   rmSync(w.path, { recursive: true, force: true });
+});
+
+test('the graph preserves branch and merge ancestry, including a detached checkout', async () => {
+  const dir = repo();
+  const base = git(dir, 'rev-parse', 'HEAD');
+  git(dir, 'checkout', '-qb', 'feature');
+  git(dir, 'commit', '--allow-empty', '-qm', 'feature work');
+  const feature = git(dir, 'rev-parse', 'HEAD');
+  git(dir, 'checkout', '-q', 'main');
+  git(dir, 'commit', '--allow-empty', '-qm', 'main work');
+  const main = git(dir, 'rev-parse', 'HEAD');
+  git(dir, 'merge', '--no-ff', '-qm', 'merge feature', 'feature');
+  const result = await graph(dir);
+  assert.equal(result.commits[0].subject, 'merge feature');
+  assert.deepEqual(result.commits[0].parents, [main, feature]);
+  assert.ok(result.commits.find((c) => c.hash === feature).refs.includes('feature'));
+  assert.ok(result.commits.find((c) => c.hash === main).parents.includes(base));
+  git(dir, 'checkout', '--detach', '-q', feature);
+  git(dir, 'commit', '--allow-empty', '-qm', 'detached work');
+  const detached = git(dir, 'rev-parse', 'HEAD');
+  const detachedResult = await graph(dir);
+  assert.ok(detachedResult.commits.some((c) => c.hash === detached));
+  assert.equal(detachedResult.worktrees[0].branch, null);
+});
+
+test('live agents map to the exact checkout, including subfolders and symlinks', async () => {
+  const dir = repo();
+  const w = await addWorktree(dir, 'feature');
+  mkdirSync(join(w.path, 'src'));
+  const link = join(dir, '..', 'alias');
+  symlinkSync(w.path, link);
+  const nested = join(dir, 'other-repo');
+  mkdirSync(nested);
+  git(nested, 'init', '-q', '-b', 'main');
+  const session = (id, cwd, extra = {}) => ({ id, cwd, title: id, engine: 'codex', profileId: 'codex-main', status: 'working', alive: true, ...extra });
+  const sessions = [session('main', dir), session('feature', join(w.path, 'src')),
+    session('alias', link, { status: 'blocked' }), session('archived', dir, { archived: true }),
+    session('closed', dir, { alive: false, status: 'idle' }), session('brain', dir, { brain: true }),
+    session('terminal', dir, { engine: 'shell' }), session('nested', nested), session('missing', '/not/here')];
+  const result = await graph(dir, sessions);
+  assert.deepEqual(result.worktrees.find((x) => x.current).agents.map((a) => a.id), ['main']);
+  assert.deepEqual(result.worktrees.find((x) => x.branch === w.branch).agents.map((a) => a.id), ['alias', 'feature']);
+  const fromWorktree = await graph(join(w.path, 'src'), sessions);
+  assert.equal(fromWorktree.worktrees.find((x) => x.current).branch, w.branch);
+  rmSync(w.path, { recursive: true, force: true });
+});
+
+test('the graph handles an unborn repository and bounds large histories', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-unborn-'));
+  git(dir, 'init', '-q', '-b', 'main');
+  const empty = await graph(dir);
+  assert.deepEqual(empty.commits, []);
+  assert.equal(empty.worktrees[0].head, null);
+  assert.equal(empty.worktrees[0].branch, 'main');
+  assert.equal((await graph(mkdtempSync(join(tmpdir(), 'helm-nogit-')))).repo, false);
+  const full = repo();
+  for (let i = 0; i < 82; i++) git(full, 'commit', '--allow-empty', '-qm', `commit ${i}`);
+  const bounded = await graph(full);
+  assert.equal(bounded.commits.length, 80);
+  assert.equal(bounded.truncated, true);
 });

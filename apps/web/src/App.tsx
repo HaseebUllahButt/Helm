@@ -8,6 +8,7 @@ import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { DrivenSession } from './session/DrivenSession';
 import { EngineMark } from './EngineMark';
+import { NotificationToast } from './NotificationToast';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import {
@@ -1298,19 +1299,8 @@ function Shell({ client, conn, onSignOut }: {
       {/* Another thread started waiting while this one was open. A tap on
           the toast is the whole journey to answering it. */}
       {toast && (
-        <button
-          className="toast"
-          aria-label={`${toast.session.title || 'A session'} needs you on ${envs.find((e) => e.id === toast.envId)?.name ?? 'a machine'}`}
-          title={toast.session.title}
-          onClick={() => { const t = toast; setToast(null); openSession(t.envId, t.session); }}
-        >
-          <i className="sdot blocked" />
-          <span className="toast-copy">
-            <b>{toast.session.title}</b>
-            <small>{envs.find((e) => e.id === toast.envId)?.name ?? 'a machine'} · {ENGINE[toast.session.engine]?.label ?? toast.session.engine} needs you</small>
-          </span>
-          <span className="chev">›</span>
-        </button>
+        <NotificationToast session={toast.session} onDismiss={() => setToast(null)}
+          onOpen={() => { const t = toast; setToast(null); openSession(t.envId, t.session); }} />
       )}
 
       {snoozeUndo && (
@@ -3890,19 +3880,6 @@ function Start({ client, env, cwd, onBack, onStarted }: {
   // remembered account in the same per-machine slot.
   const [hidden, setHidden] = useState<Set<string>>(() => new Set(prefs.current[env.id]?.hidden ?? []));
   const [choosing, setChoosing] = useState(false);
-  // Whether this folder is a git repository decides what else can be offered:
-  // a checkout of its own for the agent, or several agents side by side.
-  const [repo, setRepo] = useState<{ repo: boolean; worktree?: boolean; branch?: string | null } | null>(null);
-  const [worktree, setWorktree] = useState(false);
-  const [compare, setCompare] = useState(false);
-  const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [task, setTask] = useState('');
-  /** What did start, when something in a comparison did not. */
-  const [began, setBegan] = useState<Session | null>(null);
-  useEffect(() => {
-    client.rpc<{ repo: boolean; worktree?: boolean; branch?: string | null }>(env.id, 'git.status', { cwd }, 15_000)
-      .then(setRepo).catch(() => setRepo({ repo: false }));
-  }, [client, env.id, cwd]);
 
   useEffect(() => {
     client.rpc(env.id, 'profile.list')
@@ -3930,7 +3907,6 @@ function Start({ client, env, cwd, onBack, onStarted }: {
     // A row nobody can see cannot be the one that starts.
     if (next.has(a.key)) {
       if (a.key === key) setKey(accounts?.find((x) => !next.has(x.key))?.key ?? '');
-      setPicked((p) => { const n = new Set(p); n.delete(a.key); return n; });
     }
   };
 
@@ -3949,46 +3925,17 @@ function Start({ client, env, cwd, onBack, onStarted }: {
     setBusy(true); setError('');
     prefs.current = {
       ...prefs.current,
-      [env.id]: { account: account.key },
+      [env.id]: { ...prefs.current[env.id], account: account.key },
     };
     savePrefs(prefs.current);
-    const targets = compare ? (shown ?? []).filter((a) => picked.has(a.key)) : [account];
-    const started: Session[] = [];
-    const failed: string[] = [];
-    for (const t of targets) {
-      try {
-        // Two agents in one folder step on each other's edits, so a
-        // comparison always gives each its own checkout.
-        let dir = cwd;
-        if (worktree || compare) {
-          const w = await client.rpc<{ path: string }>(env.id, 'git.worktree', {
-            cwd, name: compare ? `${engineOf(t.engine).label} ${t.account}` : 'task',
-          }, 60_000);
-          dir = w.path;
-        }
-        // The chosen account's own choices; the ones on screen are for the
-        // account you are looking at, which in a comparison is not every one.
-        const own = t === account;
-        const r = await client.rpc<{ session: Session }>(env.id, 'session.start', {
-          cwd: dir, profileId: t.profile.id,
-          model: (own ? model : t.prefs?.default ?? '') || undefined,
-          effort: (own ? effort : t.defaults?.effort ?? '') || undefined,
-          mode: (own ? mode : t.defaults?.mode ?? '') || undefined,
-          speed: (own ? speed : t.defaults?.speed ?? '') || undefined,
-        }, 70_000);
-        if (compare && task.trim()) {
-          await client.rpc(env.id, 'session.input', { id: r.session.id, data: task.trim() }, 70_000);
-        }
-        started.push(r.session);
-      } catch (e: any) { failed.push(`${engineOf(t.engine).label}: ${e.message}`); }
-    }
-    // A failure has to be readable. Moving on to the agent that did start
-    // would unmount this screen and take the reason with it.
-    if (failed.length) {
-      setError(`${failed.join('\n')}${started.length ? `\n${started.length} did start.` : ''}`);
-      setBegan(started[0] ?? null);
-      setBusy(false);
-    } else if (started.length) onStarted(started[0]);
+    try {
+      const r = await client.rpc<{ session: Session }>(env.id, 'session.start', {
+        cwd, profileId: account.profile.id,
+        model: model || undefined, effort: effort || undefined,
+        mode: mode || undefined, speed: speed || undefined,
+      }, 70_000);
+      onStarted(r.session);
+    } catch (e: any) { setError(e.message); setBusy(false); }
   };
 
   const eng = account ? engineOf(account.engine) : null;
@@ -4017,17 +3964,14 @@ function Start({ client, env, cwd, onBack, onStarted }: {
             return (
               <button
                 key={a.key} title={a.aliases.join(', ')}
-                className={`row tall${(compare ? picked.has(a.key) : a.key === key) ? ' active' : ''}`}
-                onClick={() => {
-                  setKey(a.key);
-                  if (compare) setPicked((p) => { const n = new Set(p); if (n.has(a.key)) n.delete(a.key); else n.add(a.key); return n; });
-                }}
+                className={`row tall${a.key === key ? ' active' : ''}`}
+                onClick={() => setKey(a.key)}
               >
                 <EngineMark engine={e.cls} />
                 <span className="grow">
                   <span className="rt">{e.label} <span className="dim">· {a.account}</span>{a.token && <span className="tag key">token</span>}</span>
                 </span>
-                {(compare ? picked.has(a.key) : a.key === key) && <span className="check">✓</span>}
+                {a.key === key && <span className="check">✓</span>}
               </button>
             );
           })}
@@ -4039,35 +3983,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
           </div>
         )}
 
-        {repo?.repo && (
-          <div className="startopts">
-            <div className="section">where</div>
-            <div className="segmented">
-              <button className={!compare ? 'on' : ''} onClick={() => setCompare(false)}>One agent</button>
-              <button className={compare ? 'on' : ''} onClick={() => { setCompare(true); setPicked(new Set(key ? [key] : [])); }}>Several, to compare</button>
-            </div>
-            {!compare && (
-              <label className="check-row">
-                <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} />
-                <span>
-                  Its own worktree
-                  <small>A separate folder on a new branch{repo.branch ? `, from ${repo.branch}` : ''}, so its edits stay out of your checkout.</small>
-                </span>
-              </label>
-            )}
-            {compare && (
-              <>
-                <p className="note">Pick two or more agents above. Each gets its own worktree and the same task, so you can read their answers side by side.</p>
-                <textarea
-                  className="taskbox" rows={3} value={task} onChange={(e) => setTask(e.target.value)}
-                  placeholder="What should they all do?"
-                />
-              </>
-            )}
-          </div>
-        )}
         {error && <div className="error" style={{ whiteSpace: 'pre-line' }}>{error}</div>}
-        {began && <button className="linkish" onClick={() => onStarted(began)}>Open the one that started ›</button>}
       </div></div>
       {/* Pinned, because the choice is already made - the last account you
           used is selected - and thirteen rows should not push the only
@@ -4076,12 +3992,10 @@ function Start({ client, env, cwd, onBack, onStarted }: {
         <div className="startbar">
           <button
             className="primary big"
-            disabled={busy || (compare && (picked.size < 1 || !task.trim()))}
+            disabled={busy}
             onClick={start}
           >
-            {busy ? 'starting…'
-              : compare ? `Start ${picked.size} agent${picked.size === 1 ? '' : 's'}`
-              : worktree ? `Start ${eng?.label} in a worktree` : `Start ${eng?.label}`}
+            {busy ? 'starting…' : `Start ${eng?.label}`}
           </button>
         </div>
       )}

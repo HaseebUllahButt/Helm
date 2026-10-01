@@ -109,6 +109,7 @@ export const M = {
   MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }
   // What a session did to its folder, as git sees it.
   GIT_STATUS: 'git.status',        // { cwd } -> { repo, branch?, ahead?, behind?, files[], worktree?, head? }
+  GIT_GRAPH: 'git.graph',          // { cwd } -> bounded commit ancestry and live agents by checkout
   GIT_DIFF: 'git.diff',            // { cwd, path } -> { path, diff, truncated }
   GIT_WORKTREE: 'git.worktree',    // { cwd, name? } -> { path, branch, base }  a sibling checkout on a new branch
   GIT_PR: 'git.pr',                // { cwd } -> the branch's pull request, or null

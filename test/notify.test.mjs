@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-notify-'));
 
-const { describe: describeAsk } = await import('../packages/connect/src/notify.js');
+const { describe: describeAsk, describeDone } = await import('../packages/connect/src/notify.js');
 const { fanOut, isNew, forget } = await import('../apps/relay/src/notify.js');
 
 /** A stand-in for FCM or APNs: records what it was sent, answers as told. */
@@ -61,17 +61,33 @@ test('one notification per request, however many times the event is seen', () =>
   assert.equal(isNew('s1:req-2'), true);
 });
 
-test('the notification says which session, and what it is asking', () => {
+test('a notification is branded and concise, with full command details left in the chat', () => {
   const n = describeAsk(
     { id: 's1', title: 'aitink', engine: 'codex', cwd: '/home/me/aitink', envId: 'env1' },
     { type: 'permission.request', requestId: 'r7', command: 'rm -rf build' },
   );
-  assert.equal(n.title, 'aitink · codex needs you');
-  assert.equal(n.body, 'run rm -rf build');
+  assert.equal(n.title, 'Helm · Codex needs approval');
+  assert.equal(n.body, 'aitink');
   assert.equal(n.tag, 'helm-s1-r7');
   // The tap has to land on the session that asked, so both halves travel.
   assert.equal(n.envId, 'env1');
   assert.equal(n.sessionId, 's1');
+});
+
+test('questions, plans and completions have distinct human labels', () => {
+  const session = { id: 's1', title: 'Fix login', engine: 'claude', envId: 'e1' };
+  assert.equal(describeAsk(session, { kind: 'question', question: 'A long question' }).title, 'Helm · Claude Code has a question');
+  assert.equal(describeAsk(session, { kind: 'plan' }).title, 'Helm · Claude Code has a plan to review');
+  const done = describeDone(session, 123);
+  assert.deepEqual(done, { title: 'Helm · Claude Code finished', body: 'Fix login', tag: 'helm-done-s1-123', envId: 'e1', sessionId: 's1' });
+});
+
+test('notification context removes addresses and paths and bounds long session titles', () => {
+  const session = { id: 's1', engine: 'codex', title: 'Check https://private.test/path /home/me/project localhost:4317 192.168.1.1:3000' };
+  assert.equal(describeAsk(session, { command: 'curl https://secret.test', detail: '/home/me/file' }).body, 'Check');
+  assert.equal(describeDone({ ...session, title: 'x'.repeat(200) }).body.length, 72);
+  assert.equal(describeAsk({ cwd: '/home/me/project' }, {}).body, 'project');
+  assert.equal(describeAsk({ title: '/home/me/project' }, {}).body, 'Your chat');
 });
 
 test('a push service that never answers does not hold anything up', async () => {

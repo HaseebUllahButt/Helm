@@ -1270,22 +1270,25 @@ button.primary.danger { background: color-mix(in srgb, var(--red) 22%, var(--rai
    a different session. */
 .toast {
   position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 58px); transform: translateX(-50%);
-  z-index: 55; display: flex; align-items: center; gap: 12px; width: min(440px, calc(100vw - 28px));
-  padding: 12px 14px; border-radius: 12px; text-align: left;
-  background: color-mix(in srgb, var(--amber) 8%, var(--toast-bg));
-  border: 1px solid color-mix(in srgb, var(--amber) 32%, transparent);
-  box-shadow: 0 18px 52px -14px rgb(0 0 0 / 82%), 0 2px 8px rgb(0 0 0 / 35%);
+  z-index: 55; display: flex; align-items: center; width: min(400px, calc(100vw - 24px));
+  padding: 5px; border-radius: var(--radius-xl); text-align: left;
+  background: var(--toast-bg); border: 1px solid var(--line-2);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 25%);
   animation: toast-in 0.25s var(--ease);
 }
 @keyframes toast-in { from { opacity: 0; transform: translateX(-50%) translateY(-8px); } }
-.toast .toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.toast-open { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; padding: 9px; text-align: left; border: 0; background: transparent; color: var(--text); }
+.toast .toast-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.toast-brand { display: flex; gap: 8px; font-size: var(--t-micro); font-weight: 650; color: var(--text-dim); }
+.toast-brand span { color: var(--amber); font-weight: 450; }
+.toast-dismiss { flex: none; width: 36px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--mutedfg); font-size: 22px; }
+.toast-dismiss:hover { color: var(--text); }
 .toast b {
   display: -webkit-box; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--t-body); font-weight: 550;
   line-height: 1.35; white-space: normal; overflow-wrap: anywhere; text-overflow: ellipsis;
   -webkit-box-orient: vertical; -webkit-line-clamp: 2;
 }
-.toast small { display: block; overflow: hidden; color: var(--text-dim); font-size: var(--t-meta); text-overflow: ellipsis; white-space: nowrap; }
-.toast .chev { color: var(--amber); font-size: 17px; flex: none; }
+.toast .chev { color: var(--mutedfg); font-size: 17px; flex: none; }
 
 /* Pull-to-refresh: a spacer that grows under the finger, then the release
    hint once it is far enough to count. */
@@ -1669,6 +1672,48 @@ button.sheet-editlink:hover { color: var(--text); }
 .changes { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg); animation: screen-in 0.16s var(--ease); }
 .changesbtn { position: relative; }
 .changesbtn.has { color: var(--text-dim); }
+.git-tabs { display: flex; gap: 20px; padding: 0 20px; border-bottom: 1px solid var(--line); }
+.git-tabs button { padding: 12px 0; border: 0; border-radius: 0; background: transparent; color: var(--mutedfg); border-bottom: 2px solid transparent; font-size: var(--t-body); }
+.git-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--primary-q); }
+.git-tabs button span { margin-left: 5px; font: var(--t-micro) var(--mono); color: var(--mutedfg); }
+.git-presence { margin-bottom: 24px; }
+.git-presence .section { display: flex; justify-content: space-between; }
+.git-checkout { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.git-checkout-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-width: 0; margin-bottom: 9px; }
+.git-checkout-head b { font: 550 var(--t-meta) var(--mono); overflow-wrap: anywhere; }
+.git-branch-symbol { color: var(--primary-q); font-size: 20px; }
+.git-checkout-head small { color: var(--mutedfg); font-size: var(--t-micro); overflow-wrap: anywhere; }
+.git-agents { display: flex; flex-direction: column; gap: 6px; }
+.git-agent { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--text-dim); background: var(--card); text-align: left; font-size: var(--t-meta); }
+.git-agent:hover:not(:disabled) { border-color: var(--line-2); background: var(--hover); }
+.git-agent:disabled { opacity: 1; cursor: default; }
+.git-agent-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-agent-name { color: var(--text-80); font-weight: 550; }
+.git-agent-state { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--mutedfg); font-size: var(--t-micro); }
+.git-agent-state i { width: 5px; height: 5px; border-radius: 50%; background: var(--mutedfg); }
+.git-agent.working .git-agent-state { color: var(--sky); }
+.git-agent.working .git-agent-state i { background: var(--sky); }
+.git-agent.blocked .git-agent-state { color: var(--amber); }
+.git-agent.blocked .git-agent-state i { background: var(--amber); }
+.git-shared { margin-top: 7px; color: var(--mutedfg); font-size: var(--t-micro); }
+.git-history { overflow-x: auto; overscroll-behavior-x: contain; margin-top: 8px; padding-bottom: 6px; }
+.git-commit { display: flex; height: 72px; min-width: max-content; }
+.git-lanes { flex: none; display: block; }
+.git-lane { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.git-node { fill: var(--bg); stroke: currentColor; stroke-width: 2; }
+.lane-0 { color: var(--primary-q); }
+.lane-1 { color: var(--sky); }
+.lane-2 { color: var(--emerald); }
+.lane-3 { color: var(--amber); }
+.git-commit-copy { min-width: 180px; width: 0; flex: 1; padding: 9px 6px 0 8px; }
+.git-commit-subject { color: var(--text-80); font-size: var(--t-body); line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-commit-meta { display: flex; align-items: center; gap: 8px; height: 20px; color: var(--mutedfg); font-size: var(--t-micro); overflow: hidden; white-space: nowrap; }
+.git-commit-meta code { color: var(--text-dim); font-family: var(--mono); }
+.git-ref { padding: 0 5px; border-radius: 3px; background: var(--accent); color: var(--primary-q); font: 11px/18px var(--mono); }
+.git-commit-agents { display: flex; gap: 4px; height: 22px; overflow: hidden; }
+.git-agent.compact { padding: 1px 5px; max-width: 180px; font-size: var(--t-micro); gap: 5px; }
+.git-agent.compact .git-agent-state { font-size: 10px; }
+.git-agent.compact .mark { width: 16px; height: 16px; border-radius: 4px; }
 .cbadge {
   position: absolute; top: 0; right: -2px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -1713,14 +1758,11 @@ button.sheet-editlink:hover { color: var(--text); }
 .filediff .diff { max-height: 60vh; overflow: auto; }
 
 
-/* ---------------------------------------------------------------- start options */
+/* ---------------------------------------------------------------- checkboxes */
 
-.startopts { margin-top: 6px; }
-.startopts .segmented { margin-bottom: 10px; }
 .check-row { display: flex; gap: 12px; align-items: flex-start; padding: 6px 2px; font-size: var(--t-body); cursor: pointer; }
 .check-row input { width: 20px; height: 20px; margin-top: 2px; padding: 0; flex: none; accent-color: var(--primary); }
 .check-row small { display: block; color: var(--mutedfg); font-size: var(--t-meta); line-height: 1.45; margin-top: 2px; }
-.taskbox { resize: none; min-height: 84px; line-height: 1.5; }
 
 
 /* ------------------------------------------------------------------ palette */

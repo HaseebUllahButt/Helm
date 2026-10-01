@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { stat, readFile } from 'node:fs/promises';
+import { stat, readFile, realpath } from 'node:fs/promises';
 import { existsSync, statSync, readFileSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { expand, collapse } from './paths.js';
@@ -105,6 +105,61 @@ export async function status(cwd) {
     files: files.slice(0, FILE_LIMIT),
     more: Math.max(0, files.length - FILE_LIMIT),
   };
+}
+
+/** Bounded commit ancestry and live agents in each checkout of this repository. */
+export async function graph(cwd, sessions = []) {
+  const dir = await folder(cwd);
+  const root = await toplevel(dir);
+  if (!root) return { repo: false, commits: [], worktrees: [] };
+  const limit = 80;
+  const [log, raw, current] = await Promise.all([
+    git(root, ['log', '--all', '--topo-order', `--max-count=${limit + 1}`, '--format=%H%x00%P%x00%s%x00%an%x00%aI%x00%D']).catch(async (error) => {
+      // An unborn repository still has a checkout and can have working agents.
+      const refs = await git(root, ['show-ref']).catch(() => '');
+      if (!refs.trim()) return '';
+      throw error;
+    }),
+    git(root, ['worktree', 'list', '--porcelain', '-z']),
+    realpath(root),
+  ]);
+  const commits = log.trimEnd().split('\n').filter(Boolean).map((line) => {
+    const [hash, parents, subject, author, date, refs] = line.split('\0');
+    return { hash, parents: parents ? parents.split(' ') : [], subject, author, date,
+      refs: refs ? refs.split(', ') : [] };
+  });
+  const worktrees = [];
+  let entry = null;
+  for (const field of raw.split('\0')) {
+    if (field.startsWith('worktree ')) {
+      entry = { path: field.slice(9), head: null, branch: null, agents: [] };
+      worktrees.push(entry);
+    } else if (entry && field.startsWith('HEAD ')) {
+      entry.head = /^0+$/.test(field.slice(5)) ? null : field.slice(5);
+    } else if (entry && field.startsWith('branch ')) {
+      entry.branch = field.slice(7).replace(/^refs\/heads\//, '');
+    }
+  }
+  const roots = await Promise.all(worktrees.map((w) => realpath(w.path).catch(() => null)));
+  const live = sessions.filter((s) => !s.archived && !s.brain && s.engine !== 'shell'
+    && !['done', 'exited'].includes(s.status)
+    && (s.alive === true || s.externalActive === true || ['working', 'blocked'].includes(s.status)));
+  await Promise.all(live.map(async (s) => {
+    if (!s.cwd) return;
+    const path = await realpath(resolve(expand(s.cwd))).catch(() => null);
+    if (!path) return;
+    // Longest match matters when a linked checkout lives inside another one.
+    const at = roots.map((r, i) => ({ r, i })).filter(({ r }) => r && (path === r || path.startsWith(`${r}/`)))
+      .sort((a, b) => b.r.length - a.r.length)[0]?.i;
+    if (at == null) return;
+    const sessionRoot = await toplevel(path);
+    if (!sessionRoot || await realpath(sessionRoot).catch(() => null) !== roots[at]) return;
+    worktrees[at].agents.push({ id: s.id, title: s.title, engine: s.engine,
+      profileId: s.profileId, status: s.status, cwd: collapse(path) });
+  }));
+  return { repo: true, commits: commits.slice(0, limit), truncated: commits.length > limit,
+    worktrees: worktrees.map((w, i) => ({ ...w, path: collapse(w.path), current: roots[i] === current,
+      agents: w.agents.sort((a, b) => a.id.localeCompare(b.id)) })) };
 }
 
 /** One file's change against HEAD, as unified diff text. */

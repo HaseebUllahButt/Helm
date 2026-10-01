@@ -16,6 +16,29 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-01 — Start, Git graph and notifications
+
+The start screen now chooses one account and opens it in the selected folder.
+Worktree isolation belongs to the agent's task workflow; the worktree RPC remains,
+but the worktree checkbox and comparison launcher are removed.
+
+The chat's Git button opens Graph and Changes tabs. `git.graph` returns the latest
+80 commits with parent links and live sessions grouped by their actual checkout
+(including linked worktrees, subfolders and symlinks). Agent markers open their
+threads; shared checkouts are labelled. Presence refreshes on session changes and
+every 15 seconds. This represents session folders, not ownership of individual edits.
+
+Push previews and dismissible in-app cards share concise Helm branding. Commands,
+paths and addresses stay out of previews; full approval details remain in chat.
+Completion notifications no longer request persistent display. Browser-controlled
+origin labels still belong to the browser, not Helm's notification content.
+
+Local validation: TypeScript/build, 545 Node tests with `--test-concurrency=4`,
+13 browser tests and network integration passed. Default parallel `npm run check`
+intermittently fails terminal-host startup tests, which pass alone and at reduced
+concurrency. Desktop/phone layouts were inspected; real-device push delivery was
+not exercised.
+
 ## What this is for
 
 **The problem.** Coding agents constantly need input. You give one a task, walk

@@ -389,8 +389,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {git.status?.repo && !session.brain && (
           <button
             className={`iconbtn changesbtn${changed ? ' has' : ''}`}
-            title={changed ? `${changed} changed file${changed === 1 ? '' : 's'}` : 'no changes yet'}
-            aria-label={changed ? `${changed} changed files` : 'changes'}
+            title={changed ? `Git · ${changed} changed file${changed === 1 ? '' : 's'}` : 'Git graph and agents'}
+            aria-label="Git graph and changes"
             onClick={() => setShowChanges(true)}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -504,6 +504,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         <ChangesPanel
           client={client} env={env} cwd={session.cwd} status={git.status} reload={git.reload}
           onClose={() => setShowChanges(false)}
+          onOpen={onOpenSession ? (s) => { setShowChanges(false); onOpenSession(s); } : undefined}
         />
       )}
 
