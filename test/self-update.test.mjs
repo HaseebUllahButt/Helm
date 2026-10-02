@@ -11,7 +11,9 @@ import { execFileSync } from 'node:child_process';
  * ~/.helm-src. rebuild and restart stay off - they are npm and systemd, and
  * what needs proving here is that only a clean main checkout ever moves.
  */
-const { selfUpdate, unsafeRestartSessions } = await import('../packages/connect/src/update.js');
+// The update lock lives in HELM_DIR; never the real one from a test.
+process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-update-dir-'));
+const { selfUpdate, unsafeRestartSessions, autoUpdate, currentVersion } = await import('../packages/connect/src/update.js');
 const { codexProcId } = await import('../packages/connect/src/hosted-process.js');
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
@@ -106,7 +108,6 @@ test('a directory that is not a checkout is reported, not crashed', async () => 
 
 // ------------------------------------------------------------- what the app is told
 
-const { currentVersion } = await import('../packages/connect/src/update.js');
 
 test('the machine list is told which commit runs, and whether the app may update it', async () => {
   const { remote, installed } = make();
@@ -145,4 +146,48 @@ test('commits made here and not pushed are never reset away', async () => {
   assert.equal(r.updated, false);
   assert.match(r.reason, /1 commit not pushed/);
   assert.equal(git(installed, ['rev-parse', 'HEAD']), head, 'the local commit survives');
+});
+
+test('one update at a time: a second caller is turned away, and the lock clears after', async () => {
+  const { remote, installed } = make();
+  commit(remote, 'two');
+  const [a, b] = await Promise.all([update(installed), update(installed)]);
+  const results = [a, b].map((r) => r.updated ? 'updated' : r.reason);
+  assert.deepEqual(results.sort(), ['an update is already running', 'updated']);
+  commit(remote, 'three');
+  assert.equal((await update(installed)).updated, true, 'the lock is released');
+});
+
+test('a lock left by a crashed update goes stale instead of blocking forever', async () => {
+  const { remote, installed } = make();
+  commit(remote, 'two');
+  const lock = join(process.env.HELM_DIR, 'update.lock');
+  writeFileSync(lock, '');
+  assert.equal((await update(installed)).reason, 'an update is already running');
+  const old = new Date(Date.now() - 31 * 60_000);
+  (await import('node:fs')).utimesSync(lock, old, old);
+  assert.equal((await update(installed)).updated, true);
+});
+
+test('the daemon checks on its own only as a systemd service, and not twice in a row', async () => {
+  const saved = { ...process.env };
+  let runs = 0;
+  const run = async () => { runs += 1; return { updated: false, reason: 'already at x' }; };
+  try {
+    delete process.env.HELM_NO_SERVICE; delete process.env.HELM_NO_UPDATE; delete process.env.INVOCATION_ID;
+    assert.equal(await autoUpdate({ run, now: 1e12 }), null, 'a foreground helm up never updates itself');
+    process.env.INVOCATION_ID = 'x';
+    process.env.HELM_NO_UPDATE = '1';
+    assert.equal(await autoUpdate({ run, now: 1e12 }), null);
+    delete process.env.HELM_NO_UPDATE;
+    // This dev checkout is not a clean main checkout, so even a service stops
+    // at the guard - which is the point: it never touches a working tree.
+    const v = await currentVersion();
+    const first = await autoUpdate({ run, now: 2e12 });
+    if (v?.updatable) assert.equal(runs, 1); else assert.equal(first.reason, 'not an updatable checkout');
+    assert.equal(await autoUpdate({ run, now: 2e12 + 60_000 }), null, 'too soon after the last check');
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
 });

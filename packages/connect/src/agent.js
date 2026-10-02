@@ -32,7 +32,7 @@ import { transcribe, canTranscribe } from './voice.js';
 import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
 import { Handoffs } from './handoffs.js';
 import { Transfers } from './transfers.js';
-import { selfUpdate, currentVersion } from './update.js';
+import { selfUpdate, currentVersion, autoUpdate } from './update.js';
 import * as gitq from './git.js';
 import { agentCatalog, delegationNote } from './delegation.js';
 
@@ -45,6 +45,15 @@ const RECONCILE_MS = 15_000;
 /** How often the brain's picture of the network is refreshed, while one exists. */
 const BRAIN_REFRESH_MS = 45_000;
 const HEARTBEAT_MS = 20_000;
+/** Cache warm-ups wait this long, so they never compete with coming online. */
+const WARM_DELAY_MS = 2_000;
+/** The first quiet update check, once startup has settled. */
+const UPDATE_AFTER_START_MS = 20_000;
+/** A gap this long between ticks means the machine slept. */
+const WAKE_TICK_MS = 60_000;
+const WAKE_GAP_MS = 5 * 60_000;
+/** Disconnected from every other hub this long, then back: check for an update. */
+const BACK_ONLINE_MS = 10 * 60_000;
 
 /**
  * One connection to one hub.
@@ -169,6 +178,7 @@ class Link {
       clearInterval(this.#beat);
       if (this.#stopped) return;
       if (was) console.log(`[helm] lost ${this.url}; retrying`);
+      if (was) this.daemon.linkDown?.();
       setTimeout(() => this.#open(), this.#backoff).unref?.();
       this.#backoff = Math.min(this.#backoff * 2, RECONNECT_MAX);
     });
@@ -181,6 +191,10 @@ class Link {
 
 export class Daemon {
   #links = new Map();
+  #versionP = null;
+  #about = null;
+  #wake = null;
+  #offlineSince = null;
   #tunnels = new Map();
   #brainTimer = null;
   #stopped = false;
@@ -222,6 +236,10 @@ export class Daemon {
   }
 
   async start() {
+    // What every link reports about this machine starts being worked out now,
+    // beside the wait for herdr, instead of after it - see describe().
+    this.#versionP = currentVersion().catch(() => null);
+    import('./pty.js').then((m) => m.loadPty()).catch(() => {});
     this.runtime = await createRuntime();
     this.runtimeInfo = await this.runtime.ensureReady();
 
@@ -262,16 +280,23 @@ export class Daemon {
     this.sessions.adoptTerminals()
       .catch(() => {})
       .then(() => this.sessions.resume());
-    // The folder index behind `fs.search`: one background walk now, so the
-    // first query is answered from memory rather than starting the walk then.
-    fsApi.warmIndex?.();
-    // Likewise which accounts are signed in - and, as a side effect of asking
-    // agy, their model lists - so opening the picker or choosing an account
-    // right after a restart answers from memory instead of from the CLIs.
-    currentProfiles().then(async (profiles) => {
-      const statuses = await authStatuses(profiles);
-      this.cliAgents = await agentCatalog(profiles, statuses, { models: false });
-    }).catch(() => {});
+    // Caches worth having warm, none worth being late for: they start once
+    // the links are up. Re-reading the shell's aliases blocks for a moment,
+    // and that moment used to sit in front of this machine coming online.
+    const warm = setTimeout(() => {
+      if (this.#stopped) return;
+      // The folder index behind `fs.search`: one background walk now, so the
+      // first query is answered from memory rather than starting the walk then.
+      fsApi.warmIndex?.();
+      // Likewise which accounts are signed in - and, as a side effect of asking
+      // agy, their model lists - so opening the picker or choosing an account
+      // soon after a restart answers from memory instead of from the CLIs.
+      currentProfiles().then(async (profiles) => {
+        const statuses = await authStatuses(profiles);
+        this.cliAgents = await agentCatalog(profiles, statuses, { models: false });
+      }).catch(() => {});
+    }, WARM_DELAY_MS);
+    warm.unref?.();
     this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session: wire(session) }));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
@@ -336,7 +361,34 @@ export class Daemon {
     // every redesignation, so a machine that is never one never pays for it.
     this.#syncMedia().catch((err) =>
       console.error('[helm] nas media:', err?.message || err));
+
+    // Keep current without anyone asking: a quiet check soon after start - a
+    // machine that was off for days comes back on today's helm - and again
+    // whenever it wakes from sleep. autoUpdate decides whether it may.
+    const first = setTimeout(() => { if (!this.#stopped) autoUpdate(); }, UPDATE_AFTER_START_MS);
+    first.unref?.();
+    let last = Date.now();
+    this.#wake = setInterval(() => {
+      const now = Date.now();
+      // The interval stops while the machine sleeps; a long gap means it woke.
+      if (now - last > WAKE_GAP_MS && !this.#stopped) autoUpdate();
+      last = now;
+    }, WAKE_TICK_MS);
+    this.#wake.unref?.();
   }
+
+  /** A remote hub came back after a long time away: the machine is back online. */
+  #noteRemote(up) {
+    const remote = [...this.#links.values()].filter((l) => !l.url.includes('127.0.0.1'));
+    if (!up) {
+      if (!remote.some((l) => l.connected)) this.#offlineSince ??= Date.now();
+      return;
+    }
+    if (this.#offlineSince && Date.now() - this.#offlineSince > BACK_ONLINE_MS) autoUpdate();
+    this.#offlineSince = null;
+  }
+
+  linkDown() { this.#noteRemote(false); }
 
   /**
    * Every machine's own line in the digest, gathered and written down.
@@ -382,6 +434,7 @@ export class Daemon {
     this.#stopped = true;
     clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
+    clearInterval(this.#wake);
     this.#stopWatch?.();
     for (const link of this.#links.values()) link.stop();
     // A locally terminated tunnel is a live socket even after every hub link
@@ -681,6 +734,7 @@ export class Daemon {
 
   onLinkUp(link) {
     const local = link.url.includes('127.0.0.1');
+    if (!local) this.#noteRemote(true);
     console.log(
       `[helm] ${local ? 'serving locally' : `linked to ${link.url}`} as "${this.name}"`
     );
@@ -793,18 +847,24 @@ export class Daemon {
   }
 
   async describe() {
-    // Read once per connection: it changes only when an update lands, and an
-    // update restarts the daemon.
-    this.version ??= await currentVersion().catch(() => null);
+    // Worked out once and shared: every link asks at the same moment on
+    // startup, and each used to run its own git commands and pty check. The
+    // answer changes only when an update lands, and an update restarts us.
+    this.#about ??= Promise.all([
+      this.#versionP ?? currentVersion().catch(() => null),
+      this.sessions.terminalBackend().catch(() => 'panes'),
+    ]);
+    const [version, terminals] = await this.#about;
+    this.version = version;
     return {
-      version: this.version,
+      version,
       host: hostname(),
       platform: platform(),
       arch: arch(),
       release: release(),
       runtime: this.runtimeInfo,
       // 'pty' or 'panes': what a terminal here will actually be.
-      terminals: await this.sessions.terminalBackend(),
+      terminals,
       // Whether this machine can turn a recording into words. The composer
       // only offers a microphone when something in the network can, so a
       // button that could not possibly work is never drawn.

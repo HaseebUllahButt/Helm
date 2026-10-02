@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, openSync, closeSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -32,15 +32,20 @@ const say = (m) => console.log(`  ${m}`);
  * is never offered for a development tree or a pinned release worktree.
  */
 export async function currentVersion(dir = ROOT) {
-  const git = (args) => exec('git', ['-C', dir, ...args]).then((r) => r.stdout.trim());
+  const git = (args) => exec('git', ['-C', dir, ...args]).then((r) => r.stdout);
   try {
-    const [commit, branch, subject, dirty] = await Promise.all([
-      git(['rev-parse', '--short', 'HEAD']),
-      git(['rev-parse', '--abbrev-ref', 'HEAD']),
-      git(['log', '-1', '--format=%s']),
-      git(['status', '--porcelain']),
+    // Two processes, not four: every link asks this at startup, and a
+    // machine with five hubs to dial used to run twenty git commands at once.
+    const [status, head] = await Promise.all([
+      git(['status', '--porcelain=v2', '--branch']),
+      git(['log', '-1', '--format=%h%x00%s']),
     ]);
-    return { commit, branch, subject, updatable: branch === BRANCH && !dirty };
+    const lines = status.split('\n');
+    const branch = lines.find((l) => l.startsWith('# branch.head '))?.slice(14).trim() ?? '';
+    const dirty = lines.some((l) => l && !l.startsWith('#'));
+    const [commit, subject] = head.trim().split('\0');
+    // A detached checkout reads "(detached)"; callers have always seen "HEAD".
+    return { commit, branch: branch === '(detached)' ? 'HEAD' : branch, subject, updatable: branch === BRANCH && !dirty };
   } catch {
     return null;
   }
@@ -98,7 +103,46 @@ export async function restartWhenSafe(units) {
  * `rebuild`/`restart` are skippable so the git half can run in a test without
  * an npm install or a live service to bounce.
  */
-export async function selfUpdate(dir = ROOT, { rebuild = true, restart = true } = {}) {
+export async function selfUpdate(dir = ROOT, opts = {}) {
+  // One update at a time per machine: the timer, the daemon's own check and
+  // a phone's Update button can all fire together, and two `git reset`s and
+  // `npm install`s racing in one checkout is how a deploy gets corrupted.
+  const lock = join(HELM_DIR, 'update.lock');
+  try {
+    mkdirSync(HELM_DIR, { recursive: true });
+    if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) rmSync(lock, { force: true });
+    closeSync(openSync(lock, 'wx'));
+  } catch {
+    return { updated: false, reason: 'an update is already running' };
+  }
+  try { return await updateLocked(dir, opts); } finally { rmSync(lock, { force: true }); }
+}
+
+/** An update that died mid-way must not block the next one forever. */
+const LOCK_STALE_MS = 30 * 60_000;
+
+/** Long builds run at low priority, so a machine stays usable while it updates. */
+const gentle = (cmd, args, opts) => platform() === 'win32'
+  ? exec(cmd, args, opts)
+  : exec('nice', ['-n', '10', cmd, ...args], opts);
+
+/**
+ * npm on newer releases skips packages' install scripts unless approved, and
+ * node-pty's is what builds the terminal engine - so after an install the
+ * terminals quietly fall back to the slow path. Check it loads; build it if not.
+ */
+async function ensurePty(dir) {
+  const pkg = join(dir, 'node_modules/@homebridge/node-pty-prebuilt-multiarch');
+  if (!existsSync(pkg)) return;
+  const loads = () => exec(process.execPath, ['-e', "require('@homebridge/node-pty-prebuilt-multiarch')"], { cwd: dir, timeout: 30_000 })
+    .then(() => true, () => false);
+  if (await loads()) return;
+  say('building the terminal engine');
+  await gentle('npx', ['--yes', 'node-gyp', 'rebuild'], { cwd: pkg, timeout: 10 * 60_000 }).catch(() => {});
+  if (!(await loads())) say('the terminal engine did not build - terminals use the slower fallback');
+}
+
+async function updateLocked(dir, { rebuild = true, restart = true } = {}) {
   const git = (args) => exec('git', ['-C', dir, ...args]).then((r) => r.stdout.trim());
   if (!existsSync(join(dir, '.git'))) return { updated: false, reason: `${dir} is not a git checkout` };
   if (!(await git(['remote', 'get-url', 'origin']).catch(() => ''))) {
@@ -121,9 +165,10 @@ export async function selfUpdate(dir = ROOT, { rebuild = true, restart = true } 
   await git(['reset', '--hard', '--quiet', `origin/${BRANCH}`]);
   if (rebuild) {
     say('installing dependencies');
-    await exec('npm', ['install', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: dir });
+    await gentle('npm', ['install', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: dir });
+    await ensurePty(dir);
     say('building the app');
-    await exec('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir });
+    await gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir });
   }
 
   if (!restart) return { updated: true, restarting: [] };
@@ -148,6 +193,33 @@ export async function selfUpdate(dir = ROOT, { rebuild = true, restart = true } 
     }
   }
   return { updated: true, restarting, failed };
+}
+
+/**
+ * The daemon's own check, for the moments the timer cannot see: just after
+ * it starts (a machine that was off for days), and when it comes back online
+ * after being away. Quiet, background, at most once per `minGapMs`; it never
+ * delays startup and never touches a development or pinned checkout - the
+ * same guards as `selfUpdate` apply. Only a daemon systemd started does
+ * this, because only there can the update restart it afterwards.
+ */
+let autoRun = null;
+let autoAt = 0;
+export function autoUpdate({ minGapMs = 10 * 60_000, now = Date.now(), run = selfUpdate } = {}) {
+  if (process.env.HELM_NO_UPDATE === '1' || process.env.HELM_NO_SERVICE === '1') return Promise.resolve(null);
+  if (!process.env.INVOCATION_ID) return Promise.resolve(null);
+  if (autoRun) return autoRun;
+  if (now - autoAt < minGapMs) return Promise.resolve(null);
+  autoAt = now;
+  autoRun = (async () => {
+    const v = await currentVersion();
+    if (!v?.updatable) return { updated: false, reason: 'not an updatable checkout' };
+    const r = await run();
+    if (r.updated) console.log(`[helm] updated itself${r.restarting?.length ? ' - restarting' : ''}`);
+    return r;
+  })().catch((err) => ({ updated: false, reason: err?.message || String(err) }))
+    .finally(() => { autoRun = null; });
+  return autoRun;
 }
 
 /**
