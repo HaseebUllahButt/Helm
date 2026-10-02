@@ -5,12 +5,11 @@ import { Herdr } from '../herdr.js';
 const LIVE_TTL_MS = 1000;
 
 /**
- * The herdr protocol generation helm was written against. herdr reports this
- * from `ping`; if it ever moves we want a loud, specific failure at startup
- * rather than subtly wrong behaviour halfway through a session.
+ * The herdr socket API generation this adapter is written against. herdr
+ * reports it from `ping`; if it ever moves we want a loud, specific failure at
+ * startup rather than subtly wrong behaviour halfway through a session.
  */
 export const EXPECTED_PROTOCOL = 22;
-export const PINNED_VERSION = '0.9.0';
 
 export class HerdrRuntime extends EventEmitter {
   capabilities = { agentState: true, rawStream: false, persistent: true };
@@ -64,8 +63,9 @@ export class HerdrRuntime extends EventEmitter {
 
     if (pong.protocol !== EXPECTED_PROTOCOL) {
       throw new Error(
-        `herdr speaks protocol ${pong.protocol}, helm expects ${EXPECTED_PROTOCOL}. ` +
-        `Install herdr ${PINNED_VERSION}, or update helm's adapter.`
+        `herdr ${pong.version} speaks protocol ${pong.protocol}, but this helm build supports ` +
+        `protocol ${EXPECTED_PROTOCOL}. Update herdr to 0.9.0 or newer and restart its server, ` +
+        `or update helm's adapter.`
       );
     }
     this.version = pong.version;

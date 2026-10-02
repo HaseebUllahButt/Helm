@@ -84,10 +84,18 @@ export async function installService({ mode = 'agent', args = [] } = {}) {
   ].filter((p, i, a) => p && a.indexOf(p) === i).join(':');
 
   let herdrBin = '';
-  try {
-    const { stdout } = await exec('sh', ['-lc', 'command -v herdr']);
-    if (stdout.trim()) herdrBin = `Environment=${systemdArg(`HELM_HERDR_BIN=${stdout.trim()}`)}\n`;
-  } catch { /* fall back to PATH lookup at run time */ }
+  if (process.env.HELM_HERDR_BIN?.trim()) {
+    herdrBin = `Environment=${systemdArg(`HELM_HERDR_BIN=${process.env.HELM_HERDR_BIN.trim()}`)}\n`;
+  } else {
+    try {
+      // Resolve against the PATH we put in the unit. A login shell can rewrite
+      // PATH and select a different Herdr install than helm's own launcher.
+      const { stdout } = await exec('sh', ['-c', 'command -v herdr'], {
+        env: { ...process.env, PATH: searchPath },
+      });
+      if (stdout.trim()) herdrBin = `Environment=${systemdArg(`HELM_HERDR_BIN=${stdout.trim()}`)}\n`;
+    } catch { /* fall back to PATH lookup at run time */ }
+  }
 
   writeFileSync(
     join(unitDir, UNIT),

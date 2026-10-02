@@ -27,7 +27,7 @@ export function Controls({ options, session, busy, onPick, onFavs, onDefault }: 
   session: Session;
   busy?: boolean;
   onPick: (kind: Kind, id: string) => void;
-  /** Save the starred models on the machine, so every device shows the same stars. */
+  /** Save favorite models on the machine, so every device shows the same list. */
   onFavs?: (next: string[]) => void;
   /** Make a choice what new chats on this account start with. */
   onDefault?: (kind: Kind, id: string) => Promise<void> | void;
@@ -54,6 +54,7 @@ export function Controls({ options, session, busy, onPick, onFavs, onDefault }: 
     ),
     sheet: group ? (
       <ChoiceSheet
+        key={group.kind}
         title={group.title}
         note={group.note}
         choices={group.choices}
@@ -115,8 +116,6 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     const choice = (m: string): Choice => ({
       id: m,
       label: options.labels?.[m] ?? m,
-      // A saved default is tagged "new chats" on its row instead.
-      hint: m === options.default && !options.prefs?.default ? 'the default' : undefined,
     });
     const choices = options.models.map(choice);
     const more = (options.more ?? []).map(choice);
@@ -133,7 +132,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       more,
       current: model,
       currentLabel: model ? shortModel(model, options.labels, session.engine) : 'model',
-      saved: options.prefs?.default ?? null,
+      saved: options.prefs?.default ?? options.default ?? null,
     });
   }
 
@@ -204,9 +203,9 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
   title: string; note?: string; choices: Choice[]; more?: Choice[]; current: string;
   saved?: string | null;
   busy?: boolean; onPick: (id: string) => void; onClose: () => void;
-  /** Models can be starred, per engine: the ones you use sit at the top. */
+  /** Favorite models sit at the top, per engine. */
   favKey?: string;
-  /** The machine's stars. Undefined from a machine too old to keep them: this browser's then. */
+  /** Machine favorites, falling back to this browser on older machines. */
   favs?: string[];
   onFavs?: (next: string[]) => void;
   onDefault?: (id: string) => Promise<void> | void;
@@ -220,24 +219,27 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
     if (machineFavs) onFavs!(next);
     else try { localStorage.setItem(`helm.favmodels:${favKey}`, JSON.stringify(next)); } catch { /* full */ }
   };
-  const [saving, setSaving] = useState(false);
-  const makeDefault = async () => {
-    if (!onDefault) return;
-    setSaving(true);
-    try { await onDefault(current); } finally { setSaving(false); }
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState('');
+  const makeDefault = async (id: string) => {
+    if (!onDefault || saving !== null || id === saved) return;
+    setSaving(id);
+    setSaveError('');
+    try { await onDefault(id); }
+    catch (e) { setSaveError(e instanceof Error ? e.message : String(e)); }
+    finally { setSaving(null); }
   };
-  const currentChoice = [...choices, ...more].find((c) => c.id === current);
   const [arming, setArming] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
   const match = (c: Choice) =>
     !q || c.label.toLowerCase().includes(q) || c.id.toLowerCase().includes(q);
-  // A starred model is lifted out of whichever list it was in, so it is one
+  // A favorite model is lifted out of whichever list it was in, so it is one
   // tap away even when the account's long tail is folded.
-  const starred = favKey ? [...choices, ...more].filter((c) => favs.includes(c.id) && match(c)) : [];
-  const main = choices.filter(match).filter((c) => !starred.includes(c));
-  const rest = more.filter(match).filter((c) => !starred.includes(c));
+  const favorites = favKey ? [...choices, ...more].filter((c) => favs.includes(c.id) && match(c)) : [];
+  const main = choices.filter(match).filter((c) => !favorites.includes(c));
+  const rest = more.filter(match).filter((c) => !favorites.includes(c));
   const choose = (c: Choice) => {
     if (c.id === current) return onClose();
     if (c.danger && arming !== c.id) return setArming(c.id);
@@ -253,23 +255,30 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
         onClick={() => choose(c)}
       >
         <span className="grow">
-          <span className="rt"><span className="rt-text">{c.label}</span>
-            {saved !== undefined && saved !== null && c.id === saved && <span className="tag">new chats</span>}</span>
+          <span className="rt"><span className="rt-text">{c.label}</span></span>
           {(armed || c.hint) && <span className="rm">{armed ? 'Tap again to confirm' : c.hint}</span>}
         </span>
         {on && <span className="check"><Icon name="check" size={16} /></span>}
       </button>
     );
-    if (!favKey || !c.id) return button;
+    if (!favKey && !onDefault) return button;
     const fav = favs.includes(c.id);
+    const isDefault = c.id === saved;
     return (
-      <div className="rowfav" key={c.id}>
+      <div className="rowfav" key={c.id || 'normal'}>
         {button}
-        <button
-          className={`star${fav ? ' on' : ''}`} aria-pressed={fav}
-          aria-label={fav ? `remove ${c.label} from favourites` : `add ${c.label} to favourites`}
-          onClick={() => toggleFav(c.id)}
-        ><Icon name={fav ? 'star-on' : 'star'} size={17} /></button>
+        {favKey && c.id && <label className="favorite-toggle" title="Favorite model">
+          <input type="checkbox" checked={fav}
+            aria-label={`Favorite ${c.label}`} onChange={() => toggleFav(c.id)} />
+        </label>}
+        {onDefault && <button
+          className={`star${isDefault ? ' on' : ''}`} aria-pressed={isDefault}
+          aria-label={isDefault ? `${c.label} is the default for new chats` : `Use ${c.label} by default for new chats`}
+          title={isDefault ? 'Default for new chats' : 'Set as default for new chats'}
+          disabled={saving !== null}
+          aria-busy={saving === c.id}
+          onClick={() => void makeDefault(c.id)}
+        ><Icon name={isDefault ? 'star-on' : 'star'} size={17} /></button>}
       </div>
     );
   };
@@ -280,6 +289,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
         <button className="x" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button>
       </div>
       {note && <div className="modesheet-note">{note}</div>}
+      {onDefault && <div className="modesheet-legend"><Icon name="star" size={13} /> default for new chats{favKey && <span>☑ favorites</span>}</div>}
       {more.length > 0 && (
         <input
           className="sheetfilter" value={query} placeholder="search all models"
@@ -287,9 +297,9 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
           onChange={(e) => setQuery(e.target.value)}
         />
       )}
-      {starred.length > 0 && <div className="modesheet-label">favourites</div>}
-      {starred.map(row)}
-      {starred.length > 0 && main.length > 0 && <div className="modesheet-label">all</div>}
+      {favorites.length > 0 && <div className="modesheet-label">favorites</div>}
+      {favorites.map(row)}
+      {favorites.length > 0 && main.length > 0 && <div className="modesheet-label">all</div>}
       {main.map(row)}
       {rest.length > 0 && (q || expanded ? rest.map(row) : (
         <button className="moderow more" onClick={() => setExpanded(true)}>
@@ -300,13 +310,8 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
           <span className="chev">›</span>
         </button>
       ))}
-      {q && !main.length && !rest.length && <div className="modesheet-note">no matches</div>}
-      {onDefault && currentChoice && current !== (saved ?? '') && (
-        <button className="setdefault" disabled={saving || busy} onClick={() => void makeDefault()}>
-          <Icon name="check" size={14} />
-          {saving ? 'Saving…' : <>Start new chats with <b>{currentChoice.label}</b></>}
-        </button>
-      )}
+      {q && !favorites.length && !main.length && !rest.length && <div className="modesheet-note">no matches</div>}
+      {saveError && <div className="error" role="alert">{saveError}</div>}
     </div>
   );
 }

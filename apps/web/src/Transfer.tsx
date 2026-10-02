@@ -181,6 +181,15 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
               </label>
             </div>
 
+            {receipt.repository && <div className="field">
+              <label className="field-label">Git origin
+                <input className="custom" value={receipt.repository.remote} readOnly onFocus={(e) => e.target.select()} />
+              </label>
+              <p className="note">{receipt.repository.configured
+                ? 'Origin is configured. Fetch or pull here using this machine’s GitHub login.'
+                : receipt.repository.error}</p>
+            </div>}
+
             {readiness && (
               <>
                 <div className="section">
@@ -194,7 +203,7 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
             )}
 
             <p className="note">
-              Files arrived, but no project commands were run. Install dependencies,
+              Files arrived{receipt.repository?.configured ? ' and Git origin was configured' : ''}. Install dependencies,
               start services and verify environment values only when you choose to.
             </p>
             {error && <div className="error">{error}</div>}
@@ -226,6 +235,12 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
             </div>
 
             <div className="section">send to</div>
+            {preview?.git?.remote && <div className="field">
+              <label className="field-label">Git origin
+                <input className="custom" value={preview.git.remote} readOnly onFocus={(e) => e.target.select()} />
+              </label>
+              <p className="note">The origin URL travels with the files. Pull on the target using its GitHub login.</p>
+            </div>}
             <div className="rows">
               {targets.map((t) => (
                 <button
@@ -306,7 +321,7 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
 
             <p className="note">
               What is left behind is decided by filename policy, not file contents.
-              Nothing on {target?.name ?? 'the target'} is overwritten, and nothing is run.
+              Nothing on {target?.name ?? 'the target'} is overwritten. Git origin is configured when available; project commands are not run.
             </p>
             {busy && <div className="banner">{step || 'working…'}</div>}
             {error && <div className="error">{error}</div>}

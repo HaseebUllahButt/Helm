@@ -21,7 +21,7 @@ const GENERATED_MESSAGES = new Map([
   ['dist', 'build output is not transferred; rebuild it on the target'],
   ['.next', 'build output is not transferred; rebuild it on the target'],
   ['target', 'build output is not transferred; rebuild it on the target'],
-  ['.git', 'git history is not transferred; the folder arrives without its repository'],
+  ['.git', 'git history stays on the source; origin is configured on the target when available'],
 ]);
 
 const MAX_WALK_ENTRIES = 20_000;

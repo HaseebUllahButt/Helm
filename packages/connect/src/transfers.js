@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { M } from '@helm/protocol';
 import {
-  createCodeSnapshot, createEphemeralCodeKey, materializeCode, sealCodeSnapshot,
+  createCodeSnapshot, createEphemeralCodeKey, materializeCode, sealCodeSnapshot, configureGitOrigin,
   signHandoffDigest, verifyHandoffSignature,
 } from './code-transfer.js';
 import {
@@ -302,6 +302,7 @@ export class Transfers {
         privateKey: grant.privateKey,
         expectedDigest: p.snapshotDigest,
       });
+      const repository = await configureGitOrigin(receipt.folder, receipt.git);
       const readiness = await inspectTransferReadiness(receipt.folder, {
         skippedEntries: receipt.skippedEntries,
         skipped: receipt.skipped,
@@ -322,6 +323,7 @@ export class Transfers {
         skippedEntries: receipt.skippedEntries,
         digest: receipt.digest,
         readiness,
+        ...(repository ? { repository } : {}),
       };
       grant.result = result;
       grant.privateKey = null;

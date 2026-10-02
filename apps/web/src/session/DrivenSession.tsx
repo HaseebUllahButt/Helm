@@ -358,7 +358,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       : s === 'working' ? <span className="chip working"><i />working{ago}</span> : null;
   };
 
-  // Stars and new-chat defaults live on the machine, so a phone and a laptop
+  // Favorites and new-chat defaults live on the machine, so a phone and a laptop
   // open the same picker. Older machines answer without `favs`, and the
   // sheet falls back to this browser's own stars.
   const saveFavs = (next: string[]) => {
@@ -367,6 +367,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   };
   const saveDefault = async (kind: Kind, value: string) => {
     if (!options) return;
+    setError('');
     try {
       if (kind === 'model') {
         const r: any = await client.rpc(env.id, 'model.prefs', {
@@ -379,7 +380,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         }, 15_000);
         setOptions((now) => now && { ...now, defaults: r.defaults });
       }
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   };
   const controls = Controls({ options, session, busy, onPick: pick, onFavs: saveFavs, onDefault: saveDefault });
 

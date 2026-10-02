@@ -2040,13 +2040,19 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 }
 
 
-/* ------------------------------------------------------------------ favourites */
+/* ---------------------------------------------------- favorites and defaults */
 
 .rowfav { display: flex; align-items: stretch; }
 .rowfav .moderow { flex: 1; min-width: 0; }
-.star { flex: none; width: 44px; color: var(--icon); border-radius: var(--radius-sm); display: inline-flex; align-items: center; justify-content: center; }
-.star.on { color: var(--text); }
+.star { flex: none; width: 44px; min-height: 44px; color: var(--icon); border-radius: var(--radius-sm); display: inline-flex; align-items: center; justify-content: center; }
+.star.on { color: var(--primary-q); }
 .star:hover { background: var(--accent); }
+.favorite-toggle { flex: none; width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; border-radius: var(--radius-sm); }
+.favorite-toggle:hover { background: var(--accent); }
+.favorite-toggle input { width: 17px; height: 17px; margin: 0; accent-color: var(--primary-q); cursor: pointer; }
+.star:focus-visible, .favorite-toggle:focus-within { outline: 2px solid var(--primary-q); outline-offset: -2px; }
+.modesheet-legend { display: flex; align-items: center; gap: 6px; padding: 0 12px 8px; color: var(--mutedfg); font-size: var(--t-micro); }
+.modesheet-legend span { margin-left: auto; }
 .modesheet-label { padding: 8px 12px 2px; font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--mutedfg); }
 
 
@@ -2183,17 +2189,6 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 }
 .termtabs button.on { color: var(--text); background: var(--raised); border-color: var(--line-2); font-weight: 600; }
 .termtabs button:not(.on):hover { background: var(--hover); }
-
-/* "Start new chats with X": saves the sheet's current choice on the machine. */
-.modesheet .moderow .tag { margin-left: 8px; vertical-align: 1px; }
-.setdefault {
-  display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%;
-  margin-top: 6px; padding: 11px 12px; min-height: 44px;
-  border: 1px dashed var(--line-2); border-radius: var(--radius); background: transparent;
-  color: var(--text-dim); font-size: var(--t-meta);
-}
-.setdefault b { color: var(--text); font-weight: 600; }
-.setdefault:hover:not(:disabled) { background: var(--hover); border-style: solid; }
 
 /* ------------------------------------------------- folded agent activity */
 /* Everything between two things the agent said is one line until opened. */

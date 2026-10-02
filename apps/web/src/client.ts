@@ -270,6 +270,7 @@ export interface TransferReceipt {
   skippedEntries: TransferSkipped[];
   digest: string;
   readiness: TransferReadiness;
+  repository?: { remote: string; configured: boolean; error?: string };
 }
 export interface TransferResult {
   sent: boolean;
@@ -994,7 +995,12 @@ export class Client {
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
     const peer = this.peers.get(env);
-    const direct = peer?.ready && peer.channel.readyState === 'open';
+    // Tiny persistent settings writes should use the acknowledged hub route
+    // when available. An apparently open peer can stop answering after a
+    // phone changes networks, leaving a default save waiting until timeout.
+    const settingsWrite = ['profile.defaults', 'model.prefs', 'picker.prefs'].includes(method);
+    const direct = peer?.ready && peer.channel.readyState === 'open'
+      && !(settingsWrite && this.connected);
     if (!direct && !this.connected) return Promise.reject(new Error('not connected'));
 
     const id = `w${++this.seq}`;
