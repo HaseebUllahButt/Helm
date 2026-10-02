@@ -360,7 +360,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
 
   // Favorites and new-chat defaults live on the machine, so a phone and a laptop
   // open the same picker. Older machines answer without `favs`, and the
-  // sheet falls back to this browser's own stars.
+  // sheet falls back to this browser's own favorites.
   const saveFavs = (next: string[]) => {
     setOptions((now) => now && { ...now, favs: next });
     client.rpc(env.id, 'picker.prefs', { favs: { [session.engine]: next } }, 15_000).catch((e) => setError(e.message));

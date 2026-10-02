@@ -1225,6 +1225,12 @@ async function send() {
     const secrets = snapshot.files.filter((f) => f.secret).length;
     console.log(`  ${secrets} .env file${secrets === 1 ? '' : 's'} included, written owner-only on the target`);
   }
+  if (receipt.repository) {
+    console.log(`  origin: ${receipt.repository.remote}`);
+    console.log(`  ${receipt.repository.configured
+      ? 'origin configured; fetch or pull with the target machine’s GitHub login'
+      : receipt.repository.error}`);
+  }
   if (receipt?.readiness && Array.isArray(receipt.readiness.checks)) {
     for (const line of readinessLines(receipt.readiness)) console.log(line);
   } else {

@@ -8,7 +8,7 @@
 
 export type IconName =
   | 'back' | 'forward' | 'up' | 'down' | 'arrow-up' | 'arrow-down'
-  | 'more' | 'close' | 'refresh' | 'plus' | 'check'
+  | 'more' | 'close' | 'refresh' | 'plus' | 'check' | 'checkbox'
   | 'subagents' | 'git' | 'branch' | 'terminal' | 'raw'
   | 'star' | 'star-on' | 'bolt' | 'model' | 'effort' | 'shield'
   | 'read' | 'edit' | 'run' | 'search' | 'web' | 'tool' | 'ask' | 'plan' | 'think' | 'alert'
@@ -27,6 +27,7 @@ const PATHS: Record<IconName, JSX.Element> = {
   refresh: <><path d="M20 12a8 8 0 11-2.4-5.7" /><path d="M20 4v4.5h-4.5" /></>,
   plus: <path d="M12 5v14M5 12h14" />,
   check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  checkbox: <><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M7.5 12l3 3L17 8.5" /></>,
   // Work handed on: a thread and the copy of it that does the job.
   subagents: <><rect x="3.5" y="8.5" width="12" height="12" rx="2.5" /><path d="M8.5 8.5V6A2.5 2.5 0 0111 3.5h7A2.5 2.5 0 0120.5 6v7a2.5 2.5 0 01-2.5 2.5h-2.5" /></>,
   git: <><circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="9" r="2" /><path d="M6 7v10M18 11c0 4-6 3-10 7" /></>,

@@ -234,13 +234,13 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
               </div>
             </div>
 
-            <div className="section">send to</div>
             {preview?.git?.remote && <div className="field">
               <label className="field-label">Git origin
                 <input className="custom" value={preview.git.remote} readOnly onFocus={(e) => e.target.select()} />
               </label>
               <p className="note">The origin URL travels with the files. Pull on the target using its GitHub login.</p>
             </div>}
+            <div className="section">send to</div>
             <div className="rows">
               {targets.map((t) => (
                 <button

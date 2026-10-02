@@ -5,6 +5,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-transfers-'));
 process.env.HELM_DIR = join(root, 'helm');
@@ -140,6 +141,38 @@ test('a controller-driven send signs, encrypts and lands through the invitation'
   assert.equal(readFileSync(join(dest, 'a.txt'), 'utf8'), 'code');
   assert.equal(r.receipt.files, 1);
   assert.equal(r.receipt.readiness.verified, false);
+});
+
+test('project sends configure origin without copying or fetching history, including unborn repos', async () => {
+  const runGit = (repo, ...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  for (const committed of [false, true]) {
+    const repo = join(work, `origin-source-${committed}`);
+    mkdirSync(repo, { recursive: true });
+    runGit(repo, 'init', '-b', 'feature/send');
+    // Deliberately unreachable: a successful send proves no network fetch.
+    const remote = 'ssh://git@127.0.0.1:1/owner/repo.git';
+    runGit(repo, 'remote', 'add', 'origin', remote);
+    writeFileSync(join(repo, 'code.txt'), 'local edits');
+    if (committed) {
+      runGit(repo, 'add', 'code.txt');
+      runGit(repo, '-c', 'user.name=Test', '-c', 'user.email=t@example.com', 'commit', '-m', 'source history');
+      writeFileSync(join(repo, 'code.txt'), 'uncommitted edits');
+    }
+    const target = make();
+    const { grant } = target.invite(forSrc, 'dev1');
+    const sender = new Transfers({ network: () => ({ ...net, self: SRC }),
+      rpc: async (_env, _method, p) => target.accept(p, SRC) });
+    const dest = join(work, `origin-dest-${committed}`);
+    const result = await sender.send({ folder: repo, targetMachineId: net.self, targetFolder: dest, grant }, 'dev1');
+    assert.equal(result.sent, true);
+    assert.deepEqual(result.receipt.repository, { remote, configured: true });
+    assert.equal(runGit(dest, 'remote', 'get-url', 'origin'), remote);
+    assert.equal(runGit(dest, 'symbolic-ref', '--short', 'HEAD'), 'feature/send');
+    assert.throws(() => runGit(dest, 'rev-parse', '--verify', 'HEAD'), 'history was not copied');
+    assert.equal(readFileSync(join(dest, 'code.txt'), 'utf8'), committed ? 'uncommitted edits' : 'local edits');
+    assert.equal(CT.createCodeSnapshot(dest).git.remote, remote, 'origin survives a second send');
+    assert.deepEqual(await CT.configureGitOrigin(dest, { remote }), { remote, configured: true }, 'retry preserves existing metadata');
+  }
 });
 
 test('a controller send returns to review instead of sending unacknowledged omissions', async () => {

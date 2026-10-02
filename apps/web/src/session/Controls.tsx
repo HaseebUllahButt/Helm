@@ -289,7 +289,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
         <button className="x" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button>
       </div>
       {note && <div className="modesheet-note">{note}</div>}
-      {onDefault && <div className="modesheet-legend"><Icon name="star" size={13} /> default for new chats{favKey && <span>☑ favorites</span>}</div>}
+      {onDefault && <div className="modesheet-legend"><Icon name="star" size={13} /> default for new chats{favKey && <span><Icon name="checkbox" size={13} /> favorites</span>}</div>}
       {more.length > 0 && (
         <input
           className="sheetfilter" value={query} placeholder="search all models"

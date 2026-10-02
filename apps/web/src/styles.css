@@ -2052,7 +2052,7 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .favorite-toggle input { width: 17px; height: 17px; margin: 0; accent-color: var(--primary-q); cursor: pointer; }
 .star:focus-visible, .favorite-toggle:focus-within { outline: 2px solid var(--primary-q); outline-offset: -2px; }
 .modesheet-legend { display: flex; align-items: center; gap: 6px; padding: 0 12px 8px; color: var(--mutedfg); font-size: var(--t-micro); }
-.modesheet-legend span { margin-left: auto; }
+.modesheet-legend span { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
 .modesheet-label { padding: 8px 12px 2px; font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--mutedfg); }
 
 
