@@ -128,7 +128,7 @@ const EXTERNAL = /^(pane:|found:)/;
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
-export const wire = ({ promptSample, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, originHandoffId, delegationReply, ...s }) => s;
+export const wire = ({ promptSample, unsent, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, originHandoffId, delegationReply, ...s }) => s;
 
 const EXTERNAL_INFO_COMMANDS = [
   { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
@@ -832,6 +832,10 @@ export class Sessions extends EventEmitter {
       // already had the id that made it a resume, and must keep it.
       session.engineSessionId = engineSessionId ?? driver.engineSessionId;
       if (!session.engineSessionId) throw new Error(`${profile.label || profile.engine} did not create an engine session`);
+      // Claude writes nothing to disk until its first message, so until then
+      // its id cannot be resumed - a driver rebuilt early (a new effort, a
+      // restart) has to start it again instead.
+      if (!engineSessionId && !forkFrom) session.unsent = true;
       this.#save();
       this.emit('session', session);
       return session;
@@ -893,6 +897,7 @@ export class Sessions extends EventEmitter {
       cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
       model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
       engineSessionId: s.engineSessionId,
+      unsent: !!s.unsent,
       forkFrom: s.forkFrom,
       transcript: s.transcript,
       monitorOnly: !!s.external,
@@ -2063,6 +2068,7 @@ export class Sessions extends EventEmitter {
         }
         await d.send(msg);
       }
+      if (s.unsent) { delete s.unsent; this.#save(); }
     } catch (err) {
       if (s.delegation) {
         s.delegation.status = 'error';

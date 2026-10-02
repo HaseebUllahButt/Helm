@@ -208,6 +208,14 @@ export function formatAccountUsage(result, view = '', rateLimits = null) {
 
 const servers = new Map();
 
+// The variables that say which helm session is asking. One app-server serves
+// every thread on an account, so these cannot live in its environment: the
+// first thread's id would be stamped on every other thread's commands, and a
+// `helm delegate` from one chat would file its subagents under another.
+// Each thread sets its own through Codex's shell environment policy instead.
+const THREAD_VARS = ['HELM_SESSION_ID', 'HELM_PROFILE_ID', 'HELM_ENGINE', 'HELM_CWD'];
+const serverEnv = (env = {}) => Object.fromEntries(Object.entries(env).filter(([k]) => !THREAD_VARS.includes(k)));
+
 /** One app-server process, shared by every thread on the same account. */
 class CodexServer {
   #child = null;
@@ -279,7 +287,7 @@ class CodexServer {
           const adopted = this.procHost.hasProc(this.procId);
           if (!adopted) {
             await this.procHost.openProc(this.procId, {
-              cmd: this.cmd, args: ['app-server', '--stdio'], cwd: undefined, env: this.env,
+              cmd: this.cmd, args: ['app-server', '--stdio'], cwd: undefined, env: serverEnv(this.env),
             });
           }
           const pipe = this.procHost.procPipe(this.procId);
@@ -297,7 +305,7 @@ class CodexServer {
       }
       if (!this.#pipe) {
         const child = spawn(this.cmd, ['app-server', '--stdio'], {
-          env: { ...process.env, ...this.env },
+          env: serverEnv({ ...process.env, ...this.env }),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         this.#child = child;
@@ -482,7 +490,10 @@ export class CodexDriver extends Driver {
       return;
     }
     const { approvalPolicy, sandbox } = this.#policy();
-    const common = { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}) };
+    const config = Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
+      .map((k) => [`shell_environment_policy.set.${k}`, this.env[k]]));
+    const common = { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}),
+      ...(Object.keys(config).length ? { config } : {}) };
     const res = this.threadId
       ? await server.call('thread/resume', { threadId: this.threadId, excludeTurns: true, ...common })
       : await server.call('thread/start', common);

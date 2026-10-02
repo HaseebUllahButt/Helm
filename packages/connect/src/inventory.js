@@ -213,7 +213,10 @@ async function claude(home, account) {
         : Array.isArray(content)
           ? content.find((c) => c?.type === 'text')?.text ?? ''
           : '';
-      if (text && !text.startsWith('<')) { title ||= text.trim(); break; }
+      // A chat helm started opens with helm's own notes to the agent; the
+      // name belongs to what the owner typed after them.
+      const said = text.replace(/^(?:\[helm [^\]\n]*\]\n\n)+/, '').trim();
+      if (said && !said.startsWith('<')) { title ||= said; break; }
     }
     // A sidechain file is a subagent's transcript, not a session you resume.
     if (sidechain || !cwd) continue;

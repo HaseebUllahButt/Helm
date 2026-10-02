@@ -253,3 +253,15 @@ test('antigravity inventory sorts before it caps: the newest db survives a crowd
   assert.equal(rows.at(-1).id, 'conv-050', 'the cut keeps the newest 40');
   assert.ok(!rows.some((r) => r.id === 'conv-049'), 'older conversations stay out');
 });
+
+test('a Claude chat helm started is named for what the owner typed, not helm\'s note', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-claude-home-'));
+  const dir = join(home, 'projects', '-work-app');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '11111111-1111-4111-8111-111111111111.jsonl'), [
+    { type: 'user', cwd: '/work/app', message: { role: 'user', content: '[helm delegation: CLI accounts: claudea (claude, authenticated).]\n\nFix the settings icon' } },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const rows = await inventory([{ id: 'claudex', engine: 'claude', env: { CLAUDE_CONFIG_DIR: home } }]);
+  assert.equal(rows.find((r) => r.cwd === '/work/app')?.title, 'Fix the settings icon');
+});

@@ -29,6 +29,20 @@ test('argv: headless flags, the account home, and a session id to resume later',
   assert.ok(r.args.includes('manual')); // the CLI's name for the default mode
 });
 
+test('a new effort before the first message starts the same id again, not --resume', async () => {
+  // The CLI has written nothing until it has a message, so resuming the id
+  // after an early restart failed with "No conversation found".
+  const { driver, log } = make('plain');
+  await driver.start();
+  await driver.setEffort('high');
+  assert.ok(driver.args.includes(`--session-id=${driver.engineSessionId}`));
+  assert.ok(!driver.args.some((a) => a.startsWith('--resume')));
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done');
+  assert.ok(driver.args.includes(`--resume=${driver.engineSessionId}`), 'once it has a message, a restart resumes');
+  await driver.kill();
+});
+
 test('plain: text streams in as deltas, then the turn completes with its cost', async () => {
   const { driver, log } = make('plain');
   await driver.send('Reply with exactly the words: hello from helm');

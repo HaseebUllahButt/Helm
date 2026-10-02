@@ -1640,6 +1640,10 @@ try {
     case 'up':
     case 'serve':
     case 'run':
+      // A daemon started from inside an agent's shell (a self-update, a
+      // sandbox) inherits that agent's identity. Left in place, every
+      // terminal and app-server it spawns would claim to be that session.
+      for (const k of ['HELM_SESSION_ID', 'HELM_PROFILE_ID', 'HELM_ENGINE', 'HELM_CWD']) delete process.env[k];
       await up();
       break;
 

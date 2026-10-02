@@ -73,7 +73,7 @@ export class ClaudeDriver extends Driver {
   constructor(opts) {
     super({ engine: 'claude', ...opts });
     this.engineSessionId ??= randomUUID();
-    this.resume = !!opts.engineSessionId;
+    this.resume = !!opts.engineSessionId && !opts.unsent;
     this.delegated = !!opts.delegated;
     // A thread branched from another: begin as that conversation was at `at`.
     // Both ids are checked here as well as by whoever asked - they end up as
@@ -135,13 +135,16 @@ export class ClaudeDriver extends Driver {
       pipe = this.#localPipe(child);
     }
     this.#bindPipe(pipe);
-    // The next turn resumes this session.
-    this.resume = true;
   }
 
   #write(obj) {
     if (!this.#pipe) throw new Error('claude is not running');
     this.#pipe.write(JSON.stringify(obj) + '\n');
+    // The conversation exists on disk once it has a message, and not
+    // before: a process restarted before then (a new effort, picked ahead
+    // of the first message) must start the id again, because `--resume`
+    // of an id with no transcript fails with "No conversation found".
+    if (obj.type === 'user') this.resume = true;
   }
 
   #localPipe(child) {
