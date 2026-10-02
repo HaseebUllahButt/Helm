@@ -16,6 +16,38 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-02 (evening) — Faster startup, machines update themselves
+
+**Startup.** On a copy of the laptop's real state with its network cut
+(`unshare -rn`, so it could not reach the VM as "Laptop"), time to "serving
+locally" went ~1.1s -> ~0.5s; on the live laptop 2.4s -> 0.7s, and linked to
+the VM 4.8s -> 3.7s (the rest is the VPN's round trips). Causes: every hub link
+ran `describe()` itself - four git commands each, twenty at once on five
+hubs - and the profile/auth/folder-index warm-ups (alias rediscovery blocks
+briefly) ran before the links. `describe()` is now one shared promise started
+beside herdr's `ensureReady`; warm-ups wait 2s. `currentVersion` is two git
+calls (`status --porcelain=v2 --branch` + `log -1`). A Node compile cache was
+measured and gained nothing.
+
+**Auto-update.** `autoUpdate()` in `update.js`: a systemd-started daemon
+(INVOCATION_ID) checks 20s after start, on wake from sleep (a >5 min gap in a
+1 min interval), and when a remote hub link returns after 10+ min with none.
+At most once per 10 min, same guard as `self-update` (clean main checkout), so
+the laptop's pinned `~/.helm-release` and dev trees never move. `selfUpdate`
+now takes `HELM_DIR/update.lock` (stale after 30 min), runs npm under
+`nice -n 10`, and rebuilds node-pty when npm's blocked install scripts left it
+unbuilt. macOS/Windows daemons do not auto-update (nothing would restart them).
+
+**Machines:** VM, laptop and the online `haseeb` (24764342) are on ac288c9.
+That haseeb's two local herdr fixes were ported to main (a742705) and kept on
+it as `stash@{0}`. The other `haseeb` (8727e3f9) and HomePC were offline.
+
+**Commit hygiene incident.** Two helm-driven `claude -p` sessions were editing
+this checkout at the same time; commits 998d88c and a742705 were made with
+`git add -A` and swept in their in-progress edits (picker favorites legend,
+transfer origin handling), which were pushed and deployed. Tests passed with
+them. Commit by path from now on.
+
 ## 2026-10-02 (later) — Folded tool calls, Inter, defaults from a chat
 
 **Tool calls fold.** In a driven chat, everything between two things the agent
