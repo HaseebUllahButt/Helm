@@ -4,8 +4,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/HaseebUllahButt/helm/main/install.sh | bash
 #
-# Installs helm and everything it needs into your home directory, then tells
-# you the one command to run next. Safe to re-run: it updates in place and
+# Installs helm and everything it needs into your home directory, then starts
+# it in the background. Safe to re-run: it updates in place and
 # never touches a network you have already joined.
 #
 # Nothing here needs root. helm runs as you, with your agents' credentials,
@@ -142,6 +142,9 @@ esac
 
 # ------------------------------------------------------------------- done
 
+step "starting helm"
+"$BIN_DIR/helm" start || die "could not start Helm - run helm start to see why"
+
 printf '\n%s\n' "-------------------------------------------------------------"
 if [ "$ON_PATH" = no ]; then
   say "$BIN_DIR is not on your PATH yet. Add this to your shell rc:"
@@ -150,22 +153,23 @@ if [ "$ON_PATH" = no ]; then
 fi
 
 cat <<'NEXT'
-  helm is installed.
+  Helm is installed and active.
 
-  On your always-on VM, install Caddy, then run:
+  Joining your network:
 
-    helm setup
+    helm join
 
-  It creates a free HTTPS address from the VM's public IP, installs Helm as a
-  service, and prints one private link. No website or domain is needed. Open
-  that link on your laptop or phone. Keep it private: it can add a new device.
+  Paste the private join link from Settings on any paired device. That's it:
+  this computer stays connected, and its browser/app opens already signed in.
+
+  To create your first always-on home instead, install Caddy and run helm setup.
 
   Commands worth remembering:
 
     helm add controller          a link to open on a phone or browser
-    helm add pc                  a code for another computer
-    helm add vm                  a code for another always-on machine
-    helm join <CODE> <VM-URL>    run that on the machine being added
+    helm add pc                  a private join link for another computer
+    helm add vm                  a private join link for another always-on machine
+    helm join                    paste the link on the machine being added
     helm open                    open the app here, already signed in
     helm status                  check your machines
 

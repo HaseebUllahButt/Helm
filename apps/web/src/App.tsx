@@ -1391,6 +1391,8 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [selfHosted, setSelfHosted] = useState<boolean | null>(null);
+  const [network, setNetwork] = useState<string | null>(null);
+  const [checking, setChecking] = useState(true);
   const [linkSecretFailed, setLinkSecretFailed] = useState(false);
 
   const finish = (auth: Auth) => {
@@ -1406,7 +1408,7 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
       setError(err.message);
       setLinkSecretFailed(true);
       setPassword((p) => (p === secret ? '' : p));
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setChecking(false); }
   };
 
   // `helm open` puts this machine's own key in the fragment. Nothing to type:
@@ -1424,9 +1426,11 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${location.origin}/api/health`)
-      .then((r) => r.ok)
-      .then((ok) => { if (!cancelled) setSelfHosted(ok); })
+    fetch(`${location.origin}/api/health`, { signal: AbortSignal.timeout(5000) })
+      .then((r) => r.ok ? r.json() : null)
+      .then((health) => {
+        if (!cancelled) { setSelfHosted(!!health?.ok); setNetwork(health?.network ?? null); }
+      })
       .catch(() => { if (!cancelled) setSelfHosted(false); });
     return () => { cancelled = true; };
   }, []);
@@ -1435,37 +1439,47 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
   // whole claim a local sign-in makes - ask it for the local key directly
   // rather than waiting for a link. Nothing answers that but this machine.
   useEffect(() => {
-    if (!isLocal || selfHosted !== true || autoStarted.current) return;
+    if (!isLocal || selfHosted !== true || openedWith.current?.password || autoStarted.current) return;
     autoStarted.current = true;
     fetch('/api/auth/local', { method: 'POST' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((v) => { if (v?.local) connect(location.origin, '', v.local); })
-      .catch(() => {});
+      .then(async (v) => { if (v?.local) await connect(location.origin, '', v.local); })
+      .catch(() => {})
+      .finally(() => setChecking(false));
   }, [selfHosted]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /**
-   * The other direction: the app was installed from the VM's public address
-   * but a daemon is also running on this computer, and that one signs itself
-   * in. This used to be a sentence with a link in it, under a pairing form -
-   * so the answer to "open helm on my desktop" was: read a paragraph, click
-   * the link, every time. It goes there itself now.
-   *
-   * Only when there is nothing else to do: a link with a pairing code in it,
-   * or a key from `helm open`, is a deliberate instruction to pair *here* and
-   * outranks the local daemon. The local page cannot bounce back - it takes
-   * the `isLocal` branch above - so there is no loop to get stuck in.
-   */
-  const [localHelm, setLocalHelm] = useState<string | null>(null);
+  // Keep the public app's origin and installed-app scope. The local daemon
+  // shares a device token only with an exact origin already in its network,
+  // and only if both sides name the same network. It never exposes local.key.
   useEffect(() => {
-    if (isLocal || openedWith.current?.password || autoStarted.current) return;
-    fetch('http://127.0.0.1:8787/api/health', { cache: 'no-store' })
-      .then((r) => {
-        if (!r.ok || autoStarted.current) return;
-        setLocalHelm('http://127.0.0.1:8787');
-        location.replace('http://127.0.0.1:8787/');
+    if (selfHosted === null) return;
+    if (selfHosted === false) { setChecking(false); return; }
+    if (isLocal || openedWith.current?.password || autoStarted.current) {
+      if (openedWith.current?.password) setChecking(false);
+      return;
+    }
+    if (!network || /Android|iPhone|iPad|iPod/.test(navigator.userAgent)) {
+      setChecking(false); return;
+    }
+    let cancelled = false;
+    const base = 'http://127.0.0.1:8787';
+    fetch(`${base}/api/auth/desktop`, {
+      method: 'POST', cache: 'no-store',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ network, label: 'this computer' }),
+      signal: AbortSignal.timeout(5000),
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .then((v) => {
+        if (cancelled || autoStarted.current || !v?.token || v.network !== network) return;
+        autoStarted.current = true;
+        finish({ token: v.token, deviceId: v.deviceId,
+          endpoints: [...new Set<string>([location.origin, base, ...(v.endpoints ?? [])])] });
       })
-      .catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setChecking(false); });
+    return () => { cancelled = true; };
+  }, [selfHosted, network]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const target = openedWith.current;
@@ -1487,21 +1501,15 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
     await connect(endpoint, secret);
   };
 
-  // Found one on this computer: the redirect is already going. Showing the
-  // pairing form underneath it only invites someone to start typing a code
-  // into a screen that is about to be replaced.
-  if (localHelm) {
+  if (checking || busy) {
     return (
       <div className="auth">
         <div className="auth-card">
           <div className="auth-brand">
             <img src="/icon.svg" alt="" />
             <h1>helm</h1>
-            <p>opening the helm on this computer…</p>
+            <p>{busy ? 'joining your network…' : 'checking this device…'}</p>
           </div>
-          <p className="note" style={{ textAlign: 'center' }}>
-            <a href={localHelm}>{localHelm.replace(/^https?:\/\//, '')}</a>
-          </p>
         </div>
       </div>
     );
@@ -1552,9 +1560,15 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
           </button>
           {error && <div className="error">{error}</div>}
           <p className="note" style={{ marginTop: 14, textAlign: 'center' }}>
-            Run <code>helm link</code> on your VM for a fresh link.
+            Make a fresh link from Devices on any paired device, or run <code>helm link</code> on a joined computer.
             Pair once; this device stays paired until you remove it.
           </p>
+          {!isLocal && !/Android|iPhone|iPad|iPod/.test(navigator.userAgent) && (
+            <p className="note" style={{ textAlign: 'center' }}>
+              Already ran <code>helm join</code> here?{' '}
+              <a href="http://127.0.0.1:8787/">Open this computer's Helm</a>.
+            </p>
+          )}
         </form>
         {/* The one place "install it" cannot wait for the sidebar: a phone
             that has not paired yet is exactly the phone this is for. */}
@@ -1564,18 +1578,47 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
   );
 }
 
-function AddMachine() {
+function AddMachine({ client }: { client: Client }) {
+  const [role, setRole] = useState<'pc' | 'vm' | 'nas'>('pc');
+  const [invite, setInvite] = useState<{ link: string; expiresAt: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const now = useNow();
+  const makeInvite = async () => {
+    setBusy(true); setError(''); setCopied(false);
+    try {
+      const r = await client.invite(role);
+      setInvite({ link: `${r.base || client.relay}/#join=${encodeURIComponent(r.code)}`, expiresAt: r.expiresAt });
+    } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+  const command = invite ? `helm join '${invite.link}'` : '';
   return (
     <>
       <div className="row">
         <span className="grow">
           <span className="rt">Add a computer</span>
-          <span className="rm">join codes are minted by machines, not phones - run one of these on a machine already in the network</span>
+          <span className="rm">install Helm there, then run this network's join command</span>
         </span>
       </div>
-      <pre className="snippet">{`helm add pc
-helm add vm
-helm add nas`}</pre>
+      <select aria-label="Computer kind" value={role} onChange={(e) => { setRole(e.target.value as typeof role); setInvite(null); }}>
+        <option value="pc">Laptop or desktop</option>
+        <option value="vm">Always-on VM</option>
+        <option value="nas">NAS</option>
+      </select>
+      <button className="row" disabled={busy} onClick={makeInvite}>
+        <span className="grow"><span className="rt">{busy ? 'making a command…' : 'Make join command'}</span></span>
+      </button>
+      {invite && (now >= invite.expiresAt ? <p className="note">This invite expired. Make a new command.</p> : <>
+        <pre className="snippet">{command}</pre>
+        <button className="row" onClick={async () => {
+          try { await navigator.clipboard.writeText(command); setCopied(true); }
+          catch { setError('could not copy - select the command instead'); }
+        }}><span className="grow"><span className="rt">{copied ? 'copied' : 'Copy join command'}</span></span></button>
+        <p className="note">Private, single-use, expires in 10 minutes. The computer and its web app join together.</p>
+      </>)}
+      {error && <div className="error">{error}</div>}
     </>
   );
 }
@@ -1826,6 +1869,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   // Who was already paired when the link was made, so anyone else who shows
   // up while it is open is known to have come through it.
   const knownAtInvite = useRef<Set<string>>(new Set());
+  const pairingBase = useRef(client.relay);
   const now = useNow();
 
   const load = useCallback(() => {
@@ -1843,7 +1887,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   // cannot afford.
   const closeLink = useCallback(async () => {
     setInvite(null); setCopied(false);
-    return client.closePairing().then(() => true, () => false);
+    return client.closePairing(pairingBase.current).then(() => true, () => false);
   }, [client]);
 
   // While a link is out, watch for it being used. The password is not spent by
@@ -1854,7 +1898,7 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
     if (!invite) return;
     const timer = setInterval(async () => {
       try {
-        const r = await client.devices();
+        const r = await client.devices(pairingBase.current);
         setDevices(r.devices);
         const fresh = r.devices.find((d) => !knownAtInvite.current.has(d.id));
         if (fresh) {
@@ -1876,7 +1920,9 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
       const current = (await client.devices()).devices;
       knownAtInvite.current = new Set(current.map((d) => d.id));
       const r = await client.newPassword(10 * 60_000);
-      setInvite({ link: `${client.relay}/#pair=${r.password}`, expiresAt: r.expiresAt });
+      pairingBase.current = r.base;
+      knownAtInvite.current = new Set(r.knownDeviceIds);
+      setInvite({ link: `${r.base}/#pair=${encodeURIComponent(r.password)}`, expiresAt: r.expiresAt });
     } catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
   };
@@ -3289,7 +3335,7 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
             </span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
-          <AddMachine />
+          <AddMachine client={client} />
           <Notifications client={client} />
           <InstallPwa />
           <button className="row destructive" onClick={onUnpair}>

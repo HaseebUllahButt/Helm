@@ -68,12 +68,13 @@ helm add pc            a laptop or desktop: runs agents, and controls others
 helm add vm            another always-on machine, dialled by the rest
 ```
 
-Only `helm add controller` prints a **link to open**. The other two print a
-**code to type**, and what you type on the machine being added is always the
-same command, whichever kind it is:
+Add a phone, browser, or computer from **Settings** on any paired device.
+Computer invites contain one private join link with the secret already in it.
+The terminal commands above produce the same invites. On the new computer:
 
 ```bash
-helm join ABCD-1234 https://helm.example.com
+helm join
+# Paste: https://helm.example.com/#join=ABCD-1234
 ```
 
 The code remembers which kind you asked for. A pc dials out to the home and
@@ -94,8 +95,16 @@ already holds the network key:
 helm open
 ```
 
-That opens the app on `127.0.0.1`, signed in, showing every machine in the
-network. This is how a laptop drives the VM.
+The curl installer starts Helm immediately. Joining replaces its temporary
+local network and keeps Helm running in the background. The Linux application
+launcher is installed automatically; opening it or `127.0.0.1:8787` signs in
+without a pairing link. macOS runs Helm as a LaunchAgent at login.
+
+Opening the network's website on the joined computer also inherits its local
+membership and saves it at that website's origin, so installing the web app
+keeps the sign-in. The browser may request local network access; allow it so
+the website can talk to Helm on this computer. If access is blocked, `helm open`
+opens the local app signed in.
 
 The older `helm up`, `helm invite`, `helm link` and `helm login` commands
 remain available for scripts and existing setups.
@@ -119,16 +128,21 @@ paired device stays connected until removed.
 
 ### Add another computer
 
-Install Helm on the new computer. Then run `helm add` on an existing one and
-copy the command it prints:
+Create a computer invite from Settings on any paired phone, browser or app,
+or run `helm add pc` on an existing computer. Install Helm on the new computer,
+then run:
 
 ```bash
-helm join ABCD-1234 https://helm.example.com
+helm join
+# Paste the private join link when prompted.
+# Or: helm join 'https://helm.example.com/#join=ABCD-1234'
 ```
 
 The join code is single-use and expires after ten minutes. `helm join` installs
 Helm as a background service on that computer, so it stays in the network
 after the terminal closes; pass `--foreground` to run it in the terminal instead.
+There is no separate `helm up`, `helm leave`, or browser pairing step for a
+fresh install. The old `helm join CODE https://home.example` format still works.
 
 ## Mobile PWA
 

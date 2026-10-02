@@ -15,6 +15,33 @@ const safeEqual = (a, b) => {
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
+const LOOPBACK_HOST = /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])(:\d+)?$/;
+
+// A public Helm page can inherit this computer's membership, but only if
+// its exact origin is already an address in this computer's network.
+function desktopOrigin(req, net) {
+  if (!isLoopback(req) || !LOOPBACK_HOST.test(String(req.headers.host))) return null;
+  const origin = req.headers.origin;
+  if (!origin || !net) return null;
+  return allEndpoints(net).some((endpoint) => {
+    try { return new URL(endpoint).origin === origin; } catch { return false; }
+  }) ? origin : null;
+}
+
+function localSignIn(net, label) {
+  const remembered = q.localDeviceGet.get()?.device_id;
+  const existing = remembered ? deviceToken(net, remembered) : null;
+  const { id, token } = existing
+    ? { id: remembered, token: existing }
+    : issueDevice(net, label || 'this machine');
+  if (!existing) q.localDeviceSet.run(id);
+  return { token, deviceId: id, network: net.id, endpoints: allEndpoints(net), local: true };
+}
+
+function confirmNetwork(net) {
+  if (net.provisional) { delete net.provisional; saveNetwork(net); }
+}
+
 const INVITE_TTL_MS = 10 * 60 * 1000;
 
 /** Wrong passwords a login window survives before it is burned. */
@@ -323,6 +350,24 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
     const origin = allowedOrigin(req, loadNetwork());
     const json = (r, code, body) => reply(r, code, body, origin);
 
+    if (path === '/api/auth/desktop') {
+      const net = loadNetwork();
+      const trusted = desktopOrigin(req, net);
+      if (!trusted) return reply(res, 403, { error: 'this page is not in this computer\'s network' });
+      if (req.method === 'OPTIONS') {
+        if (req.headers['access-control-request-private-network'] === 'true') {
+          res.setHeader('access-control-allow-private-network', 'true');
+        }
+        return reply(res, 204, {}, trusted);
+      }
+      if (req.method !== 'POST') return reply(res, 405, { error: 'POST required' }, trusted);
+      const body = await readBody(req).catch(() => ({}));
+      if (body.network !== net.id) {
+        return reply(res, 409, { error: 'this computer belongs to a different network' }, trusted);
+      }
+      return reply(res, 200, localSignIn(net, body.label), trusted);
+    }
+
     if (req.method === 'OPTIONS') return json(res, 204, {});
 
     // -------------------------------------------------- unauthenticated routes
@@ -408,15 +453,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
         // remembered device has since been removed, `deviceToken` says so and
         // a new one is issued - which is what makes pruning stick rather than
         // locking the owner out of their own machine.
-        const remembered = q.localDeviceGet.get()?.device_id;
-        const existing = remembered ? deviceToken(net, remembered) : null;
-        const { id, token } = existing
-          ? { id: remembered, token: existing }
-          : issueDevice(net, body.label || 'this machine');
-        if (!existing) q.localDeviceSet.run(id);
-        return json(res, 200, {
-          token, deviceId: id, network: net.id, endpoints: allEndpoints(net), local: true,
-        });
+        return json(res, 200, localSignIn(net, body.label));
       }
 
       const expected = currentPassword();
@@ -445,6 +482,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
         return json(res, 401, { error: 'bad password' });
       }
 
+      confirmNetwork(net);
       const { id, token } = issueDevice(net, body.label || 'web');
       // Pairing is the first time this device was here, and the moment the
       // owner most wants to hear about it: a link that leaked would look
@@ -556,6 +594,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
     }
 
     if (path === '/api/auth/rotate' && req.method === 'POST') {
+      confirmNetwork(net);
       const body = await readBody(req).catch(() => ({}));
       return json(res, 200, rotatePassword(null, passwordTtl(body.ttlMs)));
     }
@@ -570,9 +609,9 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
     }
 
     if (path === '/api/invite' && req.method === 'POST') {
-      if (claims.role !== ROLE.MACHINE) {
-        return json(res, 403, { error: 'only a machine can invite another machine' });
-      }
+      // Paired controllers are the owner's devices too: adding a computer
+      // must work from a phone just as adding another controller does.
+      confirmNetwork(net);
       q.inviteSweep.run(now());
       const body = await readBody(req).catch(() => ({}));
       // The kind the inviter says the machine will be. Anything outside the

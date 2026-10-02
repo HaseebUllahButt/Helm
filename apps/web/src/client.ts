@@ -1198,8 +1198,13 @@ export class Client {
   // ------------------------------------------------------------- REST helpers
 
   private async http<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const res = await fetch(`${this.relay}${path}`, {
+    return this.httpAt<T>(this.relay, path, init);
+  }
+
+  private async httpAt<T>(base: string, path: string, init: RequestInit = {}): Promise<T> {
+    const res = await fetch(`${base}${path}`, {
       ...init,
+      signal: init.signal ?? AbortSignal.timeout(10_000),
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...init.headers },
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
@@ -1218,23 +1223,45 @@ export class Client {
       .then((r) => ({ environments: r.machines }));
   }
 
-  devices() { return this.http<{ devices: Device[] }>('/api/devices'); }
+  devices(base = this.relay) { return this.httpAt<{ devices: Device[] }>(base, '/api/devices'); }
 
   /** An invite for adding another machine. Carries the network key. */
-  invite() {
-    return this.http<{ code: string; expiresAt: number; endpoints: string[] }>(
-      '/api/invite', { method: 'POST' }
-    );
+  async invite(role: 'pc' | 'vm' | 'nas' = 'pc') {
+    // Invites belong to the hub that minted them. A localhost link cannot
+    // be redeemed on another computer; mint at a public home and carry that
+    // same address, rather than replacing it with a different hub's address.
+    const homes = [...new Set([this.relay, ...this.endpoints])].filter((base) => base.startsWith('https://'));
+    if (!homes.length) throw new Error('This network needs a reachable HTTPS home. Run helm setup on its always-on VM first.');
+    let last: unknown;
+    for (const base of homes) {
+      try {
+        const invite = await this.httpAt<{ code: string; expiresAt: number; role: string; endpoints: string[] }>(
+          base, '/api/invite', { method: 'POST', body: JSON.stringify({ role }) });
+        return { ...invite, base };
+      } catch (error) { last = error; }
+    }
+    throw last;
   }
 
   /** Close the pairing window now; devices already paired are untouched. */
-  closePairing() { return this.http('/api/auth/close', { method: 'POST' }); }
+  closePairing(base = this.relay) { return this.httpAt(base, '/api/auth/close', { method: 'POST' }); }
 
   /** A new short-lived password, for signing in another phone or browser. */
-  newPassword(ttlMs?: number) {
-    return this.http<{ password: string; expiresAt: number }>('/api/auth/rotate', {
-      method: 'POST', body: JSON.stringify({ ttlMs }),
-    });
+  async newPassword(ttlMs?: number) {
+    const homes = [...new Set([this.relay, ...this.endpoints])]
+      .filter((base) => { try { return !LOOPBACK_HOST.test(new URL(base).hostname); } catch { return false; } })
+      .sort((a, b) => Number(!a.startsWith('https://')) - Number(!b.startsWith('https://')));
+    let last: unknown;
+    for (const base of homes) {
+      try {
+        const current = await this.devices(base);
+        const invite = await this.httpAt<{ password: string; expiresAt: number }>(base, '/api/auth/rotate', {
+          method: 'POST', body: JSON.stringify({ ttlMs }),
+        });
+        return { ...invite, base, knownDeviceIds: current.devices.map((device) => device.id) };
+      } catch (error) { last = error; }
+    }
+    throw last ?? new Error('No address is reachable from another device. Run helm setup on your home first.');
   }
 
   /**

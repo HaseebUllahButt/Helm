@@ -12,6 +12,11 @@ const AGENT_UNIT = 'helm-agent.service';
 const SERVE_UNIT = 'helm-serve.service';
 const unitDir = join(HOME, '.config/systemd/user');
 const binPath = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
+const LAUNCH_LABEL = 'dev.helm.serve';
+const launchFile = join(HOME, 'Library/LaunchAgents', `${LAUNCH_LABEL}.plist`);
+const launchDomain = () => `gui/${userInfo().uid}`;
+const xml = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 
 /** Quote one systemd ExecStart/Environment value without involving a shell. */
 export function systemdArg(value) {
@@ -40,9 +45,28 @@ export async function installService({ mode = 'agent', args = [] } = {}) {
     console.log('(skipping service install: HELM_NO_SERVICE=1)');
     return { installed: false };
   }
+  if (platform() === 'darwin') {
+    const searchPath = [join(HOME, '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH].filter(Boolean).join(':');
+    const logs = join(HOME, 'Library/Logs/helm');
+    mkdirSync(logs, { recursive: true });
+    mkdirSync(join(HOME, 'Library/LaunchAgents'), { recursive: true });
+    writeFileSync(launchFile, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>${LAUNCH_LABEL}</string>
+<key>ProgramArguments</key><array>${[process.execPath, binPath, ...command].map((v) => `<string>${xml(v)}</string>`).join('')}</array>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(searchPath)}</string><key>NODE_ENV</key><string>production</string></dict>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>StandardOutPath</key><string>${xml(join(logs, 'serve.log'))}</string>
+<key>StandardErrorPath</key><string>${xml(join(logs, 'serve.log'))}</string>
+</dict></plist>\n`);
+    await exec('launchctl', ['bootout', `${launchDomain()}/${LAUNCH_LABEL}`]).catch(() => {});
+    await exec('launchctl', ['bootstrap', launchDomain(), launchFile]);
+    return { installed: true, unit: LAUNCH_LABEL };
+  }
   if (platform() !== 'linux') {
     console.log(
-      `\nautomatic service install is Linux-only for now. Run this to keep helm up:\n` +
+      `\nautomatic service install supports Linux and macOS. Run this to keep helm up:\n` +
       `  ${process.execPath} ${binPath} run\n`
     );
     return { installed: false };
@@ -117,6 +141,12 @@ WantedBy=default.target
 export async function uninstallService({ mode = 'agent' } = {}) {
   const UNIT = mode === 'serve' ? SERVE_UNIT : AGENT_UNIT;
   if (process.env.HELM_NO_SERVICE === '1') return { removed: false };
+  if (platform() === 'darwin') {
+    await exec('launchctl', ['bootout', `${launchDomain()}/${LAUNCH_LABEL}`]).catch(() => {});
+    const removed = existsSync(launchFile);
+    rmSync(launchFile, { force: true });
+    return { removed };
+  }
   if (platform() !== 'linux') return { removed: false };
   await exec('systemctl', ['--user', 'disable', '--now', UNIT]).catch(() => {});
   await (await import('./update.js')).removeUpdateTimer().catch(() => {});
@@ -124,4 +154,59 @@ export async function uninstallService({ mode = 'agent' } = {}) {
   if (existsSync(file)) rmSync(file);
   await exec('systemctl', ['--user', 'daemon-reload']).catch(() => {});
   return { removed: true };
+}
+
+/** Pause running Helm units before changing this machine's network. */
+export async function pauseServices() {
+  if (process.env.HELM_NO_SERVICE === '1') return [];
+  if (platform() === 'darwin') {
+    const active = await exec('launchctl', ['print', `${launchDomain()}/${LAUNCH_LABEL}`]).then(() => true, () => false);
+    if (!active) return [];
+    await exec('launchctl', ['bootout', `${launchDomain()}/${LAUNCH_LABEL}`]);
+    return [LAUNCH_LABEL];
+  }
+  if (platform() !== 'linux') return [];
+  const active = [];
+  try {
+    for (const unit of [SERVE_UNIT, AGENT_UNIT]) {
+      const running = await exec('systemctl', ['--user', 'is-active', unit])
+        .then(({ stdout }) => stdout.trim() === 'active', () => false);
+      if (running) {
+        await exec('systemctl', ['--user', 'stop', unit]);
+        active.push(unit);
+      }
+    }
+  } catch (err) {
+    await resumeServices(active);
+    throw err;
+  }
+  return active;
+}
+
+export async function resumeServices(units) {
+  if (platform() === 'darwin') {
+    if (units.length) await exec('launchctl', ['bootstrap', launchDomain(), launchFile]);
+    return;
+  }
+  for (const unit of units) await exec('systemctl', ['--user', 'start', unit]);
+}
+
+/** Reinstalling preserves an existing home's listen/advertise arguments. */
+export async function startService({ port = 8787 } = {}) {
+  if (platform() === 'darwin' && process.env.HELM_NO_SERVICE !== '1' && existsSync(launchFile)) {
+    await exec('launchctl', ['bootout', `${launchDomain()}/${LAUNCH_LABEL}`]).catch(() => {});
+    await exec('launchctl', ['bootstrap', launchDomain(), launchFile]);
+    return { installed: true, unit: LAUNCH_LABEL };
+  }
+  if (platform() === 'linux' && process.env.HELM_NO_SERVICE !== '1') {
+    for (const unit of [SERVE_UNIT, AGENT_UNIT]) {
+      if (existsSync(join(unitDir, unit))) {
+        await exec('systemctl', ['--user', 'daemon-reload']);
+        await exec('systemctl', ['--user', 'enable', unit]);
+        await exec('systemctl', ['--user', 'restart', unit]);
+        return { installed: true, unit };
+      }
+    }
+  }
+  return installService({ mode: 'serve', args: ['--port', String(port)] });
 }
