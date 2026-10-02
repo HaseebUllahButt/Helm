@@ -102,6 +102,8 @@ function ViewLoading({ title, onBack }: { title: string; onBack: () => void }) {
   );
 }
 
+const DONE_FOR_MS = 24 * 60 * 60_000;
+
 const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', cls: 'other' };
 
 /**
@@ -934,6 +936,12 @@ function Shell({ client, conn, onSignOut }: {
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
   const runningNow = everyone.filter(({ s }) => s.status === 'working').sort(byNewest);
+  // A thread that stops working leaves "running" for "done" rather than
+  // vanishing from the sidebar: it is where you look for what finished. A day
+  // is long enough to come back to it; older work lives on its machine.
+  const doneNow = everyone.filter(({ s }) => s.driver && (s.turns ?? 0) > 0
+    && s.status !== 'working' && s.status !== 'blocked'
+    && Date.now() - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest).slice(0, 30);
   const snoozeThread = (envId: string, s: Session, until: number) => {
     setSnooze(`${envId}:${s.id}`, until);
     setSnoozeUndo({ key: `${envId}:${s.id}`, title: s.title, until });
@@ -1091,6 +1099,16 @@ function Shell({ client, conn, onSignOut }: {
                   ))}
                 </div>
               </>
+            )}
+
+            {doneNow.length > 0 && (
+              <Fold title="done" count={doneNow.length} remember="sidebar:done">
+                <div className="rows plain">
+                  {doneNow.map(({ env: e, s }) => (
+                    <HomeRow key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)} />
+                  ))}
+                </div>
+              </Fold>
             )}
 
             <Fold title="machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
