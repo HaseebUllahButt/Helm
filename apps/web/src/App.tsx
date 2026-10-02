@@ -3993,7 +3993,7 @@ function MediaView({ client, env, onBack }: {
  */
 const PREFS = 'helm.prefs';
 type Prefs = Record<string, { account?: string; hidden?: string[] }>;
-interface PickerPrefs { hidden: string[]; last: string | null; favs?: Record<string, string[]> }
+interface PickerPrefs { hidden: string[]; last: string | null; agent?: string | null; favs?: Record<string, string[]> }
 const loadPrefs = (): Prefs => { try { return JSON.parse(localStorage.getItem(PREFS) || '{}'); } catch { return {}; } };
 const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* full */ } };
 
@@ -4024,6 +4024,8 @@ function Start({ client, env, cwd, onBack, onStarted }: {
   const onMachine = useRef(false);
   const [hidden, setHidden] = useState<Set<string>>(() => new Set(prefs.current[env.id]?.hidden ?? []));
   const [choosing, setChoosing] = useState(false);
+  // The agent picked on purpose as this machine's default; null when none is.
+  const [preferred, setPreferred] = useState<string | null>(null);
 
   const savePicker = (change: Partial<PickerPrefs>) => {
     if (onMachine.current) {
@@ -4061,8 +4063,11 @@ function Start({ client, env, cwd, onBack, onStarted }: {
         }
         const seen = new Set(picker.hidden);
         setHidden(seen);
-        // A hidden row cannot be the selected one: it is not on the screen.
-        setKey(list.find((a) => a.key === picker.last && !seen.has(a.key))?.key
+        setPreferred(picker.agent ?? null);
+        // The chosen default first, then the last one used. A hidden row
+        // cannot be the selected one: it is not on the screen.
+        setKey(list.find((a) => a.key === picker.agent && !seen.has(a.key))?.key
+          ?? list.find((a) => a.key === picker.last && !seen.has(a.key))?.key
           ?? list.find((a) => !seen.has(a.key))?.key ?? '');
       })
       .catch((e) => setError(e.message));
@@ -4141,7 +4146,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
               >
                 <EngineMark engine={e.cls} />
                 <span className="grow">
-                  <span className="rt">{e.label} <span className="dim">· {accountName(a)}</span>{a.token && <span className="tag">API key</span>}</span>
+                  <span className="rt">{e.label} <span className="dim">· {accountName(a)}</span>{a.token && <span className="tag">API key</span>}{a.key === preferred && <span className="tag key">default</span>}</span>
                   {a.key === key && <span className="rm">{startSummary(a)}</span>}
                 </span>
                 {a.key === key && <span className="check"><Icon name="check" size={16} /></span>}
@@ -4149,6 +4154,11 @@ function Start({ client, env, cwd, onBack, onStarted }: {
             );
           })}
         </div>
+        {account && onMachine.current && account.key !== preferred && (
+          <button className="linkbtn makedefault" onClick={() => { setPreferred(account.key); savePicker({ agent: account.key }); }}>
+            Make {engineOf(account.engine).label} · {accountName(account)} the default on {env.name}
+          </button>
+        )}
         {accounts?.length === 0 && (
           <div className="empty quiet">
             no agents on {env.name}
@@ -4467,7 +4477,16 @@ function Turn({ m }: { m: Message }) {
       </div>
     );
   }
-  const many = m.tools.length > 3;
+  // Every step folds into one line you can open, whatever the count.
+  const kinds = new Map<string, number>();
+  for (const t of m.tools) { const k = toolKind(t.name); kinds.set(k, (kinds.get(k) ?? 0) + 1); }
+  const word = (k: string, n: number) => k === 'read' ? (n === 1 ? 'Read 1 file' : `Read ${n} files`)
+    : k === 'edit' ? (n === 1 ? 'Edited 1 file' : `Edited ${n} files`)
+    : k === 'run' ? (n === 1 ? 'Ran 1 command' : `Ran ${n} commands`)
+    : k === 'search' ? (n === 1 ? 'Searched' : `Searched ${n} times`)
+    : (n === 1 ? 'Used 1 tool' : `Used ${n} tools`);
+  const summary = [...kinds].map(([k, n]) => word(k, n)).join(' · ');
+  const many = m.tools.length > 1;
   const rows = m.tools.map((t, j) => (
     <div key={j} className="act">
       <span className="aicon"><Icon name={toolKind(t.name)} size={15} /></span>
@@ -4477,7 +4496,7 @@ function Turn({ m }: { m: Message }) {
   return (
     <div className="turn assistant">
       {m.tools.length > 0 && (many
-        ? <details className="actgroup"><summary><span className="aicon"><Icon name="tool" size={15} /></span><span className="alabel">{m.tools.length} steps</span><span className="achev"><Icon name="forward" size={13} /></span></summary>{rows}</details>
+        ? <details className="actgroup"><summary><span className="aicon"><Icon name="tool" size={15} /></span><span className="alabel">{summary}</span><span className="achev"><Icon name="forward" size={13} /></span></summary>{rows}</details>
         : rows)}
       {m.text && <Markdown text={m.text} className="prose" />}
       {!m.text && !m.tools.length && m.thinking && <div className="act"><span className="aicon"><Icon name="think" size={15} /></span><span className="alabel">Thinking</span></div>}

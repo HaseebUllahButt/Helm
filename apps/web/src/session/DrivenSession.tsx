@@ -382,6 +382,33 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     } catch (e: any) { setError(e.message); }
   };
   const controls = Controls({ options, session, busy, onPick: pick, onFavs: saveFavs, onDefault: saveDefault });
+
+  // Everything this chat runs with - the account, model, thinking, permissions
+  // and speed - becomes what a new chat on this machine starts with, for
+  // every device, until it is changed again.
+  const [notice, setNotice] = useState('');
+  const saveAsDefaults = () => call(async () => {
+    if (!options) throw new Error('Still reading this chat\'s settings - try again in a moment.');
+    // What the model chip shows is what this chat runs with.
+    const model = session.model || session.engineModel || options.default || '';
+    const effort = session.effort || session.engineEffort || '';
+    const mode = session.mode && session.mode !== 'plan' ? session.mode : '';
+    const speed = session.speed || '';
+    if (model) {
+      const r: any = await client.rpc(env.id, 'model.prefs', {
+        profileId: session.profileId, default: model, approved: options.prefs?.approved ?? [],
+      }, 15_000);
+      setOptions((now) => now && { ...now, prefs: r.prefs });
+    }
+    const d: any = await client.rpc(env.id, 'profile.defaults', {
+      profileId: session.profileId, effort: effort || undefined, mode: mode || undefined, speed: speed || undefined,
+    }, 15_000);
+    setOptions((now) => now && { ...now, defaults: d.defaults });
+    if (options.account) await client.rpc(env.id, 'picker.prefs', { agent: options.account }, 15_000);
+    const label = (m: string) => options.labels?.[m] ?? m;
+    setNotice(`New chats on ${env.name} now start with ${[engine, model && label(model), effort, mode && (options.modes?.find((x) => x.id === mode)?.short ?? mode), speed].filter(Boolean).join(' · ')}.`);
+    setTimeout(() => setNotice(''), 5000);
+  });
   // What the folder looks like to git. Asked again whenever a turn ends,
   // which is when something has usually just changed.
   const git = useGitStatus(client, env, session.cwd, status === 'working' ? 'working' : `rest:${session.updatedAt ?? 0}`);
@@ -470,6 +497,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             <button className="narrow-only" aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
               {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
             </button>
+            {!session.brain && <button onClick={() => { setMenu(null); void saveAsDefaults(); }}>Use these settings for new chats</button>}
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
             {session.delegation?.parentId && onOpenSession && <button onClick={() => call(async () => {
               const r = await client.rpc<{ session: Session }>(env.id, 'session.events', { id: session.delegation!.parentId, limit: 1 });
@@ -514,6 +542,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {/* Above the input, not under it: below the composer it landed in
             the home-bar zone and pushed the input up. A tap dismisses it. */}
         {(error || logError) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || logError}</div>}
+        {notice && !error && <div className="notice floating" role="status" onClick={() => setNotice('')}><Icon name="check" size={14} />{notice}</div>}
         {controls.sheet}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}

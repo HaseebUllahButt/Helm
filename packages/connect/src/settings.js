@@ -106,7 +106,8 @@ export function saveModelPrefs(profile, { default: def = null, approved = [] } =
  * What the new-session picker on this machine shows: accounts hidden from
  * it, the account last started, and starred models per engine. Kept on the
  * machine rather than in a browser so a phone and a laptop open the same
- * picker. Hidden and last are account keys (see accountKey).
+ * picker. Hidden, last and agent (the default one) are account keys (see
+ * accountKey).
  */
 export function pickerPrefs(cfg = loadSettings()) {
   const p = cfg?.picker ?? {};
@@ -119,6 +120,8 @@ export function pickerPrefs(cfg = loadSettings()) {
   return {
     hidden: strings(p.hidden),
     last: typeof p.last === 'string' && p.last ? p.last : null,
+    // Chosen on purpose, so it outlasts starting something else once.
+    agent: typeof p.agent === 'string' && p.agent ? p.agent : null,
     favs,
   };
 }
@@ -129,6 +132,7 @@ export function savePickerPrefs(change = {}) {
   const next = pickerPrefs(cfg);
   if ('hidden' in change) next.hidden = pickerPrefs({ picker: { hidden: change.hidden } }).hidden;
   if ('last' in change) next.last = typeof change.last === 'string' && change.last ? change.last : null;
+  if ('agent' in change) next.agent = typeof change.agent === 'string' && change.agent ? change.agent : null;
   if (change.favs && typeof change.favs === 'object') {
     for (const [engine, list] of Object.entries(change.favs)) {
       if (!/^[\w.-]{1,40}$/.test(engine)) continue;

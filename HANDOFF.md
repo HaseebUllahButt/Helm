@@ -16,6 +16,35 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-02 (later) — Folded tool calls, Inter, defaults from a chat
+
+**Tool calls fold.** In a driven chat, everything between two things the agent
+said (tool calls, commands, edits, subagents, thinking) is one line, e.g.
+"Read 1 file · Ran 2 commands · Edited App.tsx · 1 failed". Closed by default;
+tap to open. Opened, each command is one line and its output opens only on
+its own tap. While the agent works, the line reads "Running npm run build ·
+Read 1 file so far" and the command's last 4 lines show only if opened. The
+group is keyed by its first item, so it keeps its open state as it grows.
+Outside-helm chats (App.tsx `Turn`) fold any run of 2+ tools with the same
+kind of summary. Browser test: `test/browser/activity-fold.test.mjs`.
+
+**Font.** Inter (variable, Latin, self-hosted at `/fonts/inter-latin-var.woff2`,
+precached; shell cache bumped to v14) for everything except the conversation:
+`.chat-wrap, .chat, .composer-wrap` keep the system face, as the owner asked.
+Titles use Inter too; only the wordmark keeps Archivo.
+
+**Defaults from a chat.** Chat ⋯ menu → "Use these settings for new chats"
+saves the account as the machine's default agent (`picker.agent`, sticky -
+starting another agent once does not move it; `last` still records the last
+used), plus model, thinking, permissions and speed for that account. The start
+screen picks `agent` first, tags it "default", and offers "Make X the default
+on <machine>" for any other selected row. `model.list` now returns `account`.
+
+**Terminals on the laptop already have the pty.** Terminals run in
+`helm-terminals-<uid>` (restarted with helm-serve, `"pty":true` since 12:17);
+only agents run in `helm-procs-<uid>`, which still says `"pty":false` and does
+not need it. The earlier note above saying laptop terminals stay slow was wrong.
+
 ## 2026-10-02 — Git graph rebuilt, terminal keys, picker choices on the machine
 
 **Git graph.** Rows are 44px (were 72), so about twice the history fits. Each

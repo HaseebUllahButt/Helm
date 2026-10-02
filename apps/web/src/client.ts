@@ -166,6 +166,8 @@ export interface ModelList {
   favs?: string[];
   /** What a new chat on this account starts with, besides the model. */
   defaults?: { effort?: string; mode?: string; speed?: string } | null;
+  /** The account key the machine files this account's defaults under. */
+  account?: string;
 }
 
 /**

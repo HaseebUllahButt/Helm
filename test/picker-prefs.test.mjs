@@ -14,7 +14,7 @@ test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }))
 const { pickerPrefs, savePickerPrefs, saveModelPrefs, loadSettings } = await import('../packages/connect/src/settings.js');
 
 test('an untouched machine hides nothing and remembers nothing', () => {
-  assert.deepEqual(pickerPrefs(), { hidden: [], last: null, favs: {} });
+  assert.deepEqual(pickerPrefs(), { hidden: [], last: null, agent: null, favs: {} });
 });
 
 test('a change keeps the fields it does not mention', () => {
@@ -22,9 +22,12 @@ test('a change keeps the fields it does not mention', () => {
   savePickerPrefs({ last: 'codex|~/.codex-personal|' });
   savePickerPrefs({ favs: { codex: ['gpt-6-luna'] } });
   savePickerPrefs({ favs: { claude: ['claude-fable-5-1'] } });
+  savePickerPrefs({ agent: 'claude|~/.claude-personal|' });
+  savePickerPrefs({ last: 'codex|~/.codex-personal|' });
   assert.deepEqual(pickerPrefs(), {
     hidden: ['grok||', 'cursor||'],
     last: 'codex|~/.codex-personal|',
+    agent: 'claude|~/.claude-personal|',
     favs: { codex: ['gpt-6-luna'], claude: ['claude-fable-5-1'] },
   });
   // It is the machine's file, read fresh: what another device sees.

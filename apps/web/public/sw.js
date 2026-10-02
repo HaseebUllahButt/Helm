@@ -8,7 +8,7 @@
  */
 // Bump this whenever the shell changes so an installed PWA cannot stay on a
 // previous bundle forever when its page has been left open for days.
-const CACHE = 'helm-shell-v13';
+const CACHE = 'helm-shell-v14';
 const NAVIGATION_TIMEOUT_MS = 1200;
 /**
  * Hashed bundles live apart from the shell: their names change every deploy,
@@ -20,7 +20,7 @@ const MAX_ASSETS = 60;
 const SHELL = [
   '/', '/index.html', '/manifest.webmanifest',
   '/icon.svg', '/favicon.svg', '/icon-180.png', '/icon-192.png', '/favicon-32.png',
-  '/fonts/archivo-semiexpanded-600.woff2',
+  '/fonts/archivo-semiexpanded-600.woff2', '/fonts/inter-latin-var.woff2',
 ];
 
 /**

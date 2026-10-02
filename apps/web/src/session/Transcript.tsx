@@ -94,20 +94,45 @@ function ToolItem({ item }: { item: Item }) {
 function stepsSummary(items: Item[]): string {
   const order: string[] = [];
   const count: Record<string, number> = {};
-  for (const it of items) {
-    const g = toolKind(it.name ?? '');
+  const edited: string[] = [];
+  const add = (g: string) => {
     if (!(g in count)) { count[g] = 0; order.push(g); }
     count[g] += 1;
+  };
+  for (const it of items) {
+    if (it.kind === 'thinking') continue;
+    if (it.kind === 'command') add('run');
+    else if (it.kind === 'subagent') add('agent');
+    else if (it.kind === 'edit') {
+      const paths = (it.changes ?? []).map((c) => c.path);
+      for (const p of paths.length ? paths : ['']) if (!edited.includes(p)) { edited.push(p); add('edit'); }
+    } else add(toolKind(it.name ?? ''));
   }
   const many = (n: number, one: string, more: string) => (n === 1 ? one : more.replace('#', String(n)));
-  return order.map((g) => {
+  const names = edited.filter(Boolean).map((p) => p.split('/').pop());
+  const parts = order.map((g) => {
     const n = count[g];
     if (g === 'read') return many(n, 'Read 1 file', 'Read # files');
-    if (g === 'edit') return many(n, 'Edited 1 file', 'Edited # files');
+    if (g === 'edit') return names.length && names.length <= 2 && names.length === n ? `Edited ${names.join(', ')}` : many(n, 'Edited 1 file', 'Edited # files');
     if (g === 'run') return many(n, 'Ran 1 command', 'Ran # commands');
     if (g === 'search') return many(n, 'Searched', 'Searched # times');
+    if (g === 'agent') return many(n, 'Ran 1 agent', 'Ran # agents');
     return many(n, 'Used 1 tool', 'Used # tools');
-  }).join(' · ');
+  });
+  return parts.join(' · ') || 'Thought';
+}
+
+/** What the newest step is doing, in one line, while it is still going. */
+function liveLine(it: Item): string {
+  if (it.kind === 'thinking') return 'Thinking';
+  if (it.kind === 'command') return it.command ? `Running ${it.command}` : 'Running a command';
+  if (it.kind === 'edit') return `Editing ${(it.changes ?? []).map((c) => shortPath(c.path)).join(', ') || 'a file'}`;
+  if (it.kind === 'subagent') {
+    const input = it.input ?? tryParse(it.inputJson);
+    return `${input?.subagent_type ?? it.name ?? 'Agent'}: ${it.agent?.description ?? input?.description ?? 'working'}`;
+  }
+  const summary = toolSummary(it);
+  return `${it.name ?? 'Tool'}${summary ? ` ${summary}` : ''}`;
 }
 
 /** "12s" from the first call to the last, when the timestamps are there. */
@@ -135,18 +160,38 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
   );
 }
 
-function ToolRun({ items, tools, byParent }: { items: Item[]; tools: Item[]; byParent: Map<string, Item[]> }) {
-  const failed = tools.filter((i) => i.status === 'error').length;
+/**
+ * Everything the agent did between two things it said - reads, searches,
+ * commands, edits, helpers - folded into one line you can open. While it
+ * works, the line says what it is doing now; nothing it prints lands in the
+ * conversation unless you ask for it.
+ */
+function ActivityGroup({ items, byParent, live }: { items: Item[]; byParent: Map<string, Item[]>; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const steps = items.filter((i) => i.kind !== 'thinking');
+  const failed = steps.filter((i) => i.status === 'error' || (i.kind === 'command' && i.exitCode != null && i.exitCode !== 0)).length;
+  const current = live ? [...items].reverse().find((i) => i.status === 'streaming') ?? items.at(-1) : undefined;
+  const done = live ? items.filter((i) => i !== current) : items;
+  const first = steps[0] ?? items[0];
+  const span = spanOf(items);
   return (
-    <details className="actgroup steps">
-      <summary>
-        <span className="aicon"><ToolIcon name={tools[0].name} /></span>
-        <span className="alabel">{stepsSummary(tools)}{failed ? ` · ${failed} failed` : ''}</span>
-        {spanOf(items) && <span className="ameta">{spanOf(items)}</span>}
-        <span className="achev"><Icon name="forward" size={13} /></span>
-      </summary>
-      <div className="steps-body">{items.map((it) => <ItemView key={it.id} item={it} byParent={byParent} />)}</div>
-    </details>
+    <div className={`activity${open ? ' open' : ''}${live ? ' live' : ''}`}>
+      <button type="button" className="activity-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <span className="aicon">{first.kind === 'command' ? <Icon name="run" size={15} />
+          : first.kind === 'edit' ? <Icon name="edit" size={15} />
+          : first.kind === 'subagent' ? <Icon name="subagents" size={15} />
+          : first.kind === 'thinking' ? <Icon name="think" size={15} />
+          : <ToolIcon name={first.name} />}</span>
+        <span className="alabel">
+          {live && current
+            ? <><span className="shine">{liveLine(current)}</span>{done.some((i) => i.kind !== 'thinking') && <span className="activity-done"> · {stepsSummary(done)} so far</span>}</>
+            : <>{stepsSummary(items)}{failed ? <span className="bad"> · {failed} failed</span> : ''}</>}
+        </span>
+        {!live && span && <span className="ameta">{span}</span>}
+        <span className={`achev${open ? ' open' : ''}`}><Icon name="forward" size={13} /></span>
+      </button>
+      {open && <div className="steps-body">{items.map((it) => <ItemView key={it.id} item={it} byParent={byParent} />)}</div>}
+    </div>
   );
 }
 
@@ -154,23 +199,24 @@ function CommandItem({ item }: { item: Item }) {
   const live = item.status === 'streaming';
   const out = (item.output ?? item.text ?? '').replace(/\s+$/, '');
   const lines = out ? out.split('\n') : [];
+  // Output is folded until asked for: the command says what happened, and
+  // a wall of its output is what made a conversation unreadable. While it
+  // runs, its last few lines show it is alive.
   const [open, setOpen] = useState(false);
-  const tail = open ? lines : lines.slice(-6);
+  const shown = open ? lines : live ? lines.slice(-4) : [];
   return (
     <div className={`cmd${item.status === 'error' ? ' bad' : ''}`}>
-      <div className="cmd-head">
+      <button type="button" className="cmd-head" disabled={!lines.length} aria-expanded={lines.length ? open : undefined}
+        onClick={() => setOpen((v) => !v)}>
         <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}><Icon name="run" size={15} /></span>
         <code className={`cmd-line${live ? ' shine' : ''}`}>{item.command}</code>
         {item.status === 'declined' && <span className="ameta">declined</span>}
         {item.exitCode != null && item.exitCode !== 0 && <span className="ameta bad">exit {item.exitCode}</span>}
         {live && item.elapsed != null && item.elapsed > 2 && <span className="ameta">{Math.round(item.elapsed)}s</span>}
-      </div>
-      {lines.length > 0 && (
-        <pre className="cmd-out" onClick={() => lines.length > 6 && setOpen((v) => !v)}>
-          {lines.length > 6 && !open && <span className="more">… {lines.length - 6} more lines</span>}
-          {tail.join('\n')}
-        </pre>
-      )}
+        {!live && lines.length > 0 && <span className="ameta">{lines.length} {lines.length === 1 ? 'line' : 'lines'}</span>}
+        {lines.length > 0 && !live && <span className={`achev${open ? ' open' : ''}`}><Icon name="forward" size={13} /></span>}
+      </button>
+      {shown.length > 0 && <pre className="cmd-out">{shown.join('\n')}</pre>}
     </div>
   );
 }
@@ -392,11 +438,12 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
       )}
       <div className="turn assistant">
         {(() => {
-          // Runs of finished tool calls fold into one line. A run still at
-          // the end of a turn in progress stays as lines: the newest call is
-          // the news, and a group that re-forms on every call would flicker.
+          // Everything between two things the agent said folds into one line:
+          // tool calls, commands and their output, edits, helpers. Keyed by
+          // the run's first item, so a run that grows while the agent works
+          // keeps the same line - and whether you opened it.
           const nodes: ReactNode[] = [];
-          const quiet = (it: Item) => it.kind === 'tool' || it.kind === 'thinking';
+          const quiet = (it: Item) => it.kind !== 'text' && it.kind !== 'error';
           for (let i = 0; i < roots.length;) {
             if (!quiet(roots[i])) {
               nodes.push(<ItemView key={roots[i].id} item={roots[i]} byParent={byParent} commandOutput={commandOutput} />);
@@ -406,11 +453,12 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
             let j = i;
             while (j < roots.length && quiet(roots[j])) j += 1;
             const run = roots.slice(i, j);
-            const tools = run.filter((x) => x.kind === 'tool');
-            // Thinking rides along in the fold - "Thought" between two reads
-            // is not news - but a lone thought with no tool call stays as it is.
-            if (tools.length > 0 && run.length > 1 && (d || j < roots.length) && run.every((x) => x.status !== 'streaming')) {
-              nodes.push(<ToolRun key={run[0].id} items={run} tools={tools} byParent={byParent} />);
+            const live = !d && j === roots.length && run.some((x) => x.status === 'streaming');
+            // A lone thought, or a single quiet one-line tool call, is already
+            // one line; anything more, or anything with output, folds.
+            const single = run.length === 1 && (run[0].kind === 'thinking' || (run[0].kind === 'tool' && !run[0].output && !run[0].error));
+            if (!single || live) {
+              nodes.push(<ActivityGroup key={run[0].id} items={run} byParent={byParent} live={live} />);
             } else {
               run.forEach((x) => nodes.push(<ItemView key={x.id} item={x} byParent={byParent} commandOutput={commandOutput} />));
             }

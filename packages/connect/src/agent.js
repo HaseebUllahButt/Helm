@@ -1245,7 +1245,7 @@ export class Daemon {
         // picker can show and change both without a second round trip.
         return {
           ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine),
-          favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile),
+          favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile), account: accountKey(profile),
         };
       }
 
