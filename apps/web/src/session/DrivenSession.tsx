@@ -358,7 +358,30 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       : s === 'working' ? <span className="chip working"><i />working{ago}</span> : null;
   };
 
-  const controls = Controls({ options, session, busy, onPick: pick });
+  // Stars and new-chat defaults live on the machine, so a phone and a laptop
+  // open the same picker. Older machines answer without `favs`, and the
+  // sheet falls back to this browser's own stars.
+  const saveFavs = (next: string[]) => {
+    setOptions((now) => now && { ...now, favs: next });
+    client.rpc(env.id, 'picker.prefs', { favs: { [session.engine]: next } }, 15_000).catch((e) => setError(e.message));
+  };
+  const saveDefault = async (kind: Kind, value: string) => {
+    if (!options) return;
+    try {
+      if (kind === 'model') {
+        const r: any = await client.rpc(env.id, 'model.prefs', {
+          profileId: session.profileId, default: value, approved: options.prefs?.approved ?? [],
+        }, 15_000);
+        setOptions((now) => now && { ...now, prefs: r.prefs });
+      } else {
+        const r: any = await client.rpc(env.id, 'profile.defaults', {
+          profileId: session.profileId, ...(options.defaults ?? {}), [kind]: value,
+        }, 15_000);
+        setOptions((now) => now && { ...now, defaults: r.defaults });
+      }
+    } catch (e: any) { setError(e.message); }
+  };
+  const controls = Controls({ options, session, busy, onPick: pick, onFavs: saveFavs, onDefault: saveDefault });
   // What the folder looks like to git. Asked again whenever a turn ends,
   // which is when something has usually just changed.
   const git = useGitStatus(client, env, session.cwd, status === 'working' ? 'working' : `rest:${session.updatedAt ?? 0}`);

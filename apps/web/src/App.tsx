@@ -212,6 +212,9 @@ const shortPath = (p: string) => {
 
 const byRecent = (a: Session, b: Session) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 
+/** A terminal helm opened and still holds - not a shell someone runs at the keyboard. */
+const ownTerminal = (s: Session) => s.engine === 'shell' && !s.archived && s.alive !== false && !s.adopted;
+
 /**
  * How far back a machine screen looks, and what the window does not apply to.
  *
@@ -673,7 +676,7 @@ function Shell({ client, conn, onSignOut }: {
     for (const e of envs) {
       items.push({
         id: `m:${e.id}`, group: 'machine', title: e.name,
-        sub: `${e.kind ?? 'machine'} · ${e.online ? 'online' : 'offline'}`, keywords: 'machine computer',
+        sub: e.online ? 'online' : 'offline', keywords: 'machine computer',
         run: () => openEnv(e.id),
       });
       for (const s of agentsOf(e.id)) {
@@ -1105,7 +1108,7 @@ function Shell({ client, conn, onSignOut }: {
                     >
                       <span className={`mdot ${e.online ? 'on' : 'off'}`} />
                       <span className="grow">
-                        <span className="rt"><span className="rt-text">{e.name}</span>{e.kind && <span className="tag">{e.kind}</span>}</span>
+                        <span className="rt"><span className="rt-text">{e.name}</span></span>
                         <span className="rm">
                           {e.online
                             ? (list.length ? `${list.length} running${working ? `, ${working} working` : ''}` : 'idle')
@@ -1212,7 +1215,7 @@ function Shell({ client, conn, onSignOut }: {
                     <button key={e.id} className={`row tall machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
                       <span className={`mdot ${e.online ? 'on' : 'off'}`} />
                       <span className="grow">
-                        <span className="rt"><span className="rt-text">{e.name}</span>{e.kind && <span className="tag">{e.kind}</span>}</span>
+                        <span className="rt"><span className="rt-text">{e.name}</span></span>
                         <span className="rm">
                           {e.online
                             ? (list.length ? `${list.length} running` : 'Nothing running')
@@ -1344,8 +1347,23 @@ function Shell({ client, conn, onSignOut }: {
             key={view.session.id}
             client={client} env={env} onTranscribe={transcribeVia(env.id)}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
+            terminals={(sessions[env.id] ?? []).filter(ownTerminal).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))}
+            onSwitch={(s) => restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: s }])}
+            onNewTerminal={async () => {
+              const r = await client.rpc<{ session: Session }>(env.id, 'session.start', { cwd: '~', profileId: 'shell' }, 45_000);
+              loadSessions(env.id);
+              restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: r.session }]);
+            }}
             onBack={back}
-            onClosed={() => { loadSessions(env.id); back(); }}
+            onClosed={() => {
+              loadSessions(env.id);
+              // Closing one terminal of several lands on a neighbour, not the machine.
+              const next = view.session.engine === 'shell'
+                ? (sessions[env.id] ?? []).filter((s) => ownTerminal(s) && s.id !== view.session.id).sort(byRecent)[0]
+                : undefined;
+              if (next) restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: next }]);
+              else back();
+            }}
             onArchived={() => { loadSessions(env.id); back(); }}
             onSession={onSessionChanged(env.id)}
           />
@@ -2175,22 +2193,16 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   useEffect(() => { reloadProjects(); }, [reloadProjects, projectCwds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openTerminal = async () => {
+    // Back to the terminal you left, with whatever is running in it still
+    // running: the button used to start a fresh shell and close the old one,
+    // which killed a build or a server mid-run. A new one is the + beside
+    // the terminal's tabs.
+    const open = sessions.filter(ownTerminal).sort(byRecent)[0];
+    if (open) { onOpen(open); return; }
     setOpening(true); setError('');
     try {
-      // Every open is a fresh shell: reopening the last one returned to a
-      // prompt still holding whatever the last command left in it, which
-      // read as the previous session carrying over. Shells helm already ran
-      // are closed once the new one exists - killing them first would leave
-      // a failed start with no terminal at all. Adopted panes are someone
-      // else's shell at a real keyboard; those are left alone.
-      const stale = sessions
-        .filter((s) => s.engine === 'shell' && !s.archived && s.alive !== false && !s.adopted)
-        .map((s) => s.id);
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start',
         { cwd: '~', profileId: 'shell' }, 45_000);
-      for (const id of stale) {
-        client.rpc(env.id, 'session.kill', { id }, 10_000).catch(() => {});
-      }
       reload();
       onOpen(r.session);
     } catch (e: any) { setError(e.message); }
@@ -3209,9 +3221,9 @@ function MachineKind({ client, env, onChanged }: {
   client: Client; env: Environment; onChanged: () => void;
 }) {
   const KINDS = [
-    { id: 'pc' as const, hint: 'runs agents, and controls others' },
-    { id: 'vm' as const, hint: 'a home the others dial - takes an https address and serves it' },
-    { id: 'nas' as const, hint: 'storage for the network - stays reachable' },
+    { id: 'pc' as const, label: 'Computer', hint: 'runs agents, and controls others' },
+    { id: 'vm' as const, label: 'Always-on server', hint: 'a home the others dial - takes an https address and serves it' },
+    { id: 'nas' as const, label: 'Storage', hint: 'storage for the network - stays reachable' },
   ];
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -3236,7 +3248,7 @@ function MachineKind({ client, env, onChanged }: {
             onClick={() => pick(k.id)}>
             <span className="grow">
               <span className="rt">
-                {k.id}{env.kind === k.id && <span className="tag key">current</span>}
+                {k.label}{env.kind === k.id && <span className="tag key">current</span>}
               </span>
               <span className="rm">{k.hint}</span>
             </span>
@@ -3245,9 +3257,9 @@ function MachineKind({ client, env, onChanged }: {
         ))}
       </div>
       <p className="note">
-        A vm takes an https address and serves it; leaving it stops
-        advertising that address. The flag is what the rest of the network
-        sees - a controller is never a choice here, because it runs nothing.
+        An always-on server takes an https address and serves it; switching
+        away stops advertising that address. This only changes what the other
+        machines expect - the name shown everywhere stays the same.
       </p>
       {!env.online && (
         <div className="banner warn">
@@ -3973,8 +3985,15 @@ function MediaView({ client, env, onBack }: {
 
 // -------------------------------------------------------------------- start
 
+/**
+ * Which agents the picker shows and which one was used last. A machine new
+ * enough keeps these itself (`picker.prefs`), so every phone and laptop sees
+ * the same list; this browser's copy is only for older machines, and is
+ * moved onto the machine the first time a newer one is opened.
+ */
 const PREFS = 'helm.prefs';
 type Prefs = Record<string, { account?: string; hidden?: string[] }>;
+interface PickerPrefs { hidden: string[]; last: string | null; favs?: Record<string, string[]> }
 const loadPrefs = (): Prefs => { try { return JSON.parse(localStorage.getItem(PREFS) || '{}'); } catch { return {}; } };
 const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* full */ } };
 
@@ -4001,34 +4020,66 @@ function Start({ client, env, cwd, onBack, onStarted }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const prefs = useRef(loadPrefs());
-  // Accounts this device hides on this machine's picker, stored beside the
-  // remembered account in the same per-machine slot.
+  // True once the machine has said it keeps these itself.
+  const onMachine = useRef(false);
   const [hidden, setHidden] = useState<Set<string>>(() => new Set(prefs.current[env.id]?.hidden ?? []));
   const [choosing, setChoosing] = useState(false);
+
+  const savePicker = (change: Partial<PickerPrefs>) => {
+    if (onMachine.current) {
+      client.rpc(env.id, 'picker.prefs', change, 15_000).catch((e) => setError(e.message));
+      return;
+    }
+    const slot = { ...prefs.current[env.id] };
+    if (change.hidden) slot.hidden = change.hidden;
+    if (change.last) slot.account = change.last;
+    prefs.current = { ...prefs.current, [env.id]: slot };
+    savePrefs(prefs.current);
+  };
 
   useEffect(() => {
     client.rpc(env.id, 'profile.list')
       .then((r: any) => {
         const list = accountsFrom(r.profiles);
         setAccounts(list);
-        const remembered = prefs.current[env.id]?.account;
+        const local = prefs.current[env.id];
+        let picker: PickerPrefs = { hidden: local?.hidden ?? [], last: local?.account ?? null };
+        if (r.picker) {
+          onMachine.current = true;
+          picker = r.picker;
+          // This browser chose before the machine could keep it: hand the
+          // choice over once, then forget the local copy.
+          if (local && !picker.hidden.length && !picker.last && (local.hidden?.length || local.account)) {
+            picker = { ...picker, hidden: local.hidden ?? [], last: local.account ?? null };
+            savePicker({ hidden: picker.hidden, last: picker.last });
+          }
+          if (local) {
+            const { [env.id]: _gone, ...rest } = prefs.current;
+            prefs.current = rest;
+            savePrefs(rest);
+          }
+        }
+        const seen = new Set(picker.hidden);
+        setHidden(seen);
         // A hidden row cannot be the selected one: it is not on the screen.
-        const seen = new Set(prefs.current[env.id]?.hidden ?? []);
-        setKey(list.find((a) => a.key === remembered && !seen.has(a.key))?.key
+        setKey(list.find((a) => a.key === picker.last && !seen.has(a.key))?.key
           ?? list.find((a) => !seen.has(a.key))?.key ?? '');
       })
       .catch((e) => setError(e.message));
-  }, [client, env.id]);
+  }, [client, env.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = accounts?.filter((a) => !hidden.has(a.key)) ?? null;
   const account = shown?.find((a) => a.key === key) ?? null;
+  // Two logins of one CLI can share a folder name; the alias tells them apart.
+  const twins = new Set((accounts ?? []).map((a) => `${a.engine}|${a.account}`)
+    .filter((k, i, all) => all.indexOf(k) !== i));
+  const accountName = (a: Account) => twins.has(`${a.engine}|${a.account}`) ? `${a.account} (${a.profile.id})` : a.account;
 
   const toggleShown = (a: Account) => {
     const next = new Set(hidden);
     if (next.has(a.key)) next.delete(a.key); else next.add(a.key);
     setHidden(next);
-    prefs.current = { ...prefs.current, [env.id]: { ...prefs.current[env.id], hidden: [...next] } };
-    savePrefs(prefs.current);
+    savePicker({ hidden: [...next] });
     // A row nobody can see cannot be the one that starts.
     if (next.has(a.key)) {
       if (a.key === key) setKey(accounts?.find((x) => !next.has(x.key))?.key ?? '');
@@ -4048,11 +4099,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
   const start = async () => {
     if (!account) return;
     setBusy(true); setError('');
-    prefs.current = {
-      ...prefs.current,
-      [env.id]: { ...prefs.current[env.id], account: account.key },
-    };
-    savePrefs(prefs.current);
+    savePicker({ last: account.key });
     try {
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start', {
         cwd, profileId: account.profile.id,
@@ -4094,7 +4141,8 @@ function Start({ client, env, cwd, onBack, onStarted }: {
               >
                 <EngineMark engine={e.cls} />
                 <span className="grow">
-                  <span className="rt">{e.label} <span className="dim">· {a.account}</span>{a.token && <span className="tag">API key</span>}</span>
+                  <span className="rt">{e.label} <span className="dim">· {accountName(a)}</span>{a.token && <span className="tag">API key</span>}</span>
+                  {a.key === key && <span className="rm">{startSummary(a)}</span>}
                 </span>
                 {a.key === key && <span className="check"><Icon name="check" size={16} /></span>}
               </button>
@@ -4128,7 +4176,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
         <Sheet onClose={() => setChoosing(false)} label="Choose which agents show">
           <div className="modal-title">Agents on this screen</div>
           <div className="modal-body">
-            Checked agents show in the list. Unchecking only hides one here — it stays installed on {env.name}.
+            Checked agents show in the list on every device. Unchecking only hides one — it stays installed on {env.name}.
           </div>
           <div className="sheetlist"><div className="rows">
             {(accounts ?? []).map((a) => {
@@ -4138,7 +4186,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
                 <button key={a.key} className={`row tall${on ? ' active' : ''}`} onClick={() => toggleShown(a)}>
                   <EngineMark engine={e.cls} />
                   <span className="grow">
-                    <span className="rt">{e.label} <span className="dim">· {a.account}</span></span>
+                    <span className="rt">{e.label} <span className="dim">· {accountName(a)}</span></span>
                   </span>
                   {on && <span className="check"><Icon name="check" size={16} /></span>}
                 </button>
@@ -4156,8 +4204,12 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-function SessionView({ client, env, session, onBack, onClosed, onArchived, onSession, onTranscribe }: {
+function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe }: {
   client: Client; env: Environment; session: Session;
+  /** This machine's open terminals, for the tabs above one. */
+  terminals?: Session[];
+  onSwitch?: (s: Session) => void;
+  onNewTerminal?: () => Promise<void>;
   onBack: () => void; onClosed: () => void; onArchived: () => void; onSession: (s: Session) => void;
   /** Absent when no machine in the network holds a Groq key. */
   onTranscribe?: (audio: string, mime: string) => Promise<string>;
@@ -4233,6 +4285,12 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
 
   const [killing, setKilling] = useState(false);
   const [naming, setNaming] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const newTerminal = async () => {
+    if (!onNewTerminal) return;
+    setOpening(true);
+    try { await onNewTerminal(); } catch (e: any) { setError(e.message); } finally { setOpening(false); }
+  };
 
   const kill = async () => {
     try { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); }
@@ -4273,27 +4331,52 @@ function SessionView({ client, env, session, onBack, onClosed, onArchived, onSes
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
           </button>
         )}
+        {isShell && onNewTerminal && (
+          <button className="iconbtn" title="New terminal" aria-label="New terminal" disabled={opening} onClick={() => void newTerminal()}>
+            <Icon name="plus" size={18} />
+          </button>
+        )}
         <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((v) => !v)}><Icon name="more" size={18} /></button>
-        {menu && (
+        {menu && (isShell ? (
+          <div className="menu" onClick={() => setMenu(false)}>
+            <button onClick={() => setNaming(true)}>Rename terminal</button>
+            <button className="destructive" onClick={() => setKilling(true)}>Close terminal</button>
+          </div>
+        ) : (
           <div className="menu" onClick={() => setMenu(false)}>
             <button onClick={() => setNaming(true)}>Rename thread</button>
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
             <button className="destructive" onClick={() => setKilling(true)}>Delete thread</button>
           </div>
-        )}
+        ))}
       </div>
+
+      {/* Every open terminal on this machine, one tap apart. */}
+      {isShell && terminals.length > 1 && (
+        <div className="termtabs" role="tablist" aria-label="Open terminals">
+          {terminals.map((t) => (
+            <button key={t.id} role="tab" aria-selected={t.id === session.id}
+              className={t.id === session.id ? 'on' : undefined}
+              onClick={() => { if (t.id !== session.id) onSwitch?.(t); }}>
+              <Icon name="terminal" size={13} />{t.title}
+            </button>
+          ))}
+        </div>
+      )}
 
       {naming && (
         <TextPrompt
-          title="Name this thread" value={session.title}
+          title={isShell ? 'Name this terminal' : 'Name this thread'} value={session.title}
           onCancel={() => setNaming(false)} onSubmit={renameThread}
         />
       )}
       {killing && (
         <Confirm
-          title={`Delete "${session.title}"?`}
-          body="The agent process is closed and the thread is removed from helm."
-          confirmLabel="Delete" danger
+          title={isShell ? `Close "${session.title}"?` : `Delete "${session.title}"?`}
+          body={isShell
+            ? 'Anything still running in it stops.'
+            : 'The agent process is closed and the thread is removed from helm.'}
+          confirmLabel={isShell ? 'Close' : 'Delete'} danger
           onCancel={() => setKilling(false)}
           onConfirm={() => { setKilling(false); kill(); }}
         />

@@ -16,6 +16,55 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-02 — Git graph rebuilt, terminal keys, picker choices on the machine
+
+**Git graph.** Rows are 44px (were 72), so about twice the history fits. Each
+line of history keeps one colour (eight-colour palette, both themes); a
+commit hands its column to its first parent, and when a side line reaches a
+shared parent first the mainline still wins the left column (`graphRows`).
+Branch, tag and remote labels are pills (`main` and `origin/main` on one
+commit fold into one pill with a cloud); the current checkout's commit has a
+halo; agents sit on the commit their checkout is at. Tapping a commit opens
+its message, author, date, parents and files; tapping a file shows its diff.
+New RPC `git.commit { cwd, hash, path? }` - hash must be hex, path must stay
+inside the folder; merges read against the first parent. `git.graph` now also
+returns `remotes`.
+
+**Terminal.** The quick keys were sent as key *names* (`session.keys`), which
+only the pty path translated; on a herdr pane most were dropped. They now send
+the bytes a keyboard sends through `session.input` (the typing path), with
+arrows/Home/End following the program's cursor-key mode (proved: Up sends
+`ESC O A` in that mode). The daemon's `session.keys` also sends bytes to panes
+now, which fixes the chat composer's quick keys. Two rows that fit a phone (no
+sideways scrolling), press on touch-down, hold-to-repeat for arrows/⌫/page
+keys, refit on any size change. The terminal button reopens your open
+terminal instead of killing it and starting a new one; `+` opens another, tabs
+switch between them, the menu says Rename/Close terminal.
+
+**This laptop's release worktree has no pty again** (`terminals.log`:
+`Cannot find module '../build/Debug/pty.node'`, `"pty":false`), so its
+terminals are on the slow pane path. Rebuild per the deploy notes
+(`npx node-gyp rebuild` in `node-pty-prebuilt-multiarch`). Not done here.
+
+**Picker choices live on the machine.** Hidden agents, the last agent started,
+and starred models are in `config.json` under `picker` (`picker.prefs` RPC,
+also returned by `profile.list`). A browser's old local copy is moved onto the
+machine the first time it opens a new-enough machine. The chat's model,
+thinking, permission and speed sheets have "Start new chats with X", which
+writes the account default on the machine. Verified with two separate browser
+profiles: hiding agents in one shows the same list in the other.
+
+**Smaller.** No more `vm`/`pc` tags beside machine names (sidebar, Updates,
+palette). The machine-type setting reads Computer / Always-on server / Storage.
+Two logins with the same folder name show their alias ("personal (claudea)").
+The start screen shows what the selected agent starts with.
+
+Validation: `npm run check` (573 tests + network) and 18 browser tests pass.
+Phone (390×844) and desktop screenshots in both themes were checked against a
+sandboxed `helm up` with real profiles. Not checked on a real phone or on a
+real herdr pane - the pane key fix is reasoned from the typing path, which
+already used `sendText`, plus a unit test.
+
 ## 2026-10-01 — Start, Git graph and notifications
 
 The start screen now chooses one account and opens it in the selected folder.

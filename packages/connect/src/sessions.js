@@ -2226,11 +2226,15 @@ export class Sessions extends EventEmitter {
   keys(id, keys) {
     const s = this.get(id);
     if (s.driver) throw new Error('a headless session has no terminal');
+    const bytes = keys.map(KEY_BYTES).join('');
     if (s.pty) {
-      this.terminals.write(id, keys.map(KEY_BYTES).join(''));
+      this.terminals.write(id, bytes);
       return { ok: true };
     }
-    return this.runtime.sendKeys(this.#handle(s), keys);
+    // The same bytes, down the same road typing takes. herdr's own key
+    // names ("esc", lower case) are not the ones the app sends, and a name
+    // it does not know was silently dropped - every quick key but a few.
+    return this.runtime.sendText(this.#handle(s), bytes);
   }
 
   async kill(id) {

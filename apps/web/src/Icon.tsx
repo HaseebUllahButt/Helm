@@ -12,7 +12,8 @@ export type IconName =
   | 'subagents' | 'git' | 'branch' | 'terminal' | 'raw'
   | 'star' | 'star-on' | 'bolt' | 'model' | 'effort' | 'shield'
   | 'read' | 'edit' | 'run' | 'search' | 'web' | 'tool' | 'ask' | 'plan' | 'think' | 'alert'
-  | 'folder' | 'repo' | 'machine' | 'transfer' | 'image' | 'sidebar' | 'jump' | 'stop';
+  | 'folder' | 'repo' | 'machine' | 'transfer' | 'image' | 'sidebar' | 'jump' | 'stop'
+  | 'tag' | 'cloud' | 'copy';
 
 const PATHS: Record<IconName, JSX.Element> = {
   back: <path d="M15 5l-7 7 7 7" />,
@@ -56,6 +57,9 @@ const PATHS: Record<IconName, JSX.Element> = {
   sidebar: <><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M9.5 4.5v15" /></>,
   jump: <><path d="M4.5 12h11M11.5 7l5 5-5 5" /><path d="M19.5 5v14" /></>,
   stop: <rect x="7" y="7" width="10" height="10" rx="1.8" fill="currentColor" stroke="none" />,
+  tag: <><path d="M3.5 12.2V4.5a1 1 0 011-1h7.7l8.3 8.3a1.5 1.5 0 010 2.1l-6.4 6.4a1.5 1.5 0 01-2.1 0z" /><circle cx="8" cy="8" r="1.3" /></>,
+  cloud: <path d="M7 18.5h10.5a3.5 3.5 0 00.4-7A5.5 5.5 0 007.3 10 4.3 4.3 0 007 18.5z" />,
+  copy: <><rect x="8.5" y="8.5" width="11" height="11" rx="2" /><path d="M15.5 8.5V6.5a2 2 0 00-2-2h-7a2 2 0 00-2 2v7a2 2 0 002 2h2" /></>,
 };
 
 export function Icon({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {

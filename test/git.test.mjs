@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
  * status says what changed and by how much, a diff is only ever of a file
  * inside the folder, and a worktree is a new folder on a new derived branch.
  */
-const { status, diff, addWorktree, graph } = await import('../packages/connect/src/git.js');
+const { status, diff, addWorktree, graph, commit } = await import('../packages/connect/src/git.js');
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
 const repo = () => {
@@ -181,4 +181,43 @@ test('the graph handles an unborn repository and bounds large histories', async 
   const bounded = await graph(full);
   assert.equal(bounded.commits.length, 80);
   assert.equal(bounded.truncated, true);
+});
+
+test('a commit reads back its message, files and one file\'s change; a merge against its first parent', async () => {
+  const dir = repo();
+  git(dir, 'checkout', '-qb', 'side');
+  writeFileSync(join(dir, 'side.txt'), 'from the side\n');
+  git(dir, 'add', '.');
+  git(dir, 'commit', '-qm', 'side work', '-m', 'Why it was done.');
+  const sideHash = git(dir, 'rev-parse', 'HEAD');
+  git(dir, 'checkout', '-q', 'main');
+  writeFileSync(join(dir, 'a.txt'), 'one\nTWO\nthree\n');
+  git(dir, 'commit', '-qam', 'main work');
+  git(dir, 'merge', '-q', '--no-ff', 'side', '-m', 'merge side');
+  const mergeHash = git(dir, 'rev-parse', 'HEAD');
+
+  const side = await commit(dir, sideHash.slice(0, 7));
+  assert.equal(side.hash, sideHash);
+  assert.equal(side.subject, 'side work');
+  assert.equal(side.body, 'Why it was done.');
+  assert.deepEqual(side.files, [{ path: 'side.txt', add: 1, del: 0 }]);
+  assert.equal(side.diff, undefined);
+
+  const merge = await commit(dir, mergeHash, 'side.txt');
+  assert.equal(merge.parents.length, 2);
+  assert.deepEqual(merge.files.map((f) => f.path), ['side.txt'], 'only what the merge brought in');
+  assert.match(merge.diff, /^\+from the side$/m);
+
+  // Nothing but a hash reaches git as a revision, and no path leaves the folder.
+  await assert.rejects(commit(dir, '--all'), /not a commit/);
+  await assert.rejects(commit(dir, 'HEAD~1'), /not a commit/);
+  await assert.rejects(commit(dir, mergeHash, '../outside'), /not a path inside/);
+  await assert.rejects(commit(dir, mergeHash, '/etc/passwd'), /not a path inside/);
+});
+
+test('the graph names the remotes, so a remote branch is told from a local one', async () => {
+  const dir = repo();
+  assert.deepEqual((await graph(dir)).remotes, []);
+  git(dir, 'remote', 'add', 'upstream', 'https://example.invalid/x.git');
+  assert.deepEqual((await graph(dir)).remotes, ['upstream']);
 });

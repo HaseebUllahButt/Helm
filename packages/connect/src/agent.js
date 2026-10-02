@@ -14,7 +14,7 @@ import { getProfiles, refreshProfiles, currentProfiles, materialize } from './pr
 import { listModels } from './models.js';
 import { usableProfiles, authStatuses } from './auth.js';
 import { listCommands } from './commands.js';
-import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
+import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
@@ -1030,6 +1030,7 @@ export class Daemon {
       case M.GIT_STATUS: return gitq.status(p.cwd);
       case M.GIT_GRAPH: return gitq.graph(p.cwd, await this.sessions.list());
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
+      case M.GIT_COMMIT: return gitq.commit(p.cwd, p.hash, p.path);
       case M.GIT_WORKTREE: return gitq.addWorktree(p.cwd, p.name);
       case M.GIT_PR: return { pr: await gitq.pullRequest(p.cwd) };
 
@@ -1160,6 +1161,7 @@ export class Daemon {
           profiles: profiles.map((x) => ({
             ...x, account: accountKey(x), prefs: modelPrefs(x, cfg), defaults: startPrefs(x, cfg),
           })),
+          picker: pickerPrefs(cfg),
         };
       }
 
@@ -1239,8 +1241,15 @@ export class Daemon {
           filtered.default = live.current ?? filtered.default;
         }
         // The permission modes this engine offers, so the app never has to know the flags.
-        return { ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine) };
+        // Starred models and the start defaults ride along, so the in-chat
+        // picker can show and change both without a second round trip.
+        return {
+          ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine),
+          favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile),
+        };
       }
+
+      case M.PICKER_PREFS: return { ok: true, picker: savePickerPrefs(p) };
 
       case M.MODEL_PREFS: {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);

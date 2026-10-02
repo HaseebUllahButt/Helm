@@ -38,6 +38,10 @@ before(async () => {
         if(method === 'git.pr') return {pr:null};
         if(method === 'session.list') return {sessions:agents};
         if(method === 'git.diff') return {diff:'@@ -1 +1 @@\\n-before\\n+after',truncated:false};
+        if(method === 'git.commit') return {hash:params.hash+'0000000',parents:['base'],author:'Claude',date:'2026-10-01T10:00:00Z',
+          subject:'Show where each agent is working',body:'Agents appear on the commit they have checked out.',
+          files:[{path:'apps/web/src/GitGraph.tsx',add:12,del:3}],
+          ...(params.path ? {diff:'diff --git a/x b/x\\n@@ -1 +1 @@\\n-old line\\n+new line',truncated:false} : {})};
       }
     };
     window.graphRows = graphRows;
@@ -61,8 +65,10 @@ test('graph shows merges and live agents on their checkouts, and opens the selec
   await page.getByRole('tab',{name:'Changes 1'}).waitFor();
   assert.equal(await page.getByRole('tab',{name:'Changes 1'}).getAttribute('aria-selected'),'true');
   await page.getByRole('tab',{name:'Graph',exact:true}).click();
-  await page.getByText('2 agents share this checkout').waitFor();
-  assert.equal(await page.locator('.git-node').count(),4);
+  await page.getByText('2 agents share this folder', {exact:false}).waitFor();
+  assert.equal(await page.locator('.git-dot').count(),4);
+  assert.equal(await page.locator('.git-dot.merge').count(),1);
+  assert.equal(await page.locator('.git-ref.head').innerText(),'main');
   assert.equal(await page.locator('.git-checkout.current .git-agent').count(),2);
   assert.equal(await page.locator('.git-checkout:not(.current) .git-agent').count(),1);
   const rows = await page.evaluate(()=>window.graphRows([
@@ -72,6 +78,14 @@ test('graph shows merges and live agents on their checkouts, and opens the selec
   assert.deepEqual(rows[2].after,['root']);
   assert.deepEqual(rows[3].after,[]);
   assert.ok(rows.every((r)=>r.edges.every((e)=>e.to >= 0)));
+  // A side line that reaches the shared parent first bends into the
+  // mainline; the mainline keeps its column and its colour.
+  const side = await page.evaluate(()=>window.graphRows([
+    {hash:'M',parents:['A','F']},{hash:'F',parents:['B']},{hash:'A',parents:['B']},{hash:'B',parents:[]}
+  ]));
+  assert.deepEqual(side.map((r)=>r.lane),[0,1,0,0]);
+  assert.equal(side[3].colour,side[0].colour);
+  assert.notEqual(side[1].colour,side[0].colour);
   await page.locator('.git-checkout:not(.current)').getByRole('button',{name:/Open Improve the branch graph/}).click();
   await page.waitForFunction(()=>window.opened==='feature');
   if(process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({path:join(process.env.HELM_TEST_SCREENSHOT_DIR,'git-desktop.png'),animations:'disabled'});
@@ -84,10 +98,22 @@ test('Git tabs remain keyboard accessible and preserve the file diff view', asyn
   await page.locator('.filemain').click();
   await page.getByText('+after',{exact:true}).waitFor();
   await page.getByRole('tab',{name:'Graph',exact:true}).click();
-  await page.getByText('2 agents share this checkout').waitFor();
+  await page.getByText('2 agents share this folder', {exact:false}).waitFor();
   const before = await page.evaluate(()=>window.calls.filter((c)=>c.method==='git.graph').length);
   await page.evaluate(()=>window.notifyChange());
   await page.waitForFunction((n)=>window.calls.filter((c)=>c.method==='git.graph').length>n,before);
+});
+
+test('a commit opens to its message and files, and a file to its diff', async () => {
+  await page.locator('.git-line').filter({hasText:'Show where each agent is working'}).click();
+  await page.getByText('Agents appear on the commit they have checked out.').waitFor();
+  assert.ok(await page.locator('.git-through').count() >= 1, 'lanes carry on beside the opened commit');
+  await page.locator('.git-file-row').click();
+  await page.getByText('+new line',{exact:true}).waitFor();
+  const asked = await page.evaluate(()=>window.calls.filter((c)=>c.method==='git.commit').map((c)=>c.params));
+  assert.deepEqual(asked.map((p)=>p.path ?? null),[null,'apps/web/src/GitGraph.tsx']);
+  await page.locator('.git-line').filter({hasText:'Show where each agent is working'}).click();
+  await page.locator('.git-detail').waitFor({state:'detached'});
 });
 
 test('graph and branded notifications fit a phone, and dismissal does not navigate', async () => {

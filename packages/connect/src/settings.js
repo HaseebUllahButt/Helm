@@ -102,6 +102,45 @@ export function saveModelPrefs(profile, { default: def = null, approved = [] } =
   return modelPrefs(profile, cfg);
 }
 
+/**
+ * What the new-session picker on this machine shows: accounts hidden from
+ * it, the account last started, and starred models per engine. Kept on the
+ * machine rather than in a browser so a phone and a laptop open the same
+ * picker. Hidden and last are account keys (see accountKey).
+ */
+export function pickerPrefs(cfg = loadSettings()) {
+  const p = cfg?.picker ?? {};
+  const strings = (v) => [...new Set((Array.isArray(v) ? v : []).filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()))];
+  const favs = {};
+  for (const [engine, list] of Object.entries(p.favs && typeof p.favs === 'object' ? p.favs : {})) {
+    const clean = strings(list);
+    if (clean.length) favs[engine] = clean;
+  }
+  return {
+    hidden: strings(p.hidden),
+    last: typeof p.last === 'string' && p.last ? p.last : null,
+    favs,
+  };
+}
+
+/** Merge a partial change into the picker prefs. Fields left out are kept. */
+export function savePickerPrefs(change = {}) {
+  const cfg = loadSettings();
+  const next = pickerPrefs(cfg);
+  if ('hidden' in change) next.hidden = pickerPrefs({ picker: { hidden: change.hidden } }).hidden;
+  if ('last' in change) next.last = typeof change.last === 'string' && change.last ? change.last : null;
+  if (change.favs && typeof change.favs === 'object') {
+    for (const [engine, list] of Object.entries(change.favs)) {
+      if (!/^[\w.-]{1,40}$/.test(engine)) continue;
+      const clean = pickerPrefs({ picker: { favs: { [engine]: list } } }).favs[engine];
+      if (clean) next.favs[engine] = clean; else delete next.favs[engine];
+    }
+  }
+  cfg.picker = next;
+  writeSettings(cfg);
+  return pickerPrefs(cfg);
+}
+
 function writeSettings(cfg) {
   mkdirSync(dirname(CONFIG_FILE), { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify({ version: 1, ...cfg }, null, 2), { mode: 0o600 });

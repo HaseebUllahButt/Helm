@@ -111,6 +111,7 @@ export const M = {
   GIT_STATUS: 'git.status',        // { cwd } -> { repo, branch?, ahead?, behind?, files[], worktree?, head? }
   GIT_GRAPH: 'git.graph',          // { cwd } -> bounded commit ancestry and live agents by checkout
   GIT_DIFF: 'git.diff',            // { cwd, path } -> { path, diff, truncated }
+  GIT_COMMIT: 'git.commit',        // { cwd, hash } -> { hash, subject, body, author, date, parents[], files[] }
   GIT_WORKTREE: 'git.worktree',    // { cwd, name? } -> { path, branch, base }  a sibling checkout on a new branch
   GIT_PR: 'git.pr',                // { cwd } -> the branch's pull request, or null
   FS_LIST: 'fs.list',              // { path } -> { path, parent, entries[] }
@@ -125,6 +126,7 @@ export const M = {
   PROFILE_DEFAULTS: 'profile.defaults', // { profileId, effort?, mode?, speed? } -> { defaults }
   MODEL_LIST: 'model.list',        // { profileId, id?, all? } -> { default, models[], more?[], prefs?, effort?, efforts? }
   MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[] } -> { prefs }  per-account picker filter
+  PICKER_PREFS: 'picker.prefs',    // { hidden?, last?, favs? } -> { picker }  what the new-session picker shows, shared by every device
   SESSION_LIST: 'session.list',    // {} -> { sessions[] }
   SESSION_START: 'session.start',  // { cwd, profileId, model?, effort?, mode?, speed?, title?, parent? } -> { session }
   SESSION_LINK:  'session.link',   // { id, child } -> { session }  durable parent/child handoff link

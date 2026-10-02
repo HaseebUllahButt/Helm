@@ -72,6 +72,7 @@ export interface Session {
   profileId: string;
   status: Status;
   alive?: boolean;
+  createdAt?: number;
   updatedAt?: number;
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;
@@ -161,6 +162,10 @@ export interface ModelList {
   imagesByModel?: Record<string, boolean>;
   modes?: Mode[];
   defaultMode?: string | null;
+  /** Models starred for this engine on this machine, shared by every device. */
+  favs?: string[];
+  /** What a new chat on this account starts with, besides the model. */
+  defaults?: { effort?: string; mode?: string; speed?: string } | null;
 }
 
 /**
