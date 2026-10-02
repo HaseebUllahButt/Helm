@@ -134,8 +134,8 @@ const Play = () => (
 const Gear = () => (
   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
        strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-    <circle cx="12" cy="12" r="3.2" />
-    <path d="M12 3v2.6M12 18.4V21M5.2 5.2l1.9 1.9M16.9 16.9l1.9 1.9M3 12h2.6M18.4 12H21M5.2 18.8l1.9-1.9M16.9 7.1l1.9-1.9" />
+    <path strokeLinejoin="round" d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" />
+    <circle cx="12" cy="12" r="3" />
   </svg>
 );
 
@@ -2415,7 +2415,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           onClick={openTerminal}
         ><Icon name="terminal" size={18} />{env.info.terminals === 'panes' && <b className="slowmark" aria-hidden="true">!</b>}</button>
         <button className="iconbtn" title={`what ${env.name} has cost`} aria-label={`what ${env.name} has cost`} onClick={onUsage}><Meter /></button>
-        <button className="iconbtn" title={`${env.name} settings`} aria-label={`${env.name} settings`} onClick={onSettings}><Sliders /></button>
+        <button className="iconbtn" title={`${env.name} settings`} aria-label={`${env.name} settings`} onClick={onSettings}><Gear /></button>
       </div>
 
       <div
@@ -4146,7 +4146,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
               >
                 <EngineMark engine={e.cls} />
                 <span className="grow">
-                  <span className="rt">{e.label} <span className="dim">· {accountName(a)}</span>{a.token && <span className="tag">API key</span>}{a.key === preferred && <span className="tag key">default</span>}</span>
+                  <span className="rt">{e.label} <span className="dim">· {accountName(a)}</span>{a.token && <span className="tag wide-only">API key</span>}{a.key === preferred && <span className="tag key">default</span>}</span>
                   {a.key === key && <span className="rm">{startSummary(a)}</span>}
                 </span>
                 {a.key === key && <span className="check"><Icon name="check" size={16} /></span>}

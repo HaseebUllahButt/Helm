@@ -183,7 +183,8 @@ code, pre, kbd { font-family: var(--mono); }
      thing in the app. */
   .sidebar { display: none; background: var(--bg); }
   .sidebar.showing { display: flex; flex-direction: column; height: 100%; width: 100%; }
-  .collapse-toggle { display: none; }
+  /* `.iconbtn` comes later and would win at equal weight. */
+  .iconbtn.collapse-toggle { display: none; }
   .main { display: none; }
   .main.showing { display: flex; flex-direction: column; height: 100%; width: 100%; }
 }
@@ -1152,6 +1153,13 @@ pre.snippet {
   background: color-mix(in srgb, var(--amber) 9%, transparent);
 }
 .chip-pick.danger .cg { color: var(--amber-text); }
+/* A phone has room for the controls or for their names, not both. The icon
+   says which control it is; the sheet it opens marks what it is set to. */
+@media (max-width: 599px) {
+  .chip-pick { width: 36px; height: 36px; padding: 0; justify-content: center; }
+  .chip-pick .chip-label { display: none; }
+  .chip-pick .cg svg { width: 17px; height: 17px; }
+}
 .slab.danger::after { border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .modesheet-note { padding: 0 8px 8px; font-size: var(--t-meta); color: var(--mutedfg); }
 
@@ -1255,6 +1263,8 @@ pre.snippet {
   font: 500 11px var(--mono); color: var(--mutedfg);
   opacity: 0.8; white-space: pre-wrap;
 }
+.turn.user details.turn-note summary { cursor: pointer; white-space: nowrap; }
+.turn.user details.turn-note[open] summary { margin-bottom: 4px; }
 
 /* Speaking a prompt. The microphone is a control like the paperclip until it
    is live, and then it is the loudest thing in the composer - a recording you
@@ -2098,7 +2108,7 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 }
 .quick-switch kbd { font-size: 10.5px; padding: 1px 5px; color: var(--mutedfg); }
 .quick-switch:hover { background: var(--raised); color: var(--text); }
-/* In the narrow desktop sidebar the key says it; on a phone the word does. */
+/* In the narrow desktop sidebar the key says it; on a phone the icon alone. */
 @media (min-width: 900px) { .sidebar .quick-switch .qs-label { display: none; } }
 @media (min-width: 900px) {
   .sidebar .findbox, .sidebar .quick-switch { background: var(--bg); }
@@ -2147,6 +2157,8 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
   .palette-back { padding-top: max(12px, env(safe-area-inset-top)); }
   .palette-box { max-height: calc(100dvh - 32px); }
   .quick-switch kbd { display: none; }
+  .quick-switch { width: 42px; padding: 0; justify-content: center; }
+  .quick-switch .qs-label { display: none; }
 }
 
 /* ------------------------------------------------------------ odds and ends */

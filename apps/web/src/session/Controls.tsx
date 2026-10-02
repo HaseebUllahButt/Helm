@@ -43,11 +43,11 @@ export function Controls({ options, session, busy, onPick, onFavs, onDefault }: 
           <button
             key={g.kind}
             className={`chip-pick${open === g.kind ? ' on' : ''}${g.danger ? ' danger' : ''}`}
-            title={`${g.title}: ${g.currentLabel}`}
+            title={`${g.title}: ${g.currentLabel}`} aria-label={`${g.title}: ${g.currentLabel}`}
             onClick={() => setOpen(open === g.kind ? null : g.kind)}
           >
             {g.glyph && <i className={`cg ${g.kind}`}><Icon name={g.glyph} size={13} /></i>}
-            {g.currentLabel}
+            <span className="chip-label">{g.currentLabel}</span>
           </button>
         ))}
       </span>
@@ -225,7 +225,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
     if (!onDefault || saving !== null || id === saved) return;
     setSaving(id);
     setSaveError('');
-    try { await onDefault(id); }
+    try { await onDefault(id); onClose(); }
     catch (e) { setSaveError(e instanceof Error ? e.message : String(e)); }
     finally { setSaving(null); }
   };

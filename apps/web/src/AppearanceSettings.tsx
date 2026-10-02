@@ -10,8 +10,8 @@ export function AppearanceSettings() {
     saveAppearance(next);
     applyAppearance(next);
   };
-  const seg = <K extends keyof Appearance>(k: K, label: string, note: string, options: [Appearance[K], string][]) => (
-    <div className="row appearance">
+  const seg = <K extends keyof Appearance>(k: K, label: string, note: string, options: [Appearance[K], string][], className = '') => (
+    <div className={`row appearance${className ? ` ${className}` : ''}`}>
       <span className="grow">
         <span className="rt">{label}</span>
         <span className="rm">{note}</span>
@@ -27,7 +27,7 @@ export function AppearanceSettings() {
     <>
       {seg('theme', 'Theme', 'Light reads better outdoors', [['system', 'System'], ['dark', 'Dark'], ['light', 'Light']])}
       {seg('diff', 'Diff colours', 'Blue and orange if red and green look alike', [['green', 'Green / red'], ['blue', 'Blue / orange']])}
-      {seg('width', 'Chat width', 'On a wide screen', [['comfortable', 'Comfortable'], ['wide', 'Wide']])}
+      {seg('width', 'Chat width', 'On a wide screen', [['comfortable', 'Comfortable'], ['wide', 'Wide']], 'wide-only')}
       {seg('density', 'Lists', 'How much of each thread fits', [['comfortable', 'Comfortable'], ['compact', 'Compact']])}
     </>
   );

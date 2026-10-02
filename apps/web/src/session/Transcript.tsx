@@ -413,7 +413,11 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
     <>
       {head && (turn.text || turn.attachments?.length) && (
         <div className={`turn user${queued ? ' queued' : ''}`}><div className="bubble">
-          {said.note && <span className="turn-note">{said.note}</span>}
+          {said.note && (said.note.length > 160
+            // The delegation brief is a paragraph of instructions to the
+            // agent; on a phone it buried the one line the owner typed.
+            ? <details className="turn-note"><summary>helm note to the agent</summary>{said.note}</details>
+            : <span className="turn-note">{said.note}</span>)}
           {said.text}
           {turn.attachments?.map((a, i) => (a.data
             // A blob the log has swept past still has its name, and saying
