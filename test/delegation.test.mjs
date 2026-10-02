@@ -187,15 +187,18 @@ test('nesting is bounded and empty tasks fail before starting a CLI', async (t) 
   await assert.rejects(() => sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Four' }), /three levels/);
 });
 
-test('agents see the tool instructions once; slash commands stay unmodified', async (t) => {
+test('agents get the tool instructions as standing instructions, not in the owner\'s message', async (t) => {
   const { sessions, drivers } = setup(t);
   sessions.delegationBrief = () => '[helm delegation: use helm agents and helm delegate]';
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  // The brief once rode on the first message and showed in the owner's
+  // bubble as if they had typed it. Codex and Claude take it out of band.
+  assert.equal(drivers.get(parent.id).instructions, '[helm delegation: use helm agents and helm delegate]');
   await sessions.input(parent.id, '/status');
   assert.equal(drivers.get(parent.id).sent, '/status');
   drivers.get(parent.id).finish();
   await sessions.input(parent.id, 'Work');
-  assert.match(drivers.get(parent.id).sent, /^\[helm delegation:/);
+  assert.equal(drivers.get(parent.id).sent, 'Work');
   drivers.get(parent.id).finish();
   await sessions.input(parent.id, 'Continue');
   assert.equal(drivers.get(parent.id).sent, 'Continue');

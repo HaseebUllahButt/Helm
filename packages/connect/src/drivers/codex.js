@@ -435,6 +435,8 @@ function childStep(item) {
 }
 
 export class CodexDriver extends Driver {
+  /** helm's brief rides in the developer instructions, not the first message. */
+  static takesInstructions = true;
   #server = null;
   #serverAdopted = false;
   #started = false;
@@ -451,11 +453,14 @@ export class CodexDriver extends Driver {
   #lastSpawn = null;
   /** server request id -> { method, params } */
   #requests = new Map();
+  /** Texts handed to the running turn that Codex has not used yet. */
+  #steers = [];
 
   constructor(opts) {
     super({ engine: 'codex', ...opts });
     this.threadId = this.engineSessionId ?? null;
     this.monitorOnly = !!opts.monitorOnly;
+    this.instructions = opts.instructions || null;
   }
 
   #policy() {
@@ -493,6 +498,7 @@ export class CodexDriver extends Driver {
     const config = Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
       .map((k) => [`shell_environment_policy.set.${k}`, this.env[k]]));
     const common = { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}),
+      ...(this.instructions ? { developerInstructions: this.instructions } : {}),
       ...(Object.keys(config).length ? { config } : {}) };
     const res = this.threadId
       ? await server.call('thread/resume', { threadId: this.threadId, excludeTurns: true, ...common })
@@ -859,6 +865,7 @@ export class CodexDriver extends Driver {
       clientUserMessageId: randomUUID(),
     });
     if (res.error) throw new Error(res.error.message);
+    this.#steers.push(input.filter((b) => b.type === 'text').map((b) => b.text).join('\n'));
   }
 
   async answer(requestId, decision) {
@@ -1036,7 +1043,17 @@ export class CodexDriver extends Driver {
     }
     const base = { id: item.id, turnId: turnId ?? this.#turnId, parentId };
     switch (item.type) {
-      case 'userMessage': return;
+      // Codex records a steered message when it uses it: after the step in
+      // flight, before the next. That is where it joins the conversation.
+      case 'userMessage': {
+        if (parentId || !this.#steers.length) return;
+        const text = (item.content ?? []).filter((b) => b?.type === 'text').map((b) => b.text).join('\n');
+        const i = this.#steers.indexOf(text);
+        if (i < 0) return;
+        this.#steers.splice(i, 1);
+        this.push('input.consumed', { text });
+        return;
+      }
       // One agent spawning another (spawn_agent | send_input | resume_agent
       // | wait | close_agent). The card is the child; what it does arrives on
       // the child's own threadId, which we alias back to here.

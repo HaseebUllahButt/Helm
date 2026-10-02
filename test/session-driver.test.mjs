@@ -1067,6 +1067,11 @@ test('messages sent mid-turn queue in order; stop and withdraw take theirs with 
   assert.deepEqual(await sessions.sendNow(s.id, rushId), { ok: true, found: true, sent: true });
   assert.deepEqual(d.sent, ['first', 'second', 'third', 'while you were asking'], 'steered, not a normal send');
   assert.deepEqual(d.steered, [{ text: 'rush this now', images: [] }]);
+  // Handed over is not yet used: it can no longer be withdrawn, but it joins
+  // the transcript only when the CLI says it read it.
+  assert.ok(sessions.history(s.id).events.some((e) => e.type === 'turn.deliver' && e.turnId === rushId));
+  assert.ok(!sessions.history(s.id).events.some((e) => e.type === 'turn.accept' && e.turnId === rushId));
+  d.push('input.consumed', { text: 'rush this now' });
   assert.ok(sessions.history(s.id).events.some((e) => e.type === 'turn.accept' && e.turnId === rushId));
   assert.deepEqual(await sessions.sendNow(s.id, rushId), { ok: true, found: false, sent: false });
 
@@ -1094,4 +1099,70 @@ test('messages sent mid-turn queue in order; stop and withdraw take theirs with 
   const removed = sessions.history(s.id).events.filter((e) => e.type === 'turn.remove');
   assert.equal(removed.length, 3);
   assert.ok(removed.some((e) => e.turnId === turnId));
+});
+
+test('a message typed mid-turn is held until a step runs, then handed over like the CLI does', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-steer'));
+  const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const d = FakeDriver.made.at(-1);
+  const log = () => sessions.history(s.id).events;
+  const ticket = (text) => log().find((e) => e.type === 'turn.start' && e.text === text).turnId;
+
+  await sessions.input(s.id, 'first');
+  // The agent is only writing: Claude and Codex would read a message at the
+  // end of the next step, so helm holds it - and it can still be withdrawn.
+  await sessions.input(s.id, 'also check the tests');
+  await tick();
+  assert.equal(d.steered, undefined);
+  // A step starts: now it goes in, and lands when that step ends.
+  d.push('item.start', { id: 'cmd1', kind: 'command', turnId: 't1' });
+  await tick(); await tick();
+  assert.deepEqual(d.steered, [{ text: 'also check the tests', images: [] }]);
+  const id = ticket('also check the tests');
+  assert.ok(log().some((e) => e.type === 'turn.deliver' && e.turnId === id));
+  assert.deepEqual(sessions.dequeue(s.id, id), { ok: true, found: false }, 'the CLI has it; no taking it back');
+
+  // Typed while a step is already running: handed over at once.
+  await sessions.input(s.id, 'and the docs');
+  await tick(); await tick();
+  assert.deepEqual(d.steered.map((x) => x.text), ['also check the tests', 'and the docs']);
+
+  // The CLI reads them after the step: each joins the transcript there.
+  d.push('item.done', { id: 'cmd1', status: 'ok' });
+  d.push('input.consumed', { text: 'also check the tests' });
+  d.push('input.consumed', { text: 'and the docs' });
+  const accepted = log().filter((e) => e.type === 'turn.accept').map((e) => e.turnId);
+  assert.deepEqual(accepted, [id, ticket('and the docs')]);
+  assert.ok(!log().some((e) => e.type === 'input.consumed'), 'the driver signal is not itself logged');
+
+  // No step running, and a slash command never goes in mid-turn.
+  await sessions.input(s.id, '/review');
+  d.push('item.start', { id: 'cmd2', kind: 'command', turnId: 't1' });
+  await tick(); await tick();
+  assert.equal(d.steered.length, 2);
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+  await tick(); await tick();
+  assert.deepEqual(d.sent, ['first', '/review']);
+});
+
+test('stop drops a message handed over but not yet used', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-steer-stop'));
+  const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const d = FakeDriver.made.at(-1);
+  await sessions.input(s.id, 'first');
+  d.push('item.start', { id: 'cmd1', kind: 'command', turnId: 't1' });
+  await sessions.input(s.id, 'never mind');
+  await tick(); await tick();
+  const id = sessions.history(s.id).events.find((e) => e.text === 'never mind').turnId;
+  await sessions.interrupt(s.id);
+  assert.ok(sessions.history(s.id).events.some((e) => e.type === 'turn.remove' && e.turnId === id));
 });

@@ -220,22 +220,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     finally { setQueueBusy(''); }
   };
 
-  /**
-   * Send a queued message into the turn already running, without
-   * interrupting it. Real steering, not a queue trick: Codex's app-server
-   * turn/steer is currently the only true in-flight primitive Helm has -
-   * Claude's print stream queues a second frame as its own later turn and
-   * ACP v1 has no equivalent, so those engines keep FIFO plus withdraw.
-   */
-  const sendQueuedNow = async (turn: Turn) => {
-    if (queueBusy) return;
-    setQueueBusy(turn.id);
-    try {
-      await client.rpc(env.id, 'session.send-now', { id: session.id, turnId: turn.id });
-    } catch (e: any) { setError(e.message); }
-    finally { setQueueBusy(''); }
-  };
-
   const answer = (d: Decision) => pending && call(() => client.rpc(env.id, 'session.answer', { id: session.id, requestId: pending.requestId, decision: d }));
   const stop = () => call(() => client.rpc(env.id, 'session.interrupt', { id: session.id }));
   // model / thinking / permissions / speed all go the same way: tell the
@@ -533,10 +517,10 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         commands={commands}
         queued={queuedTurns.map((turn) => ({
           turn, text: splitNote(turn.text).text ?? turn.text,
-          attachments: turn.attachments?.length ?? 0,
+          attachments: turn.attachments?.length ?? 0, delivered: turn.delivered,
         }))}
         onWithdrawQueued={withdraw}
-        onSendQueuedNow={session.engine === 'codex' ? sendQueuedNow : undefined}
+        steers={session.engine === 'codex' || session.engine === 'claude'}
         queueBusy={queueBusy}
         history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
       >

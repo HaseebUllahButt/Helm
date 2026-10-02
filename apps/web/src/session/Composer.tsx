@@ -22,7 +22,7 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, onSendQueuedNow, queueBusy, onTranscribe }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
@@ -45,15 +45,14 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
    * Messages still in helm's outbox, oldest first: accepted but not yet
    * handed to the agent, so they sit here rather than in the transcript.
    */
-  queued?: { turn: Turn; text: string; attachments: number }[];
+  queued?: { turn: Turn; text: string; attachments: number; delivered?: boolean }[];
   /** Pull a queued message back into the draft before the agent sees it. */
   onWithdrawQueued?: (turn: Turn) => void;
   /**
-   * Send a queued message into the turn already running, without
-   * interrupting it. Absent unless the engine has a real in-flight steering
-   * primitive - ACP v1 has no safe one, so the button is never faked there.
+   * The CLI takes a message mid-turn, after the step in flight (Claude,
+   * Codex). Others read it only once the reply ends.
    */
-  onSendQueuedNow?: (turn: Turn) => void;
+  steers?: boolean;
   /** The queued turn id an action is in flight for, so it cannot run twice. */
   queueBusy?: string;
   /**
@@ -254,8 +253,8 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
           {queued.length > 0 && (
             <div className="queued-panel">
               <div className="queued-head">
-                <b>{queued.length} queued</b>
-                <span>sent after the current turn</span>
+                <b>{queued.length} waiting</b>
+                <span>{steers ? 'goes in at the next step' : 'goes in when this reply ends'}</span>
               </div>
               {queued.map((item) => {
                 const label = item.text || (item.attachments === 1 ? 'Image' : `${item.attachments} images`);
@@ -269,15 +268,9 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                         <span className="queued-attachments">{item.attachments === 1 ? ' + image' : ` + ${item.attachments} images`}</span>
                       )}
                     </span>
-                    {onSendQueuedNow && (
-                      <button
-                        disabled={busy}
-                        onClick={() => onSendQueuedNow(item.turn)}
-                        title={`send now, without stopping the current turn: ${name}`}
-                        aria-label={`send queued message now: ${name}`}
-                      >send now</button>
-                    )}
-                    {onWithdrawQueued && (
+                    {/* Once the CLI has it there is no taking it back -
+                        neither CLI can - so the button goes. */}
+                    {item.delivered ? <span className="queued-sent">sent</span> : onWithdrawQueued && (
                       <button
                         disabled={busy}
                         onClick={() => onWithdrawQueued(item.turn)}

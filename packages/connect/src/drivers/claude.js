@@ -47,6 +47,8 @@ function resultText(content) {
 }
 
 export class ClaudeDriver extends Driver {
+  /** helm's brief rides in the system prompt, not the first message. */
+  static takesInstructions = true;
   #pipe = null;
   #hosted = false;
   #exited = null;
@@ -60,6 +62,8 @@ export class ClaudeDriver extends Driver {
   /** task_id -> tool_use_id, from task_started system frames */
   #tasks = new Map();
   #turnId = null;
+  /** A turn is running: a replayed user message now is one handed over mid-turn. */
+  #inTurn = false;
   /** The last top-level assistant message, which is where a branch can be cut. */
   #lastAssistant = null;
   #interrupting = false;
@@ -74,6 +78,7 @@ export class ClaudeDriver extends Driver {
     super({ engine: 'claude', ...opts });
     this.engineSessionId ??= randomUUID();
     this.resume = !!opts.engineSessionId && !opts.unsent;
+    this.instructions = opts.instructions || null;
     this.delegated = !!opts.delegated;
     // A thread branched from another: begin as that conversation was at `at`.
     // Both ids are checked here as well as by whoever asked - they end up as
@@ -88,6 +93,7 @@ export class ClaudeDriver extends Driver {
     if (this.model) args.push('--model', this.model);
     if (this.effort) args.push('--effort', this.effort);
     args.push('--disallowedTools', 'EnterPlanMode,ExitPlanMode');
+    if (this.instructions) args.push('--append-system-prompt', this.instructions);
     if (this.forkFrom) {
       // Until the branch has said its first word it is not yet a conversation
       // of its own, so every start - including one after a restart - is the
@@ -171,6 +177,7 @@ export class ClaudeDriver extends Driver {
     if (adopted) {
       this.resume = true;
       this.#turnId = this.openTurn?.() ?? null;
+      this.#inTurn = !!this.#turnId;
       for (const e of this.pendingEvents?.() ?? []) this.pending.set(e.requestId, e);
       // A restart can land between a block's start and its next delta. Recover
       // those stream ids so the remaining text still appends to the same item.
@@ -192,6 +199,7 @@ export class ClaudeDriver extends Driver {
     this.#exited = new Promise((resolve) => {
       pipe.onExit(({ code, signal, stderr }) => {
         this.#pipe = null;
+        this.#inTurn = false;
         markReady();
         // A prompt the CLI was holding open dies with it; say so.
         for (const requestId of [...this.pending.keys()]) {
@@ -238,6 +246,26 @@ export class ClaudeDriver extends Driver {
     // A message sent while a prompt is open is queued behind it; the agent
     // is still waiting on the person until that prompt is answered.
     if (!this.pending.size) this.push('status', { status: 'working' });
+  }
+
+  /**
+   * A message for the turn already running. Claude reads its input between
+   * steps, so this lands when the step in flight ends - what typing while
+   * the CLI works does. The replay says when it was used.
+   */
+  async steer(text, attachments = []) {
+    if (!this.#pipe || !this.#inTurn) throw new Error('claude has no active turn to steer');
+    const content = [];
+    if (text) content.push({ type: 'text', text });
+    for (const a of attachments ?? []) {
+      if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
+      content.push({ type: 'image', source: { type: 'base64', media_type: a.mime, data: a.data } });
+    }
+    if (!content.length) content.push({ type: 'text', text: '(empty message)' });
+    this.#write({
+      type: 'user', session_id: '', parent_tool_use_id: null, uuid: randomUUID(),
+      message: { role: 'user', content },
+    });
   }
 
   async availableCommands() {
@@ -444,9 +472,16 @@ export class ClaudeDriver extends Driver {
 
   #onUser(m) {
     if (m.isReplay) {
+      const text = resultText(m.message?.content);
+      // A message written while a turn runs is read at the end of the step
+      // in flight and joins that turn - the turn keeps its id.
+      if (this.#inTurn) {
+        this.push('input.consumed', { text });
+        return;
+      }
       // The CLI accepted our message; this uuid is the turn.
       this.#turnId = m.uuid;
-      const text = resultText(m.message?.content);
+      this.#inTurn = true;
       this.push('turn.start', { turnId: m.uuid, text });
       return;
     }
@@ -540,6 +575,7 @@ export class ClaudeDriver extends Driver {
   }
 
   #onResult(m) {
+    this.#inTurn = false;
     const interrupted = this.#interrupting && m.is_error;
     this.#interrupting = false;
     // From here the thread stands on its own; a restart resumes it as usual.

@@ -347,3 +347,10 @@ test('a finished turn says where a branch could be cut, and the branch stands al
   assert.ok(!driver.args.includes('--fork-session'));
   await driver.kill();
 });
+
+test('helm\'s brief goes in the system prompt, not the owner\'s message', () => {
+  const d = new ClaudeDriver({ cmd: 'claude', env: {}, cwd: '/x', mode: 'default', instructions: '[helm delegation: x]' });
+  const a = d.args;
+  assert.equal(a[a.indexOf('--append-system-prompt') + 1], '[helm delegation: x]');
+  assert.ok(!new ClaudeDriver({ cmd: 'claude', env: {}, cwd: '/x', mode: 'default' }).args.includes('--append-system-prompt'));
+});

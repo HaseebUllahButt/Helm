@@ -92,6 +92,10 @@ export interface Turn {
   at: number;
   /** Still in helm's outbox: accepted, but the agent has not seen it yet. */
   queued?: boolean;
+  /** Handed to the CLI mid-turn: it can no longer be withdrawn. */
+  delivered?: boolean;
+  /** Used by the CLI inside a running turn; it lives at a seam in that turn. */
+  steered?: boolean;
   /** Answered by helm itself - complete on arrival, never a live turn. */
   local?: boolean;
   /**
@@ -179,7 +183,7 @@ const turnFor = (turns: Turn[], turnId?: string): Turn | undefined =>
 const hostFor = (turns: Turn[], target?: Turn): Turn | undefined => {
   for (let i = turns.length - 1; i >= 0; i--) {
     const t = turns[i];
-    if (t === target || t.done || t.local || t.queued) continue;
+    if (t === target || t.done || t.local || t.queued || t.steered) continue;
     return t;
   }
   return undefined;
@@ -211,7 +215,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       let open: Turn | undefined;
       for (let i = 0; i < state.turns.length; i++) {
         const t = state.turns[i];
-        if (!t.id.startsWith('local-') || t.items.length || t.done) continue;
+        if (!t.id.startsWith('local-') || t.items.length || t.done || t.steered) continue;
         // Compared trimmed: helm strips the trailing newline off what it
         // sends, and the CLI echoes the prompt back with it still attached.
         // A prefix match covers the one case where the text sent and the
@@ -292,11 +296,24 @@ export function apply(state: LogState, e: HelmEvent): void {
     case 'permission.resolved':
       state.pending = state.pending.filter((p) => p.requestId !== e.requestId);
       return;
-    case 'turn.accept': {
-      // A queued ticket steered into the live turn: it is a transcript
-      // bubble now, not a queue row.
+    case 'turn.deliver': {
       const turn = state.turns.find((t) => t.id === e.turnId);
-      if (turn) turn.queued = false;
+      if (turn) turn.delivered = true;
+      return;
+    }
+    case 'turn.accept': {
+      // The CLI used a message typed mid-turn: it is a transcript bubble
+      // now, not a queue row, at the point the turn had reached - the rest
+      // of the turn's work flows below it, the way it does in the CLI.
+      const turn = state.turns.find((t) => t.id === e.turnId);
+      if (!turn) return;
+      turn.queued = false;
+      turn.steered = true;
+      const host = hostFor(state.turns, turn);
+      if (host && !turn.insideOf) {
+        turn.insideOf = host.id;
+        turn.insideAt = host.items.length;
+      }
       return;
     }
     case 'turn.done': {

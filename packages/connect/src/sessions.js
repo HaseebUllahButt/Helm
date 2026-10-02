@@ -250,6 +250,15 @@ export class Sessions extends EventEmitter {
   #outbox = new Map();
   /** sessionIds with a pump loop live - the queue's mutex. */
   #sending = new Set();
+  /**
+   * sessionId -> top-level tool items running now. Claude and Codex both
+   * take a message typed mid-turn at the end of the step in flight, so that
+   * is when a held message is handed over - and until then it can still be
+   * withdrawn, which neither CLI can do once it has the message.
+   */
+  #steps = new Map();
+  /** sessionId -> messages handed to the CLI that it has not used yet. */
+  #steered = new Map();
   /** session object -> in-flight full-rollout reconciliation */
   #imports = new WeakMap();
 
@@ -898,6 +907,10 @@ export class Sessions extends EventEmitter {
       model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
       engineSessionId: s.engineSessionId,
       unsent: !!s.unsent,
+      // helm's brief to the agent - which CLI accounts it can delegate to -
+      // as standing instructions rather than glued onto the owner's first
+      // message, where it read as something they had typed.
+      instructions: DRIVERS[s.driver]?.takesInstructions ? (this.delegationBrief?.() || null) : null,
       forkFrom: s.forkFrom,
       transcript: s.transcript,
       monitorOnly: !!s.external,
@@ -980,8 +993,27 @@ export class Sessions extends EventEmitter {
       // turn ended badly. `exited` counts too: delivery respawns the driver,
       // which is how a queue survives the process dying mid-turn. The pump
       // reads s.status to know the agent is free, so it runs after it lands.
+      if (status === 'idle' || e.status === 'exited') this.#steps.delete(s.id);
       if (status === 'idle') this.#pump(s);
       if (e.status === 'exited') return;
+    }
+    // The CLI used a message handed to it mid-turn: from here it is part of
+    // the conversation, at this point in it.
+    if (e.type === 'input.consumed') return this.#consumed(s, e.text);
+    if (e.type === 'item.start' && !e.parentId && !['text', 'thinking'].includes(e.kind)) {
+      const steps = this.#steps.get(s.id) ?? new Set();
+      steps.add(e.id);
+      this.#steps.set(s.id, steps);
+      void this.#handOver(s);
+    }
+    if (e.type === 'item.done') this.#steps.get(s.id)?.delete(e.id);
+    if (e.type === 'turn.done') this.#steps.delete(s.id);
+    if (e.type === 'turn.start') {
+      // Handed over too late for the turn it was typed into, the CLI runs
+      // it as the next one instead; the echo is the client's cue.
+      const steered = this.#steered.get(s.id);
+      const i = steered?.findIndex((x) => x.text.trim() === (e.text ?? '').trim()) ?? -1;
+      if (i >= 0) steered.splice(i, 1);
     }
     if (e.type === 'title') return this.#titled(s, e.title, 'agent');
     // Every turn has always said what it cost and nothing added them up.
@@ -1471,8 +1503,14 @@ export class Sessions extends EventEmitter {
       const event = this.events.append(id, { type: 'turn.remove', turnId: item.turnId });
       this.emit('event', { id, event });
     }
+    const handed = this.#steered.get(id) ?? [];
+    this.#steered.delete(id);
+    for (const item of handed) {
+      const event = this.events.append(id, { type: 'turn.remove', turnId: item.turnId });
+      this.emit('event', { id, event });
+    }
     const s = this.#index.get(id);
-    if (s && queued.length) s.lastSeq = this.events.last(id);
+    if (s && (queued.length || handed.length)) s.lastSeq = this.events.last(id);
     const d = this.#drivers.get(id);
     if (d) await d.interrupt();
     return { ok: true };
@@ -1921,7 +1959,10 @@ export class Sessions extends EventEmitter {
       // is a verb for the CLI, not a description of the work - "/status"
       // must never become the thread's title.
       if (!raw && !clean.trimStart().startsWith('/')) this.#prompted(s, clean);
-      if (!raw && !clean.trimStart().startsWith('/') && !s.delegationIntroduced && this.delegationBrief) {
+      // Claude and Codex take helm's brief as standing instructions instead
+      // (see #driver); only CLIs without that channel get it in the message.
+      if (!raw && !clean.trimStart().startsWith('/') && !s.delegationIntroduced && this.delegationBrief
+        && !DRIVERS[s.driver]?.takesInstructions) {
         const note = this.delegationBrief();
         if (note) {
           clean = `${note}\n\n${clean}`;
@@ -1987,6 +2028,7 @@ export class Sessions extends EventEmitter {
         const q = this.#outbox.get(s.id) ?? [];
         q.push(item);
         this.#outbox.set(s.id, q);
+        void this.#handOver(s);
         return { ok: true };
       }
       this.#sending.add(s.id);
@@ -2155,24 +2197,23 @@ export class Sessions extends EventEmitter {
   /**
    * Hand a queued message to the turn already running, without stopping it.
    *
-   * Only engines with a real steering primitive get this - codex's
-   * app-server turn/steer is the one that exists today - so the capability
-   * is the method existing on the driver, not a flag. Where it does not
-   * exist the refusal lands before the queue is touched: Claude's print
-   * stream would queue a second frame as its own later turn and ACP v1 has
-   * no safe equivalent, and faking either would mislabel the promise.
+   * Only engines with a real steering primitive get this - Codex's
+   * app-server turn/steer, and Claude reading stream input between steps -
+   * so the capability is the method existing on the driver, not a flag.
+   * Where it does not exist the refusal lands before the queue is touched:
+   * ACP v1 has no safe equivalent, and faking one would mislabel the promise.
+   * Delegated tasks use this directly; a chat's held messages go through
+   * `#handOver` when a step starts.
    *
    * `#sending` is held across the steer so a turn settling mid-call cannot
-   * let `#pump` hand the same ticket to the agent twice. `turn.accept` is
-   * the event that lands instead of a close: the message went out, so its
-   * bubble is promoted into the transcript rather than marked stopped.
+   * let `#pump` hand the same ticket to the agent twice. `turn.deliver`
+   * lands instead of a close; `turn.accept` follows when the CLI says it
+   * used the message, and promotes the bubble into the transcript there.
    */
   async sendNow(id, turnId) {
     const s = this.get(id);
-    const q = this.#outbox.get(id) ?? [];
-    const i = q.findIndex((x) => x.turnId === turnId);
-    if (i < 0) return { ok: true, found: false, sent: false };
-    const item = q[i];
+    const item = (this.#outbox.get(id) ?? []).find((x) => x.turnId === turnId);
+    if (!item) return { ok: true, found: false, sent: false };
     const d = this.#drivers.get(id);
     if (typeof d?.steer !== 'function') {
       throw new Error(`${s.engine} cannot send a queued message into the current turn`);
@@ -2180,23 +2221,74 @@ export class Sessions extends EventEmitter {
     if (this.#sending.has(s.id)) throw new Error('message is already being sent');
     this.#sending.add(s.id);
     try {
-      await d.steer(item.text, item.images);
-      // A withdraw or a queue-clearing interrupt may have landed while the
-      // steer was in flight: take the ticket out by id, not by position.
-      const rest = this.#outbox.get(s.id);
-      if (rest) {
-        const j = rest.findIndex((x) => x.turnId === turnId);
-        if (j >= 0) rest.splice(j, 1);
-        if (!rest.length) this.#outbox.delete(s.id);
-      }
-      const event = this.events.append(id, { type: 'turn.accept', turnId });
-      s.lastSeq = event.seq;
-      this.emit('event', { id, event });
+      await this.#steerOne(s, d, item);
       return { ok: true, found: true, sent: true };
     } finally {
       this.#sending.delete(s.id);
       this.#pump(s);
     }
+  }
+
+  /**
+   * Hand held messages to a CLI that is in the middle of a step, oldest
+   * first. It uses them when the step ends - what typing into the CLI's own
+   * input does. A slash command or /compact is a verb for between turns, so
+   * it and everything behind it waits for the turn to end.
+   */
+  async #handOver(s) {
+    const d = this.#drivers.get(s.id);
+    if (typeof d?.steer !== 'function' || !this.#steps.get(s.id)?.size) return;
+    if (this.#sending.has(s.id)) return;
+    this.#sending.add(s.id);
+    try {
+      for (;;) {
+        const item = this.#outbox.get(s.id)?.[0];
+        if (!item || item.compact != null || item.text.trimStart().startsWith('/')) break;
+        if (s.status !== 'working' && s.status !== 'blocked') break;
+        try { await this.#steerOne(s, d, item); }
+        catch (err) {
+          // The turn ended under it: the pump sends it as the next turn.
+          this.log(`[${s.id}] could not hand over a message mid-turn: ${err.message}`);
+          break;
+        }
+      }
+    } finally {
+      this.#sending.delete(s.id);
+      this.#pump(s);
+    }
+  }
+
+  /** One message to the running turn; `turn.deliver` says it can no longer be withdrawn. */
+  async #steerOne(s, d, item) {
+    await d.steer(item.text, item.images);
+    // A withdraw or a queue-clearing interrupt may have landed while the
+    // steer was in flight: take the ticket out by id, not by position.
+    const rest = this.#outbox.get(s.id);
+    if (rest) {
+      const j = rest.findIndex((x) => x.turnId === item.turnId);
+      if (j >= 0) rest.splice(j, 1);
+      if (!rest.length) this.#outbox.delete(s.id);
+    }
+    const steered = this.#steered.get(s.id) ?? [];
+    steered.push({ turnId: item.turnId, text: item.text });
+    this.#steered.set(s.id, steered);
+    const event = this.events.append(s.id, { type: 'turn.deliver', turnId: item.turnId });
+    s.lastSeq = event.seq;
+    this.emit('event', { id: s.id, event });
+  }
+
+  /** The CLI used a handed-over message: its bubble joins the transcript here. */
+  #consumed(s, text) {
+    const steered = this.#steered.get(s.id);
+    if (!steered?.length) return;
+    const want = String(text ?? '').trim();
+    let i = steered.findIndex((x) => x.text.trim() === want);
+    if (i < 0) i = 0;
+    const [{ turnId }] = steered.splice(i, 1);
+    if (!steered.length) this.#steered.delete(s.id);
+    const event = this.events.append(s.id, { type: 'turn.accept', turnId });
+    s.lastSeq = event.seq;
+    this.emit('event', { id: s.id, event });
   }
 
   /** A turn helm itself speaks: appended and pushed like any driver event. */
@@ -2264,6 +2356,8 @@ export class Sessions extends EventEmitter {
       const d = this.#drivers.get(id);
       this.#drivers.delete(id);
       this.#outbox.delete(id);
+      this.#steps.delete(id);
+      this.#steered.delete(id);
       clearTimeout(this.#reapers.get(id));
       if (d) await d.kill();
       this.#index.delete(id);
@@ -2414,6 +2508,7 @@ export class Sessions extends EventEmitter {
     const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
     const removed = new Set(tail.filter((e) => e.type === 'turn.remove').map((e) => e.turnId));
     const accepted = new Set(tail.filter((e) => e.type === 'turn.accept').map((e) => e.turnId));
+    const delivered = new Set(tail.filter((e) => e.type === 'turn.deliver').map((e) => e.turnId));
     const echoes = tail.filter((e) => e.type === 'turn.start'
       && !String(e.turnId).startsWith('local-'));
     const open = tail.filter((e) => e.type === 'turn.start'
@@ -2439,9 +2534,15 @@ export class Sessions extends EventEmitter {
       const echoed = echoIndex >= 0;
       if (echoed) echoes.splice(echoIndex, 1);
 
-      if (local && accepted.has(e.turnId)) {
+      if (local && (accepted.has(e.turnId) || delivered.has(e.turnId))) {
         // `turn.accept` records a successful steer into a live turn; never
         // send that ticket again if the daemon restarted before its echo.
+        // A ticket handed over but not yet used went to the CLI all the same.
+        if (!accepted.has(e.turnId)) {
+          const event = this.events.append(s.id, { type: 'turn.accept', turnId: e.turnId });
+          s.lastSeq = event.seq;
+          this.emit('event', { id: s.id, event });
+        }
         settle(e.turnId, 'ok');
         continue;
       }

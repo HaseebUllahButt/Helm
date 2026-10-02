@@ -508,7 +508,9 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   const [unread, setUnread] = useState(false);
   // The working pulse hangs off the turn still being written - with a helm
   // answer hosted mid-turn, that is not necessarily the last turn in the list.
-  const openTurn = turns.filter((t) => !t.done).at(-1);
+  // A message the CLI took mid-turn sits inside its host turn and never
+  // closes on its own; the host is the one still working.
+  const openTurn = turns.filter((t) => !t.done && !t.steered).at(-1);
   const working = status === 'working' || status === 'blocked';
 
   const onScroll = () => {
