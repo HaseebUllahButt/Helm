@@ -196,6 +196,18 @@ test('a headless session: start, stream, watch, prompt, resume, kill', async (t)
   sessions.unwatch(s.id);
   assert.equal(sessions.watching(s.id), false);
 
+  // Refreshing one tab or closing another device must not end this stream.
+  sessions.watch(s.id, 'laptop:tab-a');
+  sessions.watch(s.id, 'phone:tab-b');
+  sessions.unwatch(s.id, 'laptop:tab-a');
+  assert.equal(sessions.watching(s.id), true);
+  sessions.watch(s.id, 'phone:refreshed-tab');
+  sessions.unwatch(s.id, 'phone:tab-b');
+  sessions.unwatch(s.id); // an old app's unwatch only releases its legacy lease
+  assert.equal(sessions.watching(s.id), true);
+  sessions.unwatch(s.id, 'phone:refreshed-tab');
+  assert.equal(sessions.watching(s.id), false);
+
   // Mode and model changes reach the driver and the record.
   await assert.rejects(() => sessions.setMode(s.id, 'plan'), /plan mode is not supported/);
   await assert.rejects(() => sessions.input(s.id, '/plan'), /plan mode is not supported/);

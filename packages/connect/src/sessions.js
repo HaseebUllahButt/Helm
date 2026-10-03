@@ -231,7 +231,7 @@ export class Sessions extends EventEmitter {
   #drivers = new Map();
   /** sessionId -> reap timer */
   #reapers = new Map();
-  /** sessionId -> expiry, for event pushes somebody is looking at */
+  /** sessionId -> (view identity -> expiry), independent leases per device/tab */
   #watching = new Map();
   /** external id -> 'archived' | 'removed', for rows helm does not own */
   #marks = new Map();
@@ -1480,19 +1480,29 @@ export class Sessions extends EventEmitter {
   }
 
   /** Say that somebody is looking at this session; pushes flow while renewed. */
-  watch(id) {
-    this.get(id);
-    this.#watching.set(id, Date.now() + WATCH_TTL_MS);
-    return { ok: true, last: this.events.last(id) };
+  watch(id, watcher = 'legacy') {
+    const session = this.get(id);
+    this.watching(id); // expire old views before renewing this one
+    const viewers = this.#watching.get(id) ?? new Map();
+    viewers.set(watcher, Date.now() + WATCH_TTL_MS);
+    this.#watching.set(id, viewers);
+    return { ok: true, last: this.events.last(id), status: session.status };
   }
 
-  unwatch(id) { this.#watching.delete(id); return { ok: true }; }
+  unwatch(id, watcher = 'legacy') {
+    const viewers = this.#watching.get(id);
+    viewers?.delete(watcher);
+    if (!viewers?.size) this.#watching.delete(id);
+    return { ok: true };
+  }
 
   watching(id) {
-    const until = this.#watching.get(id);
-    if (!until) return false;
-    if (Date.now() > until) { this.#watching.delete(id); return false; }
-    return true;
+    const viewers = this.#watching.get(id);
+    if (!viewers) return false;
+    const now = Date.now();
+    for (const [watcher, until] of viewers) if (now > until) viewers.delete(watcher);
+    if (!viewers.size) this.#watching.delete(id);
+    return viewers.size > 0;
   }
 
   async answer(id, requestId, decision) {

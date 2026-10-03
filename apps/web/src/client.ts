@@ -1005,7 +1005,13 @@ export class Client {
 
     const id = `w${++this.seq}`;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let fallback: ReturnType<typeof setTimeout> | undefined;
+      const clear = () => { clearTimeout(deadline); clearTimeout(fallback); };
+      this.pending.set(id, {
+        resolve: (value) => { clear(); resolve(value as T); },
+        reject: (error) => { clear(); reject(error); },
+      });
       const frame = JSON.stringify({ t: 'rpc', id, env, method, params });
       // Prefer the direct channel: relaying costs two internet round trips
       // per call, which is what makes a remote session feel dead. A large
@@ -1027,7 +1033,18 @@ export class Client {
           return;
         }
       }
-      setTimeout(() => {
+      if (!this.pending.has(id)) return;
+      // A suspended laptop can leave a data channel looking open but silent.
+      // These reads (and the idempotent view lease) are safe to race over the
+      // hub too; never replay prompts, approvals, or other writes this way.
+      if (sent && ['session.events', 'session.watch', 'session.list', 'session.messages'].includes(method)) {
+        fallback = setTimeout(() => {
+          if (!this.pending.has(id) || !this.connected) return;
+          try { this.ws!.send(frame); } catch { /* keep waiting for the original route */ }
+        }, Math.min(1500, timeout / 2));
+      }
+      deadline = setTimeout(() => {
+        clear();
         if (this.pending.delete(id)) reject(new Error(`${method} timed out`));
       }, timeout);
     });

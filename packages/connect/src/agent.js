@@ -1346,8 +1346,16 @@ export class Daemon {
       case M.SESSION_EVENTS:  return this.sessions.history(p.id, {
         since: p.since ?? 0, limit: p.limit ?? 500, tail: p.tail ?? 0, before: p.before ?? 0,
       });
-      case M.SESSION_WATCH:   return this.sessions.watch(p.id);
-      case M.SESSION_UNWATCH: return this.sessions.unwatch(p.id);
+      // A view owns its lease. Refreshing or closing one tab cannot cancel
+      // another device's stream, even when both use the same login.
+      case M.SESSION_WATCH:
+      case M.SESSION_UNWATCH: {
+        if (p.watchId != null && (typeof p.watchId !== 'string' || !p.watchId || p.watchId.length > 128)) {
+          throw new Error('invalid session watch ID');
+        }
+        const watcher = JSON.stringify([caller ?? 'legacy', p.watchId ?? 'legacy']);
+        return method === M.SESSION_WATCH ? this.sessions.watch(p.id, watcher) : this.sessions.unwatch(p.id, watcher);
+      }
       case M.SESSION_ANSWER:  return this.sessions.answer(p.id, p.requestId, p.decision ?? {});
       case M.SESSION_INTERRUPT: return this.sessions.interrupt(p.id);
       case M.SESSION_DEQUEUE:  return this.sessions.dequeue(p.id, p.turnId);

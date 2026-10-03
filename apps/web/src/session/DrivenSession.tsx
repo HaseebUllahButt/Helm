@@ -45,7 +45,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   /** Go to another thread - the one a branch just made. */
   onOpenSession?: (s: Session) => void;
 }) {
-  const { log, error: logError, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
+  const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
   const [draft, setDraftRaw] = useState(() => loadDraft(env.id, session.id));
@@ -424,6 +424,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
               <span key={part}><span className="sep"> · </span>{part}</span>
             ))}
             {!env.online && <span className="offline"> · machine offline</span>}
+            {env.online && syncing && <span role="status"> · Syncing chat…</span>}
             {env.online && conn && !conn.online && (
               <span className="offline"> · {conn.reachable ? 'reconnecting' : 'connection down'}</span>
             )}
