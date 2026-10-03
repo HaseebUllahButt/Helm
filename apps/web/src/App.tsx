@@ -22,6 +22,7 @@ import { money, bytes } from './format';
 import { loadModels, saveModels } from './modelCache';
 import { followModelRefresh } from './modelRefresh';
 import { loadMessages, saveMessages } from './session/logCache';
+import { loadWorkspace, loadWorkspaceDurable, saveWorkspace, forgetWorkspace, workspaceScope } from './workspaceCache';
 
 type Auth = StoredAuth;
 type PairingTarget = { endpoint: string; password: string };
@@ -308,6 +309,7 @@ export function App() {
       if (kind === 'connection') setConn({ online: !!payload.online, reachable: payload.reachable ?? !!payload.online, error: payload.error });
       if (kind === 'endpoints') saveAuth({ ...auth, endpoints: payload.endpoints });
       if (kind === 'unauthorized') {
+        forgetWorkspace(workspaceScope(auth.token));
         clearAuth();
         setNotice('This device is no longer in the network. Pair it again with a fresh link from `helm link`.');
         setAuth(null); setClient(null);
@@ -318,14 +320,14 @@ export function App() {
     return () => { off(); c.close?.(); };
   }, [auth]);
 
-  const signOut = () => { clearAuth(); setAuth(null); setClient(null); };
+  const signOut = () => { forgetWorkspace(workspaceScope(auth?.token)); clearAuth(); setAuth(null); setClient(null); };
 
   if (auth === undefined) return null;
   if (!auth) {
     return <Login notice={notice} onDone={(a) => { setNotice(''); saveAuth(a); setAuth(a); }} />;
   }
   if (!client) return null;
-  return <Shell client={client} conn={conn} onSignOut={signOut} />;
+  return <Shell key={workspaceScope(auth.token)} client={client} conn={conn} onSignOut={signOut} />;
 }
 
 // ------------------------------------------------------------------- shell
@@ -391,11 +393,35 @@ function Shell({ client, conn, onSignOut }: {
   client: Client; conn: { online: boolean; reachable: boolean; error?: string }; onSignOut: () => void;
 }) {
   const wide = useWide();
-  const [envs, setEnvs] = useState<Environment[]>([]);
-  const [sessions, setSessions] = useState<Record<string, Session[]>>({});
-  const [selected, setSelected] = useState<string | null>(null);
-  const [stack, setStack] = useState<MainView[]>([{ kind: 'env' }]);
+  const scope = workspaceScope(client.token);
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, [client]);
+  const [cached] = useState(() => loadWorkspace(scope));
+  const [envs, setEnvs] = useState<Environment[]>(() => cached.environments.map(e => ({ ...e, online: false })));
+  const [sessions, setSessions] = useState<Record<string, Session[]>>(cached.sessions);
+  const [selected, setSelected] = useState<string | null>(cached.view?.envId ?? null);
+  const [stack, setStack] = useState<MainView[]>(() => cached.view
+    ? [{ kind: 'env' }, { kind: 'session', session: cached.view.session }] : [{ kind: 'env' }]);
+  const liveEnvsSeen = useRef(false);
+  const liveListsSeen = useRef(new Set<string>());
+  const sessionRequests = useRef(new Set<string>());
+  const envRequest = useRef(false);
+  const envAgain = useRef(false);
+  useEffect(() => {
+    let stale = false;
+    void loadWorkspaceDurable(scope).then(value => {
+      if (stale) return;
+      if (!liveEnvsSeen.current) setEnvs(value.environments.map(e => ({ ...e, online: false })));
+      setSessions(current => ({ ...Object.fromEntries(Object.entries(value.sessions)
+        .filter(([id]) => !liveListsSeen.current.has(id))), ...current }));
+      if (!cached.view && value.view && !location.hash && nav.current.depth === 0 && nav.current.stack.length === 1) {
+        restate([{ kind: 'env' }, { kind: 'session', session: value.view.session }], value.view.envId);
+      }
+    });
+    return () => { stale = true; };
+  }, [scope]);
   const [error, setError] = useState('');
+  const [envError, setEnvError] = useState('');
   const [downSince, setDownSince] = useState<number | null>(null);
   /** "thread X needs you" while a different session is on screen. */
   const [toast, setToast] = useState<Toast | null>(null);
@@ -454,7 +480,7 @@ function Shell({ client, conn, onSignOut }: {
    * `nav` mirrors the state for code that cannot wait a render.
    */
   const nav = useRef<{ stack: MainView[]; selected: string | null; depth: number }>(
-    { stack: [{ kind: 'env' }], selected: null, depth: 0 });
+    { stack, selected, depth: 0 });
 
   /**
    * Leaving an unused chat should not leave an empty row behind. The machine
@@ -489,6 +515,9 @@ function Shell({ client, conn, onSignOut }: {
       nav.current = { stack: s.stack, selected: s.selected, depth: s.depth };
       setStack(s.stack);
       setSelected(s.selected);
+      const top = s.stack.at(-1);
+      saveWorkspace(scope, { view: s.selected && top?.kind === 'session' && top.session.engine !== 'shell'
+        ? { envId: s.selected, session: top.session } : undefined });
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -502,6 +531,9 @@ function Shell({ client, conn, onSignOut }: {
     setStack(next);
     setSelected(sel);
     history.pushState({ helm: 1, depth, stack: next, selected: sel }, '');
+    const top = next.at(-1);
+    saveWorkspace(scope, { view: sel && top?.kind === 'session' && top.session.engine !== 'shell'
+      ? { envId: sel, session: top.session } : undefined });
   };
 
   /** Same place, fresher snapshot: session records change under a view. */
@@ -510,6 +542,9 @@ function Shell({ client, conn, onSignOut }: {
     setStack(next);
     setSelected(sel);
     history.replaceState({ helm: 1, depth: nav.current.depth, stack: next, selected: sel }, '');
+    const top = next.at(-1);
+    saveWorkspace(scope, { view: sel && top?.kind === 'session' && top.session.engine !== 'shell'
+      ? { envId: sel, session: top.session } : undefined });
   };
 
   /**
@@ -565,19 +600,41 @@ function Shell({ client, conn, onSignOut }: {
     setDownSince((t) => t ?? Date.now());
   }, [conn.online]);
 
-  const loadEnvs = useCallback(() => {
+  const loadEnvs = useCallback((): void => {
+    if (!active.current) return;
+    if (envRequest.current) { envAgain.current = true; return; }
+    envRequest.current = true;
     client.environments()
-      .then((r) => { setEnvs(r.environments); setError(''); })
-      .catch((e) => setError(e.message));
-  }, [client]);
+      .then((r) => {
+        if (!active.current) return;
+        liveEnvsSeen.current = true;
+        setEnvs(r.environments); setEnvError('');
+        saveWorkspace(scope, { environments: r.environments });
+      })
+      .catch((e) => { if (active.current) setEnvError(e.message); })
+      .finally(() => {
+        envRequest.current = false;
+        const again = envAgain.current; envAgain.current = false;
+        if (again && active.current) loadEnvs();
+      });
+  }, [client, scope]);
 
   /** One trailing session.list per machine per burst of updates. */
   const relist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const loadSessions = useCallback((envId: string) => {
+    if (!active.current) return;
+    if (sessionRequests.current.has(envId)) return;
+    sessionRequests.current.add(envId);
     client.rpc<{ sessions: Session[] }>(envId, 'session.list', {}, 15_000)
-      .then((r) => setSessions((s) => ({ ...s, [envId]: r.sessions })))
-      .catch(() => {});
-  }, [client]);
+      .then((r) => {
+        if (!active.current) return;
+        liveListsSeen.current.add(envId);
+        setSessions((s) => ({ ...s, [envId]: r.sessions }));
+        saveWorkspace(scope, { sessions: { [envId]: r.sessions } });
+      })
+      .catch(() => {})
+      .finally(() => { sessionRequests.current.delete(envId); });
+  }, [client, scope]);
 
   useEffect(() => {
     loadEnvs();
@@ -590,7 +647,7 @@ function Shell({ client, conn, onSignOut }: {
             m.id === e ? { ...m, online: !!payload.online, name: payload.name ?? m.name } : m)));
         } else loadEnvs();
       }
-      if (kind === 'connection' && payload.online) loadEnvs();
+      if (kind === 'connection' && (payload.online || payload.reachable)) loadEnvs();
       if (kind === 'session.update' && e) {
         // The update carries the session, so draw it now; the list call
         // behind it only has to find what came or went. It used to be the
@@ -625,6 +682,20 @@ function Shell({ client, conn, onSignOut }: {
       }
     });
   }, [loadEnvs, loadSessions, client]);
+
+  useEffect(() => {
+    const catchUp = () => { if (!document.hidden) loadEnvs(); };
+    window.addEventListener('focus', catchUp);
+    window.addEventListener('online', catchUp);
+    window.addEventListener('pageshow', catchUp);
+    document.addEventListener('visibilitychange', catchUp);
+    return () => {
+      window.removeEventListener('focus', catchUp);
+      window.removeEventListener('online', catchUp);
+      window.removeEventListener('pageshow', catchUp);
+      document.removeEventListener('visibilitychange', catchUp);
+    };
+  }, [loadEnvs]);
 
   const liveIds = envs.filter((e) => e.online).map((e) => e.id).join(',');
   // `conn.online` is a dependency because of what it costs to leave out. The
@@ -811,7 +882,8 @@ function Shell({ client, conn, onSignOut }: {
     // somewhere to pop to. At the root there is no such entry; there the ‹
     // means "back to the machine list" on a phone and nothing on desktop.
     if (nav.current.depth > 0) history.back();
-    else if (!wide) setSelected(null);
+    else if (nav.current.stack.length > 1) restate([{ kind: 'env' }]);
+    else if (!wide) restate([{ kind: 'env' }], null);
   };
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived);
@@ -1033,7 +1105,7 @@ function Shell({ client, conn, onSignOut }: {
                     .filter((s) => !s.delegation && `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q))
                     .map((s) => ({ e, s, stale: true }))
                   : [];
-                return [...live, ...remembered];
+                return [...live, ...remembered.filter(({ s }) => !live.some(row => row.s.id === s.id))];
               }).sort((a, b) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0)).slice(0, 40);
               const machines = envs.filter((e) => e.name.toLowerCase().includes(q));
               return (
@@ -1050,8 +1122,7 @@ function Shell({ client, conn, onSignOut }: {
                     {hits.map(({ e, s, stale }) => (
                       <button key={`${e.id}:${s.id}`} className="row tall" onClick={() => {
                         setQuery('');
-                        if (stale) openEnv(e.id);
-                        else openSession(e.id, s);
+                        openSession(e.id, s);
                       }}>
                         <EngineMark engine={engineOf(s.engine).cls} />
                         <span className="grow">
@@ -1179,6 +1250,7 @@ function Shell({ client, conn, onSignOut }: {
                 gear up top. The home screen is just the machines and what
                 is running on them. */}
             {error && <div className="error">{error}</div>}
+            {envError && <p className="note" role="status">{envs.length ? 'Saved workspace · reconnecting…' : 'Connecting to your machines…'}</p>}
 
             </>)}
           </div>
@@ -1243,7 +1315,7 @@ function Shell({ client, conn, onSignOut }: {
               </div>
             ) : (
               <div className="empty quiet">
-                {error ? 'The hub did not answer' : 'No machines yet'}
+                {envError ? 'The hub did not answer' : 'No machines yet'}
                 {!error && <div className="note">Run <code>helm add pc</code> on a machine that is already in your network.</div>}
               </div>
             )}
@@ -1267,7 +1339,8 @@ function Shell({ client, conn, onSignOut }: {
             key={env.id}
             client={client} env={env} wide={wide} onBack={back}
             sessions={(sessions[env.id] ?? []).filter((s) => !s.delegation)} reload={reloadEnv}
-            remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions.filter((s) => !s.delegation)}
+            remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions.filter((s) => !s.delegation
+              && !(sessions[env.id] ?? []).some(known => known.id === s.id))}
             rememberedAt={env.online ? undefined : snap?.machines?.[env.id]?.at}
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
             onNewSession={() => push({ kind: 'new' })}
@@ -1345,7 +1418,7 @@ function Shell({ client, conn, onSignOut }: {
           />
         ) : view.session.driver ? (
           <DrivenSession
-            key={view.session.id}
+            key={`${env.id}:${view.session.id}`}
             client={client} env={env} conn={conn} onTranscribe={transcribeVia(env.id)}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
@@ -1357,7 +1430,7 @@ function Shell({ client, conn, onSignOut }: {
           />
         ) : (
           <SessionView
-            key={view.session.id}
+            key={`${env.id}:${view.session.id}`}
             client={client} env={env} onTranscribe={transcribeVia(env.id)}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             terminals={(sessions[env.id] ?? []).filter(ownTerminal).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))}
@@ -2584,7 +2657,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             </div>
             <div className="rows plain stale">
               {remembered!.map((s) => (
-                <div key={s.id} className="row tall">
+                <button key={s.id} className="row tall" onClick={() => onOpen(s)}>
                   <div className="rowmain">
                     <EngineMark engine={engineOf(s.engine).cls} />
                     <span className="grow">
@@ -2596,7 +2669,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
                     </span>
                     <StatusChip status={s.status} at={s.updatedAt} />
                   </div>
-                </div>
+                </button>
               ))}
             </div>
             <p className="note">as it was when this machine last answered - it may be different now.</p>
@@ -4240,6 +4313,9 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const isShell = session.engine === 'shell';
   const isExternal = !!session.external;
   const [messages, setMessages] = useState<Message[] | null>(null);
+  const [readError, setReadError] = useState('');
+  const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [raw, setRaw] = useState(isShell);
   const [status, setStatus] = useState(session.status);
   // When it entered the status it is in, for "working 14m" beside the word.
@@ -4254,13 +4330,23 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   // to say anything at all. Paint the copy on the device first: what you read
   // last time is a better opening than a blank screen, and the refresh behind
   // it is usually a second or two.
-  const refresh = useCallback(async () => {
-    if (isShell) return;
+  const refresh = useCallback(async (): Promise<void> => {
+    if (isShell || !mounted.current) return;
+    if (reading.current) { readAgain.current = true; return; }
+    reading.current = true;
+    let success = false;
     try {
       const r = await client.rpc<{ messages: Message[] }>(env.id, 'session.messages', { id: session.id }, 15_000);
+      if (!mounted.current) return;
       setMessages(r.messages);
+      setReadError(''); success = true;
       saveMessages(env.id, session.id, r.messages);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { if (mounted.current) setReadError(e.message); }
+    finally {
+      reading.current = false;
+      const again = readAgain.current; readAgain.current = false;
+      if (success && again && mounted.current) void refresh();
+    }
   }, [client, env.id, session.id, isShell]);
 
   useEffect(() => {
@@ -4275,7 +4361,9 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   useEffect(() => {
     refresh();
     const off = client.on((e, kind, payload) => {
+      if (kind === 'connection' && payload?.online) void refresh();
       if (e !== env.id) return;
+      if (kind === 'transport' || (kind === 'presence' && payload?.online)) void refresh();
       if (kind === 'session.transcript' && payload?.id === session.id) refresh();
       if (kind === 'session.update' && payload.session?.id === session.id) {
         setStatus(payload.session.status);
@@ -4283,7 +4371,14 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
         refresh();
       }
     });
-    return off;
+    const catchUp = () => { if (!document.hidden) void refresh(); };
+    window.addEventListener('focus', catchUp);
+    window.addEventListener('online', catchUp);
+    document.addEventListener('visibilitychange', catchUp);
+    return () => {
+      off(); window.removeEventListener('focus', catchUp); window.removeEventListener('online', catchUp);
+      document.removeEventListener('visibilitychange', catchUp);
+    };
   }, [client, env.id, session.id, refresh]);
 
   // The transcript events above are the live stream; the poll is only the
@@ -4346,6 +4441,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
             <EngineMark engine={eng.cls} />
             <Route machine={env.name} folder={session.cwd} />
             <span className="sep"> · </span>{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''}
+            {!isShell && messages && (readError || !env.online) && <span className="offline" role="status"> · Saved chat · reconnecting…</span>}
           </span>
         </div>
         <StatusChip status={status} at={statusAt} />
@@ -4418,7 +4514,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           waiting={status === 'blocked'} engine={eng.label}
           history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
         >
-          {error && <div className="error floating" role="alert" onClick={() => setError('')}>{error}</div>}
+          {(error || (!messages && readError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || readError}</div>}
         </Composer>
       )}
       {raw && error && <div className="error floating" role="alert" onClick={() => setError('')}>{error}</div>}

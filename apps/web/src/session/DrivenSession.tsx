@@ -423,10 +423,12 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
               <span key={part}><span className="sep"> · </span>{part}</span>
             ))}
-            {!env.online && <span className="offline"> · machine offline</span>}
-            {env.online && syncing && <span role="status"> · Syncing chat…</span>}
-            {env.online && conn && !conn.online && (
-              <span className="offline"> · {conn.reachable ? 'reconnecting' : 'connection down'}</span>
+            {log.loaded && (logError || (!env.online && syncing))
+              ? <span className="offline" role="status"> · Saved chat · reconnecting…</span>
+              : syncing && <span role="status"> · Syncing chat…</span>}
+            {!env.online && !log.loaded && <span className="offline"> · machine offline</span>}
+            {env.online && conn && !conn.online && !logError && (
+              <span className="offline"> · live updates reconnecting…</span>
             )}
           </span>
         </div>
@@ -527,7 +529,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       >
         {/* Above the input, not under it: below the composer it landed in
             the home-bar zone and pushed the input up. A tap dismisses it. */}
-        {(error || logError) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || logError}</div>}
+        {(error || (!log.loaded && logError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || logError}</div>}
         {notice && !error && <div className="notice floating" role="status" onClick={() => setNotice('')}><Icon name="check" size={14} />{notice}</div>}
         {controls.sheet}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}

@@ -21,7 +21,7 @@
  */
 
 const NAME = 'helm';
-const VERSION = 2;
+const VERSION = 3;
 const STORES = ['kv', 'session-logs'] as const;
 export type Store = typeof STORES[number];
 
@@ -32,15 +32,22 @@ export function idb(): Promise<IDBDatabase | null> {
   if (conn) return conn;
   const attempt = new Promise<IDBDatabase | null>((resolve) => {
     let settled = false;
-    const done = (db: IDBDatabase | null) => { if (!settled) { settled = true; resolve(db); } };
+    let timer: ReturnType<typeof setTimeout>;
+    const done = (db: IDBDatabase | null) => {
+      if (settled) { db?.close(); return; }
+      settled = true; clearTimeout(timer); resolve(db);
+    };
     try {
       if (typeof indexedDB === 'undefined') return done(null);
       const req = indexedDB.open(NAME, VERSION);
       req.onupgradeneeded = () => {
         for (const s of STORES) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s);
+        const logs = req.transaction!.objectStore('session-logs');
+        if (!logs.indexNames.contains('at')) logs.createIndex('at', 'at');
       };
       req.onsuccess = () => {
         const db = req.result;
+        if (settled) { db.close(); return; }
         // Another tab is upgrading: let go of it and open again next time.
         db.onversionchange = () => { db.close(); conn = null; };
         db.onclose = () => { conn = null; };
@@ -50,7 +57,7 @@ export function idb(): Promise<IDBDatabase | null> {
       // An older tab holding version 1 open blocks the upgrade. Do not hang
       // the caller on it; storage is best-effort everywhere it is used.
       req.onblocked = () => done(null);
-      setTimeout(() => done(null), 5_000);
+      timer = setTimeout(() => done(null), 1000);
     } catch { done(null); }
   });
   conn = attempt.then((db) => { if (!db) conn = null; return db; });
@@ -68,9 +75,17 @@ export async function txn<T>(
   if (!db) throw new Error('no indexedDB');
   return new Promise<T>((resolve, reject) => {
     const tx = db.transaction(store, mode);
-    const req = fn(tx.objectStore(store));
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error('indexedDB request failed'));
-    tx.onabort = () => reject(tx.error ?? new Error('indexedDB transaction aborted'));
+    const timer = setTimeout(() => {
+      try { tx.abort(); } catch { /* it may have just completed */ }
+      reject(new Error('indexedDB transaction timed out'));
+    }, 2000);
+    let req: IDBRequest<T>;
+    try { req = fn(tx.objectStore(store)); }
+    catch (error) { clearTimeout(timer); try { tx.abort(); } catch {} reject(error); return; }
+    // Request success precedes commit: resolving there reported an aborted
+    // write as saved, which made an evicted PWA silently lose its cache.
+    tx.oncomplete = () => { clearTimeout(timer); resolve(req.result); };
+    tx.onabort = () => { clearTimeout(timer); reject(tx.error ?? new Error('indexedDB transaction aborted')); };
+    tx.onerror = () => { clearTimeout(timer); reject(tx.error ?? req.error ?? new Error('indexedDB request failed')); };
   });
 }

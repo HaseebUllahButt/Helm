@@ -63,28 +63,76 @@ interface Record {
   messages?: unknown[];
 }
 
-/**
- * Trim from the front, on a turn boundary.
- *
- * Cutting mid-turn leaves deltas whose `turn.start` is gone; the reducer
- * drops those on the floor, so the chat would open with a headless fragment
- * at the top. Cutting at a turn start means the oldest thing on screen is a
- * whole exchange.
- */
-function trim(events: HelmEvent[]): HelmEvent[] {
-  if (events.length <= MAX_EVENTS) return events;
-  const from = events.length - MAX_EVENTS;
-  for (let i = from; i < events.length; i++) {
-    if (events[i].type === 'turn.start') return events.slice(i);
+// Returning to a chat must not queue behind this device's disk writes.
+// Bound both count and bytes so a long-running phone never retains every log.
+const hot = new Map<string, { record: Record; bytes: number }>();
+const writes = new Map<string, Promise<void>>();
+let hotBytes = 0;
+function remember(record: Record) {
+  let bytes = 0;
+  const pending: unknown[] = [record];
+  while (pending.length && bytes <= 4_000_000) {
+    const value = pending.pop();
+    if (typeof value === 'string') bytes += value.length * 2;
+    else if (value && typeof value === 'object') for (const part of Object.values(value)) pending.push(part);
+    else bytes += 8;
   }
-  return events.slice(from);
+  const previous = hot.get(record.key);
+  if (previous) { hotBytes -= previous.bytes; hot.delete(record.key); }
+  if (bytes > 4_000_000) return;
+  hot.set(record.key, { record, bytes }); hotBytes += bytes;
+  while (hot.size > 8 || hotBytes > 12_000_000) {
+    const oldest = hot.entries().next().value!;
+    hot.delete(oldest[0]); hotBytes -= oldest[1].bytes;
+  }
+}
+function recall(key: string): Record | undefined {
+  const entry = hot.get(key);
+  if (entry) { hot.delete(key); hot.set(key, entry); }
+  return entry?.record;
+}
+async function write(record: Record): Promise<void> {
+  remember(record);
+  const next = (writes.get(record.key) ?? Promise.resolve()).then(async () => {
+    const fresh = !(await known(record.key));
+    await txn('session-logs', 'readwrite', s => s.put(record, record.key));
+    if (fresh) await prune(record.key);
+  }).catch(() => {});
+  writes.set(record.key, next);
+  await next;
+  if (writes.get(record.key) === next) writes.delete(record.key);
+}
+
+/**
+ * Keep the contiguous tail plus the small owner/item context needed to
+ * render it. The real tail boundary remains separate from sparse anchors.
+ */
+function trim(events: HelmEvent[]): { events: HelmEvent[]; first: number } {
+  if (events.length <= MAX_EVENTS) return { events, first: 0 };
+  const from = events.length - MAX_EVENTS;
+  const tail = events.slice(from);
+  const owners = new Set(tail.map(e => e.turnId).filter(Boolean));
+  const items = new Set(tail.filter(e => e.type.startsWith('item.')).map(e => e.id));
+  const context: HelmEvent[] = [];
+  for (const event of events.slice(0, from)) {
+    if (event.type === 'item.start' && items.has(event.id)) {
+      context.push(event); if (event.turnId) owners.add(event.turnId);
+    }
+  }
+  for (const event of events.slice(0, from)) {
+    if (owners.has(event.turnId) && event.type.startsWith('turn.')) context.push(event);
+  }
+  return { events: [...context, ...tail].sort((a, b) => a.seq - b.seq), first: tail[0].seq };
 }
 
 /** The stored log for a session, or null on a miss / version skew / any failure. */
 export async function loadCached(env: string, sessionId: string): Promise<{ last: number; first: number; events: HelmEvent[] } | null> {
   try {
-    const rec = await txn<Record | undefined>('session-logs', 'readonly', (s) => s.get(`${env}:${sessionId}`));
+    const key = `${env}:${sessionId}`;
+    const cached = recall(key);
+    const rec = cached ?? await txn<Record | undefined>('session-logs', 'readonly', (s) => s.get(key));
     if (!rec || rec.shape !== SHAPE || rec.kind === 'messages' || !Array.isArray(rec.events)) return null;
+    if (!cached) remember(rec);
     // No LRU touch here: it rewrote the whole payload to change one number,
     // and the save that follows every open's refresh stamps `at` anyway.
     return { last: rec.last ?? 0, first: rec.first ?? rec.events[0]?.seq ?? 0, events: rec.events };
@@ -98,11 +146,9 @@ export async function saveCached(env: string, sessionId: string, last: number, e
   try {
     const key = `${env}:${sessionId}`;
     const kept = trim(events);
-    const fresh = !(await known(key));
-    await txn('session-logs', 'readwrite', (s) => s.put(
+    await write(
       { key, kind: 'events', shape: SHAPE, at: Date.now(), last,
-        first: Math.max(first, kept[0]?.seq ?? 0), events: kept } satisfies Record, key));
-    if (fresh) await prune(key);
+        first: Math.max(first, kept.first), events: kept.events });
   } catch {
     /* cache is best-effort; the network path still works */
   }
@@ -111,8 +157,11 @@ export async function saveCached(env: string, sessionId: string, last: number, e
 /** The messages of a herdr-pane chat, or null on a miss or any failure. */
 export async function loadMessages<T>(env: string, sessionId: string): Promise<T[] | null> {
   try {
-    const rec = await txn<Record | undefined>('session-logs', 'readonly', (s) => s.get(`msg:${env}:${sessionId}`));
+    const key = `msg:${env}:${sessionId}`;
+    const cached = recall(key);
+    const rec = cached ?? await txn<Record | undefined>('session-logs', 'readonly', (s) => s.get(key));
     if (!rec || rec.shape !== SHAPE || !Array.isArray(rec.messages)) return null;
+    if (!cached) remember(rec);
     return rec.messages as T[];
   } catch {
     return null;
@@ -123,9 +172,7 @@ export async function loadMessages<T>(env: string, sessionId: string): Promise<T
 export async function saveMessages(env: string, sessionId: string, messages: unknown[]): Promise<void> {
   try {
     const key = `msg:${env}:${sessionId}`;
-    const fresh = !(await known(key));
-    await txn('session-logs', 'readwrite', (s) => s.put({ key, kind: 'messages', shape: SHAPE, at: Date.now(), messages } satisfies Record, key));
-    if (fresh) await prune(key);
+    await write({ key, kind: 'messages', shape: SHAPE, at: Date.now(), messages });
   } catch {
     /* best-effort, as above */
   }
@@ -149,15 +196,17 @@ async function known(key: string): Promise<boolean> {
 async function prune(keep: string): Promise<void> {
   const keys = await txn<IDBValidKey[]>('session-logs', 'readonly', (s) => s.getAllKeys());
   if (keys.length <= MAX_SESSIONS) return;
-  const all = await txn<Record[]>('session-logs', 'readonly', (s) => s.getAll());
-  const drop: Record[] = [];
+  // Read only keys ordered by timestamp. getAll() copied every cached chat
+  // into memory merely to evict one, stalling phones when a new chat opened.
+  const ordered = await txn<IDBValidKey[]>('session-logs', 'readonly', s => s.index('at').getAllKeys());
+  const drop: IDBValidKey[] = [];
   for (const [kind, max] of [['messages', MAX_MESSAGE_SESSIONS], ['events', MAX_SESSIONS]] as const) {
-    const mine = all.filter((r) => (r.kind ?? 'events') === kind).sort((a, b) => a.at - b.at);
+    const mine = ordered.filter(k => (String(k).startsWith('msg:') ? 'messages' : 'events') === kind);
     if (mine.length > max) drop.push(...mine.slice(0, mine.length - max));
   }
   if (!drop.length) return;
   await txn('session-logs', 'readwrite', (s) => {
-    for (const r of drop) if (r.key !== keep) s.delete(r.key);
+    for (const key of drop) if (key !== keep) s.delete(key);
     return s.get(keep);
   });
 }
