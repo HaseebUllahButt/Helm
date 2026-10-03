@@ -533,7 +533,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>
 
-      {showSubagents && <Subagents client={client} env={env} parent={session} onClose={() => setShowSubagents(false)} onOpen={onOpenSession} />}
+      {showSubagents && <Subagents key={`${env.id}:${session.id}`} client={client} env={env} parent={session} onClose={() => setShowSubagents(false)} onOpen={onOpenSession} />}
 
       {branching && (
         <Confirm

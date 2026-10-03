@@ -28,7 +28,7 @@ export function Subagents({ client, env, parent, onClose }: {
   const [revision, setRevision] = useState(0);
   const ref = useDialog(() => { if (!busy) onClose(); });
   const agent = agents.find((a) => a.id === account);
-  const children = sessions.filter((s) => s.delegation?.parentId === parent.id);
+  const children = sessions.filter((s) => !s.archived && s.delegation?.parentId === parent.id);
   const readOnly = ['plan', 'readonly', 'read'].includes(parent.mode ?? '');
   const modes = agent?.modes.filter((m) => m.id !== 'plan' && (!readOnly || ['readonly', 'read'].includes(m.id))) ?? [];
 
@@ -40,7 +40,10 @@ export function Subagents({ client, env, parent, onClose }: {
     void load();
     const off = client.on((e, kind, payload: any) => {
       if (e === env.id && kind === 'session.update' && payload?.session?.delegation?.parentId === parent.id) {
-        setSessions((all) => [...all.filter((s) => s.id !== payload.session.id), payload.session]);
+        const s = payload.session as Session;
+        const belongs = !s.archived && s.delegation?.parentId === parent.id;
+        setSessions((all) => [...all.filter((existing) => existing.id !== s.id), ...(belongs ? [s] : [])]);
+        if (!belongs) setSelected((id) => id === s.id ? '' : id);
         setRevision((r) => r + 1);
       }
       if ((kind === 'connection' && payload?.online) || (e === env.id && kind === 'session.exit')) void load();
@@ -173,7 +176,15 @@ export function Subagents({ client, env, parent, onClose }: {
               <button className="primary" disabled={sending || !message.trim()}>{sending ? 'Sending…' : 'Send message'}</button>
               {notice && <p className="note" role="status">{notice}</p>}
             </form>
-            {!result?.complete && <button className="linkish destructive" onClick={() => client.rpc(env.id, 'session.interrupt', { id: s.id }).catch((e) => setError(e.message))}>Stop subagent</button>}
+            {result?.complete
+              ? <button className="linkish" onClick={async () => {
+                try {
+                  await client.rpc(env.id, 'session.archive', { id: s.id, archived: true });
+                  setSessions((all) => all.filter((item) => item.id !== s.id));
+                  setSelected('');
+                } catch (e: any) { setError(e.message); }
+              }}>Hide finished task</button>
+              : <button className="linkish destructive" onClick={() => client.rpc(env.id, 'session.interrupt', { id: s.id }).catch((e) => setError(e.message))}>Stop subagent</button>}
           </div>}
         </div>)}
       </div>

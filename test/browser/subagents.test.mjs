@@ -16,6 +16,8 @@ before(async () => {
     const parent = { id:'parent', title:'Security review', cwd:'/project', engine:'codex', profileId:'codex-main', status:'working' };
     const child = { id:'child', title:'Review the vulnerability', cwd:'/project', engine:'claude', profileId:'claude-main', model:'opus', status:'blocked',
       delegation:{ parentId:'parent', task:'Review the vulnerability', requestedModel:'opus', depth:1, status:'blocked' } };
+    const unrelated = { ...child, id:'unrelated', title:'Other thread task', delegation:{...child.delegation,parentId:'other-parent'} };
+    const archived = { ...child, id:'archived', title:'Archived task', archived:true };
     const agents = [
       { id:'codex-main', label:'Codex personal', engine:'codex', auth:'authenticated', available:true, models:['gpt-6-astra'], modes:[{id:'ask',label:'Ask before acting'}] },
       { id:'claude-main', label:'Claude personal', engine:'claude', auth:'authenticated', available:true, defaultModel:'sonnet', defaultMode:'bypassPermissions', models:['opus','sonnet'], modes:[{id:'default',label:'Ask before acting'},{id:'bypassPermissions',label:'Bypass all checks'},{id:'plan',label:'Plan first'}] },
@@ -26,17 +28,21 @@ before(async () => {
       rpc: async (env, method, params) => {
         (window.calls ??= []).push({env,method,params});
         if(method === 'agent.list') return { agents };
-        if(method === 'session.list') return { sessions: window.includeChild ? [parent,child] : [parent] };
+        if(method === 'session.list') return { sessions: [...(window.includeChild ? [parent,child] : [parent]), unrelated, archived] };
         if(method === 'session.delegate') {
           window.includeChild = true;
           for(const fn of listeners) fn('local','session.update',{session:child});
           return { session:child };
         }
-        if(method === 'session.delegation-result') return { session:child,status:'blocked',complete:false,output:'I need to inspect the changed files.',pending:{kind:'command',title:'Read the diff',requestId:'permission'} };
+        if(method === 'session.delegation-result') return window.childDone
+          ? { session:child,status:'done',complete:true,output:'Review finished.' }
+          : { session:child,status:'blocked',complete:false,output:'I need to inspect the changed files.',pending:{kind:'command',title:'Read the diff',requestId:'permission'} };
         if(method === 'session.events') return { events:[], pending:[{requestId:'permission',kind:'command',title:'Read the diff',detail:'git diff',options:[{id:'allow',role:'allow',label:'Allow'},{id:'deny',role:'deny',label:'Deny'}],defaultTo:'deny'}] };
         return { ok:true };
       }
     };
+    window.sendSessionUpdate = (env, session) => listeners.forEach(fn=>fn(env,'session.update',{session}));
+    window.unrelatedChild = unrelated;
     window.showSubagents = () => root.render(<Subagents client={client} env={{id:'local',name:'Laptop',online:true,info:{}}} parent={parent}
       onClose={()=>root.render(null)} onOpen={(s)=>{window.opened=s.id}} />);
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
@@ -96,4 +102,22 @@ test('subagents fit a phone, trap focus, stop a task and restore the launcher', 
   await page.keyboard.press('Escape');
   await dialog.waitFor({state:'detached'});
   assert.equal(await page.locator('#launcher').evaluate((el)=>el===document.activeElement),true);
+});
+
+test('only this parent and machine contribute tasks, including live updates', async () => {
+  await page.evaluate(() => window.showSubagents());
+  await page.getByRole('button', { name:/Review the vulnerability/ }).waitFor();
+  assert.equal(await page.getByText('Other thread task', {exact:true}).count(), 0);
+  assert.equal(await page.getByText('Archived task', {exact:true}).count(), 0);
+  await page.evaluate(() => {
+    window.sendSessionUpdate('local', window.unrelatedChild);
+    window.sendSessionUpdate('other-machine', {...window.unrelatedChild, title:'Other machine task', delegation:{parentId:'parent'}});
+  });
+  assert.equal(await page.locator('.delegation-branch').count(), 1);
+  await page.evaluate(() => { window.childDone = true; });
+  await page.getByRole('button', { name:/Review the vulnerability/ }).click();
+  await page.getByRole('button', { name:'Hide finished task' }).click();
+  assert.equal(await page.locator('.delegation-branch').count(), 0);
+  assert.ok(await page.evaluate(() => window.calls.some(c=>c.method==='session.archive'&&c.params.id==='child'&&c.params.archived)));
+  await page.getByRole('button', { name:'Close subagents' }).click();
 });

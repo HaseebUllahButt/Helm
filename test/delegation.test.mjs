@@ -99,6 +99,40 @@ test('native CLI callers can delegate without a Helm parent session', async (t) 
   assert.equal(session.cwd, process.env.HELM_DIR);
 });
 
+test('an inherited parent cannot attach an unrelated Codex background thread', async (t) => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await assert.rejects(() => sessions.delegate({ id: parent.id, callerThreadId: 'unrelated-memory-thread',
+    profileId: 'claude-main', task: 'Inspect memories' }), /does not match.*parent/);
+  assert.equal(drivers.size, 1, 'reject before starting a child');
+  assert.equal(parent.delegations, undefined);
+  const { session: child } = await sessions.delegate({ id: parent.id, callerThreadId: parent.engineSessionId,
+    profileId: 'claude-main', task: 'Review this project' });
+  assert.equal(child.delegation.parentId, parent.id);
+});
+
+test('archived tasks disappear from their parent list and badge without losing history', async (t) => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const other = await sessions.start({ cwd: parent.cwd, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  drivers.get(child.id).finish();
+  const updates = [];
+  sessions.on('session', (s) => updates.push(s));
+  sessions.archive(child.id);
+  assert.deepEqual(await sessions.list({ parentId: parent.id }), []);
+  assert.deepEqual(await sessions.list({ parentId: other.id }), []);
+  assert.deepEqual((await sessions.list()).find((s) => s.id === parent.id).delegations, []);
+  assert.deepEqual(updates.findLast((s) => s.id === parent.id).delegations, []);
+  assert.equal(sessions.delegationResult(child.id).output, 'Opus reviewed the task.');
+  const restarted = new Sessions(new EventEmitter());
+  restarted.runtime.listLive = async () => new Map();
+  assert.deepEqual(await restarted.list({ parentId: parent.id }), []);
+  sessions.archive(child.id, false);
+  assert.deepEqual((await sessions.list({ parentId: parent.id })).map((s) => s.id), [child.id]);
+  assert.deepEqual(updates.findLast((s) => s.id === parent.id).delegations, [child.id]);
+});
+
 test('a long streamed reply survives event trimming and a daemon restart', async (t) => {
   const { sessions, drivers } = setup(t);
   const { session } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Long review' });
@@ -212,6 +246,23 @@ test('output distinguishes approval, interruption and provider failure', () => {
   }
 });
 
+test('a completed task stays complete after a message was consumed during its turn', () => {
+  const events = [
+    { type:'turn.start', turnId:'provider-turn', text:'Review' },
+    { type:'turn.start', turnId:'local-steering', text:'Check mobile too', queued:true },
+    { type:'turn.accept', turnId:'local-steering' },
+    { type:'item.start', id:'answer', kind:'text' },
+    { type:'item.delta', id:'answer', text:'Review complete.' },
+    { type:'turn.done', turnId:'provider-turn', status:'ok' },
+    { type:'status', status:'idle' },
+  ];
+  const result = delegationOutput({ status:'idle', delegation:{status:'done'} }, events);
+  assert.equal(result.status,'done');
+  assert.equal(result.complete,true);
+  assert.equal(result.output,'Review complete.');
+  assert.equal(delegationOutput({status:'working',delegation:{status:'working'}},events).complete,false);
+});
+
 test('CLI flags do not leak into the task; literal task flags survive --', () => {
   const parsed = parseAgentArgs(['claude-main', '--model', 'opus', '--wait', '--', 'review', '--dangerously-skip-permissions'], { values: ['model'], switches: ['wait'] });
   assert.deepEqual(parsed.options, { model: 'opus', wait: true });
@@ -231,9 +282,10 @@ test('CLI waits for the actual reply and reports pending approvals immediately',
     return { session: { id: 'child' }, status: ++reads === 1 ? 'working' : 'done', complete: reads > 1, output: reads > 1 ? 'Reviewed.' : '' };
   };
   assert.equal(await runAgentCommand('delegate', ['claude-main', '--model', 'opus', '--wait', '--json', '--', 'Review'], {
-    rpc, self: 'self', parentId: 'parent', write: (s) => written.push(s), sleep: async () => {},
+    rpc, self: 'self', parentId: 'parent', callerThreadId: 'real-codex-thread', write: (s) => written.push(s), sleep: async () => {},
   }), 0);
   assert.equal(calls[1].params.id, 'parent');
+  assert.equal(calls[1].params.callerThreadId, 'real-codex-thread');
   assert.equal(calls[1].params.model, 'opus');
   assert.equal(calls[1].params.task, 'Review');
   assert.equal(JSON.parse(written[0]).output, 'Reviewed.');
@@ -276,7 +328,7 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
     await once(env, 'message');
     const bin = fileURLToPath(new URL('../packages/connect/bin/helm.js', import.meta.url));
     const invoke = (args) => new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [bin, ...args], { env: { ...process.env, HELM_SESSION_ID: parent.id }, cwd: process.env.HELM_DIR });
+      const child = spawn(process.execPath, [bin, ...args], { env: { ...process.env, HELM_SESSION_ID: parent.id, CODEX_THREAD_ID: parent.engineSessionId }, cwd: process.env.HELM_DIR });
       let out = '', err = '';
       const timer = setTimeout(() => { child.kill(); reject(new Error('CLI timed out')); }, 15_000);
       child.stdout.on('data', (text) => { out += text; });

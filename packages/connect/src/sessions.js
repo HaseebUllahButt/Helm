@@ -522,8 +522,16 @@ export class Sessions extends EventEmitter {
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
-    return out.filter((s) => parentId ? s.delegation?.parentId === parentId : includeDelegations || !s.delegation)
+    return out.filter((s) => parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation)
+      .map((s) => s.delegations ? { ...s, delegations: this.#visibleDelegations(s) } : s)
       .sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  }
+
+  #visibleDelegations(parent) {
+    return (parent.delegations ?? []).filter((id) => {
+      const child = this.#index.get(id);
+      return child?.delegation?.parentId === parent.id && !child.archived;
+    });
   }
 
   /** Provider history must not rediscover a hidden task as an ordinary chat. */
@@ -644,12 +652,15 @@ export class Sessions extends EventEmitter {
   }
 
   /** A task owned by its orchestrator, with durable output and configurable permissions. */
-  async delegate({ id, cwd, profileId, model, mode, effort, task }) {
+  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId }) {
     if (typeof task !== 'string' || !task.trim() || task.length > 32_000) {
       throw new Error('a subagent task must contain 1–32000 characters');
     }
     const parent = id ? this.get(id) : null;
     if (parent && !parent.driver) throw new Error('the parent must be an agent session');
+    if (parent && callerThreadId && (parent.engine !== 'codex' || parent.engineSessionId !== callerThreadId)) {
+      throw new Error('the calling Codex thread does not match the inherited Helm parent; use --parent with the intended orchestrator ID');
+    }
     const folder = parent?.cwd ?? cwd;
     if (typeof folder !== 'string' || !folder.trim()) throw new Error('delegation needs a working folder');
     let depth = 1, ancestor = parent;
@@ -2447,6 +2458,10 @@ export class Sessions extends EventEmitter {
     s.archivedAt = s.archived ? Date.now() : null;
     this.#save();
     this.emit('session', s);
+    if (s.delegation?.parentId) {
+      const parent = this.#index.get(s.delegation.parentId);
+      if (parent) this.emit('session', { ...parent, delegations: this.#visibleDelegations(parent) });
+    }
     return { ok: true, session: wire(s) };
   }
 

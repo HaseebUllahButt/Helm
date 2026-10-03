@@ -57,9 +57,15 @@ export function delegationOutput(session, events) {
   const { turns, pending } = fold(events);
   const turn = turns.at(-1);
   const output = (turn?.items ?? []).filter((i) => i.kind === 'text').map((i) => i.text).join('\n\n');
-  const complete = !!turn?.status;
+  // A mid-turn steering message has its own optimistic turn.start but the
+  // provider finishes the original turn. That trailing ticket must not make
+  // a completed task look busy forever on another device.
+  const settled = !['starting', 'working', 'blocked'].includes(session.status)
+    && ['done', 'error', 'interrupted'].includes(session.delegation?.status)
+    ? session.delegation.status : null;
+  const complete = !!settled || !!turn?.status;
   const status = !complete && (pending || session.status === 'blocked') ? 'blocked'
-    : complete ? (turn.status === 'ok' ? 'done' : turn.status) : 'working';
+    : settled || (complete ? (turn.status === 'ok' ? 'done' : turn.status) : 'working');
   return { session, status, complete, output: output.slice(-32_000), truncated: output.length > 32_000,
     error: turn?.items.findLast((i) => i.error)?.error ?? events.findLast((e) => e.type === 'turn.done')?.error ?? null,
     pending: pending ? { requestId: pending.requestId, title: pending.title, kind: pending.kind } : null };
