@@ -110,6 +110,59 @@ function turnStartFor(events, from) {
   return -1;
 }
 
+const TURN_CONTEXT = new Set(['turn.start', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove']);
+
+/** Small identities outside the contiguous tail, never old tool payloads. */
+function anchor(event) {
+  const { seq, at, type, id, turnId, kind, parentId, name, queued, local, status, reason } = event;
+  const result = { seq, at, type, id, turnId, kind, parentId, name, queued, local, status, reason };
+  if (type === 'turn.start') {
+    result.text = String(event.text ?? '').slice(0, 8000);
+    if (event.attachments?.length) result.attachments = event.attachments.slice(0, 16).map(a => ({
+      filename: a.filename, mime: a.mime, bytes: a.bytes, ref: a.ref, ...(a.ref ? {} : { missing: true }),
+    }));
+  }
+  if (type === 'turn.done') {
+    if (event.error) result.error = String(event.error).slice(0, 8000);
+    if (event.costUsd != null) result.costUsd = event.costUsd;
+    if (event.durationMs != null) result.durationMs = event.durationMs;
+  }
+  return result;
+}
+
+/**
+ * Retain the newest KEEP events plus just the identities those events need.
+ * `older` walks backwards and is repeatable: disk opens need not parse every
+ * historic delta into a second unbounded array just to find a turn's owner.
+ * Each referenced item has at most one start, each owner one of each lifecycle
+ * event, so context remains bounded by the retained tail rather than log age.
+ */
+function retain(tail, older) {
+  const first = tail[0]?.seq ?? 0;
+  const items = new Set(tail.filter(e => e.type.startsWith('item.')).map(e => e.id));
+  const owners = new Set(tail.map(e => e.turnId).filter(Boolean));
+  const starts = new Set(tail.filter(e => e.type === 'item.start').map(e => e.id));
+  const turns = new Set(tail.filter(e => TURN_CONTEXT.has(e.type)).map(e => `${e.turnId ?? e.seq}:${e.type}`));
+  const context = [];
+  let implicit = tail.some(e => e.type === 'item.start' && !e.turnId);
+  for (const event of older()) {
+    if (event.type !== 'item.start' || !items.has(event.id) || starts.has(event.id)) continue;
+    starts.add(event.id);
+    if (event.turnId) owners.add(event.turnId); else implicit = true;
+    context.push(anchor(event));
+  }
+  for (const event of older()) {
+    if (!TURN_CONTEXT.has(event.type)) continue;
+    const fallback = implicit && event.type === 'turn.start';
+    if (!owners.has(event.turnId) && !fallback) continue;
+    if (fallback) implicit = false;
+    const key = `${event.turnId ?? event.seq}:${event.type}`;
+    if (turns.has(key)) continue;
+    turns.add(key); context.push(anchor(event));
+  }
+  return { events: [...context, ...tail].sort((a, b) => a.seq - b.seq), first };
+}
+
 /**
  * How many logs stay parsed in memory. Every append is on disk before it
  * returns, so a log dropped here is just re-read when next asked for. Without
@@ -141,15 +194,23 @@ export class EventLog {
       this.#logs.set(id, log);
       return log;
     }
-    log = { seq: 0, events: [] };
+    log = { seq: 0, events: [], first: 0 };
     const file = this.#file(id);
     if (existsSync(file)) {
       const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
-      for (const line of lines.slice(-KEEP)) {
-        try { log.events.push(JSON.parse(line)); } catch { /* a torn last line after a crash */ }
+      const from = Math.max(0, lines.length - KEEP), tail = [];
+      for (const line of lines.slice(from)) {
+        try { tail.push(JSON.parse(line)); } catch { /* a torn last line after a crash */ }
       }
+      const older = function* () {
+        for (let i = from - 1; i >= 0; i--) {
+          try { yield JSON.parse(lines[i]); } catch { /* a torn historic line */ }
+        }
+      };
+      Object.assign(log, retain(tail, older));
       if (log.events.length) log.seq = log.events[log.events.length - 1].seq;
-      // A file that outgrew the tail is rewritten to just the tail, once.
+      // Compact to the tail and its identities, preserving ownership across
+      // eviction/restart as well as while this instance remains in memory.
       if (lines.length > KEEP) {
         writeFileSync(file, log.events.map((e) => JSON.stringify(e)).join('\n') + '\n');
         this.#sweep(id, log.events);
@@ -228,9 +289,14 @@ export class EventLog {
     log.events.push(full);
     this.#track(this.#pending.get(id), full);
     if (log.events.length > KEEP) {
-      const dropped = log.events.splice(0, log.events.length - KEEP);
+      const old = log.events, from = old.length - KEEP;
+      Object.assign(log, retain(old.slice(from), function* () {
+        for (let i = from - 1; i >= 0; i--) yield old[i];
+      }));
+      const kept = new Set(log.events.map(e => e.seq));
+      const dropped = old.filter(e => !kept.has(e.seq));
       if (dropped.some((e) => e.attachments?.length)) this.#sweep(id, log.events);
-    }
+    } else log.first = log.events[0]?.seq ?? 0;
     mkdirSync(this.dir, { recursive: true });
     appendFileSync(this.#file(id), JSON.stringify(full) + '\n', { mode: 0o600 });
     return full;
@@ -267,9 +333,9 @@ export class EventLog {
    * it are different things.
    */
   window(id, { since = 0, tail = 0, before = 0, maxBytes = MAX_PAGE } = {}) {
-    const all = this.#open(id).events;
+    const log = this.#open(id), all = log.events;
     let list = all;
-    if (before > 0) list = list.filter((e) => e.seq < before);
+    if (before > 0) list = before <= log.first ? [] : list.filter((e) => e.seq < before);
     if (since > 0) list = list.filter((e) => e.seq > since);
 
     const shaped = (e) => forWire(this.#hydrate(id, e));
@@ -354,13 +420,15 @@ export class EventLog {
     return {
       events,
       hasMore,
-      firstSeq: contiguous || events[0]?.seq || 0,
-      // The oldest event this machine still holds. A client compares it with
+      firstSeq: events.length ? Math.max(log.first, contiguous || events[0]?.seq || 0) : 0,
+      // The oldest event in the retained contiguous tail. Older identity
+      // anchors do not mean that their intervening history remains available.
+      // A client compares it with
       // the front of its own window to know whether there is anything behind
       // what it is showing - one number, true for every shape of request,
       // instead of a count that only the first reply could have been right
       // about.
-      logFirst: all[0]?.seq ?? 0,
+      logFirst: log.first,
     };
   }
 
