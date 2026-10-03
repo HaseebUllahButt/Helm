@@ -893,7 +893,10 @@ function Shell({ client, conn, onSignOut }: {
     const current = nav.current.stack.at(-1);
     if (nav.current.selected === envId && current?.kind === 'session') {
       if (current.session.delegation?.parentId === session.id) {
-        const parentIndex = nav.current.stack.findLastIndex((v) => v.kind === 'session' && v.session.id === session.id);
+        let parentIndex = -1;
+        nav.current.stack.forEach((v, index) => {
+          if (v.kind === 'session' && v.session.id === session.id) parentIndex = index;
+        });
         const steps = nav.current.stack.length - 1 - parentIndex;
         if (parentIndex >= 0 && steps > 0 && nav.current.depth >= steps) history.go(-steps);
         // A restored or directly opened child has no parent entry to pop.
