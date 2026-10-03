@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { retainAssets } from './retainAssets.mjs';
 
 /**
  * Three chunks by intent, not by accident:
@@ -12,10 +13,13 @@ import react from '@vitejs/plugin-react';
  * wait on a syntax highlighter or a terminal emulator.
  */
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), retainAssets()],
   server: { port: 5273 },
   build: {
     outDir: 'dist',
+    // Keep open PWAs working during and after a deploy. The plugin expires
+    // old hashed files after a week, once the new build has been written.
+    emptyOutDir: false,
     sourcemap: true,
     rollupOptions: {
       output: { manualChunks: { react: ['react', 'react-dom', 'react-dom/client'] } },
