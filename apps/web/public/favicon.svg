@@ -1,37 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512" width="512" height="512">
-  <!-- icon.svg for a browser tab: plain handles, a heavier rim and no
-       grooves, so the wheel still reads at 16px. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- icon.svg for a browser tab and the sidebar: heavier rim, spokes and
+       handles, a plain hub and no shading, so the wheel and its indigo king
+       spoke still read at 16px. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1c1c25"/>
-      <stop offset="1" stop-color="#0a0a0d"/>
+      <stop offset="0" stop-color="#22262e"/>
+      <stop offset="1" stop-color="#101216"/>
     </linearGradient>
-    <linearGradient id="metal" x1="0" y1="-190" x2="0" y2="190" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#f4f5fa"/>
-      <stop offset=".5" stop-color="#c9ccd9"/>
-      <stop offset="1" stop-color="#8d92a5"/>
-    </linearGradient>
-    <g id="handle">
-      <rect x="104" y="-12" width="52" height="24" rx="12"/>
-      <circle cx="166" r="22"/>
-    </g>
-    <rect id="spoke" x="-100" y="-12" width="200" height="24" rx="12"/>
   </defs>
   <rect width="512" height="512" rx="116" fill="url(#bg)"/>
-  <g transform="translate(256 256) scale(1.12)">
-    <g fill="url(#metal)">
-      <use xlink:href="#handle"/>
-      <use xlink:href="#handle" transform="rotate(60)"/>
-      <use xlink:href="#handle" transform="rotate(120)"/>
-      <use xlink:href="#handle" transform="rotate(180)"/>
-      <use xlink:href="#handle" transform="rotate(240)"/>
-      <use xlink:href="#handle" transform="rotate(300)"/>
-      <use xlink:href="#spoke"/>
-      <use xlink:href="#spoke" transform="rotate(60)"/>
-      <use xlink:href="#spoke" transform="rotate(120)"/>
-    </g>
-    <circle r="100" fill="none" stroke="url(#metal)" stroke-width="38"/>
-    <circle r="50" fill="url(#metal)"/>
-    <circle r="18" fill="#6d7aff"/>
+  <g transform="translate(256 256) rotate(-12)" fill="#e8eaef">
+    <g transform="rotate(60)"><rect x="-21" y="-196" width="42" height="90" rx="21"/></g>
+    <g transform="rotate(120)"><rect x="-21" y="-196" width="42" height="90" rx="21"/></g>
+    <g transform="rotate(180)"><rect x="-21" y="-196" width="42" height="90" rx="21"/></g>
+    <g transform="rotate(240)"><rect x="-21" y="-196" width="42" height="90" rx="21"/></g>
+    <g transform="rotate(300)"><rect x="-21" y="-196" width="42" height="90" rx="21"/></g>
+    <rect x="-13" y="-96" width="26" height="192"/>
+    <rect x="-13" y="-96" width="26" height="192" transform="rotate(60)"/>
+    <rect x="-13" y="-96" width="26" height="192" transform="rotate(120)"/>
+    <circle r="96" fill="none" stroke="#e8eaef" stroke-width="42"/>
+    <circle r="40"/>
+    <rect x="-21" y="-196" width="42" height="90" rx="21" fill="#8590ff"/>
   </g>
 </svg>
