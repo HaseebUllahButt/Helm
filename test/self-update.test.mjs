@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -77,6 +77,77 @@ test('a new commit lands as a hard reset to it', async () => {
   assert.equal(r.updated, true);
   assert.equal(readFileSync(join(installed, 'v'), 'utf8'), 'two\n');
   assert.equal(git(installed, ['rev-parse', 'HEAD']), git(remote, ['rev-parse', 'main']));
+});
+
+test('a failed install rolls HEAD back so a healthy retry rebuilds the release', async () => {
+  const { remote, installed } = make();
+  commit(remote, 'two');
+  const bin = mkdtempSync(join(tmpdir(), 'helm-update-bin-'));
+  const npm = join(bin, 'npm');
+  const calls = join(bin, 'calls');
+  const before = git(installed, ['rev-parse', 'HEAD']);
+  const path = process.env.PATH;
+  try {
+    writeFileSync(npm, `#!/bin/sh\necho call >> "${calls}"\nexit 1\n`);
+    chmodSync(npm, 0o755);
+    process.env.PATH = `${bin}:${path}`;
+    await assert.rejects(() => selfUpdate(installed, { restart: false }), /Command failed/);
+    assert.equal(git(installed, ['rev-parse', 'HEAD']), before, 'a failed install restores the old source');
+
+    writeFileSync(npm, `#!/bin/sh\necho call >> "${calls}"\nexit 0\n`);
+    chmodSync(npm, 0o755);
+    const retry = await selfUpdate(installed, { restart: false });
+    assert.equal(retry.updated, true);
+    assert.equal(git(installed, ['rev-parse', 'HEAD']), git(remote, ['rev-parse', 'main']));
+    assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, 3,
+      'the retry runs install and build instead of reporting already-at');
+  } finally {
+    process.env.PATH = path;
+  }
+});
+
+test('a failed app build also rolls back and can complete on retry', async () => {
+  const { remote, installed } = make();
+  commit(remote, 'two');
+  const bin = mkdtempSync(join(tmpdir(), 'helm-update-bin-'));
+  const npm = join(bin, 'npm');
+  const calls = join(bin, 'calls');
+  const before = git(installed, ['rev-parse', 'HEAD']);
+  const path = process.env.PATH;
+  try {
+    writeFileSync(npm, `#!/bin/sh\necho call >> "${calls}"\ncount=$(wc -l < "${calls}")\n[ "$count" -ne 2 ]\n`);
+    chmodSync(npm, 0o755);
+    process.env.PATH = `${bin}:${path}`;
+    await assert.rejects(() => selfUpdate(installed, { restart: false }), /Command failed/);
+    assert.equal(git(installed, ['rev-parse', 'HEAD']), before,
+      'the source is restored even when the build command fails');
+
+    writeFileSync(npm, `#!/bin/sh\necho call >> "${calls}"\nexit 0\n`);
+    chmodSync(npm, 0o755);
+    assert.equal((await selfUpdate(installed, { restart: false })).updated, true);
+    assert.equal(git(installed, ['rev-parse', 'HEAD']), git(remote, ['rev-parse', 'HEAD']));
+    assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, 4);
+  } finally {
+    process.env.PATH = path;
+  }
+});
+
+test('an interrupted post-reset transaction is journaled and recovered', async () => {
+  const { remote, installed } = make();
+  const previousHead = git(installed, ['rev-parse', 'HEAD']);
+  commit(remote, 'two');
+  git(installed, ['fetch', '-q', 'origin', 'main']);
+  const targetHead = git(installed, ['rev-parse', 'origin/main']);
+  git(installed, ['reset', '--hard', '-q', targetHead]);
+  writeFileSync(join(process.env.HELM_DIR, 'update-state.json'), JSON.stringify({
+    version: 1, dir: installed, previousHead, targetHead, phase: 'prepared', restart: false,
+  }));
+
+  const result = await update(installed);
+  assert.equal(result.updated, true);
+  assert.equal(git(installed, ['rev-parse', 'HEAD']), targetHead);
+  assert.equal(existsSync(join(process.env.HELM_DIR, 'update-state.json')), false,
+    'the recovery journal is cleared after completion');
 });
 
 test('a dirty tree is somebody\'s work, never a deployment to overwrite', async () => {

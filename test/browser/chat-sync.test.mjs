@@ -99,6 +99,28 @@ test('all catch-up pages are fetched, including more than the previous eight-pag
   assert.ok(remote.calls.filter(c=>c.method==='session.events').length>=12);
 });
 
+test('earlier pages merge fuller duplicate event fields without duplicating output', async t => {
+  const start = event(1, 'turn.start', { turnId: 'turn', text: 'run it' });
+  const sparse = event(2, 'item.start', { id: 'cmd', turnId: 'turn', kind: 'command' });
+  const output = event(3, 'item.delta', { id: 'cmd', text: 'output' });
+  const full = event(2, 'item.start', {
+    id: 'cmd', turnId: 'turn', kind: 'command', command: 'echo original-command', input: { data: 'details' },
+  });
+  const remote = server([start, sparse, output]);
+  remote.handler = (params) => {
+    if (params.tail) return { ...remote.history(params), firstSeq: 2, logFirst: 1 };
+    if (params.before) return { events: [full], pending: [], last: 3, firstSeq: 1, logFirst: 1, session: { status: 'idle' } };
+    return remote.history(params);
+  };
+  const page = await device(t, remote);
+  await caughtUp(page, 3);
+  assert.equal(await page.evaluate(() => window.state.log.turns[0].items[0].command), undefined);
+  await page.evaluate(() => window.state.loadEarlier());
+  await page.waitForFunction(() => window.state?.log.turns[0]?.items[0]?.command === 'echo original-command');
+  assert.equal(await text(page), 'output');
+  assert.equal(await page.evaluate(() => window.state.log.turns[0].items.length), 1);
+});
+
 test('a sleeping device catches up on focus and repairs silently missed final events on renewal',async t=>{
   const remote=server();
   const page=await device(t,remote,{clock:true});await caughtUp(page,3);

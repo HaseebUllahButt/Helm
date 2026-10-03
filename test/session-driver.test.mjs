@@ -472,6 +472,45 @@ for (const profileId of ['claudea', 'codex']) test(`a surviving ${profileId} pro
   await original.kill(s.id);
 });
 
+for (const profileId of ['claudea', 'codex']) test(`a slash command can race rebind for a surviving ${profileId} process`, async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const { codexProcId } = await import('../packages/connect/src/hosted-process.js');
+  const dir = join(process.env.HELM_DIR, `events-rebind-slash-${profileId}`);
+  const seen = [];
+  let expected;
+
+  class SidebandDriver extends FakeDriver {
+    canRunWhileBusy(text) { return text === '/status'; }
+    async send(text) { this.sideband = text; this.push('status', { status: 'working' }); }
+  }
+  const makeDriver = (engine, opts) => new SidebandDriver({ engine, ...opts });
+  const originalHost = Object.assign(new EventEmitter(), { hasProc: () => false });
+  const original = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: originalHost,
+  });
+  const s = await original.start({ cwd: '/tmp', profileId });
+  await original.input(s.id, 'active work');
+  expected = profileId === 'codex'
+    ? codexProcId('codex', { CODEX_HOME: '/tmp/helm-test-account' })
+    : s.id;
+
+  const procHost = Object.assign(new EventEmitter(), {
+    hasProc: (id) => { seen.push(id); return id === expected; },
+  });
+  const restarted = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost,
+  });
+  await restarted.input(s.id, '/status');
+  const rebound = FakeDriver.made.at(-1);
+  assert.equal(rebound.sideband, '/status');
+  assert.ok(seen.includes(expected), `rebind checked ${expected}`);
+  if (profileId === 'codex') assert.equal(seen.includes(s.id), false, 'Codex does not use the thread id as its host id');
+  assert.ok(restarted.history(s.id).events.some((e) => e.type === 'turn.accept'), 'the optimistic ticket was promoted');
+  await restarted.kill(s.id);
+  await original.kill(s.id);
+});
+
 test('a hosted completed turn is not revived by its optimistic local prompt', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');

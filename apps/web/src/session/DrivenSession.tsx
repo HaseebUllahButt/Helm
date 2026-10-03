@@ -1,5 +1,5 @@
 import { useDismiss } from '../useDismiss';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
 import { Client, type Environment, type Session, type ModelList } from '../client';
 import { useNow, waitingSince } from '../useNow';
 import { Composer } from './Composer';
@@ -28,6 +28,8 @@ const ENGINE_LABEL: Record<string, string> = {
   agy: 'Antigravity CLI', antigravity: 'Antigravity', gemini: 'Gemini', kimi: 'Kimi', muse: 'Muse',
 };
 
+type Attachment = { name: string; mime: string; data: string; url: string };
+
 /**
  * A headless agent session: the transcript built from helm's own events,
  * the prompt sheet when the agent is waiting, and the model and permission
@@ -49,11 +51,20 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
   const [draft, setDraftRaw] = useState(() => loadDraft(env.id, session.id));
+  const editRevision = useRef(0);
   const setDraft = useCallback((v: string) => {
+    editRevision.current += 1;
     setDraftRaw(v);
     saveDraft(env.id, session.id, v);
   }, [env.id, session.id]);
-  const [attachments, setAttachments] = useState<{ name: string; mime: string; data: string; url: string }[]>([]);
+  const [attachments, setAttachmentsRaw] = useState<Attachment[]>([]);
+  const setAttachments = useCallback((next: SetStateAction<Attachment[]>) => {
+    editRevision.current += 1;
+    setAttachmentsRaw((current) => {
+      const value = typeof next === 'function' ? next(current) : next;
+      return value;
+    });
+  }, []);
   const [preparingImages, setPreparingImages] = useState(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -175,10 +186,21 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       setPreparingImages((count) => Math.max(0, count - 1));
     }
   };
-  const sendText = async (body: string, atts: typeof attachments) => {
+  const sendText = async (body: string, atts: Attachment[]) => {
     setDraft(''); setAttachments([]);
+    const clearedAt = editRevision.current;
     try { await client.rpc(env.id, 'session.input', { id: session.id, data: body, attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000); }
-    catch (e: any) { setError(e.message); setDraft(body); setAttachments(atts); }
+    catch (e: any) {
+      setError(e.message);
+      // Only restore the failed send if the composer is still exactly in the
+      // state produced by clearing it. A newer draft or attachment edit -
+      // including one from another pending send - belongs to the owner and
+      // must not be overwritten by a late RPC failure.
+      if (editRevision.current === clearedAt) {
+        setDraft(body);
+        setAttachments(atts);
+      }
+    }
   };
   const send = async () => {
     const body = expandPastes(draft.trim());

@@ -10,6 +10,23 @@ type History = {
   firstSeq?: number; logFirst?: number; session?: { status: string };
 };
 
+/**
+ * History windows can describe the same sequence with different detail. The
+ * tail intentionally keeps large command anchors sparse, while an earlier
+ * page may carry the full command/input fields. Replacing one whole event
+ * with the other loses those fields; merge only defined information and keep
+ * the richer value when the later representation is sparse.
+ */
+function mergeEvent(existing: HelmEvent, incoming: HelmEvent): HelmEvent {
+  const merged = { ...existing };
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string' && value === '' && merged[key]) continue;
+    merged[key] = value;
+  }
+  return merged;
+}
+
 /** Cache for first paint, ordered history for truth, pushes for low latency. */
 export function useSessionLog(client: Client, env: string, sessionId: string) {
   const [state, setState] = useState<LogState>(emptyLog);
@@ -174,7 +191,12 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
         if (!r.events.length) { setEarlier(false); return; }
         first = r.firstSeq ?? r.events[0].seq;
         noteWindow(r.logFirst);
-        raw = [...new Map([...r.events, ...raw].map(e => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
+        const bySeq = new Map<number, HelmEvent>(raw.map((event) => [event.seq, event]));
+        for (const event of r.events) {
+          const existing = bySeq.get(event.seq);
+          bySeq.set(event.seq, existing ? mergeEvent(existing, event) : event);
+        }
+        raw = [...bySeq.values()].sort((a, b) => a.seq - b.seq);
         const rebuilt = emptyLog();
         for (const event of raw) apply(rebuilt, event);
         rebuilt.loaded = log.loaded; rebuilt.pending = log.pending; rebuilt.status = log.status;

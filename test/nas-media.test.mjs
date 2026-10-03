@@ -31,15 +31,18 @@ const media = join(base, 'media');
 const outside = join(base, 'outside');
 mkdirSync(join(media, 'Movies'), { recursive: true });
 mkdirSync(join(media, '.hidden'), { recursive: true });
+mkdirSync(join(media, '.private'), { recursive: true });
 mkdirSync(outside, { recursive: true });
 const FILM = Buffer.from(Array.from({ length: 10_000 }, (_, i) => i % 251));
 writeFileSync(join(media, 'Movies', 'film.mp4'), FILM);
 writeFileSync(join(media, 'Movies', 'empty.mp4'), '');
 writeFileSync(join(media, 'song.mp3'), 'audio-bytes');
 writeFileSync(join(media, '.secret'), 'hidden');
+writeFileSync(join(media, '.private', 'secret.txt'), 'hidden target');
 writeFileSync(join(outside, 'passwords.txt'), 'nope');
 symlinkSync(outside, join(media, 'escape'), 'dir');
 symlinkSync(join(outside, 'passwords.txt'), join(media, 'leak.txt'));
+symlinkSync(join(media, '.private', 'secret.txt'), join(media, 'public.txt'));
 
 test('roots: add, dedupe, refuse what is not a folder, remove', () => {
   const roots = addMediaRoot(media);
@@ -71,6 +74,14 @@ test('a request resolves inside the root and nowhere else', async () => {
   await denied('..\\outside\\passwords.txt', 'outside');
   await denied('.secret', 'hidden');
   await denied('.hidden/anything', 'hidden');
+  await denied('.private/secret.txt', 'hidden');
+  await denied('public.txt', 'hidden');
+  // A hidden ancestor of an intentionally shared root is not part of the
+  // relative path callers can browse, so it remains a legitimate share.
+  const nested = join(media, '.hidden', 'shared');
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(join(nested, 'visible.mp3'), 'ok');
+  assert.equal((await resolveMedia(nested, 'visible.mp3')).path, join(nested, 'visible.mp3'));
   // The links are real entries in the share, but where they lead is not.
   await denied('escape/passwords.txt', 'outside');
   await denied('leak.txt', 'outside');
@@ -160,6 +171,7 @@ test('the byte server: auth first, then real HTTP media', async (t) => {
   assert.equal((await fetch(url('/stream?t=open&root=0&path=../outside/passwords.txt'))).status, 403);
   assert.equal((await fetch(url('/stream?t=open&root=0&path=leak.txt'))).status, 403);
   assert.equal((await fetch(url('/stream?t=open&root=0&path=escape/passwords.txt'))).status, 403);
+  assert.equal((await fetch(url('/stream?t=open&root=0&path=public.txt'))).status, 404);
   assert.equal((await fetch(url('/stream?t=open&root=0&path=.secret'))).status, 404);
   assert.equal((await fetch(url('/stream?t=open&root=0&path=Movies'))).status, 400);
   assert.equal((await fetch(url('/stream?t=open&root=9&path=Movies/film.mp4'))).status, 404);

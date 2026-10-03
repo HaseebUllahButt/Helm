@@ -312,6 +312,11 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
               }
             }}
             onKeyDown={(e) => {
+              // Enter confirms an IME composition before it is a prompt.
+              // Some browsers expose only isComposing, others report the
+              // legacy 229 keyCode, so recognize both before palette/history
+              // shortcuts can turn it into a send.
+              if ((e as any).isComposing || e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (open) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setPick((p) => (p + 1) % matches.length); return; }
                 if (e.key === 'ArrowUp') { e.preventDefault(); setPick((p) => (p - 1 + matches.length) % matches.length); return; }

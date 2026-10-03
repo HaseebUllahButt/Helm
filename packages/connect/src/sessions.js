@@ -1973,7 +1973,7 @@ export class Sessions extends EventEmitter {
       // Sideband reads only run beside a process already attached to this
       // daemon. Otherwise record the message first; driver startup can yield
       // long enough for a daemon restart.
-      const d = this.#drivers.get(s.id) ?? null;
+      let d = this.#drivers.get(s.id) ?? null;
       // Sampled before the prefix goes on: the network's state is helm's
       // note to the agent, and naming the thread "[helm 2 machines…]" would
       // be naming it after helm rather than after the work. A slash command
@@ -2023,8 +2023,18 @@ export class Sessions extends EventEmitter {
       // give its slash-command classifier a chance to keep a sideband read
       // beside the active turn. The optimistic ticket is already durable;
       // `turn.accept` promotes it out of the queue if it proves sideband.
-      if (!d && busy && this.procs.hasProc(s.id) && !raw && compact == null && !images.length
-        && clean.trimStart().startsWith('/')) {
+      let surviving = false;
+      if (!d && busy && !raw && compact == null && !images.length && clean.trimStart().startsWith('/')) {
+        // Most hosted drivers use the session id. Codex is the exception:
+        // every thread in one account shares a single app-server process, so
+        // checking the thread id would miss the process during rebind.
+        const profile = s.driver === 'codex'
+          ? (await getProfiles()).find((p) => p.id === s.profileId)
+          : null;
+        const procId = hostedProcId(s, profile ? materialize(profile) : null);
+        surviving = !!procId && this.procs.hasProc(procId);
+      }
+      if (surviving) {
         d = await this.#driver(s);
         sideband = !!d.canRunWhileBusy?.(clean);
         if (sideband) {

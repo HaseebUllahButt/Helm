@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { hasActiveTransfers } from '@helm/protocol/transfer-activity';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, openSync, closeSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -121,6 +121,29 @@ export async function selfUpdate(dir = ROOT, opts = {}) {
 
 /** An update that died mid-way must not block the next one forever. */
 const LOCK_STALE_MS = 30 * 60_000;
+const UPDATE_STATE_FILE = join(HELM_DIR, 'update-state.json');
+
+/**
+ * The checkout is deliberately moved only after this journal entry exists.
+ * A SIGKILL between reset and the build therefore has a recovery path on the
+ * next invocation instead of looking like a successfully installed release.
+ */
+function readUpdateState() {
+  try {
+    const state = JSON.parse(readFileSync(UPDATE_STATE_FILE, 'utf8'));
+    return state?.version === 1 && typeof state.dir === 'string' && typeof state.phase === 'string'
+      ? state : null;
+  } catch { return null; }
+}
+
+function writeUpdateState(state) {
+  mkdirSync(HELM_DIR, { recursive: true });
+  const temp = `${UPDATE_STATE_FILE}.${process.pid}.tmp`;
+  writeFileSync(temp, JSON.stringify({ version: 1, ...state }), { mode: 0o600 });
+  renameSync(temp, UPDATE_STATE_FILE);
+}
+
+function clearUpdateState() { rmSync(UPDATE_STATE_FILE, { force: true }); }
 
 /** Long builds run at low priority, so a machine stays usable while it updates. */
 const gentle = (cmd, args, opts) => platform() === 'win32'
@@ -143,40 +166,8 @@ async function ensurePty(dir) {
   if (!(await loads())) say('the terminal engine did not build - terminals use the slower fallback');
 }
 
-async function updateLocked(dir, { rebuild = true, restart = true } = {}) {
-  const git = (args) => exec('git', ['-C', dir, ...args]).then((r) => r.stdout.trim());
-  if (!existsSync(join(dir, '.git'))) return { updated: false, reason: `${dir} is not a git checkout` };
-  if (!(await git(['remote', 'get-url', 'origin']).catch(() => ''))) {
-    return { updated: false, reason: 'no origin remote' };
-  }
-  const on = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
-  if (on !== BRANCH) return { updated: false, reason: `checkout is on ${on}, not ${BRANCH}` };
-  if (await git(['status', '--porcelain'])) return { updated: false, reason: 'uncommitted changes' };
-
-  await git(['fetch', '--quiet', 'origin', BRANCH]);
-  const [head, tip] = await Promise.all([git(['rev-parse', 'HEAD']), git(['rev-parse', `origin/${BRANCH}`])]);
-  if (head === tip) return { updated: false, reason: `already at ${tip.slice(0, 7)}` };
-  // Commits made here and not pushed would be thrown away by the reset below.
-  // The VM's checkout is one you commit from, and an update asked for from a
-  // phone must never be the thing that eats them.
-  const ahead = Number(await git(['rev-list', '--count', `origin/${BRANCH}..HEAD`]).catch(() => '0'));
-  if (ahead > 0) return { updated: false, reason: `${ahead} commit${ahead === 1 ? '' : 's'} not pushed yet` };
-
-  say(`updating ${head.slice(0, 7)} -> ${tip.slice(0, 7)}`);
-  await git(['reset', '--hard', '--quiet', `origin/${BRANCH}`]);
-  if (rebuild) {
-    say('installing dependencies');
-    await gentle('npm', ['install', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: dir });
-    await ensurePty(dir);
-    say('building the app');
-    await gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir });
-  }
-
-  if (!restart) return { updated: true, restarting: [] };
-  // Restart through a transient timer rather than inline: whoever asked for
-  // this update - a shell, or the daemon itself - is inside the cgroup a
-  // direct restart would kill before it finished asking. The timer belongs
-  // to the user manager and outlives the stop it requests.
+/** Finish the restart part of an update, including a retry after a crash. */
+async function requestRestart() {
   const restarting = [];
   const failed = [];
   for (const unit of DAEMON_UNITS) if (await unitActive(unit)) restarting.push(unit);
@@ -193,7 +184,104 @@ async function updateLocked(dir, { rebuild = true, restart = true } = {}) {
       restarting.length = 0;
     }
   }
-  return { updated: true, restarting, failed };
+  return { restarting, failed };
+}
+
+/**
+ * Reconcile a journal left by an interrupted update. A prepared transaction
+ * is safe to roll back only while the checkout is still exactly the target
+ * commit and clean; otherwise a person has changed the tree and the normal
+ * dirty/unpushed guards must win without destroying their work.
+ */
+async function recoverUpdate(dir, git) {
+  const state = readUpdateState();
+  if (!state || state.dir !== dir) return null;
+  const head = await git(['rev-parse', 'HEAD']).catch(() => '');
+  const dirty = await git(['status', '--porcelain']).catch(() => null);
+  if (state.phase === 'prepared') {
+    if (head === state.targetHead && dirty === '') {
+      await git(['reset', '--hard', '--quiet', state.previousHead]);
+    }
+    // The reset either restored the old commit, or the checkout was changed
+    // by somebody else. In both cases do not replay an old transaction.
+    if (head !== state.targetHead || dirty === '') clearUpdateState();
+    return null;
+  }
+  if (state.phase === 'built' && head === state.targetHead && dirty === '') return state;
+  // A different commit means the owner moved the checkout; leave it alone.
+  if (state.phase === 'built' && dirty !== '') return state;
+  clearUpdateState();
+  return null;
+}
+
+async function updateLocked(dir, { rebuild = true, restart = true } = {}) {
+  const git = (args) => exec('git', ['-C', dir, ...args]).then((r) => r.stdout.trim());
+  if (!existsSync(join(dir, '.git'))) return { updated: false, reason: `${dir} is not a git checkout` };
+  if (!(await git(['remote', 'get-url', 'origin']).catch(() => ''))) {
+    return { updated: false, reason: 'no origin remote' };
+  }
+  const on = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (on !== BRANCH) return { updated: false, reason: `checkout is on ${on}, not ${BRANCH}` };
+  const resumed = await recoverUpdate(dir, git);
+  // Recovery can have restored a previous commit, so re-check the clean
+  // branch before fetching and deciding what remains to do.
+  if (await git(['status', '--porcelain'])) return { updated: false, reason: 'uncommitted changes' };
+
+  await git(['fetch', '--quiet', 'origin', BRANCH]);
+  const [head, tip] = await Promise.all([git(['rev-parse', 'HEAD']), git(['rev-parse', `origin/${BRANCH}`])]);
+  if (head === tip) {
+    if (!resumed || resumed.targetHead !== head) {
+      return { updated: false, reason: `already at ${tip.slice(0, 7)}` };
+    }
+    if (!restart || resumed.restart === false) {
+      clearUpdateState();
+      return { updated: true, restarting: [] };
+    }
+    const result = await requestRestart();
+    if (!result.failed.length) clearUpdateState();
+    return { updated: true, ...result };
+  }
+  // Commits made here and not pushed would be thrown away by the reset below.
+  // The VM's checkout is one you commit from, and an update asked for from a
+  // phone must never be the thing that eats them.
+  const ahead = Number(await git(['rev-list', '--count', `origin/${BRANCH}..HEAD`]).catch(() => '0'));
+  if (ahead > 0) return { updated: false, reason: `${ahead} commit${ahead === 1 ? '' : 's'} not pushed yet` };
+
+  say(`updating ${head.slice(0, 7)} -> ${tip.slice(0, 7)}`);
+  writeUpdateState({ dir, previousHead: head, targetHead: tip, phase: 'prepared', restart });
+  try {
+    await git(['reset', '--hard', '--quiet', `origin/${BRANCH}`]);
+    if (rebuild) {
+      say('installing dependencies');
+      await gentle('npm', ['install', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: dir });
+      await ensurePty(dir);
+      say('building the app');
+      await gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir });
+    }
+    // Mark the source and build complete before touching systemd. If this
+    // process dies while scheduling a restart, the next run can finish that
+    // part without reinstalling or moving the checkout again.
+    writeUpdateState({ dir, previousHead: head, targetHead: tip, phase: 'built', restart });
+  } catch (error) {
+    // A failed build must make the next attempt eligible again. The clean
+    // deployment checkout is still at the journaled target, so restore HEAD;
+    // unpushed/dirty trees were rejected before this transaction began and
+    // are never reset here.
+    const now = await git(['rev-parse', 'HEAD']).catch(() => '');
+    const dirty = await git(['status', '--porcelain']).catch(() => null);
+    if (now === tip && dirty === '') {
+      await git(['reset', '--hard', '--quiet', head]).then(clearUpdateState);
+    }
+    throw error;
+  }
+
+  if (!restart) {
+    clearUpdateState();
+    return { updated: true, restarting: [] };
+  }
+  const result = await requestRestart();
+  if (!result.failed.length) clearUpdateState();
+  return { updated: true, ...result };
 }
 
 /**

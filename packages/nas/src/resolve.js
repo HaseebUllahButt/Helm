@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
-import { resolve as resolvePath, sep } from 'node:path';
+import { relative, resolve as resolvePath, sep } from 'node:path';
 
 /**
  * A refusal with a reason.
@@ -61,6 +61,14 @@ export async function resolveMedia(rootPath, rel = '') {
   catch { throw new MediaError('missing', 'no such media'); }
   if (!beneath(realRoot, real)) {
     throw new MediaError('outside', 'a link in that path leaves the shared folder');
+  }
+  // A visible alias must not become a way around the dot-segment rule. Check
+  // only the target path relative to this canonical share: a share rooted at
+  // /some/.private/photos is intentional, and its hidden ancestor is not a
+  // child the caller can browse into.
+  const realRel = relative(realRoot, real);
+  if (realRel.split(/[\\/]+/).filter(Boolean).some((s) => s.startsWith('.'))) {
+    throw new MediaError('hidden', 'a media path does not name hidden files');
   }
   return { path: real, stat: await stat(real) };
 }
