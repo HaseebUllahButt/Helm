@@ -86,6 +86,8 @@ test('stars save defaults directly; checkboxes keep favorites independent on des
       await page.locator('button[title^="thinking:"]').click();
       assert.equal(await page.getByRole('option',{name:'high',exact:true}).getAttribute('aria-selected'),'true');
       await page.getByRole('button',{name:'Use low by default for new chats',exact:true}).click();
+      await page.locator('.modesheet').waitFor({state:'detached'});
+      await page.locator('button[title^="thinking:"]').click();
       assert.equal(await page.getByRole('button',{name:'low is the default for new chats'}).getAttribute('aria-pressed'),'true');
       assert.equal(await page.getByRole('option',{name:'high',exact:true}).getAttribute('aria-selected'),'true');
       assert.equal(await page.evaluate(()=>window.picks ?? 0),0);
@@ -95,6 +97,9 @@ test('stars save defaults directly; checkboxes keep favorites independent on des
       await page.getByRole('button',{name:'Use Model C by default for new chats'}).count().then(n=>assert.equal(n,0));
       await page.getByRole('button',{name:/1 more/}).click();
       await page.getByRole('button',{name:'Use Model C by default for new chats'}).click();
+      await page.locator('.modesheet').waitFor({state:'detached'});
+      await page.locator('button[title^="model:"]').click();
+      await page.getByRole('button',{name:/1 more/}).click();
       assert.equal(await page.getByRole('checkbox',{name:'Favorite Model B'}).isChecked(),true);
       assert.equal(await page.getByRole('checkbox',{name:'Favorite Model C'}).isChecked(),false);
       assert.equal(await page.getByRole('option',{name:'Model A',exact:true}).getAttribute('aria-selected'),'true');
