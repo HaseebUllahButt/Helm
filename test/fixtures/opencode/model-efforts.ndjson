@@ -1,0 +1,6 @@
+{"id":1,"result":{"protocolVersion":1,"agentCapabilities":{}}}
+{"id":2,"result":{"sessionId":"effort-switch","configOptions":[{"id":"model","currentValue":"provider/heavy","options":[{"value":"provider/heavy"},{"value":"provider/light"},{"value":"provider/plain"}]},{"id":"effort","currentValue":"high","options":[{"value":"low"},{"value":"high"},{"value":"max"}]}]}}
+{"id":3,"result":{}}
+{"id":4,"result":{"configOptions":[{"id":"model","currentValue":"provider/light","options":[{"value":"provider/heavy"},{"value":"provider/light"},{"value":"provider/plain"}]},{"id":"effort","currentValue":"low","options":[{"value":"low"},{"value":"medium"}]}]}}
+{"id":5,"result":{"configOptions":[{"id":"model","currentValue":"provider/plain","options":[{"value":"provider/heavy"},{"value":"provider/light"},{"value":"provider/plain"}]}]}}
+{"id":6,"result":{"configOptions":[{"id":"model","currentValue":"provider/heavy","options":[{"value":"provider/heavy"},{"value":"provider/light"},{"value":"provider/plain"}]},{"id":"effort","currentValue":"high","options":[{"value":"low"},{"value":"high"},{"value":"max"}]}]}}

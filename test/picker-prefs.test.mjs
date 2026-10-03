@@ -50,3 +50,14 @@ test('saving picker choices leaves the model defaults alone, and the other way r
   assert.equal(Object.values(cfg.models)[0].default, 'gpt-6-luna');
   assert.deepEqual(cfg.picker.hidden, ['x']);
 });
+
+test('effort favorites retain their model scope without changing model favorites or defaults', () => {
+  const favorites = [JSON.stringify(['provider/model-a', 'high']), JSON.stringify(['provider/model-b', 'low'])];
+  savePickerPrefs({ favs: { codex: ['gpt-6-luna'], 'codex-effort': favorites } });
+  saveModelPrefs({ engine: 'codex', env: {} }, { default: 'gpt-6-astra', approved: [] });
+  assert.deepEqual(pickerPrefs().favs['codex-effort'], favorites);
+  assert.deepEqual(pickerPrefs().favs.codex, ['gpt-6-luna']);
+  savePickerPrefs({ favs: { 'codex-effort': [] } });
+  assert.equal(pickerPrefs().favs['codex-effort'], undefined);
+  assert.deepEqual(pickerPrefs().favs.codex, ['gpt-6-luna']);
+});

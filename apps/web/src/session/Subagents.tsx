@@ -7,7 +7,7 @@ import { PermissionSheet } from './PermissionSheet';
 import type { Permission, Decision } from './types';
 
 /** Account → model → task, then a live branch list beside the parent thread. */
-export function Subagents({ client, env, parent, onClose }: {
+export function Subagents({ client, env, parent, onClose, onOpen }: {
   client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (s: Session) => void;
 }) {
   const [agents, setAgents] = useState<CliAgent[]>([]);
@@ -124,7 +124,7 @@ export function Subagents({ client, env, parent, onClose }: {
         <div><h2>Subagents</h2><p>{env.name} · {parent.title}</p></div>
         <button className="iconbtn" aria-label="Close subagents" disabled={busy} onClick={onClose}>×</button>
       </div>
-      <p className="delegation-intro">Dispatch a task in this folder. Subagents belong to this orchestrator, not your recent chats. Steer them here without opening another thread.</p>
+      <p className="delegation-intro">Dispatch a task in this folder. Open a subagent to read its conversation, or use Result and controls to review and steer it here.</p>
       <form className="delegation-form" onSubmit={(e) => { e.preventDefault(); void start(); }}>
         <div className="delegation-account-label"><label htmlFor="delegate-account">CLI account</label>
           <button type="button" className="linkish" disabled={loading || busy} onClick={() => void loadAgents(true)}>Refresh accounts</button></div>
@@ -155,13 +155,16 @@ export function Subagents({ client, env, parent, onClose }: {
         <h3>Tasks <span>{children.length}</span></h3>
         {!children.length && <p className="note">Tasks you or this agent delegate will appear here.</p>}
         {children.map((s) => <div key={s.id} className={`delegation-branch${selected === s.id ? ' selected' : ''}`}>
-          <button className="delegation-task" aria-expanded={selected === s.id} onClick={() => setSelected(selected === s.id ? '' : s.id)}>
+          <button className="delegation-task" title={onOpen ? 'Open subagent conversation' : undefined}
+            onClick={() => onOpen ? onOpen(s) : setSelected(selected === s.id ? '' : s.id)}>
             <EngineMark engine={s.engine} /><span className="grow"><b>{s.title}</b><small>{s.profileId} · {s.model || s.engineModel || 'CLI default'}</small></span>
             <span className={`delegation-status ${s.delegation?.status || s.status}`}>
               {{ blocked: 'Needs approval', working: 'Working', starting: 'Starting', done: 'Finished', error: 'Failed', interrupted: 'Stopped', idle: 'Ready' }[s.delegation?.status || s.status] || s.status}
             </span>
           </button>
-          {selected === s.id && <div className="delegation-result">
+          <button className="linkish" aria-expanded={selected === s.id} aria-controls={`result-${s.id}`}
+            onClick={() => setSelected(selected === s.id ? '' : s.id)}>Result and controls</button>
+          {selected === s.id && <div className="delegation-result" id={`result-${s.id}`}>
             <p className="delegation-request">{s.delegation?.task}</p>
             {!result && <p className="note">Reading result…</p>}
             {result?.output && <Markdown text={result.output} live={!result.complete} />}

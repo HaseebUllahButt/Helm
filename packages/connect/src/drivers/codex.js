@@ -964,6 +964,11 @@ export class CodexDriver extends Driver {
       }
     }
     switch (method) {
+      case 'thread/name/updated':
+        if (typeof p.threadName === 'string' && p.threadName.trim()) {
+          this.push('title', { title: p.threadName.trim() });
+        }
+        return;
       case 'turn/started':
         this.#turnId = p.turn?.id ?? this.#turnId;
         this.push('status', { status: 'working' });

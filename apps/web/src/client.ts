@@ -65,6 +65,7 @@ export interface Profile {
 }
 
 export interface Session {
+  paneId?: string;
   id: string;
   title: string;
   cwd: string;
@@ -125,6 +126,8 @@ export interface DelegationResult {
 
 /** A thread a CLI recorded on its own, whether or not helm started it. */
 export interface InventorySession {
+  status?: Session['status'];
+  turns?: number;
   engine: string;
   account: string;
   id: string;
@@ -164,6 +167,8 @@ export interface ModelList {
   defaultMode?: string | null;
   /** Models starred for this engine on this machine, shared by every device. */
   favs?: string[];
+  /** Favorite thinking levels, stored as JSON [model, effort] pairs per engine. */
+  effortFavs?: string[];
   /** What a new chat on this account starts with, besides the model. */
   defaults?: { effort?: string; mode?: string; speed?: string } | null;
   /** The account key the machine files this account's defaults under. */

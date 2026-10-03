@@ -77,6 +77,27 @@ export function primeModels(engine, home, launcher, value) {
 
 const inflight = new Map();
 
+/** A session's live choices must never overwrite another session's cached catalog. */
+export function mergeLiveModelCatalog(catalog, live, { all = false } = {}) {
+  const models = { ...catalog };
+  let extra = [];
+  if (!live) return { models, extra };
+  if (live.models?.length) {
+    const advertised = new Set(live.models);
+    extra = all ? [] : models.models.filter((m) => !advertised.has(m));
+    models.models = all ? [...new Set([...live.models, ...models.models])] : [...live.models];
+  }
+  models.labels = { ...(models.labels ?? {}), ...(live.labels ?? {}) };
+  // These levels belong to the current model only. In particular, [] is
+  // authoritative: switching to a model without thinking removes the chip.
+  models.effortsByModel = { ...(models.effortsByModel ?? {}) };
+  if (live.current) models.effortsByModel[live.current] = [...(live.efforts ?? [])];
+  models.effort = live.effort ?? null;
+  models.efforts = [];
+  if (live.current && !models.default) models.default = live.current;
+  return { models, extra };
+}
+
 function refreshModels(key, engine, home, environment, launcher, hit) {
   if (inflight.has(key)) return inflight.get(key);
   discoveries.set(key, { engine, home, environment, launcher });
@@ -551,6 +572,27 @@ async function modelsDevProvider(provider) {
   return parseModelsDevProvider(await modelsDevCatalog(), provider);
 }
 
+/** Only expose effort levels the provider actually advertises for a model. */
+export function parseOpencodeModelCache(catalog) {
+  const effortsByModel = {}, labels = {}, attachmentByModel = {};
+  for (const [provider, prov] of Object.entries(catalog ?? {})) {
+    for (const [id, meta] of Object.entries(prov?.models ?? {})) {
+      if (!meta || typeof meta !== 'object') continue;
+      const slug = `${provider}/${id}`;
+      if (meta.name) labels[slug] = meta.name;
+      if (typeof meta.attachment === 'boolean') attachmentByModel[slug] = meta.attachment;
+      const effortOpt = (Array.isArray(meta.reasoning_options) ? meta.reasoning_options : [])
+        .find((o) => o?.type === 'effort');
+      if (Array.isArray(effortOpt?.values)) {
+        effortsByModel[slug] = [...new Set(effortOpt.values.filter((v) => typeof v === 'string' && v))];
+      } else if (meta.reasoning === false) {
+        effortsByModel[slug] = [];
+      }
+    }
+  }
+  return { effortsByModel, labels, attachmentByModel };
+}
+
 async function opencodeModels(root, bin = 'opencode', environment = {}) {
   let def = null;
   for (const name of ['opencode.jsonc', 'opencode.json']) {
@@ -596,7 +638,7 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
   let attachmentByModel = {};
   try {
     const cacheFiles = [
-      join(expand('~'), '.cache', 'opencode', 'models.json'),
+      join(environment.XDG_CACHE_HOME || join(environment.HOME || expand('~'), '.cache'), 'opencode', 'models.json'),
       join(root, '..', '.cache', 'opencode', 'models.json'),
     ];
     let cache = null;
@@ -606,25 +648,14 @@ async function opencodeModels(root, bin = 'opencode', environment = {}) {
     }
     // Providers sit at the top level - opencode, opencode-go, opencode-zen
     // and any custom ones - each holding model ids without the prefix.
-    for (const [provider, prov] of Object.entries(cache ?? {})) {
-      for (const [id, meta] of Object.entries(prov?.models ?? {})) {
-        const slug = `${provider}/${id}`;
-        if (meta.name) labels[slug] = meta.name;
-        if (meta.attachment) attachmentByModel[slug] = true;
-        const effortOpt = (meta.reasoning_options ?? []).find((o) => o.type === 'effort');
-        if (effortOpt?.values?.length) effortsByModel[slug] = effortOpt.values;
-      }
-    }
-  } catch { /* cache unavailable - fall back to generic efforts */ }
-
-  const order = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
-  const union = [...new Set(Object.values(effortsByModel).flat())].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    ({ effortsByModel, labels, attachmentByModel } = parseOpencodeModelCache(cache));
+  } catch { /* the live session will advertise its actual levels */ }
 
   return {
     default: def,
     models,
     labels,
-    efforts: union.length ? union : ['low', 'medium', 'high', 'xhigh'],
+    efforts: [],
     effortsByModel,
     attachmentByModel,
     images: models.some((m) => attachmentByModel[m]),

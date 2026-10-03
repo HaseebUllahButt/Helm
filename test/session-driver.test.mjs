@@ -789,7 +789,7 @@ test('/compact delegates to the driver', async () => {
   await sessions.kill(s.id);
 });
 
-test('a session names itself after two prompts, not one', async () => {
+test('a session names itself after two user messages even before a reply', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
   const sessions = new Sessions(new StubRuntime(), {
@@ -813,6 +813,27 @@ test('a session names itself after two prompts, not one', async () => {
   assert.equal(sessions.get(s.id).title, 'fix the login bug');
   d.push('title', { title: 'Login bug fix' });
   assert.equal(sessions.get(s.id).title, 'Login bug fix');
+  await sessions.kill(s.id);
+});
+
+test('the first prompt and reply name a session and an identical manual rename stays protected', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-titles-first-exchange')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp/proj', profileId: 'claudea' });
+  await sessions.input(s.id, 'Hi!\nPlease fix the login bug');
+  assert.equal(s.title, 'proj');
+  const driver = FakeDriver.made.at(-1);
+  driver.push('turn.done', { turnId: 't1', status: 'ok' });
+  assert.equal(s.title, 'fix the login bug');
+  assert.equal(s.titleBy, 'auto');
+  sessions.rename(s.id, s.title);
+  assert.equal(s.titleBy, 'user');
+  driver.push('title', { title: 'A different generated name' });
+  assert.equal(s.title, 'fix the login bug');
   await sessions.kill(s.id);
 });
 

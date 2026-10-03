@@ -348,6 +348,80 @@ export async function codexSessionState(path) {
   return state;
 }
 
+// A writer lock says who owns a conversation, not whether a turn is running.
+// Read a bounded tail and cache by file revision so list refreshes stay cheap.
+const activityCache = new Map();
+export async function sessionActivity({ engine, path, sessionId, active = false, updatedAt = 0 }) {
+  if (!active) return { status: 'done', turns: 1, updatedAt };
+  let phase = null;
+  try {
+    if (path && ['codex', 'claude', 'pi', 'omp'].includes(engine)) {
+      const info = await stat(path);
+      updatedAt = info.mtimeMs;
+      const key = `${engine}:${path}`;
+      const stamp = `${info.size}:${info.mtimeMs}`;
+      const hit = activityCache.get(key);
+      if (hit?.stamp === stamp) phase = hit.phase;
+      else {
+        await readLines(path, (rec) => {
+          const p = rec.payload;
+          if (engine === 'codex') {
+            if (rec.type === 'event_msg') {
+              if (['task_started', 'turn_started', 'user_message'].includes(p?.type)) phase = 'working';
+              if (['task_complete', 'task_completed', 'turn_complete', 'turn_aborted'].includes(p?.type)) phase = 'done';
+            }
+            if (rec.type === 'response_item' && p?.type === 'message' && p.role === 'assistant' && p.channel === 'final') phase = 'done';
+          } else {
+            if (rec.isSidechain) return;
+            const msg = rec.message;
+            if (rec.type === 'user' || msg?.role === 'user') phase = 'working';
+            if (msg?.role === 'assistant' || rec.type === 'assistant') {
+              const reason = msg?.stop_reason ?? msg?.stopReason;
+              if (['end_turn', 'stop', 'stop_sequence', 'max_tokens'].includes(reason)) phase = 'done';
+              else if (reason === 'tool_use' || reason === 'toolUse') phase = 'working';
+              else if (Array.isArray(msg?.content)) {
+                if (msg.content.some((b) => ['tool_use', 'toolCall'].includes(b.type))) phase = 'working';
+                else if (msg.content.some((b) => b.type === 'text' && b.text?.trim())) phase = 'done';
+              }
+            }
+          }
+        }, { tailBytes: 512 << 10 });
+        activityCache.set(key, { stamp, phase });
+        if (activityCache.size > 1024) activityCache.delete(activityCache.keys().next().value);
+      }
+    } else if (path && ['opencode', 'opencode2'].includes(engine)) {
+      const conn = new DatabaseSync(path, { readOnly: true });
+      try {
+        const modern = engine === 'opencode';
+        const row = conn.prepare(modern
+          ? 'SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1'
+          : 'SELECT type, data FROM session_message WHERE session_id = ? ORDER BY seq DESC LIMIT 1').get(sessionId);
+        const msg = json(row?.data);
+        const role = modern ? msg?.role : row?.type;
+        if (role === 'user') phase = 'working';
+        else if (role === 'assistant') {
+          const finish = msg?.finish ?? msg?.finishReason ?? msg?.finish_reason;
+          if (['tool-calls', 'tool_use', 'toolUse'].includes(finish)) phase = 'working';
+          else if (msg?.time?.completed || finish) phase = 'done';
+          else if (!modern) {
+            const content = msg?.content ?? [];
+            const last = content.at(-1);
+            phase = msg?.text || last?.type === 'text' ? 'done' : 'working';
+          } else phase = 'working';
+        }
+      } finally { conn.close(); }
+    } else if (path) {
+      const last = (await messages({ engine, path, sessionId, limit: 1 })).at(-1);
+      if (last?.role === 'user') phase = 'working';
+      else if (last?.role === 'assistant' && last.text?.trim()) phase = 'done';
+    }
+  } catch { /* older schemas and partial writes use the activity fallback */ }
+  // An exited writer cannot still be working. Engines without a completion
+  // marker use recent activity, never process existence alone.
+  const status = phase ?? (Date.now() - updatedAt < 30_000 ? 'working' : 'idle');
+  return { status, turns: status === 'done' ? 1 : 0, updatedAt };
+}
+
 async function claudeMessages(path, { all = false } = {}) {
   const found = [];
   await readLines(path, (rec) => {

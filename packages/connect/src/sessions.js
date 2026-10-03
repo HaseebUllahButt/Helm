@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { HELM_DIR, expand } from './paths.js';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
-import { locate, messages as readMessages, sessionSnapshot } from './transcript.js';
+import { locate, messages as readMessages, sessionSnapshot, sessionActivity } from './transcript.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
@@ -29,6 +29,7 @@ import { authStatuses } from './auth.js';
 import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory } from './inventory.js';
 import { hostedProcId } from './hosted-process.js';
+import { GREETING, informative, promptTitle } from './titles.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -64,14 +65,12 @@ export const DRIVERS = {
  * Two sources: the agent itself - ACP sessions report the title they chose
  * as `session_info_update`, kept on the record as `generatedTitle` - and the
  * prompts, which always exist. Either kind lands only once the session has
- * TITLE_AFTER user prompts behind it: named on the first alone, a real
+ * TITLE_AFTER conversation messages behind it: named on the first alone, a real
  * fraction of sessions would be called "hi". The name the owner typed at
  * start (`titleBy: 'user'`) always wins.
  */
 const TITLE_AFTER = 2;
 const TITLE_RANK = { auto: 1, agent: 2, user: 3 };
-/** A prompt that says nothing about the work the session is for. */
-const GREETING = /^(hi+|hey+|hello+|yo|sup|hiya|howdy|test(ing)?|ping|ok(ay)?|thanks?( you)?|good (morning|afternoon|evening))[.\s!?,]*$/i;
 
 /** A title cut to fit, with the cut said out loud. */
 const clip = (text, max) => (text.length > max ? text.slice(0, max - 1) + '…' : text);
@@ -94,25 +93,10 @@ const parentLink = (value) => {
   };
 };
 
-/** A prompt's first non-empty line, unless the line says nothing. */
-const informative = (text) => {
-  const line = String(text ?? '').split('\n').map((l) => l.trim()).find(Boolean);
-  return line && !GREETING.test(line) ? line : null;
-};
-
 const missingClaudeConversation = (error, sessionId) => {
   if (typeof error !== 'string' || !sessionId) return false;
   const missing = /No conversation found with session ID:\s*(\S+)/i.exec(error);
   return missing?.[1] === sessionId;
-};
-
-/** The first informative line among the sampled prompts, or null. */
-const promptTitle = (samples) => {
-  for (const p of samples ?? []) {
-    const line = informative(p);
-    if (line) return clip(line, 60);
-  }
-  return null;
 };
 
 /**
@@ -451,10 +435,12 @@ export class Sessions extends EventEmitter {
 
   // ------------------------------------------------------------------- verbs
 
-  async list({ includeDelegations = false, parentId = null } = {}) {
+  async list({ includeDelegations = false, parentId = null, includeDetected = false } = {}) {
     // The runtime is the authority on what is still alive; our index only
     // remembers which of those panes are ours.
     const live = await this.runtime.listLive();
+    const detected = includeDetected && !parentId ? await inventory(await getProfiles()) : [];
+    const detectedById = new Map(detected.map((s) => [`${s.engine}:${s.id}`, s]));
 
     const out = [];
     const ours = new Set([...this.#index.values()].map((s) => s.paneId));
@@ -487,13 +473,19 @@ export class Sessions extends EventEmitter {
 
     for (const s of this.#index.values()) {
       if (s.external) {
+        const current = detectedById.get(`${s.engine}:${s.engineSessionId}`);
+        if (current) {
+          s.externalPid = current.writerPid || null;
+          s.transcript = current.transcript || s.transcript;
+          s.updatedAt = current.updatedAt;
+        }
         const active = this.#externalActive(s);
         // This record is a read-only window onto another process until its
         // writer lock goes away. Keep it in the ordinary list so an open app
         // continues to receive transcript notifications across refreshes.
         out.push({
           ...wire(s), alive: active, adopted: true,
-          status: active ? 'idle' : 'idle',
+          ...await this.#refreshExternalActivity(s, active),
           externalActive: active,
         });
         continue;
@@ -518,6 +510,20 @@ export class Sessions extends EventEmitter {
         : s.engine === 'shell' ? 'shell'
         : (pane.status ?? s.status ?? 'unknown');
       out.push({ ...wire(s), archived: !!s.archived, alive: !!pane, status, cwd: pane?.cwd ?? s.cwd, adopted: false });
+    }
+    if (includeDetected && !parentId) {
+      const known = new Set(out.filter((s) => s.engineSessionId).map((s) => `${s.engine}:${s.engineSessionId}`));
+      for (const x of detected) {
+        const id = `found:${x.engine}:${x.id}`;
+        const mark = this.#marks.get(id);
+        if (mark === 'removed' || known.has(`${x.engine}:${x.id}`) || this.isDelegatedConversation(x.engine, x.id)) continue;
+        // A runtime pane without a native ID can still represent this CLI.
+        if (x.active && out.some((s) => s.paneId && s.alive && s.engine === x.engine && expand(s.cwd) === expand(x.cwd))) continue;
+        out.push({ id, engine: x.engine, engineSessionId: x.id, account: x.account,
+          title: x.title, cwd: x.cwd, profileId: x.account, model: x.model,
+          status: x.status, turns: x.turns, alive: !!x.active, externalActive: !!x.active,
+          adopted: true, archived: mark === 'archived', updatedAt: x.updatedAt });
+      }
     }
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
@@ -1053,6 +1059,10 @@ export class Sessions extends EventEmitter {
     if (e.type === 'turn.done' && this.#index.has(s.id)) {
       if (s.delegation) s.delegation.status = e.status === 'ok' ? 'done' : e.status;
       s.turns = (s.turns ?? 0) + 1;
+      // A prompt and its first completed reply are two messages. Providers
+      // that never emit a title must not leave this chat named for its folder.
+      const name = s.generatedTitle || promptTitle(s.promptSample);
+      if (name) this.#titled(s, name, s.generatedTitle ? 'agent' : 'auto');
       const cost = forwarded.costUsd;
       if (cost > 0) s.costUsd = Math.round(((s.costUsd ?? 0) + cost) * 1e6) / 1e6;
       this.#save();
@@ -1079,12 +1089,13 @@ export class Sessions extends EventEmitter {
     // session that opens "hi", "hello" would otherwise fill the sample with
     // greetings and never earn a name at all.
     const sample = (s.promptSample ??= []);
-    if (sample.length < TITLE_AFTER && informative(text)) sample.push(String(text).slice(0, 200));
+    const request = informative(text);
+    if (sample.length < TITLE_AFTER && request) sample.push(request.slice(0, 200));
     this.#save();
     // The gate opens *at* TITLE_AFTER and stays open: when the first prompts
     // were all greetings there is nothing to name the session after yet, and
     // the one that finally says something still deserves to name it.
-    if (s.prompts < TITLE_AFTER) return;
+    if ((s.prompts ?? 0) + (s.turns ?? 0) < TITLE_AFTER) return;
     const agent = s.generatedTitle || null;
     const pick = agent ?? promptTitle(s.promptSample);
     if (pick) this.#titled(s, pick, agent ? 'agent' : 'auto');
@@ -1110,10 +1121,10 @@ export class Sessions extends EventEmitter {
     }
     // The gate is about *generated* names being premature. A name the owner
     // typed is never premature.
-    if (by !== 'user' && (s.prompts ?? 0) < TITLE_AFTER) return;
+    if (by !== 'user' && (s.prompts ?? 0) + (s.turns ?? 0) < TITLE_AFTER) return;
     if ((TITLE_RANK[by] ?? 0) < (TITLE_RANK[s.titleBy] ?? 0)) return;
     const named = clip(clean, 80);
-    if (s.title === named) return;
+    if (s.title === named && s.titleBy === by) return;
     s.title = named;
     s.titleBy = by;
     this.#save();
@@ -1221,11 +1232,14 @@ export class Sessions extends EventEmitter {
         titleBy: title ? 'user' : null,
         engineSessionId: id,
         transcript: found.transcript || null,
+        externalLock: engine === 'codex'
+          ? join(expand(homeOf(profile)), 'thread-writer-locks', `${id}.lock`) : null,
         external: true,
         externalSource: true,
         externalActive: false,
         adopted: true,
-        status: 'idle',
+        status: found.status ?? 'idle',
+        turns: found.turns ?? 0,
         createdAt: Date.now(),
         updatedAt: found.updatedAt || Date.now(),
       };
@@ -1262,7 +1276,8 @@ export class Sessions extends EventEmitter {
         externalSource: true,
         externalActive: true,
         adopted: true,
-        status: 'idle',
+        status: found.status ?? 'idle',
+        turns: found.turns ?? 0,
         createdAt: Date.now(),
         updatedAt: found.updatedAt || Date.now(),
       };
@@ -1290,6 +1305,20 @@ export class Sessions extends EventEmitter {
     // (`dedupeDetected` in the web app), which is also what stops a resumed
     // thread appearing twice.
     return session;
+  }
+
+  async #refreshExternalActivity(s, active = this.#externalActive(s)) {
+    const activity = await sessionActivity({ engine: s.engine, path: s.transcript,
+      sessionId: s.engineSessionId, active, updatedAt: s.updatedAt });
+    if (!s.external || this.#index.get(s.id) !== s) return { status: s.status, turns: s.turns ?? 0 };
+    if (s.status !== activity.status || s.externalActive !== active || s.turns !== activity.turns) {
+      const from = s.status;
+      Object.assign(s, activity, { externalActive: active });
+      this.#save();
+      this.emit('session', s);
+      if (from !== s.status) this.emit('status', { session: s, from, to: s.status });
+    }
+    return activity;
   }
 
   #externalActive(s) {
@@ -1838,6 +1867,8 @@ export class Sessions extends EventEmitter {
             if (took > TRANSCRIPT_POLL_MS / 2) t.rest = Date.now() + took * 3;
           }
         }
+        const monitored = this.#index.get(id);
+        if (monitored?.external) await this.#refreshExternalActivity(monitored);
         t.size = stamp;
       } catch { /* transcript not written yet */ } finally { t.busy = false; }
     }, TRANSCRIPT_POLL_MS);
@@ -1915,12 +1946,16 @@ export class Sessions extends EventEmitter {
         s.updatedAt = Date.now();
         this.#save();
         this.emit('session', s);
+        const reader = await this.#driver(s);
+        await reader.send(text);
+        return { ok: true };
       } else {
         await this.#handoffExternal(s);
       // Ownership has moved naturally: turn the monitor into the same driven
       // session instead of creating a duplicate row or losing its transcript.
         s.external = false;
         s.externalActive = false;
+        s.status = 'idle';
         s.adopted = false;
         s.externalLock = null;
         s.driver = s.engine;
@@ -2625,6 +2660,7 @@ export class Sessions extends EventEmitter {
       // A terminal lives in the host process, which outlives us - so its
       // record stays until `adoptTerminals()` has asked what really survived.
       if (s.pty) continue;
+      if (s.external) { await this.#refreshExternalActivity(s); continue; }
       if (!s.driver) { this.runtime.watch(this.#handle(s)); continue; }
       // An agent process the host kept is still running whatever it was
       // running: its active turn and questions are still answerable. Any

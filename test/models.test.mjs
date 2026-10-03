@@ -1,6 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+test('live effort options override only the current model without mutating the shared catalog', async () => {
+  const { mergeLiveModelCatalog } = await import('../packages/connect/src/models.js');
+  const cached = {
+    models: ['heavy', 'light', 'plain'], labels: { light: 'Light' }, default: 'heavy',
+    efforts: ['low', 'high', 'max'], effortsByModel: { heavy: ['low', 'high', 'max'], light: ['low', 'max'] },
+  };
+  const original = structuredClone(cached);
+  const { models, extra } = mergeLiveModelCatalog(cached, {
+    models: ['light', 'plain'], current: 'light', effort: 'low', efforts: ['low', 'medium'],
+  });
+  assert.deepEqual(models.effortsByModel.light, ['low', 'medium']);
+  assert.deepEqual(models.effortsByModel.heavy, ['low', 'high', 'max']);
+  assert.deepEqual(extra, ['heavy']);
+  assert.equal(models.effort, 'low');
+  assert.deepEqual(models.efforts, [], 'current-model levels are never a fallback for other models');
+  const plain = mergeLiveModelCatalog(cached, { current: 'plain', efforts: [] }).models;
+  assert.deepEqual(plain.effortsByModel.plain, []);
+  assert.deepEqual(plain.effortsByModel.heavy, ['low', 'high', 'max']);
+  assert.deepEqual(cached, original);
+});
+
+test('OpenCode metadata keeps explicit empty efforts and never borrows another model levels', async () => {
+  const { parseOpencodeModelCache } = await import('../packages/connect/src/models.js');
+  const parsed = parseOpencodeModelCache({ provider: { models: {
+    heavy: { reasoning_options: [{ type: 'effort', values: ['low', 'high', 'max'] }] },
+    light: { reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'low'] }] },
+    plain: { reasoning: false },
+    empty: { reasoning_options: [{ type: 'effort', values: [] }] },
+    unknown: { reasoning: true },
+  } } });
+  assert.deepEqual(parsed.effortsByModel, {
+    'provider/heavy': ['low', 'high', 'max'], 'provider/light': ['low', 'medium'],
+    'provider/plain': [], 'provider/empty': [],
+  });
+});
+
 test('Devin model detection accepts newly added model families', async () => {
   const { parseDevinModelList } = await import('../packages/connect/src/models.js');
   const found = parseDevinModelList(`

@@ -1,3 +1,4 @@
+import { useCopySelection } from './useCopySelection';
 import { useDismiss } from './useDismiss';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Confirm, Sheet, TextPrompt } from './Modal';
@@ -243,7 +244,7 @@ const sameDir = (a: string, b: string) => collapseCwd(a) === collapseCwd(b);
 const foundRow = (x: InventorySession): Session => ({
   id: `found:${x.engine}:${x.id}`,
   title: x.title, cwd: x.cwd, engine: x.engine,
-  profileId: '', status: 'idle', adopted: true, alive: !!x.active,
+  profileId: '', status: x.status ?? (x.active ? 'working' : 'done'), turns: x.turns, adopted: true, alive: !!x.active,
   externalActive: !!x.active,
   archived: !!x.archived,
   model: x.model ?? null, updatedAt: x.updatedAt,
@@ -262,11 +263,11 @@ const foundRow = (x: InventorySession): Session => ({
  * second thread.
  */
 function dedupeDetected(list: Session[], found: InventorySession[]): InventorySession[] {
-  const own = new Set(list.map((s) => s.engineSessionId).filter(Boolean));
-  const live = list.filter((s) => s.alive);
+  const own = new Set(list.filter((s) => s.engineSessionId).map((s) => `${s.engine}:${s.engineSessionId}`));
+  const live = list.filter((s) => s.alive && s.paneId && !s.engineSessionId);
   const now = Date.now();
   return found.filter((x) => {
-    if (own.has(x.id)) return false;
+    if (own.has(`${x.engine}:${x.id}`)) return false;
     if ((x.updatedAt ?? 0) > now - 15 * 60_000 &&
         live.some((s) => s.engine === x.engine && collapseCwd(s.cwd) === collapseCwd(x.cwd))) {
       return false;
@@ -625,7 +626,7 @@ function Shell({ client, conn, onSignOut }: {
     if (!active.current) return;
     if (sessionRequests.current.has(envId)) return;
     sessionRequests.current.add(envId);
-    client.rpc<{ sessions: Session[] }>(envId, 'session.list', {}, 15_000)
+    client.rpc<{ sessions: Session[] }>(envId, 'session.list', { includeDetected: true }, 15_000)
       .then((r) => {
         if (!active.current) return;
         liveListsSeen.current.add(envId);
@@ -865,6 +866,7 @@ function Shell({ client, conn, onSignOut }: {
     navigate([{ kind: 'env' }], id);
   };
   const openSession = (envId: string, s: Session) => {
+    if (s.id.startsWith('found:')) { void resumeFound(envId, s); return; }
     if (snoozed[`${envId}:${s.id}`]) setSnooze(`${envId}:${s.id}`, null);
     navigate([{ kind: 'env' }, { kind: 'session', session: s }], envId);
   };
@@ -884,6 +886,27 @@ function Shell({ client, conn, onSignOut }: {
     if (nav.current.depth > 0) history.back();
     else if (nav.current.stack.length > 1) restate([{ kind: 'env' }]);
     else if (!wide) restate([{ kind: 'env' }], null);
+  };
+
+  const openRelatedSession = (envId: string, session: Session) => {
+    loadSessions(envId);
+    const current = nav.current.stack.at(-1);
+    if (nav.current.selected === envId && current?.kind === 'session') {
+      if (current.session.delegation?.parentId === session.id) {
+        const parentIndex = nav.current.stack.findLastIndex((v) => v.kind === 'session' && v.session.id === session.id);
+        const steps = nav.current.stack.length - 1 - parentIndex;
+        if (parentIndex >= 0 && steps > 0 && nav.current.depth >= steps) history.go(-steps);
+        // A restored or directly opened child has no parent entry to pop.
+        // Replace it so Back cannot send the owner straight into it again.
+        else restate([{ kind: 'env' }, { kind: 'session', session }], envId);
+        return;
+      }
+      if (session.delegation?.parentId === current.session.id) {
+        navigate([...nav.current.stack, { kind: 'session', session }], envId);
+        return;
+      }
+    }
+    navigate([{ kind: 'env' }, { kind: 'session', session }], envId);
   };
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived);
@@ -920,7 +943,7 @@ function Shell({ client, conn, onSignOut }: {
     try {
       const r = await client.rpc<{ session: Session }>(envId, 'session.resume', {
         engine: s.engine, account: (s as any).account,
-        id: s.engineSessionId, cwd: s.cwd, title: s.title,
+        id: s.engineSessionId, cwd: s.cwd,
       }, 60_000);
       loadSessions(envId);
       navigate([...nav.current.stack, { kind: 'session', session: r.session }], envId);
@@ -1011,7 +1034,7 @@ function Shell({ client, conn, onSignOut }: {
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
   // older work stays available on its machine and through search.
-  const doneNow = everyone.filter(({ s }) => s.driver && (s.turns ?? 0) > 0
+  const doneNow = everyone.filter(({ s }) => (s.driver || s.adopted) && (s.turns ?? 0) > 0
     && s.status !== 'working' && s.status !== 'blocked'
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
   const snoozeThread = (envId: string, s: Session, until: number) => {
@@ -1423,7 +1446,7 @@ function Shell({ client, conn, onSignOut }: {
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
-            onOpenSession={(s) => { loadSessions(env.id); navigate([{ kind: 'env' }, { kind: 'session', session: s }], env.id); }}
+            onOpenSession={(s) => openRelatedSession(env.id, s)}
             onClosed={() => { if (view.session.brain) dropBrain(env.id); loadSessions(env.id); back(); }}
             onArchived={() => { loadSessions(env.id); back(); }}
             onSession={onSessionChanged(env.id)}
@@ -2311,13 +2334,12 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const rows = [...sessions.filter((s) => s.engine !== 'shell'), ...external];
 
   const live = (s: Session) => s.engine !== 'shell' && !s.archived && hit(s);
-  const mine = sessions.filter(live);
+  const mine = rows.filter(live);
   const blocked = mine.filter((s) => s.status === 'blocked').sort(byRecent);
   const working = mine.filter((s) => s.status === 'working').sort(byRecent);
 
   const rest = mine.filter((s) => s.status !== 'blocked' && s.status !== 'working');
-  const externalLive = external.filter((s) => !s.archived && hit(s));
-  const recent = [...rest, ...externalLive].filter((s) => !botThread(s)).sort(byRecent).slice(0, 3);
+  const recent = rest.filter((s) => !botThread(s)).sort(byRecent).slice(0, 3);
   const recentIds = new Set(recent.map((s) => s.id));
 
   // A thread belongs to a project by its folder - or by being in a worktree of it.
@@ -2326,10 +2348,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const projectFolds = projects
     .map((p) => ({
       project: p,
-      list: [
-        ...rest.filter((s) => !recentIds.has(s.id) && belongsTo(s, p)),
-        ...externalLive.filter((s) => !recentIds.has(s.id) && belongsTo(s, p)),
-      ].sort(byRecent),
+      list: rest.filter((s) => !recentIds.has(s.id) && belongsTo(s, p)).sort(byRecent),
       // Threads of this project already standing under "recent" above. They
       // are counted, or the header said 0 next to a thread you can see.
       above: recent.filter((s) => belongsTo(s, p)).length,
@@ -2341,7 +2360,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   // Threads from this week in folders helm has never started anything in,
   // newest first and capped - until someone types, and then the cap is the
   // thing standing between them and what they are looking for.
-  const strays = [...rest, ...externalLive]
+  const strays = rest
     .filter((s) => !inProject.has(s.id) && !recentIds.has(s.id) && thisWeek(s)).sort(byRecent);
   const [allElsewhere, setAllElsewhere] = useState(false);
   const elsewhere = q || allElsewhere ? strays : strays.slice(0, 8);
@@ -2350,7 +2369,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   // set of folders: what is in here is, by definition, not what you are
   // working on. It has to stay reachable, though - "it is not here" and "it
   // is one tap down" are different answers and only one of them is true.
-  const older = [...rest, ...externalLive]
+  const older = rest
     .filter((s) => !inProject.has(s.id) && !recentIds.has(s.id) && !thisWeek(s)).sort(byRecent);
 
   // Archived threads are on the machine they were archived on, folded away.
@@ -2874,7 +2893,6 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
           </span>
           {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
           {busy ? <span className="chip working"><i />opening</span>
-            : s.externalActive ? <span className="chip working"><i />live</span>
             : <StatusChip status={s.status} at={s.updatedAt} />}
         </Main>
         {!selecting && managed && (
@@ -3637,7 +3655,7 @@ function ModelPrefsView({ client, env, account, onBack }: {
         }, 20_000),
         client.rpc(env.id, 'profile.defaults', {
           profileId: account.profile.id,
-          effort: effort || null,
+          effort: efforts.includes(effort) ? effort : null,
           mode: mode || null,
           speed: speed || null,
         }, 20_000),
@@ -3663,10 +3681,10 @@ function ModelPrefsView({ client, env, account, onBack }: {
   // with - keep it selectable rather than silently dropping it.
   if (def && !defaults.includes(def)) defaults.push(def);
   const selectedModel = def || list?.default || list?.models?.[0] || '';
-  const efforts = [...new Set([
-    ...(list?.effortsByModel?.[selectedModel] ?? list?.efforts ?? []),
-    ...(effort ? [effort] : []),
-  ])];
+  const efforts = list?.effortsByModel?.[selectedModel] ?? list?.efforts ?? [];
+  useEffect(() => {
+    if (list && effort && !efforts.includes(effort)) setEffort('');
+  }, [list, selectedModel, effort]);
   const speeds = [...new Set([
     ...(list?.speedByModel?.[selectedModel] ?? list?.speeds ?? []),
     ...(speed ? [speed] : []),
@@ -4536,6 +4554,7 @@ function ago(ts: number | null | undefined) {
 
 function Chat({ messages, status }: { messages: Message[] | null; status: string }) {
   const box = useRef<HTMLDivElement>(null);
+  useCopySelection(box);
   const stuck = useRef(true);
   const [unread, setUnread] = useState(false);
 

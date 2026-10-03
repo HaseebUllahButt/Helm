@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { messages, sessionSnapshot, locate } from '../packages/connect/src/transcript.js';
+import { messages, sessionSnapshot, sessionActivity, locate } from '../packages/connect/src/transcript.js';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-provider-transcripts-'));
 test.after(() => rmSync(root, { recursive: true, force: true }));
@@ -184,4 +184,31 @@ test('omp locate reads past a leading title record to the session header', async
 
   assert.equal(await locate({ engine: 'omp', home, cwd: '/work/proj' }), path);
   assert.equal(await locate({ engine: 'omp', home, cwd: '/work/other' }), null);
+});
+
+
+test('external activity reads native completion fields while writers remain open', async () => {
+  const path = join(root, 'activity-claude.jsonl');
+  const write = (content) => writeFileSync(path, [
+    { type: 'user', message: { role: 'user', content: 'Fix it' } },
+    { type: 'assistant', message: { role: 'assistant', stop_reason: null, content } },
+  ].map(JSON.stringify).join('\n') + '\n');
+  write([{ type: 'text', text: 'Fixed it' }]);
+  assert.equal((await sessionActivity({ engine: 'claude', path, active: true })).status, 'done');
+  write([{ type: 'tool_use', name: 'Bash', id: 'tool', input: {} }]);
+  assert.equal((await sessionActivity({ engine: 'claude', path, active: true })).status, 'working');
+
+  const dbPath = join(root, 'activity-open.db');
+  const db = new DatabaseSync(dbPath);
+  db.exec('CREATE TABLE session_message (session_id TEXT, type TEXT, data TEXT, seq INTEGER)');
+  const put = (type, data, seq) => db.prepare('INSERT INTO session_message VALUES (?, ?, ?, ?)').run('s', type, JSON.stringify(data), seq);
+  const read = () => sessionActivity({ engine: 'opencode2', path: dbPath, sessionId: 's', active: true });
+  try {
+    put('user', { content: [{ type: 'text', text: 'Do it' }] }, 1);
+    assert.equal((await read()).status, 'working');
+    put('assistant', { content: [{ type: 'text', text: 'Done' }] }, 2);
+    assert.equal((await read()).status, 'done');
+    put('assistant', { finishReason: 'tool-calls', content: [{ type: 'tool', name: 'shell' }] }, 3);
+    assert.equal((await read()).status, 'working');
+  } finally { db.close(); }
 });

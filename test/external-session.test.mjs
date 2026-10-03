@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, appendFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -242,4 +242,38 @@ test('an inactive Devin history opens without starting a provider process', asyn
   assert.equal(opened.driver, undefined);
   assert.equal(started, false, 'opening history must not start Devin');
   assert.deepEqual((await sessions.messages(opened.id)).messages.map((m) => m.text), ['old prompt', 'old answer']);
+});
+
+
+test('detected sessions enter working and done without opening or stopping the external CLI', async () => {
+  const id = '01a0cafe-0000-7000-8000-000000000002';
+  const path = join(sessionsDir, `rollout-test-${id}.jsonl`);
+  const writerLock = join(locksDir, `${id}.lock`);
+  writeFileSync(path, JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/tmp/external-work' } }) + '\n'
+    + JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }) + '\n');
+  writeFileSync(writerLock, '');
+  writeFileSync(join(codexHome, 'session_index.jsonl'), JSON.stringify({ id, thread_name: 'Fix external status' }) + '\n');
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new Runtime(), { makeDriver: () => { throw Error('must not launch'); } });
+  const foundId = `found:codex:${id}`;
+  const get = async () => (await sessions.list({ includeDetected: true })).find((s) => s.id === foundId);
+  assert.equal((await get()).status, 'working');
+  assert.equal((await get()).title, 'Fix external status', 'native id resolves the generated title');
+  assert.equal((await get()).alive, true);
+  appendFileSync(path, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n');
+  const done = await get();
+  assert.equal(done.status, 'done');
+  assert.equal(done.turns, 1);
+  assert.equal(done.alive, true, 'an idle CLI can remain open after completing its turn');
+  assert.equal(existsSync(writerLock), true);
+  appendFileSync(path, JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }) + '\n');
+  assert.equal((await get()).status, 'working');
+  const opened = await sessions.resumeExternal({ engine: 'codex', account: 'codex', id });
+  const listed = await sessions.list({ includeDetected: true });
+  assert.equal(listed.filter((s) => s.engineSessionId === id).length, 1, 'opening never duplicates the detected row');
+  assert.equal(listed.find((s) => s.id === opened.id).status, 'working');
+  assert.notEqual(opened.titleBy, 'user', 'opening history does not freeze its generated title');
+  rmSync(writerLock);
+  assert.equal((await sessions.list()).find((s) => s.id === opened.id).status, 'done', 'a vanished writer cannot remain working');
+  await sessions.archive(foundId, true);
 });

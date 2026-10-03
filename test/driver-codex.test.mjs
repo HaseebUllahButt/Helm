@@ -22,6 +22,16 @@ test('codex exposes the commands Helm can execute through app-server', async () 
   assert.ok(CODEX_COMMANDS.length > 10);
 });
 
+test('Codex forwards native thread names without adopting another thread title', () => {
+  const driver = new CodexDriver({ cmd: 'codex', env: {}, cwd: '/x', mode: 'ask' });
+  driver.threadId = 'title-thread';
+  const log = collect(driver);
+  driver.onNotification('thread/name/updated', { threadId: 'other-thread', threadName: 'Other work' });
+  driver.onNotification('thread/name/updated', { threadId: 'title-thread', threadName: null });
+  driver.onNotification('thread/name/updated', { threadId: 'title-thread', threadName: '  Repair login  ' });
+  assert.deepEqual(log.of('title'), [{ type: 'title', title: 'Repair login' }]);
+});
+
 test('/usage views format the account activity API as Markdown', () => {
   const activity = {
     summary: { lifetimeTokens: 123456, peakDailyTokens: 4000, currentStreakDays: 3, longestStreakDays: 8 },

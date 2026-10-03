@@ -12,7 +12,7 @@ import { createRuntime } from './runtime/index.js';
 import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
-import { listModels } from './models.js';
+import { listModels, mergeLiveModelCatalog } from './models.js';
 import { usableProfiles, authStatuses } from './auth.js';
 import { listCommands } from './commands.js';
 import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
@@ -1276,7 +1276,7 @@ export class Daemon {
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
         const engine = ENGINES[profile.engine];
         const spec = materialize(profile);
-        const models = await listModels(
+        const catalog = await listModels(
           profile.engine,
           spec.env?.[engine?.homeEnv] ?? engine?.defaultHome,
           spec.env,
@@ -1293,25 +1293,7 @@ export class Daemon {
         // first-class choices but stay reachable through `more`. `all` keeps
         // the union - the settings editor manages approvals against
         // everything the CLI knows.
-        let extra = [];
-        if (live?.models?.length) {
-          if (p.all) {
-            models.models = [...new Set([...live.models, ...models.models])];
-          } else {
-            const advertised = new Set(live.models);
-            extra = models.models.filter((m) => !advertised.has(m));
-            models.models = [...live.models];
-          }
-        }
-        if (live) {
-          models.labels = { ...(models.labels ?? {}), ...(live.labels ?? {}) };
-          // The running agent's pickers are the truth for what it takes: a
-          // session whose agent advertises no thinking level gets no chip -
-          // offering one would set a value the agent then refuses.
-          models.efforts = live.efforts ?? [];
-          if (!live.efforts?.length) delete models.effortsByModel;
-          if (live.current && !models.default) models.default = live.current;
-        }
+        const { models, extra } = mergeLiveModelCatalog(catalog, live, { all: !!p.all });
         // Whether the composer offers a clip at all. A running agent's own
         // answer beats the catalogue's guess: opencode's models.dev entry
         // says what the provider can do, `initialize` says what this agent
@@ -1339,6 +1321,7 @@ export class Daemon {
         return {
           ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine),
           favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile), account: accountKey(profile),
+          effortFavs: pickerPrefs().favs[`${profile.engine}-effort`] ?? [],
         };
       }
 
@@ -1350,7 +1333,7 @@ export class Daemon {
         return { ok: true, prefs: saveModelPrefs(profile, { default: p.default, approved: p.approved }) };
       }
 
-      case M.SESSION_LIST:    return { sessions: await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true }) };
+      case M.SESSION_LIST:    return { sessions: await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true }) };
       case M.SESSION_DELEGATE: return this.sessions.delegate(p);
       case M.SESSION_DELEGATION_RESULT: return this.sessions.delegationResult(p.id);
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);

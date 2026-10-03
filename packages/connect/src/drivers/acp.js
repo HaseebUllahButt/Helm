@@ -127,6 +127,7 @@ export class AcpDriver extends Driver {
       models: (model?.options ?? []).map((o) => o.value).filter(Boolean),
       labels: Object.fromEntries((model?.options ?? []).map((o) => [o.value, o.name]).filter(([k, v]) => k && v)),
       efforts: (effort?.options ?? []).map((o) => o.value).filter(Boolean),
+      effort: effort?.currentValue ?? null,
       current: model?.currentValue ?? null,
     };
   }
@@ -382,10 +383,21 @@ export class AcpDriver extends Driver {
     if (!merged.length) return [];
     const byId = new Map(this.#options.map((o) => [o.id, o]));
     const changed = [];
+    const nextModel = merged.find((o) => o?.id === 'model')?.currentValue;
+    const modelChanged = nextModel && nextModel !== byId.get('model')?.currentValue;
+    // Effort options describe one model. A switch that does not advertise
+    // an effort picker must not inherit the previous model's picker.
+    if (modelChanged
+        && this.spec.effortId && byId.has(this.spec.effortId)
+        && !merged.some((o) => o?.id === this.spec.effortId)) {
+      byId.delete(this.spec.effortId);
+      changed.push({ id: this.spec.effortId, currentValue: null });
+    }
     for (const o of merged) {
       if (!o?.id) continue;
       const known = byId.get(o.id);
-      if (known && o.currentValue !== known.currentValue) changed.push(o);
+      if ((known && o.currentValue !== known.currentValue)
+          || (!known && (modelChanged || this.#live) && o.id === this.spec.effortId)) changed.push(o);
       byId.set(o.id, o);
     }
     this.#options = [...byId.values()];
@@ -673,7 +685,7 @@ export class AcpDriver extends Driver {
     if (this.#pipe && this.engineSessionId && model) {
       const r = await this.#setOption('model', model);
       if (r.error) this.#refused('model', model, r.error);
-      else this.#takeOptions(r.result);
+      else this.#optionsChanged(r.result);
     }
   }
 
@@ -800,15 +812,17 @@ export class AcpDriver extends Driver {
     const changed = this.#takeOptions(u);
     if (!this.#live) return;
     for (const o of changed) {
+      if (o.id === this.spec.effortId) {
+        this.effort = o.currentValue || null;
+        this.push('settings', { effort: this.effort });
+        continue;
+      }
       if (!o?.currentValue) continue;
       if (o.id === 'model') {
         this.model = o.currentValue;
         this.push('settings', { model: o.currentValue });
       } else if (o.id === 'mode') {
         this.#modeChanged(o.currentValue);
-      } else if (o.id === this.spec.effortId) {
-        this.effort = o.currentValue;
-        this.push('settings', { effort: o.currentValue });
       }
     }
   }

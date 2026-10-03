@@ -1,3 +1,4 @@
+import { useCopySelection } from '../useCopySelection';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Markdown } from '../Markdown';
 import type { Change, Item, Turn } from './types';
@@ -504,6 +505,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   onBranch?: (turn: Turn) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  useCopySelection(box);
   const stuck = useRef(true);
   const [unread, setUnread] = useState(false);
   // The working pulse hangs off the turn still being written - with a helm

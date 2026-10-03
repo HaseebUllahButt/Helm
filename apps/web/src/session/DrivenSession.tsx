@@ -44,7 +44,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   onTranscribe?: (audio: string, mime: string) => Promise<string>;
   /** Only on the brain: the way to what it is made of. */
   onSettings?: () => void;
-  /** Go to another thread - the one a branch just made. */
+  /** Open a branch, subagent, or its parent conversation. */
   onOpenSession?: (s: Session) => void;
 }) {
   const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
@@ -103,7 +103,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       if ((kind === 'connection' && payload?.online) || (e === env.id && kind === 'transport' && payload?.direct)) void catalog.refresh();
     });
     return () => { stale = true; catalog.stop(); off(); };
-  }, [client, env.id, session.profileId, session.id]);
+  }, [client, env.id, session.profileId, session.id, session.model, session.engineModel]);
 
   // What `/` offers. Read from the machine because that is where the
   // commands are: files beside the project, or in that account's config.
@@ -142,6 +142,14 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     setBusy(true); setError('');
     try { await fn(); } catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
+  };
+  const openParent = () => {
+    const parentId = session.delegation?.parentId;
+    if (!parentId || !onOpenSession) return;
+    void call(async () => {
+      const r = await client.rpc<{ session: Session }>(env.id, 'session.events', { id: parentId, limit: 1 });
+      onOpenSession(r.session);
+    });
   };
 
   /**
@@ -371,6 +379,14 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     setOptions((now) => now && { ...now, favs: next });
     client.rpc(env.id, 'picker.prefs', { favs: { [session.engine]: next } }, 15_000).catch((e) => setError(e.message));
   };
+  const saveEffortFavs = (model: string, next: string[]) => {
+    const others = (options?.effortFavs ?? []).filter((entry) => {
+      try { return JSON.parse(entry)[0] !== model; } catch { return false; }
+    });
+    const effortFavs = [...others, ...next.map((effort) => JSON.stringify([model, effort]))];
+    setOptions((now) => now && { ...now, effortFavs });
+    client.rpc(env.id, 'picker.prefs', { favs: { [`${session.engine}-effort`]: effortFavs } }, 15_000).catch((e) => setError(e.message));
+  };
   const saveDefault = async (kind: Kind, value: string) => {
     if (!options) return;
     setError('');
@@ -388,7 +404,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       }
     } catch (e: any) { setError(e.message); throw e; }
   };
-  const controls = Controls({ options, session, busy, onPick: pick, onFavs: saveFavs, onDefault: saveDefault });
+  const controls = Controls({ options, session, busy, onPick: pick, onFavs: saveFavs, onEffortFavs: saveEffortFavs, onDefault: saveDefault });
 
   // Everything this chat runs with - the account, model, thinking, permissions
   // and speed - becomes what a new chat on this machine starts with, for
@@ -436,7 +452,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   return (
     <>
       <div className="bar session-bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
+        <button className="iconbtn back" aria-label={session.delegation?.parentId && onOpenSession ? 'Back to parent thread' : 'Back'}
+          onClick={session.delegation?.parentId && onOpenSession ? openParent : onBack}><BackIcon /></button>
         <div className="titles">
           <h1>{session.title}</h1>
           <span className="sub">
@@ -509,10 +526,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             </button>
             {!session.brain && <button onClick={() => { setMenu(null); void saveAsDefaults(); }}>Use these settings for new chats</button>}
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
-            {session.delegation?.parentId && onOpenSession && <button onClick={() => call(async () => {
-              const r = await client.rpc<{ session: Session }>(env.id, 'session.events', { id: session.delegation!.parentId, limit: 1 });
-              onOpenSession(r.session);
-            })}>Open parent thread</button>}
+            {session.delegation?.parentId && onOpenSession && <button onClick={openParent}>Open parent thread</button>}
             {wakeable && (
               <button aria-pressed={keepAwake} onClick={() => setKeepAwake((v) => !v)}>
                 {keepAwake ? 'Let the screen sleep' : 'Keep the screen awake'}
@@ -558,7 +572,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>
 
-      {showSubagents && <Subagents key={`${env.id}:${session.id}`} client={client} env={env} parent={session} onClose={() => setShowSubagents(false)} onOpen={onOpenSession} />}
+      {showSubagents && <Subagents key={`${env.id}:${session.id}`} client={client} env={env} parent={session} onClose={() => setShowSubagents(false)}
+        onOpen={onOpenSession ? (s) => { setShowSubagents(false); onOpenSession(s); } : undefined} />}
 
       {branching && (
         <Confirm

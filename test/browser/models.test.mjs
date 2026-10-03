@@ -61,12 +61,14 @@ test('stars save defaults directly; checkboxes keep favorites independent on des
     function Picker() {
       const [session, setSession] = useState({ engine:'codex', model:'a', effort:'high', mode:'ask', speed:'' });
       const [options, setOptions] = useState({ models:['a','b'], more:['c'], labels:{a:'Model A',b:'Model B',c:'Model C'},
-        default:'a', efforts:['low','high','xhigh'], speeds:['fast'],
+        default:'a', effort:'low', efforts:['low','high','xhigh'],
+        effortsByModel:{a:['low','high','xhigh'], b:['low'], c:[]}, speeds:['fast'],
         modes:[{id:'ask',label:'Ask'},{id:'yolo',label:'YOLO',danger:true}], defaultMode:'ask',
-        defaults:{effort:'xhigh', mode:'ask',speed:'fast'}, favs:['a'] });
+        defaults:{effort:'xhigh', mode:'ask',speed:'fast'}, favs:['a'], effortFavs:[] });
       const controls = Controls({ options, session,
         onPick:(kind,id)=>{ window.picks = (window.picks ?? 0)+1; setSession(s=>({...s,[kind]:id})); },
         onFavs:favs=>setOptions(o=>({...o,favs})),
+        onEffortFavs:(model,levels)=>setOptions(o=>({...o,effortFavs:levels.map(level=>JSON.stringify([model,level]))})),
         onDefault:async(kind,id)=>{
           if (window.failSave) throw new Error('Save failed; try again');
           window.saved = {kind,id};
@@ -86,8 +88,9 @@ test('stars save defaults directly; checkboxes keep favorites independent on des
       await page.locator('button[title^="thinking:"]').click();
       assert.equal(await page.getByRole('option',{name:'high',exact:true}).getAttribute('aria-selected'),'true');
       await page.getByRole('button',{name:'Use low by default for new chats',exact:true}).click();
-      await page.locator('.modesheet').waitFor({state:'detached'});
-      await page.locator('button[title^="thinking:"]').click();
+      await page.getByRole('checkbox',{name:'Favorite high',exact:true}).check();
+      assert.equal(await page.locator('.modesheet').count(),1);
+      assert.equal(await page.getByRole('checkbox',{name:'Favorite low',exact:true}).isChecked(),false);
       assert.equal(await page.getByRole('button',{name:'low is the default for new chats'}).getAttribute('aria-pressed'),'true');
       assert.equal(await page.getByRole('option',{name:'high',exact:true}).getAttribute('aria-selected'),'true');
       assert.equal(await page.evaluate(()=>window.picks ?? 0),0);
@@ -97,12 +100,14 @@ test('stars save defaults directly; checkboxes keep favorites independent on des
       await page.getByRole('button',{name:'Use Model C by default for new chats'}).count().then(n=>assert.equal(n,0));
       await page.getByRole('button',{name:/1 more/}).click();
       await page.getByRole('button',{name:'Use Model C by default for new chats'}).click();
-      await page.locator('.modesheet').waitFor({state:'detached'});
-      await page.locator('button[title^="model:"]').click();
-      await page.getByRole('button',{name:/1 more/}).click();
+      assert.equal(await page.locator('.modesheet').count(),1);
       assert.equal(await page.getByRole('checkbox',{name:'Favorite Model B'}).isChecked(),true);
       assert.equal(await page.getByRole('checkbox',{name:'Favorite Model C'}).isChecked(),false);
       assert.equal(await page.getByRole('option',{name:'Model A',exact:true}).getAttribute('aria-selected'),'true');
+      assert.equal(await page.evaluate(()=>window.picks ?? 0),0);
+      await page.getByRole('checkbox',{name:'Favorite Model B'}).uncheck();
+      assert.equal(await page.getByRole('button',{name:'Model C is the default for new chats'}).getAttribute('aria-pressed'),'true');
+      await page.getByRole('checkbox',{name:'Favorite Model B'}).check();
       await page.getByPlaceholder('search all models').fill('Model B');
       assert.equal(await page.getByText('no matches',{exact:true}).count(),0);
       const bounds = await page.getByRole('checkbox',{name:'Favorite Model B'}).boundingBox();
@@ -117,6 +122,25 @@ test('stars save defaults directly; checkboxes keep favorites independent on des
       await page.evaluate(()=>{window.failSave = false});
       await page.getByRole('button',{name:'Use Normal by default for new chats'}).click();
       assert.deepEqual(await page.evaluate(()=>window.saved),{kind:'speed',id:''});
+      assert.equal(await page.locator('.modesheet').count(),1);
+      await page.getByRole('option',{name:'Normal the usual tier',exact:true}).click();
+      await page.locator('.modesheet').waitFor({state:'detached'});
+      await page.locator('button[title^="model:"]').click();
+      await page.getByRole('option',{name:'Model B',exact:true}).click();
+      await page.locator('.modesheet').waitFor({state:'detached'});
+      assert.equal(await page.evaluate(()=>window.picks ?? 0),1);
+      assert.equal(await page.locator('button[title="thinking: low"]').count(),1);
+      await page.locator('button[title^="thinking:"]').click();
+      assert.equal(await page.getByRole('checkbox',{name:'Favorite low',exact:true}).isChecked(),false);
+      assert.equal(await page.getByRole('option',{name:'high',exact:true}).count(),0);
+      await page.locator('button[title^="model:"]').click();
+      await page.getByRole('option',{name:'Model A',exact:true}).click();
+      await page.locator('button[title^="thinking:"]').click();
+      assert.equal(await page.getByRole('checkbox',{name:'Favorite high',exact:true}).isChecked(),true);
+      await page.locator('button[title^="model:"]').click();
+      await page.getByRole('button',{name:/1 more/}).click();
+      await page.getByRole('option',{name:'Model C',exact:true}).click();
+      assert.equal(await page.locator('button[title^="thinking:"]').count(),0);
       await page.close();
     }
   } finally { await browser.close(); }

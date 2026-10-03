@@ -154,3 +154,25 @@ test('opencode: no fallback list means an unadvertised palette is empty', async 
   assert.deepEqual(await driver.availableCommands(), []);
   await driver.kill();
 });
+
+test('opencode: model changes replace effort options and clear models without effort', async (t) => {
+  const fake = fakeCli('opencode', 'model-efforts');
+  const driver = new OpencodeDriver({ cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'ask' });
+  t.after(() => driver.kill());
+  const log = collect(driver);
+  await driver.start();
+  assert.deepEqual(driver.catalog().efforts, ['low', 'high', 'max']);
+  await driver.setModel('provider/light');
+  assert.deepEqual(driver.catalog().efforts, ['low', 'medium']);
+  assert.equal(driver.catalog().effort, 'low');
+  assert.equal(driver.effort, 'low');
+  assert.ok(log.of('settings').some((e) => e.effort === 'low'));
+  await driver.setModel('provider/plain');
+  assert.deepEqual(driver.catalog().efforts, []);
+  assert.equal(driver.effort, null);
+  assert.ok(log.of('settings').some((e) => Object.hasOwn(e, 'effort') && e.effort === null));
+  await driver.setModel('provider/heavy');
+  assert.deepEqual(driver.catalog().efforts, ['low', 'high', 'max']);
+  assert.equal(driver.catalog().effort, 'high');
+  assert.equal(driver.effort, 'high');
+});

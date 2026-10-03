@@ -4,6 +4,7 @@ import { join, basename } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { HOME, expand, collapse } from './paths.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
+import { sessionActivity } from './transcript.js';
 
 /**
  * Sessions that already exist on this machine, whether or not helm started
@@ -170,7 +171,7 @@ async function codex(home, account) {
         engine: 'codex',
         account,
         id: p.session_id ?? p.id,
-        title: titles.get(p.session_id) || basename(p.cwd ?? '') || 'codex session',
+        title: titles.get(p.session_id ?? p.id) || basename(p.cwd ?? '') || 'codex session',
         cwd: collapse(p.cwd ?? HOME),
         updatedAt: f.mtime,
         // Kept machine-side by the inventory RPC. Sessions uses the exact
@@ -764,7 +765,10 @@ export async function inventory(profiles = []) {
     else if (p.engine === 'muse') jobs.push(muse(home, p.id));
   }
 
-  const all = (await Promise.all(jobs)).flat();
+  const all = (await Promise.allSettled(jobs)).flatMap((r) => r.status === 'fulfilled' ? r.value : []);
+  await Promise.all(all.map(async (s) => Object.assign(s, await sessionActivity({
+    engine: s.engine, path: s.transcript, sessionId: s.id, active: s.active, updatedAt: s.updatedAt,
+  }))));
   // The sqlite readers scan shared data dirs, so a second account of the same
   // engine returns the same rows; the id, not the account, says which they are.
   const known = new Set();
