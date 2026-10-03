@@ -45,6 +45,7 @@ export const T = {
   // ever accepts an inbound connection.
   TUNNEL_OPEN: 'tunnel.open',     // initiator -> relay -> target { sid, env, port }
   TUNNEL_READY: 'tunnel.ready',   // target -> relay -> initiator { sid }
+  TUNNEL_ACK: 'tunnel.ack',       // { sid, bytes } cumulative bytes written; negotiated flow=1
   TUNNEL_DATA: 'tunnel.data',     // both ways { sid, data:<base64> }
   TUNNEL_CLOSE: 'tunnel.close',   // both ways { sid, reason? }
 

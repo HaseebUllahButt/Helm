@@ -31,6 +31,7 @@ import { hubRpc } from './hub-client.js';
 import { transcribe, canTranscribe } from './voice.js';
 import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
 import { Handoffs } from './handoffs.js';
+import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { selfUpdate, currentVersion, autoUpdate } from './update.js';
 import * as gitq from './git.js';
@@ -178,7 +179,7 @@ class Link {
       clearInterval(this.#beat);
       if (this.#stopped) return;
       if (was) console.log(`[helm] lost ${this.url}; retrying`);
-      if (was) this.daemon.linkDown?.();
+      if (was) this.daemon.linkDown?.(this);
       setTimeout(() => this.#open(), this.#backoff).unref?.();
       this.#backoff = Math.min(this.#backoff * 2, RECONNECT_MAX);
     });
@@ -388,7 +389,16 @@ export class Daemon {
     this.#offlineSince = null;
   }
 
-  linkDown() { this.#noteRemote(false); }
+  linkDown(link) {
+    this.#noteRemote(false);
+    for (const [key, tunnel] of this.#tunnels) {
+      if (tunnel.link !== link) continue;
+      tunnel.sender?.stop();
+      tunnel.receiver?.stop();
+      tunnel.sock.destroy();
+      this.#tunnels.delete(key);
+    }
+  }
 
   /**
    * Every machine's own line in the digest, gathered and written down.
@@ -1003,10 +1013,13 @@ export class Daemon {
       case T.TUNNEL_OPEN:
         return this.#openTunnel(link, msg);
 
+      case T.TUNNEL_ACK:
+        this.#tunnels.get(this.#key(link, msg.sid))?.sender?.ack(msg.bytes);
+        return;
       case T.TUNNEL_DATA: {
-        this.#tunnels
-          .get(this.#key(link, msg.sid))
-          ?.sock.write(Buffer.from(msg.data, 'base64'));
+        const tunnel = this.#tunnels.get(this.#key(link, msg.sid));
+        if (tunnel?.receiver) tunnel.receiver.write(msg.data);
+        else tunnel?.sock.write(Buffer.from(msg.data, 'base64'));
         return;
       }
 
@@ -1058,26 +1071,39 @@ export class Daemon {
    * interface. This is how ssh reaches a box behind NAT: the daemon already
    * holds the outbound connection, so nothing has to accept an inbound one.
    */
-  #openTunnel(link, { sid, port }) {
+  #openTunnel(link, { sid, port, flow }) {
     const wanted = Number(port) || 22;
     if (!this.#allowedTunnelPorts().includes(wanted)) {
       return link.send(T.TUNNEL_CLOSE, { sid, reason: 'port not allowed' });
     }
     const key = this.#key(link, sid);
     const sock = tcpConnect({ host: '127.0.0.1', port: wanted });
-    this.#tunnels.set(key, { sock, link });
-
-    sock.on('connect', () => link.send(T.TUNNEL_READY, { sid }));
-    sock.on('data', (chunk) =>
-      link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') })
-    );
-    const end = (reason) => {
+    const tunnel = { sock, link };
+    this.#tunnels.set(key, tunnel);
+    const end = reason => {
+      tunnel.sender?.stop();
+      tunnel.receiver?.stop();
       if (!this.#tunnels.delete(key)) return;
       link.send(T.TUNNEL_CLOSE, { sid, reason });
       sock.destroy();
     };
-    sock.on('error', (err) => end(err.message));
-    sock.on('close', () => end('closed'));
+    sock.on('connect', () => {
+      const negotiated = flow === 1;
+      link.send(T.TUNNEL_READY, { sid, ...(negotiated ? { flow: 1 } : {}) });
+      if (negotiated) {
+        tunnel.receiver = new TunnelReceiver(sock,
+          bytes => link.send(T.TUNNEL_ACK, { sid, bytes }), err => end(err.message));
+        tunnel.sender = new TunnelSender(sock,
+          chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }), err => end(err.message));
+      } else {
+        sock.on('data', chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }));
+      }
+    });
+    sock.on('error', err => end(err.message));
+    sock.on('close', () => {
+      if (tunnel.sender && this.#tunnels.has(key)) tunnel.sender.finish(() => end('closed'));
+      else end('closed');
+    });
   }
 
   // --------------------------------------------------------------- dispatch

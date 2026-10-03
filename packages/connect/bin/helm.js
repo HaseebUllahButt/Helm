@@ -96,6 +96,10 @@ const usage = () => {
     --include-env                   carry .env files too, written owner-only there
     --dry-run                       report what a send would carry - no grant needed
     --allow-skipped                 send even though some files stay behind
+  helm copy <machine> <folder> --target-folder <absolute-path>
+                                  resumable full folder copy over SSH; needs rsync on both ends
+    --exclude <pattern>             omit caches or dependencies (repeatable)
+    --dry-run                       preview the copy, including hidden files
   helm verify <folder> [-- cmd...]  inspect what a received folder still needs
 
   helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
@@ -1929,6 +1933,10 @@ try {
     case 'transfer':
     case 'dispatch':
       await handoff();
+      break;
+
+    case 'copy':
+      await (await import('../src/copy.js')).copyFolder(rest);
       break;
 
     case 'send':

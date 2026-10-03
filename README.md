@@ -397,3 +397,29 @@ npm run test:browser
 To use an installed Chromium instead, run
 `HELM_TEST_CHROMIUM=/usr/bin/chromium npm run test:browser`.
 These checks use isolated fixtures and do not connect to your Helm network.
+
+### Large folder copies
+
+`helm copy` streams a complete directory over SSH, using a reachable direct
+address once the machine's SSH host key has been pinned. Otherwise it uses the
+Helm hub. Both computers need `rsync` and an accessible SSH server; this command
+does not install or enable system services.
+
+```sh
+helm copy why ./my-project --target-folder /home/haseeb/dev/my-project --dry-run
+helm copy why ./my-project --target-folder /home/haseeb/dev/my-project --exclude node_modules --exclude .cache
+```
+
+Unlike the filtered, size-limited code handoff, this copies hidden files and Git
+history too. Existing matching files can be replaced; unrelated destination
+files are not deleted. Use `--exclude .env` when environment files should stay
+here. Rerun the same command after interruption: completed files are skipped and
+partial files are reused. Compression streams in memory, without writing an
+archive on either disk. Filesystem permissions, symlinks and timestamps are
+preserved; source files are retained.
+
+Updated SSH tunnels negotiate a 512 KiB window per direction. The receiver
+acknowledges data after writing it, so a fast sender cannot grow an unlimited
+hub queue while a destination is slow. Old peers remain compatible through the
+legacy tunnel path; update both ends and the hub to get flow control. A running
+SSH connection is never silently replayed on a different route after failure.
