@@ -104,6 +104,7 @@ class Link {
     this.#beat = setInterval(() => {
       if (this.#waiting) {
         // A close event follows, and with it the usual reconnect.
+        console.warn(`[helm] ${this.url}: heartbeat timed out`);
         try { this.#ws?.terminate(); } catch { /* already gone */ }
         return;
       }
@@ -177,12 +178,12 @@ class Link {
       );
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code, reason) => {
       const was = this.connected;
       this.connected = false;
       clearInterval(this.#beat);
       if (this.#stopped) return;
-      if (was) console.log(`[helm] lost ${this.url}; retrying`);
+      if (was) console.log(`[helm] lost ${this.url} (${code}${reason?.length ? `: ${reason}` : ''}); retrying`);
       if (was) this.daemon.linkDown?.(this);
       setTimeout(() => this.#open(), this.#backoff).unref?.();
       this.#backoff = Math.min(this.#backoff * 2, RECONNECT_MAX);

@@ -707,7 +707,10 @@ export function createWsLayer() {
     for (const sock of wss.clients) {
       const sub = sock.envId ?? sock.sub;
       if (net && sub && net.revoked[sub]) { kick(sub); continue; }
-      if (!sock.isAlive) { sock.terminate(); continue; }
+      if (!sock.isAlive) {
+        console.warn(`[helm] heartbeat timed out for ${sock.envId ?? sock.sub ?? 'connection'}`);
+        sock.terminate(); continue;
+      }
       sock.isAlive = false;
       sock.ping();
     }
