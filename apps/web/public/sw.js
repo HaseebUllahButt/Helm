@@ -8,8 +8,8 @@
  */
 // Bump this whenever the shell changes so an installed PWA cannot stay on a
 // previous bundle forever when its page has been left open for days.
-const CACHE = 'helm-shell-v16';
-const NAVIGATION_TIMEOUT_MS = 1200;
+const CACHE = 'helm-shell-v17';
+const NAVIGATION_TIMEOUT_MS = 250;
 /**
  * Hashed bundles live apart from the shell: their names change every deploy,
  * so they only ever accumulate. Capped by count, oldest out, since a worker
@@ -91,11 +91,11 @@ self.addEventListener('fetch', (event) => {
       });
       try {
         const response = await Promise.race([network, deadline]);
-        if (response) return response;
+        if (response?.ok) return response;
         const cached = await cachedShell();
         // A first visit has no shell to show. Keep the pending request alive
         // rather than turning a slow connection into an immediate failure.
-        return cached ?? await network;
+        return cached ?? response ?? await network;
       } catch {
         return (await cachedShell()) ?? Response.error();
       } finally {
@@ -107,21 +107,23 @@ self.addEventListener('fetch', (event) => {
 
   // A hashed bundle never changes under its name: cache-first, forever.
   if (url.pathname.startsWith('/assets/')) {
+    let cacheWrite = Promise.resolve();
+    const result = caches.match(request).then((hit) => hit ?? fetch(request).then((res) => {
+      if (res.ok && res.type === 'basic') {
+        const copy = res.clone();
+        cacheWrite = caches.open(ASSETS).then(async (c) => {
+          await c.put(request, copy);
+          const keys = await c.keys();
+          for (const k of keys.slice(0, Math.max(0, keys.length - MAX_ASSETS))) await c.delete(k);
+        }).catch(() => {});
+      }
+      return res;
+    }));
+    // Closing the PWA immediately after load must not interrupt its cache
+    // write and leave a saved index referring to an uncached entry bundle.
+    event.waitUntil(result.then(() => cacheWrite).catch(() => {}));
     event.respondWith(
-      caches.match(request).then((hit) =>
-        hit ??
-        fetch(request).then((res) => {
-          if (res.ok && res.type === 'basic') {
-            const copy = res.clone();
-            caches.open(ASSETS).then(async (c) => {
-              await c.put(request, copy);
-              const keys = await c.keys();
-              for (const k of keys.slice(0, Math.max(0, keys.length - MAX_ASSETS))) await c.delete(k);
-            }).catch(() => {});
-          }
-          return res;
-        })
-      )
+      result
     );
     return;
   }

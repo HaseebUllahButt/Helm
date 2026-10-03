@@ -213,3 +213,59 @@ test('a window starting with a queued ticket also carries its still-running host
   assert.equal(state.turns.find(t => t.id === 'local-next')?.queued, true);
   assert.equal(state.turns.find(t => t.id === 'host')?.items[0].text, 'Still working on the original');
 });
+
+test('retention preserves the real owner and item of a turn longer than 2000 events, including restart', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-retain-'));
+  const log = new EventLog(dir);
+  log.append('s', { type: 'turn.start', turnId: 'host', text: 'long original task' });
+  log.append('s', { type: 'item.start', id: 'reply', turnId: 'host', kind: 'text' });
+  for (let i = 0; i < 2100; i++) log.append('s', { type: 'item.delta', id: 'reply', text: 'x' });
+  log.append('s', { type: 'turn.start', turnId: 'local-next', text: 'also check this', queued: true });
+  log.append('s', { type: 'turn.deliver', turnId: 'local-next' });
+  log.append('s', { type: 'turn.accept', turnId: 'local-next' });
+  log.append('s', { type: 'item.delta', id: 'reply', text: ' latest answer' });
+  for (const instance of [log, new EventLog(dir), new EventLog(dir)]) {
+    const window = instance.window('s', { tail: 200 }), state = emptyLog();
+    for (const event of window.events) apply(state, event);
+    const host = state.turns.find(t => t.id === 'host');
+    assert.equal(host?.text, 'long original task');
+    assert.ok(host?.items.find(i => i.id === 'reply')?.text.endsWith(' latest answer'));
+    assert.equal(state.turns.find(t => t.id === 'local-next')?.queued, false);
+    assert.equal(window.logFirst, instance.last('s') - 1999);
+    assert.ok(window.firstSeq >= window.logFirst);
+    assert.ok(window.events[0].seq < window.logFirst, 'sparse anchors remain separate from retained history');
+    assert.deepEqual(instance.window('s', { before: window.logFirst }).events, []);
+  }
+});
+
+test('disk compaction retains compact item anchors without carrying old tool payloads', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-compact-'));
+  const rows = [
+    { seq: 1, type: 'turn.start', turnId: 'host', text: 'check files' },
+    { seq: 2, type: 'item.start', id: 'edit', turnId: 'host', kind: 'edit', changes: [{ diff: 'z'.repeat(500_000) }] },
+    ...Array.from({ length: 2100 }, (_, i) => ({ seq: i + 3, type: 'item.update', id: 'edit', status: 'streaming' })),
+  ];
+  writeFileSync(join(dir, 's.jsonl'), rows.map(e => JSON.stringify(e)).join('\n') + '\n');
+  const log = new EventLog(dir), kept = log.since('s');
+  assert.equal(kept.length, 2002);
+  assert.equal(kept.find(e => e.type === 'item.start')?.changes, undefined);
+  assert.ok(readFileSync(join(dir, 's.jsonl'), 'utf8').length < 200_000);
+  const reopened = new EventLog(dir), window = reopened.window('s', { tail: 10 }), state = emptyLog();
+  for (const event of window.events) apply(state, event);
+  assert.equal(state.turns[0].items[0].id, 'edit');
+  assert.equal(window.logFirst, 103);
+});
+
+test('old owner anchors disappear when no retained event needs them', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-bound-')), log = new EventLog(dir);
+  for (let turn = 0; turn < 3; turn++) {
+    log.append('s', { type: 'turn.start', turnId: `t${turn}`, text: 'task' });
+    log.append('s', { type: 'item.start', id: `reply${turn}`, turnId: `t${turn}`, kind: 'text' });
+    for (let i = 0; i < 2100; i++) log.append('s', { type: 'item.delta', id: `reply${turn}`, text: 'x' });
+    log.append('s', { type: 'turn.done', turnId: `t${turn}`, status: 'ok' });
+  }
+  const events = log.since('s');
+  assert.equal(events.length, 2002);
+  assert.deepEqual(events.filter(e => e.type === 'turn.start').map(e => e.turnId), ['t2']);
+  assert.equal(new EventLog(dir).since('s').length, 2002);
+});

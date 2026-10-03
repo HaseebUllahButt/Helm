@@ -146,6 +146,18 @@ fresh install. The old `helm join CODE https://home.example` format still works.
 
 ## Mobile PWA
 
+Recently opened chats and their machine/thread lists are saved on the device.
+Reopening paints that saved view before refreshing it; a disconnected view is
+labelled as saved and catches up when the app resumes or a route recovers.
+The device retains up to 25 event-log chats and 50 imported transcripts, with
+a bounded in-memory cache for quick switching. Older uncached chats still
+need a reachable machine, and browser storage eviction can remove saved data.
+
+Slow or stuck sockets reconnect automatically. Read-only chat snapshots can
+also use authenticated HTTP when WebSockets are blocked, trying another known
+hub when necessary. Prompts, approvals, and other actions require a live
+transport and are never automatically replayed over the fallback.
+
 On Android/Chrome: open the pairing link, pair, then choose **Install Helm
 app**. The installed app keeps the pairing.
 

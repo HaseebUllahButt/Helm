@@ -308,7 +308,12 @@ export interface Message {
   at?: string | number;
 }
 
-type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
+type RpcRoute = 'direct' | 'relay' | 'http';
+type Pending = {
+  resolve: (v: any) => void; reject: (e: Error) => void;
+  direct?: Peer; env?: string; hedged?: boolean;
+  routes?: Set<RpcRoute>;
+};
 type Listener = (env: string, kind: string, payload: any) => void;
 
 const ICE_SERVERS = [
@@ -322,6 +327,7 @@ interface Peer {
   channel: RTCDataChannel;
   ready: boolean;
   fragments: Map<string, { n: number; parts: string[]; got: number }>;
+  deadline?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -333,6 +339,12 @@ interface Peer {
  */
 const DC_CHUNK_AT = 16_000;
 const DC_CHUNK_TYPE = 'dc-chunk';
+// Kept deliberately narrow, matching the hub's authenticated /api/read route.
+// Prompts, approvals and other mutations must never acquire replay semantics.
+const HTTP_READ_METHODS = new Set([
+  'session.events', 'session.messages', 'session.list', 'model.list',
+  'session.commands', 'env.info', 'session.watch', 'session.unwatch',
+]);
 
 function sendDirect(channel: RTCDataChannel, frame: string): boolean {
   try {
@@ -459,6 +471,8 @@ function startProbes(endpoints: string[], token: string, timeout: number) {
   // `learn()` uses this to tell a stale address from a sleeping one.
   const answered = new Set<string>();
   const up: Reached[] = [];
+  let first!: () => void;
+  const firstReached = new Promise<void>((resolve) => { first = resolve; });
 
   const probes = endpoints.map(async (base) => {
     const ctl = new AbortController();
@@ -478,11 +492,13 @@ function startProbes(endpoints: string[], token: string, timeout: number) {
         reach: (body.machines ?? []).filter((m: Environment) => m.online).length,
         elapsed: performance.now() - started,
       });
+      first();
     } catch { /* unreachable, or too slow even for our patience */ }
     finally { clearTimeout(timer); }
   });
 
   return {
+    firstReached,
     settled: Promise.allSettled(probes),
     result(): ProbeResult {
       const ranked = up.slice().sort(byReach);
@@ -508,9 +524,18 @@ function startProbes(endpoints: string[], token: string, timeout: number) {
  */
 function probeInTwoPhases(endpoints: string[], token: string, settleAfter = PROBE_MS) {
   const round = startProbes(endpoints, token, PROBE_PATIENCE_MS);
-  const deadline = new Promise<void>((resolve) => setTimeout(resolve, settleAfter));
+  let deadlineTimer: ReturnType<typeof setTimeout>;
+  let graceTimer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<void>((resolve) => { deadlineTimer = setTimeout(resolve, settleAfter); });
+  // One sleeping address must not impose a 2.5s delay on a healthy local hub.
+  // Give near-simultaneous replies a brief chance to offer greater reach.
+  const first = round.firstReached.then(() => new Promise<void>((resolve) => { graceTimer = setTimeout(resolve, 150); }));
   return {
-    soon: Promise.race([round.settled, deadline]).then(() => round.result()),
+    soon: Promise.race([round.settled, deadline, first]).then(() => {
+      clearTimeout(deadlineTimer); clearTimeout(graceTimer);
+      return round.result();
+    }),
+    available: Promise.race([round.firstReached, round.settled]).then(() => round.result()),
     later: round.settled.then(() => round.result()),
   };
 }
@@ -524,6 +549,12 @@ export class Client {
   private backoff = 500;
   private closed = false;
   private connecting = false;
+  private connectVersion = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private disconnectSocket: ((reason: string, retry?: boolean) => void) | null = null;
+  private probeSocket: (() => void) | null = null;
+  private failedHubs = new Map<string, number>();
+  private httpReads = new Set<() => void>();
   private peers = new Map<string, Peer>();
   private presencePoll: ReturnType<typeof setInterval> | null = null;
   private onVisible = () => {
@@ -531,6 +562,7 @@ export class Client {
     // Picking the phone back up. It may well be on a different network than
     // it was when you put it down, so anything relaying is worth another go.
     this.retryDirectNow();
+    this.probeSocket?.();
     // Coming back to the foreground: the socket is almost certainly dead and
     // the backoff timer may be ten seconds out. Try now.
     if (!this.connected && !this.connecting) {
@@ -549,12 +581,25 @@ export class Client {
   private onNetworkChange = () => {
     if (this.closed) return;
     this.backoff = 500;
+    this.preferred = null;
+    this.failedHubs.clear();
     // Moving between networks is exactly when a direct connection that was
     // impossible becomes possible - the phone that just joined the wifi the
     // machine is on. Do not make it wait out a backoff to find that out.
-    this.retryDirectNow();
-    if (this.connected) this.ws?.close(4001, 'network changed');
-    else if (!this.connecting) this.connect().catch(() => {});
+    for (const env of [...this.peers.keys()]) this.dropDirect(env);
+    this.connectVersion++;
+    this.disconnectSocket?.('network changed', false);
+    this.connecting = false;
+    this.connect().catch(() => {});
+  };
+  private onOffline = () => {
+    if (this.closed) return;
+    this.connectVersion++;
+    for (const env of [...this.peers.keys()]) this.dropDirect(env);
+    this.disconnectSocket?.('network offline', false);
+    this.connecting = false;
+    clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
+    this.emit('', 'connection', { online: false, reachable: false, hub: this.relay });
   };
   /** What the last connection attempt ran into, for the diagnostics line. */
   public lastError = '';
@@ -695,6 +740,9 @@ export class Client {
     }
     if (typeof window !== 'undefined') {
       window.addEventListener('online', this.onNetworkChange);
+      window.addEventListener('offline', this.onOffline);
+      window.addEventListener('pageshow', this.onVisible);
+      window.addEventListener('focus', this.onVisible);
     }
   }
 
@@ -707,8 +755,11 @@ export class Client {
     if (this.presencePoll) return;
     this.presencePoll = setInterval(() => {
       if (this.connected || this.closed || document.hidden) return;
+      const version = this.connectVersion;
       this.environments()
         .then((r) => {
+          // This snapshot may have been in flight while a new socket opened.
+          if (this.closed || this.connected || version !== this.connectVersion) return;
           for (const env of r.environments) {
             this.emit(env.id, 'presence', { env: env.id, online: env.online, info: env.info, name: env.name });
           }
@@ -734,13 +785,18 @@ export class Client {
    * end up showing "retrying" forever while retrying nothing.
    */
   private scheduleReconnect() {
-    if (this.closed) return;
-    setTimeout(() => this.connect().catch(() => {}), this.backoff);
+    if (this.closed || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      this.connect().catch(() => {});
+    }, this.backoff);
     this.backoff = Math.min(this.backoff * 2, 15_000);
   }
 
   async connect(): Promise<void> {
-    if (this.closed || this.connecting) return;
+    if (this.closed || this.connecting || this.connected) return;
+    clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
+    const version = ++this.connectVersion;
     this.connecting = true;
 
     let hub: string | null = null;
@@ -748,7 +804,12 @@ export class Client {
     try {
       // What was actually tried, and what actually answered. `learn()` needs
       // both: an address it skipped is not an address that failed.
-      const tried = this.endpoints.filter(reachableFromHere);
+      const candidates = this.endpoints.filter(reachableFromHere);
+      const healthy = candidates.filter(base => (this.failedHubs.get(base) ?? 0) <= Date.now());
+      // HTTP can work where WebSocket upgrades fail. Give another hub a
+      // chance after a broken socket instead of selecting the same HTTP
+      // winner forever. With only one option, continue trying that option.
+      const tried = healthy.length ? healthy : candidates;
       this.tried = new Set(tried);
 
       // A hub already known to see more of the network than its neighbours is
@@ -768,8 +829,12 @@ export class Client {
       }
 
       if (!hub) {
-        const { soon, later } = probeInTwoPhases(tried, this.token);
-        const probe = await soon;
+        const { soon, available, later } = probeInTwoPhases(tried, this.token);
+        let probe = await soon;
+        // A slow network is still a network. If no hub has answered yet,
+        // consume the same round's eventual answer instead of discarding it
+        // and repeating a 2.5s deadline that can never succeed.
+        if (!probe.best) probe = await available;
         ({ best: hub, unauthorized } = probe);
         this.answered = probe.answered;
 
@@ -782,18 +847,18 @@ export class Client {
         const settledOn = hub;
         const chosenReach = probe.reached.find((r) => r.base === settledOn)?.reach ?? 0;
         later.then((full) => {
-          if (this.closed || this.relay !== settledOn) return;
+          if (this.closed || version !== this.connectVersion || this.relay !== settledOn) return;
           const best = full.reached[0];
           if (!best || best.base === settledOn || best.reach <= chosenReach) return;
           this.preferred = best.base;
           this.relay = best.base;
           // Closing makes the socket's own onclose reconnect, which now goes
           // straight to the better hub through `preferred`.
-          this.ws?.close();
+          this.disconnectSocket?.('a better hub is available');
         }).catch(() => {});
       }
     } finally {
-      if (!hub) {
+      if (!hub && version === this.connectVersion && !this.closed) {
         this.connecting = false;
         if (unauthorized) {
           // Every machine that answered said no. The token is dead; say so
@@ -807,70 +872,102 @@ export class Client {
         }
       }
     }
+    if (version !== this.connectVersion) return;
     if (!hub) throw new Error('no machine in this network is reachable right now');
     if (this.closed) { this.connecting = false; return; }
     this.relay = hub;
 
     await new Promise<void>((resolve, reject) => {
       const url = `${hub.replace(/^http/, 'ws')}/ws`;
-      // The token rides in the WebSocket subprotocol list rather than the
-      // query string, so it never lands in Caddy or tunnel access logs. The
-      // server answers with the plain "helm" protocol.
+      // Keep credentials out of URLs and access logs.
       const ws = new WebSocket(url, ['helm', this.token]);
       this.ws = ws;
-
-      ws.onopen = () => {
-        this.connecting = false;
-        this.backoff = 500;
-        this.lastError = '';
-        this.stopPresencePoll();
-        for (const env of this.subscribed) {
-          ws.send(JSON.stringify({ t: 'subscribe', env }));
-        }
-        this.emit('', 'connection', { online: true, hub });
-        settle();
-      };
-
-      ws.onmessage = (ev) => {
-        const msg = JSON.parse(ev.data);
-        if (msg.t === 'rpcResult') {
-          const p = this.pending.get(msg.id);
-          if (!p) return;
-          this.pending.delete(msg.id);
-          msg.ok ? p.resolve(msg.result) : p.reject(new Error(msg.error?.message ?? 'failed'));
-          return;
-        }
-        if (msg.t === 'event') this.deliver(msg.env, msg.kind, msg.payload, msg.eid);
-        if (msg.t === 'presence') this.emit(msg.env, 'presence', msg);
-        if (msg.t === 'signal') this.onSignal(msg.env, msg.payload);
-      };
-
-      let settled = false;
+      let settled = false, stopped = false;
+      let lastReceived = Date.now(), awaiting = false;
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
       const settle = (err?: Error) => {
         if (settled) return;
         settled = true;
         err ? reject(err) : resolve();
       };
-
-      ws.onerror = () => settle(new Error('could not reach any machine'));
-      ws.onclose = (ev) => {
-        this.connecting = false;
-        // A deliberate close must not restart the reconnect loop.
-        if (this.closed) return;
-        this.lastError = `socket closed (${ev.code}${ev.reason ? ` ${ev.reason}` : ''})`;
-        // The hub answered HTTP a moment ago, so machines are reachable even
-        // though the socket is not; say that, and keep presence fresh.
-        this.emit('', 'connection', { online: false, reachable: true, hub, error: this.lastError });
-        this.startPresencePoll();
-        // Every in-flight call is now unanswerable; fail them rather than
-        // leaving the UI spinning forever.
-        for (const p of this.pending.values()) p.reject(new Error('disconnected'));
-        this.pending.clear();
-        // Re-race on every retry rather than clinging to the hub that just
-        // dropped: the usual reason it went away is that we moved networks,
-        // and a different machine is now the reachable one.
-        this.scheduleReconnect();
+      const stop = (reason: string, retry = true) => {
+        if (stopped) return;
+        stopped = true;
+        clearTimeout(handshake); clearInterval(heartbeat);
+        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
+        if (this.ws === ws) {
+          this.ws = null;
+          this.connecting = false;
+          this.disconnectSocket = this.probeSocket = null;
+          this.lastError = reason;
+          if (retry && reason !== 'a better hub is available') this.failedHubs.set(hub, Date.now() + 15_000);
+          // A healthy direct route can still answer while the relay reconnects.
+          for (const [id, pending] of this.pending) {
+            pending.routes?.delete('relay');
+            if (pending.direct?.ready || pending.routes?.has('http')) continue;
+            this.pending.delete(id);
+            pending.reject(new Error('disconnected'));
+          }
+          if (!this.closed) {
+            this.emit('', 'connection', { online: false, reachable: true, hub, error: reason });
+            this.startPresencePoll();
+            if (retry) this.scheduleReconnect();
+          }
+        }
+        try { ws.close(); } catch { /* already closed */ }
+        settle(new Error(reason));
       };
+      // Browsers may leave an upgrade CONNECTING for minutes. HTTP having
+      // worked does not prove WebSocket upgrades work on this network.
+      const handshake = setTimeout(() => stop('socket connection timed out'), 10_000);
+      this.disconnectSocket = stop;
+      const beat = (force = false) => {
+        if (stopped || !this.connected || (!force && document.hidden)) return;
+        const idle = Date.now() - lastReceived;
+        if (awaiting && idle >= 15_000) { stop('connection stopped responding'); return; }
+        if (!awaiting && (force || idle >= 10_000)) {
+          awaiting = true;
+          // Measure the grace from the ping, not from the preceding idle gap.
+          lastReceived = Date.now();
+          try { ws.send(JSON.stringify({ t: 'ping' })); } catch { stop('connection stopped responding'); }
+        }
+      };
+      this.probeSocket = () => {
+        // Timers may have slept with the page. Give a fresh ping its full
+        // grace period instead of declaring a healthy socket dead on wake.
+        awaiting = false; lastReceived = Date.now(); beat(true);
+      };
+      ws.onopen = () => {
+        if (stopped || this.closed || this.ws !== ws || version !== this.connectVersion) { stop('connection superseded', false); return; }
+        clearTimeout(handshake);
+        this.connecting = false;
+        this.backoff = 500;
+        this.lastError = '';
+        this.failedHubs.delete(hub);
+        lastReceived = Date.now();
+        this.stopPresencePoll();
+        for (const env of this.subscribed) ws.send(JSON.stringify({ t: 'subscribe', env }));
+        heartbeat = setInterval(beat, 5000);
+        this.retryDirectNow();
+        this.emit('', 'connection', { online: true, hub });
+        settle();
+      };
+      ws.onmessage = (ev) => {
+        if (stopped || this.ws !== ws) return;
+        let msg: any;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+        lastReceived = Date.now(); awaiting = false;
+        if (msg.t === 'ping') { ws.send(JSON.stringify({ t: 'pong' })); return; }
+        if (msg.t === 'rpcResult') {
+          this.receiveRpc(msg, 'relay');
+          return;
+        }
+        if (msg.t === 'event') this.deliver(msg.env, msg.kind, msg.payload, msg.eid);
+        if (msg.t === 'presence') this.emit(msg.env, 'presence', msg);
+        if (msg.t === 'signal') this.onSignal(msg.env, msg.payload).catch(() => {});
+      };
+      ws.onerror = () => stop('could not reach any machine');
+      ws.onclose = (ev) => stop(`socket closed (${ev.code}${ev.reason ? ` ${ev.reason}` : ''})`);
     });
 
     // Machines come and go, and each one advertises fresh addresses as it
@@ -934,16 +1031,27 @@ export class Client {
   /** Tear everything down; used when the signed-in account changes. */
   close() {
     this.closed = true;
+    this.connectVersion++;
+    clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
+    this.disconnectSocket?.('client closed', false);
+    for (const cancel of this.httpReads) cancel();
+    for (const p of this.pending.values()) p.reject(new Error('client closed'));
+    this.pending.clear();
     this.stopPresencePoll();
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisible);
     }
     if (typeof window !== 'undefined') {
       window.removeEventListener('online', this.onNetworkChange);
+      window.removeEventListener('offline', this.onOffline);
+      window.removeEventListener('pageshow', this.onVisible);
+      window.removeEventListener('focus', this.onVisible);
     }
     this.wantDirect.clear();
     for (const timer of this.directRetry.values()) clearTimeout(timer);
     this.directRetry.clear();
+    for (const timer of this.rttTimers.values()) clearInterval(timer);
+    this.rttTimers.clear(); this.rttWatchers.clear();
     for (const env of [...this.peers.keys()]) this.dropDirect(env);
     try { this.ws?.close(); } catch { /* already closing */ }
   }
@@ -994,6 +1102,7 @@ export class Client {
   }
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
+    if (this.closed) return Promise.reject(new Error('client closed'));
     const peer = this.peers.get(env);
     // Tiny persistent settings writes should use the acknowledged hub route
     // when available. An apparently open peer can stop answering after a
@@ -1001,7 +1110,11 @@ export class Client {
     const settingsWrite = ['profile.defaults', 'model.prefs', 'picker.prefs'].includes(method);
     const direct = peer?.ready && peer.channel.readyState === 'open'
       && !(settingsWrite && this.connected);
-    if (!direct && !this.connected) return Promise.reject(new Error('not connected'));
+    if (!direct && !this.connected) {
+      return HTTP_READ_METHODS.has(method)
+        ? this.readHttp<T>(env, method, params, timeout)
+        : Promise.reject(new Error('not connected'));
+    }
 
     const id = `w${++this.seq}`;
     return new Promise<T>((resolve, reject) => {
@@ -1011,6 +1124,8 @@ export class Client {
       this.pending.set(id, {
         resolve: (value) => { clear(); resolve(value as T); },
         reject: (error) => { clear(); reject(error); },
+        ...(direct ? { direct: peer, env } : {}),
+        routes: new Set([direct ? 'direct' : 'relay']),
       });
       const frame = JSON.stringify({ t: 'rpc', id, env, method, params });
       // Prefer the direct channel: relaying costs two internet round trips
@@ -1020,6 +1135,8 @@ export class Client {
       let sent = false;
       if (direct) sent = sendDirect(peer!.channel, frame);
       if (!sent) {
+        const pending = this.pending.get(id);
+        if (pending) { pending.direct = undefined; pending.routes = new Set(['relay']); }
         if (!this.connected) {
           this.pending.delete(id);
           reject(new Error('not connected'));
@@ -1037,17 +1154,108 @@ export class Client {
       // A suspended laptop can leave a data channel looking open but silent.
       // These reads (and the idempotent view lease) are safe to race over the
       // hub too; never replay prompts, approvals, or other writes this way.
-      if (sent && ['session.events', 'session.watch', 'session.list', 'session.messages'].includes(method)) {
+      if (HTTP_READ_METHODS.has(method)) {
+        const hedgeAfter = Math.min(1500, timeout / 2);
+        const httpFallback = (elapsed: number) => {
+          const pending = this.pending.get(id);
+          if (!pending) return;
+          pending.hedged = true;
+          pending.routes?.add('http');
+          this.readHttp<T>(env, method, params, timeout - elapsed).then(
+            result => this.receiveRpc({ id, ok: true, result }, 'http'),
+            error => this.receiveRpc({ id, ok: false, error }, 'http'),
+          );
+        };
         fallback = setTimeout(() => {
-          if (!this.pending.has(id) || !this.connected) return;
-          try { this.ws!.send(frame); } catch { /* keep waiting for the original route */ }
-        }, Math.min(1500, timeout / 2));
+          const pending = this.pending.get(id);
+          if (!pending) return;
+          pending.hedged = true;
+          if (sent && this.connected) {
+            pending.routes?.add('relay');
+            try {
+              this.ws!.send(frame);
+              if (this.pending.has(id)) {
+                const httpAfter = Math.min(1500, (timeout - hedgeAfter) / 2);
+                fallback = setTimeout(() => httpFallback(hedgeAfter + httpAfter), httpAfter);
+              }
+              return;
+            } catch { pending.routes?.delete('relay'); }
+          }
+          // Some networks pass HTTPS but stall WebSocket traffic, and an
+          // apparently open peer can also survive a network change silently.
+          httpFallback(hedgeAfter);
+        }, hedgeAfter);
       }
       deadline = setTimeout(() => {
         clear();
         if (this.pending.delete(id)) reject(new Error(`${method} timed out`));
+        if (sent && peer) this.dropDirect(env, peer);
       }, timeout);
     });
+  }
+
+  private async readHttp<T>(env: string, method: string, params: any, timeout: number): Promise<T> {
+    if (this.closed) throw new Error('client closed');
+    const bases = [...new Set([this.relay, ...this.endpoints])].filter(Boolean).filter(reachableFromHere);
+    if (!bases.length) throw new Error('not connected');
+    const body = JSON.stringify({ env, method, params });
+    // A reconnect may find another hub while this read is already waiting on
+    // an obsolete relay. Race known, eligible endpoints with a short head
+    // start for the current one; authentication and the read-only body stay
+    // identical. Errors from one hub cannot defeat another hub's success.
+    return new Promise<T>((resolve, reject) => {
+      let settled = false, next = 0, active = 0;
+      let lastError: Error = new Error('not connected');
+      let stagger: ReturnType<typeof setTimeout> | undefined;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const controllers = new Set<AbortController>();
+      const done = (error?: Error, result?: T) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(stagger); clearTimeout(deadline);
+        this.httpReads.delete(cancel);
+        for (const controller of controllers) controller.abort();
+        error ? reject(error) : resolve(result as T);
+      };
+      const cancel = () => done(new Error('client closed'));
+      this.httpReads.add(cancel);
+      const launch = () => {
+        clearTimeout(stagger); stagger = undefined;
+        if (settled) return;
+        if (this.closed) { cancel(); return; }
+        if (next >= bases.length) { if (!active) done(lastError); return; }
+        const base = bases[next++], controller = new AbortController();
+        controllers.add(controller); active++;
+        this.httpAt<{ result: T }>(base, '/api/read', {
+          method: 'POST', body, signal: controller.signal,
+        }).then(reply => done(undefined, reply.result)).catch(error => {
+          if (settled) return;
+          lastError = error; active--;
+          controllers.delete(controller);
+          if (next < bases.length) launch();
+          else if (!active) done(lastError);
+        });
+        if (next < bases.length) stagger = setTimeout(launch, Math.min(400, Math.max(1, timeout / 2)));
+      };
+      deadline = setTimeout(() => done(new Error(`${method} timed out`)), timeout);
+      launch();
+    });
+  }
+
+  private receiveRpc(msg: any, route: RpcRoute) {
+    const pending = this.pending.get(msg.id);
+    if (!pending) return;
+    pending.routes?.delete(route);
+    // The relay may not see a machine that the direct route can reach. An
+    // early hedge error must not beat the other route's successful answer.
+    if (!msg.ok && pending.routes?.size) return;
+    this.pending.delete(msg.id);
+    msg.ok ? pending.resolve(msg.result) : pending.reject(new Error(msg.error?.message ?? 'failed'));
+    // Retire the unresponsive peer after its fallback succeeds, so the next
+    // chat does not pay the same hedge delay again.
+    if (msg.ok && route !== 'direct' && pending.hedged && pending.env && pending.direct) {
+      this.dropDirect(pending.env, pending.direct);
+    }
   }
 
   // ------------------------------------------------------------ direct path
@@ -1109,41 +1317,45 @@ export class Client {
     const channel = pc.createDataChannel('helm', { ordered: true });
     const peer: Peer = { pc, channel, ready: false, fragments: new Map() };
     this.peers.set(env, peer);
+    // Failed signalling can leave the browser's peer in "new" forever,
+    // which otherwise blocks every retry because peers.has(env) stays true.
+    peer.deadline = setTimeout(() => this.dropDirect(env, peer), 15_000);
 
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) this.signal(env, { type: 'candidate', candidate: candidate.toJSON() });
     };
     pc.onconnectionstatechange = () => {
       if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
-        this.dropDirect(env);
+        this.dropDirect(env, peer);
       }
     };
 
     channel.onopen = () => {
+      if (this.peers.get(env) !== peer || this.closed) return;
+      clearTimeout(peer.deadline);
       peer.ready = true;
       // It worked, so the next failure starts its backoff from scratch.
       this.directWait.delete(env);
       this.emit(env, 'transport', { direct: true });
     };
-    channel.onclose = () => this.dropDirect(env);
+    channel.onclose = () => this.dropDirect(env, peer);
     channel.onmessage = (ev) => {
       const raw = this.accumulate(peer, ev.data);
       if (raw == null) return;
       let msg: any;
       try { msg = JSON.parse(raw); } catch { return; }
       if (msg.t === 'rpcResult') {
-        const p = this.pending.get(msg.id);
-        if (!p) return;
-        this.pending.delete(msg.id);
-        msg.ok ? p.resolve(msg.result) : p.reject(new Error(msg.error?.message ?? 'failed'));
+        this.receiveRpc(msg, 'direct');
         return;
       }
       if (msg.t === 'event') this.deliver(env, msg.kind, msg.payload, msg.eid);
     };
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    this.signal(env, { type: 'offer', sdp: pc.localDescription!.sdp });
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      if (this.peers.get(env) === peer) this.signal(env, { type: 'offer', sdp: pc.localDescription!.sdp });
+    } catch { this.dropDirect(env, peer); }
   }
 
   /** Ids of events already handed on, so the second copy is ignored. */
@@ -1215,10 +1427,12 @@ export class Client {
     return entry.parts.join('');
   }
 
-  dropDirect(env: string) {
+  dropDirect(env: string, expected?: Peer) {
     const peer = this.peers.get(env);
-    if (!peer) return;
+    if (!peer || (expected && peer !== expected)) return;
     this.peers.delete(env);
+    peer.ready = false;
+    clearTimeout(peer.deadline);
     try { peer.channel.close(); peer.pc.close(); } catch { /* already gone */ }
     this.emit(env, 'transport', { direct: false });
     // Losing it is not the end of trying for it.

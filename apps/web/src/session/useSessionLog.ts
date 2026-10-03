@@ -45,6 +45,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     let paint: ReturnType<typeof setTimeout> | undefined;
     let writer: ReturnType<typeof setTimeout> | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    let cacheHeadStart: ReturnType<typeof setTimeout> | undefined;
     const buffered = new Map<number, HelmEvent>();
     const watchId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setState(log); setError(''); setSyncing(true); setEarlier(false); setLoadingEarlier(false);
@@ -93,7 +94,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
       if (advanced) changed();
     };
 
-    const refresh = async () => {
+    const refresh = async (prefetched?: History) => {
       if (stopped || !initialized || fetching) return;
       fetching = true;
       clearTimeout(retry); retry = undefined;
@@ -105,9 +106,10 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
         for (;;) {
           const cursor = log.last;
           const cold = cursor === 0;
-          const r = await client.rpc<History>(env, 'session.events', cold
+          const r = prefetched ?? await client.rpc<History>(env, 'session.events', cold
             ? { id: sessionId, tail: TAIL }
             : { id: sessionId, since: cursor, limit: 500 }, 20_000);
+          prefetched = undefined;
           if (stopped) return;
           // The machine may have trimmed past this device's cache or restored
           // an older log. In either case take a complete fresh tail window.
@@ -168,10 +170,20 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     });
     client.subscribe(env);
     void renew();
-    // Cache reads may be slower than pushes. Do not let either overwrite the
-    // other: hydrate the cache first, then history, then buffered live events.
+    // Give fast disk/RAM reads a head start, but a stalled storage upgrade
+    // must not hold a healthy network hostage. The first useful snapshot
+    // initializes the log; a late disk read can never replace fresh history.
+    cacheHeadStart = setTimeout(() => {
+      void client.rpc<History>(env, 'session.events', { id: sessionId, tail: TAIL }, 20_000)
+        .then(snapshot => {
+          if (stopped || initialized) return;
+          initialized = true;
+          void refresh(snapshot);
+        }).catch(() => {});
+    }, 150);
     void loadCached(env, sessionId).then((cached) => {
-      if (stopped) return;
+      if (stopped || initialized) return;
+      clearTimeout(cacheHeadStart);
       if (cached?.events.length) {
         consume([...cached.events].sort((a, b) => a.seq - b.seq));
         if (!log.turns.length) reset();
@@ -214,7 +226,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     window.addEventListener('pagehide', persist);
     return () => {
       stopped = true;
-      off(); clearInterval(timer); clearTimeout(paint); clearTimeout(retry);
+      off(); clearInterval(timer); clearTimeout(paint); clearTimeout(retry); clearTimeout(cacheHeadStart);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', catchUp);
       window.removeEventListener('pageshow', catchUp);

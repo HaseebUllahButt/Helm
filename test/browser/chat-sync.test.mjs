@@ -187,14 +187,14 @@ test('chat reads recover through the hub when a direct channel stays open but si
   const bundle=await build({stdin:{contents:`
     import { Client } from './apps/web/src/client';
     window.checkRoute = async method => {
-      const client=Object.create(Client.prototype), calls=[];
-      client.seq=0;client.pending=new Map();
+      const client=new Client([], 'test-token'), calls=[];
       client.ws={readyState:WebSocket.OPEN,send:frame=>{
         calls.push('hub');const msg=JSON.parse(frame),pending=client.pending.get(msg.id);
         client.pending.delete(msg.id);pending?.resolve({latest:true});
       }};
       client.peers=new Map([['machine',{ready:true,channel:{readyState:'open',bufferedAmount:0,send:()=>calls.push('direct')}}]]);
       const result=await client.rpc('machine',method,{},200).catch(e=>({error:e.message}));
+      client.close();
       return {calls,result};
     };
   `,resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,format:'iife'});
