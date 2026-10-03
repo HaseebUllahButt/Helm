@@ -94,7 +94,13 @@ export class TunnelReceiver {
     this.received += chunk.length;
     this.output.write(chunk, err => {
       if (this.stopped) return;
-      if (err) { this.fail(err); return; }
+      if (err) {
+        // Writable emits error after invoking this callback. Failure cleanup
+        // may already remove its listener (SSH has closed its read end).
+        this.output.once?.('error', () => {});
+        this.fail(err);
+        return;
+      }
       this.acknowledged += chunk.length;
       this.acknowledge(this.acknowledged);
     });

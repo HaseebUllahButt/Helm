@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { T } from '@helm/protocol';
 import { bridge } from '../packages/connect/src/proxy.js';
@@ -68,4 +68,19 @@ test('a lost established tunnel cannot be retried as a new SSH stream', async t 
   await assert.rejects(bridge(hub, 'test', 'target', 22, {
     input: new PassThrough(), output: new PassThrough(),
   }), e => e.established === true);
+});
+
+
+test('a closed SSH reader rejects cleanly without an unhandled pipe error', async t => {
+  const hub = await server(t, ws => ws.on('message', raw => {
+    const msg = JSON.parse(raw);
+    if (msg.t !== T.TUNNEL_OPEN) return;
+    ws.send(JSON.stringify({ t: T.TUNNEL_READY, sid: msg.sid, flow: 1 }));
+    ws.send(JSON.stringify({ t: T.TUNNEL_DATA, sid: msg.sid, data: 'YQ==' }));
+  }));
+  const output = new Writable({ write(_chunk, _encoding, done) {
+    done(Object.assign(new Error('reader closed'), { code: 'EPIPE' }));
+  } });
+  await assert.rejects(bridge(hub, 'test', 'target', 22, { input: new PassThrough(), output }), /reader closed/);
+  await new Promise(r => setImmediate(r));
 });
