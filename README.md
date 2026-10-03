@@ -215,6 +215,13 @@ after logging in or installing a CLI. Unknown sign-in state is shown as
 unverified; a signed-out account cannot be delegated to. Use an exact account
 ID when more than one profile uses the same CLI.
 
+It also reports potential credential sources: file locations, environment
+variable names, and available account/expiry metadata, never token values.
+These diagnostics honor profile overrides, saved secret references, and
+explicit unsets. An expired access token may still be refreshable; the CLI's
+sign-in status remains authoritative. Wrapper-managed credential files and
+OS keychains are not inspected.
+
 Inside a Helm session, `helm delegate` automatically links the task to that
 session and uses its folder. From an ordinary terminal or native Codex CLI,
 it uses the current folder; `--cwd <folder>` chooses another. `--model` selects

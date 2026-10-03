@@ -3,17 +3,19 @@ import { materialize } from './profiles.js';
 import { listModels } from './models.js';
 import { modelPrefs, startPrefs, accountKey } from './settings.js';
 import { modesFor, defaultMode } from './modes.js';
+import { credentialScan } from './credentials.js';
 import { fold } from './brain.js';
 import { createHash } from 'node:crypto';
 
-/** Public capabilities, never launch arguments, environment, or credentials. */
-export async function agentCatalog(profiles, statuses, { models = true } = {}) {
+/** Public capabilities and optional credential metadata, never secret values. */
+export async function agentCatalog(profiles, statuses, { models = true, credentials = false } = {}) {
   return Promise.all(profiles.filter((p) => !p.disabled && ENGINES[p.engine]?.driver).map(async (p) => {
     const auth = statuses.get(p.id) ?? 'unknown';
     const account = createHash('sha256').update(accountKey(p)).digest('hex').slice(0, 16);
     const row = { id: p.id, label: p.label, engine: p.engine, account, auth,
       available: auth !== 'unauthenticated', modes: modesFor(p.engine),
       defaultMode: startPrefs(p)?.mode === 'plan' ? defaultMode(p.engine) : startPrefs(p)?.mode ?? defaultMode(p.engine) };
+    if (credentials) row.credentials = credentialScan(p);
     if (!models || !row.available) return row;
     const spec = materialize(p);
     const engine = ENGINES[p.engine];

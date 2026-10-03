@@ -1261,7 +1261,7 @@ export class Daemon {
       case M.AGENT_LIST: {
         const profiles = p.refresh ? (await refreshProfiles()).profiles : await currentProfiles();
         const statuses = await authStatuses(profiles, { refresh: !!p.refresh });
-        this.cliAgents = await agentCatalog(profiles, statuses, { models: p.models !== false });
+        this.cliAgents = await agentCatalog(profiles, statuses, { models: p.models !== false, credentials: true });
         return { agents: this.cliAgents };
       }
 

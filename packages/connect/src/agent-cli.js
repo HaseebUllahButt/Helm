@@ -15,9 +15,13 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
     if (words.length) throw new Error('helm agents [--json] [--refresh]');
     const result = await rpc(self, M.AGENT_LIST, { refresh: !!options.refresh }, 60_000);
     if (options.json) write(JSON.stringify(result));
-    else for (const a of result.agents) {
-      write(`${a.id}  ${a.engine}  ${a.auth}${a.defaultModel ? `  default: ${a.defaultModel}` : ''}`);
-      if (a.models?.length) write(`  models: ${a.models.join(', ')}`);
+    else {
+      const { formatCredential } = await import('./credentials.js');
+      for (const a of result.agents) {
+        write(`${a.id}  ${a.engine}  ${a.auth}${a.defaultModel ? `  default: ${a.defaultModel}` : ''}`);
+        if (a.models?.length) write(`  models: ${a.models.join(', ')}`);
+        if (a.credentials?.length) write(`  credentials: ${a.credentials.map(formatCredential).join(', ')}`);
+      }
     }
     return 0;
   }

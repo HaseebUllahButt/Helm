@@ -60,7 +60,25 @@ test('agent capabilities show sign-in state without exposing launcher or credent
   assert.equal(agents[0].available, true);
   assert.equal(agents[1].available, false);
   assert.equal(JSON.stringify(agents).includes('never-advertise-me'), false);
-  for (const a of agents) for (const field of ['cmd', 'args', 'env', 'envFrom']) assert.equal(field in a, false);
+  for (const a of agents) for (const field of ['cmd', 'args', 'env', 'envFrom', 'credentials']) assert.equal(field in a, false);
+});
+
+test('credential diagnostics preserve current modes and never publish token values', async () => {
+  const p = { ...profiles[0], env: { CODEX_HOME: process.env.HELM_DIR, OPENAI_API_KEY: 'diagnostic-secret' } };
+  const statuses = new Map([[p.id, 'authenticated']]);
+  const [basic] = await agentCatalog([p], statuses, { models: false });
+  const [detailed] = await agentCatalog([p], statuses, { models: false, credentials: true });
+  assert.equal(detailed.defaultMode, basic.defaultMode);
+  assert.deepEqual(detailed.modes, basic.modes);
+  assert.ok(detailed.credentials.some((c) => c.kind === 'env' && c.where === 'OPENAI_API_KEY' && c.via === 'profile'));
+  assert.doesNotMatch(JSON.stringify(detailed), /diagnostic-secret/);
+  for (const args of [[], ['--json']]) {
+    const lines = [];
+    await runAgentCommand('agents', args, { self: 'test', write: (line) => lines.push(line),
+      rpc: async () => ({ agents: [detailed] }) });
+    assert.match(lines.join('\n'), /OPENAI_API_KEY/);
+    assert.doesNotMatch(lines.join('\n'), /diagnostic-secret/);
+  }
 });
 
 test('Codex delegates to Claude with the selected model, folder, lineage and durable result', async (t) => {
