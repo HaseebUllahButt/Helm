@@ -313,6 +313,34 @@ export class EventLog {
       }
       // The front of the unbroken window: what a client may ask "before".
       contiguous = list[front]?.seq ?? events[0]?.seq ?? 0;
+      // The nearest start may be a queued message typed during another
+      // turn. Carry the actual owners of the items too; otherwise a cold
+      // device puts the running turn's output in that hidden queue row.
+      const included = new Set(events.map((e) => e.seq));
+      const itemIds = new Set(events.filter((e) => e.type.startsWith('item.')).map((e) => e.id));
+      const owners = new Set(events.map((e) => e.turnId).filter(Boolean));
+      const context = [];
+      let contextRoom = Math.max(0, maxBytes - events.reduce((n, e) => n + sizeOf(e), 0));
+      for (const e of list.slice(0, front)) {
+        if (e.type !== 'item.start' || !itemIds.has(e.id)) continue;
+        if (e.turnId) owners.add(e.turnId);
+        if (!included.has(e.seq)) {
+          let anchor = shaped(e);
+          if (sizeOf(anchor) > contextRoom) {
+            // The identity is needed to apply a delta. An old tool's input
+            // and diff can wait for the reader to page back to that step.
+            const { seq, at, type, id, turnId, kind, parentId, name } = e;
+            anchor = { seq, at, type, id, turnId, kind, parentId, name };
+          }
+          contextRoom = Math.max(0, contextRoom - sizeOf(anchor));
+          context.push(anchor);
+        }
+      }
+      for (const e of list.slice(0, front)) {
+        if (owners.has(e.turnId) && ['turn.start', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove'].includes(e.type)
+          && !included.has(e.seq)) context.push(shaped(e));
+      }
+      if (context.length) events = [...context, ...events].sort((a, b) => a.seq - b.seq);
     } else {
       let bytes = 0;
       for (const raw of list) {
