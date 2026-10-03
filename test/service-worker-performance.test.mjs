@@ -68,7 +68,7 @@ function setup({ fetch, shell } = {}) {
       return result;
     },
     fireDeadline() {
-      const [id, timer] = [...timers.entries()].find(([, t]) => t.delay === 1200) ?? [];
+      const [id, timer] = [...timers.entries()].find(([, t]) => t.delay === 250) ?? [];
       assert.ok(timer, 'navigation deadline was scheduled');
       timers.delete(id);
       timer.callback();
@@ -97,6 +97,26 @@ test('a fast network response clears the pending fallback timer', async () => {
   assert.equal((await page).body, 'fresh shell');
   assert.equal(worker.timers.size, 0);
   await Promise.all(worker.lifetime);
+});
+
+test('a temporary gateway error still opens the saved app', async () => {
+  const worker = setup({ fetch: async () => response('gateway error', {ok:false}), shell: response('saved app') });
+  assert.equal((await worker.dispatchNavigation()).body, 'saved app');
+  await Promise.all(worker.lifetime);
+  assert.equal(worker.entries.get('/index.html').body, 'saved app');
+});
+
+test('entry bundle caching is included in the worker lifetime', async () => {
+  const worker = setup({ fetch: async () => response('entry script') });
+  let result;
+  worker.listeners.get('fetch')({
+    request:{method:'GET',url:'https://helm.test/assets/index-hash.js',mode:'cors'},
+    respondWith(promise){result=promise;}, waitUntil(promise){worker.lifetime.push(promise);},
+  });
+  assert.equal((await result).body,'entry script');
+  assert.equal(worker.lifetime.length,1);
+  await Promise.all(worker.lifetime);
+  assert.equal(worker.entries.get('/assets/index-hash.js').body,'entry script');
 });
 
 test('a cold cache keeps waiting past the deadline for the network shell', async () => {
