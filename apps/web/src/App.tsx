@@ -102,7 +102,7 @@ function ViewLoading({ title, onBack }: { title: string; onBack: () => void }) {
   );
 }
 
-const DONE_FOR_MS = 24 * 60 * 60_000;
+const DONE_FOR_MS = 3 * 24 * 60 * 60_000;
 
 const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', cls: 'other' };
 
@@ -937,11 +937,11 @@ function Shell({ client, conn, onSignOut }: {
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
   const runningNow = everyone.filter(({ s }) => s.status === 'working').sort(byNewest);
   // A thread that stops working leaves "running" for "done" rather than
-  // vanishing from the sidebar: it is where you look for what finished. A day
-  // is long enough to come back to it; older work lives on its machine.
+  // vanishing from the sidebar. Keep the latest three days in date order;
+  // older work stays available on its machine and through search.
   const doneNow = everyone.filter(({ s }) => s.driver && (s.turns ?? 0) > 0
     && s.status !== 'working' && s.status !== 'blocked'
-    && Date.now() - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest).slice(0, 30);
+    && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
   const snoozeThread = (envId: string, s: Session, until: number) => {
     setSnooze(`${envId}:${s.id}`, until);
     setSnoozeUndo({ key: `${envId}:${s.id}`, title: s.title, until });
@@ -962,7 +962,6 @@ function Shell({ client, conn, onSignOut }: {
   // deserves red.
   const downFor = downSince ? Date.now() - downSince : 0;
   const status = conn.online ? 'live' : conn.reachable ? 'reconnecting' : downFor > 12_000 ? 'offline' : 'connecting';
-  const hubHost = (() => { try { return new URL(client.relay).host; } catch { return client.relay; } })();
 
   return (
     <div className="shell">
@@ -1182,10 +1181,6 @@ function Shell({ client, conn, onSignOut }: {
             {error && <div className="error">{error}</div>}
 
             </>)}
-          </div>
-          <div className="diag">
-            <span>{hubHost || 'no hub'}</span>
-            <span>{conn.online ? 'socket live' : conn.error || 'socket down'}</span>
           </div>
         </div>
       </aside>

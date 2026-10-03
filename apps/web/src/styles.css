@@ -173,7 +173,7 @@ code, pre, kbd { font-family: var(--mono); }
   }
   .sidebar.collapsed { width: 52px; }
   .sidebar.collapsed .brand, .sidebar.collapsed .conn,
-  .sidebar.collapsed .scroll, .sidebar.collapsed .diag { display: none; }
+  .sidebar.collapsed .scroll { display: none; }
   .sidebar.collapsed .bar.side { justify-content: center; padding-inline: 6px; }
   .sidebar.collapsed .side-tools { flex-direction: column; }
   .main { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; }
@@ -283,16 +283,6 @@ code, pre, kbd { font-family: var(--mono); }
 .pad.column { max-width: var(--measure); width: 100%; margin: 0 auto; }
 @media (min-width: 900px) { .pad.column { padding: 22px 24px 40px; } }
 .side-pad { padding: 10px 10px 16px; flex: 1; }
-/* Where the socket goes and whether it is up: kept, because it is the first
-   thing to read when something is not answering, but in the instrument
-   voice rather than as content. */
-.diag {
-  display: flex; justify-content: space-between; gap: 8px; padding: 9px 14px max(10px, env(safe-area-inset-bottom));
-  font: 11px var(--mono); color: var(--mutedfg); border-top: 1px solid var(--line);
-  white-space: nowrap; overflow: hidden;
-}
-.diag span { overflow: hidden; text-overflow: ellipsis; }
-
 /* Text only a screen reader needs. */
 .vh {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
