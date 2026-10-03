@@ -44,7 +44,7 @@ export class Driver extends EventEmitter {
   #flushTimer = null;
 
   constructor({ engine, cmd, env, args = [], cwd, model, effort, mode, engineSessionId, transcript = null, log = () => {},
-                procHost = null, procId = null, openTurn = null, pendingEvents = null }) {
+                procHost = null, procId = null, openTurn = null, pendingEvents = null, resumeEvents = null }) {
     super();
     Object.assign(this, {
       engine, cmd, env, profileArgs: args, cwd, model, effort, mode, engineSessionId, transcript, log,
@@ -52,7 +52,7 @@ export class Driver extends EventEmitter {
       // host, `procId` the id the agent runs under there, and the two getters
       // answer what the event log still has open for the session - read
       // lazily, only when a surviving process is actually rebound.
-      procHost, procId, openTurn, pendingEvents,
+      procHost, procId, openTurn, pendingEvents, resumeEvents,
     });
     this.status = 'idle';
     /** requestId -> the permission.request event, until answered */

@@ -3,6 +3,7 @@ import { IMAGE_ACCEPT, looksLikeImage } from './image';
 import { useDictation } from './voice';
 import type { Turn } from './types';
 import { isBigPaste, stashPaste } from './pasteStore';
+import { Icon } from '../Icon';
 
 const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -21,7 +22,7 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, onSendQueuedNow, queueBusy, onTranscribe }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
@@ -44,15 +45,14 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
    * Messages still in helm's outbox, oldest first: accepted but not yet
    * handed to the agent, so they sit here rather than in the transcript.
    */
-  queued?: { turn: Turn; text: string; attachments: number }[];
+  queued?: { turn: Turn; text: string; attachments: number; delivered?: boolean }[];
   /** Pull a queued message back into the draft before the agent sees it. */
   onWithdrawQueued?: (turn: Turn) => void;
   /**
-   * Send a queued message into the turn already running, without
-   * interrupting it. Absent unless the engine has a real in-flight steering
-   * primitive - ACP v1 has no safe one, so the button is never faked there.
+   * The CLI takes a message mid-turn, after the step in flight (Claude,
+   * Codex). Others read it only once the reply ends.
    */
-  onSendQueuedNow?: (turn: Turn) => void;
+  steers?: boolean;
   /** The queued turn id an action is in flight for, so it cannot run twice. */
   queueBusy?: string;
   /**
@@ -253,8 +253,8 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
           {queued.length > 0 && (
             <div className="queued-panel">
               <div className="queued-head">
-                <b>{queued.length} queued</b>
-                <span>sent after the current turn</span>
+                <b>{queued.length} waiting</b>
+                <span>{steers ? 'goes in at the next step' : 'goes in when this reply ends'}</span>
               </div>
               {queued.map((item) => {
                 const label = item.text || (item.attachments === 1 ? 'Image' : `${item.attachments} images`);
@@ -268,15 +268,9 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                         <span className="queued-attachments">{item.attachments === 1 ? ' + image' : ` + ${item.attachments} images`}</span>
                       )}
                     </span>
-                    {onSendQueuedNow && (
-                      <button
-                        disabled={busy}
-                        onClick={() => onSendQueuedNow(item.turn)}
-                        title={`send now, without stopping the current turn: ${name}`}
-                        aria-label={`send queued message now: ${name}`}
-                      >send now</button>
-                    )}
-                    {onWithdrawQueued && (
+                    {/* Once the CLI has it there is no taking it back -
+                        neither CLI can - so the button goes. */}
+                    {item.delivered ? <span className="queued-sent">sent</span> : onWithdrawQueued && (
                       <button
                         disabled={busy}
                         onClick={() => onWithdrawQueued(item.turn)}
@@ -294,7 +288,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
               {attachments.map((a, i) => (
                 <span key={i} className="attach-preview" title={a.name}>
                   <img src={a.url} alt={a.name} />
-                  <button onClick={() => onRemoveAttachment?.(i)} title={`remove ${a.name}`} aria-label={`remove ${a.name}`}>×</button>
+                  <button onClick={() => onRemoveAttachment?.(i)} title={`remove ${a.name}`} aria-label={`remove ${a.name}`}><Icon name="close" size={12} /></button>
                 </span>
               ))}
             </div>
@@ -390,18 +384,18 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             {dictation.error && (
               <button className="attach-status bad" onClick={dictation.clearError} title="dismiss">{dictation.error}</button>
             )}
-            {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>⌨ keys</button>}
+            {withKeys && onKey && <button className={`ctl${keys ? ' on' : ''}`} onClick={() => setKeys((v) => !v)}>keys</button>}
             {preparing && <span className="attach-status">compressing…</span>}
             {/* The pickers share the row the buttons are on: a second row of
                 chips under the box cost a line of screen on every visit to
                 say what never changes between messages. */}
             {foot ? <div className="slab-controls">{foot}</div> : <span className="spacer" />}
             {working && onStop && (
-              <button className="stop" onClick={onStop} title="stop the agent">
+              <button className="stop" onClick={onStop} title="stop the agent" aria-label="stop the agent">
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>
               </button>
             )}
-            <button className="send" onClick={submit} disabled={preparing || (!draft.trim() && !attachments?.length)} title="send">
+            <button className="send" onClick={submit} disabled={preparing || (!draft.trim() && !attachments?.length)} title="send" aria-label="send">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </div>

@@ -3,21 +3,32 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, interactive-widget=resizes-content" />
-    <meta name="theme-color" content="#0a0a0b" />
+    <meta name="theme-color" content="#14161b" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- The one display face, fetched before the first paint that uses it. -->
+    <link rel="preload" href="/fonts/archivo-semiexpanded-600.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/inter-latin-var.woff2" as="font" type="font/woff2" crossorigin />
     <!-- iOS ignores SVG icons entirely; without a PNG apple-touch-icon it
          screenshots the page and uses that on the home screen. -->
-    <link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png?v=5" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=5" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=5" />
-    <link rel="mask-icon" href="/icon.svg?v=5" color="#c9ccd9" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png?v=6" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=6" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=6" />
+    <link rel="mask-icon" href="/icon.svg?v=6" color="#c9ccd9" />
     <meta name="apple-mobile-web-app-title" content="helm" />
     <title>helm</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- This also works when an old installed shell cannot load its entry
+         bundle. It must not depend on that bundle or its stylesheet. -->
+    <div id="root">
+      <main style="max-width:380px;margin:15vh auto;padding:24px;font:16px/1.5 system-ui;text-align:center">
+        <h1 style="font-size:24px">Opening Helm…</h1>
+        <p>If Helm does not open, reload to get the current app.</p>
+        <form action="/" method="get"><button type="submit" style="font:inherit;padding:10px 18px">Reload Helm</button></form>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

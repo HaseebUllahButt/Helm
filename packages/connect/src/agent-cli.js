@@ -5,7 +5,8 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Injected RPC keeps argument and result behavior testable without a live hub. */
 export async function runAgentCommand(command, args, { rpc, self, cwd = process.cwd(),
-  parentId = process.env.HELM_SESSION_ID, write = console.log, sleep = pause } = {}) {
+  parentId = process.env.HELM_SESSION_ID, callerThreadId = process.env.CODEX_THREAD_ID,
+  write = console.log, sleep = pause } = {}) {
   const { options, words } = parseAgentArgs(args, {
     values: command === 'delegate' ? ['model', 'mode', 'effort', 'parent', 'cwd', 'timeout'] : command === 'delegate-result' ? ['timeout'] : [],
     switches: command === 'agents' ? ['json', 'refresh'] : ['wait', 'json'],
@@ -38,6 +39,9 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
     const { session } = await rpc(self, M.SESSION_DELEGATE, {
       id: options.parent ?? parentId, cwd: options.cwd ?? cwd, profileId: agent.id,
       model: options.model, mode: options.mode, effort: options.effort, task: task.join(' '),
+      // Background/native Codex threads can inherit another thread's Helm
+      // environment. Verify the actual caller before using that parent.
+      ...(!options.parent && parentId && callerThreadId ? { callerThreadId } : {}),
     }, 70_000);
     id = session.id;
     if (!options.wait) {

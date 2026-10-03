@@ -4,28 +4,40 @@ import { FitAddon } from '@xterm/addon-fit';
 import type { Client } from './client';
 
 /**
- * The keys a phone keyboard does not have. `key` names a key the daemon
- * translates (or hands herdr by name); `paste` reads the clipboard into
- * the terminal as typed input - the only way ^V exists at all.
+ * The keys a phone keyboard does not have, as the bytes a keyboard sends.
+ *
+ * They go down the same road as typing (`session.input`, raw), so a button
+ * behaves exactly like the key it is named after on every kind of terminal.
+ * Asking the machine to press a key *by name* depended on the terminal
+ * backend knowing that name, and the pane fallback did not know most of them.
+ * Arrows, Home and End change with the program's cursor-key mode (`app`):
+ * vim, less and full-screen agents switch it on and expect ESC O A, not ESC [ A.
  */
-const TERMKEYS: { label: string; key?: string; paste?: boolean; modifier?: 'ctrl' }[] = [
-  { label: 'ctrl', modifier: 'ctrl' },
-  { label: 'esc', key: 'Escape' },
-  { label: 'tab', key: 'Tab' },
-  { label: 'enter', key: 'Enter' },
-  { label: '⌫', key: 'Backspace' },
-  { label: '←', key: 'Left' },
-  { label: '↑', key: 'Up' },
-  { label: '↓', key: 'Down' },
-  { label: '→', key: 'Right' },
-  { label: 'home', key: 'Home' },
-  { label: 'end', key: 'End' },
-  { label: 'pgup', key: 'PageUp' },
-  { label: 'pgdn', key: 'PageDown' },
-  { label: '^C', key: 'C-c' },
-  { label: '^D', key: 'C-d' },
-  { label: '^Z', key: 'C-z' },
-  { label: 'paste', paste: true },
+type TermKey = { label: string; aria: string; bytes?: (app: boolean) => string; paste?: boolean; ctrl?: boolean; repeat?: boolean; wide?: boolean };
+const csi = (normal: string, app: string) => (on: boolean) => (on ? app : normal);
+const TERMKEYS: TermKey[][] = [
+  [
+    { label: 'esc', aria: 'Escape', bytes: () => '\x1b' },
+    { label: 'tab', aria: 'Tab', bytes: () => '\t' },
+    { label: 'ctrl', aria: 'Control, applies to the next key', ctrl: true },
+    { label: '←', aria: 'Left', bytes: csi('\x1b[D', '\x1bOD'), repeat: true },
+    { label: '↑', aria: 'Up', bytes: csi('\x1b[A', '\x1bOA'), repeat: true },
+    { label: '↓', aria: 'Down', bytes: csi('\x1b[B', '\x1bOB'), repeat: true },
+    { label: '→', aria: 'Right', bytes: csi('\x1b[C', '\x1bOC'), repeat: true },
+    { label: '⌫', aria: 'Backspace', bytes: () => '\x7f', repeat: true },
+    { label: '⏎', aria: 'Enter', bytes: () => '\r', wide: true },
+  ],
+  [
+    { label: '^C', aria: 'Control C, interrupt', bytes: () => '\x03' },
+    { label: '^D', aria: 'Control D, end of input', bytes: () => '\x04' },
+    { label: '^Z', aria: 'Control Z, suspend', bytes: () => '\x1a' },
+    { label: '^R', aria: 'Control R, search history', bytes: () => '\x12' },
+    { label: 'home', aria: 'Home', bytes: csi('\x1b[H', '\x1bOH') },
+    { label: 'end', aria: 'End', bytes: csi('\x1b[F', '\x1bOF') },
+    { label: 'pgup', aria: 'Page up', bytes: () => '\x1b[5~', repeat: true },
+    { label: 'pgdn', aria: 'Page down', bytes: () => '\x1b[6~', repeat: true },
+    { label: 'paste', aria: 'Paste from clipboard', paste: true, wide: true },
+  ],
 ];
 
 /**
@@ -46,43 +58,73 @@ export function Terminal({ client, env, sessionId }: {
   client: Client; env: string; sessionId: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const term = useRef<Xterm | null>(null);
   const [note, setNote] = useState('');
   const [ctrlArmed, setCtrlArmed] = useState(false);
   const ctrlPending = useRef(false);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const repeat = useRef<{ delay?: ReturnType<typeof setTimeout>; every?: ReturnType<typeof setInterval> }>({});
   const flash = (text: string) => {
     setNote(text);
     if (noteTimer.current) clearTimeout(noteTimer.current);
     noteTimer.current = setTimeout(() => setNote(''), 1100);
   };
 
-  const sendKey = (key: string) => {
-    client.rpc(env, 'session.keys', { id: sessionId, keys: [key] }, 10_000).catch(() => {});
+  // Everything typed or tapped goes straight through, control characters
+  // included. Fire and forget: waiting for the round trip would only add latency.
+  const send = (data: string) => {
+    client.rpc(env, 'session.input', { id: sessionId, data, raw: true }, 10_000).catch(() => {});
   };
   const paste = async () => {
     try {
-      if (!navigator.clipboard?.readText) return flash('clipboard blocked');
+      if (!navigator.clipboard?.readText) return flash('Clipboard blocked');
       const text = await navigator.clipboard.readText();
-      if (!text) return flash('nothing on the clipboard');
-      await client.rpc(env, 'session.input', { id: sessionId, data: text, raw: true }, 10_000);
-    } catch { flash('clipboard blocked'); }
+      if (!text) return flash('Nothing to paste');
+      send(text);
+    } catch { flash('Clipboard blocked'); }
+  };
+  const disarm = () => { ctrlPending.current = false; setCtrlArmed(false); };
+  const stopRepeat = () => {
+    clearTimeout(repeat.current.delay);
+    clearInterval(repeat.current.every);
+    repeat.current = {};
+  };
+  const press = (k: TermKey) => {
+    if (k.ctrl) {
+      ctrlPending.current = !ctrlPending.current;
+      setCtrlArmed(ctrlPending.current);
+      return;
+    }
+    disarm();
+    if (k.paste) { void paste(); return; }
+    const once = () => send(k.bytes!(!!term.current?.modes.applicationCursorKeysMode));
+    once();
+    if (k.repeat) {
+      stopRepeat();
+      repeat.current.delay = setTimeout(() => { repeat.current.every = setInterval(once, 70); }, 380);
+    }
   };
 
   useEffect(() => {
     if (!host.current) return;
 
     const xterm = new Xterm({
-      fontSize: 12.5,
+      fontSize: 13,
+      lineHeight: 1.15,
       fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace',
       cursorBlink: true,
       convertEol: true,
       scrollback: 5000,
       theme: {
-        background: '#0a0a0a', foreground: '#e5e5e5', cursor: '#b4cbff',
-        black: '#14181d', red: '#f87171', green: '#6ee7b7', yellow: '#fbbf24',
-        blue: '#60a5fa', magenta: '#c084fc', cyan: '#67e8f9', white: '#e6eaef',
+        background: '#0d0f12', foreground: '#e6e8eb', cursor: '#b4cbff', cursorAccent: '#0d0f12',
+        selectionBackground: '#3b4b6b',
+        black: '#1b1f25', red: '#f87171', green: '#6ee7b7', yellow: '#fbbf24',
+        blue: '#7aa7ff', magenta: '#c084fc', cyan: '#67e8f9', white: '#e6eaef',
+        brightBlack: '#6b7280', brightRed: '#fca5a5', brightGreen: '#a7f3d0', brightYellow: '#fde68a',
+        brightBlue: '#a5c4ff', brightMagenta: '#d8b4fe', brightCyan: '#a5f3fc', brightWhite: '#ffffff',
       },
     });
+    term.current = xterm;
     const fit = new FitAddon();
     xterm.loadAddon(fit);
     xterm.open(host.current);
@@ -139,20 +181,17 @@ export function Terminal({ client, env, sessionId }: {
       } catch { /* offline; the reconnect handler tries again */ }
     };
 
-    // Everything typed goes straight through, control characters included.
-    // Fire and forget: waiting for the round trip would only add latency.
     const typed = xterm.onData((data) => {
       let input = data;
       if (ctrlPending.current && data.length === 1) {
-        ctrlPending.current = false;
-        setCtrlArmed(false);
+        disarm();
         if (data === ' ') {
           input = '\0';
         } else if (/^[a-z@\[\\\]^_]$/i.test(data)) {
           input = String.fromCharCode(data.toLowerCase().charCodeAt(0) & 0x1f);
         }
       }
-      client.rpc(env, 'session.input', { id: sessionId, data: input, raw: true }, 10_000).catch(() => {});
+      send(input);
     });
     const selected = xterm.onSelectionChange(() => {
       const text = xterm.getSelection();
@@ -172,8 +211,17 @@ export function Terminal({ client, env, sessionId }: {
       }
     });
 
-    const onResize = () => { try { fit.fit(); } catch { /* hidden */ } };
-    window.addEventListener('resize', onResize);
+    // The box changes size for more reasons than the window does: the
+    // sidebar folding, the phone keyboard opening, a rotation.
+    let frame: ReturnType<typeof setTimeout> | undefined;
+    const refit = () => {
+      clearTimeout(frame);
+      frame = setTimeout(() => { try { fit.fit(); } catch { /* hidden */ } }, 16);
+    };
+    const watch = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null;
+    watch?.observe(host.current);
+    window.addEventListener('resize', refit);
+    window.visualViewport?.addEventListener('resize', refit);
 
     // Tell the far end what we are drawing at, so the program lays itself out
     // for this screen. A herdr pane ignores it; its geometry is not ours.
@@ -185,16 +233,23 @@ export function Terminal({ client, env, sessionId }: {
     // The renew keeps a watching viewer registered, so output stops being
     // pushed to a phone that has gone away.
     const renew = setInterval(() => attach(true), 25_000);
+    // On a computer the terminal is what you came for: type straight away.
+    if (window.matchMedia?.('(pointer: fine)').matches) xterm.focus();
 
     return () => {
       stopped = true;
+      term.current = null;
       clearInterval(renew);
+      clearTimeout(frame);
       if (noteTimer.current) clearTimeout(noteTimer.current);
+      stopRepeat();
       off();
       typed.dispose();
       selected.dispose();
       resized.dispose();
-      window.removeEventListener('resize', onResize);
+      watch?.disconnect();
+      window.removeEventListener('resize', refit);
+      window.visualViewport?.removeEventListener('resize', refit);
       client.rpc(env, 'session.detach', { id: sessionId }, 5_000).catch(() => {});
       xterm.dispose();
     };
@@ -203,25 +258,34 @@ export function Terminal({ client, env, sessionId }: {
   return (
     <div className="terminal-wrap">
       <div className="xterm-host" ref={host} />
-      <div className="termkeys" role="toolbar" aria-label="terminal keys">
-        {TERMKEYS.map((k) => (
-          <button
-            key={k.label}
-            type="button"
-            aria-pressed={k.modifier === 'ctrl' ? ctrlArmed : undefined}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              if (k.modifier === 'ctrl') {
-                ctrlPending.current = !ctrlPending.current;
-                setCtrlArmed(ctrlPending.current);
-              } else {
-                ctrlPending.current = false;
-                setCtrlArmed(false);
-                if (k.paste) paste();
-                else if (k.key) sendKey(k.key);
-              }
-            }}
-          >{k.label}</button>
+      <div className="termkeys" role="toolbar" aria-label="Terminal keys">
+        {TERMKEYS.map((row, i) => (
+          <div className="termkeys-row" key={i}>
+            {row.map((k) => (
+              <button
+                key={k.label}
+                type="button"
+                className={k.wide ? 'wide' : undefined}
+                aria-label={k.aria}
+                title={k.aria}
+                aria-pressed={k.ctrl ? ctrlArmed : undefined}
+                // Pressed on the way down, not on release: it is a keyboard.
+                // Taking the default away keeps the focus - and so the phone
+                // keyboard - on the terminal.
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  press(k);
+                }}
+                onPointerUp={stopRepeat}
+                onPointerLeave={stopRepeat}
+                onPointerCancel={stopRepeat}
+                onContextMenu={(event) => event.preventDefault()}
+                // Enter or Space on a focused button, from a hardware keyboard.
+                onClick={(event) => { if (event.detail === 0) { press(k); stopRepeat(); } }}
+              >{k.label}</button>
+            ))}
+          </div>
         ))}
       </div>
       {note && <div className="terminal-copied" role="status">{note}</div>}

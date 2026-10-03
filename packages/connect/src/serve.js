@@ -156,7 +156,8 @@ const joinOrigin = (at) => {
 };
 
 export async function join({ code, at, name, port = 8787 }) {
-  if (loadNetwork()) {
+  const previous = loadNetwork();
+  if (previous && (!previous.provisional || Object.keys(previous.machines).length !== 1)) {
     throw new Error('this machine is already in a network - run `helm leave` first');
   }
   const base = joinOrigin(at);
@@ -173,6 +174,12 @@ export async function join({ code, at, name, port = 8787 }) {
 
   const { id, key, machines, devices, revoked, self: inviter, role } = await res.json();
   joinNetwork({ id, key, name: name || hostname(), port, machines, devices, revoked });
+  if (previous) {
+    // Invites and passwords minted in the temporary install network must
+    // never become a route into the network we have just joined.
+    const { db } = await import('@helm/relay/db');
+    db.exec('DELETE FROM invites; DELETE FROM auth_state; DELETE FROM local_device;');
+  }
 
   // We just reached the inviter at `base`, which is not necessarily an address
   // it knows to advertise about itself - it cannot see itself from out here.

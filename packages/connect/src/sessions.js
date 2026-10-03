@@ -4,14 +4,14 @@ import { join, basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { HELM_DIR, expand } from './paths.js';
-import { getProfiles, materialize } from './profiles.js';
+import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages, sessionSnapshot } from './transcript.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
 import { optionArgs } from './models.js';
 import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
-import { EventLog } from './events.js';
+import { EventLog, activeTurnFromEvents } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
 import { CodexDriver, canInspectExternalCodex } from './drivers/codex.js';
 import { OpencodeDriver, Opencode2Driver } from './drivers/opencode.js';
@@ -28,6 +28,7 @@ import { delegationMode, delegationOutput, trackDelegationReply } from './delega
 import { authStatuses } from './auth.js';
 import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory } from './inventory.js';
+import { hostedProcId } from './hosted-process.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -127,7 +128,7 @@ const EXTERNAL = /^(pane:|found:)/;
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
-export const wire = ({ promptSample, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, originHandoffId, delegationReply, ...s }) => s;
+export const wire = ({ promptSample, unsent, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, originHandoffId, delegationReply, ...s }) => s;
 
 const EXTERNAL_INFO_COMMANDS = [
   { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
@@ -230,7 +231,7 @@ export class Sessions extends EventEmitter {
   #drivers = new Map();
   /** sessionId -> reap timer */
   #reapers = new Map();
-  /** sessionId -> expiry, for event pushes somebody is looking at */
+  /** sessionId -> (view identity -> expiry), independent leases per device/tab */
   #watching = new Map();
   /** external id -> 'archived' | 'removed', for rows helm does not own */
   #marks = new Map();
@@ -249,6 +250,15 @@ export class Sessions extends EventEmitter {
   #outbox = new Map();
   /** sessionIds with a pump loop live - the queue's mutex. */
   #sending = new Set();
+  /**
+   * sessionId -> top-level tool items running now. Claude and Codex both
+   * take a message typed mid-turn at the end of the step in flight, so that
+   * is when a held message is handed over - and until then it can still be
+   * withdrawn, which neither CLI can do once it has the message.
+   */
+  #steps = new Map();
+  /** sessionId -> messages handed to the CLI that it has not used yet. */
+  #steered = new Map();
   /** session object -> in-flight full-rollout reconciliation */
   #imports = new WeakMap();
 
@@ -291,7 +301,7 @@ export class Sessions extends EventEmitter {
     // after Helm owns/resumes the session.
     if (s.external && s.engine !== 'codex') return EXTERNAL_INFO_COMMANDS;
     const driver = await this.#driver(s);
-    const available = await driver.availableCommands?.() ?? [];
+    const available = (await driver.availableCommands?.() ?? []).filter((c) => !['plan', 'plan-mode'].includes(c.name));
     return s.externalSource && s.engine !== 'codex'
       ? [...EXTERNAL_INFO_COMMANDS, ...available]
       : available;
@@ -330,7 +340,9 @@ export class Sessions extends EventEmitter {
       for (const s of raw.sessions || []) {
         // Completion notifications are the normal behaviour for driven
         // threads. Preserve an explicit opt-out from an older client.
-        if (s.driver && s.notifyDone == null) s.notifyDone = true;
+        if (s.driver && s.notifyDone == null) s.notifyDone = !s.delegation;
+        // Legacy planning sessions resume as executable tasks, not a plan gate.
+        if (s.driver && s.mode === 'plan') s.mode = defaultMode(s.engine);
         this.#index.set(s.id, s);
       }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
@@ -439,7 +451,7 @@ export class Sessions extends EventEmitter {
 
   // ------------------------------------------------------------------- verbs
 
-  async list() {
+  async list({ includeDelegations = false, parentId = null } = {}) {
     // The runtime is the authority on what is still alive; our index only
     // remembers which of those panes are ours.
     const live = await this.runtime.listLive();
@@ -510,7 +522,26 @@ export class Sessions extends EventEmitter {
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
-    return out.sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    return out.filter((s) => parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation)
+      .map((s) => s.delegations ? { ...s, delegations: this.#visibleDelegations(s) } : s)
+      .sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  }
+
+  #visibleDelegations(parent) {
+    return (parent.delegations ?? []).filter((id) => {
+      const child = this.#index.get(id);
+      return child?.delegation?.parentId === parent.id && !child.archived;
+    });
+  }
+
+  /** Provider history must not rediscover a hidden task as an ordinary chat. */
+  isDelegatedConversation(engine, id) {
+    return [...this.#index.values()].some((s) => s.delegation && s.engine === engine && s.engineSessionId === id);
+  }
+
+  hasActiveDelegations(id) {
+    return [...this.#index.values()].some((s) => s.delegation?.parentId === id
+      && (['starting', 'working', 'blocked'].includes(s.delegation.status ?? s.status) || this.hasActiveDelegations(s.id)));
   }
 
   /**
@@ -544,7 +575,7 @@ export class Sessions extends EventEmitter {
     });
   }
 
-  async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null }) {
+  async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null }) {
     if (originHandoffId !== null && !/^[a-f0-9]{24}$/.test(originHandoffId)) {
       throw new Error('invalid origin handoff id');
     }
@@ -556,10 +587,11 @@ export class Sessions extends EventEmitter {
     if (!model) model = modelPrefs(profile)?.default ?? null;
     const defaults = startPrefs(profile) ?? {};
     if (!effort) effort = defaults.effort ?? null;
-    if (!mode) mode = defaults.mode ?? null;
+    if (mode === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
+    if (!mode) mode = defaults.mode === 'plan' ? defaultMode(profile.engine) : defaults.mode ?? null;
     if (!speed) speed = defaults.speed ?? null;
     const lineage = parentLink(parent);
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId });
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -619,13 +651,16 @@ export class Sessions extends EventEmitter {
     return session;
   }
 
-  /** A CLI child in the same folder, with durable lineage and its own approvals. */
-  async delegate({ id, cwd, profileId, model, mode, effort, task }) {
+  /** A task owned by its orchestrator, with durable output and configurable permissions. */
+  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId }) {
     if (typeof task !== 'string' || !task.trim() || task.length > 32_000) {
       throw new Error('a subagent task must contain 1–32000 characters');
     }
     const parent = id ? this.get(id) : null;
     if (parent && !parent.driver) throw new Error('the parent must be an agent session');
+    if (parent && callerThreadId && (parent.engine !== 'codex' || parent.engineSessionId !== callerThreadId)) {
+      throw new Error('the calling Codex thread does not match the inherited Helm parent; use --parent with the intended orchestrator ID');
+    }
     const folder = parent?.cwd ?? cwd;
     if (typeof folder !== 'string' || !folder.trim()) throw new Error('delegation needs a working folder');
     let depth = 1, ancestor = parent;
@@ -640,19 +675,19 @@ export class Sessions extends EventEmitter {
     try {
       const profile = (await getProfiles()).find((p) => p.id === profileId && !p.disabled);
       if (!profile || !ENGINES[profile.engine]?.driver) throw new Error('choose a CLI account with a headless driver');
-      if ((profile.args ?? []).some((arg) => /^--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo)(?:=|$)/.test(arg))) {
+      if (['plan', 'readonly', 'read'].includes(parent?.mode) && (profile.args ?? []).some((arg) => /^--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo)(?:=|$)/.test(arg))) {
         throw new Error('that CLI profile bypasses permissions; choose a profile without bypass flags');
       }
       const auth = (await authStatuses([profile])).get(profile.id);
       if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
-      const selectedMode = delegationMode(profile.engine, parent?.mode, mode);
+      const selectedMode = delegationMode(profile.engine, parent?.mode, mode, startPrefs(profile)?.mode, parent?.engine);
+      const delegation = { parentId: parent?.id ?? null, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting' };
       const child = await this.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
-        title: clip(task.trim().split('\n')[0], 80) });
+        title: clip(task.trim().split('\n')[0], 80), delegation });
       if ((model && child.model !== model) || (selectedMode && child.mode !== selectedMode)) {
         await this.kill(child.id);
         throw new Error('the CLI refused the selected subagent model or permissions; no task was sent');
       }
-      child.delegation = { parentId: parent?.id ?? null, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting' };
       if (parent) {
         parent.delegations = [...(parent.delegations ?? []), child.id].slice(-100);
         parent.updatedAt = Date.now();
@@ -686,6 +721,20 @@ export class Sessions extends EventEmitter {
       }
     }
     return result;
+  }
+
+  /** Follow-ups remain on the same task; running agents can be steered without opening a chat. */
+  async messageDelegation(parentId, id, data) {
+    const child = this.get(id);
+    if (!child.delegation || child.delegation.parentId !== parentId) throw new Error('that task does not belong to this orchestrator');
+    if (typeof data !== 'string' || !data.trim() || data.length > 32_000) throw new Error('a task message must contain 1–32000 characters');
+    const d = this.#drivers.get(id);
+    const turnId = `local-message-${randomBytes(6).toString('hex')}`;
+    await this.input(id, data.trim(), { turnId });
+    if (child.status === 'working' && typeof d?.steer === 'function') {
+      if (!this.#sending.has(id)) await this.sendNow(id, turnId);
+    }
+    return { ok: true };
   }
 
   // ---------------------------------------------------------------- terminals
@@ -747,7 +796,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null }) {
+  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null }) {
     const dir = expand(cwd);
     const session = {
       id: randomBytes(6).toString('hex'),
@@ -765,7 +814,8 @@ export class Sessions extends EventEmitter {
       // permission cards - marked so that it can be found again and so that
       // `input` knows to put the network's state in front of what is typed.
       brain: brain || undefined,
-      notifyDone: true,
+      notifyDone: !delegation,
+      delegation: delegation || undefined,
       status: 'idle',
       // Set when picking up a conversation the CLI already has: the driver
       // reads this as "resume", not "start".
@@ -802,6 +852,10 @@ export class Sessions extends EventEmitter {
       // already had the id that made it a resume, and must keep it.
       session.engineSessionId = engineSessionId ?? driver.engineSessionId;
       if (!session.engineSessionId) throw new Error(`${profile.label || profile.engine} did not create an engine session`);
+      // Claude writes nothing to disk until its first message, so until then
+      // its id cannot be resumed - a driver rebuilt early (a new effort, a
+      // restart) has to start it again instead.
+      if (!engineSessionId && !forkFrom) session.unsent = true;
       this.#save();
       this.emit('session', session);
       return session;
@@ -863,15 +917,22 @@ export class Sessions extends EventEmitter {
       cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
       model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
       engineSessionId: s.engineSessionId,
+      unsent: !!s.unsent,
+      // helm's brief to the agent - which CLI accounts it can delegate to -
+      // as standing instructions rather than glued onto the owner's first
+      // message, where it read as something they had typed.
+      instructions: DRIVERS[s.driver]?.takesInstructions ? (this.delegationBrief?.() || null) : null,
       forkFrom: s.forkFrom,
       transcript: s.transcript,
       monitorOnly: !!s.external,
+      delegated: !!s.delegation,
       // Held on the proc host, the process outlives this daemon. The
       // getters answer what the log still has open - read only when the
       // driver actually finds its process there to rebind.
       procHost: this.procs, procId: s.id,
-      openTurn: () => this.events.openTurn(s.id)?.turnId ?? null,
+      openTurn: () => this.events.activeTurn(s.id)?.turnId ?? null,
       pendingEvents: () => this.events.pending(s.id),
+      resumeEvents: () => this.events.tail(s.id, 0),
       log: (m) => this.log(`[${s.id}] ${m}`),
     });
     this.#drivers.set(s.id, d);
@@ -943,8 +1004,27 @@ export class Sessions extends EventEmitter {
       // turn ended badly. `exited` counts too: delivery respawns the driver,
       // which is how a queue survives the process dying mid-turn. The pump
       // reads s.status to know the agent is free, so it runs after it lands.
+      if (status === 'idle' || e.status === 'exited') this.#steps.delete(s.id);
       if (status === 'idle') this.#pump(s);
       if (e.status === 'exited') return;
+    }
+    // The CLI used a message handed to it mid-turn: from here it is part of
+    // the conversation, at this point in it.
+    if (e.type === 'input.consumed') return this.#consumed(s, e.text);
+    if (e.type === 'item.start' && !e.parentId && !['text', 'thinking'].includes(e.kind)) {
+      const steps = this.#steps.get(s.id) ?? new Set();
+      steps.add(e.id);
+      this.#steps.set(s.id, steps);
+      void this.#handOver(s);
+    }
+    if (e.type === 'item.done') this.#steps.get(s.id)?.delete(e.id);
+    if (e.type === 'turn.done') this.#steps.delete(s.id);
+    if (e.type === 'turn.start') {
+      // Handed over too late for the turn it was typed into, the CLI runs
+      // it as the next one instead; the echo is the client's cue.
+      const steered = this.#steered.get(s.id);
+      const i = steered?.findIndex((x) => x.text.trim() === (e.text ?? '').trim()) ?? -1;
+      if (i >= 0) steered.splice(i, 1);
     }
     if (e.type === 'title') return this.#titled(s, e.title, 'agent');
     // Every turn has always said what it cost and nothing added them up.
@@ -1400,19 +1480,29 @@ export class Sessions extends EventEmitter {
   }
 
   /** Say that somebody is looking at this session; pushes flow while renewed. */
-  watch(id) {
-    this.get(id);
-    this.#watching.set(id, Date.now() + WATCH_TTL_MS);
-    return { ok: true, last: this.events.last(id) };
+  watch(id, watcher = 'legacy') {
+    const session = this.get(id);
+    this.watching(id); // expire old views before renewing this one
+    const viewers = this.#watching.get(id) ?? new Map();
+    viewers.set(watcher, Date.now() + WATCH_TTL_MS);
+    this.#watching.set(id, viewers);
+    return { ok: true, last: this.events.last(id), status: session.status };
   }
 
-  unwatch(id) { this.#watching.delete(id); return { ok: true }; }
+  unwatch(id, watcher = 'legacy') {
+    const viewers = this.#watching.get(id);
+    viewers?.delete(watcher);
+    if (!viewers?.size) this.#watching.delete(id);
+    return { ok: true };
+  }
 
   watching(id) {
-    const until = this.#watching.get(id);
-    if (!until) return false;
-    if (Date.now() > until) { this.#watching.delete(id); return false; }
-    return true;
+    const viewers = this.#watching.get(id);
+    if (!viewers) return false;
+    const now = Date.now();
+    for (const [watcher, until] of viewers) if (now > until) viewers.delete(watcher);
+    if (!viewers.size) this.#watching.delete(id);
+    return viewers.size > 0;
   }
 
   async answer(id, requestId, decision) {
@@ -1434,8 +1524,14 @@ export class Sessions extends EventEmitter {
       const event = this.events.append(id, { type: 'turn.remove', turnId: item.turnId });
       this.emit('event', { id, event });
     }
+    const handed = this.#steered.get(id) ?? [];
+    this.#steered.delete(id);
+    for (const item of handed) {
+      const event = this.events.append(id, { type: 'turn.remove', turnId: item.turnId });
+      this.emit('event', { id, event });
+    }
     const s = this.#index.get(id);
-    if (s && queued.length) s.lastSeq = this.events.last(id);
+    if (s && (queued.length || handed.length)) s.lastSeq = this.events.last(id);
     const d = this.#drivers.get(id);
     if (d) await d.interrupt();
     return { ok: true };
@@ -1471,6 +1567,7 @@ export class Sessions extends EventEmitter {
   }
 
   async setMode(id, mode) {
+    if (mode === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
     const s = this.get(id);
     if (!s.driver) throw new Error('not a headless session');
     s.mode = mode;
@@ -1777,6 +1874,9 @@ export class Sessions extends EventEmitter {
    */
   async input(id, text, { raw = false, attachments = [], turnId: requestedTurnId = null } = {}) {
     const s = this.get(id);
+    if (s.driver && !raw && /^\s*\/(?:plan|plan-mode)(?:\s|$)/i.test(text)) {
+      throw new Error('plan mode is not supported; dispatch the task directly');
+    }
     // A caller-chosen turn id is how a retried operation (code handoff)
     // delivers its first prompt exactly once: the id is deterministic, and
     // the durable turn.start written below is the dedupe marker. An open
@@ -1880,7 +1980,10 @@ export class Sessions extends EventEmitter {
       // is a verb for the CLI, not a description of the work - "/status"
       // must never become the thread's title.
       if (!raw && !clean.trimStart().startsWith('/')) this.#prompted(s, clean);
-      if (!raw && !clean.trimStart().startsWith('/') && !s.delegationIntroduced && this.delegationBrief) {
+      // Claude and Codex take helm's brief as standing instructions instead
+      // (see #driver); only CLIs without that channel get it in the message.
+      if (!raw && !clean.trimStart().startsWith('/') && !s.delegationIntroduced && this.delegationBrief
+        && !DRIVERS[s.driver]?.takesInstructions) {
         const note = this.delegationBrief();
         if (note) {
           clean = `${note}\n\n${clean}`;
@@ -1946,6 +2049,7 @@ export class Sessions extends EventEmitter {
         const q = this.#outbox.get(s.id) ?? [];
         q.push(item);
         this.#outbox.set(s.id, q);
+        void this.#handOver(s);
         return { ok: true };
       }
       this.#sending.add(s.id);
@@ -2027,6 +2131,7 @@ export class Sessions extends EventEmitter {
         }
         await d.send(msg);
       }
+      if (s.unsent) { delete s.unsent; this.#save(); }
     } catch (err) {
       if (s.delegation) {
         s.delegation.status = 'error';
@@ -2113,24 +2218,23 @@ export class Sessions extends EventEmitter {
   /**
    * Hand a queued message to the turn already running, without stopping it.
    *
-   * Only engines with a real steering primitive get this - codex's
-   * app-server turn/steer is the one that exists today - so the capability
-   * is the method existing on the driver, not a flag. Where it does not
-   * exist the refusal lands before the queue is touched: Claude's print
-   * stream would queue a second frame as its own later turn and ACP v1 has
-   * no safe equivalent, and faking either would mislabel the promise.
+   * Only engines with a real steering primitive get this - Codex's
+   * app-server turn/steer, and Claude reading stream input between steps -
+   * so the capability is the method existing on the driver, not a flag.
+   * Where it does not exist the refusal lands before the queue is touched:
+   * ACP v1 has no safe equivalent, and faking one would mislabel the promise.
+   * Delegated tasks use this directly; a chat's held messages go through
+   * `#handOver` when a step starts.
    *
    * `#sending` is held across the steer so a turn settling mid-call cannot
-   * let `#pump` hand the same ticket to the agent twice. `turn.accept` is
-   * the event that lands instead of a close: the message went out, so its
-   * bubble is promoted into the transcript rather than marked stopped.
+   * let `#pump` hand the same ticket to the agent twice. `turn.deliver`
+   * lands instead of a close; `turn.accept` follows when the CLI says it
+   * used the message, and promotes the bubble into the transcript there.
    */
   async sendNow(id, turnId) {
     const s = this.get(id);
-    const q = this.#outbox.get(id) ?? [];
-    const i = q.findIndex((x) => x.turnId === turnId);
-    if (i < 0) return { ok: true, found: false, sent: false };
-    const item = q[i];
+    const item = (this.#outbox.get(id) ?? []).find((x) => x.turnId === turnId);
+    if (!item) return { ok: true, found: false, sent: false };
     const d = this.#drivers.get(id);
     if (typeof d?.steer !== 'function') {
       throw new Error(`${s.engine} cannot send a queued message into the current turn`);
@@ -2138,23 +2242,74 @@ export class Sessions extends EventEmitter {
     if (this.#sending.has(s.id)) throw new Error('message is already being sent');
     this.#sending.add(s.id);
     try {
-      await d.steer(item.text, item.images);
-      // A withdraw or a queue-clearing interrupt may have landed while the
-      // steer was in flight: take the ticket out by id, not by position.
-      const rest = this.#outbox.get(s.id);
-      if (rest) {
-        const j = rest.findIndex((x) => x.turnId === turnId);
-        if (j >= 0) rest.splice(j, 1);
-        if (!rest.length) this.#outbox.delete(s.id);
-      }
-      const event = this.events.append(id, { type: 'turn.accept', turnId });
-      s.lastSeq = event.seq;
-      this.emit('event', { id, event });
+      await this.#steerOne(s, d, item);
       return { ok: true, found: true, sent: true };
     } finally {
       this.#sending.delete(s.id);
       this.#pump(s);
     }
+  }
+
+  /**
+   * Hand held messages to a CLI that is in the middle of a step, oldest
+   * first. It uses them when the step ends - what typing into the CLI's own
+   * input does. A slash command or /compact is a verb for between turns, so
+   * it and everything behind it waits for the turn to end.
+   */
+  async #handOver(s) {
+    const d = this.#drivers.get(s.id);
+    if (typeof d?.steer !== 'function' || !this.#steps.get(s.id)?.size) return;
+    if (this.#sending.has(s.id)) return;
+    this.#sending.add(s.id);
+    try {
+      for (;;) {
+        const item = this.#outbox.get(s.id)?.[0];
+        if (!item || item.compact != null || item.text.trimStart().startsWith('/')) break;
+        if (s.status !== 'working' && s.status !== 'blocked') break;
+        try { await this.#steerOne(s, d, item); }
+        catch (err) {
+          // The turn ended under it: the pump sends it as the next turn.
+          this.log(`[${s.id}] could not hand over a message mid-turn: ${err.message}`);
+          break;
+        }
+      }
+    } finally {
+      this.#sending.delete(s.id);
+      this.#pump(s);
+    }
+  }
+
+  /** One message to the running turn; `turn.deliver` says it can no longer be withdrawn. */
+  async #steerOne(s, d, item) {
+    await d.steer(item.text, item.images);
+    // A withdraw or a queue-clearing interrupt may have landed while the
+    // steer was in flight: take the ticket out by id, not by position.
+    const rest = this.#outbox.get(s.id);
+    if (rest) {
+      const j = rest.findIndex((x) => x.turnId === item.turnId);
+      if (j >= 0) rest.splice(j, 1);
+      if (!rest.length) this.#outbox.delete(s.id);
+    }
+    const steered = this.#steered.get(s.id) ?? [];
+    steered.push({ turnId: item.turnId, text: item.text });
+    this.#steered.set(s.id, steered);
+    const event = this.events.append(s.id, { type: 'turn.deliver', turnId: item.turnId });
+    s.lastSeq = event.seq;
+    this.emit('event', { id: s.id, event });
+  }
+
+  /** The CLI used a handed-over message: its bubble joins the transcript here. */
+  #consumed(s, text) {
+    const steered = this.#steered.get(s.id);
+    if (!steered?.length) return;
+    const want = String(text ?? '').trim();
+    let i = steered.findIndex((x) => x.text.trim() === want);
+    if (i < 0) i = 0;
+    const [{ turnId }] = steered.splice(i, 1);
+    if (!steered.length) this.#steered.delete(s.id);
+    const event = this.events.append(s.id, { type: 'turn.accept', turnId });
+    s.lastSeq = event.seq;
+    this.emit('event', { id: s.id, event });
   }
 
   /** A turn helm itself speaks: appended and pushed like any driver event. */
@@ -2190,11 +2345,15 @@ export class Sessions extends EventEmitter {
   keys(id, keys) {
     const s = this.get(id);
     if (s.driver) throw new Error('a headless session has no terminal');
+    const bytes = keys.map(KEY_BYTES).join('');
     if (s.pty) {
-      this.terminals.write(id, keys.map(KEY_BYTES).join(''));
+      this.terminals.write(id, bytes);
       return { ok: true };
     }
-    return this.runtime.sendKeys(this.#handle(s), keys);
+    // The same bytes, down the same road typing takes. herdr's own key
+    // names ("esc", lower case) are not the ones the app sends, and a name
+    // it does not know was silently dropped - every quick key but a few.
+    return this.runtime.sendText(this.#handle(s), bytes);
   }
 
   async kill(id) {
@@ -2218,6 +2377,8 @@ export class Sessions extends EventEmitter {
       const d = this.#drivers.get(id);
       this.#drivers.delete(id);
       this.#outbox.delete(id);
+      this.#steps.delete(id);
+      this.#steered.delete(id);
       clearTimeout(this.#reapers.get(id));
       if (d) await d.kill();
       this.#index.delete(id);
@@ -2307,6 +2468,10 @@ export class Sessions extends EventEmitter {
     s.archivedAt = s.archived ? Date.now() : null;
     this.#save();
     this.emit('session', s);
+    if (s.delegation?.parentId) {
+      const parent = this.#index.get(s.delegation.parentId);
+      if (parent) this.emit('session', { ...parent, delegations: this.#visibleDelegations(parent) });
+    }
     return { ok: true, session: wire(s) };
   }
 
@@ -2368,6 +2533,7 @@ export class Sessions extends EventEmitter {
     const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
     const removed = new Set(tail.filter((e) => e.type === 'turn.remove').map((e) => e.turnId));
     const accepted = new Set(tail.filter((e) => e.type === 'turn.accept').map((e) => e.turnId));
+    const delivered = new Set(tail.filter((e) => e.type === 'turn.deliver').map((e) => e.turnId));
     const echoes = tail.filter((e) => e.type === 'turn.start'
       && !String(e.turnId).startsWith('local-'));
     const open = tail.filter((e) => e.type === 'turn.start'
@@ -2375,10 +2541,7 @@ export class Sessions extends EventEmitter {
     // A hosted process may still be in its current real turn. Queued local
     // turns can follow it in the log, so use the last real turn, not simply
     // the last open turn, as the one to leave running.
-    const active = processAlive
-      ? [...open].reverse().find((e) => !String(e.turnId).startsWith('local-'))
-        ?? [...open].reverse().find((e) => e.queued !== true)
-      : null;
+    const active = processAlive ? activeTurnFromEvents(tail) : null;
     const revive = [];
     const settle = (turnId, status, error) => {
       if (s.delegation) s.delegation.status = status === 'ok' ? 'done' : status;
@@ -2396,9 +2559,15 @@ export class Sessions extends EventEmitter {
       const echoed = echoIndex >= 0;
       if (echoed) echoes.splice(echoIndex, 1);
 
-      if (local && accepted.has(e.turnId)) {
+      if (local && (accepted.has(e.turnId) || delivered.has(e.turnId))) {
         // `turn.accept` records a successful steer into a live turn; never
         // send that ticket again if the daemon restarted before its echo.
+        // A ticket handed over but not yet used went to the CLI all the same.
+        if (!accepted.has(e.turnId)) {
+          const event = this.events.append(s.id, { type: 'turn.accept', turnId: e.turnId });
+          s.lastSeq = event.seq;
+          this.emit('event', { id: s.id, event });
+        }
         settle(e.turnId, 'ok');
         continue;
       }
@@ -2439,7 +2608,9 @@ export class Sessions extends EventEmitter {
   }
 
   /** Re-watch every surviving pane after a daemon restart. */
-  resume() {
+  async resume() {
+    const reattaching = [];
+    const profiles = loadProfiles()?.profiles ?? [];
     for (const s of this.#index.values()) {
       // A terminal lives in the host process, which outlives us - so its
       // record stays until `adoptTerminals()` has asked what really survived.
@@ -2448,11 +2619,22 @@ export class Sessions extends EventEmitter {
       // An agent process the host kept is still running whatever it was
       // running: its active turn and questions are still answerable. Any
       // unmatched queued tickets are rebuilt from the log for when it settles.
-      if (this.procs.hasProc(s.id)) {
+      const profile = profiles.find((p) => p.id === s.profileId);
+      const procId = hostedProcId(s, s.driver === 'codex' && profile ? materialize(profile) : null);
+      if (procId && this.procs.hasProc(procId)) {
         const tail = this.events.tail(s.id, 0);
         this.#restoreOpenTurns(s, tail, true);
         s.lastSeq = this.events.last(s.id);
-        this.#pump(s);
+        // Listen immediately, including to unattended threads. Otherwise a
+        // turn that finishes during the update stays busy until someone opens
+        // the thread, and its queued messages never get delivered.
+        reattaching.push(this.#driver(s).then(async (d) => {
+          // Drivers start idle and suppress duplicate status events. Seed the
+          // persisted state so an adopted idle process corrects a stale busy row.
+          d.status = s.status;
+          await d.start();
+          this.#pump(s);
+        }).catch((err) => this.log(`[${s.id}] could not reattach surviving agent: ${err.message}`)));
         continue;
       }
       // The process that asked died with the previous daemon; a prompt it
@@ -2481,11 +2663,15 @@ export class Sessions extends EventEmitter {
       this.#pump(s);
     }
     this.#save();
+    await Promise.allSettled(reattaching);
   }
 
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
-    await Promise.allSettled([...this.#drivers.values()].map((d) => d.suspend?.() ?? d.kill()));
+    await Promise.allSettled([...this.#drivers.values()].map((d) => {
+      d.flush?.();
+      return d.suspend?.() ?? d.kill();
+    }));
     this.#drivers.clear();
     // Let go of the hosts, without closing what they hold: their shells and
     // agents outlive this daemon by design. A socket left open here kept a

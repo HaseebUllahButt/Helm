@@ -15,16 +15,18 @@ import { loadDraft, saveDraft } from '../draftStore';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
 import { money } from '../format';
 import { loadModels, saveModels } from '../modelCache';
+import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
 import type { Decision, Turn } from './types';
 import { Subagents } from './Subagents';
+import { BackIcon, Icon } from '../Icon';
+import { Route } from '../Route';
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
   grok: 'Grok', cursor: 'Cursor', pi: 'Pi', omp: 'OMP', rovo: 'Rovo Dev',
   agy: 'Antigravity CLI', antigravity: 'Antigravity', gemini: 'Gemini', kimi: 'Kimi', muse: 'Muse',
 };
-const shortPath = (p: string) => (p ?? '').replace(/^\/home\/[^/]+/, '~').split('/').slice(-2).join('/');
 
 /**
  * A headless agent session: the transcript built from helm's own events,
@@ -43,7 +45,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   /** Go to another thread - the one a branch just made. */
   onOpenSession?: (s: Session) => void;
 }) {
-  const { log, error: logError, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
+  const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
   const [draft, setDraftRaw] = useState(() => loadDraft(env.id, session.id));
@@ -77,14 +79,20 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // empty until a CLI has been spawned and a round trip has come back.
   useEffect(() => {
     let stale = false;
+    setOptions(null);
     loadModels(env.id, session.profileId).then((cached) => {
       if (!stale && cached) setOptions((now) => now ?? cached);
     });
-    client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id }, 30_000)
-      .then((r) => { if (!stale) { setOptions(r); saveModels(env.id, session.profileId, r); } })
-      .catch(() => setOptions((now) => now ?? { default: null, models: [] }));
-    return () => { stale = true; };
-  }, [client, env.id, session.profileId]);
+    const catalog = followModelRefresh(
+      () => client.rpc<ModelList>(env.id, 'model.list', { profileId: session.profileId, id: session.id }, 30_000),
+      (r) => { setOptions(r); saveModels(env.id, session.profileId, r); },
+      () => setOptions((now) => now ?? { default: null, models: [] }),
+    );
+    const off = client.on((e, kind, payload: any) => {
+      if ((kind === 'connection' && payload?.online) || (e === env.id && kind === 'transport' && payload?.direct)) void catalog.refresh();
+    });
+    return () => { stale = true; catalog.stop(); off(); };
+  }, [client, env.id, session.profileId, session.id]);
 
   // What `/` offers. Read from the machine because that is where the
   // commands are: files beside the project, or in that account's config.
@@ -212,22 +220,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     finally { setQueueBusy(''); }
   };
 
-  /**
-   * Send a queued message into the turn already running, without
-   * interrupting it. Real steering, not a queue trick: Codex's app-server
-   * turn/steer is currently the only true in-flight primitive Helm has -
-   * Claude's print stream queues a second frame as its own later turn and
-   * ACP v1 has no equivalent, so those engines keep FIFO plus withdraw.
-   */
-  const sendQueuedNow = async (turn: Turn) => {
-    if (queueBusy) return;
-    setQueueBusy(turn.id);
-    try {
-      await client.rpc(env.id, 'session.send-now', { id: session.id, turnId: turn.id });
-    } catch (e: any) { setError(e.message); }
-    finally { setQueueBusy(''); }
-  };
-
   const answer = (d: Decision) => pending && call(() => client.rpc(env.id, 'session.answer', { id: session.id, requestId: pending.requestId, decision: d }));
   const stop = () => call(() => client.rpc(env.id, 'session.interrupt', { id: session.id }));
   // model / thinking / permissions / speed all go the same way: tell the
@@ -350,7 +342,58 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       : s === 'working' ? <span className="chip working"><i />working{ago}</span> : null;
   };
 
-  const controls = Controls({ options, session, busy, onPick: pick });
+  // Favorites and new-chat defaults live on the machine, so a phone and a laptop
+  // open the same picker. Older machines answer without `favs`, and the
+  // sheet falls back to this browser's own favorites.
+  const saveFavs = (next: string[]) => {
+    setOptions((now) => now && { ...now, favs: next });
+    client.rpc(env.id, 'picker.prefs', { favs: { [session.engine]: next } }, 15_000).catch((e) => setError(e.message));
+  };
+  const saveDefault = async (kind: Kind, value: string) => {
+    if (!options) return;
+    setError('');
+    try {
+      if (kind === 'model') {
+        const r: any = await client.rpc(env.id, 'model.prefs', {
+          profileId: session.profileId, default: value, approved: options.prefs?.approved ?? [],
+        }, 15_000);
+        setOptions((now) => now && { ...now, prefs: r.prefs });
+      } else {
+        const r: any = await client.rpc(env.id, 'profile.defaults', {
+          profileId: session.profileId, ...(options.defaults ?? {}), [kind]: value,
+        }, 15_000);
+        setOptions((now) => now && { ...now, defaults: r.defaults });
+      }
+    } catch (e: any) { setError(e.message); throw e; }
+  };
+  const controls = Controls({ options, session, busy, onPick: pick, onFavs: saveFavs, onDefault: saveDefault });
+
+  // Everything this chat runs with - the account, model, thinking, permissions
+  // and speed - becomes what a new chat on this machine starts with, for
+  // every device, until it is changed again.
+  const [notice, setNotice] = useState('');
+  const saveAsDefaults = () => call(async () => {
+    if (!options) throw new Error('Still reading this chat\'s settings - try again in a moment.');
+    // What the model chip shows is what this chat runs with.
+    const model = session.model || session.engineModel || options.default || '';
+    const effort = session.effort || session.engineEffort || '';
+    const mode = session.mode && session.mode !== 'plan' ? session.mode : '';
+    const speed = session.speed || '';
+    if (model) {
+      const r: any = await client.rpc(env.id, 'model.prefs', {
+        profileId: session.profileId, default: model, approved: options.prefs?.approved ?? [],
+      }, 15_000);
+      setOptions((now) => now && { ...now, prefs: r.prefs });
+    }
+    const d: any = await client.rpc(env.id, 'profile.defaults', {
+      profileId: session.profileId, effort: effort || undefined, mode: mode || undefined, speed: speed || undefined,
+    }, 15_000);
+    setOptions((now) => now && { ...now, defaults: d.defaults });
+    if (options.account) await client.rpc(env.id, 'picker.prefs', { agent: options.account }, 15_000);
+    const label = (m: string) => options.labels?.[m] ?? m;
+    setNotice(`New chats on ${env.name} now start with ${[engine, model && label(model), effort, mode && (options.modes?.find((x) => x.id === mode)?.short ?? mode), speed].filter(Boolean).join(' · ')}.`);
+    setTimeout(() => setNotice(''), 5000);
+  });
   // What the folder looks like to git. Asked again whenever a turn ends,
   // which is when something has usually just changed.
   const git = useGitStatus(client, env, session.cwd, status === 'working' ? 'working' : `rest:${session.updatedAt ?? 0}`);
@@ -370,34 +413,34 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
 
   return (
     <>
-      <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+      <div className="bar session-bar">
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
           <h1>{session.title}</h1>
           <span className="sub">
             <EngineMark engine={session.engine} />
-            {[engine, shortPath(session.cwd), money(session.costUsd)].filter(Boolean).join(' · ')}
+            <Route machine={env.name} folder={session.brain ? undefined : session.cwd} />
+            {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
+              <span key={part}><span className="sep"> · </span>{part}</span>
+            ))}
             {!env.online && <span className="offline"> · machine offline</span>}
+            {env.online && syncing && <span role="status"> · Syncing chat…</span>}
             {env.online && conn && !conn.online && (
               <span className="offline"> · {conn.reachable ? 'reconnecting' : 'connection down'}</span>
             )}
           </span>
         </div>
         {chip(status)}
-        <button className="iconbtn subagents-launch" aria-label="Subagents" title="Delegate to another CLI or model"
-          onClick={() => setShowSubagents(true)}>⧉{(session.delegations?.length ?? 0) > 0 && <b className="cbadge">{session.delegations!.length}</b>}</button>
+        <button className="iconbtn subagents-launch wide-only" aria-label="Subagents" title="Delegate to another CLI or model"
+          onClick={() => setShowSubagents(true)}><Icon name="subagents" size={17} />{(session.delegations?.length ?? 0) > 0 && <b className="cbadge">{session.delegations!.length}</b>}</button>
         {git.status?.repo && !session.brain && (
           <button
             className={`iconbtn changesbtn${changed ? ' has' : ''}`}
-            title={changed ? `${changed} changed file${changed === 1 ? '' : 's'}` : 'no changes yet'}
-            aria-label={changed ? `${changed} changed files` : 'changes'}
+            title={changed ? `Git · ${changed} changed file${changed === 1 ? '' : 's'}` : 'Git graph and agents'}
+            aria-label="Git graph and changes"
             onClick={() => setShowChanges(true)}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="9" r="2" />
-              <path d="M6 7v10M18 11c0 4-6 3-10 7" />
-            </svg>
+            <Icon name="git" size={17} />
             {changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}
           </button>
         )}
@@ -405,7 +448,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             the preference, so it is the same on every device and survives
             this one closing. */}
         <button
-          className={`iconbtn bell${session.notifyDone ? ' on' : ''}`}
+          className={`iconbtn bell wide-only${session.notifyDone ? ' on' : ''}`}
           title={session.notifyDone ? 'completion notifications on — tap to turn off' : 'completion notifications off — tap to turn on'}
           aria-label={session.notifyDone ? 'turn completion notifications off' : 'turn completion notifications on'}
           aria-pressed={!!session.notifyDone}
@@ -429,9 +472,18 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             </svg>
           </button>
         )}
-        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}>⋯</button>
+        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} />{(session.delegations?.length ?? 0) > 0 && <i className="moredot narrow-only" aria-hidden="true" />}</button>
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
+            {/* On a phone the header keeps the title, the state and Git;
+                these two ride in here instead of squeezing the title. */}
+            <button className="narrow-only" onClick={() => setShowSubagents(true)}>
+              Subagents{(session.delegations?.length ?? 0) > 0 ? ` · ${session.delegations!.length}` : ''}
+            </button>
+            <button className="narrow-only" aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
+              {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
+            </button>
+            {!session.brain && <button onClick={() => { setMenu(null); void saveAsDefaults(); }}>Use these settings for new chats</button>}
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
             {session.delegation?.parentId && onOpenSession && <button onClick={() => call(async () => {
               const r = await client.rpc<{ session: Session }>(env.id, 'session.events', { id: session.delegation!.parentId, limit: 1 });
@@ -466,22 +518,23 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         commands={commands}
         queued={queuedTurns.map((turn) => ({
           turn, text: splitNote(turn.text).text ?? turn.text,
-          attachments: turn.attachments?.length ?? 0,
+          attachments: turn.attachments?.length ?? 0, delivered: turn.delivered,
         }))}
         onWithdrawQueued={withdraw}
-        onSendQueuedNow={session.engine === 'codex' ? sendQueuedNow : undefined}
+        steers={session.engine === 'codex' || session.engine === 'claude'}
         queueBusy={queueBusy}
         history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
       >
         {/* Above the input, not under it: below the composer it landed in
             the home-bar zone and pushed the input up. A tap dismisses it. */}
         {(error || logError) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || logError}</div>}
+        {notice && !error && <div className="notice floating" role="status" onClick={() => setNotice('')}><Icon name="check" size={14} />{notice}</div>}
         {controls.sheet}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>
 
-      {showSubagents && <Subagents client={client} env={env} parent={session} onClose={() => setShowSubagents(false)} onOpen={onOpenSession} />}
+      {showSubagents && <Subagents key={`${env.id}:${session.id}`} client={client} env={env} parent={session} onClose={() => setShowSubagents(false)} onOpen={onOpenSession} />}
 
       {branching && (
         <Confirm
@@ -504,6 +557,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         <ChangesPanel
           client={client} env={env} cwd={session.cwd} status={git.status} reload={git.reload}
           onClose={() => setShowChanges(false)}
+          onOpen={onOpenSession ? (s) => { setShowChanges(false); onOpenSession(s); } : undefined}
         />
       )}
 

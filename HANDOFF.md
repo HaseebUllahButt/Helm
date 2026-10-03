@@ -16,6 +16,139 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-02 (evening) — Faster startup, machines update themselves
+
+**Startup.** On a copy of the laptop's real state with its network cut
+(`unshare -rn`, so it could not reach the VM as "Laptop"), time to "serving
+locally" went ~1.1s -> ~0.5s; on the live laptop 2.4s -> 0.7s, and linked to
+the VM 4.8s -> 3.7s (the rest is the VPN's round trips). Causes: every hub link
+ran `describe()` itself - four git commands each, twenty at once on five
+hubs - and the profile/auth/folder-index warm-ups (alias rediscovery blocks
+briefly) ran before the links. `describe()` is now one shared promise started
+beside herdr's `ensureReady`; warm-ups wait 2s. `currentVersion` is two git
+calls (`status --porcelain=v2 --branch` + `log -1`). A Node compile cache was
+measured and gained nothing.
+
+**Auto-update.** `autoUpdate()` in `update.js`: a systemd-started daemon
+(INVOCATION_ID) checks 20s after start, on wake from sleep (a >5 min gap in a
+1 min interval), and when a remote hub link returns after 10+ min with none.
+At most once per 10 min, same guard as `self-update` (clean main checkout), so
+the laptop's pinned `~/.helm-release` and dev trees never move. `selfUpdate`
+now takes `HELM_DIR/update.lock` (stale after 30 min), runs npm under
+`nice -n 10`, and rebuilds node-pty when npm's blocked install scripts left it
+unbuilt. macOS/Windows daemons do not auto-update (nothing would restart them).
+
+**Machines:** VM, laptop and the online `haseeb` (24764342) are on ac288c9.
+That haseeb's two local herdr fixes were ported to main (a742705) and kept on
+it as `stash@{0}`. The other `haseeb` (8727e3f9) and HomePC were offline.
+
+**Commit hygiene incident.** Two helm-driven `claude -p` sessions were editing
+this checkout at the same time; commits 998d88c and a742705 were made with
+`git add -A` and swept in their in-progress edits (picker favorites legend,
+transfer origin handling), which were pushed and deployed. Tests passed with
+them. Commit by path from now on.
+
+## 2026-10-02 (later) — Folded tool calls, Inter, defaults from a chat
+
+**Tool calls fold.** In a driven chat, everything between two things the agent
+said (tool calls, commands, edits, subagents, thinking) is one line, e.g.
+"Read 1 file · Ran 2 commands · Edited App.tsx · 1 failed". Closed by default;
+tap to open. Opened, each command is one line and its output opens only on
+its own tap. While the agent works, the line reads "Running npm run build ·
+Read 1 file so far" and the command's last 4 lines show only if opened. The
+group is keyed by its first item, so it keeps its open state as it grows.
+Outside-helm chats (App.tsx `Turn`) fold any run of 2+ tools with the same
+kind of summary. Browser test: `test/browser/activity-fold.test.mjs`.
+
+**Font.** Inter (variable, Latin, self-hosted at `/fonts/inter-latin-var.woff2`,
+precached; shell cache bumped to v14) for everything except the conversation:
+`.chat-wrap, .chat, .composer-wrap` keep the system face, as the owner asked.
+Titles use Inter too; only the wordmark keeps Archivo.
+
+**Defaults from a chat.** Chat ⋯ menu → "Use these settings for new chats"
+saves the account as the machine's default agent (`picker.agent`, sticky -
+starting another agent once does not move it; `last` still records the last
+used), plus model, thinking, permissions and speed for that account. The start
+screen picks `agent` first, tags it "default", and offers "Make X the default
+on <machine>" for any other selected row. `model.list` now returns `account`.
+
+**Terminals on the laptop already have the pty.** Terminals run in
+`helm-terminals-<uid>` (restarted with helm-serve, `"pty":true` since 12:17);
+only agents run in `helm-procs-<uid>`, which still says `"pty":false` and does
+not need it. The earlier note above saying laptop terminals stay slow was wrong.
+
+## 2026-10-02 — Git graph rebuilt, terminal keys, picker choices on the machine
+
+**Git graph.** Rows are 44px (were 72), so about twice the history fits. Each
+line of history keeps one colour (eight-colour palette, both themes); a
+commit hands its column to its first parent, and when a side line reaches a
+shared parent first the mainline still wins the left column (`graphRows`).
+Branch, tag and remote labels are pills (`main` and `origin/main` on one
+commit fold into one pill with a cloud); the current checkout's commit has a
+halo; agents sit on the commit their checkout is at. Tapping a commit opens
+its message, author, date, parents and files; tapping a file shows its diff.
+New RPC `git.commit { cwd, hash, path? }` - hash must be hex, path must stay
+inside the folder; merges read against the first parent. `git.graph` now also
+returns `remotes`.
+
+**Terminal.** The quick keys were sent as key *names* (`session.keys`), which
+only the pty path translated; on a herdr pane most were dropped. They now send
+the bytes a keyboard sends through `session.input` (the typing path), with
+arrows/Home/End following the program's cursor-key mode (proved: Up sends
+`ESC O A` in that mode). The daemon's `session.keys` also sends bytes to panes
+now, which fixes the chat composer's quick keys. Two rows that fit a phone (no
+sideways scrolling), press on touch-down, hold-to-repeat for arrows/⌫/page
+keys, refit on any size change. The terminal button reopens your open
+terminal instead of killing it and starting a new one; `+` opens another, tabs
+switch between them, the menu says Rename/Close terminal.
+
+**This laptop's release worktree has no pty again** (`terminals.log`:
+`Cannot find module '../build/Debug/pty.node'`, `"pty":false`), so its
+terminals are on the slow pane path. Rebuild per the deploy notes
+(`npx node-gyp rebuild` in `node-pty-prebuilt-multiarch`). Not done here.
+
+**Picker choices live on the machine.** Hidden agents, the last agent started,
+and starred models are in `config.json` under `picker` (`picker.prefs` RPC,
+also returned by `profile.list`). A browser's old local copy is moved onto the
+machine the first time it opens a new-enough machine. The chat's model,
+thinking, permission and speed sheets have "Start new chats with X", which
+writes the account default on the machine. Verified with two separate browser
+profiles: hiding agents in one shows the same list in the other.
+
+**Smaller.** No more `vm`/`pc` tags beside machine names (sidebar, Updates,
+palette). The machine-type setting reads Computer / Always-on server / Storage.
+Two logins with the same folder name show their alias ("personal (claudea)").
+The start screen shows what the selected agent starts with.
+
+Validation: `npm run check` (573 tests + network) and 18 browser tests pass.
+Phone (390×844) and desktop screenshots in both themes were checked against a
+sandboxed `helm up` with real profiles. Not checked on a real phone or on a
+real herdr pane - the pane key fix is reasoned from the typing path, which
+already used `sendText`, plus a unit test.
+
+## 2026-10-01 — Start, Git graph and notifications
+
+The start screen now chooses one account and opens it in the selected folder.
+Worktree isolation belongs to the agent's task workflow; the worktree RPC remains,
+but the worktree checkbox and comparison launcher are removed.
+
+The chat's Git button opens Graph and Changes tabs. `git.graph` returns the latest
+80 commits with parent links and live sessions grouped by their actual checkout
+(including linked worktrees, subfolders and symlinks). Agent markers open their
+threads; shared checkouts are labelled. Presence refreshes on session changes and
+every 15 seconds. This represents session folders, not ownership of individual edits.
+
+Push previews and dismissible in-app cards share concise Helm branding. Commands,
+paths and addresses stay out of previews; full approval details remain in chat.
+Completion notifications no longer request persistent display. Browser-controlled
+origin labels still belong to the browser, not Helm's notification content.
+
+Local validation: TypeScript/build, 545 Node tests with `--test-concurrency=4`,
+13 browser tests and network integration passed. Default parallel `npm run check`
+intermittently fails terminal-host startup tests, which pass alone and at reduced
+concurrency. Desktop/phone layouts were inspected; real-device push delivery was
+not exercised.
+
 ## What this is for
 
 **The problem.** Coding agents constantly need input. You give one a task, walk

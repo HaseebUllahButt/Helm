@@ -399,6 +399,7 @@ export function createWsLayer() {
       }
 
       case T.TUNNEL_READY:
+      case T.TUNNEL_ACK:
       case T.TUNNEL_DATA:
       case T.TUNNEL_CLOSE:
         return routeTunnel(sock, msg);
@@ -496,6 +497,7 @@ export function createWsLayer() {
       }
 
       case T.TUNNEL_OPEN:
+      case T.TUNNEL_ACK:
       case T.TUNNEL_DATA:
       case T.TUNNEL_CLOSE:
         return routeTunnel(sock, msg);
@@ -538,13 +540,13 @@ export function createWsLayer() {
       target.tunnelSids ??= new Set();
       from.tunnelSids.add(sid);
       target.tunnelSids.add(sid);
-      return send(target, T.TUNNEL_OPEN, { sid, port: msg.port || 22 });
+      return send(target, T.TUNNEL_OPEN, { sid, port: msg.port || 22, ...(msg.flow === 1 ? { flow: 1 } : {}) });
     }
 
     // Translate whichever direction this frame came from.
     const relaySid = from.sidMap?.get(msg.sid) ?? msg.sid;
     const tun = tunnels.get(relaySid);
-    if (!tun) return;
+    if (!tun || (from !== tun.initiator && from !== tun.target)) return;
 
     const fromTarget = from === tun.target;
     const dest = fromTarget ? tun.initiator : tun.target;

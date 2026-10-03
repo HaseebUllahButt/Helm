@@ -45,6 +45,7 @@ export const T = {
   // ever accepts an inbound connection.
   TUNNEL_OPEN: 'tunnel.open',     // initiator -> relay -> target { sid, env, port }
   TUNNEL_READY: 'tunnel.ready',   // target -> relay -> initiator { sid }
+  TUNNEL_ACK: 'tunnel.ack',       // { sid, bytes } cumulative bytes written; negotiated flow=1
   TUNNEL_DATA: 'tunnel.data',     // both ways { sid, data:<base64> }
   TUNNEL_CLOSE: 'tunnel.close',   // both ways { sid, reason? }
 
@@ -109,7 +110,9 @@ export const M = {
   MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }
   // What a session did to its folder, as git sees it.
   GIT_STATUS: 'git.status',        // { cwd } -> { repo, branch?, ahead?, behind?, files[], worktree?, head? }
+  GIT_GRAPH: 'git.graph',          // { cwd } -> bounded commit ancestry and live agents by checkout
   GIT_DIFF: 'git.diff',            // { cwd, path } -> { path, diff, truncated }
+  GIT_COMMIT: 'git.commit',        // { cwd, hash } -> { hash, subject, body, author, date, parents[], files[] }
   GIT_WORKTREE: 'git.worktree',    // { cwd, name? } -> { path, branch, base }  a sibling checkout on a new branch
   GIT_PR: 'git.pr',                // { cwd } -> the branch's pull request, or null
   FS_LIST: 'fs.list',              // { path } -> { path, parent, entries[] }
@@ -124,11 +127,13 @@ export const M = {
   PROFILE_DEFAULTS: 'profile.defaults', // { profileId, effort?, mode?, speed? } -> { defaults }
   MODEL_LIST: 'model.list',        // { profileId, id?, all? } -> { default, models[], more?[], prefs?, effort?, efforts? }
   MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[] } -> { prefs }  per-account picker filter
+  PICKER_PREFS: 'picker.prefs',    // { hidden?, last?, favs? } -> { picker }  what the new-session picker shows, shared by every device
   SESSION_LIST: 'session.list',    // {} -> { sessions[] }
   SESSION_START: 'session.start',  // { cwd, profileId, model?, effort?, mode?, speed?, title?, parent? } -> { session }
   SESSION_LINK:  'session.link',   // { id, child } -> { session }  durable parent/child handoff link
   SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task } -> { session }
   SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id } -> { session, status, complete, output, pending }
+  SESSION_DELEGATION_MESSAGE: 'session.delegation-message', // { parentId, id, data } -> { ok }
   SESSION_ATTACH: 'session.attach',// { id, cols, rows } -> { session, scrollback }
   SESSION_DETACH: 'session.detach',// { id }
   SESSION_INPUT: 'session.input',  // { id, data }

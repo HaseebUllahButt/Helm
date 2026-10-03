@@ -408,13 +408,38 @@ function gitMetadata(source) {
   const toplevel = run(['rev-parse', '--show-toplevel']);
   if (!toplevel || resolve(toplevel) !== source) return null;
   const commit = run(['rev-parse', 'HEAD']);
-  if (!commit || !GIT_COMMIT.test(commit)) return null;
-  const git = { commit };
+  const git = commit && GIT_COMMIT.test(commit) ? { commit } : {};
   const branch = run(['symbolic-ref', '--quiet', '--short', 'HEAD']);
   if (branch && branch.length <= 200 && /^[^\x00-\x1f\x7f]+$/.test(branch)) git.branch = branch;
   const remote = run(['remote', 'get-url', 'origin']);
   if (remote && isSafeGitRemote(remote)) git.remote = remote;
-  return git;
+  return git.commit || git.remote ? git : null;
+}
+
+/** Configure only origin in a freshly transferred folder; never fetch or reset files. */
+export async function configureGitOrigin(folder, git, { exec = promisify(execFile) } = {}) {
+  if (!isSafeGitRemote(git?.remote)) return null;
+  const remote = git.remote;
+  const run = (args) => exec('git', ['-C', folder, ...args], {
+    timeout: GIT_TIMEOUT, maxBuffer: 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  });
+  try {
+    // On an identical retry the repository may already be configured. Leave
+    // existing metadata alone, including a fetch the owner did meanwhile.
+    if (await aExists(join(folder, '.git'))) {
+      const { stdout } = await run(['remote', 'get-url', 'origin']);
+      if (stdout.trim() !== remote) throw new Error('the target origin differs from the sent origin');
+    } else {
+      await run(['init', '--template=', ...(git.branch ? [`--initial-branch=${git.branch}`] : [])]);
+      await run(['remote', 'add', 'origin', remote]);
+    }
+    return { remote, configured: true };
+  } catch {
+    // Keep the URL available even on machines without git. Do not expose
+    // process stderr, which can contain local configuration or credentials.
+    return { remote, configured: false, error: 'Origin could not be configured; add it on the target before pulling.' };
+  }
 }
 
 /**
@@ -566,7 +591,7 @@ function validateSnapshot(snapshot) {
   if (snapshot.git != null) {
     const git = snapshot.git;
     const provenance = typeof git === 'object'
-      && GIT_COMMIT.test(git.commit ?? '')
+      && (git.commit === undefined ? isSafeGitRemote(git.remote) : GIT_COMMIT.test(git.commit))
       && (git.branch === undefined || (typeof git.branch === 'string'
         && git.branch.length <= 200 && /^[^\x00-\x1f\x7f]+$/.test(git.branch)
         && !git.branch.startsWith('-')))

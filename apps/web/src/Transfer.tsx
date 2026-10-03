@@ -4,12 +4,10 @@ import {
   type TransferPreview, type TransferReadiness, type TransferResult,
 } from './client';
 import { bytes } from './format';
+import { BackIcon, Icon } from './Icon';
+import { Route } from './Route';
 
 const leaf = (p: string) => p.replace(/\/+$/, '').split('/').pop() || p;
-const short = (p: string) => {
-  const parts = p.replace(/^~/, 'home').split('/').filter(Boolean);
-  return parts.length > 3 ? `…/${parts.slice(-2).join('/')}` : p;
-};
 
 function readinessTone(status?: string) {
   if (status === 'pass') return 'pass';
@@ -23,7 +21,7 @@ function Readiness({ readiness }: { readiness: TransferReadiness }) {
       {readiness.checks.map((c, i) => (
         <div key={`${c.code}-${i}`} className={`readiness-row ${readinessTone(c.status)}`}>
           <span className="readiness-mark">
-            {c.status === 'pass' ? '✓' : c.status === 'fail' ? '!' : '•'}
+            <Icon name={c.status === 'pass' ? 'check' : 'alert'} size={15} />
           </span>
           <span className="grow">
             <span className="rt">{c.message}</span>
@@ -153,10 +151,10 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
           <h1>{receipt ? 'Project sent' : 'Send a project'}</h1>
-          <span className="sub">{source.name} · {short(folder)}</span>
+          <span className="sub"><Route machine={source.name} folder={folder} /></span>
         </div>
       </div>
 
@@ -164,7 +162,7 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
         {receipt ? (
           <>
             <div className="transfer-done">
-              <span className="done-mark">✓</span>
+              <span className="done-mark"><Icon name="check" size={18} /></span>
               <span className="grow">
                 <span className="done-title">Arrived on {result?.targetName}</span>
                 <span className="done-sub">
@@ -183,6 +181,15 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
               </label>
             </div>
 
+            {receipt.repository && <div className="field">
+              <label className="field-label">Git origin
+                <input className="custom" value={receipt.repository.remote} readOnly onFocus={(e) => e.target.select()} />
+              </label>
+              <p className="note">{receipt.repository.configured
+                ? 'Origin is configured. Fetch or pull here using this machine’s GitHub login.'
+                : receipt.repository.error}</p>
+            </div>}
+
             {readiness && (
               <>
                 <div className="section">
@@ -196,7 +203,7 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
             )}
 
             <p className="note">
-              Files arrived, but no project commands were run. Install dependencies,
+              Files arrived{receipt.repository?.configured ? ' and Git origin was configured' : ''}. Install dependencies,
               start services and verify environment values only when you choose to.
             </p>
             {error && <div className="error">{error}</div>}
@@ -227,6 +234,12 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
               </div>
             </div>
 
+            {preview?.git?.remote && <div className="field">
+              <label className="field-label">Git origin
+                <input className="custom" value={preview.git.remote} readOnly onFocus={(e) => e.target.select()} />
+              </label>
+              <p className="note">The origin URL travels with the files. Pull on the target using its GitHub login.</p>
+            </div>}
             <div className="section">send to</div>
             <div className="rows">
               {targets.map((t) => (
@@ -235,12 +248,12 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
                   className={`row tall${t.id === targetId ? ' active' : ''}`}
                   onClick={() => setTargetId(t.id)}
                 >
-                  <span className="glyph repo">◆</span>
+                  <span className="glyph"><Icon name="machine" size={16} /></span>
                   <span className="grow">
                     <span className="rt"><span className="rt-text">{t.name}</span></span>
                     <span className="rm">{t.info.host ?? 'online'}</span>
                   </span>
-                  {t.id === targetId && <span className="check">✓</span>}
+                  {t.id === targetId && <span className="check"><Icon name="check" size={16} /></span>}
                 </button>
               ))}
               {!targets.length && (
@@ -308,7 +321,7 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
 
             <p className="note">
               What is left behind is decided by filename policy, not file contents.
-              Nothing on {target?.name ?? 'the target'} is overwritten, and nothing is run.
+              Nothing on {target?.name ?? 'the target'} is overwritten. Git origin is configured when available; project commands are not run.
             </p>
             {busy && <div className="banner">{step || 'working…'}</div>}
             {error && <div className="error">{error}</div>}
@@ -366,8 +379,8 @@ export function VerifyView({ client, env, folder, onBack, onOpenSession }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
-        <div className="titles"><h1>Check setup</h1><span className="sub">{env.name} · {short(folder)}</span></div>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
+        <div className="titles"><h1>Check setup</h1><span className="sub"><Route machine={env.name} folder={folder} /></span></div>
       </div>
       <div className="scroll"><div className="pad column">
         <div className="transfer-hero">

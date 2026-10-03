@@ -392,6 +392,20 @@ test('a worktree root carries its provenance; unsafe remotes stay home', async (
   assert.equal(createCodeSnapshot(sub).git, undefined);
 });
 
+test('origin setup refuses unsafe URLs and keeps files available when Git setup fails', async () => {
+  const { configureGitOrigin } = await import('../packages/connect/src/code-transfer.js');
+  let calls = 0;
+  const exec = async () => { calls++; throw new Error('credential-sensitive failure details'); };
+  for (const remote of ['file:///tmp/repo', '/tmp/repo', 'https://token@github.com/o/r.git', '-x']) {
+    assert.equal(await configureGitOrigin(join(work, 'missing-git'), { remote }, { exec }), null);
+  }
+  assert.equal(calls, 0);
+  const result = await configureGitOrigin(join(work, 'missing-git'), { remote: 'https://github.com/o/r.git' }, { exec });
+  assert.equal(result.configured, false);
+  assert.equal(result.remote, 'https://github.com/o/r.git');
+  assert.ok(!JSON.stringify(result).includes('sensitive'));
+});
+
 test('restoreGitMetadata runs the documented sequence for a remote', async () => {
   const { restoreGitMetadata } = await import('../packages/connect/src/code-transfer.js');
   const folder = join(work, 'restore-calls');

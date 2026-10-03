@@ -14,6 +14,7 @@ function setup({ fetch, shell } = {}) {
   const entries = new Map(shell ? [['/index.html', shell]] : []);
   const timers = new Map();
   const lifetime = [];
+  const notifications = [];
   let timerId = 0;
   const cache = {
     add: async () => {},
@@ -33,7 +34,7 @@ function setup({ fetch, shell } = {}) {
     addEventListener: (name, handler) => listeners.set(name, handler),
     skipWaiting: async () => {},
     clients: { claim: async () => {}, matchAll: async () => [], openWindow: async () => {} },
-    registration: { getNotifications: async () => [], showNotification: async () => {} },
+    registration: { getNotifications: async () => [], showNotification: async (title, options) => { notifications.push({ title, options }); } },
   };
   class TestResponse {
     static error() { return response('network error', { ok: false, type: 'error' }); }
@@ -50,7 +51,12 @@ function setup({ fetch, shell } = {}) {
   };
   vm.runInNewContext(workerSource, context, { filename: 'sw.js' });
   return {
-    entries, listeners, lifetime, timers,
+    entries, listeners, lifetime, timers, notifications,
+    async dispatchPush(payload) {
+      let result;
+      listeners.get('push')({ data: { json: () => payload }, waitUntil(promise) { result = promise; } });
+      await result;
+    },
     dispatchNavigation() {
       let result;
       const event = {
@@ -125,4 +131,16 @@ test('a rejected fetch uses a good cached shell and never returns a cached error
   await Promise.resolve();
   resolveFetch(response('network shell'));
   assert.equal((await page).body, 'network shell');
+});
+
+test('completion previews can dismiss naturally, while approvals stay available', async () => {
+  const worker = setup();
+  const target = { envId: 'e1', sessionId: 's1' };
+  await worker.dispatchPush({ ...target, title: 'Helm · Codex finished', body: 'Fix login', tag: 'helm-done-s1-123' });
+  await worker.dispatchPush({ ...target, title: 'Helm · Codex needs approval', body: 'Fix login', tag: 'helm-s1-r1' });
+  assert.equal(worker.notifications[0].title, 'Helm · Codex finished');
+  assert.equal(worker.notifications[0].options.requireInteraction, false);
+  assert.equal(worker.notifications[1].options.requireInteraction, true);
+  assert.equal(worker.notifications[1].options.data.sessionId, 's1');
+  assert.equal(worker.notifications[1].options.icon, '/icon-192.png');
 });

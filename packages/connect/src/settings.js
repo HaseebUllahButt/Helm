@@ -20,13 +20,32 @@ export function accountKey(profile) {
   const home = profile.wraps
     ? [profile.cmd, ...(profile.args ?? [])].join(' ')
     : Object.values(profile.env ?? {}).find((v) => /^[~/]/.test(v)) ?? '';
-  const creds = [...(profile.envFrom ?? [])].sort().join(',');
+  const creds = [...(profile.envFrom ?? [])].map((name) => profile.secretRefs?.[name] ?? name).sort().join(',');
   return `${profile.engine}|${home}|${creds}`;
 }
 
 export function loadSettings() {
   if (!existsSync(CONFIG_FILE)) return {};
   try { return JSON.parse(readFileSync(CONFIG_FILE, 'utf8')); } catch { return {}; }
+}
+
+/** Retain saved choices when rediscovery separates formerly shared token slots. */
+export function migrateProfileSettings(previous, next) {
+  const cfg = loadSettings();
+  let changed = false;
+  for (const profile of next) {
+    const old = previous.find((p) => p.id === profile.id);
+    if (!old) continue;
+    const before = accountKey(old), after = accountKey(profile);
+    if (before === after) continue;
+    for (const section of ['models', 'starts']) {
+      if (cfg[section]?.[before] && !Object.hasOwn(cfg[section], after)) {
+        cfg[section][after] = { ...cfg[section][before] };
+        changed = true;
+      }
+    }
+  }
+  if (changed) writeSettings(cfg);
 }
 
 /** The account's model prefs, or null - an absent entry means "offer all". */
@@ -55,6 +74,7 @@ export function saveStartPrefs(profile, values = {}) {
   const clean = {};
   for (const key of ['effort', 'mode', 'speed']) {
     const value = typeof values[key] === 'string' ? values[key].trim() : '';
+    if (key === 'mode' && value === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
     if (value) clean[key] = value;
   }
   const key = accountKey(profile);
@@ -80,6 +100,49 @@ export function saveModelPrefs(profile, { default: def = null, approved = [] } =
   else cfg.models[accountKey(profile)] = { default: pick, approved: list };
   writeSettings(cfg);
   return modelPrefs(profile, cfg);
+}
+
+/**
+ * What the new-session picker on this machine shows: accounts hidden from
+ * it, the account last started, and starred models per engine. Kept on the
+ * machine rather than in a browser so a phone and a laptop open the same
+ * picker. Hidden, last and agent (the default one) are account keys (see
+ * accountKey).
+ */
+export function pickerPrefs(cfg = loadSettings()) {
+  const p = cfg?.picker ?? {};
+  const strings = (v) => [...new Set((Array.isArray(v) ? v : []).filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()))];
+  const favs = {};
+  for (const [engine, list] of Object.entries(p.favs && typeof p.favs === 'object' ? p.favs : {})) {
+    const clean = strings(list);
+    if (clean.length) favs[engine] = clean;
+  }
+  return {
+    hidden: strings(p.hidden),
+    last: typeof p.last === 'string' && p.last ? p.last : null,
+    // Chosen on purpose, so it outlasts starting something else once.
+    agent: typeof p.agent === 'string' && p.agent ? p.agent : null,
+    favs,
+  };
+}
+
+/** Merge a partial change into the picker prefs. Fields left out are kept. */
+export function savePickerPrefs(change = {}) {
+  const cfg = loadSettings();
+  const next = pickerPrefs(cfg);
+  if ('hidden' in change) next.hidden = pickerPrefs({ picker: { hidden: change.hidden } }).hidden;
+  if ('last' in change) next.last = typeof change.last === 'string' && change.last ? change.last : null;
+  if ('agent' in change) next.agent = typeof change.agent === 'string' && change.agent ? change.agent : null;
+  if (change.favs && typeof change.favs === 'object') {
+    for (const [engine, list] of Object.entries(change.favs)) {
+      if (!/^[\w.-]{1,40}$/.test(engine)) continue;
+      const clean = pickerPrefs({ picker: { favs: { [engine]: list } } }).favs[engine];
+      if (clean) next.favs[engine] = clean; else delete next.favs[engine];
+    }
+  }
+  cfg.picker = next;
+  writeSettings(cfg);
+  return pickerPrefs(cfg);
 }
 
 function writeSettings(cfg) {

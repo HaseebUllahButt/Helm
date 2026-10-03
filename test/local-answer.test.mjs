@@ -108,3 +108,28 @@ test('an ordinary turn mid-stream is not mistaken for a helm answer', () => {
   const second = log.turns.at(-1);
   assert.equal(second.insideOf, undefined, 'without local it stays a sibling, not a guest');
 });
+
+test('a message the CLI took mid-turn sits where it was used; the turn goes on below it', () => {
+  const log = emptyLog();
+  let seq = 0;
+  const ev = (e) => apply(log, { ...e, seq: ++seq });
+  ev({ type: 'turn.start', turnId: 't1', text: 'a long job' });
+  ev({ type: 'item.start', id: 'c1', kind: 'command', turnId: 't1' });
+  ev({ type: 'turn.start', turnId: 'local-9', text: 'also the docs', queued: true });
+  ev({ type: 'turn.deliver', turnId: 'local-9' });
+  const msg = log.turns.find((t) => t.id === 'local-9');
+  assert.equal(msg.queued, true);
+  assert.equal(msg.delivered, true);
+  ev({ type: 'item.done', id: 'c1', status: 'ok' });
+  ev({ type: 'turn.accept', turnId: 'local-9' });
+  assert.equal(msg.queued, false);
+  assert.equal(msg.insideOf, 't1');
+  assert.equal(msg.insideAt, 1, 'after the step that was running when the CLI read it');
+  ev({ type: 'item.start', id: 'c2', kind: 'command', turnId: 't1' });
+  assert.equal(log.turns.find((t) => t.id === 't1').items.length, 2, 'later work stays in the running turn');
+  // An echo of the same words later is a new turn, not this bubble.
+  ev({ type: 'turn.done', turnId: 't1', status: 'ok' });
+  ev({ type: 'turn.start', turnId: 't2', text: 'also the docs' });
+  assert.ok(log.turns.some((t) => t.id === 't2'));
+  assert.equal(msg.id, 'local-9');
+});

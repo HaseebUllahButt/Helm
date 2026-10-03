@@ -12,8 +12,9 @@ test('every mode the app can show has a label, a one-word short and a hint', () 
       assert.ok(!shorts.has(m.short), `${engine} repeats the short "${m.short}"`);
       shorts.add(m.short);
     }
-    // The first is the default, and it is never the dangerous one.
-    assert.equal(defaultMode(engine), list[0].id);
+    // Dispatch without an approval phase by default; restrictions remain available.
+    assert.equal(defaultMode(engine), list.find((m) => m.short === 'yolo').id);
+    assert.ok(!list.some((m) => m.id === 'plan'));
     assert.ok(!list[0].danger);
     // Something to cycle through with shift+tab without arming anything.
     assert.ok(list.filter((m) => !m.danger).length >= 2, `${engine} has nothing safe to cycle`);
@@ -25,7 +26,7 @@ test('claude modes carry the CLI flag; the bypass is the dangerous one', () => {
   assert.equal(modeFor('claude', 'bypassPermissions').danger, true);
   assert.equal(modesFor('claude').filter((m) => m.danger).length, 1);
   // An unknown id falls back to the default rather than throwing at a phone.
-  assert.equal(modeFor('claude', 'nonsense').id, 'default');
+  assert.equal(modeFor('claude', 'nonsense').id, 'bypassPermissions');
   assert.equal(modeFor('nonsense', 'default'), null);
 });
 

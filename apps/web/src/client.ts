@@ -72,6 +72,7 @@ export interface Session {
   profileId: string;
   status: Status;
   alive?: boolean;
+  createdAt?: number;
   updatedAt?: number;
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;
@@ -113,6 +114,7 @@ export interface CliAgent {
   auth: 'authenticated' | 'unauthenticated' | 'unknown'; available: boolean;
   models?: string[]; labels?: Record<string, string>; defaultModel?: string | null;
   modes: Mode[];
+  defaultMode?: string | null;
 }
 
 export interface DelegationResult {
@@ -141,6 +143,8 @@ export interface Mode { id: string; label: string; short?: string; hint?: string
 export interface ModelList {
   default: string | null;
   models: string[];
+  /** Public catalog is still arriving; fetch again after showing this answer. */
+  refreshing?: boolean;
   /** What the account's approved list filtered out - reachable, not offered first. */
   more?: string[];
   prefs?: ModelPrefs | null;
@@ -157,6 +161,13 @@ export interface ModelList {
   images?: boolean;
   imagesByModel?: Record<string, boolean>;
   modes?: Mode[];
+  defaultMode?: string | null;
+  /** Models starred for this engine on this machine, shared by every device. */
+  favs?: string[];
+  /** What a new chat on this account starts with, besides the model. */
+  defaults?: { effort?: string; mode?: string; speed?: string } | null;
+  /** The account key the machine files this account's defaults under. */
+  account?: string;
 }
 
 /**
@@ -259,6 +270,7 @@ export interface TransferReceipt {
   skippedEntries: TransferSkipped[];
   digest: string;
   readiness: TransferReadiness;
+  repository?: { remote: string; configured: boolean; error?: string };
 }
 export interface TransferResult {
   sent: boolean;
@@ -983,12 +995,23 @@ export class Client {
 
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
     const peer = this.peers.get(env);
-    const direct = peer?.ready && peer.channel.readyState === 'open';
+    // Tiny persistent settings writes should use the acknowledged hub route
+    // when available. An apparently open peer can stop answering after a
+    // phone changes networks, leaving a default save waiting until timeout.
+    const settingsWrite = ['profile.defaults', 'model.prefs', 'picker.prefs'].includes(method);
+    const direct = peer?.ready && peer.channel.readyState === 'open'
+      && !(settingsWrite && this.connected);
     if (!direct && !this.connected) return Promise.reject(new Error('not connected'));
 
     const id = `w${++this.seq}`;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let fallback: ReturnType<typeof setTimeout> | undefined;
+      const clear = () => { clearTimeout(deadline); clearTimeout(fallback); };
+      this.pending.set(id, {
+        resolve: (value) => { clear(); resolve(value as T); },
+        reject: (error) => { clear(); reject(error); },
+      });
       const frame = JSON.stringify({ t: 'rpc', id, env, method, params });
       // Prefer the direct channel: relaying costs two internet round trips
       // per call, which is what makes a remote session feel dead. A large
@@ -1010,7 +1033,18 @@ export class Client {
           return;
         }
       }
-      setTimeout(() => {
+      if (!this.pending.has(id)) return;
+      // A suspended laptop can leave a data channel looking open but silent.
+      // These reads (and the idempotent view lease) are safe to race over the
+      // hub too; never replay prompts, approvals, or other writes this way.
+      if (sent && ['session.events', 'session.watch', 'session.list', 'session.messages'].includes(method)) {
+        fallback = setTimeout(() => {
+          if (!this.pending.has(id) || !this.connected) return;
+          try { this.ws!.send(frame); } catch { /* keep waiting for the original route */ }
+        }, Math.min(1500, timeout / 2));
+      }
+      deadline = setTimeout(() => {
+        clear();
         if (this.pending.delete(id)) reject(new Error(`${method} timed out`));
       }, timeout);
     });
@@ -1194,8 +1228,13 @@ export class Client {
   // ------------------------------------------------------------- REST helpers
 
   private async http<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const res = await fetch(`${this.relay}${path}`, {
+    return this.httpAt<T>(this.relay, path, init);
+  }
+
+  private async httpAt<T>(base: string, path: string, init: RequestInit = {}): Promise<T> {
+    const res = await fetch(`${base}${path}`, {
       ...init,
+      signal: init.signal ?? AbortSignal.timeout(10_000),
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...init.headers },
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
@@ -1214,23 +1253,45 @@ export class Client {
       .then((r) => ({ environments: r.machines }));
   }
 
-  devices() { return this.http<{ devices: Device[] }>('/api/devices'); }
+  devices(base = this.relay) { return this.httpAt<{ devices: Device[] }>(base, '/api/devices'); }
 
   /** An invite for adding another machine. Carries the network key. */
-  invite() {
-    return this.http<{ code: string; expiresAt: number; endpoints: string[] }>(
-      '/api/invite', { method: 'POST' }
-    );
+  async invite(role: 'pc' | 'vm' | 'nas' = 'pc') {
+    // Invites belong to the hub that minted them. A localhost link cannot
+    // be redeemed on another computer; mint at a public home and carry that
+    // same address, rather than replacing it with a different hub's address.
+    const homes = [...new Set([this.relay, ...this.endpoints])].filter((base) => base.startsWith('https://'));
+    if (!homes.length) throw new Error('This network needs a reachable HTTPS home. Run helm setup on its always-on VM first.');
+    let last: unknown;
+    for (const base of homes) {
+      try {
+        const invite = await this.httpAt<{ code: string; expiresAt: number; role: string; endpoints: string[] }>(
+          base, '/api/invite', { method: 'POST', body: JSON.stringify({ role }) });
+        return { ...invite, base };
+      } catch (error) { last = error; }
+    }
+    throw last;
   }
 
   /** Close the pairing window now; devices already paired are untouched. */
-  closePairing() { return this.http('/api/auth/close', { method: 'POST' }); }
+  closePairing(base = this.relay) { return this.httpAt(base, '/api/auth/close', { method: 'POST' }); }
 
   /** A new short-lived password, for signing in another phone or browser. */
-  newPassword(ttlMs?: number) {
-    return this.http<{ password: string; expiresAt: number }>('/api/auth/rotate', {
-      method: 'POST', body: JSON.stringify({ ttlMs }),
-    });
+  async newPassword(ttlMs?: number) {
+    const homes = [...new Set([this.relay, ...this.endpoints])]
+      .filter((base) => { try { return !LOOPBACK_HOST.test(new URL(base).hostname); } catch { return false; } })
+      .sort((a, b) => Number(!a.startsWith('https://')) - Number(!b.startsWith('https://')));
+    let last: unknown;
+    for (const base of homes) {
+      try {
+        const current = await this.devices(base);
+        const invite = await this.httpAt<{ password: string; expiresAt: number }>(base, '/api/auth/rotate', {
+          method: 'POST', body: JSON.stringify({ ttlMs }),
+        });
+        return { ...invite, base, knownDeviceIds: current.devices.map((device) => device.id) };
+      } catch (error) { last = error; }
+    }
+    throw last ?? new Error('No address is reachable from another device. Run helm setup on your home first.');
   }
 
   /**

@@ -29,6 +29,20 @@ test('argv: headless flags, the account home, and a session id to resume later',
   assert.ok(r.args.includes('manual')); // the CLI's name for the default mode
 });
 
+test('a new effort before the first message starts the same id again, not --resume', async () => {
+  // The CLI has written nothing until it has a message, so resuming the id
+  // after an early restart failed with "No conversation found".
+  const { driver, log } = make('plain');
+  await driver.start();
+  await driver.setEffort('high');
+  assert.ok(driver.args.includes(`--session-id=${driver.engineSessionId}`));
+  assert.ok(!driver.args.some((a) => a.startsWith('--resume')));
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done');
+  assert.ok(driver.args.includes(`--resume=${driver.engineSessionId}`), 'once it has a message, a restart resumes');
+  await driver.kill();
+});
+
 test('plain: text streams in as deltas, then the turn completes with its cost', async () => {
   const { driver, log } = make('plain');
   await driver.send('Reply with exactly the words: hello from helm');
@@ -49,6 +63,48 @@ test('plain: text streams in as deltas, then the turn completes with its cost', 
   assert.ok(commands.some((command) => command.name === 'code-review'));
   await driver.kill();
   assert.equal(log.of('status').pop().status, 'exited');
+});
+
+test('delegated Claude tasks cannot enter a plan approval workflow', () => {
+  const { driver } = make('plain', { mode: 'bypassPermissions', delegated: true });
+  const flag = driver.args.indexOf('--disallowedTools');
+  assert.ok(flag >= 0);
+  assert.equal(driver.args[flag + 1], 'EnterPlanMode,ExitPlanMode');
+});
+
+test('reattaching Claude restores its active text block and completes the original turn', async () => {
+  let receive;
+  const pipe = { onData: (cb) => { receive = cb; }, onExit: () => {}, detach: () => {} };
+  const { driver, log } = make('plain', {
+    procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => 'original-turn',
+    resumeEvents: () => [{ type: 'item.start', id: 'message-1#0', kind: 'text', turnId: 'original-turn' }],
+  });
+  await driver.start();
+  receive(JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'continued' } } }) + '\n');
+  receive(JSON.stringify({ type: 'result', is_error: false, total_cost_usd: 0 }) + '\n');
+  assert.equal(log.of('item.delta')[0].id, 'message-1#0');
+  assert.equal(log.of('item.delta')[0].text, 'continued');
+  assert.equal(log.of('turn.done')[0].turnId, 'original-turn');
+  assert.equal(log.of('turn.done')[0].status, 'ok');
+  await driver.suspend();
+});
+
+test('a Claude question remains answerable after the daemon is replaced', async () => {
+  const writes = [];
+  const pipe = { onData: () => {}, onExit: () => {}, detach: () => {}, write: (data) => writes.push(JSON.parse(data)) };
+  const { driver } = make('plain', {
+    procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => 'original-turn', pendingEvents: () => [{
+      requestId: 'question-before-update', kind: 'question', raw: { input: { questions: [{ question: 'Continue?' }] } },
+    }],
+  });
+  await driver.start();
+  assert.equal(driver.status, 'blocked');
+  await driver.answer('question-before-update', { option: 'allow', answers: { 'Continue?': 'Yes' } });
+  assert.equal(writes[0].response.request_id, 'question-before-update');
+  assert.equal(writes[0].response.response.updatedInput.answers['Continue?'], 'Yes');
+  await driver.suspend();
 });
 
 test('tool: a Bash call becomes a tool item with streamed input and its output; a Write asks permission', async () => {
@@ -168,14 +224,14 @@ test('question: AskUserQuestion is a question card; the answer goes back as upda
   await driver.kill();
 });
 
-test('plan: ExitPlanMode is a plan card with the plan text', async () => {
-  const { driver, log } = make('plan', { mode: 'plan' });
+test('legacy ExitPlanMode is denied locally without asking for plan approval', async () => {
+  const { driver, log, fake } = make('plan');
   await driver.send('plan it');
-  const ask = await log.until((e) => e.type === 'permission.request' && e.kind === 'plan');
-  assert.match(ask.detail, /^# Plan: Add LICENSE file/);
-  assert.deepEqual(ask.options.map((o) => o.label), ['Approve plan', 'Keep planning']);
-  await driver.answer(ask.requestId, { option: 'allow' });
   const write = await log.until((e) => e.type === 'permission.request' && e.kind === 'edit');
+  assert.equal(log.of('permission.request').some((e) => e.kind === 'plan'), false);
+  const response = fake.stdinLines().find((l) => l.type === 'control_response');
+  assert.equal(response.response.response.behavior, 'deny');
+  assert.match(response.response.response.message, /Plan mode is disabled/);
   assert.equal(write.tool, 'Write');
   await driver.answer(write.requestId, { option: 'deny', message: 'plan only' });
   const done = await log.until((e) => e.type === 'turn.done');
@@ -290,4 +346,11 @@ test('a finished turn says where a branch could be cut, and the branch stands al
   assert.equal(driver.forkFrom, null, 'after its first turn a branch resumes like any thread');
   assert.ok(!driver.args.includes('--fork-session'));
   await driver.kill();
+});
+
+test('helm\'s brief goes in the system prompt, not the owner\'s message', () => {
+  const d = new ClaudeDriver({ cmd: 'claude', env: {}, cwd: '/x', mode: 'default', instructions: '[helm delegation: x]' });
+  const a = d.args;
+  assert.equal(a[a.indexOf('--append-system-prompt') + 1], '[helm delegation: x]');
+  assert.ok(!new ClaudeDriver({ cmd: 'claude', env: {}, cwd: '/x', mode: 'default' }).args.includes('--append-system-prompt'));
 });

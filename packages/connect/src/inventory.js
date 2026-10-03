@@ -160,6 +160,11 @@ async function codex(home, account) {
       const meta = parse((await headLines(f.path, 1))[0]);
       if (meta?.type !== 'session_meta') continue;
       const p = meta.payload ?? {};
+      // Codex native children write their own rollouts too. SessionSource
+      // serializes SubAgent as {subagent: ...}; these belong to the parent's
+      // task timeline, not another row in the owner's recent history.
+      if ((p.source && typeof p.source === 'object' && Object.hasOwn(p.source, 'subagent'))
+        || p.thread_source === 'subagent' || p.threadSource === 'subagent') continue;
       const active = existsSync(join(codexHome, 'thread-writer-locks', `${p.session_id ?? p.id}.lock`));
       out.push({
         engine: 'codex',
@@ -208,7 +213,10 @@ async function claude(home, account) {
         : Array.isArray(content)
           ? content.find((c) => c?.type === 'text')?.text ?? ''
           : '';
-      if (text && !text.startsWith('<')) { title ||= text.trim(); break; }
+      // A chat helm started opens with helm's own notes to the agent; the
+      // name belongs to what the owner typed after them.
+      const said = text.replace(/^(?:\[helm [^\]\n]*\]\n\n)+/, '').trim();
+      if (said && !said.startsWith('<')) { title ||= said; break; }
     }
     // A sidechain file is a subagent's transcript, not a session you resume.
     if (sidechain || !cwd) continue;

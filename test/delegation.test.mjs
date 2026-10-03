@@ -60,7 +60,25 @@ test('agent capabilities show sign-in state without exposing launcher or credent
   assert.equal(agents[0].available, true);
   assert.equal(agents[1].available, false);
   assert.equal(JSON.stringify(agents).includes('never-advertise-me'), false);
-  for (const a of agents) for (const field of ['cmd', 'args', 'env', 'envFrom']) assert.equal(field in a, false);
+  for (const a of agents) for (const field of ['cmd', 'args', 'env', 'envFrom', 'credentials']) assert.equal(field in a, false);
+});
+
+test('credential diagnostics preserve current modes and never publish token values', async () => {
+  const p = { ...profiles[0], env: { CODEX_HOME: process.env.HELM_DIR, OPENAI_API_KEY: 'diagnostic-secret' } };
+  const statuses = new Map([[p.id, 'authenticated']]);
+  const [basic] = await agentCatalog([p], statuses, { models: false });
+  const [detailed] = await agentCatalog([p], statuses, { models: false, credentials: true });
+  assert.equal(detailed.defaultMode, basic.defaultMode);
+  assert.deepEqual(detailed.modes, basic.modes);
+  assert.ok(detailed.credentials.some((c) => c.kind === 'env' && c.where === 'OPENAI_API_KEY' && c.via === 'profile'));
+  assert.doesNotMatch(JSON.stringify(detailed), /diagnostic-secret/);
+  for (const args of [[], ['--json']]) {
+    const lines = [];
+    await runAgentCommand('agents', args, { self: 'test', write: (line) => lines.push(line),
+      rpc: async () => ({ agents: [detailed] }) });
+    assert.match(lines.join('\n'), /OPENAI_API_KEY/);
+    assert.doesNotMatch(lines.join('\n'), /diagnostic-secret/);
+  }
 });
 
 test('Codex delegates to Claude with the selected model, folder, lineage and durable result', async (t) => {
@@ -71,12 +89,20 @@ test('Codex delegates to Claude with the selected model, folder, lineage and dur
   assert.equal(child.model, 'opus');
   assert.equal(child.cwd, parent.cwd);
   assert.equal(child.delegation.parentId, parent.id);
-  assert.equal(child.mode, 'default');
+  assert.equal(child.mode, 'bypassPermissions');
+  assert.equal(child.notifyDone, false);
+  assert.equal(drivers.get(child.id).delegated, true);
+  assert.equal((await sessions.list()).some((s) => s.id === child.id), false);
+  assert.equal((await sessions.list({ parentId: parent.id })).some((s) => s.id === child.id), true);
+  assert.equal((await sessions.list({ includeDelegations: true })).some((s) => s.id === child.id), true);
+  assert.equal(sessions.isDelegatedConversation(child.engine, child.engineSessionId), true);
+  assert.equal(sessions.hasActiveDelegations(parent.id), true);
   assert.deepEqual(parent.delegations, [child.id]);
   assert.equal(drivers.get(child.id).env.HELM_SESSION_ID, child.id);
   assert.equal(drivers.get(child.id).sent, 'Review security');
   assert.equal(sessions.delegationResult(child.id).status, 'working');
   drivers.get(child.id).finish();
+  assert.equal(sessions.hasActiveDelegations(parent.id), false);
   assert.equal(sessions.delegationResult(child.id).output, 'Opus reviewed the task.');
   assert.equal(sessions.delegationResult(child.id).status, 'done');
   const restarted = new Sessions(new EventEmitter(), { makeDriver: () => assert.fail('reading must not launch a CLI') });
@@ -89,6 +115,40 @@ test('native CLI callers can delegate without a Helm parent session', async (t) 
   const { session } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Check this folder' });
   assert.equal(session.delegation.parentId, null);
   assert.equal(session.cwd, process.env.HELM_DIR);
+});
+
+test('an inherited parent cannot attach an unrelated Codex background thread', async (t) => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await assert.rejects(() => sessions.delegate({ id: parent.id, callerThreadId: 'unrelated-memory-thread',
+    profileId: 'claude-main', task: 'Inspect memories' }), /does not match.*parent/);
+  assert.equal(drivers.size, 1, 'reject before starting a child');
+  assert.equal(parent.delegations, undefined);
+  const { session: child } = await sessions.delegate({ id: parent.id, callerThreadId: parent.engineSessionId,
+    profileId: 'claude-main', task: 'Review this project' });
+  assert.equal(child.delegation.parentId, parent.id);
+});
+
+test('archived tasks disappear from their parent list and badge without losing history', async (t) => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const other = await sessions.start({ cwd: parent.cwd, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  drivers.get(child.id).finish();
+  const updates = [];
+  sessions.on('session', (s) => updates.push(s));
+  sessions.archive(child.id);
+  assert.deepEqual(await sessions.list({ parentId: parent.id }), []);
+  assert.deepEqual(await sessions.list({ parentId: other.id }), []);
+  assert.deepEqual((await sessions.list()).find((s) => s.id === parent.id).delegations, []);
+  assert.deepEqual(updates.findLast((s) => s.id === parent.id).delegations, []);
+  assert.equal(sessions.delegationResult(child.id).output, 'Opus reviewed the task.');
+  const restarted = new Sessions(new EventEmitter());
+  restarted.runtime.listLive = async () => new Map();
+  assert.deepEqual(await restarted.list({ parentId: parent.id }), []);
+  sessions.archive(child.id, false);
+  assert.deepEqual((await sessions.list({ parentId: parent.id })).map((s) => s.id), [child.id]);
+  assert.deepEqual(updates.findLast((s) => s.id === parent.id).delegations, [child.id]);
 });
 
 test('a long streamed reply survives event trimming and a daemon restart', async (t) => {
@@ -114,7 +174,7 @@ test('a refused model or permission mode fails before the task is sent', async (
     }
     return d;
   });
-  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main', mode: 'readonly' });
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
   await assert.rejects(() => sessions.delegate({ id: parent.id, profileId: 'claude-main', model: 'opus', task: 'Inspect' }), /refused.*no task was sent/);
   assert.equal(parent.delegations, undefined);
   assert.equal([...drivers.values()].some((d) => d.sent), false);
@@ -123,10 +183,12 @@ test('a refused model or permission mode fails before the task is sent', async (
 test('a read-only parent stays read only across CLIs and cannot request a bypass', async (t) => {
   const { sessions } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main', mode: 'readonly' });
-  const { session } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Inspect' });
-  assert.equal(session.mode, 'plan');
-  await assert.rejects(() => sessions.delegate({ id: parent.id, profileId: 'claude-main', mode: 'acceptEdits', task: 'Write' }), /read-only/);
-  assert.throws(() => delegationMode('codex', 'ask', 'full'), /unsafe/);
+  const { session } = await sessions.delegate({ id: parent.id, profileId: 'codex-main', task: 'Inspect' });
+  assert.equal(session.mode, 'readonly');
+  await assert.rejects(() => sessions.delegate({ id: parent.id, profileId: 'codex-main', mode: 'full', task: 'Write' }), /read-only/);
+  await assert.rejects(() => sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Inspect' }), /no verified read-only/);
+  assert.equal(delegationMode('codex', 'ask', 'full'), 'full');
+  assert.throws(() => delegationMode('claude', 'full', 'plan'), /plan mode is not supported/);
   assert.throws(() => delegationMode('pi', 'readonly'), /no verified read-only/);
 });
 
@@ -143,6 +205,31 @@ test('concurrent starts cannot bypass the four-child limit', async (t) => {
   assert.equal(children.length, 4);
 });
 
+test('task messages remain scoped to their orchestrator and resume a completed child', async (t) => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const other = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Implement' });
+  await assert.rejects(() => sessions.messageDelegation(other.id, child.id, 'Redirect'), /belong/);
+  await assert.rejects(() => sessions.messageDelegation(parent.id, child.id, '  '), /message/);
+  await sessions.messageDelegation(parent.id, child.id, 'Check edge cases');
+  assert.equal(drivers.get(child.id).sent, 'Implement', 'a busy non-steerable engine queues rather than interrupts');
+  drivers.get(child.id).finish();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(drivers.get(child.id).sent, 'Check edge cases');
+  drivers.get(child.id).finish();
+  await sessions.messageDelegation(parent.id, child.id, 'Now verify');
+  assert.equal(drivers.get(child.id).sent, 'Now verify');
+  assert.equal(child.delegation.parentId, parent.id);
+});
+
+test('configured restrictions and explicit choices survive default YOLO, without plan mode', async () => {
+  assert.equal(delegationMode('claude', 'full', null, null, 'codex'), 'bypassPermissions');
+  assert.equal(delegationMode('claude', 'ask', null, null, 'codex'), 'default');
+  assert.equal(delegationMode('claude', 'full', null, 'acceptEdits', 'codex'), 'acceptEdits');
+  assert.equal(delegationMode('claude', 'full', 'default', null, 'codex'), 'default');
+});
+
 test('nesting is bounded and empty tasks fail before starting a CLI', async (t) => {
   const { sessions } = setup(t);
   await assert.rejects(() => sessions.delegate({ task: '' }), /task/);
@@ -152,15 +239,18 @@ test('nesting is bounded and empty tasks fail before starting a CLI', async (t) 
   await assert.rejects(() => sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Four' }), /three levels/);
 });
 
-test('agents see the tool instructions once; slash commands stay unmodified', async (t) => {
+test('agents get the tool instructions as standing instructions, not in the owner\'s message', async (t) => {
   const { sessions, drivers } = setup(t);
   sessions.delegationBrief = () => '[helm delegation: use helm agents and helm delegate]';
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  // The brief once rode on the first message and showed in the owner's
+  // bubble as if they had typed it. Codex and Claude take it out of band.
+  assert.equal(drivers.get(parent.id).instructions, '[helm delegation: use helm agents and helm delegate]');
   await sessions.input(parent.id, '/status');
   assert.equal(drivers.get(parent.id).sent, '/status');
   drivers.get(parent.id).finish();
   await sessions.input(parent.id, 'Work');
-  assert.match(drivers.get(parent.id).sent, /^\[helm delegation:/);
+  assert.equal(drivers.get(parent.id).sent, 'Work');
   drivers.get(parent.id).finish();
   await sessions.input(parent.id, 'Continue');
   assert.equal(drivers.get(parent.id).sent, 'Continue');
@@ -172,6 +262,23 @@ test('output distinguishes approval, interruption and provider failure', () => {
     const result = delegationOutput({}, [{ type: 'turn.start', turnId: 't' }, { type: 'turn.done', turnId: 't', status, error: 'failed' }]);
     assert.equal(result.status, status); assert.equal(result.error, 'failed'); assert.equal(result.complete, true);
   }
+});
+
+test('a completed task stays complete after a message was consumed during its turn', () => {
+  const events = [
+    { type:'turn.start', turnId:'provider-turn', text:'Review' },
+    { type:'turn.start', turnId:'local-steering', text:'Check mobile too', queued:true },
+    { type:'turn.accept', turnId:'local-steering' },
+    { type:'item.start', id:'answer', kind:'text' },
+    { type:'item.delta', id:'answer', text:'Review complete.' },
+    { type:'turn.done', turnId:'provider-turn', status:'ok' },
+    { type:'status', status:'idle' },
+  ];
+  const result = delegationOutput({ status:'idle', delegation:{status:'done'} }, events);
+  assert.equal(result.status,'done');
+  assert.equal(result.complete,true);
+  assert.equal(result.output,'Review complete.');
+  assert.equal(delegationOutput({status:'working',delegation:{status:'working'}},events).complete,false);
 });
 
 test('CLI flags do not leak into the task; literal task flags survive --', () => {
@@ -193,9 +300,10 @@ test('CLI waits for the actual reply and reports pending approvals immediately',
     return { session: { id: 'child' }, status: ++reads === 1 ? 'working' : 'done', complete: reads > 1, output: reads > 1 ? 'Reviewed.' : '' };
   };
   assert.equal(await runAgentCommand('delegate', ['claude-main', '--model', 'opus', '--wait', '--json', '--', 'Review'], {
-    rpc, self: 'self', parentId: 'parent', write: (s) => written.push(s), sleep: async () => {},
+    rpc, self: 'self', parentId: 'parent', callerThreadId: 'real-codex-thread', write: (s) => written.push(s), sleep: async () => {},
   }), 0);
   assert.equal(calls[1].params.id, 'parent');
+  assert.equal(calls[1].params.callerThreadId, 'real-codex-thread');
   assert.equal(calls[1].params.model, 'opus');
   assert.equal(calls[1].params.task, 'Review');
   assert.equal(JSON.parse(written[0]).output, 'Reviewed.');
@@ -238,7 +346,7 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
     await once(env, 'message');
     const bin = fileURLToPath(new URL('../packages/connect/bin/helm.js', import.meta.url));
     const invoke = (args) => new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [bin, ...args], { env: { ...process.env, HELM_SESSION_ID: parent.id }, cwd: process.env.HELM_DIR });
+      const child = spawn(process.execPath, [bin, ...args], { env: { ...process.env, HELM_SESSION_ID: parent.id, CODEX_THREAD_ID: parent.engineSessionId }, cwd: process.env.HELM_DIR });
       let out = '', err = '';
       const timer = setTimeout(() => { child.kill(); reject(new Error('CLI timed out')); }, 15_000);
       child.stdout.on('data', (text) => { out += text; });

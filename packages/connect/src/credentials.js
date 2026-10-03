@@ -1,18 +1,17 @@
-import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { ENGINES } from './engines.js';
 import { HOME, expand, collapse } from './paths.js';
+import { readSecrets } from './profiles.js';
 
 /**
- * Where an account's credentials actually are, and whether they look alive.
+ * Potential credential sources for an account, with expiry metadata.
  *
  * The auth probe asks each CLI "are you signed in" and stops there - which
  * cannot see the usual multi-account accidents: a dead OAuth grant still on
  * disk next to the env token that really authenticates, a second account's
- * home directory nobody aliased, an `export ANTHROPIC_API_KEY` in an rc file
- * silently feeding every default profile. This scan is the other half of
- * that answer: the credential sources each profile would pick up.
+ * home directory nobody aliased, or an inherited API key. These are diagnostic
+ * hints, not proof of which source a CLI chooses or whether a refresh works.
  *
  * Everything here is metadata - location, kind, expiry, an account hint.
  * Token values never enter the result, let alone the wire.
@@ -28,15 +27,28 @@ const jwtClaims = (token) => {
   }
 };
 
+const readText = (path) => {
+  const stat = statSync(path);
+  if (!stat.isFile() || stat.size > (256 << 10)) throw new Error('not a small credential file');
+  return readFileSync(path, 'utf8');
+};
+
 const readJson = (path) => {
   try {
-    return JSON.parse(readFileSync(path, 'utf8'));
+    return JSON.parse(readText(path));
   } catch {
     return null;
   }
 };
 
-const entry = (path, fields) => ({ kind: 'file', where: collapse(path), account: null, expiresAt: null, ...fields });
+const hint = (value) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200) : null;
+const timestamp = (value) => {
+  if (value === null || value === undefined || value === '' || !['number', 'string'].includes(typeof value)) return null;
+  const n = Number(value);
+  return Number.isFinite(n) && Math.abs(n) <= 8.64e15 ? n : null;
+};
+const entry = (path, fields) => ({ kind: 'file', where: collapse(path), expiresAt: null,
+  ...fields, account: hint(fields.account) });
 
 /** Claude: `claudeAiOauth` is the login; `mcpOAuth` entries are server grants, not one. */
 function readClaude(path, now) {
@@ -51,11 +63,11 @@ function readClaude(path, now) {
     })];
   }
   // Note: expiresAt can legitimately be 0 - Number.isFinite, not truthiness.
-  const expiresAt = Number.isFinite(Number(o.expiresAt)) ? Number(o.expiresAt) : null;
-  const refreshBy = Number.isFinite(Number(o.refreshTokenExpiresAt)) ? Number(o.refreshTokenExpiresAt) : null;
+  const expiresAt = timestamp(o.expiresAt);
+  const refreshBy = timestamp(o.refreshTokenExpiresAt);
   const claims = jwtClaims(o.accessToken);
   return [entry(path, {
-    detail: `oauth${o.subscriptionType ? ` ${o.subscriptionType}` : ''}`,
+    detail: `oauth${hint(o.subscriptionType) ? ` ${hint(o.subscriptionType)}` : ''}`,
     account: o.emailAddress ?? claims?.email ?? null,
     expiresAt,
     expired: expiresAt !== null && expiresAt <= now,
@@ -71,14 +83,15 @@ function readCodex(path, now) {
   const t = json.tokens;
   if (t && typeof t === 'object') {
     const claims = jwtClaims(t.access_token);
-    const expiresAt = claims?.exp ? claims.exp * 1000 : null;
+    const seconds = timestamp(claims?.exp);
+    const expiresAt = seconds === null ? null : timestamp(seconds * 1000);
     out.push(entry(path, {
-      detail: json.auth_mode === 'chatgpt' ? 'chatgpt oauth' : (json.auth_mode || 'oauth'),
+      detail: json.auth_mode === 'chatgpt' ? 'chatgpt oauth' : 'oauth',
       account: t.account_id ?? null,
       expiresAt,
       expired: expiresAt !== null && expiresAt <= now,
       refresh: !!t.refresh_token,
-      refreshedAt: json.last_refresh ?? null,
+      refreshedAt: hint(json.last_refresh),
     }));
   }
   if (json.OPENAI_API_KEY) out.push(entry(path, { detail: 'openai api key' }));
@@ -93,9 +106,9 @@ function readOpencode(path, now) {
   const out = [];
   for (const [provider, cred] of Object.entries(json)) {
     if (!cred || typeof cred !== 'object') continue;
-    const expiresAt = Number.isFinite(Number(cred.expires)) ? Number(cred.expires) : null;
+    const expiresAt = timestamp(cred.expires);
     out.push(entry(path, {
-      detail: `${provider} ${cred.type ?? 'credential'}`,
+      detail: `${hint(provider)} ${['api', 'oauth'].includes(cred.type) ? cred.type : 'credential'}`,
       account: cred.accountId ?? null,
       expiresAt,
       expired: expiresAt !== null && expiresAt <= now,
@@ -108,7 +121,7 @@ function readOpencode(path, now) {
 function readDevin(path) {
   let text;
   try {
-    text = readFileSync(path, 'utf8');
+    text = readText(path);
   } catch {
     return [entry(path, { detail: 'unreadable file' })];
   }
@@ -128,7 +141,7 @@ function readGoogleOauth(path, now) {
     : Number.isFinite(rawExpiry) ? Number(rawExpiry) : null;
   const claims = jwtClaims(json.id_token ?? tok.id_token);
   return [entry(path, {
-    detail: `oauth${json.auth_method ? ` ${json.auth_method}` : ''}`,
+    detail: `oauth${hint(json.auth_method) ? ` ${hint(json.auth_method)}` : ''}`,
     account: claims?.email ?? null,
     expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
     expired: Number.isFinite(expiresAt) && expiresAt <= now,
@@ -203,43 +216,28 @@ function genericHomeFiles(home) {
 }
 
 /**
- * The variables an interactive login shell exports - where an rc-file
- * `export FOO_TOKEN=…` that no alias captured still turns up. One probe is
- * shared by every profile in a scan pass.
+ * Match materialize(): saved secret references override profile values,
+ * then explicit unsets win. Do not source a shell: its exports are not the
+ * daemon's launch environment, and probing it would slow the account picker.
  */
-export function shellEnv() {
-  return new Promise((resolve) => {
-    execFile('bash', ['-ic', 'env'], {
-      timeout: 8000,
-      maxBuffer: 1 << 20,
-      env: { ...process.env, HELM_DISCOVERY: '1' },
-    }, (err, stdout) => {
-      if (err && !stdout) return resolve(new Set());
-      const names = new Set();
-      for (const line of String(stdout).split('\n')) {
-        const m = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
-        if (m) names.add(m[1]);
-      }
-      resolve(names);
-    });
-  });
-}
-
-/**
- * Every credential source a profile would run with. `shellNames` is the
- * shared shellEnv() set; `environ` defaults to the daemon's environment so a
- * token the daemon itself exports is visible too.
- */
-export function credentialScan(profile, { shellNames = null, environ = process.env, now = Date.now() } = {}) {
+export function credentialScan(profile, { environ = process.env, secrets = readSecrets(), now = Date.now() } = {}) {
   const engine = ENGINES[profile.engine];
   if (!engine || engine.plain) return [];
-  const env = profile.env ?? {};
+  const own = { ...profile.env };
+  for (const name of profile.envFrom ?? []) {
+    const value = secrets[profile.secretRefs?.[name] ?? name];
+    if (value) own[name] = value;
+  }
+  for (const name of profile.unset ?? []) own[name] = '';
+  const env = { ...environ, ...own };
+  const expandHome = (path) => typeof path === 'string' && path.startsWith('~')
+    ? join(env.HOME || HOME, path.slice(1)) : path;
   const out = [];
 
   // A wrapper script manufactures its own HOME (agy-profile), so a file in
   // the default home is not this account's credential - scan env only.
   if (!profile.wraps) {
-    const home = expand(env[engine.homeEnv] ?? engine.defaultHome ?? '');
+    const home = expandHome(env[engine.homeEnv] || engine.defaultHome || '');
     const files = HOME_FILES[profile.engine] ?? [];
     const seen = new Set();
     for (const spec of files) {
@@ -248,7 +246,7 @@ export function credentialScan(profile, { shellNames = null, environ = process.e
       seen.add(path);
       for (const e of spec.read(path, now)) out.push(e);
     }
-    const dataHome = expand(env.XDG_DATA_HOME ?? '~/.local/share');
+    const dataHome = expandHome(env.XDG_DATA_HOME || '~/.local/share');
     for (const spec of DATA_FILES[profile.engine] ?? []) {
       const path = join(dataHome, spec.rel);
       if (!existsSync(path) || seen.has(path)) continue;
@@ -257,17 +255,14 @@ export function credentialScan(profile, { shellNames = null, environ = process.e
     }
     // Engines with no known layout still get detection: any credential-named
     // file in the account home is reported, value unread.
-    if (!out.length && home && existsSync(home)) out.push(...genericHomeFiles(home));
+    if (!HOME_FILES[profile.engine] && !DATA_FILES[profile.engine] && home && existsSync(home)) out.push(...genericHomeFiles(home));
     // The default claude login can name its account from ~/.claude.json.
     const hint = profile.engine === 'claude' ? claudeAccountHint(home, engine) : null;
     if (hint) for (const e of out) if (!e.account) e.account = hint;
   }
 
-  const unset = new Set(profile.unset ?? []);
-  const wired = new Set([...(profile.envFrom ?? []), ...Object.keys(env)]);
   for (const name of ENV_TOKENS[profile.engine] ?? []) {
-    if (unset.has(name)) continue;
-    const via = wired.has(name) ? 'profile' : shellNames?.has(name) ? 'shell' : environ[name] ? 'daemon' : null;
+    const via = env[name] ? (Object.hasOwn(own, name) ? 'profile' : 'daemon') : null;
     if (via) out.push({ kind: 'env', where: name, via });
   }
   return out;
@@ -278,8 +273,8 @@ export function formatCredential(c) {
   if (c.kind === 'env') return `${c.where} (env, ${c.via})`;
   const bits = [c.detail];
   if (c.account) bits.push(c.account);
-  if (c.refreshExpired) bits.push('refresh token dead');
-  if (c.expired) bits.push('expired');
-  else if (c.expiresAt) bits.push(`expires ${new Date(c.expiresAt).toISOString().slice(0, 10)}`);
+  if (c.refreshExpired) bits.push('refresh token expired');
+  if (c.expired) bits.push('access token expired');
+  else if (timestamp(c.expiresAt) !== null) bits.push(`expires ${new Date(c.expiresAt).toISOString().slice(0, 10)}`);
   return `${c.where} (${bits.filter(Boolean).join(', ')})`;
 }

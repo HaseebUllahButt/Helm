@@ -155,6 +155,6 @@ if (kind === 'claude') {
       continue;
     }
     out(m);
-    await sleep(2);
+    await sleep(Number(process.env.FAKE_EVENT_MS ?? 2));
   }
 }

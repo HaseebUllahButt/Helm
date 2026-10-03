@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +14,13 @@ const NOW = Date.parse('2026-10-01T12:00:00Z');
 const jwt = (payload) =>
   `h.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.s`;
 
-const tmpHome = () => mkdtempSync(join(tmpdir(), 'helm-creds-'));
+const homes = [];
+const tmpHome = () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-creds-'));
+  homes.push(dir);
+  return dir;
+};
+after(() => homes.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 const write = (dir, rel, body) => {
   const path = join(dir, rel);
   mkdirSync(join(path, '..'), { recursive: true });
@@ -115,27 +121,23 @@ test('agy oauth token reports the google expiry and id_token email', () => {
   assert.equal(c.refresh, true);
 });
 
-test('env tokens are attributed to profile, shell, or daemon', () => {
+test('env tokens are attributed to resolved profile secrets or daemon', () => {
   const home = tmpHome();
   const viaProfile = credentialScan(
     profile('claude', { CLAUDE_CONFIG_DIR: home }, { envFrom: ['CLAUDE_CODE_OAUTH_TOKEN'] }),
-    { now: NOW, environ: {} });
+    { now: NOW, environ: {}, secrets: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' } });
   assert.deepEqual(viaProfile, [{ kind: 'env', where: 'CLAUDE_CODE_OAUTH_TOKEN', via: 'profile' }]);
-
-  const viaShell = credentialScan(profile('claude', { CLAUDE_CONFIG_DIR: home }),
-    { now: NOW, environ: {}, shellNames: new Set(['ANTHROPIC_API_KEY']) });
-  assert.deepEqual(viaShell, [{ kind: 'env', where: 'ANTHROPIC_API_KEY', via: 'shell' }]);
 
   const viaDaemon = credentialScan(profile('claude', { CLAUDE_CONFIG_DIR: home }),
     { now: NOW, environ: { ANTHROPIC_AUTH_TOKEN: 'x' } });
   assert.deepEqual(viaDaemon, [{ kind: 'env', where: 'ANTHROPIC_AUTH_TOKEN', via: 'daemon' }]);
 });
 
-test('an unset variable wins over every other source', () => {
+test('an unset variable wins over inherited and profile sources', () => {
   const home = tmpHome();
   const creds = credentialScan(
-    profile('claude', { CLAUDE_CONFIG_DIR: home }, { unset: ['ANTHROPIC_API_KEY'] }),
-    { now: NOW, environ: { ANTHROPIC_API_KEY: 'x' }, shellNames: new Set(['ANTHROPIC_API_KEY']) });
+    profile('claude', { CLAUDE_CONFIG_DIR: home, ANTHROPIC_API_KEY: 'profile-key' }, { unset: ['ANTHROPIC_API_KEY'] }),
+    { now: NOW, environ: { ANTHROPIC_API_KEY: 'x' } });
   assert.equal(creds.length, 0);
 });
 
@@ -164,7 +166,7 @@ test('multiple sources for one account are all reported', () => {
   }));
   const creds = credentialScan(
     profile('claude', { CLAUDE_CONFIG_DIR: home }, { envFrom: ['CLAUDE_CODE_OAUTH_TOKEN'] }),
-    { now: NOW, environ: {} });
+    { now: NOW, environ: {}, secrets: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' } });
   assert.equal(creds.length, 2, 'the file token and the env token both show');
   assert.deepEqual(creds.map((c) => c.kind), ['file', 'env']);
 });
@@ -174,8 +176,54 @@ test('formatCredential renders location and health, never values', () => {
     formatCredential({ kind: 'file', where: '~/.codex/auth.json', detail: 'chatgpt oauth', account: 'a1', expiresAt: NOW + DAY, expired: false }),
     `~/.codex/auth.json (chatgpt oauth, a1, expires ${new Date(NOW + DAY).toISOString().slice(0, 10)})`);
   assert.equal(
-    formatCredential({ kind: 'env', where: 'CLAUDE_CODE_OAUTH_TOKEN', via: 'shell' }),
-    'CLAUDE_CODE_OAUTH_TOKEN (env, shell)');
+    formatCredential({ kind: 'env', where: 'CLAUDE_CODE_OAUTH_TOKEN', via: 'profile' }),
+    'CLAUDE_CODE_OAUTH_TOKEN (env, profile)');
+});
+
+test('inherited account directories and saved secret references are respected', () => {
+  const home = tmpHome();
+  write(home, 'auth.json', JSON.stringify({ OPENAI_API_KEY: 'file-secret' }));
+  const creds = credentialScan(profile('codex', {}, {
+    envFrom: ['OPENAI_API_KEY'], secretRefs: { OPENAI_API_KEY: 'account_two' },
+  }), { environ: { CODEX_HOME: home }, secrets: { account_two: 'profile-secret' } });
+  assert.equal(creds[0].where, join(home, 'auth.json'));
+  assert.deepEqual(creds[1], { kind: 'env', where: 'OPENAI_API_KEY', via: 'profile' });
+  assert.doesNotMatch(JSON.stringify(creds), /file-secret|profile-secret/);
+});
+
+test('missing secret references and blank overrides are not reported as usable tokens', () => {
+  const p = profile('codex', { CODEX_HOME: tmpHome(), OPENAI_API_KEY: '' }, {
+    envFrom: ['CODEX_API_KEY'], secretRefs: { CODEX_API_KEY: 'missing' },
+  });
+  assert.deepEqual(credentialScan(p, { environ: { OPENAI_API_KEY: 'inherited' }, secrets: {} }), []);
+});
+
+test('null expiry is unknown, epoch expiry is expired, invalid metadata cannot leak objects', () => {
+  const home = tmpHome();
+  write(home, '.credentials.json', JSON.stringify({ claudeAiOauth: {
+    accessToken: 'secret-token', expiresAt: null, refreshTokenExpiresAt: '',
+    emailAddress: { accessToken: 'nested-secret' },
+  } }));
+  const [unknown] = credentialScan(profile('claude', { CLAUDE_CONFIG_DIR: home }), { environ: {}, now: NOW });
+  assert.equal(unknown.expiresAt, null);
+  assert.equal(unknown.expired, false);
+  assert.equal(unknown.refreshExpired, false);
+  assert.equal(unknown.account, null);
+  assert.doesNotMatch(JSON.stringify(unknown), /secret-token|nested-secret/);
+  write(home, 'auth.json', JSON.stringify({ tokens: { access_token: jwt({ exp: 0 }) } }));
+  const [epoch] = credentialScan(profile('codex', { CODEX_HOME: home }), { environ: {}, now: NOW });
+  assert.equal(epoch.expired, true);
+  assert.doesNotThrow(() => formatCredential({ kind: 'file', expiresAt: 1e100 }));
+});
+
+test('known engines do not scan unrelated files, and oversized stores are bounded', () => {
+  const home = tmpHome();
+  write(home, 'unrelated-secret.json', '{}');
+  const p = profile('codex', { CODEX_HOME: home });
+  assert.deepEqual(credentialScan(p, { environ: {} }), []);
+  write(home, 'auth.json', 'x'.repeat(300_000));
+  const [c] = credentialScan(p, { environ: {} });
+  assert.equal(c.detail, 'unreadable file');
 });
 
 test('every env name we probe is unique', () => {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Client, Environment, UsageReport, UsageGroup, UsageTotals } from './client';
 import { hitRate, cacheSaved } from './client';
 import { loadUsage, saveUsage, mergeReports, today, daysAgo } from './usageCache';
+import { BackIcon } from './Icon';
 
 /**
  * What the agents on this network have cost.
@@ -153,7 +154,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
   return (
     <>
       <div className="bar">
-        <button className="iconbtn back" aria-label="Back" onClick={onBack}>‹</button>
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <b>Usage</b>
         {pending.size > 0 && answered.length > 0 && <span className="conn"><i />updating</span>}
       </div>

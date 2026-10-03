@@ -1,244 +1,209 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Client } from '../client';
-import { apply, emptyLog, type HelmEvent, type LogState } from './types';
+import { apply, emptyLog, type HelmEvent, type LogState, type Permission } from './types';
 import { loadCached, saveCached } from './logCache';
 
-/**
- * How much of a conversation an open asks for: the end of it.
- *
- * The machine budgets the reply in bytes as well, so this is only the count
- * at which even small events stop being worth fetching. Two hundred is a
- * handful of turns - more than a phone screen holds, and the rest is a tap.
- */
 const TAIL = 200;
+const RENEW_MS = 10_000;
+type History = {
+  events: HelmEvent[]; pending: Permission[]; last: number; hasMore?: boolean;
+  firstSeq?: number; logFirst?: number; session?: { status: string };
+};
 
-/**
- * A live view of one headless session.
- *
- * Opening paints instantly from the on-device cache when there is one,
- * then refreshes only what is new in the background - an old chat no
- * longer costs up to 8 relay round-trips before first paint.
- *
- * With no cache it asks for the *tail* rather than paging forward from the
- * first event. That is the difference between opening a chat and waiting for
- * one: a devin thread on the owner's VM held 822 events and 6.8MB, and the
- * old first page - 500 events, oldest first - was 5MB, which took 58 seconds
- * from the laptop and timed out at 20 on the phone, to render a screenful of
- * history nobody had asked to see. The machine now budgets a page in bytes
- * and answers from the end; what came before is counted, and fetched only if
- * the owner reaches for it.
- *
- * What is on screen is written back as it streams, not only when the view
- * closes. A phone does not close views: it is swiped away, or the tab is
- * evicted while it sits in the background, and React never unmounts - so
- * anything that arrived since the chat was opened was cached nowhere and
- * came back over the network. It is saved a beat after the stream goes
- * quiet, and again the moment the page is hidden. Loads the
- * log once, then applies pushes as they arrive - in sequence order, and
- * if a push ever skips a number (a socket that dropped for a moment) the
- * gap is refetched rather than guessed at. The daemon only pushes while
- * we keep saying we are watching, so the watch is renewed while this
- * hook is mounted, and re-done after a reconnect.
- */
+/** Cache for first paint, ordered history for truth, pushes for low latency. */
 export function useSessionLog(client: Client, env: string, sessionId: string) {
-  const log = useRef<LogState>(emptyLog());
-  /** Raw events in seq order, mirroring what was applied - what gets cached. */
-  const raw = useRef<HelmEvent[]>([]);
-  const [state, setState] = useState<LogState>(log.current);
+  const [state, setState] = useState<LogState>(emptyLog);
   const [error, setError] = useState('');
-  const fetching = useRef<Promise<void> | null>(null);
-  /**
-   * Whether the machine holds anything before the oldest event on screen.
-   * `firstSeq` is the front of our window; the daemon says where its own log
-   * starts, and the two together answer it for a cached open as well as a
-   * cold one.
-   */
+  const [syncing, setSyncing] = useState(true);
   const [earlier, setEarlier] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
-  const firstSeq = useRef(0);
-  const noteWindow = useCallback((logFirst?: number) => {
-    setEarlier(!!logFirst && !!firstSeq.current && logFirst < firstSeq.current);
-  }, []);
-
-  const paint = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const publish = useCallback(() => {
-    if (paint.current !== null) { clearTimeout(paint.current); paint.current = null; }
-    setState({ ...log.current, turns: log.current.turns, pending: [...log.current.pending] });
-  }, []);
-  // Consume every event immediately, but paint the latest state at most 20
-  // times a second. Fast providers must not saturate a phone's main thread.
-  const publishSoon = useCallback(() => {
-    if (paint.current === null) paint.current = setTimeout(publish, 50);
-  }, [publish]);
-
-  const dirty = useRef(false);
-  const writer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const persist = useCallback(() => {
-    if (writer.current) { clearTimeout(writer.current); writer.current = null; }
-    if (!dirty.current) return;
-    dirty.current = false;
-    if (log.current.last > 0 && raw.current.length) {
-      saveCached(env, sessionId, log.current.last, raw.current, firstSeq.current).catch(() => {});
-    }
-  }, [env, sessionId]);
-
-  /**
-   * Save shortly after the stream goes quiet. Debounced because a live turn
-   * is hundreds of deltas a second and each save rewrites the whole array;
-   * short because the window between the last save and a phone killing the
-   * app is exactly what gets lost.
-   */
-  const persistSoon = useCallback(() => {
-    dirty.current = true;
-    if (writer.current) return;
-    writer.current = setTimeout(() => { writer.current = null; persist(); }, 2000);
-  }, [persist]);
-
-  const fetchSince = useCallback((since: number) => {
-    if (fetching.current) return fetching.current;
-    fetching.current = (async () => {
-      // Nothing on screen yet: take the end of the conversation in one
-      // budgeted reply. Otherwise page forward from what we already have,
-      // which is only what happened while this device was away.
-      const cold = since === 0 && !log.current.turns.length;
-      let cursor = since;
-      for (let pages = 0; pages < 8; pages++) {
-        const r = await client
-          .rpc<{ events: HelmEvent[]; pending: any[]; last: number; hasMore?: boolean; firstSeq?: number; logFirst?: number }>(
-            env, 'session.events',
-            cold && pages === 0
-              ? { id: sessionId, tail: TAIL }
-              : { id: sessionId, since: cursor, limit: 500 },
-            20_000);
-        for (const e of r.events) {
-          if (e.seq > log.current.last) raw.current.push(e);
-          apply(log.current, e);
-        }
-        if (cold && pages === 0) firstSeq.current = r.firstSeq ?? r.events[0]?.seq ?? 0;
-        noteWindow(r.logFirst);
-        if (r.events.length) cursor = r.events[r.events.length - 1].seq;
-        publish();
-        if (!r.hasMore) break;
-      }
-      log.current.loaded = true;
-      setError('');
-      publish();
-      dirty.current = true;
-      persist();
-    })()
-      .catch((e: any) => setError(e.message))
-      .finally(() => { fetching.current = null; });
-    return fetching.current;
-  }, [client, env, sessionId, publish, persist, noteWindow]);
-
-  /**
-   * One more window of what came before, newest-first, on request.
-   *
-   * The events land in front of what is already reduced, so the log is rebuilt
-   * from the whole array rather than patched: a turn that was half in the
-   * window has to become whole, and `apply` only ever moves forward.
-   */
-  const loadEarlier = useCallback(async () => {
-    if (loadingEarlier || !firstSeq.current) return;
-    setLoadingEarlier(true);
-    try {
-      const r = await client.rpc<{ events: HelmEvent[]; firstSeq?: number; logFirst?: number }>(
-        env, 'session.events', { id: sessionId, before: firstSeq.current }, 30_000);
-      if (!r.events.length) { setEarlier(false); return; }
-      firstSeq.current = r.firstSeq ?? r.events[0].seq;
-      noteWindow(r.logFirst);
-      raw.current = [...r.events, ...raw.current];
-      const rebuilt = emptyLog();
-      for (const e of raw.current) apply(rebuilt, e);
-      rebuilt.loaded = true;
-      rebuilt.pending = log.current.pending;
-      log.current = rebuilt;
-      publish();
-      dirty.current = true;
-      persist();
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoadingEarlier(false);
-    }
-  }, [client, env, sessionId, loadingEarlier, publish, persist, noteWindow]);
+  const actions = useRef({ refresh: async () => {}, earlier: async () => {} });
 
   useEffect(() => {
-    log.current = emptyLog();
-    raw.current = [];
-    firstSeq.current = 0;
-    setEarlier(false);
-    setState(log.current);
-    let stopped = false;
+    // All mutable state belongs to this mount. A late reply from another
+    // chat (or a StrictMode cleanup) can never write into this conversation.
+    let stopped = false, initialized = false, fetching = false, pagingBack = false;
+    let log = emptyLog(), raw: HelmEvent[] = [], first = 0, windowVersion = 0;
+    let dirty = false, retryDelay = 1000;
+    let paint: ReturnType<typeof setTimeout> | undefined;
+    let writer: ReturnType<typeof setTimeout> | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const buffered = new Map<number, HelmEvent>();
+    const watchId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setState(log); setError(''); setSyncing(true); setEarlier(false); setLoadingEarlier(false);
 
-    const watch = () => client.rpc(env, 'session.watch', { id: sessionId }, 10_000).catch(() => {});
-    watch();
-    // Instant paint from the device cache, then only-what-is-new behind it.
-    loadCached(env, sessionId).then((cached) => {
+    const publish = () => {
+      clearTimeout(paint); paint = undefined;
+      if (!stopped) setState({ ...log, pending: [...log.pending] });
+    };
+    const persist = () => {
+      clearTimeout(writer); writer = undefined;
+      if (!dirty || !raw.length) return;
+      dirty = false;
+      void saveCached(env, sessionId, log.last, [...raw], first);
+    };
+    const changed = () => {
+      dirty = true;
+      paint ??= setTimeout(publish, 50);
+      writer ??= setTimeout(persist, 2000);
+    };
+    const consume = (events: HelmEvent[]) => {
+      for (const event of events) {
+        if (event.seq <= log.last) continue;
+        raw.push(event);
+        apply(log, event);
+      }
+    };
+    const noteWindow = (logFirst?: number) => setEarlier(!!logFirst && !!first && logFirst < first);
+    const reset = () => { log = emptyLog(); raw = []; first = 0; windowVersion++; };
+    const scheduleRetry = () => {
+      if (stopped || retry) return;
+      retry = setTimeout(() => { retry = undefined; void refresh(); }, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, RENEW_MS);
+    };
+
+    // Live frames wait behind cache/history reads. Advancing the cursor with
+    // a newer push first would make the reducer discard the missing history.
+    const drain = () => {
+      if (!initialized || fetching || stopped) return;
+      let advanced = false;
+      for (const event of [...buffered.values()].sort((a, b) => a.seq - b.seq)) {
+        if (event.seq <= log.last) { buffered.delete(event.seq); continue; }
+        if (event.seq !== log.last + 1) { if (advanced) changed(); void refresh(); return; }
+        consume([event]); buffered.delete(event.seq);
+        advanced = true;
+      }
+      if (advanced) changed();
+    };
+
+    const refresh = async () => {
+      if (stopped || !initialized || fetching) return;
+      fetching = true;
+      clearTimeout(retry); retry = undefined;
+      setSyncing(true);
+      let failed = false;
+      try {
+        let target: number | undefined;
+        let resetOnce = false;
+        for (;;) {
+          const cursor = log.last;
+          const cold = cursor === 0;
+          const r = await client.rpc<History>(env, 'session.events', cold
+            ? { id: sessionId, tail: TAIL }
+            : { id: sessionId, since: cursor, limit: 500 }, 20_000);
+          if (stopped) return;
+          // The machine may have trimmed past this device's cache or restored
+          // an older log. In either case take a complete fresh tail window.
+          if (!cold && (r.last < cursor || (r.logFirst ?? 0) > cursor + 1)) {
+            if (resetOnce) throw new Error('Chat history changed while syncing; retrying…');
+            if (r.last < cursor) buffered.clear();
+            reset(); resetOnce = true; target = undefined;
+            continue;
+          }
+          target ??= r.last;
+          consume(r.events);
+          if (cold) first = r.firstSeq ?? r.events[0]?.seq ?? 0;
+          noteWindow(r.logFirst);
+          log.loaded = true;
+          // These are authoritative even if the relevant status or permission
+          // events fell outside the retained window. Apply before newer pushes.
+          if (log.last >= r.last) {
+            log.pending = r.pending ?? [];
+            if (r.session?.status) log.status = r.session.status;
+          }
+          publish();
+          if (!r.hasMore || log.last >= target) break;
+          if (log.last <= cursor) throw new Error('Chat history did not advance; retrying…');
+        }
+        setError(''); setSyncing(false); retryDelay = 1000;
+        dirty = true;
+        persist();
+      } catch (e: any) {
+        failed = true;
+        if (!stopped) { setError(e.message); scheduleRetry(); }
+      } finally {
+        fetching = false;
+        if (!stopped && !failed) drain();
+      }
+    };
+
+    const renew = async () => {
+      try {
+        const r = await client.rpc<{ last: number; status?: string }>(env, 'session.watch', { id: sessionId, watchId }, 10_000);
+        if (!stopped && initialized && (!log.loaded || r.last !== log.last || (r.status && r.status !== log.status))) void refresh();
+      } catch { if (!stopped) scheduleRetry(); }
+    };
+    const catchUp = () => { if (!stopped) { void renew(); void refresh(); } };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') persist();
+      else catchUp();
+    };
+    const off = client.on((machine, kind, payload: any) => {
+      if (stopped) return;
+      if (kind === 'session.event' && machine === env && payload?.id === sessionId) {
+        for (const event of payload.events ?? []) buffered.set(event.seq, event);
+        drain();
+      }
+      if ((kind === 'connection' && payload?.online)
+        || (machine === env && ((kind === 'presence' && payload?.online) || kind === 'transport'))) catchUp();
+      if (machine === env && kind === 'session.update' && payload?.session?.id === sessionId
+        && (payload.session.lastSeq > log.last || payload.session.status !== log.status)) void refresh();
+    });
+    client.subscribe(env);
+    void renew();
+    // Cache reads may be slower than pushes. Do not let either overwrite the
+    // other: hydrate the cache first, then history, then buffered live events.
+    void loadCached(env, sessionId).then((cached) => {
       if (stopped) return;
       if (cached?.events.length) {
-        for (const e of cached.events) {
-          raw.current.push(e);
-          apply(log.current, e);
-        }
-        // A record that reduces to nothing is not a chat, it is a hole: every
-        // event in it belongs to a turn that was cut off before it. Nothing
-        // would ever repair it either, because its `last` is current and the
-        // refresh behind it asks only for what is newer. Treat it as a miss
-        // and take a fresh window, which is also how a device heals from a
-        // window some earlier version of helm cut badly.
-        if (!log.current.turns.length) {
-          log.current = emptyLog();
-          raw.current = [];
-        } else {
-          log.current.loaded = true;
-          firstSeq.current = cached.first || cached.events[0].seq;
-          publish();
-        }
+        consume([...cached.events].sort((a, b) => a.seq - b.seq));
+        if (!log.turns.length) reset();
+        else { log.loaded = true; first = cached.first || cached.events[0].seq; publish(); }
       }
-      fetchSince(log.current.last);
+      initialized = true;
+      void refresh();
     });
 
-    const renew = setInterval(watch, 25_000);
-
-    // Being hidden is how a chat ends on a phone. The write is asynchronous
-    // and may not finish if the app is killed in the same breath, which is
-    // why the debounce above is the real guarantee and this is the last word.
-    const onHide = () => { if (document.visibilityState === 'hidden') persist(); };
-    document.addEventListener('visibilitychange', onHide);
+    const loadEarlier = async () => {
+      if (stopped || pagingBack || !first) return;
+      pagingBack = true; setLoadingEarlier(true);
+      const version = windowVersion;
+      try {
+        const r = await client.rpc<History>(env, 'session.events', { id: sessionId, before: first }, 30_000);
+        if (stopped || version !== windowVersion) return;
+        if (!r.events.length) { setEarlier(false); return; }
+        first = r.firstSeq ?? r.events[0].seq;
+        noteWindow(r.logFirst);
+        raw = [...new Map([...r.events, ...raw].map(e => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
+        const rebuilt = emptyLog();
+        for (const event of raw) apply(rebuilt, event);
+        rebuilt.loaded = log.loaded; rebuilt.pending = log.pending; rebuilt.status = log.status;
+        log = rebuilt;
+        dirty = true; publish(); persist();
+      } catch (e: any) { if (!stopped) setError(e.message); }
+      finally { pagingBack = false; if (!stopped) setLoadingEarlier(false); }
+    };
+    actions.current = { refresh, earlier: loadEarlier };
+    const timer = setInterval(() => { if (!document.hidden) void renew(); }, RENEW_MS);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', catchUp);
+    window.addEventListener('pageshow', catchUp);
+    window.addEventListener('online', catchUp);
     window.addEventListener('pagehide', persist);
-
-    const off = client.on((e, kind, payload) => {
-      if (stopped) return;
-      if (kind === 'session.event' && e === env && payload?.id === sessionId) {
-        const events: HelmEvent[] = payload.events ?? [];
-        for (const ev of events) {
-          if (ev.seq > log.current.last + 1 && log.current.loaded) {
-            // Something was missed; ask for everything after what we have.
-            fetchSince(log.current.last);
-            return;
-          }
-          if (ev.seq > log.current.last) raw.current.push(ev);
-          apply(log.current, ev);
-        }
-        publishSoon();
-        persistSoon();
-      }
-      if (kind === 'connection' && payload?.online) { watch(); fetchSince(log.current.last); }
-    });
-
     return () => {
       stopped = true;
-      if (paint.current !== null) { clearTimeout(paint.current); paint.current = null; }
-      clearInterval(renew);
-      document.removeEventListener('visibilitychange', onHide);
+      off(); clearInterval(timer); clearTimeout(paint); clearTimeout(retry);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', catchUp);
+      window.removeEventListener('pageshow', catchUp);
+      window.removeEventListener('online', catchUp);
       window.removeEventListener('pagehide', persist);
-      off();
       persist();
-      client.rpc(env, 'session.unwatch', { id: sessionId }, 5_000).catch(() => {});
+      void client.rpc(env, 'session.unwatch', { id: sessionId, watchId }, 5000).catch(() => {});
     };
-  }, [client, env, sessionId, fetchSince, publish, publishSoon, persist, persistSoon]);
+  }, [client, env, sessionId]);
 
-  return { log: state, error, earlier, loadingEarlier, loadEarlier, refresh: () => fetchSince(log.current.last) };
+  const refresh = useCallback(() => actions.current.refresh(), []);
+  const loadEarlier = useCallback(() => actions.current.earlier(), []);
+  return { log: state, error, syncing, earlier, loadingEarlier, loadEarlier, refresh };
 }

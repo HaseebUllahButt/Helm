@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventLog } from '../packages/connect/src/events.js';
+import { apply, emptyLog } from '../apps/web/src/session/types.ts';
 
 test('events are numbered, persisted, and replayable from a sequence number', () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-events-'));
@@ -109,6 +110,19 @@ test('a page is measured in bytes, and a chat opens on its end', () => {
   assert.equal(log.window('s', { before: back.firstSeq }).logFirst, 1);
 });
 
+test('completed provider echoes and withdrawn tickets are not active local prompts', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  log.append('s', { type: 'turn.start', turnId: 'local-1', text: 'hello', queued: false });
+  assert.equal(log.activeTurn('s').turnId, 'local-1');
+  log.append('s', { type: 'turn.start', turnId: 'real-1', text: 'hello' });
+  assert.equal(log.activeTurn('s').turnId, 'real-1');
+  log.append('s', { type: 'turn.done', turnId: 'real-1', status: 'ok' });
+  assert.equal(log.activeTurn('s'), null);
+  log.append('s', { type: 'turn.start', turnId: 'local-2', text: 'again', queued: false });
+  log.append('s', { type: 'turn.remove', turnId: 'local-2' });
+  assert.equal(log.activeTurn('s'), null);
+});
+
 test('a short conversation is served whole, from its first event', () => {
   const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   log.append('s', { type: 'turn.start', turnId: 't1', text: 'hi' });
@@ -162,4 +176,40 @@ test('a window that skips the middle of a turn still points at the hole', () => 
   const back = log.window('s', { before: w.firstSeq });
   assert.ok(back.events[back.events.length - 1].seq < w.firstSeq);
   assert.ok(back.events.length > 1);
+});
+
+test('a cold history window keeps output with its host instead of a mid-turn queue ticket', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  log.append('s', { type: 'turn.start', turnId: 'host', text: 'original question' });
+  log.append('s', { type: 'turn.start', turnId: 'local-steer', text: 'also check this', queued: true });
+  log.append('s', { type: 'turn.deliver', turnId: 'local-steer' });
+  log.append('s', { type: 'turn.accept', turnId: 'local-steer' });
+  log.append('s', { type: 'item.start', id: 'reply', kind: 'text', turnId: 'host' });
+  for (let i = 0; i < 40; i++) log.append('s', {
+    type: 'item.start', id: `edit${i}`, kind: 'edit', turnId: 'host',
+    changes: [{ path: `f${i}.ts`, kind: 'update', diff: 'd'.repeat(20_000) }],
+  });
+  log.append('s', { type: 'item.delta', id: 'reply', text: 'The current answer' });
+  log.append('s', { type: 'item.done', id: 'reply', status: 'ok' });
+  const window = log.window('s', { tail: 5 });
+  const state = emptyLog();
+  for (const event of window.events) apply(state, event);
+  const host = state.turns.find(t => t.id === 'host');
+  assert.equal(host?.queued, false);
+  assert.equal(host?.items.find(i => i.id === 'reply')?.text, 'The current answer');
+  assert.equal(state.turns.find(t => t.id === 'local-steer')?.queued, false, 'the accepted message is not resurrected in the outbox');
+  assert.ok(window.firstSeq > window.events[0].seq, 'paging still points at the omitted middle');
+  assert.ok(JSON.stringify(window.events).length < 200_000);
+});
+
+test('a window starting with a queued ticket also carries its still-running host', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
+  log.append('s', { type: 'turn.start', turnId: 'host', text: 'original question' });
+  log.append('s', { type: 'turn.start', turnId: 'local-next', text: 'next message', queued: true });
+  log.append('s', { type: 'item.start', id: 'reply', kind: 'text', turnId: 'host' });
+  log.append('s', { type: 'item.delta', id: 'reply', text: 'Still working on the original' });
+  const state = emptyLog();
+  for (const event of log.window('s', { tail: 3 }).events) apply(state, event);
+  assert.equal(state.turns.find(t => t.id === 'local-next')?.queued, true);
+  assert.equal(state.turns.find(t => t.id === 'host')?.items[0].text, 'Still working on the original');
 });

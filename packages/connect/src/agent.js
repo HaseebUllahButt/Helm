@@ -8,14 +8,13 @@ import {
   MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
-import { modesFor } from './modes.js';
+import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
 import { listModels } from './models.js';
 import { usableProfiles, authStatuses } from './auth.js';
-import { credentialScan, shellEnv } from './credentials.js';
 import { listCommands } from './commands.js';
-import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
+import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
@@ -25,15 +24,16 @@ import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
-import { describe as describeAsk } from './notify.js';
+import { describe as describeAsk, describeDone } from './notify.js';
 import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { transcribe, canTranscribe } from './voice.js';
 import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
 import { Handoffs } from './handoffs.js';
+import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
-import { selfUpdate, currentVersion } from './update.js';
+import { selfUpdate, currentVersion, autoUpdate } from './update.js';
 import * as gitq from './git.js';
 import { agentCatalog, delegationNote } from './delegation.js';
 
@@ -46,6 +46,15 @@ const RECONCILE_MS = 15_000;
 /** How often the brain's picture of the network is refreshed, while one exists. */
 const BRAIN_REFRESH_MS = 45_000;
 const HEARTBEAT_MS = 20_000;
+/** Cache warm-ups wait this long, so they never compete with coming online. */
+const WARM_DELAY_MS = 2_000;
+/** The first quiet update check, once startup has settled. */
+const UPDATE_AFTER_START_MS = 20_000;
+/** A gap this long between ticks means the machine slept. */
+const WAKE_TICK_MS = 60_000;
+const WAKE_GAP_MS = 5 * 60_000;
+/** Disconnected from every other hub this long, then back: check for an update. */
+const BACK_ONLINE_MS = 10 * 60_000;
 
 /**
  * One connection to one hub.
@@ -170,6 +179,7 @@ class Link {
       clearInterval(this.#beat);
       if (this.#stopped) return;
       if (was) console.log(`[helm] lost ${this.url}; retrying`);
+      if (was) this.daemon.linkDown?.(this);
       setTimeout(() => this.#open(), this.#backoff).unref?.();
       this.#backoff = Math.min(this.#backoff * 2, RECONNECT_MAX);
     });
@@ -182,6 +192,10 @@ class Link {
 
 export class Daemon {
   #links = new Map();
+  #versionP = null;
+  #about = null;
+  #wake = null;
+  #offlineSince = null;
   #tunnels = new Map();
   #brainTimer = null;
   #stopped = false;
@@ -223,6 +237,10 @@ export class Daemon {
   }
 
   async start() {
+    // What every link reports about this machine starts being worked out now,
+    // beside the wait for herdr, instead of after it - see describe().
+    this.#versionP = currentVersion().catch(() => null);
+    import('./pty.js').then((m) => m.loadPty()).catch(() => {});
     this.runtime = await createRuntime();
     this.runtimeInfo = await this.runtime.ensureReady();
 
@@ -263,16 +281,23 @@ export class Daemon {
     this.sessions.adoptTerminals()
       .catch(() => {})
       .then(() => this.sessions.resume());
-    // The folder index behind `fs.search`: one background walk now, so the
-    // first query is answered from memory rather than starting the walk then.
-    fsApi.warmIndex?.();
-    // Likewise which accounts are signed in - and, as a side effect of asking
-    // agy, their model lists - so opening the picker or choosing an account
-    // right after a restart answers from memory instead of from the CLIs.
-    currentProfiles().then(async (profiles) => {
-      const statuses = await authStatuses(profiles);
-      this.cliAgents = await agentCatalog(profiles, statuses, { models: false });
-    }).catch(() => {});
+    // Caches worth having warm, none worth being late for: they start once
+    // the links are up. Re-reading the shell's aliases blocks for a moment,
+    // and that moment used to sit in front of this machine coming online.
+    const warm = setTimeout(() => {
+      if (this.#stopped) return;
+      // The folder index behind `fs.search`: one background walk now, so the
+      // first query is answered from memory rather than starting the walk then.
+      fsApi.warmIndex?.();
+      // Likewise which accounts are signed in - and, as a side effect of asking
+      // agy, their model lists - so opening the picker or choosing an account
+      // soon after a restart answers from memory instead of from the CLIs.
+      currentProfiles().then(async (profiles) => {
+        const statuses = await authStatuses(profiles);
+        this.cliAgents = await agentCatalog(profiles, statuses, { models: false });
+      }).catch(() => {});
+    }, WARM_DELAY_MS);
+    warm.unref?.();
     this.sessions.on('session', (session) => this.#emit(E.SESSION_UPDATE, { session: wire(session) }));
     this.sessions.on('digest', (digest) => this.#emit(E.DIGEST, { digest }));
     this.sessions.on('data', (delta) => this.#emit(E.SESSION_DATA, delta));
@@ -284,7 +309,7 @@ export class Daemon {
       // pauses to ask: a completion notification means finished - a thread
       // that is merely blocked has its own notification already. Done,
       // interrupted and errored all land on idle, so any of them rings it.
-      if (session.notifyDone && to === 'idle' && from !== 'idle') {
+      if (!session.delegation && !this.sessions.hasActiveDelegations(session.id) && session.notifyDone && to === 'idle' && from !== 'idle') {
         this.#notifyDone(session);
       }
     });
@@ -337,6 +362,42 @@ export class Daemon {
     // every redesignation, so a machine that is never one never pays for it.
     this.#syncMedia().catch((err) =>
       console.error('[helm] nas media:', err?.message || err));
+
+    // Keep current without anyone asking: a quiet check soon after start - a
+    // machine that was off for days comes back on today's helm - and again
+    // whenever it wakes from sleep. autoUpdate decides whether it may.
+    const first = setTimeout(() => { if (!this.#stopped) autoUpdate(); }, UPDATE_AFTER_START_MS);
+    first.unref?.();
+    let last = Date.now();
+    this.#wake = setInterval(() => {
+      const now = Date.now();
+      // The interval stops while the machine sleeps; a long gap means it woke.
+      if (now - last > WAKE_GAP_MS && !this.#stopped) autoUpdate();
+      last = now;
+    }, WAKE_TICK_MS);
+    this.#wake.unref?.();
+  }
+
+  /** A remote hub came back after a long time away: the machine is back online. */
+  #noteRemote(up) {
+    const remote = [...this.#links.values()].filter((l) => !l.url.includes('127.0.0.1'));
+    if (!up) {
+      if (!remote.some((l) => l.connected)) this.#offlineSince ??= Date.now();
+      return;
+    }
+    if (this.#offlineSince && Date.now() - this.#offlineSince > BACK_ONLINE_MS) autoUpdate();
+    this.#offlineSince = null;
+  }
+
+  linkDown(link) {
+    this.#noteRemote(false);
+    for (const [key, tunnel] of this.#tunnels) {
+      if (tunnel.link !== link) continue;
+      tunnel.sender?.stop();
+      tunnel.receiver?.stop();
+      tunnel.sock.destroy();
+      this.#tunnels.delete(key);
+    }
   }
 
   /**
@@ -383,6 +444,7 @@ export class Daemon {
     this.#stopped = true;
     clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
+    clearInterval(this.#wake);
     this.#stopWatch?.();
     for (const link of this.#links.values()) link.stop();
     // A locally terminated tunnel is a live socket even after every hub link
@@ -395,7 +457,7 @@ export class Daemon {
     this.peers?.stop();
     this.runtime?.stop();
     this.usage?.stop();
-    // Hosted agents are detached by Sessions.stop() and resume on demand;
+    // Hosted agents are detached by Sessions.stop() and rebound at boot;
     // local ones are stopped as before. Awaiting this is important during a
     // systemd restart: the daemon must release its side of every session
     // before the service exits.
@@ -682,6 +744,7 @@ export class Daemon {
 
   onLinkUp(link) {
     const local = link.url.includes('127.0.0.1');
+    if (!local) this.#noteRemote(true);
     console.log(
       `[helm] ${local ? 'serving locally' : `linked to ${link.url}`} as "${this.name}"`
     );
@@ -774,6 +837,7 @@ export class Daemon {
   #notify(id, event) {
     let session = null;
     try { session = this.sessions.get(id); } catch { /* gone already */ }
+    if (session?.delegation) return;
     const payload = describeAsk({ ...session, envId: this.id }, event);
     // Each connected hub receives the small, already-redacted notification.
     // The hub that accepted the phone's subscription is the one that can
@@ -787,30 +851,30 @@ export class Daemon {
    * the thread's name and that it finished, nothing more.
    */
   #notifyDone(session) {
-    const where = session.title || session.cwd?.split('/').pop() || 'a session';
     this.broadcastFrame(T.NOTIFY, {
-      payload: {
-        title: `${where} · finished`,
-        body: `${session.engine ?? 'the agent'} is done`,
-        tag: `helm-done-${session.id}-${Date.now()}`,
-        envId: this.id, sessionId: session.id,
-      },
+      payload: describeDone({ ...session, envId: this.id }),
     });
   }
 
   async describe() {
-    // Read once per connection: it changes only when an update lands, and an
-    // update restarts the daemon.
-    this.version ??= await currentVersion().catch(() => null);
+    // Worked out once and shared: every link asks at the same moment on
+    // startup, and each used to run its own git commands and pty check. The
+    // answer changes only when an update lands, and an update restarts us.
+    this.#about ??= Promise.all([
+      this.#versionP ?? currentVersion().catch(() => null),
+      this.sessions.terminalBackend().catch(() => 'panes'),
+    ]);
+    const [version, terminals] = await this.#about;
+    this.version = version;
     return {
-      version: this.version,
+      version,
       host: hostname(),
       platform: platform(),
       arch: arch(),
       release: release(),
       runtime: this.runtimeInfo,
       // 'pty' or 'panes': what a terminal here will actually be.
-      terminals: await this.sessions.terminalBackend(),
+      terminals,
       // Whether this machine can turn a recording into words. The composer
       // only offers a microphone when something in the network can, so a
       // button that could not possibly work is never drawn.
@@ -949,10 +1013,13 @@ export class Daemon {
       case T.TUNNEL_OPEN:
         return this.#openTunnel(link, msg);
 
+      case T.TUNNEL_ACK:
+        this.#tunnels.get(this.#key(link, msg.sid))?.sender?.ack(msg.bytes);
+        return;
       case T.TUNNEL_DATA: {
-        this.#tunnels
-          .get(this.#key(link, msg.sid))
-          ?.sock.write(Buffer.from(msg.data, 'base64'));
+        const tunnel = this.#tunnels.get(this.#key(link, msg.sid));
+        if (tunnel?.receiver) tunnel.receiver.write(msg.data);
+        else tunnel?.sock.write(Buffer.from(msg.data, 'base64'));
         return;
       }
 
@@ -1004,26 +1071,39 @@ export class Daemon {
    * interface. This is how ssh reaches a box behind NAT: the daemon already
    * holds the outbound connection, so nothing has to accept an inbound one.
    */
-  #openTunnel(link, { sid, port }) {
+  #openTunnel(link, { sid, port, flow }) {
     const wanted = Number(port) || 22;
     if (!this.#allowedTunnelPorts().includes(wanted)) {
       return link.send(T.TUNNEL_CLOSE, { sid, reason: 'port not allowed' });
     }
     const key = this.#key(link, sid);
     const sock = tcpConnect({ host: '127.0.0.1', port: wanted });
-    this.#tunnels.set(key, { sock, link });
-
-    sock.on('connect', () => link.send(T.TUNNEL_READY, { sid }));
-    sock.on('data', (chunk) =>
-      link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') })
-    );
-    const end = (reason) => {
+    const tunnel = { sock, link };
+    this.#tunnels.set(key, tunnel);
+    const end = reason => {
+      tunnel.sender?.stop();
+      tunnel.receiver?.stop();
       if (!this.#tunnels.delete(key)) return;
       link.send(T.TUNNEL_CLOSE, { sid, reason });
       sock.destroy();
     };
-    sock.on('error', (err) => end(err.message));
-    sock.on('close', () => end('closed'));
+    sock.on('connect', () => {
+      const negotiated = flow === 1;
+      link.send(T.TUNNEL_READY, { sid, ...(negotiated ? { flow: 1 } : {}) });
+      if (negotiated) {
+        tunnel.receiver = new TunnelReceiver(sock,
+          bytes => link.send(T.TUNNEL_ACK, { sid, bytes }), err => end(err.message));
+        tunnel.sender = new TunnelSender(sock,
+          chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }), err => end(err.message));
+      } else {
+        sock.on('data', chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }));
+      }
+    });
+    sock.on('error', err => end(err.message));
+    sock.on('close', () => {
+      if (tunnel.sender && this.#tunnels.has(key)) tunnel.sender.finish(() => end('closed'));
+      else end('closed');
+    });
   }
 
   // --------------------------------------------------------------- dispatch
@@ -1034,7 +1114,9 @@ export class Daemon {
         return { ...(await this.describe()), name: this.name };
 
       case M.GIT_STATUS: return gitq.status(p.cwd);
+      case M.GIT_GRAPH: return gitq.graph(p.cwd, await this.sessions.list());
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
+      case M.GIT_COMMIT: return gitq.commit(p.cwd, p.hash, p.path);
       case M.GIT_WORKTREE: return gitq.addWorktree(p.cwd, p.name);
       case M.GIT_PR: return { pr: await gitq.pullRequest(p.cwd) };
 
@@ -1161,19 +1243,18 @@ export class Daemon {
         // Each profile carries its account key and model prefs, so the app
         // groups aliases and renders the picker filter with no extra call.
         const cfg = loadSettings();
-        const shellNames = await shellEnv();
         return {
           profiles: profiles.map((x) => ({
             ...x, account: accountKey(x), prefs: modelPrefs(x, cfg), defaults: startPrefs(x, cfg),
-            credentials: credentialScan(x, { shellNames }),
           })),
+          picker: pickerPrefs(cfg),
         };
       }
 
       case M.AGENT_LIST: {
         const profiles = p.refresh ? (await refreshProfiles()).profiles : await currentProfiles();
         const statuses = await authStatuses(profiles, { refresh: !!p.refresh });
-        this.cliAgents = await agentCatalog(profiles, statuses, { models: p.models !== false });
+        this.cliAgents = await agentCatalog(profiles, statuses, { models: p.models !== false, credentials: true });
         return { agents: this.cliAgents };
       }
 
@@ -1246,8 +1327,15 @@ export class Daemon {
           filtered.default = live.current ?? filtered.default;
         }
         // The permission modes this engine offers, so the app never has to know the flags.
-        return { ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [] };
+        // Starred models and the start defaults ride along, so the in-chat
+        // picker can show and change both without a second round trip.
+        return {
+          ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine),
+          favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile), account: accountKey(profile),
+        };
       }
+
+      case M.PICKER_PREFS: return { ok: true, picker: savePickerPrefs(p) };
 
       case M.MODEL_PREFS: {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
@@ -1255,11 +1343,12 @@ export class Daemon {
         return { ok: true, prefs: saveModelPrefs(profile, { default: p.default, approved: p.approved }) };
       }
 
-      case M.SESSION_LIST:    return { sessions: await this.sessions.list() };
+      case M.SESSION_LIST:    return { sessions: await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true }) };
       case M.SESSION_DELEGATE: return this.sessions.delegate(p);
       case M.SESSION_DELEGATION_RESULT: return this.sessions.delegationResult(p.id);
+      case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
       case M.SESSION_START: {
-        const { originHandoffId: _originHandoffId, ...start } = p;
+        const { originHandoffId: _originHandoffId, delegation: _delegation, ...start } = p;
         return { session: await this.sessions.start(start) };
       }
       case M.SESSION_LINK:    return this.sessions.linkChild(p.id, p.child);
@@ -1283,8 +1372,16 @@ export class Daemon {
       case M.SESSION_EVENTS:  return this.sessions.history(p.id, {
         since: p.since ?? 0, limit: p.limit ?? 500, tail: p.tail ?? 0, before: p.before ?? 0,
       });
-      case M.SESSION_WATCH:   return this.sessions.watch(p.id);
-      case M.SESSION_UNWATCH: return this.sessions.unwatch(p.id);
+      // A view owns its lease. Refreshing or closing one tab cannot cancel
+      // another device's stream, even when both use the same login.
+      case M.SESSION_WATCH:
+      case M.SESSION_UNWATCH: {
+        if (p.watchId != null && (typeof p.watchId !== 'string' || !p.watchId || p.watchId.length > 128)) {
+          throw new Error('invalid session watch ID');
+        }
+        const watcher = JSON.stringify([caller ?? 'legacy', p.watchId ?? 'legacy']);
+        return method === M.SESSION_WATCH ? this.sessions.watch(p.id, watcher) : this.sessions.unwatch(p.id, watcher);
+      }
       case M.SESSION_ANSWER:  return this.sessions.answer(p.id, p.requestId, p.decision ?? {});
       case M.SESSION_INTERRUPT: return this.sessions.interrupt(p.id);
       case M.SESSION_DEQUEUE:  return this.sessions.dequeue(p.id, p.turnId);
@@ -1304,6 +1401,7 @@ export class Daemon {
         const marks = this.sessions.marks();
         const recent = [];
         for (const x of await inventory(await currentProfiles())) {
+          if (this.sessions.isDelegatedConversation(x.engine, x.id)) continue;
           const mark = marks[`found:${x.engine}:${x.id}`];
           if (mark === 'removed') continue;
           // Transcript paths are machine-private. The app only needs the

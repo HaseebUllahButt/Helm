@@ -24,7 +24,9 @@ import { txn } from '../idb';
  */
 
 /** Stored event shape version; bump when HelmEvent changes incompatibly. */
-const SHAPE = 1;
+// Version 1 windows could attach a running turn to a queued steering ticket.
+// Fetch a corrected window instead of continuing from that incomplete cache.
+const SHAPE = 2;
 /** How many sessions to keep records for; opening an old chat just refetches. */
 const MAX_SESSIONS = 25;
 /** And how many for the much smaller message records. */

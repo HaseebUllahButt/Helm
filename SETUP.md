@@ -83,14 +83,16 @@ Tell the owner:
 
 ## 5. Add another computer
 
-On any connected computer:
+From Settings on any paired phone, browser or app, make a computer invite.
+You can also make one on a connected computer:
 
 ```bash
 helm add pc
 ```
 
-Install Helm on the new computer, then run the exact `helm join ...` command
-printed by `helm add pc`.
+The curl installer starts Helm automatically. On the new computer, run
+`helm join` and paste the private invite link. It joins and keeps running;
+opening its browser or app signs in without another pairing code.
 
 ## 5a. Add a second always-on VM (optional)
 
@@ -99,7 +101,8 @@ is down. On an existing machine, get a code with `helm add vm`. On the new VM,
 after installing Caddy and Helm, run the command that code was printed with:
 
 ```bash
-helm join <CODE> https://your-first-home.example
+helm join
+# Paste the private link made for this VM.
 ```
 
 The code says "vm", so that machine also takes an address of its own and

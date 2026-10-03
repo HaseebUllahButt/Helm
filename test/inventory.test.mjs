@@ -13,6 +13,22 @@ process.env.XDG_DATA_HOME = XDG;
 
 const SECONDS = Math.floor(Date.now() / 1000);
 
+test('Codex native subagent rollouts stay out of recent history without hiding user forks', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-codex-inventory-'));
+  const dir = join(home, 'sessions');
+  mkdirSync(dir);
+  const entries = [
+    { id: 'root', source: 'cli' },
+    { id: 'child', source: { subagent: { thread_spawn: { parent_thread_id: 'root', depth: 1 } } } },
+    { id: 'review', source: { subagent: 'review' } },
+    { id: 'fork', source: 'vscode', forked_from_id: 'root' },
+  ];
+  for (const p of entries) writeFileSync(join(dir, `${p.id}.jsonl`), JSON.stringify({ type: 'session_meta', payload: { ...p, cwd: '/tmp/project' } }) + '\n');
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const rows = await inventory([{ id: 'test-codex', engine: 'codex', env: { CODEX_HOME: home } }]);
+  assert.deepEqual(rows.filter((r) => r.engine === 'codex').map((r) => r.id).sort(), ['fork', 'root']);
+});
+
 function devinStore(accountDir, { hiddenColumn = true } = {}) {
   const dir = join(XDG, accountDir, 'cli');
   mkdirSync(dir, { recursive: true });
@@ -236,4 +252,16 @@ test('antigravity inventory sorts before it caps: the newest db survives a crowd
   assert.equal(rows[0].id, 'conv-089', 'the newest conversation leads the list');
   assert.equal(rows.at(-1).id, 'conv-050', 'the cut keeps the newest 40');
   assert.ok(!rows.some((r) => r.id === 'conv-049'), 'older conversations stay out');
+});
+
+test('a Claude chat helm started is named for what the owner typed, not helm\'s note', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-claude-home-'));
+  const dir = join(home, 'projects', '-work-app');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '11111111-1111-4111-8111-111111111111.jsonl'), [
+    { type: 'user', cwd: '/work/app', message: { role: 'user', content: '[helm delegation: CLI accounts: claudea (claude, authenticated).]\n\nFix the settings icon' } },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const rows = await inventory([{ id: 'claudex', engine: 'claude', env: { CLAUDE_CONFIG_DIR: home } }]);
+  assert.equal(rows.find((r) => r.cwd === '/work/app')?.title, 'Fix the settings icon');
 });

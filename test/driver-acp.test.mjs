@@ -180,7 +180,7 @@ test('opencode: auto mode answers a permission request without asking the phone'
 test('opencode2: the separate v2 driver starts an ACP session and exposes commands', async () => {
   const fake = fakeCli('opencode', 'plain');
   const driver = new Opencode2Driver({
-    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'plan',
+    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'ask',
   });
   const log = collect(driver);
   assert.deepEqual(driver.args, ['acp'], 'v2 has no --cwd flag');
@@ -191,7 +191,7 @@ test('opencode2: the separate v2 driver starts an ACP session and exposes comman
   const modeCall = fake.stdinLines().find(
     (l) => l.method === 'session/set_config_option' && l.params.configId === 'mode',
   );
-  assert.equal(modeCall.params.value, 'plan');
+  assert.equal(modeCall.params.value, 'build');
   await driver.kill();
 });
 

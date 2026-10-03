@@ -1,6 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { codexProcId } from '../hosted-process.js';
 import { Driver, readJsonLines, checkVersion } from './index.js';
 import { modeFor } from '../modes.js';
 import { expand } from '../paths.js';
@@ -207,6 +208,14 @@ export function formatAccountUsage(result, view = '', rateLimits = null) {
 
 const servers = new Map();
 
+// The variables that say which helm session is asking. One app-server serves
+// every thread on an account, so these cannot live in its environment: the
+// first thread's id would be stamped on every other thread's commands, and a
+// `helm delegate` from one chat would file its subagents under another.
+// Each thread sets its own through Codex's shell environment policy instead.
+const THREAD_VARS = ['HELM_SESSION_ID', 'HELM_PROFILE_ID', 'HELM_ENGINE', 'HELM_CWD'];
+const serverEnv = (env = {}) => Object.fromEntries(Object.entries(env).filter(([k]) => !THREAD_VARS.includes(k)));
+
 /** One app-server process, shared by every thread on the same account. */
 class CodexServer {
   #child = null;
@@ -224,7 +233,7 @@ class CodexServer {
 
   constructor(cmd, env, log, procHost) {
     Object.assign(this, { cmd, env, log, procHost });
-    this.procId = `codex-server-${createHash('sha256').update(`${cmd}|${env.CODEX_HOME ?? ''}`).digest('hex').slice(0, 20)}`;
+    this.procId = codexProcId(cmd, env);
   }
 
   static for(cmd, env, log, procHost) {
@@ -278,7 +287,7 @@ class CodexServer {
           const adopted = this.procHost.hasProc(this.procId);
           if (!adopted) {
             await this.procHost.openProc(this.procId, {
-              cmd: this.cmd, args: ['app-server', '--stdio'], cwd: undefined, env: this.env,
+              cmd: this.cmd, args: ['app-server', '--stdio'], cwd: undefined, env: serverEnv(this.env),
             });
           }
           const pipe = this.procHost.procPipe(this.procId);
@@ -296,7 +305,7 @@ class CodexServer {
       }
       if (!this.#pipe) {
         const child = spawn(this.cmd, ['app-server', '--stdio'], {
-          env: { ...process.env, ...this.env },
+          env: serverEnv({ ...process.env, ...this.env }),
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         this.#child = child;
@@ -426,6 +435,8 @@ function childStep(item) {
 }
 
 export class CodexDriver extends Driver {
+  /** helm's brief rides in the developer instructions, not the first message. */
+  static takesInstructions = true;
   #server = null;
   #serverAdopted = false;
   #started = false;
@@ -442,11 +453,14 @@ export class CodexDriver extends Driver {
   #lastSpawn = null;
   /** server request id -> { method, params } */
   #requests = new Map();
+  /** Texts handed to the running turn that Codex has not used yet. */
+  #steers = [];
 
   constructor(opts) {
     super({ engine: 'codex', ...opts });
     this.threadId = this.engineSessionId ?? null;
     this.monitorOnly = !!opts.monitorOnly;
+    this.instructions = opts.instructions || null;
   }
 
   #policy() {
@@ -476,12 +490,16 @@ export class CodexDriver extends Driver {
         cliVersion: this.#rolloutState.cliVersion,
       };
       this.#started = true;
-      if (this.#turnId) this.push('status', { status: 'working' });
+      this.push('status', { status: this.pending.size ? 'blocked' : this.#turnId ? 'working' : 'idle' });
       this.emit('init', this.info);
       return;
     }
     const { approvalPolicy, sandbox } = this.#policy();
-    const common = { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}) };
+    const config = Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
+      .map((k) => [`shell_environment_policy.set.${k}`, this.env[k]]));
+    const common = { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}),
+      ...(this.instructions ? { developerInstructions: this.instructions } : {}),
+      ...(Object.keys(config).length ? { config } : {}) };
     const res = this.threadId
       ? await server.call('thread/resume', { threadId: this.threadId, excludeTurns: true, ...common })
       : await server.call('thread/start', common);
@@ -511,9 +529,16 @@ export class CodexDriver extends Driver {
   async #connectOnly() {
     if (this.#server) return this.#server;
     const server = CodexServer.for(this.cmd, this.env, this.log, this.procHost);
-    this.#serverAdopted = await server.ensure();
-    this.#server = server;
+    // Register before binding the pipe: ensure() synchronously replays the
+    // host's buffered notifications, including completions during downtime.
     server.attach(this);
+    try {
+      this.#serverAdopted = await server.ensure();
+      this.#server = server;
+    } catch (err) {
+      server.detach(this, { stop: false });
+      throw err;
+    }
     return server;
   }
 
@@ -840,6 +865,7 @@ export class CodexDriver extends Driver {
       clientUserMessageId: randomUUID(),
     });
     if (res.error) throw new Error(res.error.message);
+    this.#steers.push(input.filter((b) => b.type === 'text').map((b) => b.text).join('\n'));
   }
 
   async answer(requestId, decision) {
@@ -1017,7 +1043,17 @@ export class CodexDriver extends Driver {
     }
     const base = { id: item.id, turnId: turnId ?? this.#turnId, parentId };
     switch (item.type) {
-      case 'userMessage': return;
+      // Codex records a steered message when it uses it: after the step in
+      // flight, before the next. That is where it joins the conversation.
+      case 'userMessage': {
+        if (parentId || !this.#steers.length) return;
+        const text = (item.content ?? []).filter((b) => b?.type === 'text').map((b) => b.text).join('\n');
+        const i = this.#steers.indexOf(text);
+        if (i < 0) return;
+        this.#steers.splice(i, 1);
+        this.push('input.consumed', { text });
+        return;
+      }
       // One agent spawning another (spawn_agent | send_input | resume_agent
       // | wait | close_agent). The card is the child; what it does arrives on
       // the child's own threadId, which we alias back to here.

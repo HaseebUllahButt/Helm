@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Mode, ModelList, Session } from '../client';
+import { Icon, type IconName } from '../Icon';
 
 /** One thing you can change while the agent is running. */
 export interface Choice {
@@ -21,11 +22,15 @@ export interface Choice {
  * The sheet docks in the same slot a permission prompt uses, because that is
  * where your eyes already are.
  */
-export function Controls({ options, session, busy, onPick }: {
+export function Controls({ options, session, busy, onPick, onFavs, onDefault }: {
   options: ModelList | null;
   session: Session;
   busy?: boolean;
   onPick: (kind: Kind, id: string) => void;
+  /** Save favorite models on the machine, so every device shows the same list. */
+  onFavs?: (next: string[]) => void;
+  /** Make a choice what new chats on this account start with. */
+  onDefault?: (kind: Kind, id: string) => Promise<void> | void;
 }) {
   const [open, setOpen] = useState<Kind | null>(null);
   const groups = groupsFor(options, session);
@@ -38,24 +43,29 @@ export function Controls({ options, session, busy, onPick }: {
           <button
             key={g.kind}
             className={`chip-pick${open === g.kind ? ' on' : ''}${g.danger ? ' danger' : ''}`}
-            title={`${g.title}: ${g.currentLabel}`}
+            title={`${g.title}: ${g.currentLabel}`} aria-label={`${g.title}: ${g.currentLabel}`}
             onClick={() => setOpen(open === g.kind ? null : g.kind)}
           >
-            {g.glyph && <i className={`cg ${g.kind}`}>{g.glyph}</i>}
-            {g.currentLabel}
+            {g.glyph && <i className={`cg ${g.kind}`}><Icon name={g.glyph} size={13} /></i>}
+            <span className="chip-label">{g.currentLabel}</span>
           </button>
         ))}
       </span>
     ),
     sheet: group ? (
       <ChoiceSheet
+        key={group.kind}
         title={group.title}
         note={group.note}
         choices={group.choices}
         more={group.more}
         current={group.current}
+        saved={group.saved}
         busy={busy}
         favKey={group.kind === 'model' ? session.engine : undefined}
+        favs={group.kind === 'model' ? options?.favs : undefined}
+        onFavs={onFavs}
+        onDefault={onDefault && group.saved !== undefined ? (id) => onDefault(group.kind, id) : undefined}
         onClose={() => setOpen(null)}
         onPick={(id) => { setOpen(null); onPick(group.kind, id); }}
       />
@@ -68,7 +78,7 @@ export type Kind = 'model' | 'effort' | 'mode' | 'speed';
 interface Group {
   kind: Kind;
   title: string;
-  glyph?: string;
+  glyph?: IconName;
   note?: string;
   choices: Choice[];
   /** The long tail the account's approved list hides - one tap away, not offered first. */
@@ -76,6 +86,8 @@ interface Group {
   current: string;
   currentLabel: string;
   danger?: boolean;
+  /** What new chats on this account start with; undefined when it cannot be set. */
+  saved?: string | null;
 }
 
 /** The short word a chip shows, so four of them fit on a phone. */
@@ -104,7 +116,6 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     const choice = (m: string): Choice => ({
       id: m,
       label: options.labels?.[m] ?? m,
-      hint: m === options.default ? 'the default' : undefined,
     });
     const choices = options.models.map(choice);
     const more = (options.more ?? []).map(choice);
@@ -116,11 +127,12 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     out.push({
       kind: 'model',
       title: 'model',
-      glyph: '◆',
+      glyph: 'model',
       choices,
       more,
       current: model,
       currentLabel: model ? shortModel(model, options.labels, session.engine) : 'model',
+      saved: options.prefs?.default ?? options.default ?? null,
     });
   }
 
@@ -130,25 +142,29 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     out.push({
       kind: 'effort',
       title: 'thinking',
-      glyph: '◇',
+      glyph: 'effort',
       note: 'How long it reasons before answering. More is slower and costs more.',
       choices: efforts.map((e) => ({ id: e, label: e })),
       current: session.effort || session.engineEffort || options.effort || '',
       currentLabel: session.effort || session.engineEffort || options.effort || 'think',
+      saved: options.defaults?.effort ?? null,
     });
   }
 
-  const modes = options.modes ?? [];
+  const modes = (options.modes ?? []).filter((m) => m.id !== 'plan');
   if (modes.length) {
-    const current = modes.find((m: Mode) => m.id === session.mode) ?? modes[0];
+    const current = modes.find((m: Mode) => m.id === session.mode)
+      ?? modes.find((m) => m.id === options.defaultMode)
+      ?? modes.find((m) => m.short === 'yolo') ?? modes[0];
     out.push({
       kind: 'mode',
       title: 'permissions',
-      glyph: '⦿',
+      glyph: 'shield',
       choices: modes.map((m) => ({ id: m.id, label: m.label, hint: m.hint, danger: m.danger })),
       current: current?.id ?? '',
       currentLabel: current?.short ?? current?.label ?? 'mode',
       danger: current?.danger,
+      saved: options.defaults?.mode ?? options.defaultMode ?? null,
     });
   }
 
@@ -158,7 +174,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     out.push({
       kind: 'speed',
       title: 'speed',
-      glyph: '⚡',
+      glyph: 'bolt',
       note: 'The fast tier answers sooner and uses more of your plan.',
       choices: [
         { id: '', label: 'Normal', hint: 'the usual tier' },
@@ -166,6 +182,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       ],
       current: session.speed || '',
       currentLabel: session.speed ? cap(session.speed) : 'normal',
+      saved: options.defaults?.speed ?? '',
     });
   }
   return out;
@@ -182,18 +199,35 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
  */
 const favsOf = (key: string): string[] => { try { return JSON.parse(localStorage.getItem(`helm.favmodels:${key}`) || '[]'); } catch { return []; } };
 
-function ChoiceSheet({ title, note, choices, more = [], current, busy, favKey, onPick, onClose }: {
+function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, favKey, favs: shared, onFavs, onDefault, onPick, onClose }: {
   title: string; note?: string; choices: Choice[]; more?: Choice[]; current: string;
+  saved?: string | null;
   busy?: boolean; onPick: (id: string) => void; onClose: () => void;
-  /** Models can be starred, per engine: the ones you use sit at the top. */
+  /** Favorite models sit at the top, per engine. */
   favKey?: string;
+  /** Machine favorites, falling back to this browser on older machines. */
+  favs?: string[];
+  onFavs?: (next: string[]) => void;
+  onDefault?: (id: string) => Promise<void> | void;
 }) {
-  const [favs, setFavs] = useState<string[]>(() => (favKey ? favsOf(favKey) : []));
+  const machineFavs = shared !== undefined && !!onFavs;
+  const [favs, setFavs] = useState<string[]>(() => (favKey ? (machineFavs ? shared! : favsOf(favKey)) : []));
   const toggleFav = (id: string) => {
     if (!favKey) return;
     const next = favs.includes(id) ? favs.filter((f) => f !== id) : [...favs, id];
     setFavs(next);
-    try { localStorage.setItem(`helm.favmodels:${favKey}`, JSON.stringify(next)); } catch { /* full */ }
+    if (machineFavs) onFavs!(next);
+    else try { localStorage.setItem(`helm.favmodels:${favKey}`, JSON.stringify(next)); } catch { /* full */ }
+  };
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState('');
+  const makeDefault = async (id: string) => {
+    if (!onDefault || saving !== null || id === saved) return;
+    setSaving(id);
+    setSaveError('');
+    try { await onDefault(id); onClose(); }
+    catch (e) { setSaveError(e instanceof Error ? e.message : String(e)); }
+    finally { setSaving(null); }
   };
   const [arming, setArming] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -201,11 +235,11 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, favKey, o
   const q = query.trim().toLowerCase();
   const match = (c: Choice) =>
     !q || c.label.toLowerCase().includes(q) || c.id.toLowerCase().includes(q);
-  // A starred model is lifted out of whichever list it was in, so it is one
+  // A favorite model is lifted out of whichever list it was in, so it is one
   // tap away even when the account's long tail is folded.
-  const starred = favKey ? [...choices, ...more].filter((c) => favs.includes(c.id) && match(c)) : [];
-  const main = choices.filter(match).filter((c) => !starred.includes(c));
-  const rest = more.filter(match).filter((c) => !starred.includes(c));
+  const favorites = favKey ? [...choices, ...more].filter((c) => favs.includes(c.id) && match(c)) : [];
+  const main = choices.filter(match).filter((c) => !favorites.includes(c));
+  const rest = more.filter(match).filter((c) => !favorites.includes(c));
   const choose = (c: Choice) => {
     if (c.id === current) return onClose();
     if (c.danger && arming !== c.id) return setArming(c.id);
@@ -224,19 +258,27 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, favKey, o
           <span className="rt"><span className="rt-text">{c.label}</span></span>
           {(armed || c.hint) && <span className="rm">{armed ? 'Tap again to confirm' : c.hint}</span>}
         </span>
-        {on && <span className="check">✓</span>}
+        {on && <span className="check"><Icon name="check" size={16} /></span>}
       </button>
     );
-    if (!favKey || !c.id) return button;
+    if (!favKey && !onDefault) return button;
     const fav = favs.includes(c.id);
+    const isDefault = c.id === saved;
     return (
-      <div className="rowfav" key={c.id}>
+      <div className="rowfav" key={c.id || 'normal'}>
         {button}
-        <button
-          className={`star${fav ? ' on' : ''}`} aria-pressed={fav}
-          aria-label={fav ? `remove ${c.label} from favourites` : `add ${c.label} to favourites`}
-          onClick={() => toggleFav(c.id)}
-        >{fav ? '★' : '☆'}</button>
+        {favKey && c.id && <label className="favorite-toggle" title="Favorite model">
+          <input type="checkbox" checked={fav}
+            aria-label={`Favorite ${c.label}`} onChange={() => toggleFav(c.id)} />
+        </label>}
+        {onDefault && <button
+          className={`star${isDefault ? ' on' : ''}`} aria-pressed={isDefault}
+          aria-label={isDefault ? `${c.label} is the default for new chats` : `Use ${c.label} by default for new chats`}
+          title={isDefault ? 'Default for new chats' : 'Set as default for new chats'}
+          disabled={saving !== null}
+          aria-busy={saving === c.id}
+          onClick={() => void makeDefault(c.id)}
+        ><Icon name={isDefault ? 'star-on' : 'star'} size={17} /></button>}
       </div>
     );
   };
@@ -244,9 +286,10 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, favKey, o
     <div className="modesheet" role="listbox" aria-label={title}>
       <div className="modesheet-head">
         <span>{title}</span>
-        <button className="x" onClick={onClose} aria-label="close">✕</button>
+        <button className="x" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button>
       </div>
       {note && <div className="modesheet-note">{note}</div>}
+      {onDefault && <div className="modesheet-legend"><Icon name="star" size={13} /> default for new chats{favKey && <span><Icon name="checkbox" size={13} /> favorites</span>}</div>}
       {more.length > 0 && (
         <input
           className="sheetfilter" value={query} placeholder="search all models"
@@ -254,9 +297,9 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, favKey, o
           onChange={(e) => setQuery(e.target.value)}
         />
       )}
-      {starred.length > 0 && <div className="modesheet-label">favourites</div>}
-      {starred.map(row)}
-      {starred.length > 0 && main.length > 0 && <div className="modesheet-label">all</div>}
+      {favorites.length > 0 && <div className="modesheet-label">favorites</div>}
+      {favorites.map(row)}
+      {favorites.length > 0 && main.length > 0 && <div className="modesheet-label">all</div>}
       {main.map(row)}
       {rest.length > 0 && (q || expanded ? rest.map(row) : (
         <button className="moderow more" onClick={() => setExpanded(true)}>
@@ -267,7 +310,8 @@ function ChoiceSheet({ title, note, choices, more = [], current, busy, favKey, o
           <span className="chev">›</span>
         </button>
       ))}
-      {q && !main.length && !rest.length && <div className="modesheet-note">no matches</div>}
+      {q && !favorites.length && !main.length && !rest.length && <div className="modesheet-note">no matches</div>}
+      {saveError && <div className="error" role="alert">{saveError}</div>}
     </div>
   );
 }

@@ -68,12 +68,13 @@ helm add pc            a laptop or desktop: runs agents, and controls others
 helm add vm            another always-on machine, dialled by the rest
 ```
 
-Only `helm add controller` prints a **link to open**. The other two print a
-**code to type**, and what you type on the machine being added is always the
-same command, whichever kind it is:
+Add a phone, browser, or computer from **Settings** on any paired device.
+Computer invites contain one private join link with the secret already in it.
+The terminal commands above produce the same invites. On the new computer:
 
 ```bash
-helm join ABCD-1234 https://helm.example.com
+helm join
+# Paste: https://helm.example.com/#join=ABCD-1234
 ```
 
 The code remembers which kind you asked for. A pc dials out to the home and
@@ -94,8 +95,16 @@ already holds the network key:
 helm open
 ```
 
-That opens the app on `127.0.0.1`, signed in, showing every machine in the
-network. This is how a laptop drives the VM.
+The curl installer starts Helm immediately. Joining replaces its temporary
+local network and keeps Helm running in the background. The Linux application
+launcher is installed automatically; opening it or `127.0.0.1:8787` signs in
+without a pairing link. macOS runs Helm as a LaunchAgent at login.
+
+Opening the network's website on the joined computer also inherits its local
+membership and saves it at that website's origin, so installing the web app
+keeps the sign-in. The browser may request local network access; allow it so
+the website can talk to Helm on this computer. If access is blocked, `helm open`
+opens the local app signed in.
 
 The older `helm up`, `helm invite`, `helm link` and `helm login` commands
 remain available for scripts and existing setups.
@@ -119,16 +128,21 @@ paired device stays connected until removed.
 
 ### Add another computer
 
-Install Helm on the new computer. Then run `helm add` on an existing one and
-copy the command it prints:
+Create a computer invite from Settings on any paired phone, browser or app,
+or run `helm add pc` on an existing computer. Install Helm on the new computer,
+then run:
 
 ```bash
-helm join ABCD-1234 https://helm.example.com
+helm join
+# Paste the private join link when prompted.
+# Or: helm join 'https://helm.example.com/#join=ABCD-1234'
 ```
 
 The join code is single-use and expires after ten minutes. `helm join` installs
 Helm as a background service on that computer, so it stays in the network
 after the terminal closes; pass `--foreground` to run it in the terminal instead.
+There is no separate `helm up`, `helm leave`, or browser pairing step for a
+fresh install. The old `helm join CODE https://home.example` format still works.
 
 ## Mobile PWA
 
@@ -161,9 +175,11 @@ text, tool calls, permission prompts, models, modes, images and slash commands.
 Stop interrupts the turn.
 
 **How much the agent may do without asking** is a chip in the composer, next
-to Send: `ask` · `edit` · `plan` · `auto` · `yolo` for Claude Code, `ask` ·
+to Send: `ask` · `edit` · `auto` · `yolo` for Claude Code, `ask` ·
 `edit` · `yolo` · `read` for Codex. Tap it for the list with what each one
-means; shift+tab cycles the safe ones from the keyboard. A mode that removes
+means. New sessions default to YOLO unless the account is configured otherwise;
+plan mode is not supported. Shift+tab cycles the restricted modes from the
+keyboard. Switching to a mode that removes
 the guardrails takes two taps and then colours the chip and the box you type
 in, so it is never a surprise. Changing it mid-conversation is real, not
 cosmetic: Claude gets `set_permission_mode`, and every Codex turn carries the
@@ -177,11 +193,11 @@ Plain terminals, and agents you started at the keyboard, still run in
 
 ## CLI subagents
 
-Open **Subagents** (⧉) inside a conversation to choose a CLI account, model,
-permissions, and a task. Each task opens its own child thread in the same
-folder. Its account, model, status, reply, and pending approvals are visible
-in the panel; open the child to answer an approval or continue the work.
-The child's menu can take you back to its parent.
+Open **Subagents** inside a conversation to choose a CLI account, model,
+permissions, and a bounded task. Tasks stay attached to that orchestrator
+and do not appear as separate recent chats, search results, or provider-history
+rows. Inspect replies, stop work, send follow-up messages, and answer any
+explicitly configured approval prompts in the parent task panel.
 
 Helm-managed agents receive a short introduction to these tools on their next
 ordinary message. Any local CLI with shell access can also use them directly
@@ -199,6 +215,13 @@ after logging in or installing a CLI. Unknown sign-in state is shown as
 unverified; a signed-out account cannot be delegated to. Use an exact account
 ID when more than one profile uses the same CLI.
 
+It also reports potential credential sources: file locations, environment
+variable names, and available account/expiry metadata, never token values.
+These diagnostics honor profile overrides, saved secret references, and
+explicit unsets. An expired access token may still be refreshable; the CLI's
+sign-in status remains authoritative. Wrapper-managed credential files and
+OS keychains are not inspected.
+
 Inside a Helm session, `helm delegate` automatically links the task to that
 session and uses its folder. From an ordinary terminal or native Codex CLI,
 it uses the current folder; `--cwd <folder>` chooses another. `--model` selects
@@ -207,9 +230,11 @@ using an existing Claude login. The supplied task is the child's context;
 the parent conversation is not copied automatically. Children share the
 folder, so assign distinct work when delegating edits.
 
-Children start with the CLI's safe default permissions; `--mode` and
+Children default to YOLO execution; `--mode` and
 `--effort` select supported settings. A read-only parent requires a read-only
-child, and delegation rejects permission-bypass modes. Up to four children
+child; account defaults and explicit permission choices remain configurable.
+Plan mode is not offered: dispatch tasks directly instead of waiting for plan
+approval. Up to four children
 can run at once, with at most three levels of nesting.
 CLIs without a permission picker use their own configured permission policy.
 
@@ -379,3 +404,29 @@ npm run test:browser
 To use an installed Chromium instead, run
 `HELM_TEST_CHROMIUM=/usr/bin/chromium npm run test:browser`.
 These checks use isolated fixtures and do not connect to your Helm network.
+
+### Large folder copies
+
+`helm copy` streams a complete directory over SSH, using a reachable direct
+address once the machine's SSH host key has been pinned. Otherwise it uses the
+Helm hub. Both computers need `rsync` and an accessible SSH server; this command
+does not install or enable system services.
+
+```sh
+helm copy why ./my-project --target-folder /home/haseeb/dev/my-project --dry-run
+helm copy why ./my-project --target-folder /home/haseeb/dev/my-project --exclude node_modules --exclude .cache
+```
+
+Unlike the filtered, size-limited code handoff, this copies hidden files and Git
+history too. Existing matching files can be replaced; unrelated destination
+files are not deleted. Use `--exclude .env` when environment files should stay
+here. Rerun the same command after interruption: completed files are skipped and
+partial files are reused. Compression streams in memory, without writing an
+archive on either disk. Filesystem permissions, symlinks and timestamps are
+preserved; source files are retained.
+
+Updated SSH tunnels negotiate a 512 KiB window per direction. The receiver
+acknowledges data after writing it, so a fast sender cannot grow an unlimited
+hub queue while a destination is slow. Old peers remain compatible through the
+legacy tunnel path; update both ends and the hub to get flow control. A running
+SSH connection is never silently replayed on a different route after failure.

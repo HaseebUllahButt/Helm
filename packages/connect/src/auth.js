@@ -94,7 +94,7 @@ export async function probeAuth(profile) {
 // profile identity -> { status, at, pending }. Kept on disk too: a restarted
 // daemon should not greet the picker with a round of five-second probes.
 const cache = new Map();
-const keyOf = (p) => JSON.stringify([p.id, p.engine, p.cmd, p.args ?? [], p.env ?? {}, p.envFrom ?? [], p.unset ?? []]);
+const keyOf = (p) => JSON.stringify([p.id, p.engine, p.cmd, p.args ?? [], p.env ?? {}, p.envFrom ?? [], p.secretRefs ?? {}, p.unset ?? []]);
 const AUTH_FILE = () => join(HELM_DIR, 'auth.json');
 let loaded = false;
 

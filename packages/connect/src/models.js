@@ -49,17 +49,20 @@ const codexRetryAt = new Map();
  * (discover.js wrappedEngine): its own binary can only be reached that way.
  */
 export async function listModels(engine, home, environment = {}, launcher = null) {
+  const answer = (value) => ['claude', 'gemini'].includes(engine)
+    ? { ...value, refreshing: !!modelsDevInflight }
+    : value;
   const key = modelsKey(engine, home, launcher);
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  if (hit && Date.now() - hit.at < CACHE_MS) return answer(hit.value);
   // Some CLIs take seconds to list (agy asks the server every time). A list
   // that has aged out is still a far better answer than a spinner: hand it
   // back and fetch the new one behind it.
   if (hit?.value) {
     refreshModels(key, engine, home, environment, launcher, hit).catch(() => {});
-    return hit.value;
+    return answer(hit.value);
   }
-  return refreshModels(key, engine, home, environment, launcher, hit);
+  return answer(await refreshModels(key, engine, home, environment, launcher, hit));
 }
 
 const modelsKey = (engine, home, launcher) => {
@@ -471,7 +474,7 @@ async function codexCatalog(root, environment = {}) {
 }
 
 const CLAUDE_FALLBACK_FAMILY = [
-  'claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5',
+  'claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5',
 ];
 
 /**
@@ -494,7 +497,7 @@ async function claudeModels(root) {
   } catch { /* no config yet */ }
   const models = [...seen];
   if (def && !models.includes(def)) models.unshift(def);
-  const labels = { ...published.labels };
+  const labels = { 'claude-opus-5-5': 'Claude Opus 5.5', ...published.labels };
   // `claude --effort`; the default depends on the model, so none is claimed.
   // Every model in the family takes image input.
   return {

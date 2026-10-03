@@ -472,8 +472,8 @@ test('a request with no mode runs the engine default, never a saved preference',
   const r = await h.accept(rebind(rest), SRC);
   assert.equal(r.status, 'running');
   assert.equal(sessions.starts.length, 1);
-  assert.equal(sessions.starts[0].mode, 'default', "claude's safe default, not the saved yolo");
-  assert.equal(r.mode, 'default', 'the effective mode lands on the receipt');
+  assert.equal(sessions.starts[0].mode, 'bypassPermissions', "claude's YOLO default");
+  assert.equal(r.mode, 'bypassPermissions', 'the effective mode lands on the receipt');
 });
 
 test('an unknown profile fails the accept, then the same id retries once it exists', async () => {

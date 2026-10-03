@@ -8,6 +8,7 @@ import { argv, exit } from 'node:process';
 import {
   loadNetwork, requireNetwork, forgetNetwork, revoke, allEndpoints, hubCredential,
   localKey, describeSelf, saveNetwork, machineKind, MACHINE_KINDS,
+  createNetwork,
 } from '@helm/protocol/network';
 import { HELM_DIR, expand } from '../src/paths.js';
 import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
@@ -46,7 +47,9 @@ const usage = () => {
   helm add pc                        a laptop or desktop: runs agents, controls others
   helm add vm                        another always-on machine, dialled by the rest
   helm add nas                       storage for the network: a machine that stays reachable
-  helm join <CODE> <home-url>        run on the machine being added, whichever kind
+  helm join                          paste a private join link to join its network
+  helm join <private-link>           join directly with the copied link
+  helm start                         start Helm in the background (installer does this)
 
   helm join <CODE> <home-url> --foreground   ...run in this terminal instead
   helm status                        show the network and runtime
@@ -93,6 +96,10 @@ const usage = () => {
     --include-env                   carry .env files too, written owner-only there
     --dry-run                       report what a send would carry - no grant needed
     --allow-skipped                 send even though some files stay behind
+  helm copy <machine> <folder> --target-folder <absolute-path>
+                                  resumable full folder copy over SSH; needs rsync on both ends
+    --exclude <pattern>             omit caches or dependencies (repeatable)
+    --dry-run                       preview the copy, including hidden files
   helm verify <folder> [-- cmd...]  inspect what a received folder still needs
 
   helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
@@ -100,8 +107,8 @@ const usage = () => {
   helm self-update                  pull the newest helm to this machine and restart
   helm service install|uninstall    background service
 
-Only 'helm add controller' prints a link to open; the others print a code to
-type on the machine you are adding. A controller you sign in stays signed in
+Add from Settings on any paired device, or use 'helm add' on a joined machine.
+Computer invites contain a private link to paste into 'helm join'. A controller stays signed in
 until you remove it - passwords are only for adding one, and expire in minutes.
 `);
 };
@@ -126,7 +133,7 @@ const allFlags = (name) => {
   });
   return out;
 };
-const port = () => Number(strFlag('port', 8787));
+const port = () => Number(strFlag('port', loadNetwork()?.port ?? 8787));
 
 const cleanEndpoint = (value) => String(value || '').trim().replace(/\/$/, '');
 
@@ -311,7 +318,10 @@ async function inviteMachine(role) {
   const { base: where, value } = await postToHome(net, '/api/invite', { role });
   const { code } = value;
   console.log(`\n  On the ${role === 'vm' ? 'VM' : role === 'nas' ? 'NAS' : 'computer'} you are adding, run:\n`);
-  console.log(`    helm join ${code} ${where}\n`);
+  const link = `${where}/#join=${encodeURIComponent(code)}`;
+  console.log('    helm join');
+  console.log(`    then paste: ${link}\n`);
+  console.log(`  Or run: helm join '${link}'\n`);
   if (role === 'vm') {
     console.log('  It will take its own https address and start serving, so other');
     console.log('  machines can dial it as well as this one.');
@@ -327,11 +337,28 @@ async function inviteMachine(role) {
 }
 
 async function joinCmd() {
-  const code = rest.find((a) => !a.startsWith('--'));
-  if (!code) die('an invite code is required: helm join ABCD-1234 --at https://host.example');
-  const codeIndex = rest.indexOf(code);
+  let input = rest[0]?.startsWith('--') ? undefined : rest[0];
+  if (!input) {
+    if (!process.stdin.isTTY) die('paste the private link as an argument: helm join \'https://home.example/#join=…\'');
+    const { createInterface } = await import('node:readline/promises');
+    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    try { input = (await prompt.question('Private join link: ')).trim(); }
+    finally { prompt.close(); }
+  }
+  let code = input;
+  let linkAt;
+  if (/^https?:\/\//i.test(input || '')) {
+    const link = new URL(input);
+    code = new URLSearchParams(link.hash.replace(/^#\/?/, '')).get('join');
+    if (!code || link.username || link.password || link.pathname !== '/' || link.search) {
+      die('use the private computer invite link with #join= in it');
+    }
+    linkAt = link.origin;
+  }
+  if (!code) die('a private join link is required');
+  const codeIndex = rest.indexOf(input);
   const positionalAt = rest[codeIndex + 1]?.startsWith('--') ? null : rest[codeIndex + 1];
-  const at = strFlag('at', positionalAt || process.env.HELM_AT);
+  const at = linkAt || strFlag('at', positionalAt || process.env.HELM_AT);
   if (!at) die('where should I join? pass --at https://host.example (or http://127.0.0.1:8787 on the same machine)');
 
   // Check the runtime before joining, so a machine that cannot actually run
@@ -353,8 +380,22 @@ async function joinCmd() {
   const { profiles } = await refreshProfiles();
   console.log(`${profiles.length} found`);
 
-  const { join: joinNet } = await import('../src/serve.js');
-  const net = await joinNet({ code, at, name: strFlag('name', hostname()), port: port() });
+  const previous = loadNetwork();
+  if (previous && (!previous.provisional || Object.keys(previous.machines).length !== 1)) {
+    die('this machine is already in a network - run `helm leave` first');
+  }
+  const localPort = Number(strFlag('port', previous?.port ?? 8787));
+  const { pauseServices, resumeServices } = await import('../src/service.js');
+  const paused = await pauseServices();
+  useHubDb();
+  let net;
+  try {
+    const { join: joinNet } = await import('../src/serve.js');
+    net = await joinNet({ code, at, name: strFlag('name', hostname()), port: localPort });
+  } catch (err) {
+    await resumeServices(paused);
+    throw err;
+  }
   console.log(`\n  joined. ${Object.keys(net.machines).length} machines in this network.`);
 
   // An invite made with `helm add vm` says so, and a vm is a home: it needs an
@@ -384,16 +425,20 @@ async function joinCmd() {
     const args = [
       ...(rest.includes('--name') ? ['--name', strFlag('name', hostname())] : []),
       '--host', host,
+      '--port', String(localPort),
     ];
     const { installed, unit } = await installService({ mode: 'serve', args });
     if (installed) {
       console.log(`  installed ${unit} - this machine stays in the network across reboots.`);
+      await waitForLocal(net);
       if (host === '0.0.0.0') {
         console.log('  it listens on every interface, so a phone on the same wifi reaches');
         console.log('  it directly. On an untrusted network, reinstall with:');
         console.log('    helm up --install --host 127.0.0.1');
       }
-      console.log('\n  Open the app on your phone: it should show this machine online.');
+      await installLocalApp(net);
+      console.log('\n  This computer and its web app are joined. No pairing link is needed.');
+      console.log(`  Open here: http://127.0.0.1:${localPort}/  (or run helm open)`);
       console.log('  Check with:     helm status');
       console.log('  Watch logs:     journalctl --user -u helm-serve -f');
       console.log('  Run in front:   helm up  (stop the service first)\n');
@@ -402,6 +447,48 @@ async function joinCmd() {
   }
   console.log('  bringing this machine up...\n');
   await up();
+}
+
+async function installLocalApp(net) {
+  if (platform() !== 'linux') return;
+  const { installApp } = await import('../src/desktop.js');
+  try {
+    installApp({ url: `http://127.0.0.1:${net.port ?? 8787}/` });
+    console.log('  Helm is in your applications, already signed in.');
+  } catch (err) { console.log(`  Could not add the app launcher: ${err.message}`); }
+}
+
+async function startInstalled() {
+  let net = loadNetwork();
+  if (!net) {
+    net = createNetwork({ name: strFlag('name', hostname()), port: port() });
+    // Installation starts a usable local Helm. The first join replaces this
+    // temporary network without an intervening leave/setup command.
+    net.provisional = true;
+    net.role = 'pc';
+    describeSelf(net, { kind: 'pc' });
+    saveNetwork(net);
+  }
+  localKey();
+  const { startService } = await import('../src/service.js');
+  const { installed } = await startService({ port: net.port ?? 8787 });
+  if (!installed) die('could not start the background service on this platform');
+  await waitForLocal(net);
+  await installLocalApp(net);
+  console.log('\n  Helm is active. Run helm join, then paste your private join link.\n');
+}
+
+async function waitForLocal(net) {
+  for (let i = 0; i < 40; i++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${net.port ?? 8787}/api/health`, {
+        signal: AbortSignal.timeout(1000),
+      });
+      if (res.ok && (await res.json()).network === net.id) return;
+    } catch { /* the service is still starting */ }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error('the background service did not become ready - check helm status and its logs');
 }
 
 async function setup({ alreadyJoined = false } = {}) {
@@ -455,18 +542,22 @@ async function setup({ alreadyJoined = false } = {}) {
   // when this machine is already a member, which is what makes setup re-runnable.
   if (joinCode) {
     const existing = loadNetwork();
-    if (existing) {
+    if (existing && !existing.provisional) {
       console.log(`already in a network (${existing.id}); re-advertising ${home}.`);
       console.log('to move this machine to a different mesh, run `helm leave` first.');
     } else {
       process.stdout.write(`joining the mesh at ${joinAt}... `);
+      const { pauseServices, resumeServices } = await import('../src/service.js');
+      const paused = await pauseServices();
       try {
+        useHubDb();
         const { join: joinNet } = await import('../src/serve.js');
         const net = await joinNet({
           code: joinCode, at: joinAt, name: strFlag('name', hostname()), port: port(),
         });
         console.log(`joined (${Object.keys(net.machines).length} machines).`);
       } catch (err) {
+        await resumeServices(paused);
         console.log('failed');
         die(err.message);
       }
@@ -476,7 +567,7 @@ async function setup({ alreadyJoined = false } = {}) {
   const { installService } = await import('../src/service.js');
   const result = await installService({
     mode: 'serve',
-    args: ['--advertise', home, '--host', '127.0.0.1'],
+    args: ['--advertise', home, '--host', '127.0.0.1', '--port', String(port())],
   });
   if (!result.installed) return;
 
@@ -1138,6 +1229,12 @@ async function send() {
     const secrets = snapshot.files.filter((f) => f.secret).length;
     console.log(`  ${secrets} .env file${secrets === 1 ? '' : 's'} included, written owner-only on the target`);
   }
+  if (receipt.repository) {
+    console.log(`  origin: ${receipt.repository.remote}`);
+    console.log(`  ${receipt.repository.configured
+      ? 'origin configured; fetch or pull with the target machine’s GitHub login'
+      : receipt.repository.error}`);
+  }
   if (receipt?.readiness && Array.isArray(receipt.readiness.checks)) {
     for (const line of readinessLines(receipt.readiness)) console.log(line);
   } else {
@@ -1547,11 +1644,19 @@ try {
     case 'up':
     case 'serve':
     case 'run':
+      // A daemon started from inside an agent's shell (a self-update, a
+      // sandbox) inherits that agent's identity. Left in place, every
+      // terminal and app-server it spawns would claim to be that session.
+      for (const k of ['HELM_SESSION_ID', 'HELM_PROFILE_ID', 'HELM_ENGINE', 'HELM_CWD']) delete process.env[k];
       await up();
       break;
 
     case 'setup':
       await setup();
+      break;
+
+    case 'start':
+      await startInstalled();
       break;
 
     case 'add':
@@ -1653,8 +1758,14 @@ try {
       const r = await selfUpdate();
       if (!r.updated) { console.log(`  not updated - ${r.reason}`); break; }
       console.log(r.restarting?.length
-        ? `  updated - ${r.restarting.join(', ')} restart${r.restarting.length === 1 ? 's' : ''} in a few seconds`
+        ? `  updated - ${r.restarting.join(', ')} will restart safely; active threads are preserved`
         : '  updated - restart helm to pick it up');
+      break;
+    }
+
+    case 'restart-services': {
+      const { restartWhenSafe } = await import('../src/update.js');
+      await restartWhenSafe(rest);
       break;
     }
 
@@ -1822,6 +1933,10 @@ try {
     case 'transfer':
     case 'dispatch':
       await handoff();
+      break;
+
+    case 'copy':
+      await (await import('../src/copy.js')).copyFolder(rest);
       break;
 
     case 'send':

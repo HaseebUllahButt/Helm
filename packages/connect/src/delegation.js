@@ -1,21 +1,21 @@
 import { ENGINES } from './engines.js';
 import { materialize } from './profiles.js';
 import { listModels } from './models.js';
-import { modelPrefs, accountKey } from './settings.js';
+import { modelPrefs, startPrefs, accountKey } from './settings.js';
 import { modesFor, defaultMode } from './modes.js';
-import { credentialScan, shellEnv } from './credentials.js';
+import { credentialScan } from './credentials.js';
 import { fold } from './brain.js';
 import { createHash } from 'node:crypto';
 
-/** Public capabilities, never launch arguments, environment, or credentials. */
-export async function agentCatalog(profiles, statuses, { models = true } = {}) {
-  const shellNames = await shellEnv();
+/** Public capabilities and optional credential metadata, never secret values. */
+export async function agentCatalog(profiles, statuses, { models = true, credentials = false } = {}) {
   return Promise.all(profiles.filter((p) => !p.disabled && ENGINES[p.engine]?.driver).map(async (p) => {
     const auth = statuses.get(p.id) ?? 'unknown';
     const account = createHash('sha256').update(accountKey(p)).digest('hex').slice(0, 16);
     const row = { id: p.id, label: p.label, engine: p.engine, account, auth,
-      available: auth !== 'unauthenticated', modes: modesFor(p.engine).filter((m) => !m.danger),
-      credentials: credentialScan(p, { shellNames }) };
+      available: auth !== 'unauthenticated', modes: modesFor(p.engine),
+      defaultMode: startPrefs(p)?.mode === 'plan' ? defaultMode(p.engine) : startPrefs(p)?.mode ?? defaultMode(p.engine) };
+    if (credentials) row.credentials = credentialScan(p);
     if (!models || !row.available) return row;
     const spec = materialize(p);
     const engine = ENGINES[p.engine];
@@ -33,31 +33,41 @@ export async function agentCatalog(profiles, statuses, { models = true } = {}) {
 export function delegationNote(agents) {
   const accounts = agents.filter((a) => a.available).slice(0, 24)
     .map((a) => `${a.id} (${a.engine}, ${a.auth})`).join('; ');
-  return `[helm delegation: CLI accounts: ${accounts || 'discover with helm agents --json'}. Run helm agents --json for accounts and model IDs. When the owner asks for another CLI/model, use helm delegate <account> --model <model> --wait --json -- "<task>". Read a pending result with helm delegate-result <id> --wait --json. Children share this folder; give them a bounded task. Delegate only when requested or useful, and keep permission requests visible in Helm.]`;
+  return `[helm delegation: CLI accounts: ${accounts || 'discover with helm agents --json'}. Run helm agents --json for accounts and model IDs. Use helm delegate <account> --model <model> --wait --json -- "<task>" for a bounded task. Children belong to this orchestrator and share its folder; they are tasks, not ordinary chats. Read results with helm delegate-result <id> --wait --json and send follow-ups with helm say <id> <message>. Permissions default to YOLO and remain configurable. Never use plan mode or ask to approve a plan: dispatch the task and carry it to completion. Preserve explicitly configured read-only restrictions and surface any genuine user question in the parent workflow.]`;
 }
 
 /** Read-only parents cannot acquire write access through a different CLI. */
-export function delegationMode(engine, parentMode, requested) {
+export function delegationMode(engine, parentMode, requested, configured = null, parentEngine = engine) {
   const modes = modesFor(engine);
+  if (requested === 'plan') throw new Error('plan mode is not supported for subagents; dispatch a task instead');
   const readOnly = ['plan', 'readonly', 'read'].includes(parentMode);
-  const safe = readOnly ? modes.find((m) => ['plan', 'readonly', 'read'].includes(m.id)) : null;
+  const safe = readOnly ? modes.find((m) => ['readonly', 'read'].includes(m.id)) : null;
   if (readOnly && !safe) throw new Error(`${engine} has no verified read-only delegation mode`);
-  if (requested && !modes.some((m) => m.id === requested && !m.danger)) {
-    throw new Error(`invalid or unsafe subagent mode: ${requested}`);
+  if (requested && !modes.some((m) => m.id === requested)) {
+    throw new Error(`invalid subagent mode: ${requested}`);
   }
-  if (readOnly && requested && !['plan', 'readonly', 'read'].includes(requested)) {
+  if (readOnly && requested && !['readonly', 'read'].includes(requested)) {
     throw new Error('a read-only parent requires a read-only subagent');
   }
-  return requested || safe?.id || defaultMode(engine);
+  const parent = modesFor(parentEngine).find((m) => m.id === parentMode);
+  const inherited = parent && modes.find((m) => m.short === parent.short)?.id;
+  return requested || safe?.id || (configured !== 'plan' && modes.some((m) => m.id === configured) ? configured : null)
+    || inherited || defaultMode(engine);
 }
 
 export function delegationOutput(session, events) {
   const { turns, pending } = fold(events);
   const turn = turns.at(-1);
   const output = (turn?.items ?? []).filter((i) => i.kind === 'text').map((i) => i.text).join('\n\n');
-  const complete = !!turn?.status;
+  // A mid-turn steering message has its own optimistic turn.start but the
+  // provider finishes the original turn. That trailing ticket must not make
+  // a completed task look busy forever on another device.
+  const settled = !['starting', 'working', 'blocked'].includes(session.status)
+    && ['done', 'error', 'interrupted'].includes(session.delegation?.status)
+    ? session.delegation.status : null;
+  const complete = !!settled || !!turn?.status;
   const status = !complete && (pending || session.status === 'blocked') ? 'blocked'
-    : complete ? (turn.status === 'ok' ? 'done' : turn.status) : 'working';
+    : settled || (complete ? (turn.status === 'ok' ? 'done' : turn.status) : 'working');
   return { session, status, complete, output: output.slice(-32_000), truncated: output.length > 32_000,
     error: turn?.items.findLast((i) => i.error)?.error ?? events.findLast((e) => e.type === 'turn.done')?.error ?? null,
     pending: pending ? { requestId: pending.requestId, title: pending.title, kind: pending.kind } : null };

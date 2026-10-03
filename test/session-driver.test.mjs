@@ -17,7 +17,10 @@ process.env.HELM_NO_SERVICE = '1';
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
   version: 1,
-  profiles: [{ id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: ['--model', 'x'], env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' }, source: 'alias' }],
+  profiles: [
+    { id: 'claudea', label: 'Claude · personal', engine: 'claude', cmd: 'claude', args: ['--model', 'x'], env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' }, source: 'alias' },
+    { id: 'codex', engine: 'codex', cmd: 'codex', env: { CODEX_HOME: '/tmp/helm-test-account' }, source: 'alias' },
+  ],
 }));
 
 class StubRuntime extends EventEmitter {
@@ -41,7 +44,12 @@ class FakeDriver extends EventEmitter {
     if (type === 'status') this.status = payload.status;
     this.emit('event', { type, ...payload });
   }
-  async start() { this.started = true; }
+  async start() {
+    this.started = true;
+    if (this.procHost?.hasProc?.(this.procId)) this.push('status', {
+      status: this.openTurn?.() ? 'working' : 'idle',
+    });
+  }
   async send(text) {
     if (this.failSend) { this.failSend = false; throw new Error('send refused'); }
     this.sent = (this.sent ?? []).concat(text);
@@ -188,12 +196,26 @@ test('a headless session: start, stream, watch, prompt, resume, kill', async (t)
   sessions.unwatch(s.id);
   assert.equal(sessions.watching(s.id), false);
 
+  // Refreshing one tab or closing another device must not end this stream.
+  sessions.watch(s.id, 'laptop:tab-a');
+  sessions.watch(s.id, 'phone:tab-b');
+  sessions.unwatch(s.id, 'laptop:tab-a');
+  assert.equal(sessions.watching(s.id), true);
+  sessions.watch(s.id, 'phone:refreshed-tab');
+  sessions.unwatch(s.id, 'phone:tab-b');
+  sessions.unwatch(s.id); // an old app's unwatch only releases its legacy lease
+  assert.equal(sessions.watching(s.id), true);
+  sessions.unwatch(s.id, 'phone:refreshed-tab');
+  assert.equal(sessions.watching(s.id), false);
+
   // Mode and model changes reach the driver and the record.
-  await sessions.setMode(s.id, 'plan');
+  await assert.rejects(() => sessions.setMode(s.id, 'plan'), /plan mode is not supported/);
+  await assert.rejects(() => sessions.input(s.id, '/plan'), /plan mode is not supported/);
+  await sessions.setMode(s.id, 'acceptEdits');
   await sessions.setModel(s.id, 'sonnet');
-  assert.equal(d.mode, 'plan');
+  assert.equal(d.mode, 'acceptEdits');
   assert.equal(d.model, 'sonnet');
-  assert.equal(sessions.get(s.id).mode, 'plan');
+  assert.equal(sessions.get(s.id).mode, 'acceptEdits');
 
   // The process going away is not the end of the session: the next message resumes it.
   d.push('status', { status: 'idle' });
@@ -212,7 +234,7 @@ test('a headless session: start, stream, watch, prompt, resume, kill', async (t)
   const d2 = FakeDriver.made.at(-1);
   assert.notEqual(d2, d);
   assert.equal(d2.engineSessionId, 'engine-1', 'resumed with the same engine session');
-  assert.equal(d2.mode, 'plan');
+  assert.equal(d2.mode, 'acceptEdits');
 
   // Kill removes the record and the log.
   await sessions.kill(s.id);
@@ -253,7 +275,7 @@ test('a daemon restart lists a driven session as idle and resumable', async (t) 
   const listed = (await again.list()).find((x) => x.id === s.id);
   assert.equal(listed.alive, false);
   assert.equal(listed.status, 'idle');
-  assert.equal(listed.mode, 'default');
+  assert.equal(listed.mode, 'bypassPermissions');
   t.after(() => again.kill(s.id));
 });
 
@@ -413,16 +435,20 @@ test('queued prompts and attachments are replayed after a daemon restart', async
   await original.kill(s.id);
 });
 
-test('a surviving agent process keeps its active turn while queued tickets return', async () => {
+for (const profileId of ['claudea', 'codex']) test(`a surviving ${profileId} process keeps its active turn while queued tickets return`, async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
-  const dir = join(process.env.HELM_DIR, 'events-queued-hosted-restart');
+  const dir = join(process.env.HELM_DIR, `events-queued-hosted-restart-${profileId}`);
   const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
-  const procHost = (alive) => Object.assign(new EventEmitter(), { hasProc: () => alive });
+  const { codexProcId } = await import('../packages/connect/src/hosted-process.js');
+  const sharedId = codexProcId('codex', { CODEX_HOME: '/tmp/helm-test-account' });
+  const procHost = (alive) => Object.assign(new EventEmitter(), {
+    hasProc: (id) => alive && (profileId !== 'codex' || id === sharedId),
+  });
   const original = new Sessions(new StubRuntime(), {
     events: new EventLog(dir), makeDriver, procHost: procHost(false),
   });
-  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  const s = await original.start({ cwd: '/tmp', profileId });
   await original.input(s.id, 'active turn');
   await original.input(s.id, 'still queued');
   const activeTurn = original.history(s.id).events.find((e) => e.type === 'turn.start' && e.turnId === 't1');
@@ -431,7 +457,10 @@ test('a surviving agent process keeps its active turn while queued tickets retur
   const restarted = new Sessions(new StubRuntime(), {
     events: new EventLog(dir), makeDriver, procHost: procHost(true),
   });
-  restarted.resume();
+  await restarted.resume();
+  const rebound = FakeDriver.made.at(-1);
+  assert.equal(rebound.started, true, 'a surviving agent is reattached without opening its thread');
+  assert.equal(rebound.openTurn(), activeTurn.turnId, 'queued messages do not replace the active turn');
   assert.equal(restarted.get(s.id).status, 'working', 'the host process is still in the active turn');
   assert.equal(restarted.history(s.id).events.some((e) =>
     e.type === 'turn.done' && e.turnId === activeTurn.turnId), false, 'the live turn stays open');
@@ -439,6 +468,27 @@ test('a surviving agent process keeps its active turn while queued tickets retur
     ok: true, found: true, text: 'still queued',
   }, 'the unsent ticket was restored even though its process survived');
 
+  await restarted.kill(s.id);
+  await original.kill(s.id);
+});
+
+test('a hosted completed turn is not revived by its optimistic local prompt', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-completed-hosted-restart');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const procHost = Object.assign(new EventEmitter(), { hasProc: () => true });
+  const original = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, procHost });
+  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  await original.input(s.id, 'finished turn');
+  const d = FakeDriver.made.at(-1);
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+  d.push('status', { status: 'working' }); // A row left busy by an older release.
+  const restarted = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, procHost });
+  await restarted.resume();
+  assert.equal(FakeDriver.made.at(-1).openTurn(), null);
+  assert.equal(restarted.get(s.id).status, 'idle');
   await restarted.kill(s.id);
   await original.kill(s.id);
 });
@@ -1029,6 +1079,11 @@ test('messages sent mid-turn queue in order; stop and withdraw take theirs with 
   assert.deepEqual(await sessions.sendNow(s.id, rushId), { ok: true, found: true, sent: true });
   assert.deepEqual(d.sent, ['first', 'second', 'third', 'while you were asking'], 'steered, not a normal send');
   assert.deepEqual(d.steered, [{ text: 'rush this now', images: [] }]);
+  // Handed over is not yet used: it can no longer be withdrawn, but it joins
+  // the transcript only when the CLI says it read it.
+  assert.ok(sessions.history(s.id).events.some((e) => e.type === 'turn.deliver' && e.turnId === rushId));
+  assert.ok(!sessions.history(s.id).events.some((e) => e.type === 'turn.accept' && e.turnId === rushId));
+  d.push('input.consumed', { text: 'rush this now' });
   assert.ok(sessions.history(s.id).events.some((e) => e.type === 'turn.accept' && e.turnId === rushId));
   assert.deepEqual(await sessions.sendNow(s.id, rushId), { ok: true, found: false, sent: false });
 
@@ -1056,4 +1111,70 @@ test('messages sent mid-turn queue in order; stop and withdraw take theirs with 
   const removed = sessions.history(s.id).events.filter((e) => e.type === 'turn.remove');
   assert.equal(removed.length, 3);
   assert.ok(removed.some((e) => e.turnId === turnId));
+});
+
+test('a message typed mid-turn is held until a step runs, then handed over like the CLI does', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-steer'));
+  const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const d = FakeDriver.made.at(-1);
+  const log = () => sessions.history(s.id).events;
+  const ticket = (text) => log().find((e) => e.type === 'turn.start' && e.text === text).turnId;
+
+  await sessions.input(s.id, 'first');
+  // The agent is only writing: Claude and Codex would read a message at the
+  // end of the next step, so helm holds it - and it can still be withdrawn.
+  await sessions.input(s.id, 'also check the tests');
+  await tick();
+  assert.equal(d.steered, undefined);
+  // A step starts: now it goes in, and lands when that step ends.
+  d.push('item.start', { id: 'cmd1', kind: 'command', turnId: 't1' });
+  await tick(); await tick();
+  assert.deepEqual(d.steered, [{ text: 'also check the tests', images: [] }]);
+  const id = ticket('also check the tests');
+  assert.ok(log().some((e) => e.type === 'turn.deliver' && e.turnId === id));
+  assert.deepEqual(sessions.dequeue(s.id, id), { ok: true, found: false }, 'the CLI has it; no taking it back');
+
+  // Typed while a step is already running: handed over at once.
+  await sessions.input(s.id, 'and the docs');
+  await tick(); await tick();
+  assert.deepEqual(d.steered.map((x) => x.text), ['also check the tests', 'and the docs']);
+
+  // The CLI reads them after the step: each joins the transcript there.
+  d.push('item.done', { id: 'cmd1', status: 'ok' });
+  d.push('input.consumed', { text: 'also check the tests' });
+  d.push('input.consumed', { text: 'and the docs' });
+  const accepted = log().filter((e) => e.type === 'turn.accept').map((e) => e.turnId);
+  assert.deepEqual(accepted, [id, ticket('and the docs')]);
+  assert.ok(!log().some((e) => e.type === 'input.consumed'), 'the driver signal is not itself logged');
+
+  // No step running, and a slash command never goes in mid-turn.
+  await sessions.input(s.id, '/review');
+  d.push('item.start', { id: 'cmd2', kind: 'command', turnId: 't1' });
+  await tick(); await tick();
+  assert.equal(d.steered.length, 2);
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+  await tick(); await tick();
+  assert.deepEqual(d.sent, ['first', '/review']);
+});
+
+test('stop drops a message handed over but not yet used', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-steer-stop'));
+  const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const d = FakeDriver.made.at(-1);
+  await sessions.input(s.id, 'first');
+  d.push('item.start', { id: 'cmd1', kind: 'command', turnId: 't1' });
+  await sessions.input(s.id, 'never mind');
+  await tick(); await tick();
+  const id = sessions.history(s.id).events.find((e) => e.text === 'never mind').turnId;
+  await sessions.interrupt(s.id);
+  assert.ok(sessions.history(s.id).events.some((e) => e.type === 'turn.remove' && e.turnId === id));
 });
