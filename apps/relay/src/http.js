@@ -340,7 +340,14 @@ function announceNewDevice(device) {
   }).catch(() => {});
 }
 
-export function makeHttpHandler({ online, kick, connectedDevices = () => new Set() }) {
+// These calls return snapshots. Mutations must use the live, acknowledged
+// transport so a reconnect/hedge can never submit an action twice.
+const HTTP_READ_METHODS = new Set([
+  'session.events', 'session.messages', 'session.list', 'session.commands',
+  'model.list', 'env.info', 'session.watch', 'session.unwatch',
+]);
+
+export function makeHttpHandler({ online, kick, connectedDevices = () => new Set(), callEnv }) {
   return async function handle(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
@@ -527,6 +534,30 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
     const who = identify(clientTokenFrom(req.headers.authorization));
     if (!who) return json(res, 401, { error: 'unauthorized' });
     const { net, claims } = who;
+
+    if (path === '/api/read' && req.method === 'POST') {
+      let body;
+      try { body = await readBody(req, 16_384); }
+      catch { return json(res, 400, { error: 'invalid read request' }); }
+      if (!body || typeof body.env !== 'string' || !Object.hasOwn(net.machines, body.env)
+        || !body.params || typeof body.params !== 'object' || Array.isArray(body.params)) {
+        return json(res, 400, { error: 'invalid machine or parameters' });
+      }
+      if (!HTTP_READ_METHODS.has(body.method)) return json(res, 403, { error: 'read-only method required' });
+      if (body.method === 'session.unwatch') return json(res, 200, { result: { ok: true } });
+      if (!callEnv) return json(res, 503, { error: 'machine unavailable' });
+      try {
+        // HTTP is polling, with no socket subscription to leak on disconnect.
+        const watch = body.method === 'session.watch';
+        const result = await callEnv(body.env, watch ? 'session.events' : body.method,
+          watch ? { id: body.params.id, tail: 1 } : body.params, { timeout: 12_000 });
+        return json(res, 200, { result: watch
+          ? { ok: true, last: result.last, status: result.session?.status } : result });
+      } catch (error) {
+        const message = String(error?.message || error);
+        return json(res, /timed? ?out|timeout/i.test(message) ? 504 : 503, { error: message });
+      }
+    }
 
     if (path === '/api/network' && req.method === 'GET') {
       return json(res, 200, {
