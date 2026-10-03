@@ -430,3 +430,8 @@ acknowledges data after writing it, so a fast sender cannot grow an unlimited
 hub queue while a destination is slow. Old peers remain compatible through the
 legacy tunnel path; update both ends and the hub to get flow control. A running
 SSH connection is never silently replayed on a different route after failure.
+
+Helm's safe updater waits for active transfers before restarting the sender,
+receiver or relay. Runtime activity markers expire after a crash, so an
+abandoned transfer cannot block updates indefinitely. Incoming data and credit
+frames count as liveness; a delayed pong alone does not end a busy transfer.

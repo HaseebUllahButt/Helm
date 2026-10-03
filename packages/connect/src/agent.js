@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { hostname, platform, arch, release } from 'node:os';
 import { connect as tcpConnect } from 'node:net';
 import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
@@ -168,6 +169,9 @@ class Link {
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
+      // Data and credit frames also prove the hub is alive. A pong queued
+      // behind transfer bytes must not tear down an actively flowing link.
+      this.#waiting = false;
       this.daemon.onFrame(this, msg).catch((err) =>
         console.error(`[helm] ${this.url}: ${err?.message || err}`)
       );
@@ -393,6 +397,7 @@ export class Daemon {
     this.#noteRemote(false);
     for (const [key, tunnel] of this.#tunnels) {
       if (tunnel.link !== link) continue;
+      tunnel.release?.();
       tunnel.sender?.stop();
       tunnel.receiver?.stop();
       tunnel.sock.destroy();
@@ -1078,9 +1083,10 @@ export class Daemon {
     }
     const key = this.#key(link, sid);
     const sock = tcpConnect({ host: '127.0.0.1', port: wanted });
-    const tunnel = { sock, link };
+    const tunnel = { sock, link, release: beginTransferActivity() };
     this.#tunnels.set(key, tunnel);
     const end = reason => {
+      tunnel.release?.();
       tunnel.sender?.stop();
       tunnel.receiver?.stop();
       if (!this.#tunnels.delete(key)) return;

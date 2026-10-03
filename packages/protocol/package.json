@@ -8,6 +8,7 @@
     "./identity": "./identity.js",
     "./network": "./network.js",
     "./push": "./push.js",
-    "./notifications": "./notifications.js"
+    "./notifications": "./notifications.js",
+    "./transfer-activity": "./transfer-activity.js"
   }
 }

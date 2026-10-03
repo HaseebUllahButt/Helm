@@ -1,4 +1,5 @@
 import { WebSocketServer } from 'ws';
+import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { Duplex } from 'node:stream';
 import { T, E, M, PROTOCOL_VERSION } from '@helm/protocol';
 import { foldBuckets } from '@helm/usage';
@@ -533,7 +534,7 @@ export function createWsLayer() {
       // the target. The initiator keeps using its own id and we translate,
       // which means neither side has to learn the other's numbering.
       const sid = newId(8);
-      tunnels.set(sid, { initiator: from, target, initiatorSid: msg.sid });
+      tunnels.set(sid, { initiator: from, target, initiatorSid: msg.sid, release: beginTransferActivity() });
       from.sidMap ??= new Map();
       from.sidMap.set(msg.sid, sid);
       from.tunnelSids ??= new Set();
@@ -554,6 +555,7 @@ export function createWsLayer() {
     send(dest, msg.t, { ...msg, sid });
 
     if (msg.t === T.TUNNEL_CLOSE) {
+      tun.release();
       tunnels.delete(relaySid);
       tun.initiator.sidMap?.delete(tun.initiatorSid);
       tun.initiator.tunnelSids?.delete(relaySid);
@@ -569,6 +571,7 @@ export function createWsLayer() {
       const otherSid = other === tun.initiator ? tun.initiatorSid : sid;
       send(other, T.TUNNEL_CLOSE, { sid: otherSid, reason: 'peer disconnected' });
       tun.initiator.sidMap?.delete(tun.initiatorSid);
+      tun.release();
       tunnels.delete(sid);
     }
   }
@@ -636,6 +639,9 @@ export function createWsLayer() {
     sock.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
+      // Authenticated traffic is liveness evidence even when a pong is
+      // waiting behind file data on a slow connection.
+      sock.isAlive = true;
       try {
         if (sock.envId) handleDaemonFrame(sock, msg);
         else handleClientFrame(sock, msg);
@@ -733,6 +739,8 @@ export function createWsLayer() {
   });
 
   const stop = () => {
+    for (const tunnel of tunnels.values()) tunnel.release();
+    tunnels.clear();
     clearInterval(heartbeat);
     clearInterval(redeliver);
     stopWatch();
