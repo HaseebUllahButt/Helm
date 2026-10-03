@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough, Writable } from 'node:stream';
-import { once } from 'node:events';
+import { EventEmitter } from 'node:events';
 import { randomBytes, createHash } from 'node:crypto';
 import { createServer as tcpServer } from 'node:net';
 import { createServer } from 'node:http';
@@ -131,4 +131,24 @@ test('hub preserves flow negotiation and ignores tunnel frames from a third sock
     layer.routeTunnel(client, { t: T.TUNNEL_ACK, sid: 's', bytes: 100 });
     assert.equal(received[1].bytes, 100);
   } finally { layer.online.clear(); layer.stop(); }
+});
+
+
+test('relay keeps a busy transfer alive without pong and still reaps idle connections', t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const layer = createWsLayer();
+  const socket = new EventEmitter();
+  let terminated = false;
+  Object.assign(socket, { readyState: 1, send() {}, ping() {}, terminate() { terminated = true; } });
+  layer.wss.clients.add(socket);
+  layer.wss.emit('connection', socket, {}, { sub: 'test-device' });
+  try {
+    t.mock.timers.tick(30_000);
+    assert.equal(terminated, false);
+    socket.emit('message', JSON.stringify({ t: T.TUNNEL_DATA, sid: 'unknown', data: 'YQ==' }));
+    t.mock.timers.tick(30_000);
+    assert.equal(terminated, false, 'active data must count as liveness');
+    t.mock.timers.tick(30_000);
+    assert.equal(terminated, true, 'silent sockets must still be cleaned up');
+  } finally { layer.wss.clients.delete(socket); layer.stop(); }
 });

@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { sshPeer, directSshAddresses, hasPinnedSshHost, connectDirectSsh, bridgeDirectSsh } from './direct-ssh.js';
 import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
 import { T } from '@helm/protocol';
@@ -6,6 +7,11 @@ import { requireNetwork, hubCredential, allEndpoints } from '@helm/protocol/netw
 
 /** SSH stays end-to-end encrypted; hubs only carry its byte stream. */
 export async function proxy(host, port) {
+  const release = beginTransferActivity();
+  try { return await connectProxy(host, port); } finally { release(); }
+}
+
+async function connectProxy(host, port) {
   const net = requireNetwork();
   const peer = sshPeer(net, host);
   if (peer && net.revoked?.[peer.id]) throw new Error('target machine was removed from this network');

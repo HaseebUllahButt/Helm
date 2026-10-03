@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { hasActiveTransfers } from '@helm/protocol/transfer-activity';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, openSync, closeSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -82,8 +83,8 @@ export async function restartWhenSafe(units) {
   const host = new TerminalHost({ socketPath: PROC_SOCKET_PATH, unit: 'helm-procs' });
   try {
     let waiting = false;
-    while ((await restartBlockers(host)).length) {
-      if (!waiting) say('waiting for active agents that cannot survive a restart');
+    while ((await restartBlockers(host)).length || hasActiveTransfers()) {
+      if (!waiting) say('waiting for active transfers or agents that cannot survive a restart');
       waiting = true;
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
