@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { App } from './App';
 import { AppUpdate } from './AppUpdate';
+import { AppErrorBoundary } from './AppErrorBoundary';
 import { applyAppearance, watchSystemTheme } from './appearance';
 
 // Before the first render, so a light-theme device never flashes dark.
@@ -10,7 +11,7 @@ applyAppearance();
 watchSystemTheme();
 
 createRoot(document.getElementById('root')!).render(
-  <StrictMode><App /><AppUpdate /></StrictMode>
+  <StrictMode><AppErrorBoundary><App /><AppUpdate /></AppErrorBoundary></StrictMode>
 );
 
 // Registering the worker is what makes this installable to a home screen,

@@ -20,7 +20,15 @@
     <title>helm</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- This also works when an old installed shell cannot load its entry
+         bundle. It must not depend on that bundle or its stylesheet. -->
+    <div id="root">
+      <main style="max-width:380px;margin:15vh auto;padding:24px;font:16px/1.5 system-ui;text-align:center">
+        <h1 style="font-size:24px">Opening Helm…</h1>
+        <p>If Helm does not open, reload to get the current app.</p>
+        <form action="/" method="get"><button type="submit" style="font:inherit;padding:10px 18px">Reload Helm</button></form>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
