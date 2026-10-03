@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -148,6 +148,42 @@ test('an interrupted post-reset transaction is journaled and recovered', async (
   assert.equal(git(installed, ['rev-parse', 'HEAD']), targetHead);
   assert.equal(existsSync(join(process.env.HELM_DIR, 'update-state.json')), false,
     'the recovery journal is cleared after completion');
+});
+
+test('real npm preserves an older lockfile through a failed build and retry', async () => {
+  const { remote, installed } = make();
+  mkdirSync(join(remote, 'apps/web'), { recursive: true });
+  writeFileSync(join(remote, '.gitignore'), 'node_modules/\n');
+  writeFileSync(join(remote, 'package.json'), JSON.stringify({
+    name: 'update-fixture', version: '1.0.0', private: true, workspaces: ['apps/web'],
+  }));
+  writeFileSync(join(remote, 'apps/web/package.json'), JSON.stringify({
+    name: '@helm/web', version: '1.0.0',
+    scripts: { build: 'node -e "process.exit(process.env.HELM_TEST_BUILD_FAIL === \'1\' ? 1 : 0)"' },
+  }));
+  execFileSync('npm', ['install', '--package-lock-only', '--lockfile-version=2', '--ignore-scripts', '--no-audit', '--no-fund'], {
+    cwd: remote, stdio: 'pipe',
+  });
+  const committedLock = readFileSync(join(remote, 'package-lock.json'), 'utf8');
+  commit(remote, 'baseline with dependencies');
+  git(installed, ['fetch', '-q', 'origin', 'main']);
+  git(installed, ['reset', '--hard', '-q', 'origin/main']);
+  commit(remote, 'two');
+  const before = git(installed, ['rev-parse', 'HEAD']);
+  const oldFlag = process.env.HELM_TEST_BUILD_FAIL;
+  try {
+    process.env.HELM_TEST_BUILD_FAIL = '1';
+    await assert.rejects(() => selfUpdate(installed, { restart: false }), /--workspace @helm\/web run build/);
+    assert.equal(git(installed, ['rev-parse', 'HEAD']), before);
+    assert.equal(git(installed, ['status', '--porcelain']), '', 'installer leaves no dirty lockfile blocking recovery');
+    delete process.env.HELM_TEST_BUILD_FAIL;
+    assert.equal((await selfUpdate(installed, { restart: false })).updated, true);
+    assert.equal(readFileSync(join(installed, 'package-lock.json'), 'utf8'), committedLock);
+    assert.equal(git(installed, ['status', '--porcelain']), '');
+  } finally {
+    if (oldFlag === undefined) delete process.env.HELM_TEST_BUILD_FAIL;
+    else process.env.HELM_TEST_BUILD_FAIL = oldFlag;
+  }
 });
 
 test('a dirty tree is somebody\'s work, never a deployment to overwrite', async () => {

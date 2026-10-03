@@ -586,6 +586,9 @@ export function createWsLayer() {
   });
 
   wss.on('connection', (sock, req, auth) => {
+    // Protocol/transport errors occur before the JSON message handler. Keep
+    // a malformed frame confined to its socket, including normal close cleanup.
+    sock.on('error', () => sock.terminate());
     sock.isAlive = true;
     sock.on('pong', () => { sock.isAlive = true; });
 

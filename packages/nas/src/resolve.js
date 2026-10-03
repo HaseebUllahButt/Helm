@@ -1,5 +1,7 @@
-import { realpath, stat } from 'node:fs/promises';
+import { open, realpath, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { relative, resolve as resolvePath, sep } from 'node:path';
+import { descriptorPath } from './descriptor.js';
 
 /**
  * A refusal with a reason.
@@ -70,5 +72,38 @@ export async function resolveMedia(rootPath, rel = '') {
   if (realRel.split(/[\\/]+/).filter(Boolean).some((s) => s.startsWith('.'))) {
     throw new MediaError('hidden', 'a media path does not name hidden files');
   }
-  return { path: real, stat: await stat(real) };
+  return { path: real, root: realRoot, stat: await stat(real) };
+}
+
+/**
+ * Validate the opened object, not a path that can be replaced before read().
+ * The OS reports the path for this exact descriptor, including any
+ * symlinks followed in ancestors during open. Keep the handle through streaming.
+ * Never fall back to a path-only check if that facility is unavailable.
+ */
+export async function openMedia(rootPath, rel = '') {
+  let handle;
+  try {
+    const target = await resolveMedia(rootPath, rel);
+    if (!target.stat.isFile()) throw new MediaError('not-file', 'that is not a regular file');
+    // NONBLOCK also prevents a raced FIFO from hanging the HTTP request.
+    handle = await open(target.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    let opened;
+    try { opened = await descriptorPath(handle.fd); }
+    catch { throw new MediaError('unavailable', 'this installation cannot securely verify opened media files'); }
+    if (!beneath(target.root, opened)) {
+      throw new MediaError('outside', 'the opened file leaves the shared folder');
+    }
+    if (relative(target.root, opened).split(/[\\/]+/).some((s) => s.startsWith('.'))) {
+      throw new MediaError('hidden', 'a media path does not name hidden files');
+    }
+    const info = await handle.stat();
+    if (!info.isFile()) throw new MediaError('not-file', 'that is not a regular file');
+    return { path: target.path, stat: info, handle };
+  } catch (err) {
+    await handle?.close();
+    if (err.code === 'ELOOP') throw new MediaError('outside', 'the media path changed while opening');
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') throw new MediaError('missing', 'no such media');
+    throw err;
+  }
 }

@@ -253,7 +253,9 @@ async function updateLocked(dir, { rebuild = true, restart = true } = {}) {
     await git(['reset', '--hard', '--quiet', `origin/${BRANCH}`]);
     if (rebuild) {
       say('installing dependencies');
-      await gentle('npm', ['install', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: dir });
+      // Install the committed dependency tree without rewriting its lockfile.
+      // An install-induced dirty tree would disable rollback and every retry.
+      await gentle('npm', ['ci', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: dir });
       await ensurePty(dir);
       say('building the app');
       await gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir });

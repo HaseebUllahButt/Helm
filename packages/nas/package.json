@@ -16,5 +16,8 @@
   "dependencies": {
     "@helm/protocol": "*"
   },
+  "optionalDependencies": {
+    "koffi": "^3.3.2"
+  },
   "description": "The media-serving half of a machine designated 'nas': an allowlist of shared folders and a byte-stream server that can see nothing outside it."
 }

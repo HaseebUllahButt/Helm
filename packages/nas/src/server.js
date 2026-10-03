@@ -1,8 +1,7 @@
 import { createServer } from 'node:http';
-import { createReadStream } from 'node:fs';
 import { mediaRoots } from './roots.js';
 import { listMedia, mediaMime } from './catalog.js';
-import { resolveMedia, MediaError } from './resolve.js';
+import { openMedia, MediaError } from './resolve.js';
 
 /**
  * The byte-stream half of the NAS role.
@@ -36,7 +35,7 @@ const json = (res, code, body) => {
 
 const STATUS = {
   invalid: 400, outside: 403, hidden: 404, missing: 404,
-  'not-dir': 400, 'not-file': 400,
+  'not-dir': 400, 'not-file': 400, unavailable: 503,
 };
 
 /**
@@ -92,77 +91,85 @@ export function mediaHandler({ authorize = isLoopback, file, mount = '/media' } 
       }
       let target;
       try {
-        target = await resolveMedia(root.path, rel);
-        if (!target.stat.isFile()) throw new MediaError('not-file', 'that is a folder, not a file');
+        target = await openMedia(root.path, rel);
       } catch (err) {
         fail(res, err);
         return true;
       }
 
-      const { size, mtimeMs } = target.stat;
-      const etag = `W/"${size.toString(16)}-${Math.floor(mtimeMs).toString(16)}"`;
-      const base = {
-        'content-type': mediaMime(target.path) ?? 'application/octet-stream',
-        'accept-ranges': 'bytes',
-        'last-modified': new Date(mtimeMs).toUTCString(),
-        // private: an authenticated device's copy, revalidated by etag -
-        // nothing between the NAS and the phone may keep it.
-        'cache-control': 'private, max-age=0, must-revalidate',
-        etag,
-      };
+      let streaming = false;
+      try {
+        const { size, mtimeMs } = target.stat;
+        const etag = `W/"${size.toString(16)}-${Math.floor(mtimeMs).toString(16)}"`;
+        const base = {
+          'content-type': mediaMime(target.path) ?? 'application/octet-stream',
+          'accept-ranges': 'bytes',
+          'last-modified': new Date(mtimeMs).toUTCString(),
+          // private: an authenticated device's copy, revalidated by etag -
+          // nothing between the NAS and the phone may keep it.
+          'cache-control': 'private, max-age=0, must-revalidate',
+          etag,
+        };
 
-      if (req.headers['if-none-match'] === etag && !req.headers.range) {
-        res.writeHead(304, base);
-        res.end();
-        return true;
-      }
-
-      // One range, the only kind a media element sends. A well-formed but
-      // impossible range is refused with 416; a malformed one is ignored
-      // wholesale, which is what the spec asks of a server that does not do
-      // multipart answers.
-      let start = 0;
-      let end = size - 1;
-      const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
-      const ifRangeOk = !req.headers['if-range'] || req.headers['if-range'] === etag;
-      const ranged = range && ifRangeOk && size > 0 && (range[1] !== '' || range[2] !== '');
-      if (ranged) {
-        if (range[1] === '') {
-          const n = Number(range[2]);
-          start = n > 0 ? Math.max(0, size - n) : size;   // '-0' refuses below
-        } else {
-          start = Number(range[1]);
-          if (range[2] !== '') end = Math.min(Number(range[2]), size - 1);
-        }
-        if (start > end || start >= size) {
-          res.writeHead(416, {
-            'accept-ranges': 'bytes',
-            'content-range': `bytes */${size}`,
-            'cache-control': base['cache-control'],
-          });
+        if (req.headers['if-none-match'] === etag && !req.headers.range) {
+          res.writeHead(304, base);
           res.end();
           return true;
         }
-      }
 
-      const headers = {
-        ...base,
-        'content-length': end - start + 1,
-        ...(ranged ? { 'content-range': `bytes ${start}-${end}/${size}` } : {}),
-      };
-      res.writeHead(ranged ? 206 : 200, headers);
-      // A zero-byte file has no bytes to read; opening one with end < start
-      // throws, and the headers are already gone by then.
-      if (req.method === 'HEAD' || size === 0) {
-        res.end();
+        // One range, the only kind a media element sends. A well-formed but
+        // impossible range is refused with 416; a malformed one is ignored
+        // wholesale, which is what the spec asks of a server that does not do
+        // multipart answers.
+        let start = 0;
+        let end = size - 1;
+        const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
+        const ifRangeOk = !req.headers['if-range'] || req.headers['if-range'] === etag;
+        const ranged = range && ifRangeOk && size > 0 && (range[1] !== '' || range[2] !== '');
+        if (ranged) {
+          if (range[1] === '') {
+            const n = Number(range[2]);
+            start = n > 0 ? Math.max(0, size - n) : size;   // '-0' refuses below
+          } else {
+            start = Number(range[1]);
+            if (range[2] !== '') end = Math.min(Number(range[2]), size - 1);
+          }
+          if (start > end || start >= size) {
+            res.writeHead(416, {
+              'accept-ranges': 'bytes',
+              'content-range': `bytes */${size}`,
+              'cache-control': base['cache-control'],
+            });
+            res.end();
+            return true;
+          }
+        }
+
+        const headers = {
+          ...base,
+          'content-length': end - start + 1,
+          ...(ranged ? { 'content-range': `bytes ${start}-${end}/${size}` } : {}),
+        };
+        res.writeHead(ranged ? 206 : 200, headers);
+        // A zero-byte file has no bytes to read; opening one with end < start
+        // throws, and the headers are already gone by then.
+        if (req.method === 'HEAD' || size === 0) {
+          res.end();
+          return true;
+        }
+        const stream = target.handle.createReadStream({ start, end });
+        streaming = true; // the stream now owns and closes the validated handle
+        // A file that dies mid-stream has already sent its status; the only
+        // honest answer left is to drop the connection.
+        stream.on('error', () => res.destroy());
+        res.on('close', () => stream.destroy());
+        stream.pipe(res);
+        if (res.destroyed) stream.destroy();
         return true;
+      } finally {
+        // HEAD, 304, 416, empty files and exceptions never transfer ownership.
+        if (!streaming) await target.handle.close();
       }
-      const stream = createReadStream(target.path, { start, end });
-      // A file that dies mid-stream has already sent its status; the only
-      // honest answer left is to drop the connection.
-      stream.on('error', () => res.destroy());
-      stream.pipe(res);
-      return true;
     }
 
     json(res, 404, { error: 'not found' });

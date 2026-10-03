@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,9 +22,9 @@ process.env.HELM_DIR = join(base, 'helm');
 
 const { mediaRoots, addMediaRoot, removeMediaRoot } =
   await import('../packages/nas/src/roots.js');
-const { resolveMedia } = await import('../packages/nas/src/resolve.js');
+const { resolveMedia, openMedia } = await import('../packages/nas/src/resolve.js');
 const { listMedia } = await import('../packages/nas/src/catalog.js');
-const { startMediaServer } = await import('../packages/nas/src/server.js');
+const { startMediaServer, mediaHandler } = await import('../packages/nas/src/server.js');
 
 test.after(() => rmSync(base, { recursive: true, force: true }));
 
@@ -181,4 +184,122 @@ test('the byte server: auth first, then real HTTP media', async (t) => {
   const again = await fetch(url('/stream?t=open&root=0&path=Movies/film.mp4'),
     { headers: { 'if-none-match': etag } });
   assert.equal(again.status, 304);
+});
+
+test('cached listings keep paths relative to each root and alias', async () => {
+  const root = join(base, 'cache');
+  mkdirSync(join(root, 'movies'), { recursive: true });
+  writeFileSync(join(root, 'movies', 'film.mp4'), 'movie');
+  symlinkSync('movies', join(root, 'alias'));
+  assert.equal((await listMedia(root, 'movies')).entries[0].path, 'movies/film.mp4');
+  const nested = await listMedia(join(root, 'movies'), '');
+  assert.equal(nested.path, '');
+  assert.equal(nested.entries[0].path, 'film.mp4');
+  const alias = await listMedia(root, 'alias');
+  assert.equal(alias.path, 'alias');
+  assert.equal(alias.entries[0].path, 'alias/film.mp4');
+  alias.entries[0].name = 'caller mutation';
+  assert.equal((await listMedia(root, 'movies')).entries[0].name, 'film.mp4');
+});
+
+test('streaming keeps the checked descriptor if the filename is replaced', async () => {
+  const root = join(base, 'stream-race');
+  mkdirSync(root);
+  const victim = join(root, 'film.mp4');
+  writeFileSync(victim, 'PUBLIC');
+  const file = join(base, 'stream-race-roots.json');
+  addMediaRoot(root, { file });
+  const response = new PassThrough();
+  const chunks = [];
+  response.on('data', (chunk) => chunks.push(chunk));
+  const finished = new Promise((resolve, reject) => {
+    response.on('end', resolve);
+    response.on('error', reject);
+  });
+  response.writeHead = (status) => {
+    assert.equal(status, 200);
+    renameSync(victim, join(root, 'old.mp4'));
+    symlinkSync(join(outside, 'passwords.txt'), victim);
+  };
+  await mediaHandler({ authorize: () => true, file })({
+    url: '/media/stream?root=0&path=film.mp4', method: 'GET', headers: {},
+  }, response);
+  await finished;
+  assert.equal(Buffer.concat(chunks).toString(), 'PUBLIC');
+});
+
+test('opening refuses an ancestor swapped to an outside or hidden directory', async (t) => {
+  const root = join(base, 'open-race');
+  mkdirSync(root);
+  const originalOpen = fsPromises.open;
+  const handles = [];
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  for (const hidden of [false, true]) {
+    const folder = join(root, hidden ? 'hidden-test' : 'outside-test');
+    const destination = hidden ? join(root, '.private') : outside;
+    mkdirSync(folder);
+    if (hidden) mkdirSync(destination);
+    writeFileSync(join(folder, 'passwords.txt'), 'PUBLIC');
+    writeFileSync(join(destination, 'passwords.txt'), 'SECRET');
+    t.mock.method(fsPromises, 'open', async (path, flags) => {
+      if (path === join(folder, 'passwords.txt')) {
+        renameSync(folder, `${folder}-original`);
+        symlinkSync(destination, folder);
+      }
+      const handle = await originalOpen(path, flags);
+      handles.push(handle);
+      return handle;
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(() => openMedia(root, `${hidden ? 'hidden-test' : 'outside-test'}/passwords.txt`),
+      (err) => err.code === (hidden ? 'hidden' : 'outside'));
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+  assert.ok(handles.length > 0);
+  assert.ok(handles.every((handle) => handle.fd === -1), 'rejected descriptors are closed');
+});
+
+test('non-streaming HTTP responses release their file descriptors', async (t) => {
+  const root = join(base, 'handle-cleanup');
+  mkdirSync(root);
+  writeFileSync(join(root, 'film.mp4'), 'PUBLIC');
+  writeFileSync(join(root, 'empty.mp4'), '');
+  const file = join(base, 'handle-cleanup-roots.json');
+  addMediaRoot(root, { file });
+  const originalOpen = fsPromises.open;
+  const handles = [];
+  t.mock.method(fsPromises, 'open', async (...args) => {
+    const handle = await originalOpen(...args);
+    handles.push(handle);
+    return handle;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const handler = mediaHandler({ authorize: () => true, file });
+  const request = async (method, path, headers = {}) => {
+    let result;
+    await handler({ method, headers, url: `/media/stream?root=0&path=${path}` }, {
+      writeHead: (status, headers) => { result = { status, headers }; }, end: () => {},
+    });
+    assert.ok(handles.every((handle) => handle.fd === -1));
+    return result;
+  };
+  const head = await request('HEAD', 'film.mp4');
+  assert.equal(head.status, 200);
+  assert.equal((await request('GET', 'film.mp4', { 'if-none-match': head.headers.etag })).status, 304);
+  assert.equal((await request('GET', 'film.mp4', { range: 'bytes=100-' })).status, 416);
+  assert.equal((await request('GET', 'empty.mp4')).status, 200);
+  assert.equal(handles.length, 4);
+});
+
+test('descriptor lookup failure refuses the read and closes its handle', { skip: process.platform !== 'linux' }, async (t) => {
+  const originalOpen = fsPromises.open;
+  let handle;
+  t.mock.method(fsPromises, 'open', async (...args) => (handle = await originalOpen(...args)));
+  t.mock.method(fsPromises, 'readlink', async () => { throw new Error('proc unavailable'); });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  await assert.rejects(() => openMedia(media, 'song.mp3'), (err) => err.code === 'unavailable');
+  assert.equal(handle.fd, -1);
 });

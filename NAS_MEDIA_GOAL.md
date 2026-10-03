@@ -93,3 +93,10 @@ tunnel for a machine only it can reach - and the web app browses and plays
 through it. `helm nas [machine] [add|remove <folder>]` edits the allowlist,
 and `test/nas-media.test.mjs` plus `test/nas-route.test.mjs` cover the
 boundary and the route.
+
+Streaming checks the OS-reported location of the opened file and keeps that
+descriptor for the response, so replacing a filename or directory cannot
+redirect the read. Linux uses `/proc/self/fd`; macOS and Windows use their
+native descriptor APIs through the optional `koffi` dependency, loaded only
+for media requests. If the descriptor cannot be verified (including a missing
+native dependency), streaming returns 503 instead of reopening a path.

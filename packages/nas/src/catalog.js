@@ -48,9 +48,14 @@ export async function listMedia(rootPath, rel = '') {
   }
 
   const cached = cache.get(path);
-  if (cached && cached.mtimeMs === info.mtimeMs) return cached.listing;
-
   const base = rel.split(/[\\/]+/).filter(Boolean).join('/');
+  // Canonical directories can be reached through aliases or separate roots.
+  // Cache metadata only; the caller's relative paths belong to this request.
+  const listing = (items) => ({ path: base, entries: items.map((entry) => ({
+    ...entry, path: base ? `${base}/${entry.name}` : entry.name,
+  })) });
+  if (cached && cached.mtimeMs === info.mtimeMs) return listing(cached.entries);
+
   const entries = [];
   for (const d of await readdir(path, { withFileTypes: true })) {
     if (d.name.startsWith('.')) continue;
@@ -61,7 +66,6 @@ export async function listMedia(rootPath, rel = '') {
     const mime = dir ? null : mediaMime(d.name);
     entries.push({
       name: d.name,
-      path: base ? `${base}/${d.name}` : d.name,
       dir,
       size: dir ? null : s.size,
       mtime: s.mtimeMs,
@@ -71,7 +75,6 @@ export async function listMedia(rootPath, rel = '') {
   }
   entries.sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name));
 
-  const listing = { path: base, entries };
-  cache.set(path, { mtimeMs: info.mtimeMs, listing });
-  return listing;
+  cache.set(path, { mtimeMs: info.mtimeMs, entries });
+  return listing(entries);
 }
