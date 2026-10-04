@@ -187,6 +187,7 @@ export const M = {
   CODE_KEY: 'code.key',            // { epk, nonce } -> { codePubkey, proof }
   HANDOFF_ACCEPT: 'handoff.accept',// { handoffId, sourceMachineId, targetMachineId, folder?, envelope, snapshotDigest, profileId, model?, mode?, title?, parent?, prompt, requestDigest, sourceSignature } -> receipt
   HANDOFF_STATUS: 'handoff.status',// { handoffId } -> receipt
+  TASK_SEND: 'task.send',
 
   TRANSFER_RECEIVE: 'transfer.receive',
   // The controller-driven path: preview on the source, invite on the target,

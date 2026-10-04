@@ -300,6 +300,13 @@ export function sealCodeSnapshot(snapshot, targetCodePubkey, handoffId) {
   };
 }
 
+export function openTaskPrompt(envelope, handoffId) {
+  const task = openEnvelope(envelope, handoffId);
+  if (task?.type !== 'task-prompt' || typeof task.prompt !== 'string'
+      || !task.prompt.length || task.prompt.length > 64_000) throw new Error('invalid encrypted task prompt');
+  return task.prompt;
+}
+
 function openEnvelope(envelope, handoffId, privateKey = null) {
   if (!envelope || envelope.v !== VERSION || envelope.alg !== 'X25519-A256GCM'
       || envelope.zip !== 'br') {

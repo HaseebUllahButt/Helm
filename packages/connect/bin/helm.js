@@ -89,6 +89,8 @@ const usage = () => {
     --handoff-id <id>               resume an interrupted handoff instead of starting a new one
   helm dispatch <machine> [text...]  queue this folder and task on another machine
   helm dispatch-status <id>         where a queued handoff got to
+  helm send-task <machine> --account <id> [text...]  send files, .env and a task directly
+    --no-env --allow-skipped --handoff-id <id>       environment, omissions and retry options
   helm receive <source> [minutes]   grant this machine one incoming folder from <source>
   helm send <machine> [folder] --grant <token>
                                   send a folder to a machine that granted it
@@ -1136,6 +1138,36 @@ async function handoff() {
   console.log(`retry/status: helm dispatch-status ${handoffId}`);
 }
 
+async function sendTask() {
+  const { parseAgentArgs } = await import('../src/delegation.js');
+  const { options, words } = parseAgentArgs(rest, {
+    values: ['account', 'source-folder', 'target-folder', 'session', 'model', 'mode', 'handoff-id'],
+    switches: ['no-env', 'allow-skipped', 'json'],
+  });
+  const who = words.shift();
+  if (!who || !options.account) die('usage: helm send-task <machine> --account <target-profile> [task...]');
+  const net = requireNetwork();
+  const handoffId = options['handoff-id'] || randomBytes(12).toString('hex');
+  console.error(`helm: task ${handoffId}; retry with the same arguments and --handoff-id ${handoffId}`);
+  const result = await brainRpc(net.self, M.TASK_SEND, {
+    handoffId, targetMachineId: machineId(who), profileId: options.account,
+    folder: resolve(expand(options['source-folder'] || process.env.HELM_CWD || process.cwd())),
+    targetFolder: options['target-folder'], sessionId: options.session || process.env.HELM_SESSION_ID,
+    model: options.model, mode: options.mode, prompt: words.join(' '),
+    includeEnv: !options['no-env'], allowSkipped: !!options['allow-skipped'],
+  }, 360_000);
+  if (options.json) console.log(JSON.stringify(result));
+  if (!result.sent) {
+    if (!options.json) for (const warning of result.preflight.warnings) console.error(`  ${warning.path || ''}: ${warning.message}`);
+    die('review omitted files and retry with --allow-skipped');
+  }
+  if (!options.json) {
+    console.log(`Task ${handoffId} ${result.status} on ${result.targetName}.`);
+    if (result.receipt) console.log(`  ${result.receipt.sessionId} · ${result.receipt.folder} · ${result.route}`);
+    if (result.warning) console.error(result.warning);
+  }
+}
+
 async function send() {
   const {
     createCodeSnapshot, sealCodeSnapshot, signHandoffDigest, verifyHandoffSignature,
@@ -1221,7 +1253,7 @@ async function send() {
   params.requestDigest = transferRequestDigest(params);
   params.sourceSignature = signHandoffDigest(params.requestDigest);
 
-  const receipt = await brainRpc(target, M.TRANSFER_ACCEPT, params, 120_000);
+  const receipt = await hubRpc(net, target, M.TRANSFER_ACCEPT, params, { timeout: 120_000, direct: true });
   console.log(`sent ${receipt.files} file${receipt.files === 1 ? '' : 's'} ` +
     `(${receipt.bytes} bytes) to ${targetName}:${receipt.folder}` +
     (receipt.skipped ? `; ${receipt.skipped} skipped` : ''));
@@ -1941,6 +1973,10 @@ try {
 
     case 'send':
       await send();
+      break;
+
+    case 'send-task':
+      await sendTask();
       break;
 
     case 'receive':

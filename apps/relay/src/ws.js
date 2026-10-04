@@ -469,7 +469,7 @@ export function createWsLayer() {
             id: msg.id, ok: false,
             error: { code: 'timeout', message: 'daemon did not respond' },
           });
-        }, RPC_TIMEOUT_MS).unref?.();
+        }, msg.method === M.TASK_SEND ? 420_000 : RPC_TIMEOUT_MS).unref?.();
         send(target, T.RPC, {
           id: relayId, method: msg.method, params: msg.params ?? {},
           // Who is asking travels with the call, so methods that answer

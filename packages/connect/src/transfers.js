@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { M } from '@helm/protocol';
+import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import {
   createCodeSnapshot, createEphemeralCodeKey, materializeCode, sealCodeSnapshot, configureGitOrigin,
   signHandoffDigest, verifyHandoffSignature,
@@ -178,7 +179,7 @@ export class Transfers {
     };
     request.requestDigest = transferRequestDigest(request);
     request.sourceSignature = signHandoffDigest(request.requestDigest);
-    const receipt = await this.rpc(target, M.TRANSFER_ACCEPT, request, { timeout: 240_000 });
+    const receipt = await this.rpc(target, M.TRANSFER_ACCEPT, request, { timeout: 240_000, direct: true });
     return {
       sent: true,
       transferId,
@@ -289,7 +290,8 @@ export class Transfers {
     if (grant.inflight) return grant.inflight;
     grant.transferId = p.transferId;
     grant.requestDigest = p.requestDigest;
-    const work = this.#materialize(grant, p);
+    const endActivity = beginTransferActivity();
+    const work = this.#materialize(grant, p).finally(endActivity);
     grant.inflight = work;
     const done = () => { if (grant.inflight === work) grant.inflight = null; };
     void work.then(done, done);

@@ -32,6 +32,7 @@ import { hubRpc } from './hub-client.js';
 import { transcribe, canTranscribe } from './voice.js';
 import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
 import { Handoffs } from './handoffs.js';
+import { TaskTransfers } from './task-transfer.js';
 import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { selfUpdate, currentVersion, autoUpdate } from './update.js';
@@ -265,6 +266,16 @@ export class Daemon {
       network: () => loadNetwork() ?? this.net,
       rpc: (env, method, params, opts) =>
         hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
+    });
+    this.taskTransfers = new TaskTransfers({
+      network: () => loadNetwork() ?? this.net,
+      sessions: this.sessions,
+      rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
+      enqueue: async (targetMachineId, params) => {
+        const { hubBroadcastRpc } = await import('./hub-client.js');
+        return hubBroadcastRpc(loadNetwork() ?? this.net, targetMachineId,
+          M.DISPATCH_SUBMIT, { targetMachineId, params }, { timeout: 120_000, remoteOnly: true });
+      },
     });
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
@@ -1504,6 +1515,8 @@ export class Daemon {
       }
       case M.HANDOFF_ACCEPT:
         return this.handoffs.accept(p, caller);
+      case M.TASK_SEND:
+        return this.taskTransfers.send(p, caller);
       case M.HANDOFF_STATUS:
         return this.handoffs.status(p.handoffId, caller);
       case M.TRANSFER_RECEIVE:

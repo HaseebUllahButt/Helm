@@ -20,9 +20,10 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { HELM_DIR } from './paths.js';
-import { materializeCode, restoreGitMetadata, verifyHandoffSignature } from './code-transfer.js';
+import { materializeCode, restoreGitMetadata, verifyHandoffSignature, openTaskPrompt } from './code-transfer.js';
 import { getProfiles } from './profiles.js';
 import { defaultMode } from './modes.js';
+import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 
 const HANDOFFS_FILE = join(HELM_DIR, 'handoffs.json');
 const HANDOFF_ID = /^[a-f0-9]{24}$/;
@@ -64,6 +65,8 @@ export const handoffRequestDigest = (p) => sha256(JSON.stringify({
   title: p.title ?? null,
   parent: p.parent ?? null,
   prompt: p.prompt,
+  ...(p.restoreGit !== undefined ? { restoreGit: p.restoreGit } : {}),
+  ...(p.promptEnvelope !== undefined ? { promptEnvelope: p.promptEnvelope } : {}),
 }));
 
 /** One line of printable text, or null. Same bar the roster holds. */
@@ -162,7 +165,11 @@ export class Handoffs {
       envelope: p.envelope,
       requestDigest: DIGEST.test(p.requestDigest ?? '') ? p.requestDigest : null,
       sourceSignature: SOURCE_SIG.test(p.sourceSignature ?? '') ? p.sourceSignature : null,
+      restoreGit: p.restoreGit,
+      promptEnvelope: p.promptEnvelope,
     };
+    if (p.restoreGit !== undefined && typeof p.restoreGit !== 'boolean') throw new Error('invalid restoreGit option');
+    if (p.promptEnvelope !== undefined && (!p.promptEnvelope || typeof p.promptEnvelope !== 'object')) throw new Error('invalid encrypted task prompt');
     if (p.folder !== undefined && out.folder === null) throw new Error('invalid handoff folder');
     if (!out.snapshotDigest) throw new Error('invalid handoff snapshot digest');
     if (!out.profileId) throw new Error('invalid handoff profileId');
@@ -225,13 +232,15 @@ export class Handoffs {
     // identical accept waits on the first rather than racing the record.
     const running = this.inflight.get(p.handoffId);
     if (running) return running;
+    const endActivity = beginTransferActivity();
     const work = this.#run(p, existing, digest)
-      .finally(() => this.inflight.delete(p.handoffId));
+      .finally(() => { endActivity(); this.inflight.delete(p.handoffId); });
     this.inflight.set(p.handoffId, work);
     return work;
   }
 
   async #run(p, existing, digest) {
+    const prompt = p.promptEnvelope ? openTaskPrompt(p.promptEnvelope, p.handoffId) : p.prompt;
     const record = existing ?? {
       handoffId: p.handoffId,
       sourceMachineId: p.sourceMachineId,
@@ -268,7 +277,7 @@ export class Handoffs {
       // materialized - that is the only folder restoreGitMetadata is safe
       // to clear a crashed attempt's .git from. A failed restore is a
       // detail on the receipt, not a reason the task must not start.
-      if (record.git && record.gitRestoredAt == null) {
+      if (p.restoreGit !== false && record.git && record.gitRestoredAt == null) {
         record.gitRestore = await restoreGitMetadata(record.folder, record.git)
           .catch((err) => ({ restored: false, error: String(err?.message || err).slice(0, MAX_ERROR) }));
         record.gitRestoredAt = Date.now();
@@ -314,7 +323,7 @@ export class Handoffs {
         const turnId = `handoff-${p.handoffId}-${record.promptAttempt}`;
         const state = this.sessions.turnState?.(record.sessionId, turnId) ?? null;
         if (state !== 'failed' && state !== 'removed') {
-          await this.sessions.input(record.sessionId, p.prompt, { turnId });
+          await this.sessions.input(record.sessionId, prompt, { turnId });
           break;
         }
         if (skips >= MAX_PROMPT_SKIPS) {
