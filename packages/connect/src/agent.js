@@ -279,7 +279,7 @@ export class Daemon {
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
     try { this.schedules = new Schedules({ sessions: this.sessions }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
-    this.sessions.delegationBrief = () => delegationNote(this.cliAgents ?? []);
+    this.sessions.delegationBrief = delegationNote;
     this.handoffs = new Handoffs({
       sessions: this.sessions,
       network: () => loadNetwork() ?? this.net,

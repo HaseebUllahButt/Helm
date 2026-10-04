@@ -250,6 +250,8 @@ explicitly configured approval prompts in the parent task panel.
 The inline **Team** panel shows nested tasks, model, status, elapsed time,
 and a short result. Child approvals and failures also surface on the parent
 in the sidebar. Finished child tasks return a bounded result to their parent;
+only tasks created with automatic result delivery enabled participate. Older
+task history is not replayed into conversations when the daemon restarts.
 **Stop all** stops descendants and clears pending messages. Late results from
 stopped children do not restart the parent. Archiving hides a task without
 stopping its process.
@@ -284,6 +286,21 @@ the child's model through its own CLI, so Codex can ask Claude Opus for work
 using an existing Claude login. The supplied task is the child's context;
 the parent conversation is not copied automatically. Children share the
 folder, so assign distinct work when delegating edits.
+
+Helm adds a short, stable delegation instruction, not an account roster or a
+copy of its manual. Accounts and models are discovered with `helm agents --json`
+only when needed. Codex and Claude receive it as standing instructions; other
+adapters introduce it once, not on every message. Helm-managed Codex threads
+disable `features.multi_agent` and `features.multi_agent_v2`; Claude launches
+deny the native `Agent` and legacy `Task` tools. These use the provider's
+[Codex feature configuration](https://developers.openai.com/codex/config-reference)
+and [Claude tool restrictions](https://code.claude.com/docs/en/cli-reference).
+Other adapters currently rely on the instruction, not a verified tool block.
+Existing processes preserved across an update keep their prior configuration
+until a fresh provider launch or Codex thread resume; Helm does not interrupt
+active work to apply this policy. Externally monitored sessions are not
+reconfigured. This routes ordinary delegation, not a security boundary against
+an agent launching a separate CLI through its shell.
 
 Children default to YOLO execution; `--mode` and
 `--effort` select supported settings. A read-only parent requires a read-only
@@ -340,6 +357,13 @@ Cache keepalive is deferred: this release installs no warmer, sends no
 background cache pings, and exposes no keepalive toggle. Providers' native
 prompt caching remains unchanged. The sidebar search has no shortcut badge;
 Ctrl/Cmd+K and `/` still open search.
+
+The open thread is highlighted in Running and Done. Done is a rolling list of
+threads with replies that are not running or needing attention, updated within
+the last three days; it is not a count of successful tasks. Its count can change
+as threads resume, age out, or sync from another machine. In the model picker,
+stars only favorite choices. **Set default** separately controls new chats;
+neither action changes the model of the current conversation.
 
 ## Brains (optional)
 

@@ -1128,7 +1128,7 @@ function Shell({ client, conn, onSignOut }: {
                 <div className="section">running</div>
                 <div className="rows plain">
                   {runningNow.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)} />
+                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} />
                   ))}
                 </div>
               </>
@@ -1136,10 +1136,11 @@ function Shell({ client, conn, onSignOut }: {
 
             {doneNow.length > 0 && (
               <Fold title="done" count={doneNow.length} note={doneIsSaved ? 'saved' : undefined} remember="sidebar:done">
+                <p className="note">Threads with replies, not running or needing attention · last 3 days. This is not a count of successful tasks.</p>
                 {doneIsSaved && <p className="note">Includes saved lists · syncing when connected</p>}
                 <div className="rows plain">
                   {doneNow.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)} />
+                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} />
                   ))}
                 </div>
               </Fold>
@@ -2970,18 +2971,18 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
 }
 
 /** One line of Home: the mark, the thread, where it runs, and what it is doing. */
-function HomeRow({ s, machine, onOpen, note }: { s: Session; machine: string; onOpen: () => void; note?: string }) {
+function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean }) {
   const now = useNow();
   const eng = engineOf(s.engine);
   return (
-    <button className="row tall" onClick={onOpen}>
+    <button className={`row tall thread-row${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
       <EngineMark engine={eng.cls} />
       <span className="grow">
         <span className="rt"><span className="rt-text">{s.title}</span></span>
         <span className="rm">{dirName(s.cwd)} · {machine}</span>
       </span>
       {note ? <span className="when">{note}</span>
-        : s.status === 'working'
+        : s.status === 'working' || !!s.team?.working
         ? <StatusChip status="working" at={s.updatedAt} />
         : s.updatedAt ? <span className="when">{waitingSince(s.updatedAt, now)}</span> : null}
     </button>

@@ -53,7 +53,7 @@ test('Claude picker selects Opus 5.5 immediately and receives later catalog addi
   } finally { await browser.close(); }
 });
 
-test('stars save defaults directly; checkboxes keep favorites independent on desktop and phone', async () => {
+test('favorite stars never select a model or change its default; explicit default buttons stay independent', async () => {
   const bundle = await build({ stdin: { contents: `
     import React, { useState } from 'react';
     import { createRoot } from 'react-dom/client';
@@ -97,6 +97,11 @@ test('stars save defaults directly; checkboxes keep favorites independent on des
       if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({path:process.env.HELM_TEST_SCREENSHOT_DIR+'/thinking-'+width+'.png'});
       await page.locator('button[title^="model:"]').click();
       await page.getByRole('checkbox',{name:'Favorite Model B'}).check();
+      assert.equal(await page.getByRole('button',{name:'Model A is the default for new chats'}).innerText(),'Default');
+      assert.equal(await page.getByRole('button',{name:'Use Model B by default for new chats'}).innerText(),'Set default');
+      assert.deepEqual(await page.evaluate(()=>window.saved),{kind:'effort',id:'low'});
+      assert.equal(await page.getByRole('option',{name:'Model A',exact:true}).getAttribute('aria-selected'),'true');
+      assert.equal(await page.evaluate(()=>window.picks ?? 0),0);
       await page.getByRole('button',{name:'Use Model C by default for new chats'}).count().then(n=>assert.equal(n,0));
       await page.getByRole('button',{name:/1 more/}).click();
       await page.getByRole('button',{name:'Use Model C by default for new chats'}).click();

@@ -30,10 +30,8 @@ export async function agentCatalog(profiles, statuses, { models = true, credenti
   }));
 }
 
-export function delegationNote(agents) {
-  const accounts = agents.filter((a) => a.available).slice(0, 24)
-    .map((a) => `${a.id} (${a.engine}, ${a.auth})`).join('; ');
-  return `[helm delegation: CLI accounts: ${accounts || 'discover with helm agents --json'}. Run helm agents --json for accounts and model IDs. Use helm delegate <account> --model <model> --wait --json -- "<task>" for a bounded task. Children belong to this orchestrator and share its folder; they are tasks, not ordinary chats. Read results with helm delegate-result <id> --wait --json and send follow-ups with helm say <id> <message>. Permissions default to YOLO and remain configurable. Never use plan mode or ask to approve a plan: dispatch the task and carry it to completion. Preserve explicitly configured read-only restrictions and surface any genuine user question in the parent workflow.]`;
+export function delegationNote() {
+  return '[Helm: Delegate only with helm delegate <account> --model <model> --wait --json -- "<task>", never native subagents. Discover accounts/models with helm agents --json only when needed.]';
 }
 
 /** Read-only parents cannot acquire write access through a different CLI. */

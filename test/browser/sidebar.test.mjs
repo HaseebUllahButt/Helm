@@ -199,6 +199,31 @@ test('Running counts only count working threads on online machines', async testC
   await page.locator('.main.showing h1').filter({ hasText: 'vm' }).waitFor();
 });
 
+test('selected running threads have a distinct highlight on desktop and phone', async testContext => {
+  for (const width of [1280, 390]) {
+    const { page, boot } = await pageFor(testContext, { width, height: 844 });
+    await boot();
+    await page.evaluate(() => {
+      const session = (id, title) => ({ id, title, cwd: '/project', engine: 'codex', profileId: 'codex', driver: 'codex', turns: 1, status: 'working', updatedAt: Date.now() });
+      window.mount(window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [session('one', 'First task'), session('two', 'Second task')] }));
+    });
+    const rows = page.locator('.sidebar .thread-row');
+    const first = rows.filter({ hasText: 'First task' });
+    const second = rows.filter({ hasText: 'Second task' });
+    await first.click();
+    assert.equal(await first.getAttribute('aria-current'), 'page');
+    assert.equal(await second.getAttribute('aria-current'), null);
+    const style = await first.evaluate(element => ({ background: getComputedStyle(element).backgroundColor, outline: getComputedStyle(element).boxShadow }));
+    assert.notEqual(style.background, 'rgba(0, 0, 0, 0)');
+    assert.notEqual(style.outline, 'none');
+    if (width < 900) await page.setViewportSize({ width: 1280, height: 844 });
+    await second.click();
+    assert.equal(await first.getAttribute('aria-current'), null);
+    assert.equal(await second.getAttribute('aria-current'), 'page');
+    if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.locator('.sidebar').screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, `sidebar-selected-${width}.png`) });
+  }
+});
+
 test('One search control opens the palette, keys work, selection has no left bar', async testContext => {
   const { page, boot } = await pageFor(testContext, { width: 1280, height: 800 });
   await boot();

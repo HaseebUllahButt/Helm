@@ -151,6 +151,20 @@ test('plain: initialize, thread/start, turn/start; text streams as deltas', asyn
   await driver.kill();
 });
 
+test('Helm-managed Codex threads disable native delegation on start and resume', async (t) => {
+  for (const engineSessionId of [undefined, '01a09e7a-960e-79e2-b7c8-8fc714c00f2a']) {
+    const { driver, fake } = make('plain', { engineSessionId, helmDelegation: true, instructions: 'Use Helm', mode: 'readonly' });
+    t.after(() => driver.kill());
+    await driver.start();
+    const request = fake.stdinLines().find((entry) => entry.method === (engineSessionId ? 'thread/resume' : 'thread/start'));
+    assert.equal(request.params.developerInstructions, 'Use Helm');
+    assert.equal(request.params.config['features.multi_agent'], false);
+    assert.equal(request.params.config['features.multi_agent_v2'], false);
+    assert.equal(request.params.sandbox, 'read-only');
+    assert.ok(!fake.stdinLines().some((entry) => entry.method === 'turn/start'));
+  }
+});
+
 test('each thread names its own session; the shared app-server names none', async () => {
   // One app-server serves every thread on an account. Its environment once
   // carried the first thread's HELM_SESSION_ID, so `helm delegate` from any

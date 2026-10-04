@@ -710,7 +710,7 @@ export class Sessions extends EventEmitter {
       const auth = (await authStatuses([profile])).get(profile.id);
       if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
       const selectedMode = delegationMode(profile.engine, parent?.mode, mode, startPrefs(profile)?.mode, parent?.engine);
-      const delegation = { parentId: parent?.id ?? null, parentGeneration, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting' };
+      const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting' };
       const child = await this.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
         title: clip(task.trim().split('\n')[0], 80), delegation });
       if (parent && (parent.stopGeneration ?? 0) !== parentGeneration) {
@@ -956,6 +956,7 @@ export class Sessions extends EventEmitter {
       // as standing instructions rather than glued onto the owner's first
       // message, where it read as something they had typed.
       instructions: DRIVERS[s.driver]?.takesInstructions ? (this.delegationBrief?.() || null) : null,
+      helmDelegation: !s.external && !!this.delegationBrief,
       forkFrom: s.forkFrom,
       transcript: s.transcript,
       monitorOnly: !!s.external,
@@ -1122,7 +1123,7 @@ export class Sessions extends EventEmitter {
   }
 
   async #notifyParent(child, event) {
-    if (String(event.turnId).startsWith('local-') || this.hasActiveDelegations(child.id)) return;
+    if (child.delegation?.notifyParent !== true || String(event.turnId).startsWith('local-') || this.hasActiveDelegations(child.id)) return;
     const parent = this.#index.get(child.delegation?.parentId);
     if (!parent || parent.archived || parent.stoppedAt || child.archived || child.stoppedAt || child.delegation.notifiedSeq >= event.seq
       || (child.delegation.parentGeneration ?? 0) !== (parent.stopGeneration ?? 0)) return;
@@ -2795,7 +2796,7 @@ export class Sessions extends EventEmitter {
     const active = processAlive ? activeTurnFromEvents(tail) : null;
     const revive = [];
     const settle = (turnId, status, error) => {
-      if (s.delegation) s.delegation.status = status === 'ok' ? 'done' : status;
+      if (s.delegation && !['done', 'error', 'interrupted'].includes(s.delegation.status)) s.delegation.status = status === 'ok' ? 'done' : status;
       const event = this.events.append(s.id, { type: 'turn.done', turnId, status, ...(error ? { error } : {}) });
       s.lastSeq = event.seq;
       this.emit('event', { id: s.id, event });

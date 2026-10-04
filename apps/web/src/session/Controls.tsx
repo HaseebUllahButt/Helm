@@ -278,18 +278,19 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
     return (
       <div className="rowfav" key={c.id || 'normal'}>
         {button}
-        {favKey && c.id && <label className="favorite-toggle" title="Favorite" onClick={(e) => e.stopPropagation()}>
+        {favKey && c.id && <label className={`favorite-toggle${fav ? ' on' : ''}`} title={fav ? 'Remove favorite' : 'Add favorite'} onClick={(e) => e.stopPropagation()}>
           <input type="checkbox" checked={fav}
             aria-label={`Favorite ${c.label}`} onChange={() => toggleFav(c.id)} />
+          <Icon name={fav ? 'star-on' : 'star'} size={17} />
         </label>}
         {onDefault && <button
-          className={`star${isDefault ? ' on' : ''}`} aria-pressed={isDefault}
+          className={`picker-default${isDefault ? ' on' : ''}`} aria-pressed={isDefault}
           aria-label={isDefault ? `${c.label} is the default for new chats` : `Use ${c.label} by default for new chats`}
           title={isDefault ? 'Default for new chats' : 'Set as default for new chats'}
           disabled={saving !== null}
           aria-busy={saving === c.id}
           onClick={(e) => { e.stopPropagation(); void makeDefault(c.id); }}
-        ><Icon name={isDefault ? 'star-on' : 'star'} size={17} /></button>}
+        >{isDefault ? 'Default' : 'Set default'}</button>}
       </div>
     );
   };
@@ -300,7 +301,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
         <button className="x" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button>
       </div>
       {note && <div className="modesheet-note">{note}</div>}
-      {onDefault && <div className="modesheet-legend"><Icon name="star" size={13} /> default for new chats{favKey && <span><Icon name="checkbox" size={13} /> favorites</span>}</div>}
+      {onDefault && <div className="modesheet-legend">Defaults apply to new chats{favKey && <span><Icon name="star" size={13} /> favorites only</span>}</div>}
       {more.length > 0 && (
         <input
           className="sheetfilter" value={query} placeholder="search all models"

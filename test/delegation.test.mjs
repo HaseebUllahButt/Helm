@@ -20,7 +20,7 @@ const profiles = [
 ];
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ version: 1, profiles }));
 const { Sessions } = await import('../packages/connect/src/sessions.js');
-const { agentCatalog, parseAgentArgs, chooseAgent, delegationMode, delegationOutput } = await import('../packages/connect/src/delegation.js');
+const { agentCatalog, parseAgentArgs, chooseAgent, delegationMode, delegationOutput, delegationNote } = await import('../packages/connect/src/delegation.js');
 const { runAgentCommand } = await import('../packages/connect/src/agent-cli.js');
 const { M } = await import('@helm/protocol');
 
@@ -165,6 +165,21 @@ test('a child completion wakes its idle parent once with a durable result ticket
   assert.equal(duplicate.duplicate, true);
 });
 
+test('legacy child results do not wake old threads on completion or daemon restart', async (context) => {
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Old review' });
+  delete sessions.get(child.id).delegation.notifyParent;
+  drivers.get(child.id).finish('interrupted');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drivers.get(parent.id).sent, undefined);
+  const restarted = new Sessions(new EventEmitter(), { makeDriver: () => assert.fail('historical results must not launch a CLI') });
+  await restarted.resume();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(restarted.get(child.id).delegation.status, 'interrupted');
+  assert.equal(restarted.history(parent.id).events.some((event) => String(event.turnId).startsWith('local-result-')), false);
+});
+
 test('an inherited parent cannot attach an unrelated Codex background thread', async (t) => {
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
@@ -287,6 +302,16 @@ test('nesting is bounded and empty tasks fail before starting a CLI', async (t) 
   await assert.rejects(() => sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Four' }), /three levels/);
 });
 
+test('delegation instructions stay compact and independent of the account roster', () => {
+  const note = delegationNote();
+  assert.ok(note.length < 200);
+  assert.equal(delegationNote(profiles), note);
+  assert.equal(delegationNote([]), note);
+  assert.match(note, /never native subagents/);
+  assert.match(note, /helm agents --json only when needed/);
+  assert.match(note, /helm delegate <account> --model <model> --wait --json/);
+});
+
 test('agents get the tool instructions as standing instructions, not in the owner\'s message', async (t) => {
   const { sessions, drivers } = setup(t);
   sessions.delegationBrief = () => '[helm delegation: use helm agents and helm delegate]';
@@ -294,6 +319,7 @@ test('agents get the tool instructions as standing instructions, not in the owne
   // The brief once rode on the first message and showed in the owner's
   // bubble as if they had typed it. Codex and Claude take it out of band.
   assert.equal(drivers.get(parent.id).instructions, '[helm delegation: use helm agents and helm delegate]');
+  assert.equal(drivers.get(parent.id).helmDelegation, true);
   await sessions.input(parent.id, '/status');
   assert.equal(drivers.get(parent.id).sent, '/status');
   drivers.get(parent.id).finish();
@@ -302,6 +328,9 @@ test('agents get the tool instructions as standing instructions, not in the owne
   drivers.get(parent.id).finish();
   await sessions.input(parent.id, 'Continue');
   assert.equal(drivers.get(parent.id).sent, 'Continue');
+  const child = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  assert.equal(drivers.get(child.session.id).helmDelegation, true);
+  assert.equal(drivers.get(child.session.id).instructions, drivers.get(parent.id).instructions);
 });
 
 test('output distinguishes approval, interruption and provider failure', () => {

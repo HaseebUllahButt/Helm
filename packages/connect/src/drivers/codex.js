@@ -461,6 +461,7 @@ export class CodexDriver extends Driver {
     this.threadId = this.engineSessionId ?? null;
     this.monitorOnly = !!opts.monitorOnly;
     this.instructions = opts.instructions || null;
+    this.helmDelegation = !!opts.helmDelegation;
   }
 
   #policy() {
@@ -497,6 +498,10 @@ export class CodexDriver extends Driver {
     const { approvalPolicy, sandbox } = this.#policy();
     const config = Object.fromEntries(THREAD_VARS.filter((k) => this.env?.[k])
       .map((k) => [`shell_environment_policy.set.${k}`, this.env[k]]));
+    if (this.helmDelegation) {
+      config['features.multi_agent'] = false;
+      config['features.multi_agent_v2'] = false;
+    }
     const common = { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}),
       ...(this.instructions ? { developerInstructions: this.instructions } : {}),
       ...(Object.keys(config).length ? { config } : {}) };

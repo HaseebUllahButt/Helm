@@ -72,6 +72,15 @@ test('delegated Claude tasks cannot enter a plan approval workflow', () => {
   assert.equal(driver.args[flag + 1], 'EnterPlanMode,ExitPlanMode');
 });
 
+test('Helm-managed Claude threads deny both native agent tool names on start and resume', () => {
+  for (const engineSessionId of [undefined, 'abc']) {
+    const { driver } = make('plain', { engineSessionId, helmDelegation: true, instructions: 'Use Helm' });
+    assert.equal(driver.args[driver.args.indexOf('--disallowedTools') + 1], 'EnterPlanMode,ExitPlanMode,Agent,Task');
+    assert.equal(driver.args[driver.args.indexOf('--append-system-prompt') + 1], 'Use Helm');
+    if (engineSessionId) assert.ok(driver.args.includes('--resume=abc'));
+  }
+});
+
 test('reattaching Claude restores its active text block and completes the original turn', async () => {
   let receive;
   const pipe = { onData: (cb) => { receive = cb; }, onExit: () => {}, detach: () => {} };
