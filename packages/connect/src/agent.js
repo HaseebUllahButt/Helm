@@ -823,7 +823,7 @@ export class Daemon {
   }
 
   attachHub(hub) {
-    this.mesh = new HubMesh(loadNetwork, hub.meshChanged, hub.meshEvent);
+    this.mesh = new HubMesh(loadNetwork, hub.meshChanged, hub.meshEvent, hub.meshSignal);
     hub.attachMesh(this.mesh);
   }
 

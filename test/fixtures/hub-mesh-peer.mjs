@@ -1,11 +1,16 @@
 import WebSocket from 'ws';
 import { saveNetwork, loadNetwork, machineToken, revoke } from '@helm/protocol/network';
 import { startRelay } from '@helm/relay';
+import { PeerHub } from '../../packages/connect/src/peer.js';
 
 let hub;
 let target;
 let base;
 let bridgeId;
+const peers = new PeerHub(
+  (peer, payload) => target.send(JSON.stringify({ t: 'signal', peer, payload })),
+  async (method, params, sub) => ({ method, params, sub, via: 'direct' }),
+);
 
 async function connectTarget() {
   target = new WebSocket(base.replace('http:', 'ws:') + '/ws?role=self&info=%7B%22version%22%3A%22mesh-test%22%7D', {
@@ -13,6 +18,10 @@ async function connectTarget() {
   });
   target.on('message', raw => {
     const frame = JSON.parse(raw);
+    if (frame.t === 'signal') {
+      peers.signal(frame.peer, frame.payload, null, frame.device).catch(error => process.send({ error: error.stack }));
+      return;
+    }
     if (frame.t !== 'rpc') return;
     process.send({ call: frame });
     if (frame.method === 'hang') return;
@@ -45,6 +54,7 @@ process.on('message', async message => {
     else if (message.command === 'dropTarget') target.terminate();
     else if (message.command === 'connectTarget') await connectTarget();
     else if (message.command === 'revoke') revoke(loadNetwork(), message.id);
+    else if (message.command === 'inspect') process.send({ inspection: { peers: hub.online.get(bridgeId)?.hubPeers?.size ?? 0 } });
     if (message.command !== 'start') process.send({ acknowledged: message.command });
   } catch (error) {
     process.send({ error: error.stack });

@@ -88,3 +88,27 @@ test('mesh timeouts release waiters and ignore late replies', async () => {
     mesh.stop();
   }
 });
+
+test('mesh forwards direct negotiation only along its chosen route and releases browser state', () => {
+  const { mesh, link, advertise } = fixture();
+  const signals = [];
+  mesh.signalEvent = frame => signals.push(frame);
+  advertise();
+  mesh.signal('remote', 'browser', { type: 'offer' }, 'phone');
+  assert.deepEqual(link.sent.at(-1), {
+    t: T.HUB_SIGNAL, env: 'remote', peer: 'browser', payload: { type: 'offer' }, device: 'phone',
+  });
+  const other = { connected: true, send() {} };
+  mesh.up(other);
+  const answer = { t: T.HUB_SIGNAL, kind: T.SIGNAL, env: 'remote', peer: 'browser', payload: { type: 'answer' } };
+  mesh.receive(other, answer);
+  assert.equal(signals.length, 0);
+  mesh.receive(link, answer);
+  assert.equal(signals.length, 1);
+  mesh.forgetPeer('browser');
+  assert.equal(mesh.signals.size, 0);
+  assert.deepEqual(link.sent.at(-1), { t: T.HUB_SIGNAL_CLOSE, peer: 'browser' });
+  mesh.receive(link, answer);
+  assert.equal(signals.length, 1);
+  mesh.stop();
+});

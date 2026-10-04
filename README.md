@@ -182,8 +182,11 @@ and subscribed events follow that route without making the browser open a new
 connection to the public hub. Forwarding is one hop to a directly attached
 machine, preserves the original caller, and never replays an uncertain action.
 Disconnected links withdraw their routes; reconnecting restores routes and
-subscriptions automatically. Older hubs continue to work through direct
-attachments until updated.
+subscriptions automatically. WebRTC introductions also cross this route, so
+peers can still establish fast direct connections on the same Wi-Fi instead
+of carrying terminal traffic through the public hub. Hub WebSockets compress
+larger messages without shared compression history to reduce slow-link traffic.
+Older hubs continue to work through direct attachments until updated.
 
 While open, the browser also rechecks reachability every fifteen seconds and
 moves to a hub that can reach more machines. A local hub saying a machine is

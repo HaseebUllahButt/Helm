@@ -14,6 +14,9 @@ const N = await import('@helm/protocol/network');
 const { startRelay } = await import('@helm/relay');
 const { Link } = await import('../packages/connect/src/agent.js');
 const { HubMesh } = await import('../packages/connect/src/hub-mesh.js');
+const { directRpc } = await import('../packages/connect/src/direct-rpc.js');
+const { cleanup } = await import('node-datachannel');
+test.after(() => cleanup());
 
 async function until(check) {
   const deadline = Date.now() + 8000;
@@ -59,7 +62,7 @@ test('local-only clients reach remote machines over the existing outbound daemon
     assert.equal(messages.find(message => message.error)?.error, undefined, stderr);
     return messages.find(message => message.ready)?.ready;
   });
-  const mesh = new HubMesh(N.loadNetwork, hub.meshChanged, hub.meshEvent);
+  const mesh = new HubMesh(N.loadNetwork, hub.meshChanged, hub.meshEvent, hub.meshSignal);
   hub.attachMesh(mesh);
   const daemon = {
     net: network, port: hub.server.address().port, name: 'local',
@@ -78,6 +81,25 @@ test('local-only clients reach remote machines over the existing outbound daemon
   client = new WebSocket(base.replace('http:', 'ws:') + '/ws?role=client', { headers });
   client.on('message', raw => frames.push(JSON.parse(raw)));
   await until(() => frames.some(frame => frame.t === 'welcome'));
+  assert.match(client.extensions, /permessage-deflate/);
+  let direct;
+  client.on('message', raw => {
+    const frame = JSON.parse(raw);
+    if (frame.t === 'signal' && frame.env === remote) void direct?.receive(frame.payload);
+  });
+  async function useDirect() {
+    direct = directRpc({
+      signal: payload => client.send(JSON.stringify({ t: 'signal', env: remote, payload })),
+      frame: { t: 'rpc', id: 'lan-direct', method: 'direct.lan', params: { data: 'local Wi-Fi' } },
+      connectTimeout: 8000, timeout: 10000,
+    });
+    return direct.result;
+  }
+  context.after(() => direct.close());
+  assert.deepEqual(await useDirect(), {
+    method: 'direct.lan', params: { data: 'local Wi-Fi' }, sub: phone.id, via: 'direct',
+  });
+  assert.equal(messages.some(message => message.call?.method === 'direct.lan'), false);
   let sequence = 0;
   async function rpc(method, params = {}) {
     const id = `request-${++sequence}`;
@@ -115,6 +137,7 @@ test('local-only clients reach remote machines over the existing outbound daemon
   await until(() => frames.some(frame => frame.t === 'presence' && frame.env === remote && frame.online === false));
   await until(() => mesh.machines().has(remote));
   assert.equal((await rpc('session.list')).result.sessions.length, 120);
+  assert.equal((await useDirect()).via, 'direct');
   assert.equal(messages.filter(message => message.call?.method === 'hang').length, 1);
   await rpc('session.watch', { id: 'after-reconnect' });
   await until(() => frames.find(frame => frame.t === 'event' && frame.payload.id === 'after-reconnect'));
@@ -130,4 +153,10 @@ test('local-only clients reach remote machines over the existing outbound daemon
   assert.equal(denied.ok, false);
   assert.equal(denied.error.code, 'forbidden');
   assert.equal(messages.some(message => message.call?.method === 'session.input'), false);
+  client.close();
+  await until(() => mesh.signals.size === 0);
+  await delay(50);
+  child.send({ command: 'inspect' });
+  const inspection = await until(() => messages.find(message => message.inspection));
+  assert.equal(inspection.inspection.peers, 0);
 });

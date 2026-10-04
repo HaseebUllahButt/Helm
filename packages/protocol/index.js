@@ -25,6 +25,8 @@ export const T = {
   HUB_STATE: 'hubState',
   HUB_RPC: 'hubRpc',
   HUB_EVENT: 'hubEvent',
+  HUB_SIGNAL: 'hubSignal',
+  HUB_SIGNAL_CLOSE: 'hubSignalClose',
 
   // daemon -> relay -> subscribed clients
   EVENT: 'event',           // { env, kind, payload }

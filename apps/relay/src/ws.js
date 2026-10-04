@@ -119,6 +119,11 @@ export function createWsLayer() {
     meshChanged();
   }
 
+  function meshSignal(frame) {
+    const target = signalPeers.get(frame.peer);
+    if (target) send(target, frame.kind, { env: frame.env, payload: frame.payload });
+  }
+
   /**
    * The report a machine would have sent, folded from the rollup it last
    * pushed. The buckets keep date, model, engine, account and folder per row,
@@ -302,6 +307,41 @@ export function createWsLayer() {
     const envId = sock.envId;
 
     switch (msg.t) {
+      case T.HUB_SIGNAL: {
+        const net = loadNetwork();
+        const target = online.get(msg.env);
+        if (!target || !net || net.revoked?.[msg.env] || net.revoked?.[msg.device]
+            || !(Object.hasOwn(net.devices ?? {}, msg.device) || Object.hasOwn(net.machines, msg.device))
+            || typeof msg.peer !== 'string' || msg.peer.length > 128) return;
+        sock.hubPeers ??= new Map();
+        let proxy = sock.hubPeers.get(msg.peer);
+        if (proxy && proxy.sub !== msg.device) return;
+        if (!proxy) {
+          if (sock.hubPeers.size >= 1024) return;
+          proxy = {
+            sub: msg.device, peerId: newId(8),
+            get readyState() { return sock.readyState; },
+            send(raw) {
+              const frame = JSON.parse(raw);
+              send(sock, T.HUB_SIGNAL, {
+                peer: msg.peer, env: frame.env, kind: frame.t, payload: frame.payload,
+              });
+            },
+          };
+          sock.hubPeers.set(msg.peer, proxy);
+          signalPeers.set(proxy.peerId, proxy);
+        }
+        send(target, T.SIGNAL, { peer: proxy.peerId, payload: msg.payload, device: msg.device });
+        return;
+      }
+
+      case T.HUB_SIGNAL_CLOSE: {
+        const proxy = sock.hubPeers?.get(msg.peer);
+        if (proxy) signalPeers.delete(proxy.peerId);
+        sock.hubPeers?.delete(msg.peer);
+        return;
+      }
+
       case T.HUB_WATCH: {
         const net = loadNetwork();
         if (!net || net.revoked?.[envId]) return;
@@ -559,7 +599,7 @@ export function createWsLayer() {
 
       case T.SIGNAL: {
         const target = online.get(msg.env);
-        if (!target) return;
+        if (!target && !mesh?.machines().has(msg.env)) return;
         // Give the daemon a handle it can answer on; the client never needs
         // to know anything about the relay's internal bookkeeping.
         let peer = sock.peerId;
@@ -568,6 +608,7 @@ export function createWsLayer() {
           sock.peerId = peer;
           signalPeers.set(peer, sock);
         }
+        if (!target) return mesh.signal(msg.env, peer, msg.payload, sock.sub);
         // Who is asking travels with the introduction, so the daemon can drop
         // the resulting direct connection if this device is later revoked.
         send(target, T.SIGNAL, { peer, payload: msg.payload, device: sock.sub });
@@ -657,6 +698,12 @@ export function createWsLayer() {
 
   const wss = new WebSocketServer({
     noServer: true,
+    perMessageDeflate: {
+      serverNoContextTakeover: true,
+      clientNoContextTakeover: true,
+      concurrencyLimit: 4,
+      threshold: 1024,
+    },
     // The web app offers ("helm", <token>): answer "helm" so the browser
     // accepts the handshake, without ever echoing the token back.
     handleProtocols: (protocols) => (protocols.has('helm') ? 'helm' : false),
@@ -733,6 +780,7 @@ export function createWsLayer() {
 
     sock.on('close', () => {
       dropTunnelsFor(sock);
+      for (const proxy of sock.hubPeers?.values() ?? []) signalPeers.delete(proxy.peerId);
       for (const [id, route] of pending) {
         if (route.socket === sock) pending.delete(id);
         else if (route.target === sock) {
@@ -757,7 +805,10 @@ export function createWsLayer() {
         // has just been removed: its socket closing is the kick, and writing
         // a row for it would leave a trace of someone the owner cut.
         if (sock.sub && !loadNetwork()?.revoked?.[sock.sub]) markSeen(sock.sub);
-        if (sock.peerId) signalPeers.delete(sock.peerId);
+        if (sock.peerId) {
+          signalPeers.delete(sock.peerId);
+          mesh?.forgetPeer?.(sock.peerId);
+        }
       }
     });
   });
@@ -951,5 +1002,5 @@ export function createWsLayer() {
     });
   }
 
-  return { wss, online, reachable, attachMesh, meshChanged, meshEvent, connectedDevices, broadcastPeers, kick, routeTunnel, callEnv, openTcp, stop };
+  return { wss, online, reachable, attachMesh, meshChanged, meshEvent, meshSignal, connectedDevices, broadcastPeers, kick, routeTunnel, callEnv, openTcp, stop };
 }

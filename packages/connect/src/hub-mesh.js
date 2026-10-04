@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { T } from '@helm/protocol';
 
 export class HubMesh {
-  constructor(network, changed, event) {
+  constructor(network, changed, event, signalEvent) {
     this.network = network;
     this.changed = changed;
     this.event = event;
+    this.signalEvent = signalEvent;
+    this.signals = new Map();
     this.links = new Map();
     this.pending = new Map();
     this.subscriptions = [];
@@ -18,6 +20,9 @@ export class HubMesh {
 
   down(link) {
     this.links.delete(link);
+    for (const [key, route] of this.signals) {
+      if (route.link === link) this.signals.delete(key);
+    }
     for (const [id, request] of this.pending) {
       if (request.link !== link) continue;
       this.pending.delete(id);
@@ -46,6 +51,12 @@ export class HubMesh {
 
   receive(link, frame) {
     if (!this.links.has(link)) return false;
+    if (frame.t === T.HUB_SIGNAL) {
+      const route = this.signals.get(`${frame.peer}:${frame.env}`);
+      if (route?.link === link && this.machines().has(frame.env)
+          && [T.SIGNAL, T.SIGNAL_READY].includes(frame.kind)) this.signalEvent?.(frame);
+      return true;
+    }
     if (frame.t === T.HUB_STATE && Array.isArray(frame.machines)) {
       this.links.set(link, new Map(frame.machines.filter(machine => typeof machine?.id === 'string').map(machine => [machine.id, machine])));
       this.changed();
@@ -81,6 +92,29 @@ export class HubMesh {
       this.pending.set(id, { link, resolve, reject, timer });
       link.send(T.HUB_RPC, { id, env, method, params, sub: sub ?? network.self });
     });
+  }
+
+  signal(env, peer, payload, device) {
+    if (!this.machines().has(env)) return;
+    const key = `${peer}:${env}`;
+    let route = this.signals.get(key);
+    if (!route || payload?.type === 'offer') {
+      const link = [...this.links].find(([candidate, machines]) => candidate.connected && machines.has(env))?.[0];
+      if (!link) return;
+      route = { link, peer, env };
+      this.signals.set(key, route);
+    }
+    route.link.send(T.HUB_SIGNAL, { env, peer, payload, device });
+  }
+
+  forgetPeer(peer) {
+    const links = new Set();
+    for (const [key, route] of this.signals) {
+      if (route.peer !== peer) continue;
+      links.add(route.link);
+      this.signals.delete(key);
+    }
+    for (const link of links) link.send(T.HUB_SIGNAL_CLOSE, { peer });
   }
 
   stop() {
