@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
+import { readFileSync } from 'node:fs';
 test('task return review preserves local choices and offers the original conversation', async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
@@ -33,15 +34,16 @@ test('task return review preserves local choices and offers the original convers
   } finally {await browser.close();}
 });
 
-test('managed agent conversation exposes Send task in its menu', async () => {
+test('conversation header exposes Send task and keeps notifications in the menu on desktop and mobile', async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
     import { DrivenSession } from './apps/web/src/session/DrivenSession';
-    const session = {id:'thread',title:'Build feature',cwd:'/project',engine:'codex',profileId:'codex',status:'idle',driver:true};
+    const session = {id:'thread',title:'Build feature',cwd:'/project',engine:'codex',profileId:'codex',status:'idle',driver:true,notifyDone:true};
     const client = {
       on:()=>()=>{}, subscribe:()=>{},
-      rpc:async(_env,method)=>{
+      rpc:async(_env,method,params)=>{
+        if(method==='session.notify') {window.notificationRequest=params; return {session:{...session,notifyDone:params.on}};}
         if(method==='model.list') return {models:[],modes:[]};
         if(method==='session.events') return {session,events:[],pending:[],last:0};
         if(method==='session.list') return {sessions:[]};
@@ -57,11 +59,21 @@ test('managed agent conversation exposes Send task in its menu', async () => {
   try {
     const page = await browser.newPage();
     await page.route('http://helm-task-test/**', (route) => route.fulfill({contentType:'text/html',body:'<div id="root"></div>'}));
-    await page.goto('http://helm-task-test/');
-    await page.addScriptTag({content:bundle.outputFiles[0].text});
-    await page.getByRole('button',{name:'more',exact:true}).click();
-    await page.getByRole('button',{name:'Send task to another machine',exact:true}).click();
-    assert.equal(await page.evaluate(()=>window.sendTaskClicked),true);
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 850 });
+      await page.goto('http://helm-task-test/');
+      await page.addStyleTag({content:readFileSync('apps/web/src/styles.css','utf8')});
+      await page.addScriptTag({content:bundle.outputFiles[0].text});
+      await page.locator('.session-bar > button[aria-label="Send task to another machine"]').click();
+      assert.equal(await page.evaluate(()=>window.sendTaskClicked),true);
+      assert.equal(await page.getByRole('button',{name:/completion alerts|completion notifications/}).count(),0);
+      await page.getByRole('button',{name:'more',exact:true}).click();
+      assert.equal(await page.locator('.menu').getByRole('button',{name:'Send task to another machine',exact:true}).count(),0);
+      const notification = page.getByRole('button',{name:'Turn completion alerts off',exact:true});
+      assert.equal(await notification.getAttribute('aria-pressed'),'true');
+      await notification.click();
+      assert.deepEqual(await page.evaluate(()=>window.notificationRequest),{id:'thread',on:false});
+    }
   } finally {await browser.close();}
 });
 

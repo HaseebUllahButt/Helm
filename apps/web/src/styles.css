@@ -1525,10 +1525,6 @@ button.withdraw:hover { color: var(--text); }
 button.sheet-editlink { align-self: flex-start; color: var(--primary-q); font-size: var(--t-meta); font-weight: 500; padding: 2px 0; }
 button.sheet-editlink:hover { color: var(--text); }
 
-/* The notify-when-done bell: dim until armed, then the hub's indigo - it is
-   a setting that is on, not something waiting on you. */
-.iconbtn.bell.on { color: var(--primary-q); }
-
 /* The nas player: as wide as the measure, nothing else dressed up. */
 .player video { width: 100%; border-radius: var(--radius); background: #000; display: block; }
 .player audio { width: 100%; }

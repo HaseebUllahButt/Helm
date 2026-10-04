@@ -295,7 +295,8 @@ helm send <machine> [folder] --grant <token>
 `helm digest` keeps the last answer from every machine, so one that is asleep
 is listed with when it was last seen rather than left out.
 
-**Send task** is available in a managed conversation's menu. It pauses the
+**Send task** is available in a managed conversation's header. Completion
+notification settings live in its **⋯** menu. Sending pauses the
 source agent, copies the project and recent conversation, and starts a
 continuation using an agent account on the destination. In **Send a project**,
 enable **Send a task with this project** to start a new task instead.

@@ -488,22 +488,12 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             {changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}
           </button>
         )}
-        {/* Completion notifications are on for new threads. The daemon holds
-            the preference, so it is the same on every device and survives
-            this one closing. */}
-        <button
-          className={`iconbtn bell wide-only${session.notifyDone ? ' on' : ''}`}
-          title={session.notifyDone ? 'completion notifications on — tap to turn off' : 'completion notifications off — tap to turn on'}
-          aria-label={session.notifyDone ? 'turn completion notifications off' : 'turn completion notifications on'}
-          aria-pressed={!!session.notifyDone}
-          onClick={toggleNotify}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M18 8a6 6 0 10-12 0c0 7-3 8-3 8h18s-3-1-3-8" />
-            <path d="M13.7 20a2 2 0 01-3.4 0" />
-          </svg>
-        </button>
+        {!session.external && !session.brain && onSendTask && (
+          <button className="iconbtn" title="Send task to another machine" aria-label="Send task to another machine"
+            disabled={!env.online || busy} onClick={onSendTask}>
+            <Icon name="transfer" size={17} />
+          </button>
+        )}
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -519,19 +509,16 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} />{changed > 0 && !session.brain && <i className="moredot git-mobile-only" aria-hidden="true" />}</button>
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
-            {/* On a phone the header keeps the title, the state and Subagents;
-                these two ride in here instead of squeezing the title. */}
             {git.status?.repo && !session.brain && (
               <button className="git-mobile-only" onClick={() => setShowChanges(true)}>
                 Git graph and changes{changed > 0 ? ` · ${changed > 99 ? '99+' : changed}` : ''}
               </button>
             )}
-            <button className="narrow-only" aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
+            <button aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
               {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
             </button>
             {!session.brain && <button onClick={() => { setMenu(null); void saveAsDefaults(); }}>Use these settings for new chats</button>}
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
-            {!session.external && !session.brain && onSendTask && <button disabled={!env.online || busy} onClick={onSendTask}>Send task to another machine</button>}
             {session.delegation?.parentId && onOpenSession && <button onClick={openParent}>Open parent thread</button>}
             {wakeable && (
               <button aria-pressed={keepAwake} onClick={() => setKeepAwake((v) => !v)}>
