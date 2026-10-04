@@ -472,11 +472,11 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           </span>
         </div>
         {chip(status)}
-        <button className="iconbtn subagents-launch wide-only" aria-label="Subagents" title="Delegate to another CLI or model"
+        <button className="iconbtn subagents-launch" aria-label="Subagents" title="Delegate to another CLI or model"
           onClick={() => setShowSubagents(true)}><Icon name="subagents" size={17} />{(session.delegations?.length ?? 0) > 0 && <b className="cbadge">{session.delegations!.length}</b>}</button>
         {git.status?.repo && !session.brain && (
           <button
-            className={`iconbtn changesbtn${changed ? ' has' : ''}`}
+            className={`iconbtn changesbtn wide-only${changed ? ' has' : ''}`}
             title={changed ? `Git · ${changed} changed file${changed === 1 ? '' : 's'}` : 'Git graph and agents'}
             aria-label="Git graph and changes"
             onClick={() => setShowChanges(true)}
@@ -513,14 +513,16 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             </svg>
           </button>
         )}
-        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} />{(session.delegations?.length ?? 0) > 0 && <i className="moredot narrow-only" aria-hidden="true" />}</button>
+        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} />{changed > 0 && !session.brain && <i className="moredot narrow-only" aria-hidden="true" />}</button>
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
-            {/* On a phone the header keeps the title, the state and Git;
+            {/* On a phone the header keeps the title, the state and Subagents;
                 these two ride in here instead of squeezing the title. */}
-            <button className="narrow-only" onClick={() => setShowSubagents(true)}>
-              Subagents{(session.delegations?.length ?? 0) > 0 ? ` · ${session.delegations!.length}` : ''}
-            </button>
+            {git.status?.repo && !session.brain && (
+              <button className="narrow-only" onClick={() => setShowChanges(true)}>
+                Git graph and changes{changed > 0 ? ` · ${changed > 99 ? '99+' : changed}` : ''}
+              </button>
+            )}
             <button className="narrow-only" aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
               {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
             </button>

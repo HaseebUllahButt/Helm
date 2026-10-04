@@ -49,13 +49,17 @@ const splitPath = (p: string) => {
   return i < 0 ? { dir: '', name: p } : { dir: p.slice(0, i + 1), name: p.slice(i + 1) };
 };
 
+const STATUS_NAME: Record<GitFile['status'], string> = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', '?': 'Untracked' };
+const TABS = ['graph', 'changes'] as const;
+type Tab = typeof TABS[number];
+
 export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen }: {
   client: Client; env: Environment; cwd: string; status: GitStatus; reload: () => void; onClose: () => void;
   onOpen?: (s: Session) => void;
 }) {
   // The badge that opened this counted changed files, so that is where it
   // lands; with nothing changed the graph is the news. Either is one tab away.
-  const [tab, setTab] = useState<'graph' | 'changes'>(() => ((status.files?.length ?? 0) + (status.more ?? 0) > 0 ? 'changes' : 'graph'));
+  const [tab, setTab] = useState<Tab>(() => ((status.files?.length ?? 0) + (status.more ?? 0) > 0 ? 'changes' : 'graph'));
   const [refresh, setRefresh] = useState(0);
   const files = status.files ?? [];
   const key = viewedKey(env.id, status.root ?? cwd);
@@ -79,20 +83,32 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
     try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* full */ }
   };
 
+  const fetchDiff = (path: string) => {
+    setDiffs((current) => ({ ...current, [path]: 'loading' }));
+    client.rpc<{ diff: string; truncated: boolean }>(env.id, 'git.diff', { cwd, path }, 20_000)
+      .then((result) => setDiffs((current) => ({ ...current, [path]: { text: hunksOnly(result.diff), truncated: result.truncated } })))
+      .catch(() => setDiffs((current) => ({ ...current, [path]: 'failed' })));
+  };
+
   const expand = (f: GitFile) => {
     const path = f.path;
     setOpen((o) => (o === path ? null : path));
     const cached = diffs[path];
     if (cached && cached !== 'failed') return;
-    setDiffs((d) => ({ ...d, [path]: 'loading' }));
-    client.rpc<{ diff: string; truncated: boolean }>(env.id, 'git.diff', { cwd, path }, 20_000)
-      .then((r) => setDiffs((d) => ({ ...d, [path]: { text: hunksOnly(r.diff), truncated: r.truncated } })))
-      .catch(() => setDiffs((d) => ({ ...d, [path]: 'failed' })));
+    fetchDiff(path);
   };
 
   const add = files.reduce((n, f) => n + f.add, 0);
   const del = files.reduce((n, f) => n + f.del, 0);
   const seen = files.filter(isViewed).length;
+  const total = files.length + (status.more ?? 0);
+  const prState = pr ? (pr.draft ? 'draft' : pr.state.toLowerCase()) : '';
+  const sync = [status.ahead ? `${status.ahead} ahead` : '', status.behind ? `${status.behind} behind` : ''].filter(Boolean).join(', ');
+
+  const pick = (next: Tab, focus = false) => {
+    setTab(next);
+    if (focus) document.getElementById(`git-${next}-tab`)?.focus();
+  };
 
   return (
     <div className="changes">
@@ -100,58 +116,78 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
         <button className="iconbtn back" aria-label="Back to the conversation" onClick={onClose}><BackIcon /></button>
         <div className="titles">
           <h1>Git</h1>
-          <span className="sub">
-            <Route machine={env.name} folder={cwd} />
-            <span className="sep"> · </span>{status.branch ?? 'detached'}
-            {status.worktree ? ' · worktree' : ''}
-            {status.ahead ? ` · ↑${status.ahead}` : ''}{status.behind ? ` · ↓${status.behind}` : ''}
-          </span>
+          <span className="sub"><Route machine={env.name} folder={cwd} /></span>
         </div>
         <button className="iconbtn" title="Refresh Git" aria-label="Refresh Git" onClick={() => { reload(); setRefresh((n) => n + 1); }}><Icon name="refresh" size={17} /></button>
       </div>
-      <div className="git-tabs" role="tablist" aria-label="Git views" onKeyDown={(e) => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
-        e.preventDefault();
-        const next = e.key === 'Home' ? 'graph' : e.key === 'End' ? 'changes' : tab === 'graph' ? 'changes' : 'graph';
-        setTab(next); document.getElementById(`git-${next}-tab`)?.focus();
-      }}>
-        <button id="git-graph-tab" role="tab" tabIndex={tab === 'graph' ? 0 : -1} aria-selected={tab === 'graph'} aria-controls="git-graph-panel" onClick={() => setTab('graph')}>Graph</button>
-        <button id="git-changes-tab" role="tab" tabIndex={tab === 'changes' ? 0 : -1} aria-selected={tab === 'changes'} aria-controls="git-changes-panel" onClick={() => setTab('changes')}>Changes <span>{files.length + (status.more ?? 0)}</span></button>
-      </div>
+      <div className="git-head"><div className="git-toolbar">
+        <div className="git-context">
+          <span className="git-branch" title={status.branch ? `On ${status.branch}${status.upstream ? `, tracking ${status.upstream}` : ''}` : 'Detached HEAD'}>
+            <Icon name="branch" size={14} />
+            <b>{status.branch ?? 'detached'}</b>
+          </span>
+          {sync && (
+            <span className="git-sync" title={`${sync}${status.upstream ? ` of ${status.upstream}` : ''}`} aria-label={sync}>
+              {!!status.ahead && <span>↑{status.ahead}</span>}
+              {!!status.behind && <span>↓{status.behind}</span>}
+            </span>
+          )}
+          {status.worktree && <span className="git-wt">worktree</span>}
+          {pr && (
+            <a className="git-pr" href={pr.url} target="_blank" rel="noreferrer" title={`#${pr.number} ${pr.title}`}
+              aria-label={`Pull request #${pr.number}, ${prState}: ${pr.title}`}>
+              <span className={`pr-state ${prState}`}>{prState}</span>
+              <span className="git-pr-title"><b>#{pr.number}</b> {pr.title}</span>
+              <Icon name="forward" size={13} />
+            </a>
+          )}
+        </div>
+        <div className="git-tabs" role="tablist" aria-label="Git views" onKeyDown={(event) => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault();
+          pick(event.key === 'Home' ? 'graph' : event.key === 'End' ? 'changes' : tab === 'graph' ? 'changes' : 'graph', true);
+        }}>
+          {TABS.map((name) => (
+            <button key={name} id={`git-${name}-tab`} role="tab" tabIndex={tab === name ? 0 : -1} aria-selected={tab === name}
+              aria-controls={`git-${name}-panel`} onClick={() => pick(name)}>
+              {name === 'graph' ? 'Graph' : 'Changes'}
+              {name === 'changes' && total > 0 && <>{' '}<span className="git-count">{total}</span></>}
+            </button>
+          ))}
+        </div>
+      </div></div>
       <div className="scroll"><div className="pad column">
         {tab === 'graph' ? <div id="git-graph-panel" role="tabpanel" aria-labelledby="git-graph-tab">
           <GitGraph client={client} env={env} cwd={cwd} refreshKey={`${status.head?.commit}:${refresh}`} onOpen={onOpen} />
         </div> : <div id="git-changes-panel" role="tabpanel" aria-labelledby="git-changes-tab">
-        {pr && (
-          <a className="pr" href={pr.url} target="_blank" rel="noreferrer">
-            <span className={`pr-state ${pr.draft ? 'draft' : pr.state.toLowerCase()}`}>{pr.draft ? 'draft' : pr.state.toLowerCase()}</span>
-            <span className="grow"><b>#{pr.number}</b> {pr.title}</span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </a>
-        )}
-
         {files.length === 0 ? (
-          <div className="empty quiet">
-            Nothing changed since the last commit
-            {status.head && <div className="note mono">{status.head.commit} · {status.head.subject}</div>}
+          <div className="git-empty">
+            <span className="git-empty-icon ok"><Icon name="check" size={18} /></span>
+            <b>Working tree clean</b>
+            <span>Nothing changed since the last commit.</span>
+            {status.head && <code title={status.head.subject}>{status.head.commit} · {status.head.subject}</code>}
           </div>
         ) : (
           <>
             <div className="changes-sum">
-              {files.length} file{files.length === 1 ? '' : 's'}
-              <span className="add">+{add}</span><span className="del">−{del}</span>
+              <span className="changes-count">{files.length} changed file{files.length === 1 ? '' : 's'}</span>
+              <span className="gcount"><i className="add">+{add}</i> <i className="del">−{del}</i></span>
               <span className="grow" />
-              <span className="quiet">{seen}/{files.length} viewed</span>
+              <span className="changes-seen" aria-label={`${seen} of ${files.length} viewed`}>
+                <span className="changes-meter" aria-hidden="true"><i style={{ width: `${(seen / files.length) * 100}%` }} /></span>
+                {seen}/{files.length} viewed
+              </span>
             </div>
-            <div className="rows plain">
+            <div className="rows plain changes-files">
               {files.map((f) => {
                 const { dir, name } = splitPath(f.path);
                 const d = diffs[f.path];
+                const shown = open === f.path;
                 return (
-                  <div key={f.path} className={`fileRow${isViewed(f) ? ' viewed' : ''}`}>
+                  <div key={f.path} className={`fileRow${isViewed(f) ? ' viewed' : ''}${shown ? ' open' : ''}`}>
                     <div className="row tall">
-                      <button className="rowmain filemain" onClick={() => expand(f)} aria-expanded={open === f.path}>
-                        <span className={`gst s${f.status === '?' ? 'u' : f.status}`}>{f.status === '?' ? 'U' : f.status}</span>
+                      <button className="rowmain filemain" onClick={() => expand(f)} aria-expanded={shown} title={f.path}>
+                        <span className={`gst s${f.status === '?' ? 'u' : f.status}`} title={STATUS_NAME[f.status]}>{f.status === '?' ? 'U' : f.status}</span>
                         <span className="grow">
                           <span className="rt"><span className="rt-text">{name}</span></span>
                           <span className="rm">{dir || './'}</span>
@@ -160,16 +196,19 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
                       </button>
                       <button
                         className={`viewedbox${isViewed(f) ? ' on' : ''}`} onClick={() => toggleViewed(f)}
-                        aria-pressed={isViewed(f)} aria-label={`mark ${f.path} as viewed`} title="viewed"
-                      >{isViewed(f) && <Icon name="check" size={15} />}</button>
+                        aria-pressed={isViewed(f)} aria-label={`mark ${f.path} as viewed`} title={isViewed(f) ? 'Viewed' : 'Mark as viewed'}
+                      ><span>{isViewed(f) && <Icon name="check" size={13} />}</span></button>
                     </div>
-                    {open === f.path && (
+                    {shown && (
                       <div className="filediff">
-                        {d === 'loading' || !d ? <div className="empty quiet">reading…</div>
-                          : d === 'failed' ? <div className="empty quiet">could not read this diff</div>
+                        {d === 'loading' || !d ? <div className="git-state" role="status">Reading the diff…</div>
+                          : d === 'failed' ? <div className="git-state bad" role="status">
+                              Could not read this diff.
+                              <button className="linkish" onClick={() => fetchDiff(f.path)}>Try again</button>
+                            </div>
                           : <>
                               <Diff text={d.text || '(no textual changes)'} />
-                              {d.truncated && <div className="note">the rest is too long to show here</div>}
+                              {d.truncated && <div className="git-state">The rest is too long to show here.</div>}
                             </>}
                       </div>
                     )}
@@ -177,7 +216,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
                 );
               })}
             </div>
-            {!!status.more && <div className="note">and {status.more} more files</div>}
+            {!!status.more && <div className="note git-tail">And {status.more} more files</div>}
           </>
         )}
         </div>}

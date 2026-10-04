@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Client, Environment, Session } from '../client';
 import { EngineMark } from '../EngineMark';
-import { Icon } from '../Icon';
+import { Icon, type IconName } from '../Icon';
 import { agentLabel } from '@helm/protocol/notifications';
 import { Diff } from './Transcript';
 
@@ -31,6 +31,7 @@ const ROW = 44;
 const MID = ROW / 2;
 const GAP = 14;
 const lx = (n: number) => 9 + n * GAP;
+const MAX_REFS = 2;
 
 export interface GraphEdge { from: number; to: number; colour: number; pass: boolean }
 export interface GraphRow {
@@ -181,6 +182,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen }: {
   const [details, setDetails] = useState<Record<string, CommitDetail | 'loading' | { error: string }>>({});
   const [fileDiff, setFileDiff] = useState<{ hash: string; path: string; diff: string | null; truncated?: boolean; error?: string } | null>(null);
   const [copied, setCopied] = useState('');
+  const [attempt, setAttempt] = useState(0);
   const list = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -205,13 +207,13 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen }: {
       }
     });
     return () => { stale = true; clearInterval(timer); clearTimeout(debounce); off(); };
-  }, [client, env.id, env.online, cwd, refreshKey]);
+  }, [client, env.id, env.online, cwd, refreshKey, attempt]);
 
   const rows = useMemo(() => graphRows(data?.commits ?? []), [data]);
   const lanes = Math.min(10, Math.max(1, ...rows.map((r) => Math.max(r.before.length, r.after.length))));
   const width = lx(lanes - 1) + 10;
   const current = data?.worktrees.find((w) => w.current);
-  const liveAgents = data?.worktrees.reduce((n, w) => n + w.agents.length, 0) ?? 0;
+  const working = data?.worktrees.filter((worktree) => worktree.agents.length) ?? [];
 
   const open = async (agent: GitAgent) => {
     if (!onOpen) return;
@@ -255,46 +257,73 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen }: {
     navigator.clipboard?.writeText(text).then(() => { setCopied(text); setTimeout(() => setCopied(''), 1200); }).catch(() => {});
   };
 
-  const agentChip = (agent: GitAgent) => (
-    <button key={agent.id} className={`git-agent ${agent.status}`}
-      disabled={!onOpen} onClick={(e) => { e.stopPropagation(); void open(agent); }}
-      title={[agent.title, agent.profileId, stateLabel(agent.status)].filter(Boolean).join(' · ')}
-      aria-label={`Open ${agent.title}, ${stateLabel(agent.status)}`}>
-      <EngineMark engine={agent.engine} />
-      <span className="git-agent-title"><span className="git-agent-name">{agentLabel(agent.engine)}</span> · {agent.title || 'Untitled chat'}</span>
-      <span className="git-agent-state"><i />{stateLabel(agent.status)}</span>
-    </button>
+  const agentRow = (agent: GitAgent) => {
+    const title = agent.title || 'Untitled chat';
+    return (
+      <button key={agent.id} className={`git-agent s-${agent.status}`}
+        disabled={!onOpen} onClick={(event) => { event.stopPropagation(); void open(agent); }}
+        title={[agentLabel(agent.engine), title, agent.profileId, stateLabel(agent.status)].filter(Boolean).join(' · ')}
+        aria-label={`Open ${title}, ${agentLabel(agent.engine)}, ${stateLabel(agent.status)}`}>
+        <EngineMark engine={agent.engine} />
+        <span className="git-agent-title">{title}</span>
+        <span className="git-agent-state"><i />{stateLabel(agent.status)}</span>
+        {onOpen && <span className="git-agent-go"><Icon name="forward" size={14} /></span>}
+      </button>
+    );
+  };
+
+  const refPill = (ref: Ref, colour: number) => (
+    <span key={ref.kind + ref.name} className={`git-ref ${ref.kind} lc-${colour}`} title={ref.synced ? `${ref.name}, same as the remote` : ref.name}>
+      {ref.kind === 'tag' ? <Icon name="tag" size={11} /> : ref.kind === 'remote' ? <Icon name="cloud" size={11} /> : null}
+      {ref.name}{ref.synced && <Icon name="cloud" size={11} />}
+    </span>
+  );
+
+  const empty = (icon: IconName, title: string, text: string, retry = false) => (
+    <div className={`git-empty${retry ? ' bad' : ''}`} role={retry ? 'alert' : undefined}>
+      <span className="git-empty-icon"><Icon name={icon} size={18} /></span>
+      <b>{title}</b>
+      <span>{text}</span>
+      {retry && <button className="ghost" onClick={() => { setError(''); setAttempt((count) => count + 1); }}>Try again</button>}
+    </div>
   );
 
   return (
     <div className="git-graph">
-      {!env.online && <div className="note">Connect this machine to see its Git history.</div>}
-      {error && <div className="error" role="status">{error}</div>}
-      {!data && !error && env.online && <div className="git-skeleton" aria-label="Loading Git history">{[0, 1, 2, 3, 4, 5].map((i) => <i key={i} />)}</div>}
-      {data && !data.repo && <div className="empty quiet">This folder is not a Git repository.</div>}
+      {!env.online && empty('machine', 'This machine is offline', 'Connect this machine to see its Git history.')}
+      {error && !data && empty('alert', 'Could not load Git history', error, true)}
+      {error && data && <div className="error" role="status">{error}</div>}
+      {!data && !error && env.online && (
+        <div className="git-skeleton" role="status" aria-label="Loading Git history">
+          {[0, 1, 2, 3, 4, 5].map((placeholder) => <span key={placeholder}><i /><b /></span>)}
+        </div>
+      )}
+      {data && !data.repo && empty('folder', 'Not a Git repository', 'This folder is not a Git repository.')}
       {data?.repo && <>
         {/* Where things are checked out, and who is working in each. */}
-        <div className="git-checkouts">
-          {data.worktrees.filter((w) => w.current || w.agents.length).map((w) => (
-            <div key={w.path} className={`git-checkout${w.current ? ' current' : ''}`}>
-              <div className="git-checkout-head">
-                <Icon name="branch" size={15} />
-                <b>{w.branch || (w.head ? `detached at ${w.head.slice(0, 7)}` : 'no commits yet')}</b>
-                {w.current && <span className="tag">this chat</span>}
-                <small title={w.path}>{folderName(w.path)}</small>
+        {working.length > 0 ? (
+          <section className="git-checkouts" aria-label="Where agents are working">
+            {working.map((worktree) => (
+              <div key={worktree.path} className={`git-checkout${worktree.current ? ' current' : ''}`}>
+                <div className="git-checkout-head">
+                  <Icon name="branch" size={14} />
+                  <b>{worktree.branch || (worktree.head ? `detached at ${worktree.head.slice(0, 7)}` : 'no commits yet')}</b>
+                  <small title={worktree.path}>{folderName(worktree.path)}</small>
+                  {worktree.current && <span className="git-here">This chat</span>}
+                </div>
+                <div className="git-agents">{worktree.agents.map(agentRow)}</div>
+                {worktree.agents.length > 1 && <div className="git-shared"><Icon name="alert" size={13} />{worktree.agents.length} agents share this folder, so their edits can collide.</div>}
               </div>
-              {w.agents.length > 0 && <div className="git-agents">{w.agents.map(agentChip)}</div>}
-              {w.agents.length > 1 && <div className="git-shared">{w.agents.length} agents share this folder, so their edits can collide.</div>}
-            </div>
-          ))}
-          {liveAgents === 0 && <div className="git-none">No agents are working in this repository right now.</div>}
-        </div>
+            ))}
+          </section>
+        ) : <div className="git-none">No agents are working in this repository right now.</div>}
 
-        {!rows.length && <div className="empty quiet">Your first commit will appear here.</div>}
+        {!rows.length && empty('git', 'No commits yet', 'Your first commit will appear here.')}
         {!!rows.length && <div className="git-history" ref={list} aria-label="Commit history, newest first">
           {rows.map((row) => {
             const { commit } = row;
             const refs = parseRefs(commit.refs, data.remotes);
+            const hidden = refs.slice(MAX_REFS);
             const agents = data.worktrees.filter((w) => w.head === commit.hash).flatMap((w) => w.agents);
             const isHead = current?.head === commit.hash;
             const expanded = openHash === commit.hash;
@@ -305,56 +334,53 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen }: {
                 <Lanes row={row} width={width} head={isHead} />
                 <span className="git-text">
                   <span className="git-subject">
-                    {refs.map((r) => (
-                      <span key={r.kind + r.name} className={`git-ref ${r.kind} lc-${row.colour}`} title={r.synced ? `${r.name}, same as the remote` : r.name}>
-                        {r.kind === 'tag' ? <Icon name="tag" size={11} /> : r.kind === 'remote' ? <Icon name="cloud" size={11} /> : null}
-                        {r.name}{r.synced && <Icon name="cloud" size={11} />}
-                      </span>
-                    ))}
+                    {refs.slice(0, MAX_REFS).map((ref) => refPill(ref, row.colour))}
+                    {hidden.length > 0 && <span className="git-ref more" title={hidden.map((ref) => ref.name).join(', ')}>+{hidden.length}</span>}
                     <span className="git-subject-text">{commit.subject}</span>
                   </span>
                   <span className="git-meta">
-                    <code>{commit.hash.slice(0, 7)}</code>
                     <span className="git-author">{commit.author}</span>
+                    <span aria-hidden="true">·</span>
                     <span>{shortAge(commit.date)}</span>
                   </span>
                 </span>
                 {agents.length > 0 && (
                   <span className="git-row-agents">
-                    {agents.slice(0, 3).map((a) => <span key={a.id} className={`git-mini ${a.status}`} title={`${agentLabel(a.engine)} · ${a.title} · ${stateLabel(a.status)}`}><EngineMark engine={a.engine} /><i /></span>)}
+                    {agents.slice(0, 3).map((agent) => <span key={agent.id} className={`git-mini s-${agent.status}`} title={`${agentLabel(agent.engine)} · ${agent.title} · ${stateLabel(agent.status)}`}><EngineMark engine={agent.engine} /><i /></span>)}
                     {agents.length > 3 && <span className="git-more">+{agents.length - 3}</span>}
                   </span>
                 )}
+                <code className="git-sha">{commit.hash.slice(0, 7)}</code>
               </button>
               {expanded && (
                 <div className="git-detail" style={{ paddingLeft: width + 8 }}>
                   <Through row={row} width={width} />
-                  {d === 'loading' || !d ? <div className="note">Reading the commit…</div>
-                    : 'error' in d ? <div className="note">{d.error}</div>
+                  {d === 'loading' || !d ? <div className="git-state" role="status">Reading the commit…</div>
+                    : 'error' in d ? <div className="git-state bad" role="status">{d.error}</div>
                     : <>
                       <div className="git-detail-subject">{d.subject}</div>
                       {d.body && <div className="git-detail-body">{d.body}</div>}
                       <div className="git-detail-meta">
-                        <button className="git-hash" onClick={() => copy(d.hash)} title="Copy the full hash">
-                          <code>{d.hash.slice(0, 12)}</code>{copied === d.hash ? <span>copied</span> : <Icon name="copy" size={12} />}
-                        </button>
                         <span>{d.author}</span>
                         <span>{new Date(d.date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
-                        {d.parents.length > 1 && <span>merge of {d.parents.map((p, i) => <button key={p} className="git-parent" onClick={() => jump(p)}>{i ? ' + ' : ''}{p.slice(0, 7)}</button>)}</span>}
+                        <button className="git-hash" onClick={() => copy(d.hash)} title="Copy the full hash" aria-label={`Copy commit hash ${d.hash}`}>
+                          <code>{d.hash.slice(0, 12)}</code>{copied === d.hash ? <span>copied</span> : <Icon name="copy" size={12} />}
+                        </button>
+                        {d.parents.length > 1 && <span className="git-merge">Merge of {d.parents.map((parent, index) => <span key={parent}>{index ? ' + ' : ''}<button className="git-parent" onClick={() => jump(parent)} aria-label={`Go to parent ${parent.slice(0, 7)}`}>{parent.slice(0, 7)}</button></span>)}</span>}
                       </div>
-                      {agents.length > 0 && <div className="git-agents">{agents.map(agentChip)}</div>}
+                      {hidden.length > 0 && <div className="git-detail-refs">{refs.map((ref) => refPill(ref, row.colour))}</div>}
+                      {agents.length > 0 && <div className="git-agents">{agents.map(agentRow)}</div>}
                       {d.files.length === 0
-                        ? <div className="note">No file changes.</div>
+                        ? <div className="git-state">No file changes.</div>
                         : <div className="git-files">
                           <div className="git-files-head">
                             {d.files.length} file{d.files.length === 1 ? '' : 's'}
-                            <span className="add">+{d.files.reduce((n, f) => n + f.add, 0)}</span>
-                            <span className="del">−{d.files.reduce((n, f) => n + f.del, 0)}</span>
+                            <span className="gcount"><i className="add">+{d.files.reduce((sum, file) => sum + file.add, 0)}</i> <i className="del">−{d.files.reduce((sum, file) => sum + file.del, 0)}</i></span>
                             {d.parents.length > 1 && <span className="quiet">against the first parent</span>}
                           </div>
                           {d.files.map((f) => {
                             const shown = fileDiff?.hash === d.hash && fileDiff.path === f.path;
-                            return <div key={f.path} className="git-file">
+                            return <div key={f.path} className={`git-file${shown ? ' open' : ''}`}>
                               <button className="git-file-row" onClick={() => showFile(d.hash, f.path)} aria-expanded={shown}>
                                 <span className="git-file-path" title={f.path}>
                                   <span className="dir">{f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : ''}</span>{f.path.split('/').pop()}
@@ -362,9 +388,9 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen }: {
                                 <span className="gcount"><i className="add">+{f.add}</i> <i className="del">−{f.del}</i></span>
                               </button>
                               {shown && <div className="filediff">
-                                {fileDiff!.error ? <div className="note">{fileDiff!.error}</div>
-                                  : fileDiff!.diff === null ? <div className="note">Reading…</div>
-                                  : <><Diff text={fileDiff!.diff || '(no text changes)'} />{fileDiff!.truncated && <div className="note">The rest is too long to show here.</div>}</>}
+                                {fileDiff!.error ? <div className="git-state bad" role="status">{fileDiff!.error}</div>
+                                  : fileDiff!.diff === null ? <div className="git-state" role="status">Reading the diff…</div>
+                                  : <><Diff text={fileDiff!.diff || '(no text changes)'} />{fileDiff!.truncated && <div className="git-state">The rest is too long to show here.</div>}</>}
                               </div>}
                             </div>;
                           })}

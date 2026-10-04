@@ -419,6 +419,7 @@ code, pre, kbd { font-family: var(--mono); }
 /* A machine is a place: its name in the display face. */
 .row.machine .rt-text { font-family: var(--display); font-weight: 600; letter-spacing: -0.01em; }
 .row.machine.offline .rt-text { color: var(--text-dim); }
+.sidebar .row.machine.active::after { display: none; }
 
 .mark {
   width: 26px; height: 26px; border-radius: 7px; flex: none;
@@ -1819,11 +1820,39 @@ button.sheet-editlink:hover { color: var(--text); }
 .changes { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg); animation: screen-in 0.16s var(--ease); }
 .changesbtn { position: relative; }
 .changesbtn.has { color: var(--text-dim); }
-.git-tabs { display: flex; gap: 22px; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--bg); }
-.git-tabs button { padding: 12px 0; min-height: 44px; border: 0; border-radius: 0; background: transparent; color: var(--mutedfg); border-bottom: 2px solid transparent; font-size: var(--t-body); font-weight: 550; }
-.git-tabs button:hover { color: var(--text-dim); }
-.git-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--primary-q); }
-.git-tabs button span { margin-left: 5px; font: var(--t-micro) var(--mono); color: var(--mutedfg); }
+.git-head { border-bottom: 1px solid var(--line); background: var(--bg); }
+.git-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; max-width: var(--measure); width: 100%; margin: 0 auto; padding: 8px 14px 10px; }
+@media (min-width: 900px) { .git-toolbar { padding: 10px 24px; } }
+.git-context { display: flex; align-items: center; gap: 10px; flex: 1 1 220px; min-width: 0; min-height: 32px; font-size: var(--t-meta); color: var(--mutedfg); }
+.git-branch { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--icon); }
+.git-branch svg { flex: none; }
+.git-branch b { font: 600 var(--t-meta) var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-sync { display: inline-flex; gap: 6px; flex: none; font: 500 var(--t-micro) var(--mono); color: var(--text-dim); }
+.git-wt { flex: none; font-size: var(--t-micro); color: var(--mutedfg); }
+.git-pr {
+  display: inline-flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; min-height: 32px;
+  padding: 4px 8px 4px 11px; border: 1px solid var(--line); border-radius: 999px;
+  color: var(--text-dim); text-decoration: none; font-size: var(--t-meta);
+}
+.git-pr:hover { border-color: var(--line-2); background: var(--hover); color: var(--text); }
+.git-pr svg { flex: none; color: var(--icon); }
+.git-pr-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-pr-title b { color: var(--text); font-weight: 600; }
+.git-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; flex: 0 0 248px; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+.git-tabs button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 12px;
+  border-radius: var(--radius-md); color: var(--mutedfg); font-size: var(--t-meta); font-weight: 550;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.git-tabs button:hover { color: var(--text); }
+.git-tabs button[aria-selected="true"] { background: var(--raised); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / 25%), inset 0 0 0 1px var(--line-2); }
+:root[data-theme="light"] .git-tabs button[aria-selected="true"] { box-shadow: 0 1px 2px rgb(26 29 36 / 12%), inset 0 0 0 1px var(--line-2); }
+.git-count { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); font: 600 var(--t-micro)/18px var(--mono); color: var(--text-dim); text-align: center; }
+.git-tabs button[aria-selected="true"] .git-count { background: color-mix(in srgb, var(--primary-q) 22%, transparent); color: var(--text); }
+@media (max-width: 599px) {
+  .git-tabs { flex-basis: 100%; }
+  .git-tabs button { min-height: 40px; }
+}
 /* Eight line colours for the commit graph, each readable as a line and as
    pill text on both themes. A branch keeps its colour down its whole line. */
 :root {
@@ -1839,44 +1868,72 @@ button.sheet-editlink:hover { color: var(--text); }
 .lc-0 { --lc: var(--lc0); } .lc-1 { --lc: var(--lc1); } .lc-2 { --lc: var(--lc2); } .lc-3 { --lc: var(--lc3); }
 .lc-4 { --lc: var(--lc4); } .lc-5 { --lc: var(--lc5); } .lc-6 { --lc: var(--lc6); } .lc-7 { --lc: var(--lc7); }
 
-.git-graph { display: flex; flex-direction: column; gap: 14px; }
-.git-skeleton { display: flex; flex-direction: column; gap: 10px; padding: 8px 4px; }
-.git-skeleton i { height: 30px; border-radius: 8px; background: var(--accent); animation: git-pulse 1.2s ease-in-out infinite alternate; }
-.git-skeleton i:nth-child(2n) { width: 82%; } .git-skeleton i:nth-child(3n) { width: 64%; }
+.git-graph { display: flex; flex-direction: column; gap: 16px; }
+.git-skeleton { display: flex; flex-direction: column; padding: 4px 0; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--card); }
+.git-skeleton span { position: relative; display: flex; flex-direction: column; justify-content: center; gap: 7px; height: 44px; padding-left: 34px; animation: git-pulse 1.2s ease-in-out infinite alternate; }
+.git-skeleton span::before { content: ''; position: absolute; left: 9px; top: 17px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.git-skeleton i, .git-skeleton b { display: block; width: 58%; height: 9px; border-radius: 5px; background: var(--accent); }
+.git-skeleton b { width: 24%; height: 7px; }
+.git-skeleton span:nth-child(2n) i { width: 44%; } .git-skeleton span:nth-child(3n) i { width: 68%; }
 @keyframes git-pulse { to { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .git-skeleton span { animation: none; } }
+
+.git-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 40px 20px; text-align: center; color: var(--mutedfg); font-size: var(--t-meta); line-height: 1.5; }
+.git-empty b { color: var(--text); font-size: var(--t-body); font-weight: 600; }
+.git-empty code {
+  max-width: 100%; margin-top: 10px; padding: 4px 10px; border-radius: var(--radius-sm); background: var(--accent);
+  font: var(--t-micro) var(--mono); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.git-empty-icon { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; margin-bottom: 8px; border-radius: 50%; background: var(--accent); color: var(--icon); }
+.git-empty-icon.ok { color: var(--emerald); background: color-mix(in srgb, var(--emerald) 12%, transparent); }
+.git-empty.bad .git-empty-icon { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.git-empty button.ghost { width: auto; margin-top: 14px; }
+.git-state { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 10px 12px; color: var(--mutedfg); font-size: var(--t-meta); }
+.git-state.bad { color: var(--red); }
 
 /* Where the repository is checked out, and which agents are in each copy. */
-.git-checkouts { display: flex; flex-direction: column; gap: 8px; }
-.git-checkout { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--card); }
-.git-checkout.current { border-color: var(--line-2); }
-.git-checkout-head { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--text-dim); }
-.git-checkout-head b { font: 600 var(--t-meta) var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.git-checkout-head small { margin-left: auto; color: var(--mutedfg); font-size: var(--t-micro); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.git-none { color: var(--mutedfg); font-size: var(--t-micro); padding: 0 4px; }
-.git-agents { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }
-.git-agent { display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--text-dim); background: var(--bg); text-align: left; font-size: var(--t-meta); }
-.git-agent:hover:not(:disabled) { border-color: var(--line-2); background: var(--hover); }
+.git-checkouts { border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--card); overflow: hidden; }
+.git-checkout { padding: 8px 6px 6px; }
+.git-checkout + .git-checkout { border-top: 1px solid var(--line); }
+.git-checkout-head { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 26px; padding: 0 8px; color: var(--icon); font-size: var(--t-micro); }
+.git-checkout-head svg { flex: none; }
+.git-checkout-head b { font: 600 var(--t-micro) var(--mono); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.git-checkout-head small { color: var(--mutedfg); font-size: var(--t-micro); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.git-here { margin-left: auto; flex: none; color: var(--primary-q); font-size: var(--t-micro); font-weight: 600; }
+.git-none { color: var(--mutedfg); font-size: var(--t-meta); padding: 0 4px; }
+.git-agents { display: flex; flex-direction: column; }
+.git-agent {
+  display: flex; align-items: center; gap: 10px; min-width: 0; width: 100%; min-height: 40px; padding: 6px 8px;
+  border-radius: var(--radius); color: var(--text); text-align: left; font-size: var(--t-meta);
+  transition: background 0.12s var(--ease);
+}
+.git-agent:hover:not(:disabled) { background: var(--hover); }
 .git-agent:disabled { opacity: 1; cursor: default; }
+@media (pointer: coarse) { .git-agent { min-height: 44px; } }
 .git-agent .mark { width: 20px; height: 20px; border-radius: 5px; flex: none; }
 .git-agent-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-agent-name { color: var(--text-80); font-weight: 550; }
+.git-agent-go { display: inline-flex; flex: none; color: var(--icon); opacity: 0.55; }
+.git-agent:hover .git-agent-go { opacity: 1; }
 .git-agent-state { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--mutedfg); font-size: var(--t-micro); }
 .git-agent-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--mutedfg); }
-.git-agent.working .git-agent-state { color: var(--sky); }
-.git-agent.working .git-agent-state i { background: var(--sky); }
-.git-agent.blocked .git-agent-state { color: var(--amber-text); }
-.git-agent.blocked .git-agent-state i { background: var(--amber); }
-.git-shared { margin-top: 7px; color: var(--amber-text); font-size: var(--t-micro); }
+.git-agent.s-working .git-agent-state { color: var(--sky); }
+.git-agent.s-working .git-agent-state i { background: var(--sky); }
+.git-agent.s-blocked .git-agent-state { color: var(--amber-text); }
+.git-agent.s-blocked .git-agent-state i { background: var(--amber); }
+.git-shared { display: flex; align-items: center; gap: 6px; padding: 2px 8px 4px; color: var(--amber-text); font-size: var(--t-micro); }
+.git-shared svg { flex: none; }
 
 /* The history: one 44px line per commit, the lane picture on the left. */
 .git-history { border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--card); overflow: hidden; }
 /* No rules between rows: they would cut every lane line. */
-.git-row.head > .git-line { background: color-mix(in srgb, var(--select) 70%, transparent); }
-.git-row.open > .git-line { background: var(--hover); }
+.git-row.head > .git-line { background: color-mix(in srgb, var(--select) 55%, transparent); }
+.git-row.open { background: color-mix(in srgb, var(--hover) 70%, transparent); }
 .git-line {
-  display: flex; align-items: center; gap: 4px; width: 100%; height: 44px; padding: 0 10px 0 4px;
+  display: flex; align-items: center; gap: 6px; width: 100%; height: 44px; padding: 0 12px 0 4px;
   border: 0; border-radius: 0; background: transparent; text-align: left; color: inherit; cursor: pointer;
 }
+.git-sha { flex: none; font: var(--t-micro) var(--mono); color: var(--mutedfg); }
+@media (max-width: 599px) { .git-sha { display: none; } }
 .git-line:hover { background: var(--hover); }
 .git-lanes { flex: none; display: block; overflow: visible; }
 .git-lanes path { fill: none; stroke: var(--lc); stroke-width: 2; stroke-linecap: round; }
@@ -1884,13 +1941,12 @@ button.sheet-editlink:hover { color: var(--text); }
 .git-dot.merge { fill: var(--card); stroke: var(--lc); stroke-width: 2; }
 .git-halo { fill: none; stroke: var(--lc); stroke-width: 2; opacity: 0.45; }
 .git-text { display: flex; flex-direction: column; justify-content: center; gap: 1px; flex: 1; min-width: 0; }
-.git-subject { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--text); font-size: var(--t-meta); line-height: 18px; }
+.git-subject { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text); font-size: var(--t-meta); font-weight: 500; line-height: 18px; }
 .git-subject-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.git-meta { display: flex; align-items: center; gap: 7px; color: var(--mutedfg); font-size: var(--t-micro); white-space: nowrap; overflow: hidden; line-height: 16px; }
-.git-meta code { font-family: var(--mono); color: var(--text-dim); }
+.git-meta { display: flex; align-items: center; gap: 5px; color: var(--mutedfg); font-size: var(--t-micro); white-space: nowrap; overflow: hidden; line-height: 16px; }
 .git-author { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .git-ref {
-  display: inline-flex; align-items: center; gap: 3px; flex: none; max-width: 150px;
+  display: inline-flex; align-items: center; gap: 3px; flex: none; max-width: 140px;
   padding: 0 6px; border-radius: 6px; font: 600 11px/18px var(--mono);
   color: var(--lc); background: color-mix(in srgb, var(--lc) 14%, transparent);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1899,29 +1955,38 @@ button.sheet-editlink:hover { color: var(--text); }
 .git-ref.remote { color: var(--mutedfg); background: var(--accent); font-weight: 500; }
 .git-ref.tag { color: var(--amber-text); background: color-mix(in srgb, var(--amber) 16%, transparent); }
 .git-ref.detached { color: var(--card); background: var(--text-dim); }
+.git-ref.more { color: var(--mutedfg); background: var(--accent); font-weight: 500; }
 .git-row-agents { display: flex; align-items: center; gap: 3px; flex: none; }
 .git-mini { position: relative; display: inline-flex; }
-.git-mini .mark { width: 20px; height: 20px; border-radius: 5px; }
+.git-mini .mark { width: 18px; height: 18px; border-radius: 5px; }
 .git-mini i { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--mutedfg); border: 2px solid var(--card); }
-.git-mini.working i { background: var(--sky); } .git-mini.blocked i { background: var(--amber); }
+.git-mini.s-working i { background: var(--sky); } .git-mini.s-blocked i { background: var(--amber); }
 .git-more { font-size: var(--t-micro); color: var(--mutedfg); }
 
 /* A commit, opened. */
-.git-detail { position: relative; padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 8px; animation: screen-in 0.14s var(--ease); }
+.git-detail { position: relative; padding: 2px 14px 16px; display: flex; flex-direction: column; gap: 10px; animation: screen-in 0.14s var(--ease); }
+.git-detail > .git-state { padding-inline: 0; }
 .git-through { position: absolute; left: 4px; top: 0; bottom: 0; height: 100%; }
 .git-through path { fill: none; stroke: var(--lc); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .git-detail-subject { font-weight: 600; color: var(--text); font-size: var(--t-body); overflow-wrap: anywhere; }
-.git-detail-body { white-space: pre-wrap; color: var(--text-dim); font-size: var(--t-meta); overflow-wrap: anywhere; }
+.git-detail-body { white-space: pre-wrap; color: var(--text-dim); font-size: var(--t-meta); line-height: 1.55; overflow-wrap: anywhere; }
 .git-detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; color: var(--mutedfg); font-size: var(--t-micro); }
-.git-hash, .git-parent { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text-dim); font: 11px var(--mono); min-height: 0; }
-.git-hash:hover, .git-parent:hover { border-color: var(--line-2); }
-.git-parent { margin: 0 2px; }
-.git-files { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.git-files-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: var(--t-micro); color: var(--text-dim); background: var(--bg); border-bottom: 1px solid var(--line); }
+.git-detail-refs { display: flex; flex-wrap: wrap; gap: 4px; }
+.git-hash, .git-parent { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text-dim); font: 11px var(--mono); min-height: 24px; }
+.git-hash:hover, .git-parent:hover { border-color: var(--line-2); color: var(--text); }
+.git-merge { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.git-detail .git-agents { border: 1px solid var(--line); border-radius: var(--radius); padding: 2px; background: var(--bg); }
+.git-files { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
+.git-files-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: var(--t-micro); color: var(--mutedfg); border-bottom: 1px solid var(--line); }
+.git-files-head .gcount { font-size: var(--t-micro); }
 .git-files-head .quiet { margin-left: auto; color: var(--mutedfg); }
 .git-file + .git-file { border-top: 1px solid var(--line); }
 .git-file-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 0; background: transparent; text-align: left; min-height: 38px; font-size: var(--t-meta); }
-.git-file-row:hover { background: var(--hover); }
+.git-file-row:hover, .git-file.open > .git-file-row { background: var(--hover); }
+@media (pointer: coarse) {
+  .git-file-row { min-height: 44px; }
+  .git-hash, .git-parent { min-height: 32px; padding-inline: 10px; }
+}
 .git-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; color: var(--text); }
 .git-file-path .dir { color: var(--mutedfg); }
 .git-file .filediff { border-top: 1px solid var(--line); }
@@ -1935,28 +2000,30 @@ button.sheet-editlink:hover { color: var(--text); }
 /* Lavender is a tile colour in the dark; as text on white it needs ink. */
 :root[data-theme="light"] .gst.sR, :root[data-theme="light"] .pr-state.merged { color: #5b45b0; }
 
-.pr {
-  display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 10px 12px;
-  border: 1px solid var(--line-2); border-radius: var(--radius-xl); background: var(--card); color: var(--text); text-decoration: none;
-  font-size: var(--t-body);
-}
-.pr .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-state { flex: none; font-size: var(--t-micro); font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 6px; background: var(--accent); color: var(--mutedfg); }
-.pr-state.open { background: color-mix(in srgb, var(--emerald) 16%, transparent); color: var(--emerald); }
-.pr-state.merged { background: color-mix(in srgb, var(--opencode) 18%, transparent); color: var(--opencode); }
-.pr-state.closed { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
+.pr-state { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--mutedfg); }
+.pr-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pr-state.open { color: var(--emerald); }
+.pr-state.merged { color: var(--opencode); }
+.pr-state.closed { color: var(--red); }
 
-.changes-sum { display: flex; align-items: center; gap: 10px; padding: 0 4px 8px; font-size: var(--t-meta); color: var(--text-dim); }
+.changes-sum { display: flex; align-items: center; gap: 10px; padding: 0 4px 10px; font-size: var(--t-meta); color: var(--text-dim); }
 .changes-sum .grow { flex: 1; }
+.changes-count { color: var(--text); font-weight: 550; }
+.changes-seen { display: inline-flex; align-items: center; gap: 8px; flex: none; color: var(--mutedfg); font-size: var(--t-micro); font-variant-numeric: tabular-nums; }
+.changes-meter { width: 56px; height: 4px; border-radius: 2px; background: var(--accent); overflow: hidden; }
+.changes-meter i { display: block; height: 100%; border-radius: inherit; background: var(--emerald); transition: width 0.2s var(--ease); }
 .add { color: var(--diff-add-fg); font-style: normal; }
 .del { color: var(--diff-del-fg); font-style: normal; }
 :root[data-theme="light"] .add { color: #166534; } :root[data-theme="light"] .del { color: #991b1b; }
 :root[data-diff="blue"] .add { color: #60a5fa; } :root[data-diff="blue"] .del { color: #fb923c; }
 :root[data-theme="light"][data-diff="blue"] .add { color: #1d4ed8; } :root[data-theme="light"][data-diff="blue"] .del { color: #c2410c; }
 
-.fileRow .row.tall { padding-inline: 0; }
-.fileRow .filemain { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; padding: 9px 4px 9px 10px; text-align: left; color: inherit; border-radius: var(--radius); }
+.fileRow .row.tall { min-height: 52px; padding: 0 4px 0 0; }
+.fileRow .filemain { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; min-height: 52px; padding: 8px 4px 8px 12px; text-align: left; color: inherit; border-radius: var(--radius); }
+.fileRow .filemain .rt { font-size: var(--t-body); font-weight: 550; }
+.fileRow .filemain .rm { font: var(--t-micro) var(--mono); }
 .fileRow.viewed .filemain { opacity: 0.5; }
+.fileRow.open > .row { background: var(--hover); }
 .gst {
   flex: none; width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
   font: 700 11px/1 var(--mono); background: var(--accent); color: var(--text-dim);
@@ -1964,14 +2031,21 @@ button.sheet-editlink:hover { color: var(--text); }
 .gst.sM { color: var(--sky); } .gst.sA, .gst.su { color: var(--emerald); } .gst.sD { color: var(--red); } .gst.sR { color: var(--opencode); }
 .gcount { flex: none; font: 12px var(--mono); }
 .viewedbox {
-  flex: none; width: 28px; height: 28px; margin: 0 4px 0 8px; align-self: center; border-radius: 8px;
-  border: 1.5px solid var(--line-2); color: var(--pill-fg); font-size: 14px; font-weight: 700; line-height: 1;
-  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; width: 40px; height: 40px; align-self: center; border-radius: var(--radius);
+  display: inline-flex; align-items: center; justify-content: center; color: var(--pill-fg);
 }
-@media (pointer: coarse) { .viewedbox { width: 36px; height: 36px; } }
-.viewedbox.on { background: var(--pill-bg); border-color: var(--pill-bg); }
+.viewedbox > span {
+  width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--line-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.12s var(--ease), border-color 0.12s var(--ease);
+}
+.viewedbox:hover > span { border-color: var(--mutedfg); }
+.viewedbox.on > span { background: var(--pill-bg); border-color: var(--pill-bg); }
+@media (pointer: coarse) { .viewedbox { width: 44px; height: 44px; } .viewedbox > span { width: 24px; height: 24px; } }
 .filediff { margin: 0 8px 8px; }
 .filediff .diff { max-height: 60vh; overflow: auto; }
+.fileRow .filediff .diff { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--code-bg); }
+.fileRow .filediff > .git-state { padding-inline: 4px; }
 
 
 /* ---------------------------------------------------------------- checkboxes */
@@ -2076,80 +2150,126 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .bubble-meta .branch { font-size: var(--t-micro); color: var(--mutedfg); padding: 0 6px 0 0; border-radius: 6px; display: inline-flex; align-items: center; gap: 4px; }
 .bubble-meta .branch:hover { color: var(--text); }
 
-/* Home's two finders, on one line because they are a pair: the box filters
-   the list below it in place; the button beside it opens the palette that
-   goes anywhere - threads on every machine, machines, actions. */
-.home-find { gap: 8px; margin-bottom: 8px; }
-.findbox {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 42px; padding: 0 10px 0 12px;
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); color: var(--icon); cursor: text;
-  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+.home-search {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 42px; margin: 0 0 8px; padding: 0 10px 0 12px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  color: var(--mutedfg); font-size: var(--t-body); text-align: left;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
 }
-.findbox:focus-within { border-color: color-mix(in srgb, var(--primary-q) 70%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-q) 18%, transparent); }
-.filterbar .findbox .sheetfilter {
-  flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; background: none; box-shadow: none;
-  font-size: var(--t-body); border-radius: 0;
-}
-.findbox .sheetfilter:focus-visible { outline: none; }
-.findbox kbd { font-size: 10.5px; padding: 1px 6px; color: var(--mutedfg); }
-.quick-switch {
-  display: inline-flex; align-items: center; gap: 7px; flex: none; height: 42px; padding: 0 12px;
-  border: 1px solid var(--line); border-radius: var(--radius); background: var(--card);
-  color: var(--text-dim); font-size: var(--t-meta); font-weight: 550; white-space: nowrap;
-}
-.quick-switch kbd { font-size: 10.5px; padding: 1px 5px; color: var(--mutedfg); }
-.quick-switch:hover { background: var(--raised); color: var(--text); }
-/* In the narrow desktop sidebar the key says it; on a phone the icon alone. */
-@media (min-width: 900px) { .sidebar .quick-switch .qs-label { display: none; } }
+.home-search svg { flex: none; color: var(--icon); }
+.home-search .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-search kbd { flex: none; font-size: 10.5px; padding: 1px 6px; color: var(--mutedfg); }
+.home-search:hover { border-color: var(--line-2); color: var(--text-dim); }
 @media (min-width: 900px) {
-  .sidebar .findbox, .sidebar .quick-switch { background: var(--bg); }
-  .sidebar .quick-switch:hover { background: var(--hover); }
+  .sidebar .home-search { background: var(--bg); }
+  .sidebar .home-search:hover { background: var(--hover); }
 }
 .palette-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 0 18px; color: var(--mutedfg); font-size: var(--t-meta); font-weight: 550; }
 .palette-heading button { min-height: 36px; }
 
 /* A branch rail identifies the account and model behind every delegated task. */
 .subagents-launch { position: relative; }
-.delegation-panel { width: min(680px, calc(100vw - 24px)); max-width: 680px; max-height: calc(100dvh - 32px); overflow-y: auto; }
-.delegation-heading, .delegation-account-label, .delegation-start { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.delegation-panel {
+  width: min(640px, calc(100vw - 24px)); max-width: 640px; max-height: calc(100dvh - 32px);
+  display: flex; flex-direction: column; padding: 0; overflow: hidden;
+}
+.delegation-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 10px 12px 18px; border-bottom: 1px solid var(--line); }
+.delegation-heading > div { min-width: 0; }
 .delegation-heading h2 { margin: 0; font-size: var(--t-title); }
-.delegation-heading p, .delegation-intro { color: var(--mutedfg); font-size: var(--t-meta); line-height: 1.5; }
-.delegation-heading p { margin: 4px 0 0; }
-.delegation-form { display: grid; gap: 8px; margin: 18px 0; }
-.delegation-form label { display: grid; gap: 6px; font-size: var(--t-meta); color: var(--text-dim); }
+.delegation-heading p { margin: 3px 0 0; color: var(--mutedfg); font-size: var(--t-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.delegation-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px 18px; display: grid; gap: 14px; align-content: start; }
+.delegation-body > .error, .delegation-branches > .note { margin: 0; }
+.delegation-body, .delegation-form, .delegation-options, .delegation-branches, .delegation-group ul, .delegation-detail { grid-template-columns: minmax(0, 1fr); }
+.delegation-new {
+  display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 44px;
+  border: 1px dashed var(--line-2); border-radius: var(--radius); color: var(--text-dim); font-size: var(--t-body); font-weight: 550;
+}
+.delegation-new:hover { background: var(--hover); color: var(--text); }
+.delegation-form { display: grid; gap: 10px; margin: 0; padding: 14px; border: 1px solid var(--line-2); border-radius: var(--radius-xl); background: var(--card); }
+.delegation-form > label { font-size: var(--t-meta); font-weight: 550; color: var(--text-dim); }
 .delegation-form input, .delegation-form select, .delegation-form textarea { width: 100%; min-width: 0; margin: 0; padding: 9px 10px; }
 .delegation-form textarea { resize: vertical; }
-.delegation-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 6px 0; }
-.delegation-start { margin-top: 6px; }
-.delegation-start span { color: var(--mutedfg); font-size: var(--t-micro); }
-.delegation-start button { width: auto; margin: 0; flex-shrink: 0; }
-.delegation-branches h3 { font-size: var(--t-meta); margin: 22px 0 12px; }
-.delegation-branches h3 span { color: var(--mutedfg); font-weight: 400; margin-left: 6px; }
-.delegation-branch { border-left: 2px solid var(--line-2); margin-left: 9px; padding-left: 14px; }
-.delegation-branch.selected { border-left-color: var(--primary-q); }
-.delegation-task { display: flex; gap: 10px; align-items: center; width: 100%; background: none; border: 0; text-align: left; padding: 12px 0; }
-.delegation-task .grow { min-width: 0; }
-.delegation-task b { display: block; font-weight: 500; overflow-wrap: anywhere; }
-.delegation-task small { display: block; font: var(--t-micro) var(--mono); color: var(--mutedfg); margin-top: 5px; overflow-wrap: anywhere; }
-.delegation-status { color: var(--mutedfg); font-size: var(--t-micro); flex-shrink: 0; }
-.delegation-status.working { color: var(--sky); }
-.delegation-status.blocked { color: var(--amber-text); }
-.delegation-result { padding: 0 0 16px; font-size: var(--t-body); }
-.delegation-request { color: var(--mutedfg); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-meta); }
-.delegation-result .linkish { margin: 12px 18px 0 0; }
-@media (max-width: 520px) {
-  .delegation-pickers { grid-template-columns: 1fr; gap: 8px; }
-  .delegation-start { align-items: flex-start; }
+.delegation-form .error { margin: 0; }
+.delegation-config {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 10px;
+  border: 1px solid var(--line); border-radius: var(--radius); text-align: left; color: var(--text-dim); font-size: var(--t-meta);
 }
+.delegation-config:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.delegation-config .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.delegation-config-more { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--primary-q); font-weight: 550; }
+.delegation-options { display: grid; gap: 8px; }
+.delegation-options label { display: grid; gap: 6px; font-size: var(--t-meta); color: var(--text-dim); }
+.delegation-options .note { margin: 0; }
+.delegation-account-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--t-meta); color: var(--text-dim); }
+.delegation-account-label .linkish { min-height: 32px; }
+.delegation-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.delegation-start { display: flex; align-items: center; gap: 8px; }
+.delegation-start span { flex: 1; min-width: 0; color: var(--mutedfg); font-size: var(--t-micro); }
+.delegation-start button { width: auto; margin: 0; flex-shrink: 0; min-height: 40px; }
+.delegation-start .ghost { padding: 8px 14px; }
+.delegation-branches { display: grid; gap: 16px; }
+.delegation-group h3 { display: flex; gap: 6px; margin: 0 0 4px; font-size: var(--t-micro); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--mutedfg); }
+.delegation-group h3 span { font-weight: 400; }
+.delegation-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.delegation-branch { border-radius: var(--radius); }
+.delegation-branch.selected { background: var(--muted); box-shadow: inset 2px 0 0 var(--primary-q); }
+.delegation-row { display: flex; align-items: center; gap: 4px; }
+.delegation-task { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; min-height: 48px; padding: 6px 8px; border-radius: var(--radius); text-align: left; }
+.delegation-task:hover { background: var(--hover); }
+.delegation-task .grow { flex: 1; min-width: 0; }
+.delegation-task b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-weight: 500; font-size: var(--t-body); overflow: hidden; overflow-wrap: anywhere; }
+.delegation-task small { display: block; font: var(--t-micro) var(--mono); color: var(--mutedfg); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.delegation-group.finished .delegation-task b { color: var(--text-dim); }
+.delegation-status {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 44px; padding: 0 8px;
+  border-radius: var(--radius); color: var(--mutedfg); font-size: var(--t-micro); font-weight: 550; white-space: nowrap;
+}
+.delegation-status:hover { background: var(--hover); color: var(--text); }
+.delegation-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.delegation-status.state-working, .delegation-status.state-starting { color: var(--sky); }
+.delegation-status.state-working i, .delegation-status.state-starting i { animation: pulse 2s steps(6) infinite; }
+.delegation-status.state-blocked { color: var(--amber-text); }
+.delegation-status.state-error { color: var(--red); }
+.delegation-status.state-done i { background: var(--emerald); }
+.delegation-detail { display: grid; gap: 10px; padding: 2px 10px 12px 34px; font-size: var(--t-body); }
+.delegation-detail .note, .delegation-detail .error { margin: 0; }
+.delegation-request { margin: 0; color: var(--mutedfg); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-meta); }
+.delegation-output { max-height: 40dvh; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+.delegation-detail .sheet {
+  margin: 0; padding: 12px 14px; max-height: none; box-shadow: none;
+  border-radius: var(--radius-xl); border-bottom: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
+}
+.delegation-follow { display: flex; gap: 8px; align-items: flex-end; margin: 0; }
+.delegation-follow textarea { flex: 1; min-width: 0; margin: 0; padding: 9px 10px; resize: vertical; }
+.delegation-follow button { width: auto; margin: 0; flex: none; }
+.delegation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.delegation-actions button { width: auto; margin: 0; min-height: 40px; padding: 8px 14px; }
+.delegation-actions .destructive, .delegation-actions .destructive:hover:not(:disabled) { color: var(--red); }
+@media (max-width: 599px) {
+  .delegation-panel { width: 100%; max-height: calc(100dvh - 24px); }
+  .delegation-heading { padding: 12px 6px 10px 16px; }
+  .delegation-body { padding: 12px 14px 16px; }
+  .delegation-pickers { grid-template-columns: 1fr; gap: 8px; }
+  .delegation-start { flex-wrap: wrap; justify-content: flex-end; }
+  .delegation-start span { flex-basis: 100%; }
+  .delegation-config .grow { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .delegation-task small { white-space: normal; overflow-wrap: anywhere; }
+  .delegation-detail { padding-left: 10px; }
+  .delegation-follow { flex-direction: column; align-items: stretch; }
+  .delegation-follow button { align-self: flex-end; }
+  .delegation-actions button { flex: 1 1 auto; }
+}
+@media (pointer: coarse) {
+  .delegation-start button, .delegation-follow button, .delegation-actions button { min-height: 44px; }
+  .delegation-account-label .linkish { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { .delegation-status i { animation: none !important; } }
 .palette-row { min-height: 48px; }
 .palette-box:focus { outline: none; }
-.quick-switch:focus-visible, .palette-row:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 2px; }
+.home-search:focus-visible, .palette-row:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 2px; }
 @media (max-width: 599px) {
   .palette-back { padding-top: max(12px, env(safe-area-inset-top)); }
   .palette-box { max-height: calc(100dvh - 32px); }
-  .quick-switch kbd { display: none; }
-  .quick-switch { width: 42px; padding: 0; justify-content: center; }
-  .quick-switch .qs-label { display: none; }
 }
 
 /* ------------------------------------------------------------ odds and ends */

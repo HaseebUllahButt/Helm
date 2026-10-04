@@ -426,9 +426,6 @@ function Shell({ client, conn, onSignOut }: {
   const [downSince, setDownSince] = useState<number | null>(null);
   /** "thread X needs you" while a different session is on screen. */
   const [toast, setToast] = useState<Toast | null>(null);
-  /** Search every machine's threads from the sidebar, not only the open one. */
-  const [query, setQuery] = useState('');
-  const searchRef = useRef<HTMLInputElement>(null);
   const [palette, setPalette] = useState(false);
   /**
    * Threads put off until later, on this device. A thread waiting on you that
@@ -721,8 +718,8 @@ function Shell({ client, conn, onSignOut }: {
     if (wide && !selected && envs.length) setSelected(envs[0].id);
   }, [wide, selected, envs]);
 
-  // Keys, on a keyboard. Ctrl/Cmd+K opens the palette; "/" goes to the search
-  // box; Ctrl/Cmd+[ and ] walk back and forward; "?" lists them. None of them
+  // Keys, on a keyboard. Ctrl/Cmd+K opens the palette; "/" opens it too;
+  // Ctrl/Cmd+[ and ] walk back and forward; "?" lists them. None of them
   // fire while you are typing into something, and a phone never sends them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -734,15 +731,11 @@ function Shell({ client, conn, onSignOut }: {
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       if (typing || mod || e.altKey) return;
       if (e.key === '?') { e.preventDefault(); setHelp(true); return; }
-      if (e.key === '/' && wide) {
-        e.preventDefault();
-        collapseSidebar(false);
-        requestAnimationFrame(() => { searchRef.current?.focus(); searchRef.current?.select(); });
-      }
+      if (e.key === '/') { e.preventDefault(); setPalette(true); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [wide]);
+  }, []);
 
   /** Everything the palette can find, built when it opens. */
   const paletteItems = (): PaletteItem[] => {
@@ -753,11 +746,16 @@ function Shell({ client, conn, onSignOut }: {
         sub: e.online ? 'online' : 'offline', keywords: 'machine computer',
         run: () => openEnv(e.id),
       });
-      for (const s of agentsOf(e.id)) {
+      const liveThreads = agentsOf(e.id);
+      const snapshotThreads = !e.online
+        ? (snap?.machines?.[e.id]?.sessions ?? []).filter((thread) => !thread.delegation && thread.engine !== 'shell'
+          && !thread.archived && !liveThreads.some((liveThread) => liveThread.id === thread.id))
+        : [];
+      for (const s of [...liveThreads, ...snapshotThreads]) {
         items.push({
           id: `t:${e.id}:${s.id}`, group: 'thread', title: s.title, engine: s.engine, at: s.updatedAt,
-          sub: `${dirName(s.cwd)} · ${e.name}${s.status === 'blocked' ? ' · needs you' : s.status === 'working' ? ' · working' : ''}`,
-          keywords: s.cwd,
+          sub: `${dirName(s.cwd)} · ${e.name}${s.status === 'blocked' ? ' · needs you' : s.status === 'working' ? ' · working' : ''}${!e.online ? ' · offline' : ''}`,
+          keywords: `${s.cwd} ${engineOf(s.engine).label}`,
           run: () => openSession(e.id, s),
         });
       }
@@ -913,11 +911,9 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived);
-  // The machine card says "running", so count processes that are actually
-  // alive. `session.list` also includes finished threads so they remain
-  // reachable from the machine view; counting those made old machines look
-  // like they had dozens of live agents.
-  const runningAgentsOf = (id: string) => agentsOf(id).filter((s) => s.alive === true);
+  const workingThreadsOn = (machine: Environment) =>
+    machine.online ? agentsOf(machine.id).filter((thread) => thread.status === 'working') : [];
+  const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter((thread) => thread.status === 'blocked').length;
 
   /**
    * Turning a recording into words, on whichever machine can.
@@ -1033,7 +1029,8 @@ function Shell({ client, conn, onSignOut }: {
   // running. A brain has its own place under "brains".
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
-  const runningNow = everyone.filter(({ s }) => s.status === 'working').sort(byNewest);
+  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && thread.status === 'working').sort(byNewest);
+  const runningCount = envs.reduce((total, machine) => total + workingThreadsOn(machine).length, 0);
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
   // older work stays available on its machine and through search.
@@ -1094,77 +1091,15 @@ function Shell({ client, conn, onSignOut }: {
               </div>
             )}
 
-            {/* "Which machine has the thread about X" is one question, not
-                one per machine. The box searches every live list, and the
-                remembered threads of machines that are asleep. */}
-            {/* Two tools, side by side because they do different things: the
-                box filters this list in place, the button opens the palette
-                that goes anywhere - threads, machines and actions. */}
-            <div className="filterbar home-find">
-              <label className="findbox">
-                <Icon name="search" size={15} />
-                <input
-                  ref={searchRef}
-                  className="sheetfilter grow" value={query}
-                  placeholder="Filter threads and machines"
-                  aria-label="Filter threads and machines"
-                  autoCapitalize="off" autoCorrect="off" autoComplete="off"
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Escape') { setQuery(''); e.currentTarget.blur(); } }}
-                />
-                {wide && <kbd aria-hidden="true">/</kbd>}
-              </label>
-              <button className="quick-switch" onClick={() => setPalette(true)} aria-label="Open command palette" title="Go anywhere (Ctrl or ⌘ K)">
-                <Icon name="jump" size={15} /><span className="qs-label">Go to</span><kbd>⌘K</kbd>
-              </button>
-            </div>
-
-            {(() => {
-              const q = query.trim().toLowerCase();
-              if (!q) return null;
-              const hits = envs.flatMap((e) => {
-                const live = agentsOf(e.id)
-                  .filter((s) => `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q))
-                  .map((s) => ({ e, s, stale: false }));
-                const remembered = !e.online
-                  ? (snap?.machines?.[e.id]?.sessions ?? [])
-                    .filter((s) => !s.delegation && `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q))
-                    .map((s) => ({ e, s, stale: true }))
-                  : [];
-                return [...live, ...remembered.filter(({ s }) => !live.some(row => row.s.id === s.id))];
-              }).sort((a, b) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0)).slice(0, 40);
-              const machines = envs.filter((e) => e.name.toLowerCase().includes(q));
-              return (
-                <>
-                  <div className="section">Everywhere</div>
-                  <div className="rows plain">
-                    {machines.map((e) => (
-                      <button key={e.id} className="row" onClick={() => { setQuery(''); openEnv(e.id); }}>
-                        <span className={`mdot ${e.online ? 'on' : 'off'}`} />
-                        <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span><span className="rm">{e.kind ?? 'machine'}</span></span>
-                        <span className="chev"><Icon name="forward" size={15} /></span>
-                      </button>
-                    ))}
-                    {hits.map(({ e, s, stale }) => (
-                      <button key={`${e.id}:${s.id}`} className="row tall" onClick={() => {
-                        setQuery('');
-                        openSession(e.id, s);
-                      }}>
-                        <EngineMark engine={engineOf(s.engine).cls} />
-                        <span className="grow">
-                          <span className="rt"><span className="rt-text">{s.title}</span>{stale && <span className="tag">offline</span>}</span>
-                          <span className="rm">{e.name} · {shortPath(s.cwd)}</span>
-                        </span>
-                        <StatusChip status={s.status} />
-                      </button>
-                    ))}
-                    {!hits.length && !machines.length && <div className="empty quiet">Nothing on any machine matches “{query.trim()}”</div>}
-                  </div>
-                </>
-              );
-            })()}
-
-            {!query.trim() && (<>
+            <button
+              type="button" className="home-search" onClick={() => setPalette(true)}
+              aria-label="Search threads, machines and folders" aria-keyshortcuts="/ Control+K Meta+K"
+              title="Search threads, machines and folders (/ or Ctrl/⌘ K)"
+            >
+              <Icon name="search" size={15} />
+              <span className="grow">Search anything</span>
+              {wide && <kbd aria-hidden="true">{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}</kbd>}
+            </button>
 
             {blocked.map(({ env: e, s }) => (
               <NeedCard
@@ -1210,9 +1145,8 @@ function Shell({ client, conn, onSignOut }: {
             <Fold title="machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
               <div className="rows plain">
                 {envs.map((e) => {
-                  const list = runningAgentsOf(e.id);
-                  const working = list.filter((s) => s.status === 'working').length;
-                  const waiting = list.filter((s) => s.status === 'blocked').length;
+                  const working = workingThreadsOn(e).length;
+                  const waiting = waitingCountOn(e);
                   return (
                     <button
                       key={e.id}
@@ -1225,7 +1159,7 @@ function Shell({ client, conn, onSignOut }: {
                         <span className="rt"><span className="rt-text">{e.name}</span></span>
                         <span className="rm">
                           {e.online
-                            ? (list.length ? `${list.length} running${working ? `, ${working} working` : ''}` : 'idle')
+                            ? (working ? `${working} running` : 'idle')
                             : e.lastSeen ? `seen ${ago(e.lastSeen)}` : 'never connected'}
                         </span>
                       </span>
@@ -1277,8 +1211,6 @@ function Shell({ client, conn, onSignOut }: {
                 is running on them. */}
             {error && <div className="error">{error}</div>}
             {envError && <p className="note" role="status">{envs.length ? 'Saved workspace · reconnecting…' : 'Connecting to your machines…'}</p>}
-
-            </>)}
           </div>
         </div>
       </aside>
@@ -1314,14 +1246,14 @@ function Shell({ client, conn, onSignOut }: {
             <p className="readout">
               {envs.length === 1 ? '1 machine' : `${envs.length} machines`}
               {' · '}{envs.filter((e) => e.online).length} online
-              {runningNow.length > 0 && ` · ${runningNow.length} running`}
+              {runningCount > 0 && ` · ${runningCount} running`}
               {blocked.length > 0 && <span className="attention"> · {blocked.length} {blocked.length === 1 ? 'needs' : 'need'} you</span>}
             </p>
             {envs.length > 0 ? (
               <div className="rows plain">
                 {envs.map((e) => {
-                  const list = runningAgentsOf(e.id);
-                  const waiting = list.filter((s) => s.status === 'blocked').length;
+                  const working = workingThreadsOn(e).length;
+                  const waiting = waitingCountOn(e);
                   return (
                     <button key={e.id} className={`row tall machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
                       <span className={`mdot ${e.online ? 'on' : 'off'}`} />
@@ -1329,7 +1261,7 @@ function Shell({ client, conn, onSignOut }: {
                         <span className="rt"><span className="rt-text">{e.name}</span></span>
                         <span className="rm">
                           {e.online
-                            ? (list.length ? `${list.length} running` : 'Nothing running')
+                            ? (working ? `${working} running` : 'Nothing running')
                             : e.lastSeen ? `Offline · seen ${ago(e.lastSeen)}` : 'Never connected'}
                         </span>
                       </span>

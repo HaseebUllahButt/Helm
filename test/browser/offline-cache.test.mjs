@@ -67,6 +67,14 @@ async function pageFor(t) {
   return { page, boot };
 }
 
+async function openFromSearch(page, title) {
+  await page.locator('.sidebar').getByRole('button', { name: 'Search threads, machines and folders' }).click();
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  await palette.getByRole('combobox', { name: 'Search threads, machines, actions' }).fill(title);
+  await palette.getByRole('option', { name: new RegExp(`^${title}.*offline`) }).click();
+  await palette.waitFor({ state: 'hidden' });
+}
+
 test('saved workspace and chat open with every network request stalled, including after a reload', async t => {
   const { page, boot } = await pageFor(t);
   await page.evaluate(() => window.seed());
@@ -75,9 +83,11 @@ test('saved workspace and chat open with every network request stalled, includin
     await page.getByText('Saved response', { exact: true }).waitFor({ timeout: 1500 });
     assert.match(await page.locator('.session-bar').innerText(), /Saved chat.*reconnecting/);
     await page.getByRole('button', { name: 'Back', exact: true }).click();
-    await page.locator('.sidebar').getByText('Another chat', { exact: true }).click();
+    const sidebar = page.locator('.sidebar');
+    assert.equal(await sidebar.getByText('Another chat', { exact: true }).count(), 0, 'disconnected threads are not listed as running');
+    await openFromSearch(page, 'Another chat');
     await page.getByText('Other saved response', { exact: true }).waitFor({ timeout: 1500 });
-    await page.locator('.sidebar').getByText('Cached chat', { exact: true }).click();
+    await openFromSearch(page, 'Cached chat');
     await page.getByText('Saved response', { exact: true }).waitFor({ timeout: 1500 });
     if (!pass) { await page.reload(); await boot(); }
   }
