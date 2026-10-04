@@ -7,8 +7,7 @@ import { requireNetwork, hubCredential, allEndpoints } from '@helm/protocol/netw
 
 /** SSH stays end-to-end encrypted; hubs only carry its byte stream. */
 export async function proxy(host, port) {
-  const release = beginTransferActivity();
-  try { return await connectProxy(host, port); } finally { release(); }
+  return connectProxy(host, port);
 }
 
 async function connectProxy(host, port) {
@@ -23,7 +22,8 @@ async function connectProxy(host, port) {
     for (const address of directSshAddresses(net, host)) {
       let socket;
       try { socket = await connectDirectSsh(address, port); } catch { continue; }
-      return bridgeDirectSsh(socket);
+      const release = beginTransferActivity();
+      try { return await bridgeDirectSsh(socket); } finally { release(); }
     }
   }
   const hubs = [...new Set([`http://127.0.0.1:${net.port ?? 8787}`, ...allEndpoints(net)])];
@@ -55,6 +55,7 @@ export function bridge(hub, token, host, port, {
     let open = false;
     let settled = false;
     let sender, receiver;
+    let release;
     const timer = setTimeout(() => shutdown(new Error('tunnel open timed out')), timeout);
     const drain = () => { if (!settled) ws.resume(); };
     const send = (chunk) => {
@@ -72,6 +73,7 @@ export function bridge(hub, token, host, port, {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      release?.();
       input.pause();
       sender?.stop();
       receiver?.stop();
@@ -90,6 +92,7 @@ export function bridge(hub, token, host, port, {
       if (msg.sid !== sid || settled) return;
       if (msg.t === T.TUNNEL_READY && !open) {
         open = true;
+        release = beginTransferActivity();
         clearTimeout(timer);
         if (msg.flow === 1) {
           receiver = new TunnelReceiver(output, bytes => ws.send(JSON.stringify({ t: T.TUNNEL_ACK, sid, bytes })), shutdown);

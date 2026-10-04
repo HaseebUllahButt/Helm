@@ -90,6 +90,31 @@ test('closing an already ended tunnel releases its update blocker while credit i
   assert.equal(hasActiveTransfers(), false);
 });
 
+test('an SSH proxy blocks updates only while its tunnel is established', { timeout: 3000 }, async context => {
+  const server = createServer();
+  const sockets = new WebSocketServer({ server });
+  let requested;
+  const request = new Promise(resolve => { requested = resolve; });
+  sockets.on('connection', socket => socket.on('message', raw => {
+    const frame = JSON.parse(raw);
+    if (frame.t === T.TUNNEL_OPEN) requested({ socket, sid: frame.sid });
+  }));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => { for (const socket of sockets.clients) socket.terminate(); sockets.close(); server.close(); });
+  const input = new PassThrough(), output = new PassThrough();
+  const work = bridge(`http://127.0.0.1:${server.address().port}`, 'test', 'target', 22, { input, output });
+  const { socket, sid } = await request;
+  assert.equal(hasActiveTransfers(), false);
+  socket.send(JSON.stringify({ t: T.TUNNEL_READY, sid }));
+  for (let attempt = 0; attempt < 20 && !hasActiveTransfers(); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(hasActiveTransfers(), true);
+  socket.send(JSON.stringify({ t: T.TUNNEL_CLOSE, sid, reason: 'closed' }));
+  await work;
+  assert.equal(hasActiveTransfers(), false);
+});
+
 test('receiver grants credit only after the slow destination writes, and bounds hostile input', async () => {
   const callbacks = []; const acks = []; const errors = [];
   const receiver = new TunnelReceiver({ write: (_c, done) => callbacks.push(done) }, n => acks.push(n), e => errors.push(e));
