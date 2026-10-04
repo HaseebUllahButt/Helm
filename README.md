@@ -158,6 +158,13 @@ also use authenticated HTTP when WebSockets are blocked, trying another known
 hub when necessary. Prompts, approvals, and other actions require a live
 transport and are never automatically replayed over the fallback.
 
+Opening the app races a socket to the page's hub against HTTP discovery;
+reconnecting races the last working hub instead. A slow discovery response
+does not hold up a working socket, and an unreachable remembered hub does not
+block alternatives. Hub upgrades open the replacement before retiring the
+working connection; in-flight replies can finish on the old socket without
+resending actions.
+
 While the app is open, it rechecks hub reachability every fifteen seconds and
 moves to a hub that can reach more machines. A local hub saying a machine is
 offline does not prevent safe chat reads from trying another hub. Direct

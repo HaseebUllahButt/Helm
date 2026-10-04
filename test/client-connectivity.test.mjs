@@ -31,7 +31,7 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     constructor(url) {
       this.url = url; this.readyState = 0; this.frames = []; sockets.push(this);
       const behavior = typeof socket === 'function' ? socket(url) : socket;
-      if (behavior === 'open') timer(() => { this.readyState = 1; this.onopen?.(); }, socketDelay);
+      if (behavior === 'open') timer(() => { if (this.readyState === 3) return; this.readyState = 1; this.onopen?.(); }, typeof socketDelay === 'function' ? socketDelay(url) : socketDelay);
       if (behavior === 'error') timer(() => this.onerror?.(), 1);
     }
     send(raw) {
@@ -155,6 +155,151 @@ test('a broader hub takes over as soon as it answers, without waiting for a slee
   assert.equal(h.client.relay, 'http://home');
   assert.equal(h.sockets.length, 2);
   h.client.close();
+});
+
+test('warm reconnect races the known WebSocket without waiting for slow HTTP discovery', async () => {
+  const delays = {};
+  const setup = harness({ delays });
+  setup.start(); await setup.advance(10);
+  delays['http://good'] = 12000;
+  setup.sockets[0].close();
+  await setup.advance(510);
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.sockets.length, 2);
+  await setup.advance(12500);
+  assert.equal(setup.sockets.length, 2);
+  setup.client.close();
+});
+
+test('the page origin opens immediately even when its HTTP discovery is stalled', async () => {
+  const setup = harness({ endpoints: ['https://home'], delays: { 'https://home': Infinity },
+    location: { origin: 'https://home', protocol: 'https:' } });
+  const connection = setup.start();
+  await setup.advance(10); await connection;
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.client.relay, 'https://home');
+  setup.client.close();
+});
+
+test('HTTP discovery failure cannot cancel a working origin WebSocket', async () => {
+  const setup = harness({ endpoints: ['https://home'], statuses: { 'https://home': 503 },
+    location: { origin: 'https://home', protocol: 'https:' } });
+  const connection = setup.start();
+  await setup.advance(10); await connection;
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.sockets.length, 1);
+  setup.client.close();
+});
+
+test('signout cancels an in-flight warm handshake and cannot resurrect its socket', async () => {
+  let delay = 1;
+  const setup = harness({ socketDelay: () => delay });
+  setup.start(); await setup.advance(10);
+  delay = 5000;
+  setup.sockets[0].close();
+  await setup.advance(600);
+  setup.client.close();
+  await setup.advance(25000);
+  assert.equal(setup.client.connected, false);
+  assert.ok(setup.sockets.every(socket => socket.readyState === 3));
+});
+
+test('a cached hub whose upgrade stalls cannot block another discovered hub', async () => {
+  const delays = { 'http://other': Infinity };
+  let stalled = false;
+  const setup = harness({ endpoints: ['http://good', 'http://other'], delays,
+    socket: url => stalled && url.startsWith('ws://good') ? 'hang' : 'open' });
+  setup.start(); await setup.advance(200);
+  stalled = true;
+  delays['http://other'] = 1000;
+  setup.window('offline'); setup.window('online');
+  await setup.advance(1100);
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.client.relay, 'http://other');
+  assert.equal(setup.sockets[1].readyState, 3);
+  setup.client.close();
+});
+
+test('hub migration keeps the old route working and drains writes without replay', async () => {
+  const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 },
+    socketDelay: url => url.startsWith('ws://home') ? 5000 : 1 });
+  setup.start(); await setup.advance(10);
+  const original = setup.sockets[0];
+  const connectionEvents = setup.events.filter(event => event.kind === 'connection').length;
+  setup.client.learn(['http://local', 'http://home']);
+  await setup.advance(100);
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.client.relay, 'http://local');
+  const request = setup.client.rpc('vm', 'session.input', { data: 'once' });
+  const frame = original.frames.at(-1);
+  await setup.advance(5000);
+  assert.equal(setup.client.relay, 'http://home');
+  assert.equal(original.readyState, 1);
+  original.message({ t: 'rpcResult', id: frame.id, ok: true, result: 'accepted' });
+  assert.equal(await request, 'accepted');
+  assert.equal(original.readyState, 3);
+  assert.equal(setup.sockets.flatMap(socket => socket.frames).filter(frame => frame.t === 'rpc').length, 1);
+  assert.equal(setup.events.filter(event => event.kind === 'connection').slice(connectionEvents).some(event => !event.payload.online), false);
+  setup.client.close();
+});
+
+test('failed migration preserves the working hub and closing cancels a pending replacement', async () => {
+  for (const behavior of ['error', 'hang']) {
+    const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 },
+      socket: url => url.startsWith('ws://home') ? behavior : 'open' });
+    setup.start(); await setup.advance(10);
+    setup.client.learn(['http://local', 'http://home']);
+    await setup.advance(100);
+    assert.equal(setup.client.connected, true);
+    assert.equal(setup.client.relay, 'http://local');
+    setup.client.close();
+    await setup.advance(25000);
+    assert.ok(setup.sockets.every(socket => socket.readyState === 3));
+    assert.equal(setup.sockets.length, 2);
+  }
+});
+
+test('losing the old hub during migration does not supersede the pending replacement', async () => {
+  const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 },
+    socketDelay: url => url.startsWith('ws://home') ? 2000 : 1 });
+  setup.start(); await setup.advance(10);
+  setup.client.learn(['http://local', 'http://home']);
+  await setup.advance(100);
+  setup.sockets[0].close();
+  await setup.advance(2100);
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.client.relay, 'http://home');
+  assert.equal(setup.sockets.length, 2);
+  setup.client.close();
+});
+
+test('a replacement handshake timeout does not disconnect the original healthy hub', async () => {
+  const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 },
+    socket: url => url.startsWith('ws://home') ? 'hang' : 'open' });
+  setup.start(); await setup.advance(10);
+  setup.client.learn(['http://local', 'http://home']);
+  await setup.advance(20100);
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.client.relay, 'http://local');
+  assert.equal(setup.sockets[0].readyState, 1);
+  assert.equal(setup.sockets[1].readyState, 3);
+  setup.client.close();
+});
+
+test('hub migration restarts unfinished direct negotiation but preserves live direct routes', async () => {
+  const setup = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 } });
+  setup.start(); await setup.advance(10);
+  await setup.client.openDirect('ready');
+  setup.peers[0].open();
+  await setup.client.openDirect('negotiating');
+  const stale = setup.peers[1];
+  setup.client.learn(['http://local', 'http://home']);
+  await setup.advance(20);
+  assert.equal(setup.client.directTo('ready'), true);
+  assert.equal(stale.connectionState, 'closed');
+  assert.equal(setup.peers.length, 3);
+  assert.ok(setup.sockets[1].frames.some(frame => frame.t === 'signal' && frame.env === 'negotiating'));
+  setup.client.close();
 });
 
 test('a lossy distant hub remains eligible after twelve seconds while the local app opens immediately', async () => {

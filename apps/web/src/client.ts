@@ -584,6 +584,9 @@ export class Client {
   private connectVersion = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private disconnectSocket: ((reason: string, retry?: boolean) => void) | null = null;
+  private retireSocket: (() => void) | null = null;
+  private socketCleanups = new Set<() => void>();
+  private lastGoodHub: string | null = null;
   private probeSocket: (() => void) | null = null;
   private failedHubs = new Map<string, number>();
   private httpReads = new Set<() => void>();
@@ -622,6 +625,7 @@ export class Client {
     // machine is on. Do not make it wait out a backoff to find that out.
     for (const env of [...this.peers.keys()]) this.dropDirect(env);
     this.connectVersion++;
+    for (const cleanup of this.socketCleanups) cleanup();
     this.disconnectSocket?.('network changed', false);
     this.connecting = false;
     this.connect().catch(() => {});
@@ -629,6 +633,7 @@ export class Client {
   private onOffline = () => {
     if (this.closed) return;
     this.connectVersion++;
+    for (const cleanup of this.socketCleanups) cleanup();
     for (const env of [...this.peers.keys()]) this.dropDirect(env);
     this.disconnectSocket?.('network offline', false);
     this.connecting = false;
@@ -807,7 +812,6 @@ export class Client {
     const best = reached[0];
     if (!current || !best || best.base === hub || best.reach <= current.reach) return;
     this.backoff = 500;
-    this.disconnectSocket?.('a better hub is available', false);
     void this.connect(best.base).catch(() => {});
   }
 
@@ -842,13 +846,36 @@ export class Client {
     this.backoff = Math.min(this.backoff * 2, 15_000);
   }
 
+  private prepareSocket(hub: string) {
+    const ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/ws`, ['helm', this.token]);
+    let cancel!: () => void;
+    const ready = new Promise<WebSocket>((resolve, reject) => {
+      const timer = setTimeout(() => finish(new Error('socket connection timed out')), 20_000);
+      const finish = (error?: Error) => {
+        clearTimeout(timer);
+        this.socketCleanups.delete(cancel);
+        ws.onopen = ws.onerror = ws.onclose = null;
+        if (error) { try { ws.close(); } catch {} reject(error); }
+        else resolve(ws);
+      };
+      cancel = () => finish(new Error('connection superseded'));
+      this.socketCleanups.add(cancel);
+      ws.onopen = () => finish();
+      ws.onerror = ws.onclose = () => finish(new Error('could not reach the hub'));
+    });
+    return { ws, ready, cancel };
+  }
+
   async connect(hubHint: string | null = null): Promise<void> {
-    if (this.closed || this.connecting || this.connected) return;
+    if (this.closed || this.connecting || (this.connected && !hubHint)) return;
+    const migrating = this.connected;
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
     const version = ++this.connectVersion;
     this.connecting = true;
 
     let hub: string | null = null;
+    let prepared: ReturnType<Client['prepareSocket']> | undefined;
+    let reached: Reached[] = [];
     let unauthorized = false;
     try {
       // What was actually tried, and what actually answered. `learn()` needs
@@ -864,14 +891,42 @@ export class Client {
       if (hubHint && tried.includes(hubHint)) hub = hubHint;
 
       if (!hub) {
+        const warmHub = this.lastGoodHub ?? here().find(base => candidates.includes(base));
+        if (warmHub && candidates.includes(warmHub)) prepared = this.prepareSocket(warmHub);
+        let offerAlternative!: (base: string) => void;
+        const alternative = new Promise<string>(resolve => { offerAlternative = resolve; });
         const { soon, available, later } = probeInTwoPhases(tried, this.token, PROBE_MS,
-          reached => { if (hub) this.upgradeHub(reached, version, hub); });
-        let probe = await soon;
+          results => {
+            reached = results;
+            const other = results.find(candidate => candidate.base !== warmHub);
+            if (other) offerAlternative(other.base);
+            if (hub) this.upgradeHub(results, version, hub);
+          });
+        const selection = soon.then(probe => probe.best ? probe : available);
+        const warm = prepared?.ready.then(() => {
+          return { best: warmHub!, unauthorized: false, answered: new Set([warmHub!]) };
+        })
+          .catch(() => selection);
+        let probe = await (warm ? Promise.race([selection, warm]) : selection);
         // A slow network is still a network. If no hub has answered yet,
         // consume the same round's eventual answer instead of discarding it
         // and repeating a 2.5s deadline that can never succeed.
         if (!probe.best) probe = await available;
+        if (!probe.best && prepared) {
+          try {
+            await prepared.ready;
+            probe = { ...probe, best: warmHub!, unauthorized: false };
+          } catch {}
+        }
         ({ best: hub, unauthorized } = probe);
+        if (prepared && hub !== warmHub) { prepared.cancel(); prepared = undefined; }
+        if (prepared && prepared.ws.readyState !== WebSocket.OPEN) {
+          try {
+            hub = await Promise.race([prepared.ready.then(() => hub), alternative]);
+            if (hub !== warmHub) { prepared.cancel(); prepared = undefined; }
+          }
+          catch { prepared = undefined; }
+        }
         this.answered = probe.answered;
 
         // A hub that was still thinking when we settled may see more of the
@@ -900,17 +955,18 @@ export class Client {
         }
       }
     }
-    if (version !== this.connectVersion) return;
+    if (version !== this.connectVersion) { prepared?.cancel(); return; }
     if (!hub) throw new Error('no machine in this network is reachable right now');
-    if (this.closed) { this.connecting = false; return; }
-    this.relay = hub;
+    if (this.closed) { prepared?.cancel(); this.connecting = false; return; }
+    if (!migrating) this.relay = hub;
 
     await new Promise<void>((resolve, reject) => {
       const url = `${hub.replace(/^http/, 'ws')}/ws`;
       // Keep credentials out of URLs and access logs.
-      const ws = new WebSocket(url, ['helm', this.token]);
-      this.ws = ws;
+      const ws = prepared?.ws ?? new WebSocket(url, ['helm', this.token]);
+      if (!migrating) this.ws = ws;
       let settled = false, stopped = false;
+      let drain: ReturnType<typeof setTimeout> | undefined;
       let lastReceived = Date.now(), awaiting = false;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       const settle = (err?: Error) => {
@@ -921,14 +977,16 @@ export class Client {
       const stop = (reason: string, retry = true) => {
         if (stopped) return;
         stopped = true;
-        clearTimeout(handshake); clearInterval(heartbeat);
+        clearTimeout(handshake); clearInterval(heartbeat); clearTimeout(drain);
+        this.socketCleanups.delete(cleanup);
         ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
         if (this.ws === ws) {
           this.ws = null;
-          this.connecting = false;
+          if (version === this.connectVersion) this.connecting = false;
           this.disconnectSocket = this.probeSocket = null;
+          this.retireSocket = null;
           this.lastError = reason;
-          if (retry && reason !== 'a better hub is available') this.failedHubs.set(hub, Date.now() + 15_000);
+          if (retry) this.failedHubs.set(hub, Date.now() + 15_000);
           // A healthy direct route can still answer while the relay reconnects.
           for (const [id, pending] of this.pending) {
             pending.routes?.delete('relay');
@@ -939,8 +997,12 @@ export class Client {
           if (!this.closed) {
             this.emit('', 'connection', { online: false, reachable: true, hub, error: reason });
             this.startPresencePoll();
-            if (retry) this.scheduleReconnect();
+            if (retry && !this.connecting) this.scheduleReconnect();
           }
+        } else if (!settled && version === this.connectVersion) {
+          this.connecting = false;
+          if (retry) this.failedHubs.set(hub, Date.now() + 15_000);
+          if (!this.connected && !this.closed && retry) this.scheduleReconnect();
         }
         try { ws.close(); } catch { /* already closed */ }
         settle(new Error(reason));
@@ -948,7 +1010,9 @@ export class Client {
       // Browsers may leave an upgrade CONNECTING for minutes. HTTP having
       // worked does not prove WebSocket upgrades work on this network.
       const handshake = setTimeout(() => stop('socket connection timed out'), 20_000);
-      this.disconnectSocket = stop;
+      const cleanup = () => stop('connection superseded', false);
+      this.socketCleanups.add(cleanup);
+      if (!migrating) this.disconnectSocket = stop;
       const beat = (force = false) => {
         if (stopped || !this.connected || (!force && document.hidden)) return;
         const idle = Date.now() - lastReceived;
@@ -960,14 +1024,26 @@ export class Client {
           try { ws.send(JSON.stringify({ t: 'ping' })); } catch { stop('connection stopped responding'); }
         }
       };
-      this.probeSocket = () => {
+      const probeSocket = () => {
         // Timers may have slept with the page. Give a fresh ping its full
         // grace period instead of declaring a healthy socket dead on wake.
         awaiting = false; lastReceived = Date.now(); beat(true);
       };
       ws.onopen = () => {
-        if (stopped || this.closed || this.ws !== ws || version !== this.connectVersion) { stop('connection superseded', false); return; }
+        if (stopped || this.closed || version !== this.connectVersion) { stop('connection superseded', false); return; }
         clearTimeout(handshake);
+        const retire = this.retireSocket;
+        this.ws = ws;
+        this.relay = hub;
+        this.lastGoodHub = hub;
+        this.disconnectSocket = stop;
+        this.probeSocket = probeSocket;
+        this.retireSocket = () => {
+          clearInterval(heartbeat);
+          if (!this.pending.size) cleanup();
+          else drain = setTimeout(cleanup, 60_000);
+        };
+        retire?.();
         this.connecting = false;
         this.backoff = 500;
         this.lastError = '';
@@ -977,27 +1053,33 @@ export class Client {
         if (!this.reachPoll) this.reachPoll = setInterval(() => this.refreshReachability(), 15_000);
         for (const env of this.subscribed) ws.send(JSON.stringify({ t: 'subscribe', env }));
         heartbeat = setInterval(beat, 5000);
+        for (const [env, peer] of this.peers) if (!peer.ready) this.dropDirect(env, peer);
         this.retryDirectNow();
         this.emit('', 'connection', { online: true, hub });
         settle();
       };
       ws.onmessage = (ev) => {
-        if (stopped || this.ws !== ws) return;
+        if (stopped) return;
         let msg: any;
         try { msg = JSON.parse(ev.data); } catch { return; }
         lastReceived = Date.now(); awaiting = false;
         if (msg.t === 'ping') { ws.send(JSON.stringify({ t: 'pong' })); return; }
         if (msg.t === 'rpcResult') {
           this.receiveRpc(msg, 'relay');
+          if (this.ws !== ws && !this.pending.size) cleanup();
           return;
         }
+        if (this.ws !== ws) return;
         if (msg.t === 'event') this.deliver(msg.env, msg.kind, msg.payload, msg.eid);
         if (msg.t === 'presence') this.emit(msg.env, 'presence', msg);
         if (msg.t === 'signal') this.onSignal(msg.env, msg.payload).catch(() => {});
       };
       ws.onerror = () => stop('could not reach any machine');
       ws.onclose = (ev) => stop(`socket closed (${ev.code}${ev.reason ? ` ${ev.reason}` : ''})`);
+      if (ws.readyState === WebSocket.OPEN) ws.onopen({} as Event);
     });
+
+    this.upgradeHub(reached, version, hub);
 
     // Machines come and go, and each one advertises fresh addresses as it
     // moves; folding them in here is what keeps a device working after the
@@ -1062,6 +1144,7 @@ export class Client {
   close() {
     this.closed = true;
     this.connectVersion++;
+    for (const cleanup of this.socketCleanups) cleanup();
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
     this.disconnectSocket?.('client closed', false);
     for (const cancel of this.httpReads) cancel();
