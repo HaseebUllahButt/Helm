@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   type Client, type Environment, type Session,
-  type TransferPreview, type TransferReadiness, type TransferResult,
+  type TransferPreview, type TransferReadiness, type TransferResult, type TaskTransferResult,
 } from './client';
 import { bytes } from './format';
 import { BackIcon, Icon } from './Icon';
@@ -33,20 +33,30 @@ function Readiness({ readiness }: { readiness: TransferReadiness }) {
   );
 }
 
-export function TransferView({ client, source, envs, folder, onBack, onOpenSession }: {
+export function TransferView({ client, source, envs, folder, session, onBack, onOpenSession }: {
   client: Client;
   source: Environment;
   envs: Environment[];
   folder: string;
+  session?: Session;
   onBack: () => void;
   onOpenSession: (envId: string, session: Session) => void;
 }) {
-  const targets = useMemo(
-    () => envs.filter((e) => e.id !== source.id && e.online),
-    [envs, source.id],
-  );
   const [targetId, setTargetId] = useState('');
-  const [includeEnv, setIncludeEnv] = useState(false);
+  const [locked, setLocked] = useState(false);
+  const targets = useMemo(
+    () => envs.filter((e) => e.id !== source.id && (e.online || (locked && e.id === targetId))),
+    [envs, source.id, locked, targetId],
+  );
+  const [includeEnv, setIncludeEnv] = useState(!!session);
+  const [task, setTask] = useState(!!session);
+  const [prompt, setPrompt] = useState('');
+  const [agents, setAgents] = useState<{ id: string; label: string; available: boolean }[]>([]);
+  const [profileId, setProfileId] = useState('');
+  const [agentsLoading, setAgentsLoading] = useState(false);
+  const [taskResult, setTaskResult] = useState<TaskTransferResult | null>(null);
+  const [handoffId] = useState(() => Array.from(crypto.getRandomValues(new Uint8Array(12)),
+    (value) => value.toString(16).padStart(2, '0')).join(''));
   const [targetFolder, setTargetFolder] = useState('');
   const [preview, setPreview] = useState<TransferPreview | null>(null);
   const [previewing, setPreviewing] = useState(true);
@@ -62,6 +72,22 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
     if (!targets.some((t) => t.id === targetId)) setTargetId(targets[0]?.id ?? '');
   }, [targets, targetId]);
   const target = targets.find((t) => t.id === targetId) ?? null;
+
+  useEffect(() => {
+    if (!task || !targetId || locked) return;
+    let live = true;
+    setAgents([]); setProfileId(''); setAgentsLoading(true);
+    client.rpc<{ agents: { id: string; label: string; available: boolean }[] }>(targetId, 'agent.list', { models: false })
+      .then(({ agents: found }) => {
+        if (!live) return;
+        const available = found.filter((agent) => agent.available);
+        setAgents(available);
+        setProfileId(available.find((agent) => agent.id === session?.profileId)?.id ?? available[0]?.id ?? '');
+      })
+      .catch((err) => { if (live) setError(err.message); })
+      .finally(() => { if (live) setAgentsLoading(false); });
+    return () => { live = false; };
+  }, [client, task, targetId, session?.profileId, locked]);
 
   useEffect(() => {
     let live = true;
@@ -88,12 +114,31 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
   const needsAck = !!preflight?.requiresAcknowledgement;
   const envCanChoose = !!preflight && !previewing
     && (preflight.skipped > 0 || preflight.envFiles.length > 0 || includeEnv);
-  const canSend = !!preview && !!target && !busy && !previewing && (!needsAck || ack);
+  const canSend = !!preview && !!target && !busy && !previewing && (!needsAck || ack)
+    && (!task || (!!profileId && !agentsLoading && (!!session || !!prompt.trim())));
 
   const send = async () => {
     if (!preview || !target) return;
     setBusy(true); setError(''); setResult(null); setRecheck(null);
     try {
+      if (task) {
+        setLocked(true);
+        setStep(session ? `pausing this task and sending it to ${target.name}` : `sending the task to ${target.name}`);
+        const sent = await client.rpc<TaskTransferResult>(source.id, 'task.send', {
+          handoffId, folder, sessionId: session?.id, targetMachineId: target.id,
+          targetFolder: targetFolder.trim() || undefined, profileId,
+          prompt, includeEnv, allowSkipped: needsAck && ack,
+        }, 360_000);
+        if (!sent.sent && sent.requiresAcknowledgement) {
+          setLocked(false);
+          setPreview((now) => now ? { ...now, preflight: sent.preflight } : now);
+          setAck(false);
+          setError('Review what stays behind, then confirm it.');
+          return;
+        }
+        setTaskResult(sent);
+        return;
+      }
       setStep(`asking ${target.name} for a one-time invitation`);
       const invite = await client.transferInvite(target.id, source.id);
       setStep(`encrypting and sending to ${target.name}`);
@@ -120,6 +165,17 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
 
   const receipt = result?.receipt ?? null;
   const readiness = recheck ?? receipt?.readiness ?? null;
+
+  const openTask = async () => {
+    if (!taskResult?.receipt || !taskResult.targetMachineId) return;
+    setBusy(true); setError('');
+    try {
+      const reply = await client.rpc<{ session: Session }>(taskResult.targetMachineId,
+        'session.events', { id: taskResult.receipt.sessionId, tail: 1, limit: 1 });
+      onOpenSession(taskResult.targetMachineId, reply.session);
+    } catch (err: any) { setError(err.message); }
+    finally { setBusy(false); }
+  };
 
   const checkAgain = async () => {
     if (!receipt || !result?.targetMachineId) return;
@@ -153,13 +209,34 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
-          <h1>{receipt ? 'Project sent' : 'Send a project'}</h1>
+          <h1>{taskResult ? 'Task sent' : task ? 'Send task' : receipt ? 'Project sent' : 'Send a project'}</h1>
           <span className="sub"><Route machine={source.name} folder={folder} /></span>
         </div>
       </div>
 
       <div className="scroll"><div className="pad column">
-        {receipt ? (
+        {taskResult ? (
+          <>
+            <div className="transfer-done">
+              <span className="done-mark"><Icon name="check" size={18} /></span>
+              <span className="grow">
+                <span className="done-title">{taskResult.status === 'running' ? 'Running' : 'Queued'} on {taskResult.targetName}</span>
+                <span className="done-sub">{taskResult.status === 'running'
+                  ? 'The destination has accepted the task. You can close this laptop.'
+                  : 'Another machine’s hub has stored the task for delivery when the destination reconnects.'}</span>
+              </span>
+            </div>
+            {taskResult.receipt && <p className="note">{taskResult.receipt.files} files · {bytes(taskResult.receipt.bytes)} · {taskResult.route === 'direct' ? 'Direct WebRTC' : 'Via hub'}<br />{taskResult.receipt.folder}</p>}
+            <p className="note">The destination agent checks project setup and recreates dependencies before continuing. Its progress and any questions appear in the destination thread.</p>
+            {taskResult.warning && <div className="banner">{taskResult.warning}</div>}
+            {error && <div className="error">{error}</div>}
+            <div className="transfer-actions">
+              {taskResult.receipt && <button className="primary big" disabled={busy} onClick={openTask}>Open task there</button>}
+              {taskResult.status === 'queued' && <button className="primary big" disabled={busy} onClick={send}>Check / retry delivery</button>}
+              <button className="linkish" onClick={onBack}>Done</button>
+            </div>
+          </>
+        ) : receipt ? (
           <>
             <div className="transfer-done">
               <span className="done-mark"><Icon name="check" size={18} /></span>
@@ -234,7 +311,20 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
               </div>
             </div>
 
-            {preview?.git?.remote && <div className="field">
+            {!session && <label className="check-row">
+              <input type="checkbox" checked={task} disabled={busy || locked}
+                onChange={(event) => { setTask(event.target.checked); setIncludeEnv(event.target.checked); }} />
+              <span>Send a task with this project<small>Start an agent on the destination and keep working there.</small></span>
+            </label>}
+            {task && <>
+              <div className="field"><label className="field-label">{session ? 'Instructions for continuing' : 'Task'}
+                <textarea className="custom" value={prompt} disabled={busy || locked} maxLength={32000} rows={4}
+                  placeholder={session ? 'Continue where this conversation left off' : 'What should the agent do?'}
+                  onChange={(event) => setPrompt(event.target.value)} />
+              </label></div>
+              {session && <p className="note">Sending pauses this thread, copies its current files and recent conversation, and starts a continuation on the destination.</p>}
+            </>}
+            {!task && preview?.git?.remote && <div className="field">
               <label className="field-label">Git origin
                 <input className="custom" value={preview.git.remote} readOnly onFocus={(e) => e.target.select()} />
               </label>
@@ -245,6 +335,7 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
               {targets.map((t) => (
                 <button
                   key={t.id}
+                  disabled={busy || locked}
                   className={`row tall${t.id === targetId ? ' active' : ''}`}
                   onClick={() => setTargetId(t.id)}
                 >
@@ -261,9 +352,17 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
               )}
             </div>
 
+            {task && <div className="field"><label className="field-label">Agent account on the destination
+              <select className="custom" value={profileId} disabled={busy || locked || agentsLoading}
+                onChange={(event) => setProfileId(event.target.value)}>
+                {!agents.length && <option value="">{agentsLoading ? 'Loading accounts…' : 'No available agent accounts'}</option>}
+                {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.label || agent.id}</option>)}
+              </select>
+            </label></div>}
+
             <label className={`check-row${envCanChoose ? '' : ' disabled'}`}>
               <input
-                type="checkbox" checked={includeEnv} disabled={!envCanChoose}
+                type="checkbox" checked={includeEnv} disabled={!envCanChoose || busy || locked}
                 onChange={(e) => setIncludeEnv(e.target.checked)}
               />
               <span>
@@ -282,7 +381,7 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
               <label className="field-label">
                 Folder on the target <span className="quiet">optional</span>
                 <input
-                  className="custom" value={targetFolder} disabled={busy}
+                  className="custom" value={targetFolder} disabled={busy || locked}
                   placeholder={`~/.helm/transfers/${preview?.rootName ?? leaf(folder)}`}
                   autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
                   onChange={(e) => setTargetFolder(e.target.value)}
@@ -321,18 +420,21 @@ export function TransferView({ client, source, envs, folder, onBack, onOpenSessi
 
             <p className="note">
               What is left behind is decided by filename policy, not file contents.
-              Nothing on {target?.name ?? 'the target'} is overwritten. Git origin is configured when available; project commands are not run.
+              {task
+                ? ' Project .env files travel encrypted. Agent logins and machine-wide credentials stay on each machine. No GitHub access is required. Wait for the destination to confirm the task is running before closing this laptop.'
+                : ` Nothing on ${target?.name ?? 'the target'} is overwritten. Git origin is configured when available; project commands are not run.`}
             </p>
             {busy && <div className="banner">{step || 'working…'}</div>}
             {error && <div className="error">{error}</div>}
+            {task && locked && error && <p className="note">Retry resumes this same handoff: {handoffId}. The original thread may already be paused.</p>}
           </>
         )}
       </div></div>
 
-      {!receipt && preview && (
+      {!receipt && !taskResult && preview && (
         <div className="startbar">
           <button className="primary big" disabled={!canSend} onClick={send}>
-            {busy ? 'sending…' : target ? `Send to ${target.name}` : 'Send'}
+            {busy ? 'sending…' : target ? `${locked ? 'Retry' : task ? 'Send task' : 'Send'} to ${target.name}` : 'Send'}
           </button>
         </div>
       )}

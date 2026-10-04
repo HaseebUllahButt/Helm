@@ -35,7 +35,7 @@ type Attachment = { name: string; mime: string; data: string; url: string };
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
-export function DrivenSession({ client, env, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession }: {
+export function DrivenSession({ client, env, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask }: {
   client: Client; env: Environment; session: Session;
   /** The socket's own health, so a dropped connection shows where it matters. */
   conn?: { online: boolean; reachable: boolean };
@@ -46,6 +46,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   onSettings?: () => void;
   /** Open a branch, subagent, or its parent conversation. */
   onOpenSession?: (s: Session) => void;
+  onSendTask?: () => void;
 }) {
   const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
   // The draft outlives the view: leaving to answer another thread and coming
@@ -528,6 +529,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             </button>
             {!session.brain && <button onClick={() => { setMenu(null); void saveAsDefaults(); }}>Use these settings for new chats</button>}
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
+            {!session.external && !session.brain && onSendTask && <button disabled={!env.online || busy} onClick={onSendTask}>Send task to another machine</button>}
             {session.delegation?.parentId && onOpenSession && <button onClick={openParent}>Open parent thread</button>}
             {wakeable && (
               <button aria-pressed={keepAwake} onClick={() => setKeepAwake((v) => !v)}>

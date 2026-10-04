@@ -287,12 +287,48 @@ helm say <id> "<text>"            prompt an existing session
 helm spawn <machine> <folder> <account> "<text>"
 helm dispatch <machine> --account <target-profile> "<task>"
 helm dispatch-status <id>         where a queued handoff stands
+helm send-task <machine> --account <target-profile> "<task>"
 helm receive <machine> [minutes]  grant this machine one folder from it
 helm send <machine> [folder] --grant <token>
 ```
 
 `helm digest` keeps the last answer from every machine, so one that is asleep
 is listed with when it was last seen rather than left out.
+
+**Send task** is available in a managed conversation's menu. It pauses the
+source agent, copies the project and recent conversation, and starts a
+continuation using an agent account on the destination. In **Send a project**,
+enable **Send a task with this project** to start a new task instead.
+Project `.env` files are included by default for tasks and written with `0600`
+permissions; turn the option off to exclude them. Files and task context are
+encrypted to the destination and signed by the source. No GitHub checkout,
+fetch or Git history restoration is performed for this flow.
+
+Task and project transfers try a direct WebRTC data channel with
+bounded send buffering, using a hub for signalling. If a direct connection
+cannot be established, the same encrypted request travels through the hub.
+If task delivery loses connectivity, an independent machine's hub can store
+the encrypted request for later delivery; the laptop's own hub alone is not
+enough. A **Running** receipt means the destination has started a session and
+accepted its first prompt, so the source laptop can close. It does not mean
+dependency setup or the task itself has finished.
+
+`helm send-task` uses the current folder and, inside a managed session, its
+conversation. Use `--source-folder`, `--target-folder`, `--session`, `--model`
+or `--mode` to choose explicitly, `--no-env` to exclude project environment
+files, and `--allow-skipped` after reviewing any omitted sensitive files or
+symlinks. The command prints a handoff ID before sending; retry with the same
+arguments and `--handoff-id <id>` to reuse the saved snapshot without starting
+another session. Source and destination both need this Helm version.
+
+This is a project snapshot plus a bounded conversation continuation, not a
+live process migration. The destination agent is instructed to recreate
+dependencies from project instructions, manifests and lockfiles. Provider
+logins, machine-wide environment variables, services, virtual environments
+and generated dependencies stay on the source. Required runtimes and agent
+authentication must be available on the destination. Snapshot limits remain
+32 MiB total, 16 MiB per file and 20,000 files; larger directory copies use
+`helm copy`.
 
 `helm dispatch` runs from any joined machine - inside a session or from a
 plain shell. It packs the current folder, encrypts it to the target's own

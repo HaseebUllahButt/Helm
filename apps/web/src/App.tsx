@@ -342,7 +342,7 @@ type MainView =
   | { kind: 'new'; path?: string }
   | { kind: 'browse'; path?: string }
   | { kind: 'transfer-browse'; path?: string }
-  | { kind: 'transfer'; cwd: string }
+  | { kind: 'transfer'; cwd: string; session?: Session }
   | { kind: 'verify'; path: string }
   | { kind: 'start'; cwd: string }
   | { kind: 'settings' }
@@ -1348,7 +1348,7 @@ function Shell({ client, conn, onSignOut }: {
         ) : view.kind === 'transfer' ? (
           <Suspense fallback={<ViewLoading title="Send a project" onBack={back} />}>
             <TransferView
-              client={client} source={env} envs={envs} folder={view.cwd} onBack={back}
+              client={client} source={env} envs={envs} folder={view.cwd} session={view.session} onBack={back}
               onOpenSession={(targetId, session) => navigate([
                 { kind: 'env' }, { kind: 'session', session },
               ], targetId)}
@@ -1378,6 +1378,7 @@ function Shell({ client, conn, onSignOut }: {
           <DrivenSession
             key={`${env.id}:${view.session.id}`}
             client={client} env={env} conn={conn} onTranscribe={transcribeVia(env.id)}
+            onSendTask={() => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
@@ -1390,6 +1391,7 @@ function Shell({ client, conn, onSignOut }: {
           <SessionView
             key={`${env.id}:${view.session.id}`}
             client={client} env={env} onTranscribe={transcribeVia(env.id)}
+            onSendTask={() => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             terminals={(sessions[env.id] ?? []).filter(ownTerminal).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))}
             onSwitch={(s) => restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: s }])}
@@ -4253,8 +4255,9 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe }: {
+function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask }: {
   client: Client; env: Environment; session: Session;
+  onSendTask?: () => void;
   /** This machine's open terminals, for the tabs above one. */
   terminals?: Session[];
   onSwitch?: (s: Session) => void;
@@ -4417,6 +4420,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
         ) : (
           <div className="menu" onClick={() => setMenu(false)}>
             <button onClick={() => setNaming(true)}>Rename thread</button>
+            {!isExternal && onSendTask && <button disabled={!env.online} onClick={onSendTask}>Send task to another machine</button>}
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
             <button className="destructive" onClick={() => setKilling(true)}>Delete thread</button>
           </div>

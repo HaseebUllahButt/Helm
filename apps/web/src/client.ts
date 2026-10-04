@@ -286,6 +286,18 @@ export interface TransferResult {
   preflight: TransferPreflight;
   receipt?: TransferReceipt;
 }
+export interface TaskTransferResult {
+  sent: boolean;
+  requiresAcknowledgement?: boolean;
+  status?: 'running' | 'queued';
+  handoffId?: string;
+  targetMachineId?: string;
+  targetName?: string;
+  route?: 'direct' | 'relay';
+  warning?: string;
+  preflight: TransferPreflight;
+  receipt?: { sessionId: string; folder: string; files: number; bytes: number };
+}
 
 /** A folder a machine designated 'nas' has agreed to serve. */
 export interface MediaRoot { id: number; name: string; path: string }
