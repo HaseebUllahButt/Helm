@@ -135,7 +135,7 @@ test('main task click opens the full child conversation and Back returns to its 
   }
 });
 
-test('mobile header swaps Git for Subagents and keeps Git in the overflow menu', async () => {
+test('desktop windows retain the Git header shortcut while phones use the overflow menu', async () => {
   const bundle = await build({ stdin: { contents: `
     import React, { useState } from 'react';
     import { createRoot } from 'react-dom/client';
@@ -164,11 +164,11 @@ test('mobile header swaps Git for Subagents and keeps Git in the overflow menu',
     }
     createRoot(document.getElementById('root')).render(<Chat />);
   `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true, write:false, format:'iife', jsx:'automatic' });
-  for (const width of [1280, 390]) {
-    const view = await browser.newPage({ viewport:{width,height:844} });
+  for (const {width, phone} of [{width:1280,phone:false}, {width:390,phone:false}, {width:390,phone:true}]) {
+    const view = await browser.newPage({ viewport:{width,height:844}, hasTouch:phone, isMobile:phone });
     view.setDefaultTimeout(10_000);
     try {
-      await view.route('http://helm-header-test/**', route => route.fulfill({contentType:'text/html',body:'<div class="session" id="root"></div>'}));
+      await view.route('http://helm-header-test/**', route => route.fulfill({contentType:'text/html',body:'<meta name="viewport" content="width=device-width, initial-scale=1"><div class="session" id="root"></div>'}));
       await view.goto('http://helm-header-test/');
       await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
       await view.addScriptTag({ content:bundle.outputFiles[0].text });
@@ -177,9 +177,14 @@ test('mobile header swaps Git for Subagents and keeps Git in the overflow menu',
       const git = bar.getByRole('button', {name:'Git graph and changes',exact:true});
       await subagents.waitFor();
       assert.equal(await subagents.locator('.cbadge').textContent(), '2');
-      if (width === 1280) {
+      if (!phone) {
         await git.waitFor();
-        await capture(bar, 'session-header-desktop.png');
+        await capture(bar, `session-header-desktop-${width}.png`);
+        assert.equal(await view.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        await git.click();
+        await view.getByRole('tab', {name:'Graph',exact:true}).click();
+        await view.getByRole('tabpanel', {name:'Graph',exact:true}).waitFor();
+        await view.getByRole('button', {name:'Back to the conversation',exact:true}).click();
         await bar.getByRole('button', {name:'more',exact:true}).click();
         assert.equal(await view.getByRole('button', {name:/^Git graph and changes ·/}).count(), 0, 'desktop keeps Git in the header only');
         assert.equal(await bar.locator('.moredot').isVisible(), false);

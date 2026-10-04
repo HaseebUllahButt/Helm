@@ -476,7 +476,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           onClick={() => setShowSubagents(true)}><Icon name="subagents" size={17} />{(session.delegations?.length ?? 0) > 0 && <b className="cbadge">{session.delegations!.length}</b>}</button>
         {git.status?.repo && !session.brain && (
           <button
-            className={`iconbtn changesbtn wide-only${changed ? ' has' : ''}`}
+            className={`iconbtn changesbtn${changed ? ' has' : ''}`}
             title={changed ? `Git · ${changed} changed file${changed === 1 ? '' : 's'}` : 'Git graph and agents'}
             aria-label="Git graph and changes"
             onClick={() => setShowChanges(true)}
@@ -513,13 +513,13 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             </svg>
           </button>
         )}
-        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} />{changed > 0 && !session.brain && <i className="moredot narrow-only" aria-hidden="true" />}</button>
+        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} />{changed > 0 && !session.brain && <i className="moredot git-mobile-only" aria-hidden="true" />}</button>
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
             {/* On a phone the header keeps the title, the state and Subagents;
                 these two ride in here instead of squeezing the title. */}
             {git.status?.repo && !session.brain && (
-              <button className="narrow-only" onClick={() => setShowChanges(true)}>
+              <button className="git-mobile-only" onClick={() => setShowChanges(true)}>
                 Git graph and changes{changed > 0 ? ` · ${changed > 99 ? '99+' : changed}` : ''}
               </button>
             )}
