@@ -23,6 +23,31 @@ test('events are numbered, persisted, and replayable from a sequence number', ()
   assert.equal(again.append('s1', { type: 'turn.done' }).seq, 3);
 });
 
+test('unconsumed queue edits and reference snapshots survive retention and cold windows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-queue-retention-'));
+  const original = new EventLog(dir);
+  const edited = 'Keep this entire message. '.repeat(600);
+  original.append('thread', { type: 'turn.start', turnId: 'active', text: 'Work' });
+  original.append('thread', { type: 'item.start', id: 'answer', turnId: 'active', kind: 'text' });
+  original.append('thread', { type: 'turn.start', turnId: 'local-queued', text: 'Initial', queued: true, delivery: 'queue', references: ['reference'], referenceContext: 'Frozen reference content' });
+  original.append('thread', { type: 'turn.edit', turnId: 'local-queued', text: edited });
+  original.append('thread', { type: 'turn.start', turnId: 'local-removed', text: 'Removed', queued: true });
+  original.append('thread', { type: 'turn.remove', turnId: 'local-removed' });
+  for (let index = 0; index < 2300; index++) original.append('thread', { type: 'item.delta', id: 'answer', text: 'x' });
+  for (const log of [original, new EventLog(dir), new EventLog(dir)]) {
+    const events = log.tail('thread', 0);
+    const ticket = events.find((event) => event.turnId === 'local-queued' && event.type === 'turn.start');
+    assert.equal(ticket.delivery, 'queue');
+    assert.equal(ticket.referenceContext, 'Frozen reference content');
+    assert.deepEqual(ticket.references, ['reference']);
+    assert.equal(events.find((event) => event.type === 'turn.edit').text, edited);
+    const state = emptyLog();
+    for (const event of log.window('thread', { tail: 50 }).events) apply(state, event);
+    assert.equal(state.turns.find((turn) => turn.id === 'local-queued')?.text, edited);
+    assert.equal(state.turns.some((turn) => turn.id === 'local-removed'), false);
+  }
+});
+
 test('a parked attachment can be read back for queued-message recovery', () => {
   const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   const data = 'iVBORw0KGgo=';

@@ -160,6 +160,13 @@ export const M = {
   SESSION_INTERRUPT: 'session.interrupt', // { id }
   SESSION_DEQUEUE: 'session.dequeue',   // { id, turnId } -> { found, text? }  pull a queued message back
   SESSION_SEND_NOW: 'session.send-now', // { id, turnId } -> { found, sent }  steer a queued message into the live turn
+  SESSION_QUEUE_EDIT: 'session.queue-edit',
+  SESSION_QUEUE_REORDER: 'session.queue-reorder',
+  SESSION_RECOVER: 'session.recover',
+  SCHEDULE_LIST: 'schedule.list',
+  SCHEDULE_SAVE: 'schedule.save',
+  SCHEDULE_DELETE: 'schedule.delete',
+  SCHEDULE_RUN: 'schedule.run',
   SESSION_NOTIFY: 'session.notify',       // { id, on } -> { ok }  ping me when this thread finishes
   SESSION_MODE: 'session.mode',       // { id, mode } -> { session }
   SESSION_MODEL: 'session.model',

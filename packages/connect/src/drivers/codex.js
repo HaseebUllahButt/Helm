@@ -995,7 +995,7 @@ export class CodexDriver extends Driver {
         this.push('turn.done', {
           turnId: t.id ?? this.#turnId,
           status,
-          usage: last && { input: last.inputTokens, output: last.outputTokens, cacheRead: last.cachedInputTokens },
+          usage: last && { input: last.inputTokens, output: last.outputTokens, cacheRead: last.cachedInputTokens, cacheWrite: last.cacheWriteInputTokens, inputIncludesCache: true },
           durationMs: t.durationMs ?? undefined,
           error: status === 'error' ? (t.error?.message ?? 'turn failed') : undefined,
         });

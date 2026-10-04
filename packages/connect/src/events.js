@@ -110,14 +110,35 @@ function turnStartFor(events, from) {
   return -1;
 }
 
-const TURN_CONTEXT = new Set(['turn.start', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove']);
+const TURN_CONTEXT = new Set(['turn.start', 'turn.edit', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove']);
+
+function pendingTickets(events) {
+  const pending = new Map();
+  for (const event of events) {
+    if (event.type === 'turn.start' && String(event.turnId).startsWith('local-') && event.queued) pending.set(event.turnId, event.text ?? '');
+    else if (event.type === 'turn.edit' && pending.has(event.turnId)) pending.set(event.turnId, event.text ?? '');
+    else if (['turn.deliver', 'turn.accept', 'turn.done', 'turn.remove'].includes(event.type)) pending.delete(event.turnId);
+    else if (event.type === 'turn.start' && !String(event.turnId).startsWith('local-')) {
+      const echo = (event.text ?? '').trim();
+      for (const [turnId, text] of pending) {
+        const prefix = text.trim();
+        if (echo === prefix || (prefix && echo.startsWith(`${prefix}\n`))) { pending.delete(turnId); break; }
+      }
+    }
+  }
+  return new Set(pending.keys());
+}
 
 /** Small identities outside the contiguous tail, never old tool payloads. */
 function anchor(event) {
   const { seq, at, type, id, turnId, kind, parentId, name, queued, local, status, reason } = event;
   const result = { seq, at, type, id, turnId, kind, parentId, name, queued, local, status, reason };
-  if (type === 'turn.start') {
+  if (type === 'turn.start' || type === 'turn.edit') {
     result.text = String(event.text ?? '').slice(0, 8000);
+    if (event.delivery) result.delivery = event.delivery;
+    if (event.references) result.references = event.references;
+    if (event.referenceContext) result.referenceContext = event.referenceContext;
+    if (event.compact != null) result.compact = event.compact;
     if (event.attachments?.length) result.attachments = event.attachments.slice(0, 16).map(a => ({
       filename: a.filename, mime: a.mime, bytes: a.bytes, ref: a.ref, ...(a.ref ? {} : { missing: true }),
     }));
@@ -139,8 +160,10 @@ function anchor(event) {
  */
 function retain(tail, older) {
   const first = tail[0]?.seq ?? 0;
+  const pending = pendingTickets([...older()].reverse().concat(tail));
   const items = new Set(tail.filter(e => e.type.startsWith('item.')).map(e => e.id));
   const owners = new Set(tail.map(e => e.turnId).filter(Boolean));
+  for (const turnId of pending) owners.add(turnId);
   const starts = new Set(tail.filter(e => e.type === 'item.start').map(e => e.id));
   const turns = new Set(tail.filter(e => TURN_CONTEXT.has(e.type)).map(e => `${e.turnId ?? e.seq}:${e.type}`));
   const context = [];
@@ -158,7 +181,7 @@ function retain(tail, older) {
     if (fallback) implicit = false;
     const key = `${event.turnId ?? event.seq}:${event.type}`;
     if (turns.has(key)) continue;
-    turns.add(key); context.push(anchor(event));
+    turns.add(key); context.push(pending.has(event.turnId) ? event : anchor(event));
   }
   return { events: [...context, ...tail].sort((a, b) => a.seq - b.seq), first };
 }
@@ -385,6 +408,7 @@ export class EventLog {
       const included = new Set(events.map((e) => e.seq));
       const itemIds = new Set(events.filter((e) => e.type.startsWith('item.')).map((e) => e.id));
       const owners = new Set(events.map((e) => e.turnId).filter(Boolean));
+      if (!before && !since) for (const turnId of pendingTickets(list)) owners.add(turnId);
       const context = [];
       let contextRoom = Math.max(0, maxBytes - events.reduce((n, e) => n + sizeOf(e), 0));
       for (const e of list.slice(0, front)) {
@@ -403,7 +427,7 @@ export class EventLog {
         }
       }
       for (const e of list.slice(0, front)) {
-        if (owners.has(e.turnId) && ['turn.start', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove'].includes(e.type)
+        if (owners.has(e.turnId) && TURN_CONTEXT.has(e.type)
           && !included.has(e.seq)) context.push(shaped(e));
       }
       if (context.length) events = [...context, ...events].sort((a, b) => a.seq - b.seq);

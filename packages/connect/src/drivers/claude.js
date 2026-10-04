@@ -590,7 +590,7 @@ export class ClaudeDriver extends Driver {
       // CLI says to read the latest rather than sum them. Sessions turns it
       // back into a per-turn figure against the last total it saw.
       costTotalUsd: m.total_cost_usd,
-      usage: m.usage && { input: m.usage.input_tokens, output: m.usage.output_tokens, cacheRead: m.usage.cache_read_input_tokens },
+      usage: m.usage && { input: m.usage.input_tokens, output: m.usage.output_tokens, cacheRead: m.usage.cache_read_input_tokens, cacheWrite: m.usage.cache_creation_input_tokens, inputIncludesCache: false },
       durationMs: m.duration_ms,
       error: m.is_error && !interrupted ? (m.errors?.join('; ') || m.result || m.subtype) : undefined,
     });

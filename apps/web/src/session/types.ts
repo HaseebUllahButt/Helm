@@ -76,7 +76,7 @@ export interface Item {
  * rate. Knowing how much is cached is the difference between warning about
  * that and guessing at it.
  */
-export interface TurnUsage { input?: number; output?: number; cacheRead?: number }
+export interface TurnUsage { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputIncludesCache?: boolean }
 
 export interface TurnEnd {
   status: 'ok' | 'interrupted' | 'error';
@@ -92,6 +92,7 @@ export interface Turn {
   at: number;
   /** Still in helm's outbox: accepted, but the agent has not seen it yet. */
   queued?: boolean;
+  references?: string[];
   /** Handed to the CLI mid-turn: it can no longer be withdrawn. */
   delivered?: boolean;
   /** Used by the CLI inside a running turn; it lives at a seam in that turn. */
@@ -240,7 +241,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         }
         return;
       }
-      const turn: Turn = { id, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true };
+      const turn: Turn = { id, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, references: e.references };
       if (e.local) {
         turn.local = true;
         turn.insideOf = host?.id;
@@ -299,6 +300,11 @@ export function apply(state: LogState, e: HelmEvent): void {
     case 'turn.deliver': {
       const turn = state.turns.find((t) => t.id === e.turnId);
       if (turn) turn.delivered = true;
+      return;
+    }
+    case 'turn.edit': {
+      const turn = state.turns.find((entry) => entry.id === e.turnId);
+      if (turn?.queued && !turn.delivered) turn.text = e.text;
       return;
     }
     case 'turn.accept': {

@@ -108,7 +108,8 @@ test('main task click opens the full child conversation and Back returns to its 
       await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
       await view.addScriptTag({ content:bundle.outputFiles[0].text });
       await view.getByText('parent full conversation response', {exact:true}).waitFor();
-      await view.getByRole('button', {name:'Subagents',exact:true}).click();
+      await view.getByRole('button', {name:'Thread details',exact:true}).click();
+      await view.getByRole('tab', {name:'Agents',exact:true}).click();
       await view.getByRole('button', {name:/Inspect child conversation/}).click();
       await view.getByRole('heading', {name:'Inspect child conversation',exact:true}).waitFor();
       await view.getByRole('dialog', {name:'Subagents'}).waitFor({state:'detached'});
@@ -135,7 +136,7 @@ test('main task click opens the full child conversation and Back returns to its 
   }
 });
 
-test('desktop windows retain the Git header shortcut while phones use the overflow menu', async () => {
+test('desktop and phone headers open unified details with accessible Git navigation', async () => {
   const bundle = await build({ stdin: { contents: `
     import React, { useState } from 'react';
     import { createRoot } from 'react-dom/client';
@@ -173,33 +174,20 @@ test('desktop windows retain the Git header shortcut while phones use the overfl
       await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
       await view.addScriptTag({ content:bundle.outputFiles[0].text });
       const bar = view.locator('.session-bar');
-      const subagents = bar.getByRole('button', {name:'Subagents',exact:true});
-      const git = bar.getByRole('button', {name:'Git graph and changes',exact:true});
-      await subagents.waitFor();
-      assert.equal(await subagents.locator('.cbadge').textContent(), '2');
-      if (!phone) {
-        await git.waitFor();
-        await capture(bar, `session-header-desktop-${width}.png`);
-        assert.equal(await view.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-        await git.click();
-        await view.getByRole('tab', {name:'Graph',exact:true}).click();
-        await view.getByRole('tabpanel', {name:'Graph',exact:true}).waitFor();
-        await view.getByRole('button', {name:'Back to the conversation',exact:true}).click();
-        await bar.getByRole('button', {name:'more',exact:true}).click();
-        assert.equal(await view.getByRole('button', {name:/^Git graph and changes ·/}).count(), 0, 'desktop keeps Git in the header only');
-        assert.equal(await bar.locator('.moredot').isVisible(), false);
-      } else {
-        await bar.locator('.moredot').waitFor();
-        await capture(bar, 'session-header-phone.png');
-        assert.equal(await git.count(), 0, 'a phone header leaves the Git shortcut to the overflow menu');
-        const box = await subagents.boundingBox();
-        assert.ok(box.x + box.width <= 390 && box.height >= 34);
-        assert.ok((await bar.locator('h1').boundingBox()).width > 150, 'the title keeps its room');
-        await bar.getByRole('button', {name:'more',exact:true}).click();
-        await capture(view, 'session-header-phone-menu.png');
-        await view.getByRole('button', {name:'Git graph and changes · 2',exact:true}).click();
-        await view.locator('.changes').waitFor();
-      }
+      const details = bar.getByRole('button', {name:'Thread details',exact:true});
+      await details.waitFor();
+      assert.equal(await details.locator('.cbadge').textContent(), '2');
+      await capture(bar, `session-header-${phone ? 'phone' : 'desktop'}-${width}.png`);
+      assert.equal(await view.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await details.click();
+      const dialog = view.getByRole('dialog', {name:'Thread details',exact:true});
+      await dialog.getByRole('tab', {name:'Changes',exact:true}).click();
+      await dialog.getByRole('tab', {name:'Graph',exact:true}).click();
+      await dialog.getByRole('tabpanel', {name:'Graph',exact:true}).waitFor();
+      assert.equal(await view.getByRole('dialog').count(), 1);
+      await capture(view, `thread-details-${width}.png`);
+      await dialog.getByRole('button', {name:'Close thread details'}).click();
+      assert.equal(await bar.getByRole('button', {name:'Prompt cache',exact:true}).count(), 0);
     } finally { await view.close(); }
   }
 });
@@ -402,7 +390,8 @@ test('Shell back history leaves parent and child chats without cycling between t
       const heading = title=>view.locator('.session-bar h1').filter({hasText:new RegExp('^'+title+'$')});
       await heading('Parent history chat').waitFor();
       const openChild = async title=>{
-        await view.getByRole('button',{name:'Subagents',exact:true}).click();
+        await view.getByRole('button',{name:'Thread details',exact:true}).click();
+        await view.getByRole('tab',{name:'Agents',exact:true}).click();
         await view.getByRole('button',{name:new RegExp(title)}).click();
         await heading(title).waitFor();
       };

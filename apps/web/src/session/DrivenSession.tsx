@@ -8,7 +8,7 @@ import { EngineMark } from '../EngineMark';
 import { PermissionSheet } from './PermissionSheet';
 import { Controls, type Kind } from './Controls';
 import { Transcript, splitNote } from './Transcript';
-import { ChangesPanel, useGitStatus } from './Changes';
+import { useGitStatus } from './Changes';
 import { expandPastes } from './pasteStore';
 import { Confirm, TextPrompt } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
@@ -18,7 +18,8 @@ import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
 import type { Decision, Turn } from './types';
-import { Subagents } from './Subagents';
+import { TeamSummary, useThreadTeam } from './TeamSummary';
+import { ThreadDetails, type DetailsTab } from './ThreadDetails';
 import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
 import { TaskReturn } from './TaskReturn';
@@ -54,9 +55,12 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
   const [draft, setDraftRaw] = useState(() => loadDraft(env.id, session.id));
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const editRevision = useRef(0);
   const setDraft = useCallback((v: string) => {
     editRevision.current += 1;
+    draftRef.current = v;
     setDraftRaw(v);
     saveDraft(env.id, session.id, v);
   }, [env.id, session.id]);
@@ -72,8 +76,23 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
-  const [showChanges, setShowChanges] = useState(false);
-  const [showSubagents, setShowSubagents] = useState(false);
+  const [details, setDetails] = useState<DetailsTab | null>(null);
+  const [delivery, setDelivery] = useState<'auto' | 'queue' | 'steer'>('queue');
+  const [editingQueue, setEditingQueue] = useState<Turn | null>(null);
+  const [references, setReferencesRaw] = useState<{ id: string; title: string }[]>([]);
+  const setReferences = useCallback((next: SetStateAction<{ id: string; title: string }[]>) => {
+    editRevision.current += 1;
+    setReferencesRaw(next);
+  }, []);
+  const [referenceOptions, setReferenceOptions] = useState<{ id: string; title: string }[]>([]);
+  const team = useThreadTeam(client, env.id, session.id);
+  useEffect(() => {
+    let stale = false;
+    client.rpc<{ sessions: Session[] }>(env.id, 'session.list', {}).then((result) => {
+      if (!stale) setReferenceOptions((result.sessions ?? []).filter((item) => item.id !== session.id && !!item.driver && !item.archived).map(({ id, title }) => ({ id, title })));
+    }).catch(() => {});
+    return () => { stale = true; };
+  }, [client, env.id, session.id]);
   /** The message a branch was asked for from, while the confirmation is up. */
   const [branching, setBranching] = useState<Turn | null>(null);
   useDismiss(menu !== null, useCallback(() => setMenu(null), []));
@@ -85,7 +104,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const pending = log.pending[0];
   // Queued messages are the daemon's outbox rendered in the composer, not
   // transcript turns: they only become a bubble once the agent echoes them.
-  const queuedTurns = log.turns.filter((turn) => turn.queued && !turn.done);
+  const queueOrder = new Map((session.queueOrder ?? []).map((id, index) => [id, index]));
+  const queuedTurns = log.turns.filter((turn) => turn.queued && !turn.done).sort((left, right) => (queueOrder.get(left.id) ?? Infinity) - (queueOrder.get(right.id) ?? Infinity));
   const transcriptTurns = log.turns.filter((turn) => !turn.queued);
 
   // The catalogue this device last heard, then the machine's answer behind it.
@@ -197,10 +217,11 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       setPreparingImages((count) => Math.max(0, count - 1));
     }
   };
-  const sendText = async (body: string, atts: Attachment[]) => {
+  const sendText = async (body: string, atts: Attachment[], sentReferences = references) => {
+    setReferences([]);
     setDraft(''); setAttachments([]);
     const clearedAt = editRevision.current;
-    try { await client.rpc(env.id, 'session.input', { id: session.id, data: body, attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000); }
+    try { await client.rpc(env.id, 'session.input', { id: session.id, data: body, delivery, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000); }
     catch (e: any) {
       setError(e.message);
       // Only restore the failed send if the composer is still exactly in the
@@ -210,6 +231,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       if (editRevision.current === clearedAt) {
         setDraft(body);
         setAttachments(atts);
+        setReferences(sentReferences);
       }
     }
   };
@@ -227,12 +249,27 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const resend = (turn: Turn) => {
     const atts = (turn.attachments ?? []).filter((a) => a.data)
       .map((a) => ({ name: a.filename, mime: a.mime, data: a.data!, url: `data:${a.mime};base64,${a.data}` }));
-    void sendText(turn.text.trim(), atts);
+    void sendText(turn.text.trim(), atts, (turn.references ?? []).map((id) => referenceOptions.find((item) => item.id === id) ?? { id, title: id }));
   };
 
   // A queue action in flight, by ticket: the daemon's events are the source
   // of truth for what left the queue, so the button just waits it out.
   const [queueBusy, setQueueBusy] = useState('');
+  const queueAction = async (turn: Turn, method: string, params: object = {}) => {
+    if (queueBusy) return false;
+    setQueueBusy(turn.id); setError('');
+    try { await client.rpc(env.id, method, { id: session.id, turnId: turn.id, ...params }); return true; }
+    catch (failure: any) { setError(failure.message); return false; }
+    finally { setQueueBusy(''); }
+  };
+  const moveQueued = (turn: Turn, direction: -1 | 1) => {
+    const ids = queuedTurns.filter((entry) => !entry.delivered).map((entry) => entry.id);
+    const index = ids.indexOf(turn.id);
+    const next = index + direction;
+    if (index < 0 || next < 0 || next >= ids.length) return;
+    [ids[index], ids[next]] = [ids[next], ids[index]];
+    void queueAction(turn, 'session.queue-reorder', { turnIds: ids });
+  };
 
   /**
    * Pull a queued message back before the agent sees it: the daemon drops
@@ -247,7 +284,9 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       const r: any = await client.rpc(env.id, 'session.dequeue', { id: session.id, turnId: turn.id });
       if (r?.found) {
         const back = splitNote(turn.text).text ?? turn.text;
-        setDraft(draft ? `${draft.replace(/\s*$/, '')}\n${back}` : back);
+        setDraft(draftRef.current ? `${draftRef.current.replace(/\s*$/, '')}\n${back}` : back);
+        if (turn.references?.length) setReferences((current) => [...current, ...turn.references!.filter((id) => !current.some((item) => item.id === id)).map((id) => referenceOptions.find((item) => item.id === id) ?? { id, title: id })].slice(0, 3));
+        if (turn.attachments?.length) setAttachments((current) => [...current, ...turn.attachments!.filter((item) => item.data).map((item) => ({ name: item.filename, mime: item.mime, data: item.data!, url: `data:${item.mime};base64,${item.data}` }))].slice(0, MAX_ATTACHMENTS));
       }
     } catch (e: any) { setError(e.message); }
     finally { setQueueBusy(''); }
@@ -475,25 +514,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           </span>
         </div>
         {chip(status)}
-        <button className="iconbtn subagents-launch" aria-label="Subagents" title="Delegate to another CLI or model"
-          onClick={() => setShowSubagents(true)}><Icon name="subagents" size={17} />{(session.delegations?.length ?? 0) > 0 && <b className="cbadge">{session.delegations!.length}</b>}</button>
-        {git.status?.repo && !session.brain && (
-          <button
-            className={`iconbtn changesbtn${changed ? ' has' : ''}`}
-            title={changed ? `Git · ${changed} changed file${changed === 1 ? '' : 's'}` : 'Git graph and agents'}
-            aria-label="Git graph and changes"
-            onClick={() => setShowChanges(true)}
-          >
-            <Icon name="git" size={17} />
-            {changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}
-          </button>
-        )}
-        {!session.external && !session.brain && onSendTask && (
-          <button className="iconbtn" title="Send task to another machine" aria-label="Send task to another machine"
-            disabled={!env.online || busy} onClick={onSendTask}>
-            <Icon name="transfer" size={17} />
-          </button>
-        )}
+        <button className="iconbtn thread-details-launch" aria-label="Thread details" title="Agents, changes and schedules" onClick={() => setDetails('overview')}><Icon name="subagents" size={17} />{changed > 0 && <b className="cbadge">{changed}</b>}</button>
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -510,10 +531,12 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
             {git.status?.repo && !session.brain && (
-              <button className="git-mobile-only" onClick={() => setShowChanges(true)}>
+              <button onClick={() => setDetails('changes')}>
                 Git graph and changes{changed > 0 ? ` · ${changed > 99 ? '99+' : changed}` : ''}
               </button>
             )}
+            <button onClick={() => setDetails('agents')}>Subagents</button>
+            <button onClick={() => setDetails('schedules')}>Scheduled tasks</button>
             <button aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
               {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
             </button>
@@ -533,6 +556,9 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
 
       <TaskReturn client={client} envId={env.id} transfer={session.taskTransfer}
         original={session.parent} onOpenSession={onOpenMachineSession} />
+      <TeamSummary team={team} onManage={() => setDetails('agents')} onOpen={onOpenSession} onStop={stop} onReview={git.status?.repo ? () => setDetails('changes') : undefined} />
+      {session.recovery && <div className="thread-recovery" role="status"><div><strong>{session.recovery.kind === 'limited' ? 'Usage limit reached' : session.recovery.kind === 'restart' ? 'Interrupted after restart' : session.recovery.kind === 'error' ? 'Task failed' : 'Task stopped'}</strong><p>{session.recovery.message}</p></div>
+        {!working && !pending && <button disabled={busy || !env.online} onClick={() => void call(() => client.rpc(env.id, 'session.recover', { id: session.id }))}>Resume task</button>}</div>}
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
@@ -549,11 +575,19 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
         commands={commands}
+        delivery={delivery} onDelivery={setDelivery}
+        referenceOptions={referenceOptions} references={references}
+        onReference={(id) => { const item = referenceOptions.find((option) => option.id === id); if (item) setReferences((current) => [...current, item].slice(0, 3)); }}
+        onRemoveReference={(id) => setReferences((current) => current.filter((item) => item.id !== id))}
         queued={queuedTurns.map((turn) => ({
           turn, text: splitNote(turn.text).text ?? turn.text,
           attachments: turn.attachments?.length ?? 0, delivered: turn.delivered,
         }))}
         onWithdrawQueued={withdraw}
+        onEditQueued={setEditingQueue}
+        onRemoveQueued={(turn) => void queueAction(turn, 'session.dequeue')}
+        onMoveQueued={moveQueued}
+        onSendQueued={(turn) => void queueAction(turn, 'session.send-now')}
         steers={session.engine === 'codex' || session.engine === 'claude'}
         queueBusy={queueBusy}
         history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
@@ -567,8 +601,11 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>
 
-      {showSubagents && <Subagents key={`${env.id}:${session.id}`} client={client} env={env} parent={session} onClose={() => setShowSubagents(false)}
-        onOpen={onOpenSession ? (s) => { setShowSubagents(false); onOpenSession(s); } : undefined} />}
+      {details && <ThreadDetails client={client} env={env} session={session} tab={details} onTab={setDetails} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
+        onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined} onTransfer={!session.external && !session.brain ? onSendTask : undefined} />}
+      {editingQueue && <TextPrompt title="Edit queued message" multiline value={editingQueue.text} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSubmit={async (text) => {
+        if (await queueAction(editingQueue, 'session.queue-edit', { text })) setEditingQueue(null);
+      }} />}
 
       {branching && (
         <Confirm
@@ -584,14 +621,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
               onOpenSession?.(r.session);
             });
           }}
-        />
-      )}
-
-      {showChanges && git.status?.repo && (
-        <ChangesPanel
-          client={client} env={env} cwd={session.cwd} status={git.status} reload={git.reload}
-          onClose={() => setShowChanges(false)}
-          onOpen={onOpenSession ? (s) => { setShowChanges(false); onOpenSession(s); } : undefined}
         />
       )}
 

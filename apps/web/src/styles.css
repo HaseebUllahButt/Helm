@@ -2159,7 +2159,6 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 }
 .home-search svg { flex: none; color: var(--icon); }
 .home-search .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-search kbd { flex: none; font-size: 10.5px; padding: 1px 6px; color: var(--mutedfg); }
 .home-search:hover { border-color: var(--line-2); color: var(--text-dim); }
 @media (min-width: 900px) {
   .sidebar .home-search { background: var(--bg); }
@@ -2354,3 +2353,70 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 /* The wordmark stays lettered like a hull. */
 .brand .wordmark, .auth-brand h1 { font-family: "Helm Display", var(--sans); }
 .activity-head .alabel { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+.team-summary { flex: none; margin: 8px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); overflow: hidden; max-height: 32vh; overflow-y: auto; }
+.team-summary summary { position: sticky; top: 0; z-index: 1; background: var(--card); padding: 12px 14px; cursor: pointer; font-size: var(--t-meta); }
+.team-summary summary strong { margin-right: 12px; }
+.team-summary summary span { color: var(--text-dim); }
+.team-summary.needs-attention { border-color: var(--amber-text); }
+.team-summary ul { list-style: none; padding: 0 10px 10px; margin: 0; }
+.team-summary li { border-top: 1px solid var(--line); }
+.team-task { display: flex; align-items: center; gap: 10px; text-align: left; width: 100%; background: transparent; border: none; padding: 12px 4px; }
+.team-task-copy { flex: 1; min-width: 0; }
+.team-task b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.team-task small { display: block; color: var(--text-dim); margin-top: 3px; }
+.team-state { flex: none; font-size: var(--t-micro); color: var(--text-dim); }
+.team-state.state-blocked, .team-state.state-error { color: var(--amber-text); }
+.team-result { margin: 0 8px 10px 30px; color: var(--text-dim); font-size: var(--t-meta); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.team-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+.team-actions button { min-height: 36px; font-size: var(--t-meta); padding: 6px 10px; }
+.thread-details-launch { position: relative; }
+.thread-details-back { position: fixed; inset: 0; z-index: 60; background: #0005; display: flex; justify-content: flex-end; }
+.thread-details { width: min(680px, 52vw); height: 100%; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); box-shadow: -12px 0 40px #0002; }
+.details-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 18px 20px 12px; }
+.details-heading > div { min-width: 0; }
+.details-heading h2 { margin: 0; font-size: var(--t-title); }
+.details-heading p { margin: 4px 0 0; font-size: var(--t-meta); color: var(--text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.details-tabs { display: flex; gap: 4px; padding: 0 14px 10px; border-bottom: 1px solid var(--line); }
+.details-tabs button { flex: 1; min-height: 40px; padding: 8px 4px; border: none; background: transparent; font-size: var(--t-meta); }
+.details-tabs button[aria-selected="true"] { background: var(--raised); color: var(--text); }
+.details-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 16px max(16px, env(safe-area-inset-bottom)); }
+.thread-overview dl { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 16px; padding: 8px; font-size: var(--t-meta); }
+.thread-overview dt { color: var(--text-dim); }
+.thread-overview dd { margin: 0; overflow-wrap: anywhere; }
+.thread-details .delegation-panel { width: 100%; max-height: none; box-shadow: none; border: none; padding: 0; background: transparent; }
+.thread-details .delegation-heading { padding: 4px 0 12px; }
+.thread-details .delegation-body { padding: 0; overflow: visible; }
+.thread-details .changes { position: relative; inset: auto; min-height: 65vh; z-index: auto; animation: none; }
+.thread-details .changes > .bar { display: none; }
+.details-refresh { float: right; margin: 0 0 10px; }
+.thread-recovery { flex: none; display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 16px; margin: 8px 16px; background: var(--card); border: 1px solid var(--amber-text); border-radius: 10px; font-size: var(--t-meta); }
+.thread-recovery p { margin: 4px 0 0; overflow-wrap: anywhere; max-height: 70px; overflow: auto; color: var(--text-dim); }
+.thread-recovery button { flex: none; min-height: 40px; }
+.thread-schedules h3 { margin: 4px 0 12px; }
+.schedule-card { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 12px; margin: 12px 0; font-size: var(--t-meta); }
+.schedule-card > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
+.schedule-card p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.schedule-card small { display: block; color: var(--text-dim); margin-top: 6px; }
+.schedule-card .team-actions { padding: 12px 0 0; }
+.schedule-form { display: grid; gap: 12px; padding: 12px 0; }
+.schedule-form label { display: grid; gap: 6px; font-size: var(--t-meta); }
+.schedule-form input, .schedule-form textarea { width: 100%; padding: 10px; }
+.delivery-choice { max-width: 140px; font-size: var(--t-micro); padding: 6px; min-height: 34px; }
+.thread-reference-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
+.thread-reference-chips button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-micro); padding: 6px 8px; }
+.queued-row { flex-wrap: wrap; }
+.queue-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.queue-actions button { min-height: 32px; font-size: var(--t-micro); }
+@media (max-width: 700px) {
+  .thread-details-back { align-items: flex-end; }
+  .thread-details { width: 100%; height: min(88dvh, 900px); border: 1px solid var(--line); border-bottom: none; border-radius: 18px 18px 0 0; }
+  .details-heading { padding: 16px 16px 10px; }
+  .details-content { padding: 12px; }
+  .team-summary { margin: 6px 10px; max-height: 26vh; }
+  .team-task { flex-wrap: wrap; }
+  .team-state { margin-left: auto; }
+  .thread-recovery { margin: 6px 10px; }
+  .delivery-choice { max-width: 116px; }
+  .team-actions button, .queue-actions button { min-height: 40px; }
+}

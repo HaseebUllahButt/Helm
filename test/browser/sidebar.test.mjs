@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
+import { join } from 'node:path';
 
 let browser, script, css;
 before(async () => {
@@ -213,12 +214,13 @@ test('One search control opens the palette, keys work, selection has no left bar
   assert.equal(await sidebar.getByRole('textbox').count(), 0);
   assert.equal(await sidebar.getByRole('button', { name: /Go to/ }).count(), 0);
   assert.equal(await search.count(), 1);
-  assert.equal(await search.getAttribute('title'), 'Search threads, machines and folders (/ or Ctrl/⌘ K)');
-  assert.match(await search.locator('kbd').textContent(), /^(⌘K|Ctrl K)$/);
+  assert.equal(await search.getAttribute('title'), 'Search threads, machines and folders');
+  assert.equal(await search.locator('kbd').count(), 0);
   const label = search.locator('.grow');
   assert.equal(await label.textContent(), 'Search anything');
   const labelFits = await label.evaluate(element => element.scrollWidth <= element.clientWidth);
-  assert.ok(labelFits, 'the visible label is not truncated beside the shortcut in the desktop sidebar');
+  assert.ok(labelFits, 'the visible search label is not truncated in the desktop sidebar');
+  if (process.env.HELM_TEST_SCREENSHOT_DIR) await sidebar.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, 'sidebar-simple-search.png') });
   const searchBounds = await search.boundingBox();
   const padBounds = await sidebar.locator('.side-pad').boundingBox();
   assert.ok(searchBounds.width >= padBounds.width * 0.9, `search button ${searchBounds.width}px spans the ${padBounds.width}px sidebar pad`);

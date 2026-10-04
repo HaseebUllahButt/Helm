@@ -80,6 +80,105 @@ class FakeDriver extends EventEmitter {
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
 
+test('explicit queue mode survives tool steps and supports edits, ordering, and context references', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-queue-controls')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const reference = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  await sessions.input(reference.id, 'Architecture notes');
+  const session = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const driver = FakeDriver.made.at(-1);
+  await sessions.input(session.id, 'Work');
+  driver.push('item.start', { id: 'step', kind: 'tool', turnId: 't1' });
+  await sessions.input(session.id, 'First queued', { delivery: 'queue', references: [reference.id] });
+  await sessions.input(session.id, 'Second queued', { delivery: 'queue' });
+  assert.equal(driver.steered?.length ?? 0, 0);
+  const queued = sessions.history(session.id).events.filter((event) => event.type === 'turn.start' && event.queued);
+  sessions.editQueued(session.id, queued[0].turnId, 'Updated first');
+  sessions.reorderQueue(session.id, queued.map((event) => event.turnId).reverse());
+  assert.throws(() => sessions.reorderQueue(session.id, ['missing']), /queue changed/);
+  driver.push('turn.done', { turnId: 't1', status: 'ok' });
+  driver.push('status', { status: 'idle' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(driver.sent.at(-1), 'Second queued');
+  driver.push('turn.done', { turnId: 't1', status: 'ok' });
+  driver.push('status', { status: 'idle' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(driver.sent.at(-1), /^Updated first\n/);
+  assert.match(driver.sent.at(-1), /Architecture notes/);
+  assert.match(driver.sent.at(-1), /quoted source material/);
+  await assert.rejects(sessions.input(session.id, 'Bad references', { references: [session.id] }), /other threads/);
+  await sessions.stop();
+});
+
+test('rate limits pause queued work and recovery resumes it once', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-recovery-controls')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const session = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const driver = FakeDriver.made.at(-1);
+  await sessions.input(session.id, 'Work');
+  await sessions.input(session.id, 'Queued work', { delivery: 'queue' });
+  driver.push('turn.done', { turnId: 't1', status: 'error', error: 'Usage limit reached' });
+  driver.push('status', { status: 'idle' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(session.recovery.kind, 'limited');
+  assert.equal(driver.sent.length, 1);
+  await sessions.recover(session.id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(driver.sent.length, 2);
+  assert.equal(driver.sent[1], 'Queued work');
+  await sessions.stop();
+});
+
+test('queue order, edited text and reference snapshots survive a daemon restart', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const directory = join(process.env.HELM_DIR, 'events-edited-restart');
+  const drivers = new Map();
+  const options = () => ({
+    events: new EventLog(directory),
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+    makeDriver: (engine, opts) => {
+      const driver = new FakeDriver({ engine, ...opts });
+      drivers.set(opts.env.HELM_SESSION_ID, driver);
+      return driver;
+    },
+  });
+  const original = new Sessions(new StubRuntime(), options());
+  const reference = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  await original.input(reference.id, 'Original architecture notes');
+  const session = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  await original.input(session.id, 'Work');
+  await original.input(session.id, 'Initial queued text', { delivery: 'queue', references: [reference.id] });
+  await original.input(session.id, 'Second queued', { delivery: 'queue' });
+  const tickets = original.history(session.id).events.filter((event) => event.type === 'turn.start' && event.queued);
+  original.editQueued(session.id, tickets[0].turnId, 'Edited queued text');
+  original.reorderQueue(session.id, tickets.map((ticket) => ticket.turnId).reverse());
+  const restarted = new Sessions(new StubRuntime(), options());
+  await restarted.resume();
+  const deadline = Date.now() + 2000;
+  while (drivers.get(session.id).sent?.at(-1) !== 'Second queued' && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  const driver = drivers.get(session.id);
+  assert.deepEqual(driver.sent, ['Second queued']);
+  driver.push('turn.done', { turnId: 't1', status: 'ok' });
+  driver.push('status', { status: 'idle' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(driver.sent[1], /^Edited queued text\n/);
+  assert.match(driver.sent[1], /Original architecture notes/);
+  assert.equal(driver.steered?.length ?? 0, 0);
+  await restarted.kill(session.id);
+  await restarted.kill(reference.id);
+  await original.kill(session.id);
+  await original.kill(reference.id);
+});
+
 test('returned context is delivered once and destination input stays locked after return', async () => {
   const { Sessions, wire } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');

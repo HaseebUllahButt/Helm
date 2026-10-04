@@ -39,6 +39,7 @@ import { Transfers } from './transfers.js';
 import { selfUpdate, currentVersion, autoUpdate } from './update.js';
 import * as gitq from './git.js';
 import { agentCatalog, delegationNote } from './delegation.js';
+import { Schedules } from './schedules.js';
 
 const RECONNECT_MIN = 250;
 const RECONNECT_MAX = 5000;
@@ -276,6 +277,8 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    try { this.schedules = new Schedules({ sessions: this.sessions }); }
+    catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     this.sessions.delegationBrief = () => delegationNote(this.cliAgents ?? []);
     this.handoffs = new Handoffs({
       sessions: this.sessions,
@@ -316,7 +319,9 @@ export class Daemon {
     // than interrupted.
     this.sessions.adoptTerminals()
       .catch(() => {})
-      .then(() => this.sessions.resume());
+      .then(() => this.sessions.resume())
+      .then(() => { if (!this.#stopped) this.schedules?.start(); })
+      .catch((error) => console.error(`[helm] session recovery: ${error.message}`));
     // Caches worth having warm, none worth being late for: they start once
     // the links are up. Re-reading the shell's aliases blocks for a moment,
     // and that moment used to sit in front of this machine coming online.
@@ -484,6 +489,7 @@ export class Daemon {
     clearInterval(this.#reconcile);
     clearInterval(this.#wake);
     this.taskTransfers?.stop();
+    this.schedules?.stop();
     this.#stopWatch?.();
     for (const link of this.#links.values()) link.stop();
     this.mesh?.stop();
@@ -1400,7 +1406,7 @@ export class Daemon {
       });
       case M.SESSION_DETACH:  return this.sessions.detach(p.id);
       case M.SESSION_RESIZE:  return this.sessions.resize(p.id, p.cols, p.rows);
-      case M.SESSION_INPUT:   await this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments }); return { ok: true };
+      case M.SESSION_INPUT:   return this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments, delivery: p.delivery, references: p.references });
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
       case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });
       case M.SESSION_KILL:    return this.sessions.kill(p.id);
@@ -1427,6 +1433,18 @@ export class Daemon {
       case M.SESSION_INTERRUPT: return this.sessions.interrupt(p.id);
       case M.SESSION_DEQUEUE:  return this.sessions.dequeue(p.id, p.turnId);
       case M.SESSION_SEND_NOW: return this.sessions.sendNow(p.id, p.turnId);
+      case M.SESSION_QUEUE_EDIT: return this.sessions.editQueued(p.id, p.turnId, p.text);
+      case M.SESSION_QUEUE_REORDER: return this.sessions.reorderQueue(p.id, p.turnIds);
+      case M.SESSION_RECOVER: return this.sessions.recover(p.id);
+      case M.SCHEDULE_LIST:
+      case M.SCHEDULE_SAVE:
+      case M.SCHEDULE_DELETE:
+      case M.SCHEDULE_RUN:
+        if (!this.schedules) throw new Error('Schedules could not load on this machine.');
+        if (method === M.SCHEDULE_LIST) return this.schedules.list(p.sessionId);
+        if (method === M.SCHEDULE_SAVE) return this.schedules.save(p);
+        if (method === M.SCHEDULE_DELETE) return this.schedules.remove(p.id);
+        return this.schedules.run(p.id);
       case M.SESSION_NOTIFY:   return this.sessions.setNotifyDone(p.id, p.on !== false);
       case M.SESSION_MODE:    return this.sessions.setMode(p.id, p.mode);
       case M.SESSION_MODEL:   return this.sessions.setModel(p.id, p.model);

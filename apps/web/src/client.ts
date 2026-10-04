@@ -75,6 +75,10 @@ export interface Session {
   alive?: boolean;
   createdAt?: number;
   updatedAt?: number;
+  queueOrder?: string[];
+  team?: { working: number; blocked: number; failed: number };
+  recovery?: { kind: 'limited' | 'error' | 'interrupted' | 'restart'; message: string; at: number };
+  lastUsage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputIncludesCache?: boolean; at: number; model?: string };
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;
   /** Set on a terminal helm owns: a pty, not a herdr pane. */
@@ -106,7 +110,7 @@ export interface Session {
   externalActive?: boolean;
   /** This is a transcript monitor which can become driven after handoff. */
   external?: boolean;
-  delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string };
+  delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string; summary?: string; finishedAt?: number };
   taskTransfer?: TaskReturnState & { handoffId: string; role: 'source' | 'destination'; machineId: string; machineName: string };
   parent?: { machineId: string; sessionId: string };
   delegations?: string[];

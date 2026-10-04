@@ -34,7 +34,7 @@ test('task return review preserves local choices and offers the original convers
   } finally {await browser.close();}
 });
 
-test('conversation header exposes Send task and keeps notifications in the menu on desktop and mobile', async () => {
+test('thread details exposes Send task and keeps notifications in the menu on desktop and mobile', async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
@@ -64,7 +64,8 @@ test('conversation header exposes Send task and keeps notifications in the menu 
       await page.goto('http://helm-task-test/');
       await page.addStyleTag({content:readFileSync('apps/web/src/styles.css','utf8')});
       await page.addScriptTag({content:bundle.outputFiles[0].text});
-      await page.locator('.session-bar > button[aria-label="Send task to another machine"]').click();
+      await page.getByRole('button', { name: 'Thread details', exact: true }).click();
+      await page.getByRole('dialog', { name: 'Thread details' }).getByRole('button', { name: 'Send task to another machine', exact: true }).click();
       assert.equal(await page.evaluate(()=>window.sendTaskClicked),true);
       assert.equal(await page.getByRole('button',{name:/completion alerts|completion notifications/}).count(),0);
       await page.getByRole('button',{name:'more',exact:true}).click();

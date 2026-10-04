@@ -1,14 +1,14 @@
 import { useEffect, useRef } from 'react';
 
 /** Keep keyboard interaction in the open sheet and return to its launcher. */
-export function useDialog(onClose: () => void) {
+export function useDialog(onClose: () => void, enabled = true) {
   const ref = useRef<HTMLDivElement>(null);
   const opener = useRef(document.activeElement as HTMLElement | null);
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
     const dialog = ref.current;
-    if (!dialog) return;
+    if (!dialog || !enabled) return;
     const focusable = () => [...dialog.querySelectorAll<HTMLElement>(
       'input:not(:disabled), textarea:not(:disabled), select:not(:disabled), button:not(:disabled), a[href], [tabindex="0"]',
     )].filter((el) => el.tabIndex >= 0 && el.getClientRects().length > 0);
@@ -41,6 +41,6 @@ export function useDialog(onClose: () => void) {
         opener.current.focus();
       }
     };
-  }, []);
+  }, [enabled]);
   return ref;
 }

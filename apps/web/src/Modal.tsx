@@ -41,9 +41,10 @@ export function Confirm({ title, body, confirmLabel = 'Confirm', danger, busy, o
 }
 
 /** "What should it be called?" - the one-field prompt. */
-export function TextPrompt({ title, value, placeholder, submitLabel = 'Save', busy, onCancel, onSubmit }: {
+export function TextPrompt({ title, value, placeholder, submitLabel = 'Save', busy, onCancel, onSubmit, multiline = false }: {
   title: string; value: string; placeholder?: string; submitLabel?: string; busy?: boolean;
   onCancel: () => void; onSubmit: (v: string) => void;
+  multiline?: boolean;
 }) {
   const [text, setText] = useState(value);
   const submit = (e?: FormEvent) => {
@@ -55,11 +56,11 @@ export function TextPrompt({ title, value, placeholder, submitLabel = 'Save', bu
     <Sheet onClose={onCancel} label={title}>
       <form onSubmit={submit}>
         <div className="modal-title">{title}</div>
-        <input
+        {multiline ? <textarea className="modal-input" aria-label={title} value={text} rows={5} maxLength={32000} onChange={(event) => setText(event.target.value)} /> : <input
           className="modal-input" value={text} placeholder={placeholder}
           onChange={(e) => setText(e.target.value)}
           onFocus={(e) => e.target.select()}
-        />
+        />}
         <div className="modal-actions">
           <button type="button" className="ghost" onClick={onCancel} disabled={busy}>Cancel</button>
           <button type="submit" className="primary" disabled={busy || !text.trim()}>{busy ? '…' : submitLabel}</button>

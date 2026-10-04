@@ -15,8 +15,9 @@ const ACTIVE = ['blocked', 'working', 'starting'];
 const stateOf = (task: Session) => task.delegation?.status || task.status;
 
 /** Account → model → task, then a live branch list beside the parent thread. */
-export function Subagents({ client, env, parent, onClose, onOpen }: {
+export function Subagents({ client, env, parent, onClose, onOpen, embedded = false }: {
   client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (session: Session) => void;
+  embedded?: boolean;
 }) {
   const [agents, setAgents] = useState<CliAgent[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -40,7 +41,7 @@ export function Subagents({ client, env, parent, onClose, onOpen }: {
   const [revision, setRevision] = useState(0);
   const [focus, setFocus] = useState('');
   const firstList = useRef(false);
-  const ref = useDialog(() => { if (!busy) onClose(); });
+  const ref = useDialog(() => { if (!busy) onClose(); }, !embedded);
   const fail = (at: string) => (failure: any) => setError({ text: failure?.message || String(failure), at });
   const bump = () => setRevision((count) => count + 1);
   const agent = agents.find((candidate) => candidate.id === account);
@@ -259,11 +260,11 @@ export function Subagents({ client, env, parent, onClose, onOpen }: {
       <ul>{items.map(row)}</ul>
     </section>;
 
-  return <div className="modal-back" onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <div className="modal delegation-panel" ref={ref} role="dialog" aria-modal="true" aria-label="Subagents" tabIndex={-1}>
+  return <div className={embedded ? 'embedded-agents' : 'modal-back'} onClick={(event) => { if (!embedded && event.target === event.currentTarget && !busy) onClose(); }}>
+    <div className={`${embedded ? '' : 'modal '}delegation-panel`} ref={ref} role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : true} aria-label="Subagents" tabIndex={-1}>
       <div className="delegation-heading">
         <div><h2>Subagents</h2><p>{env.name} · {parent.title}</p></div>
-        <button className="iconbtn" aria-label="Close subagents" disabled={busy} onClick={onClose}><Icon name="close" size={18} /></button>
+        {!embedded && <button className="iconbtn" aria-label="Close subagents" disabled={busy} onClick={onClose}><Icon name="close" size={18} /></button>}
       </div>
       <div className="delegation-body">
         {errorBox('')}

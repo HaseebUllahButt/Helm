@@ -22,7 +22,7 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe, delivery, onDelivery, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
@@ -61,11 +61,32 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
    * a button that cannot work should not be drawn.
    */
   onTranscribe?: (audio: string, mime: string) => Promise<string>;
+  delivery?: 'auto' | 'queue' | 'steer';
+  onDelivery?: (delivery: 'auto' | 'queue' | 'steer') => void;
+  onEditQueued?: (turn: Turn) => void;
+  onRemoveQueued?: (turn: Turn) => void;
+  onMoveQueued?: (turn: Turn, direction: -1 | 1) => void;
+  onSendQueued?: (turn: Turn) => void;
+  referenceOptions?: { id: string; title: string }[];
+  references?: { id: string; title: string }[];
+  onReference?: (id: string) => void;
+  onRemoveReference?: (id: string) => void;
 }) {
   const [keys, setKeys] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [pick, setPick] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [referencePick, setReferencePick] = useState(0);
+  const referenceMatch = /(?:^|\s)@([^\n@]{0,80})$/.exec(draft);
+  const referenceMatches = !dismissed && onReference && referenceMatch && references.length < 3
+    ? referenceOptions.filter((item) => !references.some((ref) => ref.id === item.id) && item.title.toLowerCase().includes(referenceMatch[1].toLowerCase())).slice(0, 8) : [];
+  const addReference = (id: string) => {
+    onReference?.(id);
+    setDraft(draft.replace(/@([^\n@]{0,80})$/, ''));
+    setReferencePick(0);
+    ref.current?.focus();
+  };
+  useEffect(() => { setReferencePick(0); }, [draft]);
   const historyAt = useRef<number | null>(null);
   const historyDraft = useRef('');
   const paletteRef = useRef<HTMLDivElement>(null);
@@ -232,6 +253,10 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
           onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
           onDrop={(e) => { setDragging(false); if (take(e.dataTransfer?.files)) e.preventDefault(); }}
         >
+          {!!referenceMatches.length && <div className="palette" role="listbox" aria-label="Attach thread context">
+            {referenceMatches.map((item, index) => <button key={item.id} role="option" aria-selected={index === referencePick} onClick={() => addReference(item.id)} onMouseEnter={() => setReferencePick(index)}><span>@{item.title}</span><small>Attach context</small></button>)}
+          </div>}
+          {!!references.length && <div className="thread-reference-chips">{references.map((item) => <button key={item.id} onClick={() => onRemoveReference?.(item.id)} aria-label={`Remove context: ${item.title}`}>@{item.title}<span aria-hidden="true"> ×</span></button>)}</div>}
           {open && (
             <div className="palette" role="listbox" ref={paletteRef}>
               {matches.map((c, i) => (
@@ -254,9 +279,9 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             <div className="queued-panel">
               <div className="queued-head">
                 <b>{queued.length} waiting</b>
-                <span>{steers ? 'goes in at the next step' : 'goes in when this reply ends'}</span>
+                <span>Messages waiting for delivery</span>
               </div>
-              {queued.map((item) => {
+              {queued.map((item, index) => {
                 const label = item.text || (item.attachments === 1 ? 'Image' : `${item.attachments} images`);
                 const name = label.length > 80 ? `${label.slice(0, 79)}…` : label;
                 const busy = queueBusy === item.turn.id;
@@ -278,6 +303,12 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                         aria-label={`withdraw queued message: ${name}`}
                       >withdraw</button>
                     )}
+                    {!item.delivered && <div className="queue-actions">
+                      {onEditQueued && <button disabled={busy} onClick={() => onEditQueued(item.turn)}>Edit</button>}
+                      {onMoveQueued && <><button disabled={busy || index === 0 || queued[index - 1]?.delivered} aria-label={`Move up: ${name}`} onClick={() => onMoveQueued(item.turn, -1)}>↑</button><button disabled={busy || index === queued.length - 1} aria-label={`Move down: ${name}`} onClick={() => onMoveQueued(item.turn, 1)}>↓</button></>}
+                      {onSendQueued && steers && <button disabled={busy} onClick={() => onSendQueued(item.turn)}>Send now</button>}
+                      {onRemoveQueued && <button disabled={busy} aria-label={`Remove queued message: ${name}`} onClick={() => onRemoveQueued(item.turn)}>Remove</button>}
+                    </div>}
                   </div>
                 );
               })}
@@ -317,6 +348,11 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
               // legacy 229 keyCode, so recognize both before palette/history
               // shortcuts can turn it into a send.
               if ((e as any).isComposing || e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (referenceMatches.length) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setReferencePick((current) => (current + (e.key === 'ArrowDown' ? 1 : referenceMatches.length - 1)) % referenceMatches.length); return; }
+                if (e.key === 'Escape') { e.preventDefault(); setDismissed(true); return; }
+                if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); addReference(referenceMatches[Math.min(referencePick, referenceMatches.length - 1)].id); return; }
+              }
               if (open) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setPick((p) => (p + 1) % matches.length); return; }
                 if (e.key === 'ArrowUp') { e.preventDefault(); setPick((p) => (p - 1 + matches.length) % matches.length); return; }
@@ -395,6 +431,9 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                 chips under the box cost a line of screen on every visit to
                 say what never changes between messages. */}
             {foot ? <div className="slab-controls">{foot}</div> : <span className="spacer" />}
+            {onDelivery && (working || waiting) && <select className="delivery-choice" aria-label="Message delivery" value={delivery} onChange={(event) => onDelivery(event.target.value as 'auto' | 'queue' | 'steer')}>
+              <option value="queue">After this task</option>{steers && <><option value="auto">At next step</option><option value="steer">Send now</option></>}
+            </select>}
             {working && onStop && (
               <button className="stop" onClick={onStop} title="stop the agent" aria-label="stop the agent">
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>

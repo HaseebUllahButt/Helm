@@ -232,8 +232,9 @@ const ownTerminal = (s: Session) => s.engine === 'shell' && !s.archived && s.ali
  * app cannot make.
  */
 const WEEK = 7 * 24 * 60 * 60_000;
+const needsAttention = (session: Session) => session.status === 'blocked' || !!session.team?.blocked || !!session.team?.failed || ['error', 'limited', 'restart'].includes(session.recovery?.kind ?? '');
 const thisWeek = (s: Session) =>
-  s.alive === true || s.status === 'blocked' || s.status === 'working' ||
+  s.alive === true || needsAttention(s) || s.status === 'working' ||
   (s.updatedAt ?? 0) >= Date.now() - WEEK;
 
 /** `~/x` on the machine and `/home/u/x` on the wire are the same folder. */
@@ -811,7 +812,7 @@ function Shell({ client, conn, onSignOut }: {
    * session's name matters outside the app itself.
    */
   const blockedCount = envs.reduce((n, e) =>
-    n + (sessions[e.id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived && s.status === 'blocked').length, 0);
+    n + (sessions[e.id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived && needsAttention(s)).length, 0);
   useEffect(() => {
     const parts: string[] = [];
     if (view?.kind === 'session') parts.push(view.session.title);
@@ -913,8 +914,8 @@ function Shell({ client, conn, onSignOut }: {
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived);
   const workingThreadsOn = (machine: Environment) =>
-    machine.online ? agentsOf(machine.id).filter((thread) => thread.status === 'working') : [];
-  const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter((thread) => thread.status === 'blocked').length;
+    machine.online ? agentsOf(machine.id).filter((thread) => thread.status === 'working' || (thread.team?.working ?? 0) > 0) : [];
+  const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(needsAttention).length;
 
   /**
    * Turning a recording into words, on whichever machine can.
@@ -1023,20 +1024,20 @@ function Shell({ client, conn, onSignOut }: {
     setRemembered((prev) => prev.filter((b) => b.envId !== envId));
   };
 
-  const blockedAll = envs.flatMap((e) => agentsOf(e.id).filter((s) => s.status === 'blocked').map((s) => ({ env: e, s })));
+  const blockedAll = envs.flatMap((e) => agentsOf(e.id).filter(needsAttention).map((s) => ({ env: e, s })));
   const blocked = blockedAll.filter(({ env: e, s }) => !snoozedNow(e.id, s.id));
   const asleep = blockedAll.filter(({ env: e, s }) => snoozedNow(e.id, s.id));
   // Home is one list across every machine: what needs you, and what is
   // running. A brain has its own place under "brains".
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
-  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && thread.status === 'working').sort(byNewest);
+  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !needsAttention(thread) && (thread.status === 'working' || !!thread.team?.working)).sort(byNewest);
   const runningCount = envs.reduce((total, machine) => total + workingThreadsOn(machine).length, 0);
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
   // older work stays available on its machine and through search.
   const doneNow = everyone.filter(({ s }) => (s.driver || s.adopted) && (s.turns ?? 0) > 0
-    && s.status !== 'working' && s.status !== 'blocked'
+    && s.status !== 'working' && !s.team?.working && !needsAttention(s)
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
   const doneIsSaved = doneNow.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));
   const snoozeThread = (envId: string, s: Session, until: number) => {
@@ -1096,11 +1097,10 @@ function Shell({ client, conn, onSignOut }: {
             <button
               type="button" className="home-search" onClick={() => setPalette(true)}
               aria-label="Search threads, machines and folders" aria-keyshortcuts="/ Control+K Meta+K"
-              title="Search threads, machines and folders (/ or Ctrl/⌘ K)"
+              title="Search threads, machines and folders"
             >
               <Icon name="search" size={15} />
               <span className="grow">Search anything</span>
-              {wide && <kbd aria-hidden="true">{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K'}</kbd>}
             </button>
 
             {blocked.map(({ env: e, s }) => (
@@ -2279,10 +2279,10 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
 
   const live = (s: Session) => s.engine !== 'shell' && !s.archived && hit(s);
   const mine = rows.filter(live);
-  const blocked = mine.filter((s) => s.status === 'blocked').sort(byRecent);
-  const working = mine.filter((s) => s.status === 'working').sort(byRecent);
+  const blocked = mine.filter(needsAttention).sort(byRecent);
+  const working = mine.filter((s) => !needsAttention(s) && (s.status === 'working' || !!s.team?.working)).sort(byRecent);
 
-  const rest = mine.filter((s) => s.status !== 'blocked' && s.status !== 'working');
+  const rest = mine.filter((s) => !needsAttention(s) && s.status !== 'working' && !s.team?.working);
   const recent = rest.filter((s) => !botThread(s)).sort(byRecent).slice(0, 3);
   const recentIds = new Set(recent.map((s) => s.id));
 
@@ -2943,7 +2943,7 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
             <span className="need-m">{eng.label} · {dirName(s.cwd)} · {machine}</span>
           </span>
         </span>
-        <span className="need-go">Review and answer<Icon name="forward" size={17} /></span>
+        <span className="need-go">{s.team?.blocked ? `${s.team.blocked} child tasks need approval` : s.team?.failed ? `${s.team.failed} child tasks failed` : s.recovery ? 'Review task recovery' : 'Review and answer'}<Icon name="forward" size={17} /></span>
       </button>
       <div className="need-foot">
         {!choosing ? (

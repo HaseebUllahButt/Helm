@@ -241,11 +241,18 @@ Plain terminals, and agents you started at the keyboard, still run in
 
 ## CLI subagents
 
-Open **Subagents** inside a conversation to choose a CLI account, model,
+Open **Thread details → Agents** (or **Subagents** in the thread menu) to choose a CLI account, model,
 permissions, and a bounded task. Tasks stay attached to that orchestrator
 and do not appear as separate recent chats, search results, or provider-history
 rows. Inspect replies, stop work, send follow-up messages, and answer any
 explicitly configured approval prompts in the parent task panel.
+
+The inline **Team** panel shows nested tasks, model, status, elapsed time,
+and a short result. Child approvals and failures also surface on the parent
+in the sidebar. Finished child tasks return a bounded result to their parent;
+**Stop all** stops descendants and clears pending messages. Late results from
+stopped children do not restart the parent. Archiving hides a task without
+stopping its process.
 
 Helm-managed agents receive a short introduction to these tools on their next
 ordinary message. Any local CLI with shell access can also use them directly
@@ -293,6 +300,46 @@ out stops waiting while the child continues. Exit codes are 0 for success,
 1 for failure or interruption, 2 for a pending approval, and 3 for a wait
 timeout. JSON includes the full child ID and its status; replies are bounded
 to the last 32,000 characters. Open the thread for the full conversation.
+
+### Thread controls
+
+**Thread details** groups machine, folder, account, model, permissions, Git
+changes, agents, schedules, and task transfer in one panel. It opens as a
+side panel on desktop and a bottom sheet on phones.
+
+While an agent works, the composer defaults to **After this task**. On
+supported CLIs, **At next step** hands input over at a tool boundary and
+**Send now** steers the live turn. Queued messages can be edited, reordered,
+removed, or withdrawn into the composer until delivery starts. Edits, order,
+attachments, and attached context survive a daemon restart. Delivery already
+accepted by a CLI is not automatically replayed.
+
+Type **@** to attach up to three other threads from the same machine. Helm
+snapshots bounded text excerpts, not their entire histories or attachments.
+These excerpts are sent to the account/model of the receiving conversation.
+Recovery banners distinguish failures, usage limits, stops, and restarts;
+**Resume task** releases held messages or asks the agent to continue from its
+saved conversation. Usage-limit failures pause queued work instead of retrying
+automatically.
+
+### Scheduled tasks
+
+In **Thread details → Schedules**, create an interval task (minimum five
+minutes), pause/resume it, edit it, run it now, or delete it. It runs in the
+selected thread on its machine, using that thread's current account, model,
+folder, and permissions. Results appear in the same conversation. These are
+normal agent turns and consume provider usage; only schedule trusted tasks.
+
+Schedules persist in `~/.helm/schedules.json`. The machine's daemon must be
+running. Busy, stopped, archived, and attention-needed threads do not receive
+scheduled work. Missed intervals coalesce into one run, not a catch-up burst;
+dispatch failures pause the schedule. The displayed times use your browser's
+local time zone. Interval tasks are not calendar/cron schedules.
+
+Cache keepalive is deferred: this release installs no warmer, sends no
+background cache pings, and exposes no keepalive toggle. Providers' native
+prompt caching remains unchanged. The sidebar search has no shortcut badge;
+Ctrl/Cmd+K and `/` still open search.
 
 ## Brains (optional)
 
@@ -495,8 +542,8 @@ npm run check
 `npm run check` type-checks and builds the web app, then runs the CLI and
 network regression tests.
 
-Browser regressions for Markdown safety, dialog focus, the command palette,
-and CLI subagent controls:
+Browser regressions cover Markdown safety, dialog focus, the command palette,
+CLI subagents, thread details, queue controls, references, and schedules:
 
 ```bash
 npm exec --workspace @helm/web -- playwright install chromium

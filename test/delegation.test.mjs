@@ -117,6 +117,54 @@ test('native CLI callers can delegate without a Helm parent session', async (t) 
   assert.equal(session.cwd, process.env.HELM_DIR);
 });
 
+test('team attention updates after archive, restore and deletion', async (context) => {
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  assert.equal(parent.team.working, 1);
+  drivers.get(child.id).push('status', { status: 'blocked' });
+  assert.equal(parent.team.blocked, 1);
+  assert.equal(parent.team.working, 0);
+  sessions.archive(child.id);
+  assert.deepEqual(parent.team, { working: 0, blocked: 0, failed: 0 });
+  sessions.archive(child.id, false);
+  assert.equal(parent.team.blocked, 1);
+  await sessions.kill(child.id);
+  assert.deepEqual(parent.team, { working: 0, blocked: 0, failed: 0 });
+});
+
+test('stopping a parent cascades and late child results cannot restart it', async (context) => {
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const { session: grandchild } = await sessions.delegate({ id: child.id, profileId: 'codex-main', task: 'Check tests' });
+  await sessions.interrupt(parent.id);
+  assert.equal(sessions.get(child.id).delegation.status, 'interrupted');
+  assert.equal(sessions.get(grandchild.id).delegation.status, 'interrupted');
+  assert.deepEqual(parent.team, { working: 0, blocked: 0, failed: 0 });
+  await sessions.input(parent.id, 'A new user request');
+  drivers.get(child.id).finish();
+  drivers.get(grandchild.id).finish();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(drivers.get(parent.id).sent, 'A new user request');
+  assert.equal(sessions.history(parent.id).events.some((event) => String(event.turnId).startsWith('local-result-')), false);
+  assert.equal(sessions.get(child.id).delegation.status, 'interrupted');
+});
+
+test('a child completion wakes its idle parent once with a durable result ticket', async (context) => {
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  drivers.get(child.id).finish();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(drivers.get(parent.id).sent, /Opus reviewed the task/);
+  const tickets = sessions.history(parent.id).events.filter((event) => event.type === 'turn.start' && String(event.turnId).startsWith('local-result-'));
+  assert.equal(tickets.length, 1);
+  assert.ok(sessions.get(child.id).delegation.notifiedSeq > 0);
+  const duplicate = await sessions.input(parent.id, 'Duplicate result', { turnId: tickets[0].turnId, source: 'delegation' });
+  assert.equal(duplicate.duplicate, true);
+});
+
 test('an inherited parent cannot attach an unrelated Codex background thread', async (t) => {
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
