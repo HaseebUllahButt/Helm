@@ -107,6 +107,8 @@ export interface Session {
   /** This is a transcript monitor which can become driven after handoff. */
   external?: boolean;
   delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string };
+  taskTransfer?: TaskReturnState & { handoffId: string; role: 'source' | 'destination'; machineId: string; machineName: string };
+  parent?: { machineId: string; sessionId: string };
   delegations?: string[];
 }
 
@@ -297,6 +299,14 @@ export interface TaskTransferResult {
   warning?: string;
   preflight: TransferPreflight;
   receipt?: { sessionId: string; folder: string; files: number; bytes: number };
+}
+export interface TaskReturnState {
+  status: string;
+  error?: string;
+  folder?: string;
+  sourceFolder?: string;
+  conflicts?: string[];
+  changed?: number;
 }
 
 /** A folder a machine designated 'nas' has agreed to serve. */

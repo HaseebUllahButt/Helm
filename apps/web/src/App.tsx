@@ -1383,6 +1383,7 @@ function Shell({ client, conn, onSignOut }: {
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
             onOpenSession={(s) => openRelatedSession(env.id, s)}
+            onOpenMachineSession={openSession}
             onClosed={() => { if (view.session.brain) dropBrain(env.id); loadSessions(env.id); back(); }}
             onArchived={() => { loadSessions(env.id); back(); }}
             onSession={onSessionChanged(env.id)}

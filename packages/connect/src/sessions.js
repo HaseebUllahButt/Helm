@@ -112,7 +112,7 @@ const EXTERNAL = /^(pane:|found:)/;
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
-export const wire = ({ promptSample, unsent, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, originHandoffId, delegationReply, ...s }) => s;
+export const wire = ({ promptSample, unsent, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, originHandoffId, delegationReply, taskReturnContext, ...s }) => s;
 
 const EXTERNAL_INFO_COMMANDS = [
   { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
@@ -548,6 +548,12 @@ export class Sessions extends EventEmitter {
   hasActiveDelegations(id) {
     return [...this.#index.values()].some((s) => s.delegation?.parentId === id
       && (['starting', 'working', 'blocked'].includes(s.delegation.status ?? s.status) || this.hasActiveDelegations(s.id)));
+  }
+
+  canReturnTask(id) {
+    return ['idle', 'done'].includes(this.get(id).status)
+      && !this.#sending.has(id) && !this.#outbox.get(id)?.length
+      && !this.events.activeTurn(id) && !this.hasActiveDelegations(id);
   }
 
   /**
@@ -1595,6 +1601,31 @@ export class Sessions extends EventEmitter {
     return { ok: true, session: s };
   }
 
+  setTaskTransfer(id, transfer) {
+    const session = this.get(id);
+    session.taskTransfer = transfer;
+    session.updatedAt = Date.now();
+    this.#save();
+    this.emit('session', session);
+  }
+
+  receiveTaskReturn(id, { context, ...transfer }) {
+    const session = this.get(id);
+    const turnId = `returned-${transfer.handoffId}-${transfer.status}`;
+    if (transfer.status === 'returned' && session.taskReturnAppliedId !== turnId) {
+      session.taskReturnContext = context;
+      session.taskReturnAppliedId = turnId;
+      this.#save();
+    }
+    if (!this.events.turnState(id, turnId)) {
+      const message = transfer.status === 'returned'
+        ? `Task returned from ${transfer.machineName}. Project changes are applied here.`
+        : `Task returned from ${transfer.machineName}. Local changes need review; the returned copy is in ${transfer.folder}.`;
+      this.#emitLocal(session, turnId, message, context);
+    }
+    this.setTaskTransfer(id, transfer);
+  }
+
   async setMode(id, mode) {
     if (mode === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
     const s = this.get(id);
@@ -1905,6 +1936,9 @@ export class Sessions extends EventEmitter {
    */
   async input(id, text, { raw = false, attachments = [], turnId: requestedTurnId = null } = {}) {
     const s = this.get(id);
+    if (s.taskTransfer?.role === 'destination' && ['returning', 'returned', 'conflict'].includes(s.taskTransfer.status)) {
+      throw new Error(`This task is returning to ${s.taskTransfer.machineName}; continue on the original machine.`);
+    }
     if (s.driver && !raw && /^\s*\/(?:plan|plan-mode)(?:\s|$)/i.test(text)) {
       throw new Error('plan mode is not supported; dispatch the task directly');
     }
@@ -2160,10 +2194,14 @@ export class Sessions extends EventEmitter {
       // ACP reports image support only after initialize. Start it before
       // checking capabilities so queued images are restored faithfully too.
       if (item.images.length) await d.start?.();
+      const returnedContext = !item.text.trimStart().startsWith('/') ? s.taskReturnContext : null;
+      const prompt = returnedContext
+        ? `This task ran on another machine and its finished changes have returned to this project. Here is the result for context:\n${returnedContext}\n\nCurrent user request:\n${item.text}`
+        : item.text;
       if (item.images.length && driverTakesImages(d)) {
-        await d.sendWithAttachments(item.text, item.images);
+        await d.sendWithAttachments(prompt, item.images);
       } else {
-        let msg = item.text;
+        let msg = prompt;
         if (item.images.length) {
           const names = item.images.map((a) => `[image: ${a.filename || 'image'} - this agent cannot see images]`).join('\n');
           msg = msg ? `${msg}\n${names}` : names;
@@ -2175,6 +2213,10 @@ export class Sessions extends EventEmitter {
           });
         }
         await d.send(msg);
+      }
+      if (returnedContext && s.taskReturnContext === returnedContext) {
+        delete s.taskReturnContext;
+        this.#save();
       }
       if (s.unsent) { delete s.unsent; this.#save(); }
     } catch (err) {

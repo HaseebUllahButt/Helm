@@ -307,6 +307,38 @@ export function openTaskPrompt(envelope, handoffId) {
   return task.prompt;
 }
 
+export function openCodeSnapshot(envelope, handoffId) {
+  return validateSnapshot(openEnvelope(envelope, handoffId));
+}
+
+export function openTaskDelta(envelope, handoffId, baseline) {
+  const delta = openEnvelope(envelope, handoffId);
+  if (delta?.type !== 'task-delta' || !Array.isArray(delta.files) || !Array.isArray(delta.deleted)
+      || delta.deleted.length > MAX_FILES || delta.files.length > MAX_FILES) throw new Error('invalid task delta');
+  const changed = new Set();
+  const files = new Map(baseline.files.map((file) => [file.path, file]));
+  for (const path of delta.deleted) {
+    if (typeof path !== 'string' || !files.has(path) || changed.has(path)) throw new Error('invalid deleted path in task delta');
+    files.delete(path);
+    changed.add(path);
+  }
+  for (const file of delta.files) {
+    if (!file || changed.has(file.path)) throw new Error('duplicate changed path in task delta');
+    files.set(file.path, file);
+    changed.add(file.path);
+  }
+  const snapshot = { v: VERSION, rootName: delta.rootName, files: [...files.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0),
+    skipped: delta.skipped, skippedEntries: delta.skippedEntries, git: delta.git };
+  snapshot.digest = snapshotDigest(snapshot);
+  return validateSnapshot(snapshot);
+}
+
+export function canonicalSnapshot(snapshot) {
+  const canonical = { ...snapshot, files: [...snapshot.files].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0) };
+  canonical.digest = snapshotDigest(canonical);
+  return canonical;
+}
+
 function openEnvelope(envelope, handoffId, privateKey = null) {
   if (!envelope || envelope.v !== VERSION || envelope.alg !== 'X25519-A256GCM'
       || envelope.zip !== 'br') {

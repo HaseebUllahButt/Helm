@@ -17,10 +17,14 @@
  * it is left on disk so the damage is visible instead of silently wiped.
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { HELM_DIR } from './paths.js';
-import { materializeCode, restoreGitMetadata, verifyHandoffSignature, openTaskPrompt } from './code-transfer.js';
+import { materializeCode, restoreGitMetadata, verifyHandoffSignature, openTaskPrompt,
+  createCodeSnapshot, sealCodeSnapshot, signHandoffDigest, canonicalSnapshot, openCodeSnapshot } from './code-transfer.js';
+import { taskCheckpoint, checkpointChanges } from './task-git.js';
+import { readThread } from './brain.js';
+import { taskReturnDigest } from './task-return.js';
 import { getProfiles } from './profiles.js';
 import { defaultMode } from './modes.js';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
@@ -67,6 +71,7 @@ export const handoffRequestDigest = (p) => sha256(JSON.stringify({
   prompt: p.prompt,
   ...(p.restoreGit !== undefined ? { restoreGit: p.restoreGit } : {}),
   ...(p.promptEnvelope !== undefined ? { promptEnvelope: p.promptEnvelope } : {}),
+  ...(p.returnToSource !== undefined ? { returnToSource: p.returnToSource, includeEnv: p.includeEnv } : {}),
 }));
 
 /** One line of printable text, or null. Same bar the roster holds. */
@@ -92,6 +97,7 @@ export class Handoffs {
     this.records = this.#load().handoffs;
     /** handoffId -> in-flight accept promise; the second caller joins it. */
     this.inflight = new Map();
+    this.returning = new Map();
   }
 
   #net() {
@@ -167,7 +173,10 @@ export class Handoffs {
       sourceSignature: SOURCE_SIG.test(p.sourceSignature ?? '') ? p.sourceSignature : null,
       restoreGit: p.restoreGit,
       promptEnvelope: p.promptEnvelope,
+      returnToSource: p.returnToSource,
+      includeEnv: p.includeEnv,
     };
+    if (p.returnToSource !== undefined && (typeof p.returnToSource !== 'boolean' || typeof p.includeEnv !== 'boolean')) throw new Error('invalid task return options');
     if (p.restoreGit !== undefined && typeof p.restoreGit !== 'boolean') throw new Error('invalid restoreGit option');
     if (p.promptEnvelope !== undefined && (!p.promptEnvelope || typeof p.promptEnvelope !== 'object')) throw new Error('invalid encrypted task prompt');
     if (p.folder !== undefined && out.folder === null) throw new Error('invalid handoff folder');
@@ -240,6 +249,7 @@ export class Handoffs {
   }
 
   async #run(p, existing, digest) {
+    if (existing && existsSync(join(`${this.file}.returns`, `${p.handoffId}.json`))) return { ...existing };
     const prompt = p.promptEnvelope ? openTaskPrompt(p.promptEnvelope, p.handoffId) : p.prompt;
     const record = existing ?? {
       handoffId: p.handoffId,
@@ -250,6 +260,7 @@ export class Handoffs {
       folder: null, digest: null, files: 0, bytes: 0, skipped: 0,
       sessionId: null, status: 'accepted', error: null,
       createdAt: Date.now(), updatedAt: Date.now(),
+      returnToSource: p.returnToSource === true, includeEnv: p.includeEnv === true,
     };
     if (!existing) this.#put(record);
     try {
@@ -281,6 +292,11 @@ export class Handoffs {
         record.gitRestore = await restoreGitMetadata(record.folder, record.git)
           .catch((err) => ({ restored: false, error: String(err?.message || err).slice(0, MAX_ERROR) }));
         record.gitRestoredAt = Date.now();
+        this.#put(record);
+      }
+      if (record.returnToSource && !record.checkpoint) {
+        record.checkpoint = taskCheckpoint(join(`${this.file}.checkpoints`, p.handoffId),
+          openCodeSnapshot(p.envelope, p.handoffId));
         this.#put(record);
       }
       if (!record.sessionId) {
@@ -335,6 +351,10 @@ export class Handoffs {
       record.status = 'running';
       record.error = null;
       this.#put(record);
+      if (record.returnToSource && !existsSync(join(`${this.file}.returns`, `${p.handoffId}.json`))) this.sessions.setTaskTransfer?.(record.sessionId, {
+        handoffId: p.handoffId, role: 'destination', status: 'running', machineId: p.sourceMachineId,
+        machineName: this.#machine(p.sourceMachineId)?.name ?? p.sourceMachineId,
+      });
       return { ...record };
     } catch (err) {
       // The record keeps whatever completed; a retry resumes from there.
@@ -360,5 +380,87 @@ export class Handoffs {
     const record = this.records[handoffId];
     if (!record || record.sourceMachineId !== caller) throw new Error('unknown handoff');
     return { ...record };
+  }
+
+  async collect(handoffId, caller) {
+    const record = this.status(handoffId, caller);
+    if (!record.returnToSource) throw new Error('this task did not request an automatic return');
+    const running = this.returning.get(handoffId);
+    if (running) return running;
+    const work = this.#collect(record).finally(() => this.returning.delete(handoffId));
+    this.returning.set(handoffId, work);
+    return work;
+  }
+
+  async #collect(record) {
+    const directory = `${this.file}.returns`;
+    const file = join(directory, `${record.handoffId}.json`);
+    if (existsSync(file)) {
+      const session = this.sessions.get(record.sessionId);
+      if (!['returning', 'returned', 'conflict'].includes(session.taskTransfer?.status)) {
+        this.sessions.setTaskTransfer?.(session.id, {
+          handoffId: record.handoffId, role: 'destination', status: 'returning',
+          machineId: record.sourceMachineId, machineName: this.#machine(record.sourceMachineId)?.name,
+        });
+      }
+      return JSON.parse(readFileSync(file, 'utf8'));
+    }
+    if (!record.sessionId || record.status !== 'running') return { status: 'working' };
+    const session = this.sessions.get(record.sessionId);
+    if (this.sessions.canReturnTask && !this.sessions.canReturnTask(session.id)) return { status: 'working' };
+    if (!['idle', 'done'].includes(session.status) || this.sessions.hasActiveDelegations?.(session.id)) return { status: 'working' };
+    const history = await this.sessions.history(session.id, { tail: 500, limit: 500 });
+    const completion = history.events.findLast((event) => event.type === 'turn.done');
+    if (history.pending?.length || completion?.status !== 'ok') return { status: 'waiting' };
+    if (!['idle', 'done'].includes(this.sessions.get(session.id).status)
+        || this.sessions.hasActiveDelegations?.(session.id)
+        || (this.sessions.canReturnTask && !this.sessions.canReturnTask(session.id))) return { status: 'working' };
+    const source = this.#machine(record.sourceMachineId);
+    if (!source?.codePubkey) throw new Error('the original machine has no pinned return encryption key');
+    const endActivity = beginTransferActivity();
+    try {
+      const snapshot = canonicalSnapshot(createCodeSnapshot(record.folder, { includeEnv: record.includeEnv }));
+      const checkpointDirectory = join(`${this.file}.checkpoints`, record.handoffId);
+      const commit = taskCheckpoint(checkpointDirectory, snapshot, record.checkpoint);
+      const changed = new Set(checkpointChanges(checkpointDirectory, record.checkpoint, commit));
+      const present = new Set(snapshot.files.map((entry) => entry.path));
+      const delta = { type: 'task-delta', rootName: snapshot.rootName,
+        files: snapshot.files.filter((entry) => changed.has(entry.path)),
+        deleted: [...changed].filter((path) => !present.has(path)),
+        skipped: snapshot.skipped, skippedEntries: snapshot.skippedEntries, git: snapshot.git };
+      const returnId = sha256(`${record.handoffId}:return`).slice(0, 24);
+      const context = readThread(history.events, { limit: 100 }).join('\n').slice(-32_000);
+      const response = {
+        status: 'complete', handoffId: record.handoffId, returnId,
+        sourceMachineId: this.#net().self, targetMachineId: record.sourceMachineId,
+        originalDigest: record.digest, snapshotDigest: snapshot.digest, sessionId: session.id,
+        baseCommit: record.checkpoint, commit,
+        envelope: sealCodeSnapshot(delta, source.codePubkey, returnId),
+        promptEnvelope: sealCodeSnapshot({ type: 'task-prompt', prompt: context || 'The remote task completed.' }, source.codePubkey, returnId),
+      };
+      response.requestDigest = taskReturnDigest(response);
+      response.signature = signHandoffDigest(response.requestDigest);
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      writeFileSync(`${file}.tmp`, JSON.stringify(response), { mode: 0o600 });
+      renameSync(`${file}.tmp`, file);
+      this.sessions.setTaskTransfer?.(session.id, {
+        handoffId: record.handoffId, role: 'destination', status: 'returning',
+        machineId: record.sourceMachineId, machineName: source.name,
+      });
+      return response;
+    } finally { endActivity(); }
+  }
+
+  returned(params, caller) {
+    const record = this.status(params.handoffId, caller);
+    if (!record.returnToSource || !['returned', 'conflict'].includes(params.status)) throw new Error('invalid return acknowledgement');
+    const file = join(`${this.file}.returns`, `${params.handoffId}.json`);
+    const sent = JSON.parse(readFileSync(file, 'utf8'));
+    if (params.requestDigest !== sent.requestDigest) throw new Error('return acknowledgement does not match the delivered task');
+    this.sessions.setTaskTransfer?.(record.sessionId, {
+      handoffId: record.handoffId, role: 'destination', status: params.status,
+      machineId: caller, machineName: this.#machine(caller)?.name ?? caller,
+    });
+    return { ok: true };
   }
 }

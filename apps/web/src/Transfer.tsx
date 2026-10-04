@@ -6,6 +6,8 @@ import {
 import { bytes } from './format';
 import { BackIcon, Icon } from './Icon';
 import { Route } from './Route';
+import { TaskReturn } from './session/TaskReturn';
+import type { TaskReturnState } from './client';
 
 const leaf = (p: string) => p.replace(/\/+$/, '').split('/').pop() || p;
 
@@ -55,6 +57,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
   const [profileId, setProfileId] = useState('');
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [taskResult, setTaskResult] = useState<TaskTransferResult | null>(null);
+  const [returnState, setReturnState] = useState<TaskReturnState>({ status: 'waiting' });
   const [handoffId] = useState(() => Array.from(crypto.getRandomValues(new Uint8Array(12)),
     (value) => value.toString(16).padStart(2, '0')).join(''));
   const [targetFolder, setTargetFolder] = useState('');
@@ -72,6 +75,16 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
     if (!targets.some((t) => t.id === targetId)) setTargetId(targets[0]?.id ?? '');
   }, [targets, targetId]);
   const target = targets.find((t) => t.id === targetId) ?? null;
+
+  useEffect(() => {
+    if (!taskResult) return;
+    let live = true;
+    const refresh = () => client.rpc<{ return: TaskReturnState }>(source.id, 'task.status', { handoffId })
+      .then((reply) => { if (live) setReturnState(reply.return); }).catch(() => {});
+    void refresh();
+    const timer = setInterval(refresh, 3000);
+    return () => { live = false; clearInterval(timer); };
+  }, [client, source.id, source.online, handoffId, taskResult]);
 
   useEffect(() => {
     if (!task || !targetId || locked) return;
@@ -111,7 +124,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
     : (preflight?.warnings.filter((w) => w.code === 'env-omitted').length ?? 0);
   const warnings = (preflight?.warnings ?? []).filter((w) => w.code !== 'filename-policy');
   const shownWarnings = warnings.slice(0, 8);
-  const needsAck = !!preflight?.requiresAcknowledgement;
+  const needsAck = !task && !!preflight?.requiresAcknowledgement;
   const envCanChoose = !!preflight && !previewing
     && (preflight.skipped > 0 || preflight.envFiles.length > 0 || includeEnv);
   const canSend = !!preview && !!target && !busy && !previewing && (!needsAck || ack)
@@ -127,7 +140,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
         const sent = await client.rpc<TaskTransferResult>(source.id, 'task.send', {
           handoffId, folder, sessionId: session?.id, targetMachineId: target.id,
           targetFolder: targetFolder.trim() || undefined, profileId,
-          prompt, includeEnv, allowSkipped: needsAck && ack,
+          prompt, includeEnv: true, allowSkipped: true,
         }, 360_000);
         if (!sent.sent && sent.requiresAcknowledgement) {
           setLocked(false);
@@ -228,6 +241,8 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
             </div>
             {taskResult.receipt && <p className="note">{taskResult.receipt.files} files · {bytes(taskResult.receipt.bytes)} · {taskResult.route === 'direct' ? 'Direct WebRTC' : 'Via hub'}<br />{taskResult.receipt.folder}</p>}
             <p className="note">The destination agent checks project setup and recreates dependencies before continuing. Its progress and any questions appear in the destination thread.</p>
+            <TaskReturn client={client} envId={source.id} transfer={{ ...returnState, handoffId, role: 'source',
+              machineId: taskResult.targetMachineId!, machineName: taskResult.targetName! }} />
             {taskResult.warning && <div className="banner">{taskResult.warning}</div>}
             {error && <div className="error">{error}</div>}
             <div className="transfer-actions">
@@ -352,6 +367,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
               )}
             </div>
 
+            <details open={task ? undefined : true}><summary>Agent and destination options</summary>
             {task && <div className="field"><label className="field-label">Agent account on the destination
               <select className="custom" value={profileId} disabled={busy || locked || agentsLoading}
                 onChange={(event) => setProfileId(event.target.value)}>
@@ -360,7 +376,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
               </select>
             </label></div>}
 
-            <label className={`check-row${envCanChoose ? '' : ' disabled'}`}>
+            {!task && <label className={`check-row${envCanChoose ? '' : ' disabled'}`}>
               <input
                 type="checkbox" checked={includeEnv} disabled={!envCanChoose || busy || locked}
                 onChange={(e) => setIncludeEnv(e.target.checked)}
@@ -375,7 +391,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
                       : 'No .env files were found.'}
                 </small>
               </span>
-            </label>
+            </label>}
 
             <div className="field">
               <label className="field-label">
@@ -388,6 +404,9 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
                 />
               </label>
             </div>
+
+            </details>
+            {task && <p className="note">Project files and .env are included automatically, encrypted end to end. Finished changes return here when this machine is online; conflicting local edits are kept for review.</p>}
 
             {warnings.length > 0 && (
               <>

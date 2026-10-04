@@ -2,6 +2,36 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
+test('task return review preserves local choices and offers the original conversation', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { TaskReturn } from './apps/web/src/session/TaskReturn';
+    const root = createRoot(document.getElementById('root'));
+    const transfer = {handoffId:'handoff',role:'source',status:'conflict',machineId:'remote',machineName:'VM',
+      folder:'/returned-copy',conflicts:['app.js']};
+    const client = {rpc:async(env,method,params)=>{
+      window.request={env,method,params};
+      return {session:{id:'original',cwd:'/project'}};
+    }};
+    window.renderReturn = (destination=false) => root.render(<TaskReturn client={client} envId='source'
+      transfer={destination ? {...transfer,role:'destination',status:'returned'} : transfer}
+      original={{machineId:'laptop',sessionId:'original'}}
+      onOpenSession={(machineId,session)=>{window.opened={machineId,session};}} />);
+    window.renderReturn();
+  `, resolveDir:process.cwd(),loader:'tsx' },bundle:true,write:false,format:'iife',jsx:'automatic'});
+  const browser = await chromium.launch({headless:true,...(process.env.HELM_TEST_CHROMIUM ? {executablePath:process.env.HELM_TEST_CHROMIUM} : {})});
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({content:bundle.outputFiles[0].text});
+    await page.getByRole('button',{name:'Keep my conflicting edits',exact:true}).click();
+    assert.deepEqual(await page.evaluate(()=>window.request),{env:'source',method:'task.retry-return',params:{handoffId:'handoff',keepLocal:['app.js']}});
+    await page.evaluate(()=>window.renderReturn(true));
+    await page.getByRole('button',{name:'Continue on original machine',exact:true}).click();
+    assert.deepEqual(await page.evaluate(()=>window.opened),{machineId:'laptop',session:{id:'original',cwd:'/project'}});
+  } finally {await browser.close();}
+});
 
 test('managed agent conversation exposes Send task in its menu', async () => {
   const bundle = await build({ stdin: { contents: `
@@ -53,6 +83,7 @@ test('Send task includes env, keeps a retry identity, and opens the destination 
       rpc:async(env,method,params)=>{
         if(method==='agent.list') return {agents:[{id:'codex',label:'Codex',available:true}]};
         if(method==='session.events') return {session:{id:'remote',cwd:'/destination'}};
+        if(method==='task.status') return {return:{status:'returned'}};
         if(method!=='task.send') throw new Error('Unexpected method '+method);
         window.attempts.push(params);
         if(window.attempts.length===1) throw new Error('Reply lost; retry the task');
@@ -71,7 +102,7 @@ test('Send task includes env, keeps a retry identity, and opens the destination 
     await page.addScriptTag({content:bundle.outputFiles[0].text});
     await page.getByRole('button',{name:'Send task to VM',exact:true}).click();
     await page.getByText('Reply lost; retry the task',{exact:true}).waitFor();
-    assert.equal(await page.getByLabel('Include .env files').isChecked(),true);
+    assert.equal(await page.getByLabel('Include .env files').count(),0);
     assert.equal(await page.getByLabel('Instructions for continuing').isDisabled(),true);
     await page.getByRole('button',{name:'Retry to VM',exact:true}).click();
     await page.getByText('Running on VM',{exact:true}).waitFor();
@@ -79,6 +110,8 @@ test('Send task includes env, keeps a retry identity, and opens the destination 
     assert.equal(attempts.length,2);
     assert.deepEqual(attempts[0],attempts[1]);
     assert.equal(attempts[0].includeEnv,true);
+    assert.equal(attempts[0].allowSkipped,true);
+    await page.getByText('Task returned here',{exact:true}).waitFor();
     assert.equal(attempts[0].sessionId,'original');
     await page.getByRole('button',{name:'Open task there',exact:true}).click();
     assert.deepEqual(await page.evaluate(()=>window.opened),{env:'target',session:{id:'remote',cwd:'/destination'}});

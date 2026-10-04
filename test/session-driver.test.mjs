@@ -80,6 +80,34 @@ class FakeDriver extends EventEmitter {
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
 
+test('returned context is delivered once and destination input stays locked after return', async () => {
+  const { Sessions, wire } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-return')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const session = await sessions.start({ cwd: '/tmp', profileId: 'claudea', mode: 'readonly' });
+  const driver = FakeDriver.made.at(-1);
+  const returned = { handoffId: 'abc', role: 'source', status: 'returned', machineName: 'VM',
+    context: 'Remote implementation and test results.' };
+  sessions.receiveTaskReturn(session.id, returned);
+  sessions.receiveTaskReturn(session.id, returned);
+  assert.equal(sessions.history(session.id).events.filter((event) => event.type === 'turn.start').length, 1);
+  assert.equal(wire(sessions.get(session.id)).taskReturnContext, undefined);
+  await sessions.input(session.id, 'Review the result');
+  assert.match(driver.sent[0], /Remote implementation and test results/);
+  assert.match(driver.sent[0], /Review the result/);
+  driver.push('turn.done', { turnId: 't1', status: 'ok' });
+  driver.push('status', { status: 'idle' });
+  sessions.receiveTaskReturn(session.id, returned);
+  await sessions.input(session.id, 'Next step');
+  assert.equal(driver.sent[1], 'Next step');
+  assert.equal(sessions.get(session.id).mode, 'readonly');
+  sessions.setTaskTransfer(session.id, { ...returned, role: 'destination', status: 'returning' });
+  await assert.rejects(() => sessions.input(session.id, 'Edit here'), /original machine/);
+  await sessions.kill(session.id);
+});
 class FailingDriver extends EventEmitter {
   static last = null;
   constructor(opts) {

@@ -277,6 +277,7 @@ export class Daemon {
           M.DISPATCH_SUBMIT, { targetMachineId, params }, { timeout: 120_000, remoteOnly: true });
       },
     });
+    this.taskTransfers.start();
     // The line the brain gets in front of what the owner types. Read from the
     // snapshot on disk rather than the network, because it is on the send
     // path: a message must not wait on every machine answering. The refresh
@@ -462,6 +463,7 @@ export class Daemon {
     clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
     clearInterval(this.#wake);
+    this.taskTransfers?.stop();
     this.#stopWatch?.();
     for (const link of this.#links.values()) link.stop();
     // A locally terminated tunnel is a live socket even after every hub link
@@ -760,6 +762,7 @@ export class Daemon {
   }
 
   onLinkUp(link) {
+    void this.taskTransfers?.reconcile();
     const local = link.url.includes('127.0.0.1');
     if (!local) this.#noteRemote(true);
     console.log(
@@ -1517,6 +1520,14 @@ export class Daemon {
         return this.handoffs.accept(p, caller);
       case M.TASK_SEND:
         return this.taskTransfers.send(p, caller);
+      case M.TASK_COLLECT:
+        return this.handoffs.collect(p.handoffId, caller);
+      case M.TASK_RETURNED:
+        return this.handoffs.returned(p, caller);
+      case M.TASK_STATUS:
+        return this.taskTransfers.status(p, caller);
+      case M.TASK_RETRY_RETURN:
+        return this.taskTransfers.retryReturn(p, caller);
       case M.HANDOFF_STATUS:
         return this.handoffs.status(p.handoffId, caller);
       case M.TRANSFER_RECEIVE:

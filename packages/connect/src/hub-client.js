@@ -82,7 +82,7 @@ function rpcVia(hub, net, env, method, params, timeout, { direct = false, onRout
   // One handshake per socket: the credential it yields is spent on use.
   async function attempt(url) {
     const token = await hubCredential(net, hub);
-    const useDirect = direct && ['transfer.accept', 'handoff.accept'].includes(method);
+    const useDirect = direct && ['transfer.accept', 'handoff.accept', 'task.collect'].includes(method);
     const directModule = useDirect ? await import('./direct-rpc.js').catch(() => null) : null;
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url, {

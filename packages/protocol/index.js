@@ -188,6 +188,10 @@ export const M = {
   HANDOFF_ACCEPT: 'handoff.accept',// { handoffId, sourceMachineId, targetMachineId, folder?, envelope, snapshotDigest, profileId, model?, mode?, title?, parent?, prompt, requestDigest, sourceSignature } -> receipt
   HANDOFF_STATUS: 'handoff.status',// { handoffId } -> receipt
   TASK_SEND: 'task.send',
+  TASK_COLLECT: 'task.collect',
+  TASK_RETURNED: 'task.returned',
+  TASK_STATUS: 'task.status',
+  TASK_RETRY_RETURN: 'task.retry-return',
 
   TRANSFER_RECEIVE: 'transfer.receive',
   // The controller-driven path: preview on the source, invite on the target,

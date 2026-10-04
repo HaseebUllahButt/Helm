@@ -59,6 +59,19 @@ function sendFrame(channel, frame) {
   }
 }
 
+async function sendBuffered(channel, frame) {
+  if (!channel || channel.readyState !== 'open') return;
+  const pieces = fragment(frame, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+  const deadline = Date.now() + 120_000;
+  for (const piece of pieces) {
+    while (channel.readyState === 'open' && channel.bufferedAmount > 512 * 1024 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (channel.readyState !== 'open' || Date.now() >= deadline) return;
+    channel.send(piece);
+  }
+}
+
 export class PeerHub {
   #peers = new Map();
 
@@ -177,16 +190,16 @@ export class PeerHub {
     if (msg.t !== 'rpc') return;
 
     const reply = (body) => {
-      sendFrame(peer.channel, JSON.stringify({ t: 'rpcResult', ...body }));
+      return sendBuffered(peer.channel, JSON.stringify({ t: 'rpcResult', ...body }));
     };
 
     try {
-      reply({ id: msg.id, ok: true, result: await this.dispatch(msg.method, msg.params ?? {}, peer.device) });
+      await reply({ id: msg.id, ok: true, result: await this.dispatch(msg.method, msg.params ?? {}, peer.device) });
     } catch (err) {
-      reply({
+      await reply({
         id: msg.id, ok: false,
         error: { code: err.code || 'error', message: String(err?.message || err) },
-      });
+      }).catch(() => {});
     }
   }
 

@@ -299,10 +299,27 @@ is listed with when it was last seen rather than left out.
 source agent, copies the project and recent conversation, and starts a
 continuation using an agent account on the destination. In **Send a project**,
 enable **Send a task with this project** to start a new task instead.
-Project `.env` files are included by default for tasks and written with `0600`
-permissions; turn the option off to exclude them. Files and task context are
+Choose **Send task to another machine**, pick the machine, and send. Project
+`.env` files are included automatically and written with `0600` permissions;
+there is no environment checkbox in the task UI. Files and task context are
 encrypted to the destination and signed by the source. No GitHub checkout,
 fetch or Git history restoration is performed for this flow.
+
+After a successful completed turn (with no outstanding questions or delegated
+work), changes return automatically when the original machine is online.
+Reconnection triggers a check; Helm also checks every 30 seconds. A running
+original thread is never overwritten: return waits until it is idle.
+Private Git checkpoints identify changed files and deletions, so unchanged
+files are not uploaded again. Git must be installed on both machines; a Git
+repository or GitHub account is not required. Checkpoints live in Helm's
+private storage, not your project history, and may contain project secrets.
+Nothing is committed or pushed to your project's Git remote by a task transfer.
+
+Non-overlapping local edits are preserved. Overlapping changes pause the return
+with a **Returned changes need review** banner and a separate complete returned
+copy. Resolve the files and recheck, or choose **Keep my conflicting edits**.
+The original conversation receives the result and continuation context; the
+destination thread becomes read-only once its return snapshot is sealed.
 
 Task and project transfers try a direct WebRTC data channel with
 bounded send buffering, using a hub for signalling. If a direct connection

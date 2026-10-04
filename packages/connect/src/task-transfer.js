@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { M } from '@helm/protocol';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
-import { HELM_DIR } from './paths.js';
-import { createCodeSnapshot, sealCodeSnapshot, signHandoffDigest } from './code-transfer.js';
+import { HELM_DIR, expand } from './paths.js';
+import { createCodeSnapshot, sealCodeSnapshot, signHandoffDigest, verifyHandoffSignature,
+  openCodeSnapshot, openTaskPrompt, materializeCode, openTaskDelta, codeKeyInfo } from './code-transfer.js';
+import { taskCheckpoint } from './task-git.js';
+import { snapshotBaseline, taskReturnDigest, applyReturnedSnapshot } from './task-return.js';
 import { handoffRequestDigest } from './handoffs.js';
 import { transferPreflight } from './transfer-check.js';
 import { readThread } from './brain.js';
@@ -19,6 +22,7 @@ export class TaskTransfers {
   constructor({ network, sessions, rpc, enqueue, directory = join(HELM_DIR, 'outgoing-tasks') }) {
     Object.assign(this, { network, sessions, rpc, enqueue, directory });
     this.inflight = new Map();
+    this.returning = new Map();
   }
 
   async send(params, caller) {
@@ -35,7 +39,8 @@ export class TaskTransfers {
       targetMachineId: params.targetMachineId, folder: params.folder,
       targetFolder: params.targetFolder || null, sessionId: params.sessionId || null,
       profileId: params.profileId, model: params.model || null, mode: params.mode || null,
-      prompt: params.prompt || '', includeEnv: params.includeEnv === true,
+      prompt: params.prompt || '', includeEnv: params.includeEnv !== false,
+      returnToSource: params.returnToSource !== false,
     };
     if (!line(intent.folder, 1024)) throw new Error('a task needs a source folder');
     if (!line(intent.profileId, 256)) throw new Error('choose an agent account on the target');
@@ -68,7 +73,13 @@ export class TaskTransfers {
   async #send(net, target, params, intent, fingerprint) {
     const file = join(this.directory, `${params.handoffId}.json`);
     let record = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null;
-    if (record && record.fingerprint !== fingerprint) throw new Error('task retry does not match its original request');
+    if (record && record.fingerprint !== fingerprint) {
+      const { returnToSource, ...legacyIntent } = intent;
+      const legacyFingerprint = createHash('sha256').update(JSON.stringify(legacyIntent)).digest('hex');
+      if (record.request.returnToSource !== undefined || record.fingerprint !== legacyFingerprint) {
+        throw new Error('task retry does not match its original request');
+      }
+    }
     if (record?.result?.status === 'running') return record.result;
     if (!record) {
       if (!target.codePubkey) throw new Error('the target needs a code-transfer key; restart Helm there');
@@ -108,6 +119,7 @@ export class TaskTransfers {
         envelope: sealCodeSnapshot(snapshot, target.codePubkey, params.handoffId),
         profileId: intent.profileId, model: intent.model || undefined, mode,
         restoreGit: false,
+        returnToSource: intent.returnToSource, includeEnv: intent.includeEnv,
         title: (source?.title || intent.prompt.trim().split('\n')[0]).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 120),
         prompt: [
           `Continue this task on ${target.name ?? target.id} in the current working directory.`,
@@ -127,9 +139,16 @@ export class TaskTransfers {
       request.prompt = 'Continue the encrypted task using its transferred project.';
       request.requestDigest = handoffRequestDigest(request);
       request.sourceSignature = signHandoffDigest(request.requestDigest);
-      record = { fingerprint, request, preflight };
+      record = { fingerprint, request, preflight,
+        sourceFolder: resolve(expand(intent.folder)), baseline: snapshotBaseline(snapshot),
+        checkpoint: intent.returnToSource ? taskCheckpoint(join(this.directory, `${params.handoffId}.git-checkpoints`), snapshot) : null,
+        baselineEnvelope: intent.returnToSource ? sealCodeSnapshot(snapshot, codeKeyInfo().codePubkey, params.handoffId) : null };
       this.#save(params.handoffId, record);
     }
+    const sourceSession = record.request.parent?.sessionId;
+    if (sourceSession && record.request.returnToSource) this.sessions.setTaskTransfer?.(sourceSession, {
+      handoffId: params.handoffId, role: 'source', status: 'running', machineId: target.id, machineName: target.name,
+    });
     let receipt;
     let route = 'relay';
     try {
@@ -157,5 +176,123 @@ export class TaskTransfers {
     record.result = result;
     this.#save(params.handoffId, record);
     return result;
+  }
+
+  start() {
+    this.timer = setInterval(() => { void this.reconcile(); }, 30_000);
+    this.timer.unref?.();
+    this.initial = setTimeout(() => { void this.reconcile(); }, 3000);
+    this.initial.unref?.();
+  }
+
+  stop() {
+    this.stopped = true;
+    clearInterval(this.timer);
+    clearTimeout(this.initial);
+  }
+
+  async reconcile() {
+    if (this.scanning || this.stopped) return;
+    this.scanning = true;
+    try {
+      const files = existsSync(this.directory) ? readdirSync(this.directory) : [];
+      for (const file of files) {
+        if (this.stopped) break;
+        if (!/^[a-f0-9]{24}\.json$/.test(file)) continue;
+        const id = file.slice(0, -5);
+        if (this.inflight.has(id)) continue;
+        await this.collect(id).catch(() => {});
+      }
+    } catch {} finally { this.scanning = false; }
+  }
+
+  status(params, caller) {
+    const net = this.network();
+    if (!caller || net.revoked?.[caller] || !(caller === net.self || net.devices?.[caller])) throw new Error('task status is for this machine or a paired device only');
+    if (!ID.test(params?.handoffId ?? '')) throw new Error('invalid handoff id');
+    const record = JSON.parse(readFileSync(join(this.directory, `${params.handoffId}.json`), 'utf8'));
+    return { handoffId: params.handoffId, returnToSource: record.request.returnToSource === true,
+      return: record.return ?? { status: 'waiting', error: record.returnError } };
+  }
+
+  async retryReturn(params, caller) {
+    const status = this.status(params, caller);
+    if (params.keepLocal !== undefined) {
+      if (!Array.isArray(params.keepLocal) || params.keepLocal.some((path) => !status.return.conflicts?.includes(path))) throw new Error('only reported conflicts can keep the local version');
+      const file = join(this.directory, `${params.handoffId}.json`);
+      const record = JSON.parse(readFileSync(file, 'utf8'));
+      record.keepLocal = [...new Set([...(record.keepLocal ?? []), ...params.keepLocal])];
+      this.#save(params.handoffId, record);
+    }
+    await this.collect(params.handoffId, true);
+    return this.status(params, caller);
+  }
+
+  async collect(id, retry = false) {
+    if (!ID.test(id)) throw new Error('invalid handoff id');
+    if (this.returning.has(id)) return this.returning.get(id);
+    const work = this.#collect(id, retry).finally(() => this.returning.delete(id));
+    this.returning.set(id, work);
+    return work;
+  }
+
+  async #collect(id, retry) {
+    const file = join(this.directory, `${id}.json`);
+    const record = JSON.parse(readFileSync(file, 'utf8'));
+    if (!record.request.returnToSource || !record.baseline) return;
+    if (!retry && ['returned', 'conflict'].includes(record.return?.status) && record.return.acknowledged) return;
+    const net = this.network();
+    const targetId = record.request.targetMachineId;
+    const target = net.machines[targetId];
+    if (!target || net.revoked?.[targetId]) return;
+    const sourceSessionId = record.request.parent?.sessionId;
+    let sourceSession;
+    try { sourceSession = sourceSessionId ? this.sessions.get(sourceSessionId) : null; } catch {}
+    if (['starting', 'working', 'blocked'].includes(sourceSession?.status)) return;
+    const endActivity = beginTransferActivity();
+    try {
+      if (!record.return || !['returned', 'conflict'].includes(record.return.status) || retry) {
+        const response = record.returnPayload ?? await this.rpc(targetId, M.TASK_COLLECT, { handoffId: id }, { timeout: 120_000, direct: true });
+        if (response.status !== 'complete') return;
+        if (response.handoffId !== id || !ID.test(response.returnId ?? '')
+            || response.sourceMachineId !== targetId || response.targetMachineId !== net.self
+            || response.originalDigest !== record.request.snapshotDigest
+            || response.baseCommit !== record.checkpoint
+            || response.requestDigest !== taskReturnDigest(response)
+            || !verifyHandoffSignature(target.codeSignPubkey, response.requestDigest, response.signature)) {
+          throw new Error('the returned task did not verify against the destination identity');
+        }
+        const baseline = openCodeSnapshot(record.baselineEnvelope, id);
+        const snapshot = openTaskDelta(response.envelope, response.returnId, baseline);
+        if (snapshot.digest !== response.snapshotDigest) throw new Error('returned snapshot digest mismatch');
+        const context = openTaskPrompt(response.promptEnvelope, response.returnId);
+        record.returnPayload = response;
+        this.#save(id, record);
+        const envelope = sealCodeSnapshot(snapshot, codeKeyInfo().codePubkey, response.returnId);
+        const receipt = await materializeCode(envelope, response.returnId, undefined, { expectedDigest: response.snapshotDigest });
+        writeFileSync(join(receipt.folder, '.helm', 'result.md'), context, { mode: 0o600 });
+        if (sourceSession && ['starting', 'working', 'blocked'].includes(this.sessions.get(sourceSessionId).status)) return;
+        const applied = applyReturnedSnapshot(record.sourceFolder, record.baseline, snapshot, response.returnId, record.keepLocal);
+        record.return = { ...applied, folder: receipt.folder, sourceFolder: record.sourceFolder,
+          requestDigest: response.requestDigest, receivedAt: Date.now(), acknowledged: false };
+        record.returnContext = record.keepLocal?.length
+          ? `${context}\n\nThe user kept their original-machine edits for these conflicts: ${JSON.stringify(record.keepLocal)}. Preserve those choices.` : context;
+        this.#save(id, record);
+      }
+      if (sourceSession) this.sessions.receiveTaskReturn?.(sourceSessionId, {
+        handoffId: id, role: 'source', ...record.return,
+        machineId: targetId, machineName: target.name, context: record.returnContext,
+      });
+      await this.rpc(targetId, M.TASK_RETURNED, { handoffId: id,
+        status: record.return.status, requestDigest: record.return.requestDigest }, { timeout: 15_000 });
+      record.return.acknowledged = true;
+      this.#save(id, record);
+    } catch (error) {
+      if (!record.return) {
+        record.returnError = String(error.message).slice(0, 500);
+        this.#save(id, record);
+      }
+      throw error;
+    } finally { endActivity(); }
   }
 }

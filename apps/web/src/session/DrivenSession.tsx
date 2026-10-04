@@ -21,6 +21,7 @@ import type { Decision, Turn } from './types';
 import { Subagents } from './Subagents';
 import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
+import { TaskReturn } from './TaskReturn';
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
@@ -35,7 +36,7 @@ type Attachment = { name: string; mime: string; data: string; url: string };
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
-export function DrivenSession({ client, env, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask }: {
+export function DrivenSession({ client, env, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onOpenMachineSession }: {
   client: Client; env: Environment; session: Session;
   /** The socket's own health, so a dropped connection shows where it matters. */
   conn?: { online: boolean; reachable: boolean };
@@ -47,6 +48,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   /** Open a branch, subagent, or its parent conversation. */
   onOpenSession?: (s: Session) => void;
   onSendTask?: () => void;
+  onOpenMachineSession?: (machineId: string, session: Session) => void;
 }) {
   const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
   // The draft outlives the view: leaving to answer another thread and coming
@@ -542,6 +544,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         )}
       </div>
 
+      <TaskReturn client={client} envId={env.id} transfer={session.taskTransfer}
+        original={session.parent} onOpenSession={onOpenMachineSession} />
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}

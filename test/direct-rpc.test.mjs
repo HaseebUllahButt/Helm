@@ -12,7 +12,7 @@ test('machine WebRTC RPC transfers a fragmented payload and authenticates the ca
       assert.equal(method, 'handoff.accept');
       assert.equal(caller, 'source-machine');
       assert.equal(params.data, payload);
-      return { sessionId: 'destination', bytes: params.data.length };
+      return { sessionId: 'destination', bytes: params.data.length, data: payload };
     },
   );
   try {
@@ -21,7 +21,7 @@ test('machine WebRTC RPC transfers a fragmented payload and authenticates the ca
       frame: { t: 'rpc', id: 'one', method: 'handoff.accept', params: { data: payload } },
       connectTimeout: 10_000, timeout: 15_000,
     });
-    assert.deepEqual(await request.result, { sessionId: 'destination', bytes: payload.length });
+    assert.deepEqual(await request.result, { sessionId: 'destination', bytes: payload.length, data: payload });
   } finally { request?.close(); receiver.stop(); }
 });
 
