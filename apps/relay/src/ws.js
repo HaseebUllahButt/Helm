@@ -39,6 +39,12 @@ export function createWsLayer() {
   const tunnels = new Map();
   /** signalling peer id -> client socket, so a daemon can answer an offer */
   const signalPeers = new Map();
+  let mesh;
+  let meshIds = new Set();
+  const reachable = {
+    has: (id) => online.has(id) || !!mesh?.machines().has(id),
+    get: (id) => online.get(id) ?? mesh?.machines().get(id),
+  };
 
   const send = (sock, t, extra) => {
     if (sock?.readyState === 1) sock.send(JSON.stringify({ t, ...extra }));
@@ -66,16 +72,51 @@ export function createWsLayer() {
     }
   }
 
-  function notifyPresence(envId, isOnline) {
+  function notifyPresence(envId) {
     const net = loadNetwork();
     const cached = q.stateGet.get(envId);
     const payload = {
       env: envId,
-      online: isOnline,
-      info: JSON.parse(cached?.info || '{}'),
+      online: reachable.has(envId),
+      info: reachable.get(envId)?.info ?? JSON.parse(cached?.info || '{}'),
       name: net?.machines?.[envId]?.name,
     };
     for (const sock of clients.keys()) send(sock, T.PRESENCE, payload);
+    publishHubState();
+  }
+
+  function publishHubState(recipient) {
+    const net = loadNetwork();
+    const machines = [...online].filter(([id]) => !net?.revoked?.[id])
+      .map(([id, sock]) => ({ id, info: sock.info }));
+    for (const sock of recipient ? [recipient] : online.values()) {
+      if (sock.hubSubscriptions) send(sock, T.HUB_STATE, { machines });
+    }
+  }
+
+  function watchMesh() {
+    mesh?.watch(new Set([...clients.values()].flatMap(subs => [...subs])));
+  }
+
+  function meshChanged() {
+    const next = new Set(mesh?.machines().keys());
+    for (const id of new Set([...meshIds, ...next])) {
+      if (meshIds.has(id) !== next.has(id)) notifyPresence(id);
+    }
+    meshIds = next;
+  }
+
+  function meshEvent(frame) {
+    if (online.has(frame.env) || !mesh?.machines().has(frame.env)) return;
+    for (const [sock, subs] of clients) {
+      if (subs.has(frame.env)) send(sock, T.EVENT, { ...frame, t: T.EVENT });
+    }
+  }
+
+  function attachMesh(bridge) {
+    mesh = bridge;
+    watchMesh();
+    meshChanged();
   }
 
   /**
@@ -261,9 +302,31 @@ export function createWsLayer() {
     const envId = sock.envId;
 
     switch (msg.t) {
+      case T.HUB_WATCH: {
+        const net = loadNetwork();
+        if (!net || net.revoked?.[envId]) return;
+        sock.hubSubscriptions = new Set(Array.isArray(msg.envs)
+          ? msg.envs.filter(id => net.machines[id] && !net.revoked?.[id]) : []);
+        publishHubState(sock);
+        return;
+      }
+
+      case T.HUB_RPC: {
+        const net = loadNetwork();
+        if (!net || net.revoked?.[envId] || net.revoked?.[msg.sub]
+            || !(Object.hasOwn(net.machines, msg.sub) || Object.hasOwn(net.devices ?? {}, msg.sub))
+            || !Object.hasOwn(net.machines, msg.env) || net.revoked?.[msg.env]
+            || msg.method === M.DISPATCH_SUBMIT || msg.method === M.DISPATCH_STATUS) {
+          return send(sock, T.RPC_RESULT, {
+            id: msg.id, ok: false, error: { code: 'forbidden', message: 'invalid forwarded request' },
+          });
+        }
+        return handleClientFrame(sock, { ...msg, t: T.RPC }, { sub: msg.sub, directOnly: true });
+      }
+
       case T.RPC_RESULT: {
         const route = pending.get(msg.id);
-        if (!route) return;
+        if (!route || route.target !== sock) return;
         pending.delete(msg.id);
         send(route.socket, T.RPC_RESULT, { ...msg, id: route.originalId });
         return;
@@ -284,6 +347,9 @@ export function createWsLayer() {
         }
         for (const [sock2, subs] of clients) {
           if (subs.has(envId)) send(sock2, T.EVENT, { ...msg, env: envId });
+        }
+        for (const watcher of online.values()) {
+          if (watcher.hubSubscriptions?.has(envId)) send(watcher, T.HUB_EVENT, { ...msg, t: T.HUB_EVENT, env: envId });
         }
         return;
       }
@@ -417,14 +483,16 @@ export function createWsLayer() {
 
   // ------------------------------------------------------------- client side
 
-  function handleClientFrame(sock, msg) {
+  function handleClientFrame(sock, msg, { sub = sock.sub, directOnly = false } = {}) {
     switch (msg.t) {
       case T.SUBSCRIBE:
         clients.get(sock)?.add(msg.env);
+        watchMesh();
         return;
 
       case T.UNSUBSCRIBE:
         clients.get(sock)?.delete(msg.env);
+        watchMesh();
         return;
 
       case T.RPC: {
@@ -446,6 +514,15 @@ export function createWsLayer() {
         }
         const target = online.get(msg.env);
         if (!target) {
+          if (!directOnly && mesh?.machines().has(msg.env)) {
+            mesh.call(msg.env, msg.method, msg.params ?? {}, {
+              sub, timeout: msg.method === M.TASK_SEND ? 420_000 : RPC_TIMEOUT_MS,
+            }).then(result => send(sock, T.RPC_RESULT, { id: msg.id, ok: true, result }),
+              error => send(sock, T.RPC_RESULT, {
+                id: msg.id, ok: false, error: { code: error.code || 'error', message: error.message },
+              }));
+            return;
+          }
           // A sleeping machine is not zero usage. If it left its rollup with
           // us while it was attached, fold it for the window asked and answer
           // as it would have - marked stale, because it is a memory.
@@ -461,7 +538,7 @@ export function createWsLayer() {
           });
         }
         const relayId = newId(8);
-        pending.set(relayId, { socket: sock, originalId: msg.id });
+        pending.set(relayId, { socket: sock, originalId: msg.id, target });
         // Do not let a wedged daemon leak routing entries forever.
         setTimeout(() => {
           if (!pending.delete(relayId)) return;
@@ -475,7 +552,7 @@ export function createWsLayer() {
           // Who is asking travels with the call, so methods that answer
           // "for you" - a media ticket minted for the caller alone - work
           // over the hub exactly as they do over a direct channel.
-          sub: sock.sub,
+          sub,
         });
         return;
       }
@@ -646,6 +723,7 @@ export function createWsLayer() {
       // waiting behind file data on a slow connection.
       sock.isAlive = true;
       try {
+        if (loadNetwork()?.revoked?.[sock.envId ?? sock.sub]) return;
         if (sock.envId) handleDaemonFrame(sock, msg);
         else handleClientFrame(sock, msg);
       } catch (err) {
@@ -655,6 +733,16 @@ export function createWsLayer() {
 
     sock.on('close', () => {
       dropTunnelsFor(sock);
+      for (const [id, route] of pending) {
+        if (route.socket === sock) pending.delete(id);
+        else if (route.target === sock) {
+          pending.delete(id);
+          send(route.socket, T.RPC_RESULT, {
+            id: route.originalId, ok: false,
+            error: { code: 'disconnected', message: 'daemon disconnected; delivery may be uncertain' },
+          });
+        }
+      }
       if (sock.envId) {
         if (online.get(sock.envId) === sock) {
           online.delete(sock.envId);
@@ -664,14 +752,12 @@ export function createWsLayer() {
         }
       } else {
         clients.delete(sock);
+        watchMesh();
         // Leaving is the last moment it was here. Skipped for a member that
         // has just been removed: its socket closing is the kick, and writing
         // a row for it would leave a trace of someone the owner cut.
         if (sock.sub && !loadNetwork()?.revoked?.[sock.sub]) markSeen(sock.sub);
         if (sock.peerId) signalPeers.delete(sock.peerId);
-        for (const [id, route] of pending) {
-          if (route.socket === sock) pending.delete(id);
-        }
       }
     });
   });
@@ -742,6 +828,7 @@ export function createWsLayer() {
       try { q.seenDelete.run(id); } catch { /* presence is a courtesy */ }
     }
     for (const sock of online.values()) send(sock, T.ROSTER, { hash });
+    meshChanged();
   });
 
   const stop = () => {
@@ -782,8 +869,9 @@ export function createWsLayer() {
   };
 
   /** An RPC to a machine's daemon, originated by the hub itself. */
-  function callEnv(env, method, params = {}, { timeout = 15_000 } = {}) {
+  function callEnv(env, method, params = {}, { timeout = 15_000, sub } = {}) {
     const target = online.get(env);
+    if (!target && mesh?.machines().has(env)) return mesh.call(env, method, params, { timeout, sub });
     if (!target) return Promise.reject(new Error('environment is not connected'));
     return new Promise((resolve, reject) => {
       const id = newId(8);
@@ -799,8 +887,8 @@ export function createWsLayer() {
         msg.ok ? resolve(msg.result)
                : reject(Object.assign(new Error(msg.error?.message || 'rpc failed'), { code: msg.error?.code }));
       });
-      pending.set(relayId, { socket: inner, originalId: id });
-      send(target, T.RPC, { id: relayId, method, params });
+      pending.set(relayId, { socket: inner, originalId: id, target });
+      send(target, T.RPC, { id: relayId, method, params, sub });
     });
   }
 
@@ -863,5 +951,5 @@ export function createWsLayer() {
     });
   }
 
-  return { wss, online, connectedDevices, broadcastPeers, kick, routeTunnel, callEnv, openTcp, stop };
+  return { wss, online, reachable, attachMesh, meshChanged, meshEvent, connectedDevices, broadcastPeers, kick, routeTunnel, callEnv, openTcp, stop };
 }

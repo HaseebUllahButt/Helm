@@ -176,7 +176,16 @@ watchdog restarts abandoned attempts, and returning from sleep checks the
 connection immediately. Project lists use the same safe read fallback as chat
 snapshots; reconnecting refreshes the list and clears obsolete timeout errors.
 
-While the app is open, it rechecks hub reachability every fifteen seconds and
+Local hubs reuse their daemon's existing outbound links to reach machines
+attached to another hub. Machine presence, session lists, chat reads, actions,
+and subscribed events follow that route without making the browser open a new
+connection to the public hub. Forwarding is one hop to a directly attached
+machine, preserves the original caller, and never replays an uncertain action.
+Disconnected links withdraw their routes; reconnecting restores routes and
+subscriptions automatically. Older hubs continue to work through direct
+attachments until updated.
+
+While open, the browser also rechecks reachability every fifteen seconds and
 moves to a hub that can reach more machines. A local hub saying a machine is
 offline does not prevent safe chat reads from trying another hub. Direct
 connections rebuild failed negotiations and discard stale signalling when

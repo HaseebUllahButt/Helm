@@ -21,6 +21,10 @@ export const T = {
   // client -> relay -> daemon
   RPC: 'rpc',               // { id, env, method, params }
   RPC_RESULT: 'rpcResult',  // { id, ok, result | error }
+  HUB_WATCH: 'hubWatch',
+  HUB_STATE: 'hubState',
+  HUB_RPC: 'hubRpc',
+  HUB_EVENT: 'hubEvent',
 
   // daemon -> relay -> subscribed clients
   EVENT: 'event',           // { env, kind, payload }

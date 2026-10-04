@@ -100,6 +100,7 @@ export async function up({
     advertised: advertise,
     advertiseLan: !['127.0.0.1', '::1', 'localhost'].includes(host),
   });
+  daemon.attachHub(hub);
   await daemon.start();
 
   // systemd sends SIGTERM before replacing the daemon during an update. Do

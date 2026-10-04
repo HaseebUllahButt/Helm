@@ -29,6 +29,7 @@ import { describe as describeAsk, describeDone } from './notify.js';
 import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
+import { HubMesh } from './hub-mesh.js';
 import { transcribe, canTranscribe } from './voice.js';
 import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
 import { Handoffs } from './handoffs.js';
@@ -95,11 +96,13 @@ export class Link {
 
   stop() {
     this.#stopped = true;
+    const wasConnected = this.connected;
     this.connected = false;
     clearInterval(this.#beat);
     clearTimeout(this.#retryTimer);
     this.#retryTimer = null;
     try { this.#ws?.terminate(); } catch { /* already gone */ }
+    if (wasConnected) this.daemon.linkDown?.(this);
   }
 
   /**
@@ -423,6 +426,7 @@ export class Daemon {
   }
 
   linkDown(link) {
+    this.mesh?.down(link);
     this.#noteRemote(false);
     for (const [key, tunnel] of this.#tunnels) {
       if (tunnel.link !== link) continue;
@@ -482,6 +486,7 @@ export class Daemon {
     this.taskTransfers?.stop();
     this.#stopWatch?.();
     for (const link of this.#links.values()) link.stop();
+    this.mesh?.stop();
     // A locally terminated tunnel is a live socket even after every hub link
     // is gone. Close those too, or stopping the daemon can leave connections
     // (and the process that owns them) alive indefinitely.
@@ -794,6 +799,7 @@ export class Daemon {
     // revocation made while it was offline reaches it.
     const net = loadNetwork();
     if (net) link.send(T.ROSTER, { roster: rosterOf(net) });
+    if (!local) this.mesh?.up(link);
     // Nudge the hub to redistribute SSH keys now that we are attached. Our
     // identity travelled in the roster above; the hub does not write it.
     sshInfo().then((ssh) => link.send(T.SSH_INFO_REPORT, ssh)).catch(() => {});
@@ -814,6 +820,11 @@ export class Daemon {
   /** The hubs we can actually talk to right now. */
   get live() {
     return [...this.#links.values()].filter((l) => l.connected);
+  }
+
+  attachHub(hub) {
+    this.mesh = new HubMesh(loadNetwork, hub.meshChanged, hub.meshEvent);
+    hub.attachMesh(this.mesh);
   }
 
   broadcastFrame(t, extra) {
@@ -927,6 +938,7 @@ export class Daemon {
   // ----------------------------------------------------------------- frames
 
   async onFrame(link, msg) {
+    if (this.mesh?.receive(link, msg)) return;
     switch (msg.t) {
       case T.WELCOME:
         return;

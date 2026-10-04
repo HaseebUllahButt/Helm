@@ -38,8 +38,8 @@ export async function startRelay({
     ? rotatePassword(password, passwordTtlMs)
     : { password: null, expiresAt: 0 };
 
-  const { wss, online, connectedDevices, kick, callEnv, openTcp, stop: stopWs } = createWsLayer();
-  const api = makeHttpHandler({ online, kick, connectedDevices, callEnv });
+  const { wss, online, reachable, attachMesh, meshChanged, meshEvent, connectedDevices, kick, callEnv, openTcp, stop: stopWs } = createWsLayer();
+  const api = makeHttpHandler({ online: reachable, kick, connectedDevices, callEnv });
   // The byte-stream half of a nas - a real HTTP surface, mounted on every
   // hub but answering only where a nas designation and a valid media
   // credential say it may.
@@ -222,7 +222,7 @@ export async function startRelay({
     });
   });
   return {
-    server, port, online,
+    server, port, online, attachMesh, meshChanged, meshEvent,
     password: auth.password,
     expiresAt: auth.expiresAt,
     stop: () => { stopWs(); server.close(); },

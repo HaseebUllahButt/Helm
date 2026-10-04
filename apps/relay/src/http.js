@@ -312,7 +312,7 @@ export function listMachines(online) {
       self: m.id === net.self,
       online: online.has(m.id),
       lastSeen: cached?.last_seen ?? null,
-      info: JSON.parse(cached?.info || '{}'),
+      info: online.get?.(m.id)?.info ?? JSON.parse(cached?.info || '{}'),
       endpoints: m.endpoints ?? [],
       createdAt: m.addedAt,
     };
@@ -551,7 +551,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
         // HTTP is polling, with no socket subscription to leak on disconnect.
         const watch = body.method === 'session.watch';
         const result = await callEnv(body.env, watch ? 'session.events' : body.method,
-          watch ? { id: body.params.id, tail: 1 } : body.params, { timeout: 12_000 });
+          watch ? { id: body.params.id, tail: 1 } : body.params, { timeout: 12_000, sub: claims.sub });
         return json(res, 200, { result: watch
           ? { ok: true, last: result.last, status: result.session?.status } : result });
       } catch (error) {
@@ -692,7 +692,7 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       // Close what they have open, not just what they open next: a machine's
       // daemon socket, and every client socket a removed device holds.
       if (kick) kick(id);
-      else online.get(id)?.close(4004, 'removed from the network');
+      else online.get(id)?.close?.(4004, 'removed from the network');
       return json(res, 200, { ok: true, removed: id });
     }
 
