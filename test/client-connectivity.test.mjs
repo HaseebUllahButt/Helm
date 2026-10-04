@@ -7,7 +7,7 @@ import { transform } from 'esbuild';
 const source = readFileSync(new URL('../apps/web/src/client.ts', import.meta.url), 'utf8');
 const { code } = await transform(source, { loader: 'ts', format: 'cjs', target: 'node22' });
 
-function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, socket = 'open', pong = true, location } = {}) {
+function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, socket = 'open', socketDelay = 1, pong = true, location } = {}) {
   let now = 0, serial = 0;
   const timers = new Map(), sockets = [], peers = [], events = [], requests = [], windows = new Map(), documents = new Map();
   const timer = (fn, delay = 0, interval = 0) => {
@@ -31,7 +31,7 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     constructor(url) {
       this.url = url; this.readyState = 0; this.frames = []; sockets.push(this);
       const behavior = typeof socket === 'function' ? socket(url) : socket;
-      if (behavior === 'open') timer(() => { this.readyState = 1; this.onopen?.(); }, 1);
+      if (behavior === 'open') timer(() => { this.readyState = 1; this.onopen?.(); }, socketDelay);
       if (behavior === 'error') timer(() => this.onerror?.(), 1);
     }
     send(raw) {
@@ -157,6 +157,18 @@ test('a broader hub takes over as soon as it answers, without waiting for a slee
   h.client.close();
 });
 
+test('a lossy distant hub remains eligible after twelve seconds while the local app opens immediately', async () => {
+  const setup = harness({ endpoints: ['http://local', 'http://home'],
+    delays: { 'http://home': 12000 }, reaches: { 'http://local': 1, 'http://home': 3 } });
+  setup.start(); await setup.advance(200);
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.client.relay, 'http://local');
+  await setup.advance(12000);
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.client.relay, 'http://home');
+  setup.client.close();
+});
+
 test('a connected local hub does not trap the browser when a broader hub returns later', async () => {
   const statuses = { 'http://home': 503 };
   const h = harness({ endpoints: ['http://local', 'http://home'], statuses, reaches: { 'http://home': 4 } });
@@ -227,11 +239,21 @@ test('cold connection accepts slow healthy hubs and does not misclassify a slow 
 
 test('a stalled WebSocket upgrade has a deadline and retries without browser close events', async () => {
   const h = harness({ socket: 'hang' });
-  const connection = h.start(); await h.advance(10600);
+  const connection = h.start(); await h.advance(20600);
   assert.match(await connection, /timed out/);
   assert.equal(h.sockets[0].readyState, 3);
   assert.equal(h.sockets.length, 2);
   h.client.close();
+});
+
+test('a slow WebSocket handshake is allowed to complete without a reconnect loop', async () => {
+  const setup = harness({ socketDelay: 12000 });
+  const connected = setup.start();
+  await setup.advance(12500);
+  await connected;
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.sockets.length, 1);
+  setup.client.close();
 });
 
 test('a hub with working HTTP but broken WebSocket cannot win every reconnect', async () => {

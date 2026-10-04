@@ -170,7 +170,7 @@ export class Link {
       `?name=${encodeURIComponent(this.daemon.name)}` +
       `&info=${encodeURIComponent(JSON.stringify(info))}` +
       (isSelf ? '&role=self' : ''),
-      { headers: { authorization: `Bearer ${credential}` }, handshakeTimeout: 5000 }
+      { headers: { authorization: `Bearer ${credential}` }, handshakeTimeout: 15_000 }
     );
     this.#ws = ws;
 

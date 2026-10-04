@@ -421,7 +421,7 @@ const PROBE_MS = 2500;
  * to reply, and `connect` attaches to the best answer it has at PROBE_MS and
  * upgrades if something with more reach arrives afterwards.
  */
-const PROBE_PATIENCE_MS = 9000;
+const PROBE_PATIENCE_MS = 30_000;
 
 /** How many addresses to keep for a network. Newest win. */
 const MAX_ENDPOINTS = 12;
@@ -947,7 +947,7 @@ export class Client {
       };
       // Browsers may leave an upgrade CONNECTING for minutes. HTTP having
       // worked does not prove WebSocket upgrades work on this network.
-      const handshake = setTimeout(() => stop('socket connection timed out'), 10_000);
+      const handshake = setTimeout(() => stop('socket connection timed out'), 20_000);
       this.disconnectSocket = stop;
       const beat = (force = false) => {
         if (stopped || !this.connected || (!force && document.hidden)) return;
@@ -1506,7 +1506,7 @@ export class Client {
   private async httpAt<T>(base: string, path: string, init: RequestInit = {}): Promise<T> {
     const res = await fetch(`${base}${path}`, {
       ...init,
-      signal: init.signal ?? AbortSignal.timeout(10_000),
+      signal: init.signal ?? AbortSignal.timeout(20_000),
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...init.headers },
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);

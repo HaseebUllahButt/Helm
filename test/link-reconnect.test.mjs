@@ -10,6 +10,7 @@ const dir = mkdtempSync(join(tmpdir(), 'helm-link-reconnect-'));
 process.env.HELM_DIR = dir;
 const { createNetwork, hubProof } = await import('../packages/protocol/network.js');
 const { Link } = await import('../packages/connect/src/agent.js');
+const { hubRpc } = await import('../packages/connect/src/hub-client.js');
 const net = createNetwork({ name: 'test' });
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -27,7 +28,7 @@ async function fixture(context, firstUpgrade) {
   server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   server.on('upgrade', (request, socket, head) => {
     upgrades++;
-    if (upgrades === 1) return firstUpgrade(socket);
+    if (upgrades === 1 && firstUpgrade) return firstUpgrade(socket);
     webSockets.handleUpgrade(request, socket, head, connection => webSockets.emit('connection', connection));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -41,8 +42,27 @@ async function fixture(context, firstUpgrade) {
     for (const socket of sockets) socket.destroy();
     webSockets.close(); server.close();
   });
-  return { link, daemon, ready, upgrades: () => upgrades };
+  return { link, daemon, ready, url, webSockets, upgrades: () => upgrades };
 }
+
+test('a timed-out hub proof does not prevent the CLI from trying another known hub', async context => {
+  const setup = await fixture(context, null);
+  setup.webSockets.on('connection', socket => socket.on('message', raw => {
+    const frame = JSON.parse(raw);
+    if (frame.t === 'rpc') socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: 'recovered' }));
+  }));
+  const originalFetch = globalThis.fetch;
+  context.mock.method(globalThis, 'fetch', (url, options) => {
+    if (String(url).startsWith('http://127.0.0.1:1/')) {
+      return Promise.reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+    }
+    return originalFetch(url, options);
+  });
+  const network = { ...net, port: 1, machines: {
+    ...net.machines, [net.self]: { ...net.machines[net.self], endpoints: [setup.url] },
+  } };
+  assert.equal(await hubRpc(network, 'vm', 'env.info'), 'recovered');
+});
 
 test('daemon retries rejected upgrades and transient describe failures', { timeout: 4000 }, async context => {
   const setup = await fixture(context, socket => socket.end('HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\n\r\n'));
@@ -56,14 +76,14 @@ test('daemon retries rejected upgrades and transient describe failures', { timeo
   assert.ok(Date.now() - started < 2500);
 });
 
-test('a stalled daemon WebSocket handshake expires and reconnects', { timeout: 8000 }, async context => {
+test('a stalled daemon WebSocket handshake expires and reconnects', { timeout: 18000 }, async context => {
   const setup = await fixture(context, () => {});
   const started = Date.now();
   setup.link.start();
   await setup.ready;
   assert.equal(setup.upgrades(), 2);
   assert.equal(setup.link.connected, true);
-  assert.ok(Date.now() - started < 7000);
+  assert.ok(Date.now() - started < 17000);
 });
 
 test('stopping during description cannot start a new connection', async context => {

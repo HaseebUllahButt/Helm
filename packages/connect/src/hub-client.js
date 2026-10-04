@@ -23,6 +23,7 @@ export async function hubRpc(net, env, method, params = {}, { timeout = 20_000, 
       // another hub may still see it.
       if (err.rpc && !['offline', 'timeout'].includes(err.code)) throw err;
       if (!['offline', 'timeout'].includes(err.code)
+          && !['AbortError', 'TimeoutError'].includes(err.name)
           && !/offline|not connected|reach|ECONN|socket|timed out|401/i.test(err.message)) throw err;
     }
   }
@@ -87,7 +88,7 @@ function rpcVia(hub, net, env, method, params, timeout, { direct = false, onRout
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url, {
         headers: { authorization: `Bearer ${token}` },
-        handshakeTimeout: 5000,
+        handshakeTimeout: 15_000,
       });
       const id = `c${Date.now().toString(36)}`;
       const timer = setTimeout(() => { done(new Error('timed out')); }, timeout);

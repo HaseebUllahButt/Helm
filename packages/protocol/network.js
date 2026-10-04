@@ -223,7 +223,7 @@ export const oneTimeToken = (net, challenge) => mintToken(net.key, {
  * has no hello route, and falling back to the durable token for it would be
  * the very downgrade an impostor would ask for.
  */
-export async function hubCredential(net, base, { timeout = 5000 } = {}) {
+export async function hubCredential(net, base, { timeout = 15_000 } = {}) {
   const nonce = randomBytes(24).toString('base64url');
   const res = await fetch(`${base.replace(/\/+$/, '')}${HELLO_PATH}`, {
     method: 'POST',
