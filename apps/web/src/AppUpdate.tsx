@@ -1,24 +1,38 @@
 import { useEffect, useState } from 'react';
+import { reloadApp } from './reload';
 
 /** Announce a new web build without replacing a conversation or its draft. */
-export function AppUpdate({ reload = () => location.reload() }: { reload?: () => void }) {
+export function AppUpdate({ reload = reloadApp }: { reload?: () => void }) {
   const [available, setAvailable] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
     let stopped = false;
+    let checking = false;
     const check = async () => {
+      if (checking || document.hidden) return;
+      checking = true;
       try {
-        const response = await fetch('/api/version', { cache: 'no-store' });
+        const response = await fetch('/api/version', { cache: 'no-store', signal: AbortSignal.timeout(20_000) });
         if (!response.ok || stopped) return;
         const version = await response.json();
         const own = document.querySelector<HTMLScriptElement>('script[type="module"]')?.src;
         if (!stopped && version?.build && own && !own.endsWith(version.build)) setAvailable(true);
       } catch { /* offline, or a development server without a version route */ }
+      finally { checking = false; }
     };
     void check();
     const visible = () => { if (document.visibilityState === 'visible') void check(); };
     document.addEventListener('visibilitychange', visible);
-    return () => { stopped = true; document.removeEventListener('visibilitychange', visible); };
+    window.addEventListener('online', visible);
+    window.addEventListener('pageshow', visible);
+    const timer = setInterval(visible, 60_000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', visible);
+      window.removeEventListener('online', visible);
+      window.removeEventListener('pageshow', visible);
+    };
   }, []);
   if (!available || dismissed) return null;
   return (

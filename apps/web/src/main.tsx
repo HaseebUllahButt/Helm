@@ -5,6 +5,9 @@ import { App } from './App';
 import { AppUpdate } from './AppUpdate';
 import { AppErrorBoundary } from './AppErrorBoundary';
 import { applyAppearance, watchSystemTheme } from './appearance';
+import { clearRefreshMarker } from './reload';
+
+clearRefreshMarker();
 
 // Before the first render, so a light-theme device never flashes dark.
 applyAppearance();

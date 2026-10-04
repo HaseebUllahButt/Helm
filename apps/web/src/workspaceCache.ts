@@ -34,9 +34,9 @@ function valid(value: any): value is WorkspaceSnapshot {
 /** Small headers, never transcript bodies, keys or provider settings. */
 function header(s: Session): Session {
   const { id, title, cwd, engine, profileId, status, driver, pty, model, mode, effort,
-    speed, alive, createdAt, updatedAt, pending, archived, brain, turns, external, engineSessionId } = s;
+    speed, alive, createdAt, updatedAt, pending, archived, brain, turns, external, engineSessionId, adopted, account } = s;
   return { id, title: title?.slice(0, 300), cwd, engine, profileId, status, driver, pty,
-    model, mode, effort, speed, alive, createdAt, updatedAt, pending, archived, brain, turns, external, engineSessionId };
+    model, mode, effort, speed, alive, createdAt, updatedAt, pending, archived, brain, turns, external, engineSessionId, adopted, account };
 }
 
 export function loadWorkspace(scope: string): WorkspaceSnapshot {

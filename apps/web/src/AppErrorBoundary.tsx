@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from 'react';
+import { reloadApp } from './reload';
 
 /** A failed lazy import must not erase the whole installed app. */
 export class AppErrorBoundary extends Component<{
@@ -22,7 +23,7 @@ export class AppErrorBoundary extends Component<{
             ? 'An app file could not be loaded. Reload to get the current version.'
             : 'Reload Helm to try again.'}</p>
         </div>
-        <button className="primary" onClick={this.props.reload ?? (() => location.reload())}>Reload Helm</button>
+        <button className="primary" onClick={this.props.reload ?? reloadApp}>Reload Helm</button>
         <details className="note"><summary>Error details</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{error.message}</pre></details>
       </div>
     </main>;

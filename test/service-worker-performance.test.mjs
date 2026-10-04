@@ -40,7 +40,7 @@ function setup({ fetch, shell } = {}) {
     static error() { return response('network error', { ok: false, type: 'error' }); }
   }
   const context = {
-    self, caches, fetch, URL, Map, Promise,
+    self, caches, fetch, URL, Map, Promise, AbortController,
     Response: TestResponse,
     setTimeout(callback, delay) {
       const id = ++timerId;
@@ -57,10 +57,10 @@ function setup({ fetch, shell } = {}) {
       listeners.get('push')({ data: { json: () => payload }, waitUntil(promise) { result = promise; } });
       await result;
     },
-    dispatchNavigation() {
+    dispatchNavigation(search = '') {
       let result;
       const event = {
-        request: { method: 'GET', url: 'https://helm.test/agent/abc', mode: 'navigate' },
+        request: { method: 'GET', url: `https://helm.test/agent/abc${search}`, mode: 'navigate' },
         respondWith(promise) { result = Promise.resolve(promise); },
         waitUntil(promise) { lifetime.push(Promise.resolve(promise)); },
       };
@@ -88,6 +88,36 @@ test('a stalled navigation serves the cached shell and late network response ref
   resolveFetch(response('new shell'));
   await Promise.all(worker.lifetime);
   assert.equal(worker.entries.get('/index.html').body, 'new shell');
+});
+
+test('an explicit app refresh waits for fresh HTML rather than reopening the stale cached build', async () => {
+  let resolveFetch, options;
+  const worker = setup({ shell: response('old build'), fetch: (_request, init) => {
+    options = init;
+    return new Promise(resolve => { resolveFetch = resolve; });
+  } });
+  let settled = false;
+  const navigation = worker.dispatchNavigation('?helm-refresh=1').then(value => { settled = true; return value; });
+  worker.fireDeadline();
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(settled, false);
+  assert.equal(options.cache, 'no-store');
+  resolveFetch(response('new build'));
+  assert.equal((await navigation).body, 'new build');
+  await Promise.all(worker.lifetime);
+  assert.equal(worker.entries.get('/index.html').body, 'new build');
+  assert.equal(worker.timers.size, 0);
+});
+
+test('a fresh-shell request has a deadline and preserves the saved shell when unreachable', async () => {
+  const worker = setup({ shell: response('saved build'), fetch: (_request, { signal }) =>
+    new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('offline')))) });
+  const navigation = worker.dispatchNavigation('?helm-refresh=1');
+  const [id, timeout] = [...worker.timers].find(([, timer]) => timer.delay === 30000);
+  worker.timers.delete(id); timeout.callback();
+  assert.equal((await navigation).body, 'saved build');
+  await Promise.all(worker.lifetime);
+  assert.equal(worker.entries.get('/index.html').body, 'saved build');
 });
 
 test('a fast network response clears the pending fallback timer', async () => {

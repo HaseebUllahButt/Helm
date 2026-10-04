@@ -8,7 +8,7 @@
  */
 // Bump this whenever the shell changes so an installed PWA cannot stay on a
 // previous bundle forever when its page has been left open for days.
-const CACHE = 'helm-shell-v17';
+const CACHE = 'helm-shell-v18';
 const NAVIGATION_TIMEOUT_MS = 250;
 /**
  * Hashed bundles live apart from the shell: their names change every deploy,
@@ -69,14 +69,17 @@ self.addEventListener('fetch', (event) => {
   // shell still replaces it when the response finally arrives. A cold cache
   // keeps waiting for the network because there is no useful fallback yet.
   if (request.mode === 'navigate') {
+    const fresh = url.searchParams.has('helm-refresh');
+    const controller = fresh ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), 30_000) : null;
     let cacheWrite = Promise.resolve();
-    const network = fetch(request).then((res) => {
+    const network = fetch(request, controller ? { cache: 'no-store', signal: controller.signal } : undefined).then((res) => {
       if (res.ok && res.type === 'basic') {
         const copy = res.clone();
         cacheWrite = caches.open(CACHE).then((c) => c.put('/index.html', copy)).catch(() => {});
       }
       return res;
-    });
+    }).finally(() => { if (timeout) clearTimeout(timeout); });
     const refresh = network.then(() => cacheWrite);
     event.waitUntil(refresh.then(() => {}, () => {}));
 
@@ -90,7 +93,7 @@ self.addEventListener('fetch', (event) => {
         timer = setTimeout(() => resolve(undefined), NAVIGATION_TIMEOUT_MS);
       });
       try {
-        const response = await Promise.race([network, deadline]);
+        const response = await (fresh ? network : Promise.race([network, deadline]));
         if (response?.ok) return response;
         const cached = await cachedShell();
         // A first visit has no shell to show. Keep the pending request alive

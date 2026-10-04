@@ -75,6 +75,38 @@ async function openFromSearch(page, title) {
   await palette.waitFor({ state: 'hidden' });
 }
 
+test('saved imported chats retain their Done count and resume account before live lists arrive', async context => {
+  const { page } = await pageFor(context);
+  await page.evaluate(async () => {
+    await window.seed();
+    window.savedSessions = [
+      { ...window.session('Driven'), status: 'done' },
+      { ...window.session('Imported'), driver: undefined, adopted: true, account: 'second-account', engineSessionId: 'cli-id', status: 'done' },
+    ];
+    window.workspace.saveWorkspace(window.scope, { sessions: { machine: window.savedSessions }, view: undefined });
+    window.envs = async () => ({ environments: [{ id: 'machine', name: 'Laptop', online: false, info: {} }] });
+    window.reads = async () => { throw new Error('offline'); };
+    window.mount();
+  });
+  const done = page.locator('.sidebar').getByRole('button', { name: /^done 2(?: saved)?$/ });
+  await done.waitFor();
+  assert.match(await done.innerText(), /saved/);
+  await done.click();
+  await page.getByText('Includes saved lists · syncing when connected', { exact: true }).waitFor();
+  const imported = await page.evaluate(() => JSON.parse(localStorage.getItem('helm.workspace:' + window.scope)).sessions.machine.find(session => session.id === 'Imported'));
+  assert.equal(imported.adopted, true);
+  assert.equal(imported.account, 'second-account');
+  assert.equal(imported.engineSessionId, 'cli-id');
+  await page.evaluate(() => {
+    window.envs = async () => ({ environments: [{ id: 'machine', name: 'Laptop', online: true, info: {} }] });
+    window.reads = async (_env, method) => method === 'session.list' ? { sessions: window.savedSessions } : { projects: [], recent: [] };
+    window.dispatchEvent(new Event('online'));
+  });
+  await page.getByText('Includes saved lists · syncing when connected', { exact: true }).waitFor({ state: 'detached' });
+  assert.equal(await done.count(), 1);
+  assert.doesNotMatch(await done.innerText(), /saved/);
+});
+
 test('saved workspace and chat open with every network request stalled, including after a reload', async t => {
   const { page, boot } = await pageFor(t);
   await page.evaluate(() => window.seed());

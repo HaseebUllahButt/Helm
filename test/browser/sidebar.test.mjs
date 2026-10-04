@@ -75,6 +75,24 @@ test('project timeout errors clear on recovery and late failures cannot replace 
   assert.equal(await page.getByText('stale disconnected', { exact: true }).count(), 0);
 });
 
+test('settings expose the app route and build without exposing pairing credentials', async context => {
+  const { page, boot } = await pageFor(context, { width: 1280, height: 900 });
+  await boot();
+  await page.evaluate(() => {
+    const client = window.makeClient([], {}, 'https://hub.example');
+    client.connected = false;
+    client.lastError = 'connection stopped responding';
+    window.mount(client);
+  });
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByText('Connection details', { exact: true }).click();
+  await page.getByText('Hub: https://hub.example', { exact: true }).waitFor();
+  await page.getByText('App build: development', { exact: true }).waitFor();
+  await page.getByText('Last connection error: connection stopped responding', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: /^Reload app/ }).count(), 1);
+  assert.doesNotMatch(await page.locator('.main').innerText(), /helm1\./);
+});
+
 test('Done is newest first across machines, retires at three days, and the footer is quiet', async testContext => {
   const { page, boot } = await pageFor(testContext, { width: 390, height: 844 });
   await page.clock.install({ time: new Date('2026-10-03T12:00:00Z') });

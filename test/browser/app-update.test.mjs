@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
 
 test('an arriving update preserves the page and draft until Reload is chosen', async () => {
   const bundle = await build({ stdin: { contents: `
@@ -34,4 +36,54 @@ test('an arriving update preserves the page and draft until Reload is chosen', a
     assert.equal(await page.getByRole('status').count(), 0);
     assert.equal(await page.getByLabel('Draft').inputValue(), 'keep this unsent message');
   } finally { await browser.close(); }
+});
+
+test('an installed worker loads the new build on explicit reload despite a slow network, without clearing pairing', async context => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { AppUpdate } from './apps/web/src/AppUpdate';
+    import { clearRefreshMarker } from './apps/web/src/reload';
+    clearRefreshMarker();
+    createRoot(document.getElementById('root')).render(<AppUpdate />);
+    navigator.serviceWorker.register('/sw.js');
+  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
+  const worker = await readFile('apps/web/public/sw.js', 'utf8');
+  let version = 'old', delay = 0;
+  const timers = new Set();
+  const server = createServer((request, response) => {
+    const path = new URL(request.url, 'http://localhost').pathname;
+    response.setHeader('cache-control', 'no-store');
+    if (path === '/sw.js') {
+      response.setHeader('content-type', 'text/javascript'); response.end(worker);
+    } else if (path === '/api/version') {
+      response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ build: `index-${version}.js` }));
+    } else if (path.startsWith('/assets/')) {
+      response.setHeader('content-type', 'text/javascript');
+      response.end(`window.loadedBuild = ${JSON.stringify(path)};\n` + bundle.outputFiles[0].text);
+    } else {
+      const html = `<!doctype html><div id="root"></div><script type="module" src="/assets/index-${version}.js"></script>`;
+      const timer = setTimeout(() => { timers.delete(timer); response.setHeader('content-type', 'text/html'); response.end(html); }, delay);
+      timers.add(timer);
+    }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  context.after(() => { for (const timer of timers) clearTimeout(timer); server.closeAllConnections(); server.close(); });
+  const browser = await chromium.launch({ headless: true,
+    ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}),
+  });
+  context.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.goto(`http://127.0.0.1:${server.address().port}/#open=vm/chat`);
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+  await page.evaluate(() => { localStorage.setItem('helm.auth', 'keep-pairing'); localStorage.setItem('saved-draft', 'keep-draft'); });
+  version = 'new'; delay = 900;
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.getByRole('button', { name: 'Reload', exact: true }).click();
+  await page.waitForFunction(() => window.loadedBuild === '/assets/index-new.js');
+  assert.equal(new URL(page.url()).hash, '#open=vm/chat');
+  assert.equal(new URL(page.url()).search, '');
+  assert.deepEqual(await page.evaluate(() => [localStorage.getItem('helm.auth'), localStorage.getItem('saved-draft')]), ['keep-pairing', 'keep-draft']);
+  await page.reload();
+  await page.waitForFunction(() => window.loadedBuild === '/assets/index-new.js');
 });

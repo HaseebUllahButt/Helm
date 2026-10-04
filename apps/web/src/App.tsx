@@ -1,5 +1,6 @@
 import { useCopySelection } from './useCopySelection';
 import { useDismiss } from './useDismiss';
+import { reloadApp } from './reload';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Confirm, Sheet, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
@@ -1037,6 +1038,7 @@ function Shell({ client, conn, onSignOut }: {
   const doneNow = everyone.filter(({ s }) => (s.driver || s.adopted) && (s.turns ?? 0) > 0
     && s.status !== 'working' && s.status !== 'blocked'
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
+  const doneIsSaved = doneNow.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));
   const snoozeThread = (envId: string, s: Session, until: number) => {
     setSnooze(`${envId}:${s.id}`, until);
     setSnoozeUndo({ key: `${envId}:${s.id}`, title: s.title, until });
@@ -1133,7 +1135,8 @@ function Shell({ client, conn, onSignOut }: {
             )}
 
             {doneNow.length > 0 && (
-              <Fold title="done" count={doneNow.length} remember="sidebar:done">
+              <Fold title="done" count={doneNow.length} note={doneIsSaved ? 'saved' : undefined} remember="sidebar:done">
+                {doneIsSaved && <p className="note">Includes saved lists · syncing when connected</p>}
                 <div className="rows plain">
                   {doneNow.map(({ env: e, s }) => (
                     <HomeRow key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)} />
@@ -3395,6 +3398,17 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
           </button>
           <AddMachine client={client} />
           <Notifications client={client} />
+          <button className="row" onClick={reloadApp}>
+            <span className="grow"><span className="rt">Reload app</span><span className="rm">get the current web app without clearing pairing or saved chats</span></span>
+          </button>
+          <details className="note">
+            <summary>Connection details</summary>
+            <p>App address: {location.origin}</p>
+            <p>App build: {document.querySelector<HTMLScriptElement>('script[type="module"]')?.src.split('/').at(-1) ?? 'development'}</p>
+            <p>Hub: {client.relay}</p>
+            <p>Socket: {client.connected ? 'connected' : 'reconnecting'}</p>
+            {client.lastError && <p>Last connection error: {client.lastError}</p>}
+          </details>
           <InstallPwa />
           <button className="row destructive" onClick={onUnpair}>
             <span className="grow"><span className="rt">Unpair this device</span></span>

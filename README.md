@@ -153,6 +153,12 @@ The device retains up to 25 event-log chats and 50 imported transcripts, with
 a bounded in-memory cache for quick switching. Older uncached chats still
 need a reachable machine, and browser storage eviction can remove saved data.
 
+An installed PWA updates without reinstalling or clearing its pairing. Choose
+Reload in the update notice to request the fresh app shell, even on a slow
+network. Saved lists retain imported-chat metadata; the Done section identifies
+saved lists until they can reconcile with the machines, so an offline count is
+not presented as a fresh network-wide total.
+
 Slow or stuck sockets reconnect automatically. Read-only chat snapshots can
 also use authenticated HTTP when WebSockets are blocked, trying another known
 hub when necessary. Prompts, approvals, and other actions require a live
