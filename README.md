@@ -158,6 +158,12 @@ also use authenticated HTTP when WebSockets are blocked, trying another known
 hub when necessary. Prompts, approvals, and other actions require a live
 transport and are never automatically replayed over the fallback.
 
+While the app is open, it rechecks hub reachability every fifteen seconds and
+moves to a hub that can reach more machines. A local hub saying a machine is
+offline does not prevent safe chat reads from trying another hub. Direct
+connections rebuild failed negotiations and discard stale signalling when
+retrying after sleep or a network change.
+
 On Android/Chrome: open the pairing link, pair, then choose **Install Helm
 app**. The installed app keeps the pairing.
 

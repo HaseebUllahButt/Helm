@@ -340,6 +340,7 @@ type Pending = {
   resolve: (v: any) => void; reject: (e: Error) => void;
   direct?: Peer; env?: string; hedged?: boolean;
   routes?: Set<RpcRoute>;
+  recover?: () => void;
 };
 type Listener = (env: string, kind: string, payload: any) => void;
 
@@ -353,6 +354,9 @@ interface Peer {
   pc: RTCPeerConnection;
   channel: RTCDataChannel;
   ready: boolean;
+  negotiation: string;
+  remoteReady: boolean;
+  candidates: RTCIceCandidateInit[];
   fragments: Map<string, { n: number; parts: string[]; got: number }>;
   deadline?: ReturnType<typeof setTimeout>;
 }
@@ -491,7 +495,7 @@ const byReach = (a: Reached, b: Reached) => b.reach - a.reach || a.elapsed - b.e
  * "the best answer so far" and "the best answer there is" are two reads of
  * the same round rather than two rounds.
  */
-function startProbes(endpoints: string[], token: string, timeout: number) {
+function startProbes(endpoints: string[], token: string, timeout: number, onReach?: (reached: Reached[]) => void) {
   const statuses: number[] = [];
   // Answering at all is worth knowing separately from winning: a 401 is a
   // machine that is there and refusing us, which is not a dead address.
@@ -520,6 +524,7 @@ function startProbes(endpoints: string[], token: string, timeout: number) {
         elapsed: performance.now() - started,
       });
       first();
+      onReach?.(up.slice().sort(byReach));
     } catch { /* unreachable, or too slow even for our patience */ }
     finally { clearTimeout(timer); }
   });
@@ -549,8 +554,8 @@ function startProbes(endpoints: string[], token: string, timeout: number) {
  * a normal network is everything. `later` resolves when the last probe
  * finishes, so a hub that was merely far away still gets counted.
  */
-function probeInTwoPhases(endpoints: string[], token: string, settleAfter = PROBE_MS) {
-  const round = startProbes(endpoints, token, PROBE_PATIENCE_MS);
+function probeInTwoPhases(endpoints: string[], token: string, settleAfter = PROBE_MS, onReach?: (reached: Reached[]) => void) {
+  const round = startProbes(endpoints, token, PROBE_PATIENCE_MS, onReach);
   let deadlineTimer: ReturnType<typeof setTimeout>;
   let graceTimer: ReturnType<typeof setTimeout>;
   const deadline = new Promise<void>((resolve) => { deadlineTimer = setTimeout(resolve, settleAfter); });
@@ -584,12 +589,15 @@ export class Client {
   private httpReads = new Set<() => void>();
   private peers = new Map<string, Peer>();
   private presencePoll: ReturnType<typeof setInterval> | null = null;
+  private reachPoll: ReturnType<typeof setInterval> | null = null;
+  private reachCheck: Promise<unknown> | null = null;
   private onVisible = () => {
     if (document.visibilityState !== 'visible') return;
     // Picking the phone back up. It may well be on a different network than
     // it was when you put it down, so anything relaying is worth another go.
     this.retryDirectNow();
     this.probeSocket?.();
+    this.refreshReachability();
     // Coming back to the foreground: the socket is almost certainly dead and
     // the backoff timer may be ten seconds out. Try now.
     if (!this.connected && !this.connecting) {
@@ -608,7 +616,6 @@ export class Client {
   private onNetworkChange = () => {
     if (this.closed) return;
     this.backoff = 500;
-    this.preferred = null;
     this.failedHubs.clear();
     // Moving between networks is exactly when a direct connection that was
     // impossible becomes possible - the phone that just joined the wifi the
@@ -633,12 +640,6 @@ export class Client {
 
   /** The hub we are currently attached to. */
   public relay: string;
-  /**
-   * A hub found to see more of the network than the one we would otherwise
-   * settle on. Sticky, so the upgrade happens once rather than on every
-   * reconnect; cleared the moment it stops answering.
-   */
-  private preferred: string | null = null;
 
   /** Which machines are currently reachable without going through a hub. */
   directTo(env: string) { return this.peers.get(env)?.ready ?? false; }
@@ -800,6 +801,27 @@ export class Client {
     this.presencePoll = null;
   }
 
+  private upgradeHub(reached: Reached[], version: number, hub: string) {
+    if (this.closed || !this.connected || version !== this.connectVersion || this.relay !== hub) return;
+    const current = reached.find(candidate => candidate.base === hub);
+    const best = reached[0];
+    if (!current || !best || best.base === hub || best.reach <= current.reach) return;
+    this.backoff = 500;
+    this.disconnectSocket?.('a better hub is available', false);
+    void this.connect(best.base).catch(() => {});
+  }
+
+  private refreshReachability() {
+    if (this.closed || !this.connected || this.reachCheck || document.hidden) return;
+    const version = this.connectVersion;
+    const hub = this.relay;
+    const endpoints = this.endpoints.filter(base => reachableFromHere(base)
+      && (base === hub || (this.failedHubs.get(base) ?? 0) <= Date.now()));
+    const round = startProbes(endpoints, this.token, PROBE_PATIENCE_MS,
+      reached => this.upgradeHub(reached, version, hub));
+    this.reachCheck = round.settled.finally(() => { this.reachCheck = null; });
+  }
+
   get connected() { return this.ws?.readyState === WebSocket.OPEN; }
 
   /**
@@ -820,7 +842,7 @@ export class Client {
     this.backoff = Math.min(this.backoff * 2, 15_000);
   }
 
-  async connect(): Promise<void> {
+  async connect(hubHint: string | null = null): Promise<void> {
     if (this.closed || this.connecting || this.connected) return;
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
     const version = ++this.connectVersion;
@@ -839,24 +861,11 @@ export class Client {
       const tried = healthy.length ? healthy : candidates;
       this.tried = new Set(tried);
 
-      // A hub already known to see more of the network than its neighbours is
-      // used directly. Without this the upgrade below would happen on every
-      // single reconnect - settle on the near hub, discover the far one is
-      // better, close, reconnect, settle on the near hub again - and the app
-      // would flap between them forever.
-      if (this.preferred && tried.includes(this.preferred)) {
-        const check = await probeEndpoints([this.preferred], this.token);
-        if (check.best) {
-          this.answered = check.answered;
-          hub = check.best;
-        } else {
-          // It stopped answering; fall through and choose again.
-          this.preferred = null;
-        }
-      }
+      if (hubHint && tried.includes(hubHint)) hub = hubHint;
 
       if (!hub) {
-        const { soon, available, later } = probeInTwoPhases(tried, this.token);
+        const { soon, available, later } = probeInTwoPhases(tried, this.token, PROBE_MS,
+          reached => { if (hub) this.upgradeHub(reached, version, hub); });
         let probe = await soon;
         // A slow network is still a network. If no hub has answered yet,
         // consume the same round's eventual answer instead of discarding it
@@ -872,16 +881,8 @@ export class Client {
         // phone was talking to it happily. Worth one reconnect to move, but
         // only for strictly more reach, never for a few milliseconds.
         const settledOn = hub;
-        const chosenReach = probe.reached.find((r) => r.base === settledOn)?.reach ?? 0;
         later.then((full) => {
-          if (this.closed || version !== this.connectVersion || this.relay !== settledOn) return;
-          const best = full.reached[0];
-          if (!best || best.base === settledOn || best.reach <= chosenReach) return;
-          this.preferred = best.base;
-          this.relay = best.base;
-          // Closing makes the socket's own onclose reconnect, which now goes
-          // straight to the better hub through `preferred`.
-          this.disconnectSocket?.('a better hub is available');
+          if (settledOn) this.upgradeHub(full.reached, version, settledOn);
         }).catch(() => {});
       }
     } finally {
@@ -973,6 +974,7 @@ export class Client {
         this.failedHubs.delete(hub);
         lastReceived = Date.now();
         this.stopPresencePoll();
+        if (!this.reachPoll) this.reachPoll = setInterval(() => this.refreshReachability(), 15_000);
         for (const env of this.subscribed) ws.send(JSON.stringify({ t: 'subscribe', env }));
         heartbeat = setInterval(beat, 5000);
         this.retryDirectNow();
@@ -1044,6 +1046,7 @@ export class Client {
     if (same) return;
     this.endpoints = merged;
     this.emit('', 'endpoints', { endpoints: merged });
+    this.refreshReachability();
   }
 
   private emit(env: string, kind: string, payload: any) {
@@ -1065,6 +1068,8 @@ export class Client {
     for (const p of this.pending.values()) p.reject(new Error('client closed'));
     this.pending.clear();
     this.stopPresencePoll();
+    if (this.reachPoll) clearInterval(this.reachPoll);
+    this.reachPoll = null;
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisible);
     }
@@ -1145,6 +1150,7 @@ export class Client {
 
     const id = `w${++this.seq}`;
     return new Promise<T>((resolve, reject) => {
+      const started = Date.now();
       let deadline: ReturnType<typeof setTimeout> | undefined;
       let fallback: ReturnType<typeof setTimeout> | undefined;
       const clear = () => { clearTimeout(deadline); clearTimeout(fallback); };
@@ -1185,7 +1191,9 @@ export class Client {
         const hedgeAfter = Math.min(1500, timeout / 2);
         const httpFallback = (elapsed: number) => {
           const pending = this.pending.get(id);
-          if (!pending) return;
+          if (!pending || pending.routes?.has('http')) return;
+          clearTimeout(fallback);
+          pending.recover = undefined;
           pending.hedged = true;
           pending.routes?.add('http');
           this.readHttp<T>(env, method, params, timeout - elapsed).then(
@@ -1193,6 +1201,7 @@ export class Client {
             error => this.receiveRpc({ id, ok: false, error }, 'http'),
           );
         };
+        this.pending.get(id)!.recover = () => httpFallback(Date.now() - started);
         fallback = setTimeout(() => {
           const pending = this.pending.get(id);
           if (!pending) return;
@@ -1273,6 +1282,11 @@ export class Client {
     const pending = this.pending.get(msg.id);
     if (!pending) return;
     pending.routes?.delete(route);
+    if (!msg.ok && route === 'relay' && msg.error?.code === 'offline' && pending.recover) {
+      pending.recover();
+      this.refreshReachability();
+      return;
+    }
     // The relay may not see a machine that the direct route can reach. An
     // early hedge error must not beat the other route's successful answer.
     if (!msg.ok && pending.routes?.size) return;
@@ -1342,14 +1356,19 @@ export class Client {
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     const channel = pc.createDataChannel('helm', { ordered: true });
-    const peer: Peer = { pc, channel, ready: false, fragments: new Map() };
+    const negotiation = `${Date.now().toString(36)}-${++this.seq}`;
+    const peer: Peer = { pc, channel, ready: false, fragments: new Map(), negotiation, remoteReady: false, candidates: [] };
+    let offerSent = false;
+    const localCandidates: RTCIceCandidateInit[] = [];
     this.peers.set(env, peer);
     // Failed signalling can leave the browser's peer in "new" forever,
     // which otherwise blocks every retry because peers.has(env) stays true.
     peer.deadline = setTimeout(() => this.dropDirect(env, peer), 15_000);
 
     pc.onicecandidate = ({ candidate }) => {
-      if (candidate) this.signal(env, { type: 'candidate', candidate: candidate.toJSON() });
+      if (!candidate || this.peers.get(env) !== peer) return;
+      if (offerSent) this.signal(env, { type: 'candidate', candidate: candidate.toJSON(), negotiation });
+      else localCandidates.push(candidate.toJSON());
     };
     pc.onconnectionstatechange = () => {
       if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
@@ -1381,7 +1400,12 @@ export class Client {
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      if (this.peers.get(env) === peer) this.signal(env, { type: 'offer', sdp: pc.localDescription!.sdp });
+      if (this.peers.get(env) === peer) {
+        this.signal(env, { type: 'offer', sdp: pc.localDescription!.sdp, negotiation });
+        offerSent = true;
+        for (const candidate of localCandidates) this.signal(env, { type: 'candidate', candidate, negotiation });
+        localCandidates.length = 0;
+      }
     } catch { this.dropDirect(env, peer); }
   }
 
@@ -1418,10 +1442,17 @@ export class Client {
   private async onSignal(env: string, payload: any) {
     const peer = this.peers.get(env);
     if (!peer) return;
+    if (payload?.negotiation && payload.negotiation !== peer.negotiation) return;
     if (payload?.type === 'answer') {
-      await peer.pc.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
+      try {
+        await peer.pc.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
+        if (this.peers.get(env) !== peer) return;
+        peer.remoteReady = true;
+        for (const candidate of peer.candidates.splice(0)) await peer.pc.addIceCandidate(candidate).catch(() => {});
+      } catch { this.dropDirect(env, peer); }
     } else if (payload?.type === 'candidate' && payload.candidate) {
-      await peer.pc.addIceCandidate(payload.candidate).catch(() => {});
+      if (peer.remoteReady) await peer.pc.addIceCandidate(payload.candidate).catch(() => {});
+      else if (peer.candidates.length < 128) peer.candidates.push(payload.candidate);
     }
   }
 
@@ -1489,9 +1520,17 @@ export class Client {
     }>('/api/network');
   }
 
-  environments() {
-    return this.http<{ machines: Environment[] }>('/api/machines')
-      .then((r) => ({ environments: r.machines }));
+  async environments(): Promise<{ environments: Environment[] }> {
+    const hub = this.relay;
+    try {
+      const result = await this.httpAt<{ machines: Environment[] }>(hub, '/api/machines');
+      if (!this.closed && hub !== this.relay) return this.environments();
+      if (result.machines.some(machine => !machine.online)) this.refreshReachability();
+      return { environments: result.machines };
+    } catch (error) {
+      if (!this.closed && hub !== this.relay) return this.environments();
+      throw error;
+    }
   }
 
   devices(base = this.relay) { return this.httpAt<{ devices: Device[] }>(base, '/api/devices'); }

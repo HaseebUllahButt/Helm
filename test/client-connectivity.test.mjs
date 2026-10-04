@@ -7,7 +7,7 @@ import { transform } from 'esbuild';
 const source = readFileSync(new URL('../apps/web/src/client.ts', import.meta.url), 'utf8');
 const { code } = await transform(source, { loader: 'ts', format: 'cjs', target: 'node22' });
 
-function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, socket = 'open', pong = true, location } = {}) {
+function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, socket = 'open', pong = true, location } = {}) {
   let now = 0, serial = 0;
   const timers = new Map(), sockets = [], peers = [], events = [], requests = [], windows = new Map(), documents = new Map();
   const timer = (fn, delay = 0, interval = 0) => {
@@ -49,6 +49,11 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, sock
     }
     async createOffer() { return { type: 'offer', sdp: 'test' }; }
     async setLocalDescription(offer) { this.localDescription = offer; }
+    async setRemoteDescription(answer) { this.remoteDescription = answer; }
+    async addIceCandidate(candidate) {
+      if (!this.remoteDescription) throw new Error('remote description is not ready');
+      (this.candidates ??= []).push(candidate);
+    }
     close() { this.connectionState = 'closed'; this.onconnectionstatechange?.(); }
     open() { this.channel.readyState = 'open'; this.channel.onopen?.(); }
     message(msg) { this.channel.onmessage?.({ data: JSON.stringify(msg) }); }
@@ -69,11 +74,11 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, sock
     window: { addEventListener: (kind, fn) => windows.set(kind, fn), removeEventListener: kind => windows.delete(kind) },
     fetch: (url, init) => new Promise((resolve, reject) => {
       requests.push({ url, init });
-      const base = new URL(url).origin, delay = delays[base] ?? 0;
+      const base = new URL(url).origin, delay = delays[url] ?? delays[base] ?? 0;
       const finish = () => {
         const status = statuses[base] ?? 200;
         resolve({ status, ok: status === 200, json: async () => url.endsWith('/api/read')
-          ? { result: { fresh: true } } : { machines: [{ id: 'machine', online: true }], endpoints: [] } });
+          ? { result: { fresh: true } } : { machines: Array.from({ length: reaches[base] ?? 1 }, (_, index) => ({ id: `machine-${index}`, online: true })), endpoints: [] } });
       };
       if (delay !== Infinity) timer(finish, delay);
       init?.signal?.addEventListener('abort', () => reject(Error('aborted')), { once: true });
@@ -92,6 +97,122 @@ test('a fast hub opens promptly even when another remembered endpoint is unreach
   const connection = h.start(); await h.advance(200); await connection;
   assert.equal(h.client.connected, true); assert.equal(h.sockets.length, 1);
   h.client.close();
+});
+
+test('direct signalling buffers early candidates and ignores superseded negotiations', async () => {
+  const setup = harness();
+  setup.start(); await setup.advance(200);
+  await setup.client.openDirect('vm');
+  const first = setup.sockets[0].frames.find(frame => frame.payload?.type === 'offer').payload;
+  const candidate = { candidate: 'early', sdpMid: '0' };
+  setup.sockets[0].message({ t: 'signal', env: 'vm', payload: { type: 'candidate', candidate, negotiation: first.negotiation } });
+  await setup.advance(1);
+  assert.equal(setup.peers[0].candidates, undefined);
+  setup.sockets[0].message({ t: 'signal', env: 'vm', payload: { type: 'answer', sdp: 'answer', negotiation: first.negotiation } });
+  await setup.advance(1);
+  assert.equal(setup.peers[0].candidates[0].candidate, 'early');
+  setup.client.dropDirect('vm');
+  await setup.client.openDirect('vm');
+  const replacement = setup.peers.at(-1);
+  setup.sockets[0].message({ t: 'signal', env: 'vm', payload: { type: 'answer', sdp: 'stale', negotiation: first.negotiation } });
+  setup.sockets[0].message({ t: 'signal', env: 'vm', payload: { type: 'candidate', candidate, negotiation: first.negotiation } });
+  await setup.advance(1);
+  assert.equal(replacement.remoteDescription, undefined);
+  assert.equal(replacement.candidates, undefined);
+  const current = setup.sockets[0].frames.filter(frame => frame.payload?.type === 'offer').at(-1).payload;
+  setup.sockets[0].message({ t: 'signal', env: 'vm', payload: { type: 'answer', sdp: 'current', negotiation: current.negotiation } });
+  await setup.advance(1);
+  assert.equal(replacement.remoteDescription.sdp, 'current');
+  setup.client.close();
+});
+
+test('an offline response from one hub immediately recovers safe reads without replaying writes', async () => {
+  const setup = harness();
+  setup.start(); await setup.advance(200);
+  const read = setup.client.rpc('vm', 'session.list');
+  const readFrame = setup.sockets[0].frames.at(-1);
+  setup.sockets[0].message({ t: 'rpcResult', id: readFrame.id, ok: false, error: { code: 'offline', message: 'offline' } });
+  await setup.advance(1);
+  assert.equal((await read).fresh, true);
+  assert.equal(setup.requests.filter(request => request.url.endsWith('/api/read')).length, 1);
+  const write = setup.client.rpc('vm', 'session.input', { id: 'chat', data: 'hello' });
+  const rejected = assert.rejects(write, /offline/);
+  const writeFrame = setup.sockets[0].frames.at(-1);
+  setup.sockets[0].message({ t: 'rpcResult', id: writeFrame.id, ok: false, error: { code: 'offline', message: 'offline' } });
+  await rejected;
+  await setup.advance(2000);
+  assert.equal(setup.requests.filter(request => request.url.endsWith('/api/read')).length, 1);
+  setup.client.close();
+});
+
+test('a broader hub takes over as soon as it answers, without waiting for a sleeping address', async () => {
+  const h = harness({ endpoints: ['http://local', 'http://home', 'http://asleep'],
+    delays: { 'http://home': 1000, 'http://asleep': Infinity }, reaches: { 'http://local': 1, 'http://home': 4 } });
+  h.start(); await h.advance(200);
+  assert.equal(h.client.relay, 'http://local');
+  await h.advance(900);
+  assert.equal(h.client.connected, true);
+  assert.equal(h.client.relay, 'http://home');
+  assert.equal(h.sockets.length, 2);
+  h.client.close();
+});
+
+test('a connected local hub does not trap the browser when a broader hub returns later', async () => {
+  const statuses = { 'http://home': 503 };
+  const h = harness({ endpoints: ['http://local', 'http://home'], statuses, reaches: { 'http://home': 4 } });
+  h.start(); await h.advance(200);
+  assert.equal(h.client.relay, 'http://local');
+  statuses['http://home'] = 200;
+  await h.advance(15000);
+  assert.equal(h.client.relay, 'http://home');
+  assert.equal(h.client.connected, true);
+  h.client.close();
+});
+
+test('learning a new hub checks its reach without waiting for a reconnect', async () => {
+  const h = harness({ endpoints: ['http://local'], reaches: { 'http://home': 4 } });
+  h.start(); await h.advance(200);
+  h.client.learn(['http://local', 'http://home']);
+  await h.advance(20);
+  assert.equal(h.client.relay, 'http://home');
+  assert.equal(h.client.connected, true);
+  h.client.close();
+});
+
+test('a dead previously broader hub cannot delay a healthy local reconnect', async () => {
+  const delays = { 'http://home': 1000 };
+  const h = harness({ endpoints: ['http://local', 'http://home'], delays, reaches: { 'http://home': 4 } });
+  h.start(); await h.advance(1100);
+  assert.equal(h.client.relay, 'http://home');
+  delays['http://home'] = Infinity;
+  h.sockets.at(-1).close();
+  await h.advance(700);
+  assert.equal(h.client.connected, true);
+  assert.equal(h.client.relay, 'http://local');
+  h.client.close();
+});
+
+test('a presence response from the old hub cannot overwrite the new hub after failover', async () => {
+  const delays = {};
+  const h = harness({ endpoints: ['http://local'], delays, reaches: { 'http://home': 4 } });
+  h.start(); await h.advance(200);
+  delays['http://local/api/machines'] = 2000;
+  const presence = h.client.environments();
+  h.client.learn(['http://local', 'http://home']);
+  await h.advance(2100);
+  assert.equal(h.client.relay, 'http://home');
+  assert.equal((await presence).environments.length, 4);
+  h.client.close();
+});
+
+test('equal reach stays on the current hub and closing stops periodic discovery', async () => {
+  const h = harness({ endpoints: ['http://local', 'http://home'] });
+  h.start(); await h.advance(46000);
+  assert.equal(h.sockets.length, 1);
+  h.client.close();
+  const requests = h.requests.length;
+  await h.advance(30000);
+  assert.equal(h.requests.length, requests);
 });
 
 test('cold connection accepts slow healthy hubs and does not misclassify a slow success as revoked', async () => {

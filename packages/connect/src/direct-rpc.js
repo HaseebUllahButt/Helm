@@ -10,6 +10,10 @@ export function directRpc({ signal, frame, timeout = 240_000, connectTimeout = 3
     { urls: 'stun:stun.cloudflare.com:3478' },
   ] });
   const channel = pc.createDataChannel('helm', { ordered: true });
+  const negotiation = randomBytes(12).toString('hex');
+  const candidates = [];
+  const localCandidates = [];
+  let offerSent = false, remoteReady = false;
   let settled = false;
   let resolveResult, rejectResult;
   const result = new Promise((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
@@ -53,7 +57,9 @@ export function directRpc({ signal, frame, timeout = 240_000, connectTimeout = 3
     if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) finish(new Error('direct connection closed'));
   };
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate && !settled) signal({ type: 'candidate', candidate });
+    if (!candidate || settled) return;
+    if (offerSent) signal({ type: 'candidate', candidate, negotiation });
+    else localCandidates.push(candidate);
   };
   channel.onopen = async () => {
     clearTimeout(connectTimer);
@@ -77,17 +83,27 @@ export function directRpc({ signal, frame, timeout = 240_000, connectTimeout = 3
   const start = async () => {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    if (!settled) signal({ type: 'offer', sdp: pc.localDescription.sdp });
+    if (!settled) {
+      signal({ type: 'offer', sdp: pc.localDescription.sdp, negotiation });
+      offerSent = true;
+      for (const candidate of localCandidates.splice(0)) signal({ type: 'candidate', candidate, negotiation });
+    }
   };
   start().catch((error) => finish(error));
   return {
     result,
     close: () => finish(new Error('direct RPC closed')),
     receive: async (payload) => {
-      if (settled) return;
+      if (settled || (payload?.negotiation && payload.negotiation !== negotiation)) return;
       try {
-        if (payload?.type === 'answer') await pc.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
-        else if (payload?.type === 'candidate' && payload.candidate) await pc.addIceCandidate(payload.candidate);
+        if (payload?.type === 'answer') {
+          await pc.setRemoteDescription({ type: 'answer', sdp: payload.sdp });
+          remoteReady = true;
+          for (const candidate of candidates.splice(0)) await pc.addIceCandidate(candidate);
+        } else if (payload?.type === 'candidate' && payload.candidate) {
+          if (remoteReady) await pc.addIceCandidate(payload.candidate);
+          else if (candidates.length < 128) candidates.push(payload.candidate);
+        }
       } catch (error) { finish(error); }
     },
   };

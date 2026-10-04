@@ -95,52 +95,73 @@ export class PeerHub {
   async signal(peerId, payload, link = null, device = null) {
     let peer = this.#peers.get(peerId);
 
-    if (!peer) {
-      if (payload?.type !== 'offer') return; // candidates for a peer we dropped
-      // No device id, no channel. `dropRevoked` can only close what it can
-      // attribute, so a peer created without one would hold a direct route
-      // into this machine that outlives its own removal from the network -
-      // the side door revocation is supposed to shut.
+    if (payload?.type === 'offer') {
       if (!device) return;
+      this.drop(peerId);
       peer = this.#create(peerId, link);
+      peer.negotiation = payload.negotiation;
     }
+
+    if (!peer) return;
+    if (payload.negotiation && payload.negotiation !== peer.negotiation) return;
     if (link) peer.link = link;
     // Which device this channel belongs to, so a revocation can find it.
     if (device) peer.device = device;
 
     const { pc } = peer;
     if (payload.type === 'offer') {
-      await pc.setRemoteDescription({ type: 'offer', sdp: payload.sdp });
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      this.sendSignal(peerId, { type: 'answer', sdp: pc.localDescription.sdp }, peer.link);
+      try {
+        await pc.setRemoteDescription({ type: 'offer', sdp: payload.sdp });
+        if (this.#peers.get(peerId) !== peer) return;
+        peer.remoteReady = true;
+        for (const candidate of peer.candidates.splice(0)) await pc.addIceCandidate(candidate).catch(() => {});
+        const answer = await pc.createAnswer();
+        if (this.#peers.get(peerId) !== peer) return;
+        await pc.setLocalDescription(answer);
+        if (this.#peers.get(peerId) !== peer) return;
+        this.sendSignal(peerId, { type: 'answer', sdp: pc.localDescription.sdp, negotiation: peer.negotiation }, peer.link);
+      } catch (error) {
+        this.drop(peerId, peer);
+        throw error;
+      }
       return;
     }
     if (payload.type === 'candidate' && payload.candidate) {
+      if (!peer.remoteReady) {
+        if (peer.candidates.length < 128) peer.candidates.push(payload.candidate);
+        return;
+      }
       await pc.addIceCandidate(payload.candidate).catch(() => {});
     }
   }
 
   #create(peerId, link = null) {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    const peer = { pc, channel: null, link };
+    const peer = { pc, channel: null, link, remoteReady: false, candidates: [] };
     this.#peers.set(peerId, peer);
+    peer.deadline = setTimeout(() => this.drop(peerId, peer), 20_000);
+    peer.deadline.unref?.();
 
     pc.onicecandidate = ({ candidate }) => {
-      if (candidate) this.sendSignal(peerId, { type: 'candidate', candidate }, peer.link);
+      if (candidate && this.#peers.get(peerId) === peer) {
+        this.sendSignal(peerId, { type: 'candidate', candidate, negotiation: peer.negotiation }, peer.link);
+      }
     };
 
     pc.onconnectionstatechange = () => {
       if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
-        this.drop(peerId);
+        this.drop(peerId, peer);
       }
     };
 
     pc.ondatachannel = ({ channel }) => {
+      if (this.#peers.get(peerId) !== peer) { channel.close(); return; }
       peer.channel = channel;
       peer.fragments = new Map();
+      channel.onopen = () => clearTimeout(peer.deadline);
+      if (channel.readyState === 'open') clearTimeout(peer.deadline);
       channel.onmessage = (ev) => this.#onRaw(peer, ev.data);
-      channel.onclose = () => { peer.channel = null; peer.fragments?.clear(); };
+      channel.onclose = () => this.drop(peerId, peer);
     };
 
     return peer;
@@ -211,11 +232,13 @@ export class PeerHub {
     }
   }
 
-  drop(peerId) {
+  drop(peerId, expected) {
     const peer = this.#peers.get(peerId);
-    if (!peer) return;
-    try { peer.channel?.close(); peer.pc.close(); } catch { /* already torn down */ }
+    if (!peer || (expected && expected !== peer)) return;
     this.#peers.delete(peerId);
+    clearTimeout(peer.deadline);
+    peer.fragments?.clear();
+    try { peer.channel?.close(); peer.pc.close(); } catch { /* already torn down */ }
   }
 
   /**

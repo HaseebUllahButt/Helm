@@ -39,8 +39,8 @@ import { selfUpdate, currentVersion, autoUpdate } from './update.js';
 import * as gitq from './git.js';
 import { agentCatalog, delegationNote } from './delegation.js';
 
-const RECONNECT_MIN = 1000;
-const RECONNECT_MAX = 30_000;
+const RECONNECT_MIN = 250;
+const RECONNECT_MAX = 5000;
 /** How recently a machine must have answered to be called online. */
 const FRESH_MS = 90_000;
 
@@ -66,12 +66,13 @@ const BACK_ONLINE_MS = 10 * 60_000;
  * phone that can only reach the VM and a laptop that can only be reached on
  * the LAN still meet, as long as some hub can see both of them.
  */
-class Link {
+export class Link {
   #ws = null;
   #backoff = RECONNECT_MIN;
   #stopped = false;
   #beat = null;
   #waiting = false;
+  #retryTimer = null;
 
   constructor(daemon, url) {
     this.daemon = daemon;
@@ -80,13 +81,25 @@ class Link {
     this.connected = false;
   }
 
-  start() { this.#open(); return this; }
+  start() { this.#open().catch(() => this.#retry()); return this; }
+
+  #retry() {
+    if (this.#stopped || this.#retryTimer) return;
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = null;
+      this.#open().catch(() => this.#retry());
+    }, this.#backoff);
+    this.#retryTimer.unref?.();
+    this.#backoff = Math.min(this.#backoff * 2, RECONNECT_MAX);
+  }
 
   stop() {
     this.#stopped = true;
     this.connected = false;
     clearInterval(this.#beat);
-    try { this.#ws?.close(); } catch { /* already gone */ }
+    clearTimeout(this.#retryTimer);
+    this.#retryTimer = null;
+    try { this.#ws?.terminate(); } catch { /* already gone */ }
   }
 
   /**
@@ -126,6 +139,7 @@ class Link {
   async #open() {
     if (this.#stopped) return;
     const info = await this.daemon.describe();
+    if (this.#stopped) return;
     // The one hub a machine attaches to as *itself* is its own, on loopback -
     // which is what lets a phone reach this machine through the very hub this
     // machine is running. Mark that link `role=self` so the hub can allow this
@@ -144,8 +158,7 @@ class Link {
         console.log(`[helm] ${this.url}: ${err.message}`);
       }
       if (this.#stopped) return;
-      setTimeout(() => this.#open(), this.#backoff).unref?.();
-      this.#backoff = Math.min(this.#backoff * 2, RECONNECT_MAX);
+      this.#retry();
       return;
     }
     if (this.#stopped) return;
@@ -157,7 +170,7 @@ class Link {
       `?name=${encodeURIComponent(this.daemon.name)}` +
       `&info=${encodeURIComponent(JSON.stringify(info))}` +
       (isSelf ? '&role=self' : ''),
-      { headers: { authorization: `Bearer ${credential}` } }
+      { headers: { authorization: `Bearer ${credential}` }, handshakeTimeout: 5000 }
     );
     this.#ws = ws;
 
@@ -186,13 +199,16 @@ class Link {
       if (this.#stopped) return;
       if (was) console.log(`[helm] lost ${this.url} (${code}${reason?.length ? `: ${reason}` : ''}); retrying`);
       if (was) this.daemon.linkDown?.(this);
-      setTimeout(() => this.#open(), this.#backoff).unref?.();
-      this.#backoff = Math.min(this.#backoff * 2, RECONNECT_MAX);
+      this.#retry();
     });
 
     // Unreachable hubs are normal - a laptop that is asleep, a LAN address
     // from a network we are not on. Retrying quietly is the correct response.
     ws.on('error', () => {});
+    ws.on('unexpected-response', (_request, response) => {
+      response.resume();
+      ws.terminate();
+    });
   }
 }
 
