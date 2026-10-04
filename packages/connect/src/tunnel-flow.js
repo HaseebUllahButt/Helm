@@ -8,6 +8,7 @@ export class TunnelSender {
   pending = null;
   stopped = false;
   finishing = null;
+  finishTimer = null;
 
   constructor(input, send, fail) {
     this.input = input;
@@ -43,9 +44,16 @@ export class TunnelSender {
 
   // A TCP FIN can arrive while the last chunk is still waiting for credit.
   // Do not send tunnel CLOSE until that tail has reached the other writer.
-  finish(done) {
+  finish(done, { timeout = 30_000 } = {}) {
     if (this.stopped) return done();
     this.finishing = done;
+    if (!this.finishTimer) {
+      this.finishTimer = setTimeout(() => {
+        this.stop();
+        this.fail(new Error('tunnel close acknowledgement timed out'));
+      }, timeout);
+      this.finishTimer.unref?.();
+    }
     this.pump();
   }
 
@@ -61,6 +69,8 @@ export class TunnelSender {
 
   stop() {
     this.stopped = true;
+    clearTimeout(this.finishTimer);
+    this.finishTimer = null;
     this.input.pause();
     this.input.off('data', this.data);
     this.pending = null;

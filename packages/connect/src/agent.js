@@ -485,7 +485,12 @@ export class Daemon {
     // A locally terminated tunnel is a live socket even after every hub link
     // is gone. Close those too, or stopping the daemon can leave connections
     // (and the process that owns them) alive indefinitely.
-    for (const { sock } of this.#tunnels.values()) sock.destroy();
+    for (const tunnel of this.#tunnels.values()) {
+      tunnel.release?.();
+      tunnel.sender?.stop();
+      tunnel.receiver?.stop();
+      tunnel.sock.destroy();
+    }
     this.#tunnels.clear();
     this.#media?.server.close();
     this.#media = null;
@@ -1061,8 +1066,12 @@ export class Daemon {
 
       case T.TUNNEL_CLOSE: {
         const key = this.#key(link, msg.sid);
-        this.#tunnels.get(key)?.sock.destroy();
+        const tunnel = this.#tunnels.get(key);
         this.#tunnels.delete(key);
+        tunnel?.release?.();
+        tunnel?.sender?.stop();
+        tunnel?.receiver?.stop();
+        tunnel?.sock.destroy();
         return;
       }
 

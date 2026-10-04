@@ -21,6 +21,7 @@ const N = await import('@helm/protocol/network');
 N.createNetwork({ name: 'test' });
 const { Daemon } = await import('../packages/connect/src/agent.js');
 const { createWsLayer } = await import('../apps/relay/src/ws.js');
+const { hasActiveTransfers } = await import('@helm/protocol/transfer-activity');
 test.after(() => rmSync(root, { force: true, recursive: true }));
 const tick = () => new Promise(r => setImmediate(r));
 
@@ -52,6 +53,41 @@ test('a closing sender flushes a tail that is waiting for credit before closing 
   assert.equal(closed, false);
   sender.ack(TUNNEL_WINDOW + 123);
   assert.equal(closed, true);
+});
+
+test('a closing tunnel cannot wait forever for an acknowledgement that never arrives', async () => {
+  const input = new PassThrough();
+  let failed;
+  const failure = new Promise(resolve => { failed = resolve; });
+  const sender = new TunnelSender(input, () => {}, failed);
+  input.write(Buffer.from('unacknowledged'));
+  await tick();
+  sender.finish(() => assert.fail('unacknowledged data must not report success'), { timeout: 20 });
+  const keepAlive = setTimeout(() => {}, 1000);
+  try {
+    assert.match((await failure).message, /acknowledgement timed out/);
+    assert.equal(sender.stopped, true);
+    assert.equal(input.listenerCount('data'), 0);
+  } finally { clearTimeout(keepAlive); sender.stop(); }
+});
+
+test('closing an already ended tunnel releases its update blocker while credit is outstanding', { timeout: 3000 }, async context => {
+  let ended;
+  const closed = new Promise(resolve => { ended = resolve; });
+  const server = tcpServer(socket => { socket.on('close', ended); socket.end('last bytes'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  process.env.HELM_SSH_PORT = String(server.address().port);
+  const daemon = new Daemon({ port: 18787 });
+  const frames = [];
+  const link = { id: 'closed-tunnel', send: (type, extra) => frames.push({ t: type, ...extra }) };
+  context.after(async () => { await daemon.stop(); server.close(); delete process.env.HELM_SSH_PORT; });
+  await daemon.onFrame(link, { t: T.TUNNEL_OPEN, sid: 'closing', port: server.address().port, flow: 1 });
+  await closed;
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.ok(frames.some(frame => frame.t === T.TUNNEL_DATA));
+  assert.equal(hasActiveTransfers(), true);
+  await daemon.onFrame(link, { t: T.TUNNEL_CLOSE, sid: 'closing' });
+  assert.equal(hasActiveTransfers(), false);
 });
 
 test('receiver grants credit only after the slow destination writes, and bounds hostile input', async () => {
