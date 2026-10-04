@@ -9,7 +9,7 @@ before(async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
-    import { Shell } from './apps/web/src/App';
+    import { Shell, EnvView } from './apps/web/src/App';
     import * as workspace from './apps/web/src/workspaceCache';
     const root = createRoot(document.getElementById('root'));
     const token = 'helm1.' + btoa(JSON.stringify({net:'network',sub:'device'})) + '.test';
@@ -24,8 +24,10 @@ before(async () => {
         : new Promise(() => {}),
     });
     window.mount = client => root.render(<Shell client={client} conn={{online:true,reachable:true}} onSignOut={()=>{}} />);
+    window.mountEnv = client => root.render(<EnvView client={client} env={{id:'vm',name:'VM',online:true,info:{}}}
+      sessions={[]} reload={()=>{}} onNewSession={()=>{}} onSendProject={()=>{}} />);
   `, resolveDir: process.cwd(), loader: 'tsx' }, plugins: [{ name: 'shell-test-export', setup(builder) {
-    builder.onLoad({ filter: /\/App\.tsx$/ }, async ({ path }) => ({ contents: await readFile(path, 'utf8') + '\nexport { Shell };', loader: 'tsx' }));
+    builder.onLoad({ filter: /\/App\.tsx$/ }, async ({ path }) => ({ contents: await readFile(path, 'utf8') + '\nexport { Shell, EnvView };', loader: 'tsx' }));
   } }], bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   script = bundle.outputFiles[0].text;
   css = (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '');
@@ -44,6 +46,34 @@ async function pageFor(testContext, viewport) {
   testContext.after(() => assert.deepEqual(errors, []));
   return { page, boot };
 }
+
+test('project timeout errors clear on recovery and late failures cannot replace a fresh list', async context => {
+  const { page, boot } = await pageFor(context, { width: 1280, height: 900 });
+  await boot();
+  await page.evaluate(() => {
+    const listeners = new Set();
+    window.projectRequests = [];
+    const client = window.makeClient([], {});
+    client.on = callback => { listeners.add(callback); return () => listeners.delete(callback); };
+    client.rpc = (_env, method) => method === 'project.list'
+      ? new Promise((resolve, reject) => window.projectRequests.push({ resolve, reject }))
+      : Promise.resolve({ recent: [] });
+    window.reconnect = () => { for (const listener of listeners) listener('', 'connection', { online: true }); };
+    window.mountEnv(client);
+  });
+  await page.waitForFunction(() => window.projectRequests.length === 1);
+  await page.evaluate(() => window.projectRequests[0].reject(new Error('project.list timed out')));
+  await page.getByText('project.list timed out', { exact: true }).waitFor();
+  await page.evaluate(() => window.reconnect());
+  await page.waitForFunction(() => window.projectRequests.length === 2);
+  await page.evaluate(() => window.projectRequests[1].resolve({ projects: [] }));
+  await page.getByText('project.list timed out', { exact: true }).waitFor({ state: 'detached' });
+  await page.evaluate(() => { window.reconnect(); window.reconnect(); });
+  await page.waitForFunction(() => window.projectRequests.length === 4);
+  await page.evaluate(() => window.projectRequests[3].resolve({ projects: [] }));
+  await page.evaluate(() => window.projectRequests[2].reject(new Error('stale disconnected')));
+  assert.equal(await page.getByText('stale disconnected', { exact: true }).count(), 0);
+});
 
 test('Done is newest first across machines, retires at three days, and the footer is quiet', async testContext => {
   const { page, boot } = await pageFor(testContext, { width: 390, height: 844 });

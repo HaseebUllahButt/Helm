@@ -84,6 +84,30 @@ test('real browser reconnect skips a six-second HTTP discovery delay', async con
   await page.evaluate(() => window.client.close());
 });
 
+test('real browser recovers after offline without relying on another online event', async context => {
+  const home = await hub(context);
+  const page = await pageFor(context, home);
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  assert.equal(await page.evaluate(() => window.client.connected), false);
+  await page.waitForFunction(() => window.client.connected, undefined, { timeout: 3000 });
+  assert.equal(home.sockets.length, 2);
+  await page.evaluate(() => window.client.close());
+});
+
+test('a frozen browser tab reconnects on resume after losing its idle hub socket', async context => {
+  const home = await hub(context);
+  const page = await pageFor(context, home);
+  const protocol = await page.context().newCDPSession(page);
+  await protocol.send('Page.setWebLifecycleState', { state: 'frozen' });
+  home.sockets[0].terminate();
+  await new Promise(resolve => setTimeout(resolve, 200));
+  await protocol.send('Page.setWebLifecycleState', { state: 'active' });
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+  await page.waitForFunction(() => window.client.connected, undefined, { timeout: 3000 });
+  assert.equal(home.sockets.length, 2);
+  await page.evaluate(() => window.client.close());
+});
+
 test('real browser keeps pending writes on the old socket during a slow hub upgrade', async context => {
   const local = await hub(context);
   const remote = await hub(context, 3);

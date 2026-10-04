@@ -20,8 +20,8 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     for (;;) {
       const next = [...timers].filter(([, t]) => t.at <= until).sort((a, b) => a[1].at - b[1].at)[0];
       if (!next) break;
-      const [id, task] = next; now = task.at;
-      if (task.interval) task.at += task.interval; else timers.delete(id);
+      const [id, task] = next; now = Math.max(now, task.at);
+      if (task.interval) task.at = now + task.interval; else timers.delete(id);
       task.fn(); await flush();
     }
     now = until; await flush();
@@ -89,6 +89,7 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
   client.on((env, kind, payload) => events.push({ env, kind, payload }));
   const start = () => client.connect().catch(error => error.message);
   return { client, sockets, peers, events, requests, timers, document, advance, start,
+    suspend: ms => { now += ms; },
     window: kind => windows.get(kind)?.(), visible: () => documents.get('visibilitychange')?.() };
 }
 
@@ -437,6 +438,78 @@ test('foreground checks a sleeping socket with fresh patience and offline/online
   h.window('online'); await h.advance(10);
   assert.equal(h.client.connected, true); assert.equal(h.sockets.length, 2);
   h.client.close();
+});
+
+test('an offline notification cannot stop retries when the online notification is missed', async () => {
+  const setup = harness();
+  setup.start(); await setup.advance(10);
+  setup.window('offline');
+  assert.equal(setup.client.connected, false);
+  await setup.advance(600);
+  assert.equal(setup.client.connected, true);
+  setup.client.close();
+});
+
+test('a closed idle socket recovers even if the browser never delivers its close event', async () => {
+  const setup = harness();
+  setup.start(); await setup.advance(10);
+  setup.sockets[0].readyState = 3;
+  await setup.advance(6000);
+  assert.equal(setup.client.connected, true);
+  setup.client.close();
+});
+
+test('returning after suspension replaces a stale connecting attempt immediately', async () => {
+  let stalled = true;
+  const setup = harness({ socket: () => stalled ? 'hang' : 'open' });
+  setup.start(); await setup.advance(10);
+  setup.suspend(60000);
+  stalled = false;
+  setup.visible();
+  await setup.advance(10);
+  assert.equal(setup.client.connected, true);
+  assert.equal(setup.sockets[0].readyState, 3);
+  setup.client.close();
+});
+
+test('repeated focus events cannot postpone dead-socket detection indefinitely', async () => {
+  const setup = harness({ pong: false });
+  setup.start(); await setup.advance(10);
+  for (let count = 0; count < 5; count++) {
+    setup.window('focus');
+    await setup.advance(5000);
+  }
+  assert.ok(setup.sockets.length >= 2);
+  setup.client.close();
+});
+
+test('project reads escape a silent direct connection instead of timing out', async () => {
+  const setup = harness();
+  setup.start(); await setup.advance(10);
+  await setup.client.openDirect('vm'); setup.peers[0].open();
+  const request = setup.client.rpc('vm', 'project.list', {}, 20000);
+  await setup.advance(1500);
+  const frame = setup.sockets[0].frames.find(frame => frame.method === 'project.list');
+  assert.ok(frame);
+  setup.sockets[0].message({ t: 'rpcResult', id: frame.id, ok: true, result: { projects: [] } });
+  assert.equal((await request).projects.length, 0);
+  assert.equal(setup.client.directTo('vm'), false);
+  setup.client.close();
+});
+
+test('a dropped socket recovers pending project reads but never replays project writes', async () => {
+  const setup = harness();
+  setup.start(); await setup.advance(10);
+  const request = setup.client.rpc('vm', 'project.list', {}, 20000);
+  const write = setup.client.rpc('vm', 'project.save', { path: '~/project' });
+  const failed = assert.rejects(write, /disconnected/);
+  setup.sockets[0].close();
+  await setup.advance(10);
+  assert.equal((await request).fresh, true);
+  await failed;
+  assert.equal(setup.requests.filter(request => request.url.endsWith('/api/read')).length, 1);
+  assert.equal(JSON.parse(setup.requests.find(request => request.url.endsWith('/api/read')).init.body).method, 'project.list');
+  setup.client.close();
 });
 
 test('manual recovery cancels a queued retry and late callbacks cannot replace the new socket', async () => {

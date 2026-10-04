@@ -375,6 +375,7 @@ const DC_CHUNK_TYPE = 'dc-chunk';
 const HTTP_READ_METHODS = new Set([
   'session.events', 'session.messages', 'session.list', 'model.list',
   'session.commands', 'env.info', 'session.watch', 'session.unwatch',
+  'project.list',
 ]);
 
 function sendDirect(channel: RTCDataChannel, frame: string): boolean {
@@ -581,32 +582,35 @@ export class Client {
   private backoff = 500;
   private closed = false;
   private connecting = false;
+  private connectStartedAt = 0;
+  private recoveryTimer: ReturnType<typeof setInterval> | undefined;
+  private backgrounded = false;
   private connectVersion = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private disconnectSocket: ((reason: string, retry?: boolean) => void) | null = null;
   private retireSocket: (() => void) | null = null;
   private socketCleanups = new Set<() => void>();
   private lastGoodHub: string | null = null;
-  private probeSocket: (() => void) | null = null;
+  private probeSocket: ((reset?: boolean) => void) | null = null;
   private failedHubs = new Map<string, number>();
   private httpReads = new Set<() => void>();
   private peers = new Map<string, Peer>();
   private presencePoll: ReturnType<typeof setInterval> | null = null;
   private reachPoll: ReturnType<typeof setInterval> | null = null;
   private reachCheck: Promise<unknown> | null = null;
-  private onVisible = () => {
-    if (document.visibilityState !== 'visible') return;
+  private onVisible = (event?: Event) => {
+    if (this.closed) return;
+    if (document.visibilityState !== 'visible') { this.backgrounded = true; return; }
+    const resumed = this.backgrounded || event?.type === 'pageshow' || event?.type === 'resume';
+    this.backgrounded = false;
     // Picking the phone back up. It may well be on a different network than
     // it was when you put it down, so anything relaying is worth another go.
     this.retryDirectNow();
-    this.probeSocket?.();
+    this.probeSocket?.(resumed);
     this.refreshReachability();
     // Coming back to the foreground: the socket is almost certainly dead and
     // the backoff timer may be ten seconds out. Try now.
-    if (!this.connected && !this.connecting) {
-      this.backoff = 500;
-      this.connect().catch(() => {});
-    }
+    this.recoverConnection(true);
   };
 
   /**
@@ -639,6 +643,7 @@ export class Client {
     this.connecting = false;
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
     this.emit('', 'connection', { online: false, reachable: false, hub: this.relay });
+    this.scheduleReconnect();
   };
   /** What the last connection attempt ran into, for the diagnostics line. */
   public lastError = '';
@@ -770,6 +775,7 @@ export class Client {
     this.relay = this.endpoints[0];
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.onVisible);
+      document.addEventListener('resume', this.onVisible);
     }
     if (typeof window !== 'undefined') {
       window.addEventListener('online', this.onNetworkChange);
@@ -846,6 +852,20 @@ export class Client {
     this.backoff = Math.min(this.backoff * 2, 15_000);
   }
 
+  private recoverConnection(immediate = false) {
+    if (this.closed || this.connected) return;
+    if (this.connecting) {
+      if (Date.now() - this.connectStartedAt < 60_000) return;
+      this.connectVersion++;
+      for (const cleanup of this.socketCleanups) cleanup();
+      this.connecting = false;
+    }
+    if (this.ws) this.disconnectSocket?.('connection closed without notification', false);
+    if (!immediate && this.reconnectTimer) return;
+    if (immediate) this.backoff = 500;
+    void this.connect().catch(() => {});
+  }
+
   private prepareSocket(hub: string) {
     const ws = new WebSocket(`${hub.replace(/^http/, 'ws')}/ws`, ['helm', this.token]);
     let cancel!: () => void;
@@ -868,10 +888,12 @@ export class Client {
 
   async connect(hubHint: string | null = null): Promise<void> {
     if (this.closed || this.connecting || (this.connected && !hubHint)) return;
+    if (!this.recoveryTimer) this.recoveryTimer = setInterval(() => this.recoverConnection(), 5000);
     const migrating = this.connected;
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
     const version = ++this.connectVersion;
     this.connecting = true;
+    this.connectStartedAt = Date.now();
 
     let hub: string | null = null;
     let prepared: ReturnType<Client['prepareSocket']> | undefined;
@@ -991,6 +1013,7 @@ export class Client {
           for (const [id, pending] of this.pending) {
             pending.routes?.delete('relay');
             if (pending.direct?.ready || pending.routes?.has('http')) continue;
+            if (!this.closed && pending.recover) { pending.recover(); continue; }
             this.pending.delete(id);
             pending.reject(new Error('disconnected'));
           }
@@ -1024,10 +1047,11 @@ export class Client {
           try { ws.send(JSON.stringify({ t: 'ping' })); } catch { stop('connection stopped responding'); }
         }
       };
-      const probeSocket = () => {
+      const probeSocket = (reset = false) => {
         // Timers may have slept with the page. Give a fresh ping its full
         // grace period instead of declaring a healthy socket dead on wake.
-        awaiting = false; lastReceived = Date.now(); beat(true);
+        if (reset) { awaiting = false; lastReceived = Date.now(); }
+        beat(true);
       };
       ws.onopen = () => {
         if (stopped || this.closed || version !== this.connectVersion) { stop('connection superseded', false); return; }
@@ -1146,6 +1170,7 @@ export class Client {
     this.connectVersion++;
     for (const cleanup of this.socketCleanups) cleanup();
     clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined;
+    clearInterval(this.recoveryTimer); this.recoveryTimer = undefined;
     this.disconnectSocket?.('client closed', false);
     for (const cancel of this.httpReads) cancel();
     for (const p of this.pending.values()) p.reject(new Error('client closed'));
@@ -1155,6 +1180,7 @@ export class Client {
     this.reachPoll = null;
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisible);
+      document.removeEventListener('resume', this.onVisible);
     }
     if (typeof window !== 'undefined') {
       window.removeEventListener('online', this.onNetworkChange);

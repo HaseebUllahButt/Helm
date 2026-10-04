@@ -2214,30 +2214,33 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   useLiveInterval(env.online ? 60_000 : null, reloadEarlier, [reloadEarlier, env.online]);
 
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectError, setProjectError] = useState('');
+  const projectSequence = useRef(0);
   const [renaming, setRenaming] = useState<Project | null>(null);
   const [removing, setRemoving] = useState<Project | null>(null);
   const [projectBusy, setProjectBusy] = useState(false);
   const reloadProjects = useCallback(() => {
-    if (!env.online) { setProjects([]); return; }
-    let retried = false;
+    const sequence = ++projectSequence.current;
+    if (!env.online) { setProjects([]); setProjectError(''); return; }
     client.rpc<{ projects: Project[] }>(env.id, 'project.list', {}, 20_000)
-      .then((r) => setProjects(r.projects ?? []))
-      .catch((e) => {
-        // On a wide screen this runs before the socket is up, and "not
-        // connected" is the socket saying so, not the machine failing: ask
-        // once more when it has had a moment, and stay quiet about it.
-        if (/not connected/i.test(e.message) && !retried) {
-          retried = true;
-          setTimeout(() => client.rpc<{ projects: Project[] }>(env.id, 'project.list', {}, 20_000)
-            .then((r) => setProjects(r.projects ?? []))
-            .catch((err) => setError(err.message)), 2000);
-          return;
-        }
-        setError(e.message);
+      .then(result => {
+        if (sequence !== projectSequence.current) return;
+        setProjects(result.projects ?? []);
+        setProjectError('');
+      })
+      .catch(error => {
+        if (sequence === projectSequence.current) setProjectError(error.message);
       });
   }, [client, env.id, env.online]);
   const projectCwds = sessions.filter((s) => s.engine !== 'shell').map((s) => s.cwd ?? '').sort().join('\n');
-  useEffect(() => { reloadProjects(); }, [reloadProjects, projectCwds]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    reloadProjects();
+    const off = client.on((machine, kind, payload) => {
+      if ((kind === 'connection' && payload?.online)
+        || (machine === env.id && ((kind === 'transport' && payload?.direct) || (kind === 'presence' && payload?.online)))) reloadProjects();
+    });
+    return () => { off(); projectSequence.current++; };
+  }, [client, env.id, reloadProjects, projectCwds]);
 
   const openTerminal = async () => {
     // Back to the terminal you left, with whatever is running in it still
@@ -2652,6 +2655,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           <button className="linkish addproject" onClick={onAddProject}><Icon name="plus" size={14} />Add a project shortcut</button>
         )}
 
+        {projectError && <div className="error">{projectError}</div>}
         {error && <div className="error">{error}</div>}
       </div></div>
 

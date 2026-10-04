@@ -165,6 +165,11 @@ block alternatives. Hub upgrades open the replacement before retiring the
 working connection; in-flight replies can finish on the old socket without
 resending actions.
 
+Idle recovery does not depend on receiving a browser online/close event: a
+watchdog restarts abandoned attempts, and returning from sleep checks the
+connection immediately. Project lists use the same safe read fallback as chat
+snapshots; reconnecting refreshes the list and clears obsolete timeout errors.
+
 While the app is open, it rechecks hub reachability every fifteen seconds and
 moves to a hub that can reach more machines. A local hub saying a machine is
 offline does not prevent safe chat reads from trying another hub. Direct

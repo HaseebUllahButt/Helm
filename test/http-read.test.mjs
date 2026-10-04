@@ -35,7 +35,7 @@ const read = (method, params = {}, token = phone.token, extra = {}) => fetch(bas
 });
 
 test('authenticated HTTP snapshots cross the real hub RPC router and are never browser cached', async () => {
-  for (const method of ['session.events', 'session.messages', 'session.list', 'model.list', 'session.commands', 'env.info']) {
+  for (const method of ['session.events', 'session.messages', 'session.list', 'model.list', 'session.commands', 'env.info', 'project.list']) {
     const response = await read(method, { id: 'chat' });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -60,7 +60,7 @@ test('invalid credentials, revoked devices, mutations and malformed reads never 
   const revoked = N.issueDevice(N.loadNetwork(), 'revoked');
   N.revoke(N.loadNetwork(), revoked.id);
   assert.equal((await read('session.list', {}, revoked.token)).status, 401);
-  for (const method of ['session.input', 'session.answer', 'session.start', 'session.archive', 'env.update', 'profile.defaults']) {
+  for (const method of ['session.input', 'session.answer', 'session.start', 'session.archive', 'env.update', 'profile.defaults', 'project.save', 'project.remove']) {
     assert.equal((await read(method)).status, 403, method);
   }
   for (const extra of [{ env: 'unknown' }, { params: null }, { params: [] }, { params: 'x' }]) {
