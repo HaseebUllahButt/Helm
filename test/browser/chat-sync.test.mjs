@@ -63,6 +63,27 @@ async function device(t,remote,{cache,clock=false}={}) {
 const caughtUp=(page,last)=>page.waitForFunction(last=>window.state?.log.last===last&&!window.state.syncing,last);
 const text=page=>page.evaluate(()=>window.state.log.turns.flatMap(t=>t.items.map(i=>i.text)).join(''));
 
+test('image recovery updates an already completed cached turn without replacing its answer', async t => {
+  const old = [
+    event(1, 'turn.start', { turnId: 'imported-image', text: 'Old image envelope' }),
+    event(2, 'item.start', { id: 'answer', turnId: 'imported-image', kind: 'text' }),
+    event(3, 'item.delta', { id: 'answer', text: 'Existing answer' }),
+    event(4, 'turn.done', { turnId: 'imported-image', status: 'ok' }),
+  ];
+  const remote = server([...old, event(5, 'turn.images', { turnId: 'imported-image', text: 'Clean caption',
+    attachments: [{ filename: 'saved.png', mime: 'image/png', data: 'aGVsbG8=' }],
+  })]);
+  remote.status = 'idle';
+  const page = await device(t, remote, { cache: old });
+  await caughtUp(page, 5);
+  const turn = await page.evaluate(() => window.state.log.turns[0]);
+  assert.equal(turn.text, 'Clean caption');
+  assert.equal(turn.attachments[0].data, 'aGVsbG8=');
+  assert.equal(turn.items[0].text, 'Existing answer');
+  assert.equal(turn.done.status, 'ok');
+  assert.equal(turn.revision, 5);
+});
+
 test('cached history and newer live pushes merge in order while the first fetch is pending',async t=>{
   const remote=server([...transcript(),event(4,'item.delta',{id:'reply-1',text:' middle'})]);
   const gate=deferred();

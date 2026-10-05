@@ -88,6 +88,8 @@ export interface TurnEnd {
 
 export interface Turn {
   id: string;
+  /** Last event that changed this turn; items are mutated while streaming. */
+  revision?: number;
   text: string;
   at: number;
   /** Still in helm's outbox: accepted, but the agent has not seen it yet. */
@@ -165,10 +167,10 @@ export const emptyLog = (): LogState => ({ turns: [], pending: [], status: 'idle
 
 // ------------------------------------------------------------------ reduce
 
-const findItem = (turns: Turn[], id: string): Item | undefined => {
+const findItem = (turns: Turn[], id: string, revision: number): Item | undefined => {
   for (let i = turns.length - 1; i >= 0; i--) {
     const it = turns[i].items.find((x) => x.id === id);
-    if (it) return it;
+    if (it) { turns[i].revision = revision; return it; }
   }
   return undefined;
 };
@@ -232,6 +234,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       // it existed, so the chat can host it at that seam instead.
       const host = e.local ? hostFor(state.turns, open) : undefined;
       if (open) {
+        open.revision = e.seq;
         open.id = id;
         open.queued = false;
         if (e.local) {
@@ -241,7 +244,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         }
         return;
       }
-      const turn: Turn = { id, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, references: e.references };
+      const turn: Turn = { id, revision: e.seq, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, references: e.references };
       if (e.local) {
         turn.local = true;
         turn.insideOf = host?.id;
@@ -254,6 +257,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       const turn = turnFor(state.turns, e.turnId);
       if (!turn) return;
       if (turn.items.some((x) => x.id === e.id)) return;
+      turn.revision = e.seq;
       turn.items.push({
         id: e.id, kind: e.kind, turnId: e.turnId, text: '', status: 'streaming', startedAt: e.at,
         name: e.name, input: e.input, command: e.command, cwd: e.cwd, changes: e.changes,
@@ -262,14 +266,14 @@ export function apply(state: LogState, e: HelmEvent): void {
       return;
     }
     case 'item.delta': {
-      const it = findItem(state.turns, e.id);
+      const it = findItem(state.turns, e.id, e.seq);
       if (!it) return;
       if (it.kind === 'tool' || it.kind === 'subagent') it.inputJson = (it.inputJson ?? '') + e.text;
       else it.text += e.text;
       return;
     }
     case 'item.update': {
-      const it = findItem(state.turns, e.id);
+      const it = findItem(state.turns, e.id, e.seq);
       if (!it) return;
       const { type: _t, seq: _s, at: _a, id: _i, agent, ...rest } = e;
       Object.assign(it, rest);
@@ -277,7 +281,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       return;
     }
     case 'item.done': {
-      const it = findItem(state.turns, e.id);
+      const it = findItem(state.turns, e.id, e.seq);
       if (!it) return;
       it.status = e.status ?? 'ok';
       it.doneAt = e.at;
@@ -299,12 +303,21 @@ export function apply(state: LogState, e: HelmEvent): void {
       return;
     case 'turn.deliver': {
       const turn = state.turns.find((t) => t.id === e.turnId);
-      if (turn) turn.delivered = true;
+      if (turn) { turn.delivered = true; turn.revision = e.seq; }
       return;
     }
     case 'turn.edit': {
       const turn = state.turns.find((entry) => entry.id === e.turnId);
-      if (turn?.queued && !turn.delivered) turn.text = e.text;
+      if (turn?.queued && !turn.delivered) { turn.text = e.text; turn.revision = e.seq; }
+      return;
+    }
+    case 'turn.images': {
+      const turn = state.turns.find((entry) => entry.id === e.turnId);
+      if (turn) {
+        turn.text = e.text ?? turn.text;
+        turn.attachments = e.attachments ?? turn.attachments;
+        turn.revision = e.seq;
+      }
       return;
     }
     case 'turn.accept': {
@@ -313,6 +326,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       // of the turn's work flows below it, the way it does in the CLI.
       const turn = state.turns.find((t) => t.id === e.turnId);
       if (!turn) return;
+      turn.revision = e.seq;
       turn.queued = false;
       turn.steered = true;
       const host = hostFor(state.turns, turn);
@@ -335,6 +349,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         return;
       }
       if (turn) {
+        turn.revision = e.seq;
         // The turn's error is usually the same sentence an `error` event
         // already put in the transcript ("Not logged in - run /login"), and
         // printing it twice reads like two things went wrong. Keep the item,
@@ -362,8 +377,8 @@ export function apply(state: LogState, e: HelmEvent): void {
     case 'error': {
       const turn = state.turns[state.turns.length - 1];
       const item: Item = { id: `err-${e.seq}`, kind: 'error', text: e.message ?? 'error', status: 'error', startedAt: e.at };
-      if (turn && !turn.done) turn.items.push(item);
-      else state.turns.push({ id: `sys-${e.seq}`, text: '', at: e.at, items: [item], done: { status: 'error' } });
+      if (turn && !turn.done) { turn.items.push(item); turn.revision = e.seq; }
+      else state.turns.push({ id: `sys-${e.seq}`, revision: e.seq, text: '', at: e.at, items: [item], done: { status: 'error' } });
       return;
     }
     default:

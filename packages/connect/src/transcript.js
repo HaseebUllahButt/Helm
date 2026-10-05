@@ -277,11 +277,27 @@ async function codexMessages(path, { all = false } = {}) {
     // `developer` carries injected instructions, not conversation.
     if (p.role !== 'user' && p.role !== 'assistant') return;
 
-    const { text, tools } = blocks(p.content);
-    if (!text && !tools.length) return;
+    const { text: rawText, tools } = blocks(p.content);
+    const attachments = [];
+    if (p.role === 'user' && Array.isArray(p.content)) {
+      const names = [...rawText.matchAll(/<image name=[^\n>]*? path="([^"\n]+)"\s*>\s*<\/image>/g)].map((m) => basename(m[1]));
+      for (const block of p.content) {
+        if (block?.type !== 'input_image') continue;
+        const url = typeof block.image_url === 'string' ? block.image_url : block.image_url?.url;
+        const match = typeof url === 'string' && /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=\s]+)$/.exec(url);
+        if (!match) continue;
+        attachments.push({ filename: names[attachments.length] ?? `image-${attachments.length + 1}`, mime: match[1], data: match[2] });
+      }
+    }
+    const text = attachments.length ? rawText
+      .replace(/<image name=[^\n>]*? path="[^"\n]+"\s*>\s*<\/image>/g, '')
+      .trim().replace(/^(?:\[Image #\d+\]\s*)+/, '') : rawText;
+    if (!text && !tools.length && !attachments.length) return;
     // Codex prepends a machine-readable context block to the first turn.
     if (p.role === 'user' && text.startsWith('<environment_context>')) return;
-    out.push({ role: p.role, text: clip(text), tools, at: rec.timestamp, sourceId: p.id ?? rec.id });
+    out.push({ role: p.role, text: clip(text), tools, at: rec.timestamp, sourceId: p.id ?? rec.id,
+      ...(attachments.length ? { attachments, rawText: clip(rawText) } : {}),
+    });
   }, { tailBytes: all ? Infinity : 4 << 20 });
   return out;
 }

@@ -337,6 +337,7 @@ export interface Message {
   tools: Tool[];
   thinking?: boolean;
   at?: string | number;
+  attachments?: { filename: string; mime: string; data?: string; missing?: boolean }[];
 }
 
 type RpcRoute = 'direct' | 'relay' | 'http';

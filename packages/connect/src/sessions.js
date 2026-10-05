@@ -112,7 +112,7 @@ const EXTERNAL = /^(pane:|found:)/;
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
-export const wire = ({ promptSample, unsent, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, originHandoffId, delegationReply, taskReturnContext, ...s }) => s;
+export const wire = ({ promptSample, unsent, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, ...s }) => s;
 
 const EXTERNAL_INFO_COMMANDS = [
   { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
@@ -1443,13 +1443,50 @@ export class Sessions extends EventEmitter {
     const messages = await readMessages({
       engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, all: true,
     });
-    const imported = Math.min(s.externalImported ?? 0, messages.length);
+    let imported = Math.min(s.externalImported ?? 0, messages.length);
+    if (s.engine === 'codex' && s.externalImagesVersion !== 1 && imported) {
+      // The old parser omitted image-only messages entirely. Translate its
+      // cursor before continuing, rather than importing old answers twice.
+      let oldCount = 0, index = 0;
+      for (const message of messages) {
+        if (oldCount >= imported) break;
+        index++;
+        if (!message.attachments?.length || message.rawText || message.tools?.length) oldCount++;
+      }
+      imported = index;
+      s.externalImported = imported;
+    }
     const nextId = () => `imported-${randomBytes(8).toString('hex')}`;
     const append = (event) => {
       const saved = this.events.append(s.id, event);
       s.lastSeq = saved.seq;
-      this.emit('event', { id: s.id, event: saved });
+      this.emit('event', { id: s.id, event: saved.attachments?.length ? this.events.since(s.id, saved.seq - 1)[0] : saved });
     };
+    // Existing imports already consumed these messages before image blocks
+    // were supported. Recover only retained user bubbles, with append-only
+    // corrections so their ids, replies, and cached cursors stay intact.
+    if (s.engine === 'codex' && s.externalImagesVersion !== 1) {
+      const images = new Map();
+      for (const message of messages.slice(0, imported)) {
+        if (!message.attachments?.length) continue;
+        const key = message.rawText ?? message.text;
+        if (!key) continue;
+        // Without a source id, identical old prompts cannot safely identify
+        // which image belonged to which turn.
+        images.set(key, images.has(key) ? null : message);
+      }
+      const corrected = new Set(this.events.tail(s.id, 0).filter((e) => e.type === 'turn.images').map((e) => e.turnId));
+      for (const event of [...this.events.tail(s.id, 0)]) {
+        if (event.type !== 'turn.start' || !String(event.turnId).startsWith('imported-') || event.attachments?.length || corrected.has(event.turnId)) continue;
+        const message = images.get(event.text);
+        if (!message) continue;
+        append({ type: 'turn.images', turnId: event.turnId, text: message.text,
+          attachments: message.attachments.map((a) => this.events.putAttachment(s.id, a)),
+        });
+      }
+      s.externalImagesVersion = 1;
+      if (this.#index.has(s.id)) this.#save();
+    }
     // SQLite providers update the final message row in place while it
     // streams, so the message count does not move. Extend the already drawn
     // item when its persisted snapshot grows instead of waiting for the next
@@ -1483,7 +1520,9 @@ export class Sessions extends EventEmitter {
         close();
         s.externalTail = null;
         turnId = nextId();
-        append({ type: 'turn.start', turnId, text: message.text ?? '', imported: true });
+        append({ type: 'turn.start', turnId, text: message.text ?? '', imported: true,
+          ...(message.attachments?.length ? { attachments: message.attachments.map((a) => this.events.putAttachment(s.id, a)) } : {}),
+        });
         continue;
       }
       if (!turnId) {
@@ -1566,6 +1605,14 @@ export class Sessions extends EventEmitter {
       firstSeq: events.length === w.events.length ? w.firstSeq : (events[0]?.seq ?? 0),
       logFirst: w.logFirst,
     };
+  }
+
+  /** Backfill images when an existing imported chat is opened after upgrade. */
+  async prepareHistory(id) {
+    const s = this.get(id);
+    if (s.engine === 'codex' && s.externalSource && s.transcript && s.externalImagesVersion !== 1) {
+      await this.#importExternalTranscript(s);
+    }
   }
 
   /** Say that somebody is looking at this session; pushes flow while renewed. */

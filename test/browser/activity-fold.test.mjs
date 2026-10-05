@@ -33,8 +33,8 @@ before(async () => {
         step('h', { kind: 'command', command: 'npm run build', output: 'building chunk 1\\\\nbuilding chunk 2', status: 'streaming', doneAt: undefined }),
       ] }] : []),
     ]} />);
-    window.renderHistory = (text) => root.render(<Transcript status="idle" loaded turns={[
-      { id: 'saved-reply', text, at: t0, attachments: [], items: [], done: { status: 'ok' } },
+    window.renderHistory = (text, attachments = []) => root.render(<Transcript status="idle" loaded turns={[
+      { id: 'saved-reply', text, at: t0, attachments, items: [], done: { status: 'ok' } },
       { id: 'saved-tool', text: '', at: t0 + 1, attachments: [], items: [
         step('saved-read', { kind: 'tool', name: 'Read', input: { file_path: '/repo/app.ts' } }),
       ], done: { status: 'ok' } },
@@ -122,4 +122,24 @@ test('ordinary messages and unfamiliar reply records remain readable', async () 
     await page.getByText(text, { exact: false }).waitFor();
     assert.ok((await page.locator('.turn.user .bubble').innerText()).includes(text));
   }
+});
+
+test('old image envelopes become image previews and keep their caption and zoom', async () => {
+  const data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5fsAAAAASUVORK5CYII=';
+  const text = '<image name=[Image #1] path="/tmp/old-image.png">\n</image>\n[Image #1] Why is this broken?';
+  await page.evaluate((text) => window.renderHistory(text), text);
+  await page.locator('.turn-image-gone').waitFor();
+  assert.doesNotMatch(await page.locator('.bubble').innerText(), /<image|\/tmp\/|\[Image #1\]/);
+  await page.evaluate(({ text, data }) => window.renderHistory(text, [{ filename: 'old-image.png', mime: 'image/png', data }]), { text, data });
+  const image = page.locator('img.turn-image');
+  await image.waitFor();
+  await image.scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector('img.turn-image')?.naturalWidth === 1);
+  assert.equal(await image.getAttribute('src'), `data:image/png;base64,${data}`);
+  assert.match(await page.locator('.bubble').innerText(), /Why is this broken\?/);
+  assert.equal(await page.locator('.turn-image-gone').count(), 0);
+  await image.click();
+  await page.locator('.lightbox').waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('.lightbox').waitFor({ state: 'detached' });
 });

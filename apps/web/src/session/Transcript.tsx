@@ -1,9 +1,10 @@
 import { useCopySelection } from '../useCopySelection';
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Markdown } from '../Markdown';
 import type { Change, Item, Turn } from './types';
 import { money, seconds } from '../format';
 import { Icon, toolKind } from '../Icon';
+import { userMessage } from './userMessage';
 
 /**
  * The conversation, live.
@@ -360,17 +361,6 @@ export function splitNote(text?: string): { note?: string; text?: string } {
   return m ? { note: m[1].trim(), text: m[2] } : { text };
 }
 
-/** Imported Codex replies keep their wire wrapper in older logs and caches. */
-function userReplyText(text?: string): string | undefined {
-  const match = text?.match(/^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*<\/send_user_message_question_reply>\s*$/);
-  if (!match) return text;
-  const replies: unknown = tryParse(match[1]);
-  // Leave unfamiliar or incomplete records readable instead of hiding them.
-  if (!Array.isArray(replies) || !replies.length || !replies.every((reply) =>
-    reply && typeof reply === 'object' && typeof reply.answer === 'string')) return text;
-  return replies.map((reply) => reply.answer).join('\n\n');
-}
-
 /** How long ago a bubble was sent, in the transcript's own quiet type. */
 function clock(ts?: number) {
   if (!ts) return '';
@@ -381,8 +371,9 @@ function clock(ts?: number) {
   return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
 }
 
-function TurnView({ turn, items, head = true, tail = true, working, blocked, onResend, onWithdraw, onBranch }: {
+const TurnView = memo(function TurnView({ turn, items, head = true, tail = true, working, blocked, onResend, onWithdraw, onBranch }: {
   turn: Turn;
+  revision?: number;
   /**
    * A slice of the turn's items, when it renders around a helm answer hosted
    * inside it: the first slice carries the prompt bubble, the last carries
@@ -396,7 +387,8 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
   onBranch?: (turn: Turn) => void;
 }) {
   const said = splitNote(turn.text);
-  said.text = userReplyText(said.text);
+  const display = userMessage(said.text, turn.attachments);
+  said.text = display.text;
   // A prompt that is itself a command means the turn's text is that
   // command's answer - styled as a quiet result panel rather than prose.
   const commandOutput = /^\/\S+/.test((said.text ?? '').trim());
@@ -432,10 +424,10 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
             ? <details className="turn-note"><summary>helm note to the agent</summary>{said.note}</details>
             : <span className="turn-note">{said.note}</span>)}
           {said.text}
-          {turn.attachments?.map((a, i) => (a.data
+          {display.attachments?.map((a, i) => (a.data
             // A blob the log has swept past still has its name, and saying
             // so beats a browser's broken-image glyph.
-            ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={a.filename} loading="lazy" />
+            ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={a.filename} loading="lazy" decoding="async" />
             : <span key={i} className="turn-image-gone" title={a.filename}><Icon name="image" size={14} /> {a.filename || 'image'} — no longer stored</span>
           ))}
           <span className="bubble-meta">
@@ -503,7 +495,7 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
       </div>
     </>
   );
-}
+});
 
 export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch }: {
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
@@ -520,6 +512,13 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   useCopySelection(box);
   const stuck = useRef(true);
   const [unread, setUnread] = useState(false);
+  // Parent renders supply fresh closures. Keep the memoized turns' handlers
+  // stable while dispatching to the latest actions, including during a send.
+  const actions = useRef({ onResend, onWithdraw, onBranch });
+  actions.current = { onResend, onWithdraw, onBranch };
+  const resend = useCallback((turn: Turn) => actions.current.onResend?.(turn), []);
+  const withdraw = useCallback((turn: Turn) => actions.current.onWithdraw?.(turn), []);
+  const branch = useCallback((turn: Turn) => actions.current.onBranch?.(turn), []);
   // The working pulse hangs off the turn still being written - with a helm
   // answer hosted mid-turn, that is not necessarily the last turn in the list.
   // A message the CLI took mid-turn sits inside its host turn and never
@@ -533,11 +532,11 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     if (stuck.current) setUnread(false);
   };
-  // Runs on every render, but only *growth* is news: a keystroke in the
-  // composer re-renders this too, and used to raise "↓ new" for nothing. Older
+  // Only changed transcript content needs a synchronous layout read. Older
   // turns arriving above keep the reader where they were - iOS Safari has no
   // scroll anchoring to do it for us.
   const seen = useRef<{ h: number; first?: string }>({ h: 0 });
+  const revision = turns.map((turn) => turn.revision ?? 0).join(',');
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
@@ -548,7 +547,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     if (stuck.current) el.scrollTop = h;
     else if (prev.first !== undefined && first !== prev.first) el.scrollTop += h - prev.h;
     else if (h > prev.h) setUnread(true);
-  });
+  }, [turns, revision, status, loaded, earlier, loadingEarlier]);
 
   /** Jump to the previous or next thing you asked - the landmarks of a long thread. */
   const step = (dir: -1 | 1) => {
@@ -584,10 +583,10 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     hostedIds.add(t.id);
   }
   const view = (t: Turn, items?: Item[], head = true, tail = true, key: string = t.id) => (
-    <TurnView key={key} turn={t} items={items} head={head} tail={tail}
+    <TurnView key={key} turn={t} revision={t.revision} items={items} head={head} tail={tail}
       working={working && t === openTurn} blocked={status === 'blocked'}
-      onResend={onResend} onWithdraw={onWithdraw}
-      onBranch={onBranch && turns.indexOf(t) > 0 ? onBranch : undefined} />
+      onResend={onResend ? resend : undefined} onWithdraw={onWithdraw ? withdraw : undefined}
+      onBranch={onBranch && t !== turns[0] ? branch : undefined} />
   );
   const flow: ReactNode[] = [];
   for (const t of turns) {

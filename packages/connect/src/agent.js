@@ -1416,9 +1416,11 @@ export class Daemon {
       case M.SESSION_FORK: return { session: await this.sessions.fork(p.id, p.turnId) };
 
       // Headless agent sessions.
-      case M.SESSION_EVENTS:  return this.sessions.history(p.id, {
-        since: p.since ?? 0, limit: p.limit ?? 500, tail: p.tail ?? 0, before: p.before ?? 0,
-      });
+      case M.SESSION_EVENTS:
+        await this.sessions.prepareHistory(p.id);
+        return this.sessions.history(p.id, {
+          since: p.since ?? 0, limit: p.limit ?? 500, tail: p.tail ?? 0, before: p.before ?? 0,
+        });
       // A view owns its lease. Refreshing or closing one tab cannot cancel
       // another device's stream, even when both use the same login.
       case M.SESSION_WATCH:

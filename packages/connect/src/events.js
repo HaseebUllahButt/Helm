@@ -110,7 +110,7 @@ function turnStartFor(events, from) {
   return -1;
 }
 
-const TURN_CONTEXT = new Set(['turn.start', 'turn.edit', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove']);
+const TURN_CONTEXT = new Set(['turn.start', 'turn.edit', 'turn.images', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove']);
 
 function pendingTickets(events) {
   const pending = new Map();
@@ -133,7 +133,7 @@ function pendingTickets(events) {
 function anchor(event) {
   const { seq, at, type, id, turnId, kind, parentId, name, queued, local, status, reason } = event;
   const result = { seq, at, type, id, turnId, kind, parentId, name, queued, local, status, reason };
-  if (type === 'turn.start' || type === 'turn.edit') {
+  if (type === 'turn.start' || type === 'turn.edit' || type === 'turn.images') {
     result.text = String(event.text ?? '').slice(0, 8000);
     if (event.delivery) result.delivery = event.delivery;
     if (event.references) result.references = event.references;

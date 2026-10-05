@@ -9,6 +9,33 @@ import { messages, sessionSnapshot, sessionActivity, locate } from '../packages/
 const root = mkdtempSync(join(tmpdir(), 'helm-provider-transcripts-'));
 test.after(() => rmSync(root, { recursive: true, force: true }));
 
+test('Codex image blocks become attachments, with captions instead of image envelopes', async () => {
+  const path = join(root, 'codex-images.jsonl');
+  const data = 'aGVsbG8=';
+  writeFileSync(path, [
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [
+      { type: 'input_text', text: '<image name=[Image #1] path="/tmp/clipboard.png">' },
+      { type: 'input_image', image_url: `data:image/png;base64,${data}` },
+      { type: 'input_text', text: '</image>\n[Image #1] What is wrong here?' },
+    ] } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [
+      { type: 'input_image', image_url: { url: `data:image/jpeg;base64,${data}` } },
+    ] } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [
+      { type: 'input_text', text: 'A literal <image> tag in a code example.' },
+      { type: 'input_image', image_url: 'https://example.invalid/image.png' },
+    ] } },
+  ].map(x => JSON.stringify(x)).join('\n'));
+  const history = await messages({ engine: 'codex', path, all: true });
+  assert.equal(history[0].text, 'What is wrong here?');
+  assert.deepEqual(history[0].attachments, [{ filename: 'clipboard.png', mime: 'image/png', data }]);
+  assert.match(history[0].rawText, /<image name=/, 'old imported turns can be matched without rewriting their log');
+  assert.equal(history[1].text, '');
+  assert.equal(history[1].attachments[0].mime, 'image/jpeg');
+  assert.equal(history[2].text, 'A literal <image> tag in a code example.');
+  assert.equal(history[2].attachments, undefined, 'remote image references are not fetched');
+});
+
 test('OpenCode 2 JSON-column history renders text, tools, and usage', async () => {
   const path = join(root, 'opencode.db');
   const db = new DatabaseSync(path);

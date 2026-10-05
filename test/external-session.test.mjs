@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import { existsSync, appendFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, appendFileSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -110,6 +110,55 @@ class FakeDriver extends EventEmitter {
     }
   }
 }
+
+test('already imported completed Codex images recover once, survive reopening, and reach cached clients', async () => {
+  const id = '01a0cafe-0000-7000-8000-000000000009';
+  const path = join(sessionsDir, `rollout-test-${id}.jsonl`);
+  const data = 'aGVsbG8=';
+  const text = '<image name=[Image #1] path="/tmp/old-image.png">\n\n</image>\n[Image #1] Fix this';
+  const source = [
+    { type: 'session_meta', payload: { id, cwd: '/tmp/Maser' } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [
+      { type: 'input_text', text }, { type: 'input_image', image_url: `data:image/png;base64,${data}` },
+    ] } },
+    // This record was omitted by the old parser and must not move its
+    // imported cursor backwards, replaying the existing assistant answer.
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [
+      { type: 'input_image', image_url: `data:image/png;base64,${data}` },
+    ] } },
+    { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Old answer' }] } },
+  ].map(x => JSON.stringify(x)).join('\n');
+  writeFileSync(path, source);
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new Runtime(), { makeDriver: () => { throw Error('history must not start an agent'); } });
+  const session = await sessions.resumeExternal({ engine: 'codex', account: 'codex', id });
+  const turnId = 'imported-old-image';
+  sessions.events.append(session.id, { type: 'turn.start', turnId, text, imported: true });
+  sessions.events.append(session.id, { type: 'item.start', id: 'old-answer', turnId, kind: 'text' });
+  sessions.events.append(session.id, { type: 'item.delta', id: 'old-answer', text: 'Old answer' });
+  sessions.events.append(session.id, { type: 'turn.done', turnId, status: 'ok' });
+  session.externalImported = 2;
+  // A completed chat may already have been handed over to a driven session.
+  session.external = false;
+  session.driver = 'codex';
+  let pushed;
+  sessions.on('event', ({ event }) => { if (event.type === 'turn.images') pushed = event; });
+  await sessions.prepareHistory(session.id);
+  const history = sessions.history(session.id).events;
+  const correction = history.find(e => e.type === 'turn.images');
+  assert.equal(correction.turnId, turnId);
+  assert.equal(correction.text, 'Fix this');
+  assert.equal(correction.attachments[0].data, data);
+  assert.equal(pushed.attachments[0].data, data, 'a cached client receives the bytes with the live correction');
+  assert.equal(history.find(e => e.type === 'turn.start').text, text, 'the original record remains intact');
+  assert.equal(readFileSync(path, 'utf8'), source, 'the provider transcript is untouched');
+  await sessions.prepareHistory(session.id);
+  assert.equal(sessions.history(session.id).last, correction.seq, 'reopening does not append duplicate corrections');
+  const reopened = new Sessions(new Runtime(), { makeDriver: () => { throw Error('must not launch'); } });
+  await reopened.prepareHistory(session.id);
+  assert.equal(reopened.history(session.id).events.find(e => e.type === 'turn.images').attachments[0].data, data);
+  assert.equal(reopened.history(session.id).last, correction.seq);
+});
 
 test('an active external Codex thread is monitored, then continued after handoff', async () => {
   // Stand in for Codex's writer: it holds the rollout open and removes the

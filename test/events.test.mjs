@@ -56,6 +56,26 @@ test('a parked attachment can be read back for queued-message recovery', () => {
   assert.equal(log.attachment('s1', 'missing'), null);
 });
 
+test('image corrections survive retention and are hydrated in cold history windows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-image-retention-'));
+  const log = new EventLog(dir);
+  const data = 'aGVsbG8=';
+  log.append('chat', { type: 'turn.start', turnId: 'imported-image', text: 'Old envelope', imported: true });
+  log.append('chat', { type: 'item.start', id: 'reply', turnId: 'imported-image', kind: 'text' });
+  log.append('chat', { type: 'turn.done', turnId: 'imported-image', status: 'ok' });
+  log.append('chat', { type: 'turn.images', turnId: 'imported-image', text: 'Caption',
+    attachments: [log.putAttachment('chat', { filename: 'saved.png', mime: 'image/png', data })],
+  });
+  for (let n = 0; n < 2300; n++) log.append('chat', { type: 'item.delta', id: 'reply', text: 'x' });
+  const reopened = new EventLog(dir);
+  const state = emptyLog();
+  for (const event of reopened.window('chat', { tail: 20 }).events) apply(state, event);
+  const turn = state.turns.find(t => t.id === 'imported-image');
+  assert.equal(turn.text, 'Caption');
+  assert.equal(turn.attachments[0].data, data);
+  assert.equal(turn.done.status, 'ok');
+});
+
 test('pending permissions are derived from the log', () => {
   const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   log.append('s', { type: 'permission.request', requestId: 'r1', kind: 'command' });

@@ -8,6 +8,7 @@ import { Palette, ShortcutsHelp, type PaletteItem } from './Palette';
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
+import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
 import { EngineMark } from './EngineMark';
 import { NotificationToast } from './NotificationToast';
@@ -4558,9 +4559,13 @@ function Chat({ messages, status }: { messages: Message[] | null; status: string
 
 function Turn({ m }: { m: Message }) {
   if (m.role === 'user') {
+    const display = userMessage(m.text, m.attachments);
     return (
       <div className="turn user">
-        <div className="bubble">{m.text}</div>
+        <div className="bubble">{display.text}{display.attachments?.map((a, i) => a.data
+          ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} loading="lazy" decoding="async" />
+          : <span key={i} className="turn-image-gone"><Icon name="image" size={14} /> {a.filename} — no longer stored</span>
+        )}</div>
       </div>
     );
   }
