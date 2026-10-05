@@ -100,13 +100,14 @@ function writerPid(path) {
  * a cursor-agent running as bare `node` never masquerade as a TUI someone
  * is typing into.
  */
-function interactiveProcesses(engine) {
+function interactiveProcesses(engine, all = false) {
   const out = new Map();
   for (const { pid, argv } of procs().list) {
     try {
       if (!isInteractiveProc(engine, argv)) continue;
       const cwd = readlinkSync(`/proc/${pid}/cwd`);
-      if (!out.has(cwd)) out.set(cwd, Number(pid));
+      if (all) out.set(cwd, [...(out.get(cwd) ?? []), Number(pid)]);
+      else if (!out.has(cwd)) out.set(cwd, Number(pid));
     } catch { /* process exited or belongs to another user */ }
   }
   return out;
@@ -302,6 +303,21 @@ function processIs(pid, procStart) {
     const after = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
     return after[19] === String(procStart);
   } catch { return true; }
+}
+
+/**
+ * When a process started, in epoch ms, or null where /proc cannot say.
+ * Field 22 of /proc/<pid>/stat is clock ticks since boot, which Linux
+ * reports to userspace at 100 a second; boot time is whole seconds.
+ */
+let bootMs = null;
+function startedAt(pid) {
+  try {
+    bootMs ??= Number(/^btime (\d+)$/m.exec(readFileSync('/proc/stat', 'utf8'))[1]) * 1000;
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+    return Number.isFinite(ticks) && bootMs ? bootMs + ticks * 10 : null;
+  } catch { return null; }
 }
 
 /**
@@ -550,17 +566,53 @@ function opencode(home, account, engine = 'opencode') {
 // ----------------------------------------------------------------- pi / omp
 
 /**
+ * Whether a pi-family process found in a log's directory is that log's
+ * writer. Being in the directory is not enough on its own: a pi opened at
+ * a fresh prompt writes nothing until the first message, so the newest log there
+ * is some older conversation it never touched - and every pi left open in
+ * a folder brought one of those back as running. The process owns a log
+ * only if it wrote to it since it started, or was opened on it by name.
+ */
+function piOwns(pid, file, id) {
+  let argv;
+  try { argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); }
+  catch { return { named: true, owns: false }; }
+  if (argv.includes('--no-session')) return { named: true, owns: false };
+  const at = argv.findIndex((a) => /^--session(-id)?(=|$)/.test(a));
+  if (at >= 0) {
+    const want = argv[at].includes('=') ? argv[at].slice(argv[at].indexOf('=') + 1) : argv[at + 1];
+    // `--session` takes a file or a partial id; `--session-id` an exact id.
+    const exact = /^--session-id(?:=|$)/.test(argv[at]);
+    const owns = !!want && (exact ? String(id) === want
+      : String(id).startsWith(want) || file.path === resolve(readlinkSync(`/proc/${pid}/cwd`), want));
+    return { named: true, owns };
+  }
+  const started = startedAt(pid);
+  // Boot time is whole seconds, so allow for it.
+  return { named: false, owns: started != null && file.mtime >= started - 2_000 };
+}
+
+/** Recheck an opened Pi monitor against the same evidence as inventory. */
+export function piProcessOwns(transcript, pid, sessionId, engine, cwd) {
+  try {
+    const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+    if (!isInteractiveProc(engine, argv) || readlinkSync(`/proc/${pid}/cwd`) !== expand(cwd)) return false;
+    return piOwns(pid, { path: transcript, mtime: statSync(transcript).mtimeMs }, sessionId).owns;
+  } catch { return false; }
+}
+
+/**
  * Pi-family session logs: <home>/sessions/<dash-cwd>/<ts>_<uuid>.jsonl, whose
  * header record carries `id` and `cwd` outright. omp writes an extra `title`
  * record first. A live writer either holds the file open or shows up as an
- * interactive process in the session's directory.
+ * interactive process in the session's directory (see `piOwns`).
  */
 async function piFamily(engine, home, account) {
   const root = join(expand(home), ENGINES[engine]?.sessionsDir ?? 'sessions');
   if (!existsSync(root)) return [];
 
   const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE * 2);
-  const active = interactiveProcesses(engine);
+  const active = interactiveProcesses(engine, true);
   const claimed = new Set();
   const out = [];
   for (const f of files) {
@@ -587,9 +639,16 @@ async function piFamily(engine, home, account) {
       if (!meta?.id) continue;
       const cwd = meta.cwd ?? meta.workingDirectory ?? HOME;
       let pid = writerPid(f.path);
+      if (pid) claimed.add(pid);
       if (!pid) {
-        const p = active.get(cwd);
-        if (p && !claimed.has(cwd)) { claimed.add(cwd); pid = p; }
+        for (const p of active.get(cwd) ?? []) {
+          if (claimed.has(p)) continue;
+          const { named, owns } = piOwns(p, f, meta.id);
+          // Newest first: an unnamed process can only own this log, so an
+          // older one in the folder is never its; a named one may be older.
+          if (owns || !named) claimed.add(p);
+          if (owns) { pid = p; break; }
+        }
       }
       out.push({
         engine,

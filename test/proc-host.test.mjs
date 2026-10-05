@@ -300,6 +300,40 @@ test('a hosted Claude process survives and is rebound by the next daemon', async
   await until(() => !host2.hasProc('claude-persist'));
 });
 
+test('losing the proc host invalidates streams and allows a fresh process to start', async (t) => {
+  const host = procHost();
+  t.after(() => host.detach());
+  await host.ensure();
+  const spec = { cmd: process.execPath, args: ['-e',
+    "process.stdin.on('data', () => console.log(process.ppid))"], cwd: dir };
+  await host.openProc('host-loss-bound', spec);
+  await host.openProc('host-loss-unbound', spec);
+  const pipe = host.procPipe('host-loss-bound');
+  let output = '', exit = null, unbound = null;
+  pipe.onData((data) => { output += data; });
+  pipe.onExit((event) => { exit = event; });
+  host.on('proc.exit', (event) => { if (event.id === 'host-loss-unbound') unbound = event; });
+  await pipe.write('identify host');
+  await until(() => output.includes('\n'));
+  const pid = Number(output.trim());
+  assert.ok(Number.isInteger(pid) && pid > 1 && pid !== process.pid);
+  process.kill(pid, 'SIGKILL');
+  await until(() => exit && unbound, 1500);
+  assert.match(exit.stderr, /host.*(away|lost|disconnect)/i);
+  assert.equal(host.hasProc('host-loss-bound'), false);
+  assert.equal(host.hasProc('host-loss-unbound'), false);
+  assert.equal(host.procPipe('host-loss-bound'), null);
+
+  await host.openProc('host-loss-bound', spec);
+  const replacement = host.procPipe('host-loss-bound');
+  let answer = '';
+  replacement.onData((data) => { answer += data; });
+  await replacement.write('new process');
+  await until(() => answer.includes('\n'));
+  assert.notEqual(Number(answer.trim()), pid);
+  await replacement.kill('SIGTERM');
+});
+
 // Leave nothing running: the host outlives this process by design.
 test.after(async () => {
   const last = procHost();

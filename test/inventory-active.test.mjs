@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -87,4 +87,71 @@ test('a Claude session typed at a keyboard is live through its sessions/<pid>.js
   const { inventory } = await import('../packages/connect/src/inventory.js');
   const after = await inventory([{ id: 'claudex', engine: 'claude', env: { CLAUDE_CONFIG_DIR: home } }]);
   assert.equal(after.find((r) => r.id === id(1)).active, false, 'gone once the process is');
+});
+
+test('a pi left open in a folder does not bring back the old conversations there', async (t) => {
+  if (process.platform !== 'linux') return t.skip('reads /proc');
+  const home = mkdtempSync(join(tmpdir(), 'helm-pi-live-'));
+  const folder = join(home, 'project');
+  const logs = join(home, 'sessions', '--project--');
+  mkdirSync(folder, { recursive: true });
+  mkdirSync(logs, { recursive: true });
+  const id = (n) => `4444444${n}-4444-4444-8444-44444444444${n}`;
+  const log = (n, mtime) => {
+    const path = join(logs, `2026-01-0${n}_${id(n)}.jsonl`);
+    writeFileSync(path, [
+      { type: 'session', id: id(n), cwd: folder },
+      { type: 'message', message: { role: 'user', content: [{ type: 'text', text: `thread ${n}` }] } },
+    ].map((r) => JSON.stringify(r)).join('\n') + '\n');
+    if (mtime) utimesSync(path, mtime / 1000, mtime / 1000);
+    return path;
+  };
+  const day = 24 * 3600_000;
+  log(1, Date.now() - 3 * day);
+  log(2, Date.now() - 2 * day);
+  const pi = join(home, 'pi');
+  writeFileSync(pi, `#!/usr/bin/env node
+console.log('ready');
+setInterval(() => {}, 1000);
+`);
+  chmodSync(pi, 0o755);
+  const { inventory, piProcessOwns } = await import('../packages/connect/src/inventory.js');
+  const scan = () => inventory([{ id: 'pi', engine: 'pi', env: { PI_CODING_AGENT_DIR: home } }]);
+  const run = async (args, body) => {
+    const child = spawn(pi, args, { cwd: folder, stdio: ['ignore', 'pipe', 'inherit'] });
+    await once(child.stdout, 'data');
+    try { await body(child); } finally { child.kill('SIGKILL'); await once(child, 'exit'); }
+  };
+  try {
+    // A fresh prompt: nothing written yet, so nothing is live.
+    await run([], async (child) => {
+      const rows = await scan();
+      assert.equal(rows.filter((r) => r.active).length, 0);
+      assert.equal(piProcessOwns(logs + `/2026-01-01_${id(1)}.jsonl`, child.pid, id(1), 'pi', folder), false);
+      // Its first message starts a log of its own, which is the live one.
+      log(3);
+      const after = await scan();
+      assert.deepEqual(after.filter((r) => r.active).map((r) => r.id), [id(3)]);
+    });
+    // Opened on an older conversation by name: that one, before it writes.
+    await run(['--session', id(1)], async (child) => {
+      const rows = await scan();
+      assert.deepEqual(rows.filter((r) => r.active).map((r) => r.id), [id(1)]);
+      assert.equal(rows.find((r) => r.id === id(1)).writerPid, child.pid);
+      assert.equal(piProcessOwns(rows.find((r) => r.id === id(1)).transcript, child.pid, id(1), 'pi', folder), true);
+      await run(['--session-id=' + id(2)], async (second) => {
+        const both = await scan();
+        assert.deepEqual(both.filter((r) => r.active).map((r) => r.id).sort(), [id(1), id(2)]);
+        assert.equal(both.find((r) => r.id === id(2)).writerPid, second.pid);
+      });
+    });
+    await run(['--session', `../sessions/--project--/2026-01-01_${id(1)}.jsonl`], async () => {
+      assert.deepEqual((await scan()).filter((r) => r.active).map((r) => r.id), [id(1)]);
+    });
+    for (const args of [['--no-session'], ['--session-id', id(1).slice(0, 8)]]) {
+      await run(args, async () => assert.equal((await scan()).filter((r) => r.active).length, 0));
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

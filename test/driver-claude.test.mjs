@@ -262,6 +262,35 @@ test('interrupt: stops the turn and reports it as interrupted, not as an error',
   await driver.kill();
 });
 
+test('Stop closes a stalled Claude stream even when interrupt never completes the turn', async () => {
+  for (const acknowledge of [false, true]) {
+    let receive, exit, closed = false;
+    const pipe = {
+      onData: (cb) => { receive = cb; }, onExit: (cb) => { exit = cb; }, detach: () => {},
+      write: (data) => {
+        const request = JSON.parse(data);
+        if (acknowledge) receive(JSON.stringify({ type: 'control_response', response: {
+          request_id: request.request_id, subtype: 'success',
+        } }) + '\n');
+      },
+      end: () => { closed = true; queueMicrotask(() => exit({ code: 0 })); },
+    };
+    const { driver, log } = make('plain', {
+      procId: 'stalled', procHost: { hasProc: () => true, procPipe: () => pipe },
+      openTurn: () => 'stalled-turn',
+    });
+    await driver.start();
+    await driver.interrupt();
+    assert.equal(closed, true);
+    assert.equal(driver.status, 'exited');
+    assert.equal(log.of('turn.done').length, 1);
+    assert.equal(log.of('turn.done')[0].turnId, 'stalled-turn');
+    assert.equal(log.of('turn.done')[0].status, 'interrupted');
+    await driver.kill();
+    assert.equal(log.of('turn.done').length, 1);
+  }
+});
+
 test('kill: a prompt still open is denied before the process is closed', async () => {
   const { driver, log, fake } = make('deny');
   await driver.send('write');

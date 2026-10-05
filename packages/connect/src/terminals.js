@@ -204,9 +204,21 @@ export class TerminalHost extends EventEmitter {
     const lost = () => {
       if (this.#sock !== sock) return;
       this.#sock = null;
+      sock.destroy();
       // Every call in flight is now unanswerable.
       for (const p of this.#waiting.values()) p.reject(new Error('the terminal host went away'));
       this.#waiting.clear();
+      // Cached process ids and pipes are only valid while connected. A
+      // vanished host otherwise leaves drivers writing into a dead socket,
+      // and a shared Codex server makes even new sessions adopt that ghost.
+      const procs = [...this.#procs];
+      const ids = [...this.#ids];
+      this.#procs.clear();
+      this.#ids.clear();
+      this.#pty = null;
+      for (const id of procs) this.#dispatch({ t: 'proc.exit', id, code: -1,
+        stderr: 'the terminal host went away; reopen the thread to resume' });
+      for (const id of ids) this.emit('exit', { id, code: -1 });
     };
     sock.on('close', lost);
     sock.on('error', lost);

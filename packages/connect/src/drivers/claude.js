@@ -200,7 +200,15 @@ export class ClaudeDriver extends Driver {
     this.#exited = new Promise((resolve) => {
       pipe.onExit(({ code, signal, stderr }) => {
         this.#pipe = null;
+        if (this.#inTurn && this.#turnId) {
+          this.push('turn.done', { turnId: this.#turnId,
+            status: this.#interrupting ? 'interrupted' : 'error',
+            ...(!this.#interrupting ? { error: 'claude exited before completing the turn' } : {}) });
+        }
+        this.#turnId = null;
         this.#inTurn = false;
+        for (const resolve of this.#controls.values()) resolve(null);
+        this.#controls.clear();
         markReady();
         // A prompt the CLI was holding open dies with it; say so.
         for (const requestId of [...this.pending.keys()]) {
@@ -226,13 +234,13 @@ export class ClaudeDriver extends Driver {
     });
   }
 
-  #control(request) {
+  #control(request, timeout = 15_000) {
     const request_id = `helm-${++this.#controlSeq}`;
     return new Promise((resolve, reject) => {
       this.#controls.set(request_id, resolve);
       try { this.#write({ type: 'control_request', request_id, request }); }
       catch (e) { this.#controls.delete(request_id); reject(e); }
-      setTimeout(() => { if (this.#controls.delete(request_id)) resolve(null); }, 15_000).unref?.();
+      setTimeout(() => { if (this.#controls.delete(request_id)) resolve(null); }, timeout).unref?.();
     });
   }
 
@@ -327,7 +335,23 @@ export class ClaudeDriver extends Driver {
   async interrupt() {
     if (!this.#pipe) return;
     this.#interrupting = true;
-    await this.#control({ subtype: 'interrupt', cancel_queued: this.#capabilities.has('interrupt_cancel_queued_v1') });
+    // A stalled stream can ignore the control request or acknowledge it
+    // without ever completing. Stop must still release the saved thread.
+    let timer, settled;
+    const finished = new Promise((resolve) => { settled = resolve; });
+    const onEvent = (e) => {
+      if (e.type === 'status' && ['idle', 'exited'].includes(e.status)) settled();
+    };
+    this.on('event', onEvent);
+    timer = setTimeout(settled, 5000);
+    try {
+      await this.#control({ subtype: 'interrupt', cancel_queued: this.#capabilities.has('interrupt_cancel_queued_v1') }, 5000);
+      if (this.#pipe && ['working', 'blocked'].includes(this.status)) await finished;
+      if (this.#pipe && ['working', 'blocked'].includes(this.status)) await this.kill();
+    } finally {
+      clearTimeout(timer);
+      this.off('event', onEvent);
+    }
   }
 
   async setModel(model) {
@@ -595,6 +619,7 @@ export class ClaudeDriver extends Driver {
       durationMs: m.duration_ms,
       error: m.is_error && !interrupted ? (m.errors?.join('; ') || m.result || m.subtype) : undefined,
     });
+    this.#turnId = null;
     this.push('status', { status: 'idle' });
   }
 
