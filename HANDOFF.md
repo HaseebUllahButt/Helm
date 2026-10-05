@@ -16,6 +16,68 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-05 (later) — Keyboard threads are live, CLI titles, no scratch
+
+Three owner complaints, all in `packages/connect/src/inventory.js` and
+`sessions.js`, verified with the real stores on the laptop (not committed;
+see "Not verified" below).
+
+**Titles.** Claude Code names a session by writing
+`{"type":"ai-title","aiTitle":"…"}` into the transcript after the first
+reply - not in the head lines inventory read, but after the whole first
+turn - and `/rename` adds a `custom-title` line. Inventory now scans each
+file once and then only the bytes appended since (`claudeTitle`, keyed on
+path and offset; first pass over 80 files 640ms, after that ~190ms for the
+whole inventory). Codex's `session_index.jsonl` named about half the
+rollouts; the `threads` table in `state_<n>.sqlite` (`name`, plus the
+opening prompt in `title`/`first_user_message`) names the rest, and a
+thread with no name gets a title made of its opening prompt instead of its
+folder. Rows carry `named: true` when the title is the CLI's own; a helm
+record of such a thread adopts it (`titleBy: 'cli'`, ranked with the
+agent's own name, never gated like helm's made-up names), and keeps it
+after a takeover. `claude -p` never writes a title, so threads helm starts
+with Claude still get helm's prompt-made name - there is nothing to
+inherit.
+
+**Running.** A `claude` typed at a keyboard does not hold its transcript
+open (it appends and closes), so the open-file walk never saw it and every
+such thread listed as done. Claude keeps `<CLAUDE_CONFIG_DIR>/sessions/
+<pid>.json` per live process - `sessionId`, `cwd`, `procStart` (field 22 of
+`/proc/<pid>/stat`, so a recycled pid does not count) - removed on exit.
+Inventory reads it (`claudeLive`), and `#processOwnsTranscript` accepts it
+(`claudeProcessOwns`), which is what makes the takeover path work for
+Claude: open the live row, it is a monitor; send a message, helm stops the
+terminal CLI (SIGTERM) and resumes the thread with `--resume`. That is
+"control it via Helm" - the same as Codex. The record also names a
+`messagingSocketPath` (`/run/user/<uid>/cc-socks/<pid>.sock`); that is
+Claude's own cross-session messaging with peer tokens, auth frames and
+"held for the recipient user's approval", and helm does not speak it.
+
+**Scratch.** `isScratch(cwd)`: the OS temp dir (`/tmp`, `/var/tmp`,
+`$TMPDIR`, …) or any path segment named `scratch`/`sandbox`/`tmp`/`temp`
+or ending `-scratch`/`-sandbox`. Applied where lists are built -
+`Sessions.list()` for found rows and the `session.inventory` RPC - not in
+`inventory()` itself, so a row opened earlier can still be found by id.
+On the laptop: 354 rows -> 301; the two keyboard Claude threads show live
+with "Image trigger question" / "Riverside weekly report 28 Sept - 2 Oct";
+one Codex row of 50 still falls back to its folder.
+
+**Tests.** `inventory.test.mjs` (ai-title / custom-title / incremental
+scan; Codex state db names; `isScratch`), `inventory-active.test.mjs`
+(Claude live via the pid record, recycled pid ignored),
+`external-session.test.mjs` (keyboard Claude: live -> title adopted on
+list -> taken over on first send; scratch rows read but not listed).
+Fixtures that used `/tmp/Maser` moved to `/work/Maser` because of the
+scratch rule.
+
+**Not verified:** the PWA itself was not opened; the check was
+`Sessions.list({ includeDetected: true })` on the real profiles in a
+throwaway `HELM_DIR`, which is exactly the rows the app draws
+(`alive`/`status`/`title`). Nothing was deployed; machines pick it up on
+their next self-update after a commit.
+
+---
+
 ## 2026-10-05 — Limits left, and no more "After this task"
 
 **Composer.** The delivery picker (After this task / At next step / Send

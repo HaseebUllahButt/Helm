@@ -27,7 +27,7 @@ import { defaultMode, modeFromAuto } from './modes.js';
 import { delegationMode, delegationOutput, trackDelegationReply } from './delegation.js';
 import { authStatuses } from './auth.js';
 import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
-import { inventory } from './inventory.js';
+import { inventory, claudeProcessOwns, isScratch } from './inventory.js';
 import { hostedProcId } from './hosted-process.js';
 import { GREETING, informative, promptTitle } from './titles.js';
 
@@ -70,7 +70,9 @@ export const DRIVERS = {
  * start (`titleBy: 'user'`) always wins.
  */
 const TITLE_AFTER = 2;
-const TITLE_RANK = { auto: 1, agent: 2, user: 3 };
+// `cli` is the name the CLI wrote into its own store for a thread it
+// started; it is adopted as is - the gate below is for names helm makes up.
+const TITLE_RANK = { auto: 1, agent: 2, cli: 2, user: 3 };
 
 /** A title cut to fit, with the cut said out loud. */
 const clip = (text, max) => (text.length > max ? text.slice(0, max - 1) + '…' : text);
@@ -479,6 +481,9 @@ export class Sessions extends EventEmitter {
           s.externalPid = current.writerPid || null;
           s.transcript = current.transcript || s.transcript;
           s.updatedAt = current.updatedAt;
+          // The CLI names its thread after the first reply, often after this
+          // record was opened; its name is the thread's name from then on.
+          if (current.named && current.title) this.#titled(s, current.title, 'cli');
         }
         const active = this.#externalActive(s);
         // This record is a read-only window onto another process until its
@@ -518,6 +523,9 @@ export class Sessions extends EventEmitter {
         const id = `found:${x.engine}:${x.id}`;
         const mark = this.#marks.get(id);
         if (mark === 'removed' || known.has(`${x.engine}:${x.id}`) || this.isDelegatedConversation(x.engine, x.id)) continue;
+        // Test runs and one-off checks in temp and scratch folders are not
+        // threads anyone comes back to.
+        if (isScratch(x.cwd)) continue;
         // A runtime pane without a native ID can still represent this CLI.
         if (x.active && out.some((s) => s.paneId && s.alive && s.engine === x.engine && expand(s.cwd) === expand(x.cwd))) continue;
         out.push({ id, engine: x.engine, engineSessionId: x.id, account: x.account,
@@ -1182,8 +1190,10 @@ export class Sessions extends EventEmitter {
       }
     }
     // The gate is about *generated* names being premature. A name the owner
-    // typed is never premature.
-    if (by !== 'user' && (s.prompts ?? 0) + (s.turns ?? 0) < TITLE_AFTER) return;
+    // typed is never premature, and neither is one the CLI already shows.
+    if (by === 'auto' || by === 'agent') {
+      if ((s.prompts ?? 0) + (s.turns ?? 0) < TITLE_AFTER) return;
+    }
     if ((TITLE_RANK[by] ?? 0) < (TITLE_RANK[s.titleBy] ?? 0)) return;
     const named = clip(clean, 80);
     if (s.title === named && s.titleBy === by) return;
@@ -1404,6 +1414,9 @@ export class Sessions extends EventEmitter {
       try { return readlinkSync(join(dir, fd)) === s.transcript; } catch { return false; }
     });
     if (held) return true;
+    // Claude appends and closes, but keeps a record of each live process
+    // that names its session and start time - as exact as a held file.
+    if (s.engine === 'claude') return claudeProcessOwns(s.transcript, s.externalPid, s.engineSessionId);
     const byProc = ['opencode', 'opencode2', 'devin', 'pi', 'omp', 'grok', 'cursor', 'muse'].includes(s.engine);
     if (!byProc) return false;
     try {
