@@ -360,6 +360,17 @@ export function splitNote(text?: string): { note?: string; text?: string } {
   return m ? { note: m[1].trim(), text: m[2] } : { text };
 }
 
+/** Imported Codex replies keep their wire wrapper in older logs and caches. */
+function userReplyText(text?: string): string | undefined {
+  const match = text?.match(/^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*<\/send_user_message_question_reply>\s*$/);
+  if (!match) return text;
+  const replies: unknown = tryParse(match[1]);
+  // Leave unfamiliar or incomplete records readable instead of hiding them.
+  if (!Array.isArray(replies) || !replies.length || !replies.every((reply) =>
+    reply && typeof reply === 'object' && typeof reply.answer === 'string')) return text;
+  return replies.map((reply) => reply.answer).join('\n\n');
+}
+
 /** How long ago a bubble was sent, in the transcript's own quiet type. */
 function clock(ts?: number) {
   if (!ts) return '';
@@ -385,6 +396,7 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
   onBranch?: (turn: Turn) => void;
 }) {
   const said = splitNote(turn.text);
+  said.text = userReplyText(said.text);
   // A prompt that is itself a command means the turn's text is that
   // command's answer - styled as a quiet result panel rather than prose.
   const commandOutput = /^\/\S+/.test((said.text ?? '').trim());
@@ -412,7 +424,7 @@ function TurnView({ turn, items, head = true, tail = true, working, blocked, onR
   });
   return (
     <>
-      {head && (turn.text || turn.attachments?.length) && (
+      {head && !!(turn.text || turn.attachments?.length) && (
         <div className={`turn user${queued ? ' queued' : ''}`}><div className="bubble">
           {said.note && (said.note.length > 160
             // The delegation brief is a paragraph of instructions to the

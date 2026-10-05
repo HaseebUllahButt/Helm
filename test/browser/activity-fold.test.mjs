@@ -33,9 +33,17 @@ before(async () => {
         step('h', { kind: 'command', command: 'npm run build', output: 'building chunk 1\\\\nbuilding chunk 2', status: 'streaming', doneAt: undefined }),
       ] }] : []),
     ]} />);
+    window.renderHistory = (text) => root.render(<Transcript status="idle" loaded turns={[
+      { id: 'saved-reply', text, at: t0, attachments: [], items: [], done: { status: 'ok' } },
+      { id: 'saved-tool', text: '', at: t0 + 1, attachments: [], items: [
+        step('saved-read', { kind: 'tool', name: 'Read', input: { file_path: '/repo/app.ts' } }),
+      ], done: { status: 'ok' } },
+    ]} />);
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   browser = await chromium.launch({ headless: true, ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
   page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.route('http://helm.test/**', (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html>' }));
+  await page.goto('http://helm.test/');
   await page.setContent('<div class="main showing" style="height:100vh;width:100%;display:flex;flex-direction:column"><div id="root" style="flex:1;display:flex;flex-direction:column;min-height:0"></div></div>');
   await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
@@ -80,4 +88,38 @@ test('while it works the line says what it is doing now, and stays open if opene
   await page.getByText('building chunk 2').waitFor();
   await page.evaluate(() => window.render(true));
   assert.equal(await page.locator('.activity.live').getAttribute('class').then((c) => c.includes('open')), true, 'a re-render keeps it open');
+});
+
+test('completed imported question replies display their answers, including from a saved cache', async () => {
+  const text = `<send_user_message_question_reply>\n${JSON.stringify([
+    { answer: 'Before today’s Fable change only', question: 'Which rollback point do you mean?', questionItemId: '["internal","call-id",0]' },
+    { answer: 'Keep my chats', question: 'What should be preserved?' },
+  ])}\n</send_user_message_question_reply>`;
+  await page.evaluate((text) => {
+    localStorage.setItem('saved-test-reply', JSON.stringify({ text }));
+    window.renderHistory(JSON.parse(localStorage.getItem('saved-test-reply')).text);
+  }, text);
+  await page.getByText('Before today’s Fable change only', { exact: false }).waitFor();
+  const bubble = await page.locator('.turn.user .bubble').innerText();
+  assert.match(bubble, /Before today’s Fable change only\s+Keep my chats/);
+  assert.doesNotMatch(bubble, /send_user_message_question_reply|questionItemId|call-id/);
+  assert.equal(await page.locator('.turn.user').count(), 1, 'tool-only turns do not render empty bubbles');
+  assert.equal(await page.locator('#root').evaluate((root) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.textContent === '0') return true;
+    return false;
+  }), false, 'empty attachment arrays do not print a stray zero');
+});
+
+test('ordinary messages and unfamiliar reply records remain readable', async () => {
+  for (const text of [
+    'I wrote <send_user_message_question_reply> in my notes.',
+    '<send_user_message_question_reply>broken JSON</send_user_message_question_reply>',
+    '<send_user_message_question_reply>[{"answer":42}]</send_user_message_question_reply>',
+    '<send_user_message_question_reply>[]</send_user_message_question_reply>',
+  ]) {
+    await page.evaluate((text) => window.renderHistory(text), text);
+    await page.getByText(text, { exact: false }).waitFor();
+    assert.ok((await page.locator('.turn.user .bubble').innerText()).includes(text));
+  }
 });
