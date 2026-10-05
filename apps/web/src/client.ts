@@ -189,6 +189,8 @@ export interface ModelList {
  * API-equivalent figure, and the screen says so.
  */
 export interface UsageTotals {
+  summaryOnly?: boolean;
+  undated?: boolean;
   input: number;
   output: number;
   cacheRead: number;
@@ -219,7 +221,7 @@ export interface UsageReport {
   totals: UsageTotals;
   daily: UsageDay[];
   groups: UsageGroup[];
-  accounts: { account: string; engine: string; profileId: string }[];
+  accounts: { account: string; engine: string; profileId: string | null; source?: string; sourceUrl?: string; sourceAt?: number; sourceStale?: boolean; sourceError?: string }[];
   scan: Record<string, number>;
   at: number;
   /**
@@ -229,6 +231,34 @@ export interface UsageReport {
    */
   stale?: boolean;
 }
+
+/** One rate-limit window: how much of it is used, and when it renews. */
+export interface LimitWindow {
+  key: string;
+  label: string;
+  usedPercent: number;
+  resetsAt: number | null;
+  durationMs: number | null;
+}
+
+/** One account's limits on one machine, read from what its CLI wrote. */
+export interface LimitAccount {
+  account: string;
+  engine: string;
+  name: string;
+  profileIds: string[];
+  identity?: string;
+  plan?: string;
+  windows: LimitWindow[];
+  credits?: string[];
+  note?: string;
+  /** When the reading was taken, not when it was asked for. */
+  at: number | null;
+  source: 'chat' | 'cli' | 'dashboard' | 'live' | null;
+  error?: string;
+}
+
+export interface LimitsReport { accounts: LimitAccount[]; at: number }
 
 /** The share of input tokens that came back out of the prompt cache. */
 export const hitRate = (t: Pick<UsageTotals, 'input' | 'cacheRead'>) => {
@@ -1214,6 +1244,14 @@ export class Client {
    */
   usage(env: string, opts: { since?: string; until?: string; by?: string[]; rebuild?: boolean } = {}) {
     return this.rpc<UsageReport>(env, 'usage.report', opts, 120_000);
+  }
+
+  /**
+   * How much of each account's limits is left on one machine. Answered from
+   * what the CLIs already wrote; `refresh` also asks Claude and Codex.
+   */
+  limits(env: string, refresh = false) {
+    return this.rpc<LimitsReport>(env, 'usage.limits', { refresh }, refresh ? 45_000 : 20_000);
   }
 
   /** Pull a machine to the newest helm. It restarts a few seconds after answering. */

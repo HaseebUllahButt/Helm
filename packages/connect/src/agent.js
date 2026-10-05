@@ -21,6 +21,8 @@ import * as fsApi from './fs.js';
 import { join } from 'node:path';
 import { inventory } from './inventory.js';
 import { UsageReader, foldBuckets } from '@helm/usage';
+import { connectBroMyLimits } from '@helm/usage/bromylimits';
+import { Limits } from './limits.js';
 import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
@@ -277,6 +279,8 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    this.limits = new Limits({ profiles: currentProfiles });
+    this.sessions.on('limits', ({ profileId, event }) => this.limits.note(profileId, event));
     try { this.schedules = new Schedules({ sessions: this.sessions }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     this.sessions.delegationBrief = delegationNote;
@@ -820,7 +824,8 @@ export class Daemon {
   async #usageRollup(rebuild = false) {
     this.usage ??= new UsageReader({ indexPath: join(HELM_DIR, 'usage-index.json') });
     const profiles = await currentProfiles();
-    return this.usage.buckets(profiles, { rebuild });
+    const native = await this.usage.buckets(profiles, { rebuild });
+    return connectBroMyLimits(native, { machineId: this.net.self, rebuild });
   }
 
   /** The hubs we can actually talk to right now. */
@@ -1552,6 +1557,7 @@ export class Daemon {
           by: Array.isArray(p.by) && p.by.length ? p.by : ['engine', 'model'],
           accounts: rollup.accounts,
           scan: rollup.scan,
+          at: rollup.at,
         });
       }
 
@@ -1559,6 +1565,10 @@ export class Daemon {
       // ever asks for a folded report.
       case M.USAGE_BUCKETS:
         return this.#usageRollup(!!p.rebuild);
+
+      case M.USAGE_LIMITS:
+        this.limits ??= new Limits({ profiles: currentProfiles });
+        return this.limits.report({ refresh: !!p.refresh });
 
       case M.CODE_KEY: {
         // Proving the code key is for machines: a handoff's whole chain of

@@ -107,7 +107,7 @@ test('informational slash commands do not clear an active turn status', async ()
   const item = log.of('item.start').find((e) => e.kind === 'text' && String(e.turnId).startsWith('command-'));
   const body = log.of('item.delta').filter((e) => e.id === item.id).map((e) => e.text).join('');
   assert.match(body, /### Session status/);
-  assert.match(body, /\*\*Account:\*\* dev@example\\\.com \(Pro\)/);
+  assert.match(body, /\*\*Account:\*\* dev@example\\\.com \(Pro 20x\)/);
   assert.match(body, /\*\*5h limit\*\* `█+░+` 12% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-][\d:]+\)/);
   assert.match(body, /\*\*Weekly limit\*\* `█+░+` 30% used/);
   assert.match(body, /\*\*Credits:\*\* 42\\\.50/);

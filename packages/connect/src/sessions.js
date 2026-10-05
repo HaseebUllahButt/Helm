@@ -993,6 +993,8 @@ export class Sessions extends EventEmitter {
   #onDriverEvent(s, d, e) {
     if (this.#drivers.get(s.id) !== d && e.type !== 'status') return;
     trackDelegationReply(s, e);
+    // The account's rate limits outlive the chat that reported them.
+    if (e.type === 'limits') this.emit('limits', { profileId: s.profileId, event: e });
     let forwarded = e;
     const staleClaudeConversation = s.engine === 'claude'
       && e.type === 'turn.done'

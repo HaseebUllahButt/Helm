@@ -29,9 +29,9 @@ before(async () => {
       return {ok:true};
     }};
     function Compose() {
-      const [draft,setDraft]=useState(''); const [delivery,setDelivery]=useState('queue'); const [references,setReferences]=useState([]);
+      const [draft,setDraft]=useState(''); const [references,setReferences]=useState([]);
       return <Composer draft={draft} setDraft={setDraft} engine="Claude" keys={false} working steers
-        delivery={delivery} onDelivery={setDelivery} onSend={()=>{window.sent={draft,delivery,references}}}
+        onSend={()=>{window.sent={draft,references}}}
         referenceOptions={[{id:'design',title:'Design review'}]} references={references}
         onReference={id=>setReferences([{id,title:'Design review'}])} onRemoveReference={()=>setReferences([])}
         queued={[{turn:{id:'one'},text:'First task',attachments:0},{turn:{id:'two'},text:'Second task',attachments:0}]}
@@ -63,7 +63,7 @@ async function pageFor(context, width = 1280) {
   return page;
 }
 
-test('composer selects thread references with the keyboard and keeps steer versus queue explicit', async (context) => {
+test('composer selects thread references with the keyboard and has no delivery picker', async (context) => {
   const page = await pageFor(context, 390);
   await page.evaluate(() => window.showComposer());
   const input = page.getByPlaceholder('Message Claude…');
@@ -72,9 +72,9 @@ test('composer selects thread references with the keyboard and keeps steer versu
   await input.press('Enter');
   await page.getByRole('button', { name: 'Remove context: Design review' }).waitFor();
   assert.equal(await input.inputValue(), 'Check ');
-  await page.getByLabel('Message delivery').selectOption('steer');
+  assert.equal(await page.getByLabel('Message delivery').count(), 0);
   await page.getByRole('button', { name: 'send', exact: true }).click();
-  assert.deepEqual(await page.evaluate(() => window.sent), { draft: 'Check ', delivery: 'steer', references: [{ id: 'design', title: 'Design review' }] });
+  assert.deepEqual(await page.evaluate(() => window.sent), { draft: 'Check ', references: [{ id: 'design', title: 'Design review' }] });
   await page.getByRole('button', { name: 'Move up: Second task' }).click();
   assert.deepEqual(await page.evaluate(() => window.action), ['move', 'two', -1]);
   await page.getByRole('button', { name: 'Remove queued message: First task' }).click();

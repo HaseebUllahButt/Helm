@@ -8,6 +8,7 @@
     "./pricing": "./src/pricing.js",
     "./scan-cache": "./src/scan-cache.js",
     "./recache": "./src/recache.js",
-    "./off-thread": "./src/off-thread.js"
+    "./off-thread": "./src/off-thread.js",
+    "./bromylimits": "./src/bromylimits.js"
   }
 }

@@ -16,6 +16,44 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-05 — Limits left, and no more "After this task"
+
+**Composer.** The delivery picker (After this task / At next step / Send
+now) is gone; every message goes `delivery: 'auto'`. The old default,
+`queue`, also switched off sideband commands (`sessions.js`:
+`sideband = delivery !== 'queue' && ...`), which is why Devin's `/usage`
+waited for the task. Measured in a sandbox: Devin busy, `/usage` answered in
+1.5s, `local: true`, not queued. A waiting message still has **Send now**.
+
+**Limits.** `packages/connect/src/limits.js`, RPC `usage.limits`
+(`{ refresh? }`), shown as "Limits left" at the top of Usage
+(`apps/web/src/Limits.tsx`; the menu row is now "Usage and limits"). Claude,
+Codex and Devin only - the owner said to drop Grok, so Antigravity went too.
+Sources, newest wins: a helm chat's `limits` events (Claude
+`rate_limit_event`, Codex `account/rateLimits/updated`; kept in
+`HELM_DIR/limits.json`), the newest Codex rollout's `rate_limits`, Claude's
+`.claude.json` cache, BroMyLimits' `/api/usage` rateLimits when it runs,
+and Devin's GetUserStatus (network, cached 2 min - it keeps nothing local).
+**Check now** calls Claude's `oauth/usage` and Codex's `wham/usage`, at most
+once per 2 min per account. Verified on the laptop's real accounts.
+
+Not obvious: the long-lived `CLAUDE_CODE_OAUTH_TOKEN` the claudea/claudes
+profiles use gets 403 from `oauth/usage` (needs `user:profile`), and
+`~/.claude-personal/.credentials.json` has `expiresAt: 0`, so Check now
+cannot refresh Claude here; the chat events and BroMyLimits' statusline
+snapshot keep it current. helm deliberately never renews that sign-in
+(renewing would replace the key the CLI holds). Codex `prolite` is now
+labelled "Pro 5x" and `pro` "Pro 20x", matching BroMyLimits.
+
+Also in this tree, from 2026-10-04 and still uncommitted: BroMyLimits daily
+totals replacing native usage per engine (`packages/usage/src/bromylimits.js`).
+
+A second `claude -p` session was editing ThreadDetails/Schedules/Icon/App at
+the same time and used the same `/tmp/hsb` sandbox folder; its
+`thread details ... schedule` browser test was failing mid-edit.
+
+---
+
 ## 2026-10-02 (evening) — Faster startup, machines update themselves
 
 **Startup.** On a copy of the laptop's real state with its network cut

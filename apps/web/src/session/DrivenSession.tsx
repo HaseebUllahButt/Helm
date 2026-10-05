@@ -77,7 +77,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [details, setDetails] = useState<DetailsTab | null>(null);
-  const [delivery, setDelivery] = useState<'auto' | 'queue' | 'steer'>('queue');
   const [editingQueue, setEditingQueue] = useState<Turn | null>(null);
   const [references, setReferencesRaw] = useState<{ id: string; title: string }[]>([]);
   const setReferences = useCallback((next: SetStateAction<{ id: string; title: string }[]>) => {
@@ -221,7 +220,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     setReferences([]);
     setDraft(''); setAttachments([]);
     const clearedAt = editRevision.current;
-    try { await client.rpc(env.id, 'session.input', { id: session.id, data: body, delivery, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000); }
+    try { await client.rpc(env.id, 'session.input', { id: session.id, data: body, delivery: 'auto', references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000); }
     catch (e: any) {
       setError(e.message);
       // Only restore the failed send if the composer is still exactly in the
@@ -575,7 +574,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
         commands={commands}
-        delivery={delivery} onDelivery={setDelivery}
         referenceOptions={referenceOptions} references={references}
         onReference={(id) => { const item = referenceOptions.find((option) => option.id === id); if (item) setReferences((current) => [...current, item].slice(0, 3)); }}
         onRemoveReference={(id) => setReferences((current) => current.filter((item) => item.id !== id))}

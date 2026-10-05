@@ -786,7 +786,7 @@ function Shell({ client, conn, onSignOut }: {
     go('a:settings', 'Settings', 'preferences', [{ kind: 'app-settings' }]);
     go('a:updates', 'Updates', 'version upgrade machines', [{ kind: 'app-settings' }, { kind: 'updates' }]);
     go('a:devices', 'Devices & pairing', 'phone key link', [{ kind: 'app-settings' }, { kind: 'devices' }]);
-    go('a:cost', 'What it has cost', 'usage tokens spend', [{ kind: 'usage' }]);
+    go('a:cost', 'Usage and limits', 'usage limits left quota tokens spend cost', [{ kind: 'usage' }]);
     go('a:defaults', 'CLI defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
     for (const t of ['light', 'dark', 'system'] as Theme[]) {
       items.push({
@@ -3383,8 +3383,8 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
           </button>
           <button className="row" onClick={() => onOpen({ kind: 'usage' })}>
             <span className="grow">
-              <span className="rt">What it has cost</span>
-              <span className="rm">tokens, spend and cache across every machine</span>
+              <span className="rt">Usage and limits</span>
+              <span className="rm">what's left on each account, tokens and spend</span>
             </span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>

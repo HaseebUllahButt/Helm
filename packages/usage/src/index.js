@@ -243,22 +243,26 @@ export function foldBuckets(buckets, {
     if (since && date < since) continue;
     if (until && date > until) continue;
 
-    const cost = b.billedUsd != null && b.billedUsd > 0
+    const cost = b.reportedCostUsd != null
+      ? (b.unpriced ? null : { total: b.reportedCostUsd })
+      : b.billedUsd != null && b.billedUsd > 0
       ? { total: b.billedUsd, billed: true }
       : priceBucket(b.engine, model, b, date);
-    const rates = cacheRatesFor(model, b.engine, date);
+    const rates = b.summaryOnly ? null : cacheRatesFor(model, b.engine, date);
 
     addInto(totals, b, cost, rates);
 
-    const day = daily.get(date) || blankTotals();
-    addInto(day, b, cost, rates);
-    daily.set(date, day);
+    if (!b.undated) {
+      const day = daily.get(date) || blankTotals();
+      addInto(day, b, cost, rates);
+      daily.set(date, day);
+    }
 
     const dims = {
       engine: b.engine,
       account: b.account,
       model,
-      provider: providerOf(model),
+      provider: b.summaryOnly ? b.engine : providerOf(model),
       project,
     };
     const gkey = by.map((d) => dims[d] ?? '').join('\x01');
@@ -288,11 +292,14 @@ function blankTotals() {
 }
 
 function addInto(acc, b, cost, rates) {
+  if (b.summaryOnly) acc.summaryOnly = true;
+  if (b.undated) acc.undated = true;
   for (const k of ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoning', 'total', 'turns']) {
     acc[k] += b[k] || 0;
   }
-  if (cost) acc.costUsd += cost.total;
-  else acc.unpriced = true;
+  if (b.reportedCostUsd != null) acc.costUsd += b.reportedCostUsd;
+  else if (cost) acc.costUsd += cost.total;
+  if (!cost) acc.unpriced = true;
   if (rates) {
     acc.cacheSavedUsd += ((b.cacheRead || 0) * (rates.input - rates.cacheRead)) / 1e6;
     const hour = Math.min(b.cacheWrite1h || 0, b.cacheWrite || 0);

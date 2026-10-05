@@ -2404,7 +2404,6 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .schedule-form { display: grid; gap: 12px; padding: 12px 0; }
 .schedule-form label { display: grid; gap: 6px; font-size: var(--t-meta); }
 .schedule-form input, .schedule-form textarea { width: 100%; padding: 10px; }
-.delivery-choice { max-width: 140px; font-size: var(--t-micro); padding: 6px; min-height: 34px; }
 .thread-reference-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
 .thread-reference-chips button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-micro); padding: 6px 8px; }
 .queued-row { flex-wrap: wrap; }
@@ -2419,6 +2418,49 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
   .team-task { flex-wrap: wrap; }
   .team-state { margin-left: auto; }
   .thread-recovery { margin: 6px 10px; }
-  .delivery-choice { max-width: 116px; }
   .team-actions button, .queue-actions button { min-height: 40px; }
 }
+
+/* Limits: what is left, per account. Bars fill with what remains, so a short
+   bar is the warning - the way a fuel gauge reads, not a progress bar. */
+.limit-check { margin-left: auto; min-height: 28px; padding: 4px 12px; text-transform: none; letter-spacing: 0; font-weight: 500; }
+.limit-check:disabled { opacity: 0.6; cursor: default; }
+.limit-card { padding: 14px 16px; margin-bottom: 10px; }
+.limit-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.limit-card-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.limit-card-title b { font-size: var(--t-body); font-weight: 600; color: var(--text); }
+.limit-card-title span { font-size: var(--t-micro); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.limit-plan {
+  flex: none; font-size: var(--t-micro); color: var(--text-80);
+  padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line-2);
+}
+.limit-note { margin-top: 8px; font-size: var(--t-meta); color: var(--red); }
+.limit-row { margin-top: 12px; }
+.limit-row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.limit-label { font-size: var(--t-meta); color: var(--text-80); }
+.limit-left { font-size: var(--t-body); font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.limit-track {
+  position: relative; margin: 6px 0 5px; height: 8px; border-radius: 999px;
+  background: color-mix(in oklab, var(--emerald) 16%, transparent);
+}
+.limit-track span { display: block; height: 100%; border-radius: 999px; background: var(--emerald); }
+.limit-track i {
+  position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px;
+  border-radius: 1px; background: var(--text-dim); opacity: 0.55;
+}
+.limit-row.mid .limit-track { background: color-mix(in oklab, var(--amber) 16%, transparent); }
+.limit-row.mid .limit-track span { background: var(--amber); }
+.limit-row.mid .limit-left { color: var(--amber-text); }
+.limit-row.low .limit-track { background: color-mix(in oklab, var(--red) 18%, transparent); }
+.limit-row.low .limit-track span { background: var(--red); }
+.limit-row.low .limit-left { color: var(--red); }
+.limit-row.renewed .limit-track span { background: color-mix(in oklab, var(--emerald) 45%, transparent); }
+.limit-row.renewed .limit-left { color: var(--text-dim); font-weight: 500; }
+.limit-reset { font-size: var(--t-micro); color: var(--text-dim); line-height: 1.45; }
+.limit-reset b { font-weight: 600; color: var(--amber-text); }
+.limit-extra { margin-top: 10px; font-size: var(--t-meta); color: var(--text-80); }
+.limit-extra + .limit-extra { margin-top: 2px; }
+.limit-foot { margin-top: 10px; font-size: var(--t-micro); color: var(--mutedfg); }
+.limit-foot.old { color: var(--amber-text); }
+.limit-error { color: var(--red); }
+.limit-empty { margin: 2px 4px 8px; font-size: var(--t-micro); color: var(--text-dim); line-height: 1.5; }

@@ -63,8 +63,8 @@ test('windowLabel names codex\'s buckets the way the TUI does', () => {
 });
 
 test('planName title-cases the plan codex reports', () => {
-  assert.equal(planName('pro'), 'Pro');
-  assert.equal(planName('prolite'), 'Pro Lite');
+  assert.equal(planName('pro'), 'Pro 20x');
+  assert.equal(planName('prolite'), 'Pro 5x');
   assert.equal(planName('business'), 'Business');
   assert.equal(planName('somethingnew'), 'Somethingnew');
 });
