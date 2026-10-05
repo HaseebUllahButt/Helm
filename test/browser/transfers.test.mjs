@@ -64,14 +64,16 @@ test('thread details exposes Send task and keeps notifications in the menu on de
       await page.goto('http://helm-task-test/');
       await page.addStyleTag({content:readFileSync('apps/web/src/styles.css','utf8')});
       await page.addScriptTag({content:bundle.outputFiles[0].text});
-      await page.getByRole('button', { name: 'Thread details', exact: true }).click();
-      await page.getByRole('dialog', { name: 'Thread details' }).getByRole('button', { name: 'Send task to another machine', exact: true }).click();
-      assert.equal(await page.evaluate(()=>window.sendTaskClicked),true);
-      assert.equal(await page.getByRole('button',{name:/completion alerts|completion notifications/}).count(),0);
+      // Each thing lives in one place: Git, agents and repeats behind the
+      // details button, everything else in the ⋯ menu.
       await page.getByRole('button',{name:'more',exact:true}).click();
-      assert.equal(await page.locator('.menu').getByRole('button',{name:'Send task to another machine',exact:true}).count(),0);
-      const notification = page.getByRole('button',{name:'Turn completion alerts off',exact:true});
-      assert.equal(await notification.getAttribute('aria-pressed'),'true');
+      const menu = page.locator('.menu');
+      for (const gone of ['Subagents','Scheduled tasks',/Git graph/,'Open parent thread']) assert.equal(await menu.getByRole('button',{name:gone}).count(),0);
+      await menu.getByRole('button',{name:'Send to another machine',exact:true}).click();
+      assert.equal(await page.evaluate(()=>window.sendTaskClicked),true);
+      await page.getByRole('button',{name:'more',exact:true}).click();
+      const notification = page.getByRole('menuitemcheckbox',{name:'Alert me when it finishes'});
+      assert.equal(await notification.getAttribute('aria-checked'),'true');
       await notification.click();
       assert.deepEqual(await page.evaluate(()=>window.notificationRequest),{id:'thread',on:false});
     }

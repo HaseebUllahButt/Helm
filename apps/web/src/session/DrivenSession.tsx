@@ -476,7 +476,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // What the folder looks like to git. Asked again whenever a turn ends,
   // which is when something has usually just changed.
   const git = useGitStatus(client, env, session.cwd, status === 'working' ? 'working' : `rest:${session.updatedAt ?? 0}`);
-  const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
+  const changed = git.status?.repo && !session.brain ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
 
   // The clip is only offered when the running model can see images;
   // the daemon enforces the same rule, so this is presentation, not trust.
@@ -513,7 +513,15 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           </span>
         </div>
         {chip(status)}
-        <button className="iconbtn thread-details-launch" aria-label="Thread details" title="Agents, changes and schedules" onClick={() => setDetails('overview')}><Icon name="subagents" size={17} />{changed > 0 && <b className="cbadge">{changed}</b>}</button>
+        {/* Git gets its own button, with the count of changed files on it:
+            it is the thing most often checked. The other one opens the
+            same sheet on the helpers and repeats. */}
+        {git.status?.repo && !session.brain && (
+          <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Changes and commits"
+            onClick={() => setDetails(changed > 0 ? 'changes' : 'commits')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
+        )}
+        <button className="iconbtn thread-details-launch" aria-label="Thread details" title="Agents and repeats"
+          onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{team.length > 0 && <b className="cbadge quiet">{team.length}</b>}</button>
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -526,29 +534,26 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             </svg>
           </button>
         )}
-        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} />{changed > 0 && !session.brain && <i className="moredot git-mobile-only" aria-hidden="true" />}</button>
+        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} /></button>
         {menu === 'more' && (
-          <div className="menu" onClick={() => setMenu(null)}>
-            {git.status?.repo && !session.brain && (
-              <button onClick={() => setDetails('changes')}>
-                Git graph and changes{changed > 0 ? ` · ${changed > 99 ? '99+' : changed}` : ''}
-              </button>
+          <div className="menu thread-menu" onClick={() => setMenu(null)}>
+            <button onClick={() => { setMenu(null); setAsk('rename'); }}><Icon name="edit" size={16} />Rename</button>
+            {!session.brain && onSendTask && !session.external && (
+              <button disabled={!env.online} onClick={onSendTask}><Icon name="transfer" size={16} />Send to another machine</button>
             )}
-            <button onClick={() => setDetails('agents')}>Subagents</button>
-            <button onClick={() => setDetails('schedules')}>Scheduled tasks</button>
-            <button aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
-              {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
+            {!session.brain && <button onClick={() => { setMenu(null); void saveAsDefaults(); }}><Icon name="sliders" size={16} />Make these settings the default</button>}
+            <hr />
+            <button role="menuitemcheckbox" aria-checked={!!session.notifyDone} onClick={(event) => { event.stopPropagation(); void toggleNotify(); }}>
+              <Icon name="bell" size={16} />Alert me when it finishes<span className={`switch${session.notifyDone ? ' on' : ''}`} aria-hidden="true"><i /></span>
             </button>
-            {!session.brain && <button onClick={() => { setMenu(null); void saveAsDefaults(); }}>Use these settings for new chats</button>}
-            <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
-            {session.delegation?.parentId && onOpenSession && <button onClick={openParent}>Open parent thread</button>}
             {wakeable && (
-              <button aria-pressed={keepAwake} onClick={() => setKeepAwake((v) => !v)}>
-                {keepAwake ? 'Let the screen sleep' : 'Keep the screen awake'}
+              <button role="menuitemcheckbox" aria-checked={keepAwake} onClick={(event) => { event.stopPropagation(); setKeepAwake((v) => !v); }}>
+                <Icon name="sun" size={16} />Keep screen on<span className={`switch${keepAwake ? ' on' : ''}`} aria-hidden="true"><i /></span>
               </button>
             )}
-            <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
-            <button className="destructive" onClick={kill}>Delete thread</button>
+            <hr />
+            <button onClick={archive}><Icon name="archive" size={16} />{session.archived ? 'Unarchive' : 'Archive'}</button>
+            <button className="destructive" onClick={kill}><Icon name="trash" size={16} />Delete</button>
           </div>
         )}
       </div>
@@ -599,8 +604,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>
 
-      {details && <ThreadDetails client={client} env={env} session={session} tab={details} onTab={setDetails} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
-        onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined} onTransfer={!session.external && !session.brain ? onSendTask : undefined} />}
+      {details && <ThreadDetails client={client} env={env} session={session} tab={details} onTab={setDetails} git={session.brain ? null : git.status} reloadGit={git.reload} agents={team.length} onClose={() => setDetails(null)}
+        onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined} />}
       {editingQueue && <TextPrompt title="Edit queued message" multiline value={editingQueue.text} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSubmit={async (text) => {
         if (await queueAction(editingQueue, 'session.queue-edit', { text })) setEditingQueue(null);
       }} />}

@@ -109,7 +109,7 @@ test('main task click opens the full child conversation and Back returns to its 
       await view.addScriptTag({ content:bundle.outputFiles[0].text });
       await view.getByText('parent full conversation response', {exact:true}).waitFor();
       await view.getByRole('button', {name:'Thread details',exact:true}).click();
-      await view.getByRole('tab', {name:'Agents',exact:true}).click();
+      await view.getByRole('tab', {name:/^Agents/}).click();
       await view.getByRole('button', {name:/Inspect child conversation/}).click();
       await view.getByRole('heading', {name:'Inspect child conversation',exact:true}).waitFor();
       await view.getByRole('dialog', {name:'Subagents'}).waitFor({state:'detached'});
@@ -174,16 +174,18 @@ test('desktop and phone headers open unified details with accessible Git navigat
       await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
       await view.addScriptTag({ content:bundle.outputFiles[0].text });
       const bar = view.locator('.session-bar');
-      const details = bar.getByRole('button', {name:'Thread details',exact:true});
+      const details = bar.getByRole('button', {name:/^Git/});
       await details.waitFor();
       assert.equal(await details.locator('.cbadge').textContent(), '2');
+      await bar.getByRole('button', {name:'Thread details',exact:true}).waitFor();
       await capture(bar, `session-header-${phone ? 'phone' : 'desktop'}-${width}.png`);
       assert.equal(await view.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await details.click();
       const dialog = view.getByRole('dialog', {name:'Thread details',exact:true});
-      await dialog.getByRole('tab', {name:'Changes',exact:true}).click();
-      await dialog.getByRole('tab', {name:'Graph',exact:true}).click();
-      await dialog.getByRole('tabpanel', {name:'Graph',exact:true}).waitFor();
+      assert.equal(await dialog.getByRole('tab', {name:/^Changes/}).getAttribute('aria-selected'), 'true', 'the change count opens on the changes');
+      assert.equal(await dialog.getByRole('tab', {name:'Overview'}).count(), 0);
+      await dialog.getByRole('tab', {name:'Commits',exact:true}).click();
+      await dialog.getByRole('tabpanel', {name:'Commits',exact:true}).waitFor();
       assert.equal(await view.getByRole('dialog').count(), 1);
       await capture(view, `thread-details-${width}.png`);
       await dialog.getByRole('button', {name:'Close thread details'}).click();
@@ -391,7 +393,7 @@ test('Shell back history leaves parent and child chats without cycling between t
       await heading('Parent history chat').waitFor();
       const openChild = async title=>{
         await view.getByRole('button',{name:'Thread details',exact:true}).click();
-        await view.getByRole('tab',{name:'Agents',exact:true}).click();
+        await view.getByRole('tab', {name:/^Agents/}).click();
         await view.getByRole('button',{name:new RegExp(title)}).click();
         await heading(title).waitFor();
       };

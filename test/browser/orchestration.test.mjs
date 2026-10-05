@@ -39,7 +39,7 @@ before(async () => {
         onMoveQueued={(turn,direction)=>window.action=['move',turn.id,direction]}
         onSendQueued={turn=>window.action=['send',turn.id]} />;
     }
-    function Details() { const [tab,onTab]=useState('overview'); return <ThreadDetails client={client} env={env} session={session} tab={tab} onTab={onTab} git={null} reloadGit={()=>{}} onClose={()=>root.render(null)} />; }
+    function Details() { const [tab,onTab]=useState('agents'); return <ThreadDetails client={client} env={env} session={session} tab={tab} onTab={onTab} git={null} reloadGit={()=>{}} onClose={()=>root.render(null)} />; }
     window.showComposer=()=>root.render(<Compose/>);
     window.showDetails=()=>root.render(<Details/>);
     window.showTeam=()=>root.render(<TeamSummary team={[
@@ -87,21 +87,25 @@ test('thread details create, pause, run and delete a schedule on the selected ma
   const page = await pageFor(context, 390);
   await page.evaluate(() => window.showDetails());
   const dialog = page.getByRole('dialog', { name: 'Thread details' });
-  await dialog.getByRole('tab', { name: 'Schedules' }).click();
-  await dialog.getByRole('button', { name: 'New scheduled task' }).click();
-  await dialog.getByLabel('Name', { exact: true }).fill('Morning review');
-  await dialog.getByLabel('Task', { exact: true }).fill('Review open changes');
-  await dialog.getByLabel('Every (minutes)').fill('1440');
-  await dialog.getByRole('button', { name: 'Save schedule' }).click();
-  await dialog.getByRole('button', { name: 'Pause', exact: true }).click();
-  await dialog.getByRole('button', { name: 'Resume', exact: true }).waitFor();
-  await dialog.getByRole('button', { name: 'Run now' }).click();
-  await dialog.getByText('Task sent. Its result appears in this conversation.').waitFor();
+  assert.deepEqual(await dialog.getByRole('tab').allInnerTexts(), ['Agents', 'Repeat'], 'no Git tabs without a repository, and no overview');
+  await dialog.getByRole('tab', { name: 'Repeat' }).click();
+  await dialog.getByRole('button', { name: 'New repeat' }).click();
+  await dialog.getByLabel('Message', { exact: true }).fill('Review open changes');
+  await dialog.getByLabel('How often').selectOption({ label: 'Every day' });
+  await dialog.getByLabel(/^Name/).fill('Morning review');
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+  await dialog.getByText('every day · next', { exact: false }).waitFor();
+  assert.equal(await page.evaluate(() => window.calls.find(call => call.method === 'schedule.save').params.intervalMinutes), 1440);
+  await dialog.getByRole('switch', { name: 'Pause' }).click();
+  await dialog.getByRole('switch', { name: 'Resume' }).waitFor();
+  await dialog.getByText('Paused · every day').waitFor();
+  await dialog.getByRole('button', { name: 'Send now' }).click();
+  await dialog.getByText('Sent. The reply shows up in the chat.').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await capture(page, 'orchestration-schedules-phone.png');
   assert.equal(await page.evaluate(() => window.calls.every(call => call.env === 'laptop')), true);
   await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
-  await dialog.getByText('No scheduled tasks for this thread.').waitFor();
+  await dialog.locator('.schedule-card').waitFor({ state: 'detached' });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 
