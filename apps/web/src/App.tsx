@@ -233,6 +233,15 @@ const ownTerminal = (s: Session) => s.engine === 'shell' && !s.archived && s.ali
  */
 const WEEK = 7 * 24 * 60 * 60_000;
 const needsAttention = (session: Session) => session.status === 'blocked' || !!session.team?.blocked || !!session.team?.failed || ['error', 'limited', 'restart'].includes(session.recovery?.kind ?? '');
+/**
+ * "Running" is a turn in flight - or, for a thread helm did not start, a
+ * live process. A CLI left open at its prompt is still running on that
+ * machine and belongs in the sidebar; a helm thread between turns only has
+ * a warm driver, which is not work happening.
+ */
+const isRunning = (s: Session) =>
+  s.status === 'working' || !!s.team?.working
+  || ((!!s.adopted || !!s.external) && s.alive === true);
 const thisWeek = (s: Session) =>
   s.alive === true || needsAttention(s) || s.status === 'working' ||
   (s.updatedAt ?? 0) >= Date.now() - WEEK;
@@ -914,7 +923,7 @@ function Shell({ client, conn, onSignOut }: {
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived);
   const workingThreadsOn = (machine: Environment) =>
-    machine.online ? agentsOf(machine.id).filter((thread) => thread.status === 'working' || (thread.team?.working ?? 0) > 0) : [];
+    machine.online ? agentsOf(machine.id).filter(isRunning) : [];
   const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(needsAttention).length;
 
   /**
@@ -947,11 +956,16 @@ function Shell({ client, conn, onSignOut }: {
         id: s.engineSessionId, cwd: s.cwd,
       }, 60_000);
       loadSessions(envId);
-      navigate([...nav.current.stack, { kind: 'session', session: r.session }], envId);
+      navigate([{ kind: 'env' }, { kind: 'session', session: r.session }], envId);
     } catch (e: any) {
       setError(`could not continue that thread: ${e.message}`);
     } finally { setResuming(null); }
   };
+
+  // A `found:` row is a CLI's own history until the machine is asked to pick
+  // it up - opening it has to go through resume, not straight to a view.
+  const openThread = (envId: string, s: Session) =>
+    s.id.startsWith('found:') ? resumeFound(envId, s) : openSession(envId, s);
 
   const voiceEnvs = envs.filter((e) => e.online && e.info.voice);
   const transcribeVia = (preferred?: string) => {
@@ -1031,13 +1045,13 @@ function Shell({ client, conn, onSignOut }: {
   // running. A brain has its own place under "brains".
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
-  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !needsAttention(thread) && (thread.status === 'working' || !!thread.team?.working)).sort(byNewest);
+  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !needsAttention(thread) && isRunning(thread)).sort(byNewest);
   const runningCount = envs.reduce((total, machine) => total + workingThreadsOn(machine).length, 0);
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
   // older work stays available on its machine and through search.
   const doneNow = everyone.filter(({ s }) => (s.driver || s.adopted) && (s.turns ?? 0) > 0
-    && s.status !== 'working' && !s.team?.working && !needsAttention(s)
+    && !isRunning(s) && !needsAttention(s)
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
   const doneIsSaved = doneNow.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));
   const snoozeThread = (envId: string, s: Session, until: number) => {
@@ -1105,7 +1119,7 @@ function Shell({ client, conn, onSignOut }: {
 
             {blocked.map(({ env: e, s }) => (
               <NeedCard
-                key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)}
+                key={s.id} s={s} machine={e.name} onOpen={() => openThread(e.id, s)}
                 onSnooze={(until) => snoozeThread(e.id, s, until)}
               />
             ))}
@@ -1115,7 +1129,7 @@ function Shell({ client, conn, onSignOut }: {
                 <div className="rows plain">
                   {asleep.map(({ env: e, s }) => (
                     <HomeRow
-                      key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)}
+                      key={s.id} s={s} machine={e.name} onOpen={() => openThread(e.id, s)}
                       note={`back ${when(snoozed[`${e.id}:${s.id}`])}`}
                     />
                   ))}
@@ -1128,7 +1142,7 @@ function Shell({ client, conn, onSignOut }: {
                 <div className="section">running</div>
                 <div className="rows plain">
                   {runningNow.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} />
+                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openThread(e.id, s)} />
                   ))}
                 </div>
               </>
@@ -1140,7 +1154,7 @@ function Shell({ client, conn, onSignOut }: {
                 {doneIsSaved && <p className="note">Includes saved lists · syncing when connected</p>}
                 <div className="rows plain">
                   {doneNow.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} />
+                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openThread(e.id, s)} />
                   ))}
                 </div>
               </Fold>
@@ -2281,9 +2295,9 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const live = (s: Session) => s.engine !== 'shell' && !s.archived && hit(s);
   const mine = rows.filter(live);
   const blocked = mine.filter(needsAttention).sort(byRecent);
-  const working = mine.filter((s) => !needsAttention(s) && (s.status === 'working' || !!s.team?.working)).sort(byRecent);
+  const working = mine.filter((s) => !needsAttention(s) && isRunning(s)).sort(byRecent);
 
-  const rest = mine.filter((s) => !needsAttention(s) && s.status !== 'working' && !s.team?.working);
+  const rest = mine.filter((s) => !needsAttention(s) && !isRunning(s));
   const recent = rest.filter((s) => !botThread(s)).sort(byRecent).slice(0, 3);
   const recentIds = new Set(recent.map((s) => s.id));
 
