@@ -1150,7 +1150,6 @@ function Shell({ client, conn, onSignOut }: {
 
             {doneNow.length > 0 && (
               <Fold title="done" count={doneNow.length} note={doneIsSaved ? 'saved' : undefined} remember="sidebar:done">
-                <p className="note">Threads with replies, not running or needing attention · last 3 days. This is not a count of successful tasks.</p>
                 {doneIsSaved && <p className="note">Includes saved lists · syncing when connected</p>}
                 <div className="rows plain">
                   {doneNow.map(({ env: e, s }) => (
