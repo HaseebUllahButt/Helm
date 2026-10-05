@@ -4087,10 +4087,6 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 }) {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [key, setKey] = useState<string>('');
-  const [model, setModel] = useState('');
-  const [effort, setEffort] = useState('');
-  const [mode, setMode] = useState('');
-  const [speed, setSpeed] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const prefs = useRef(loadPrefs());
@@ -4165,29 +4161,47 @@ function Start({ client, env, cwd, onBack, onStarted }: {
     }
   };
 
-  // The defaults belong to the machine/account, not this browser, so opening
-  // the same picker from a phone or laptop starts the same CLI configuration.
-  useEffect(() => {
-    if (!account) return;
-    setModel(account.prefs?.default ?? '');
-    setEffort(account.defaults?.effort ?? '');
-    setMode(account.defaults?.mode === 'plan' ? '' : account.defaults?.mode ?? '');
-    setSpeed(account.defaults?.speed ?? '');
-  }, [account?.key]);
-
-  const start = async () => {
-    if (!account) return;
+  // A ref, not the busy state: two Enters inside one render would both pass
+  // a state check, and two sessions would start for one key press.
+  const starting = useRef(false);
+  const start = async (picked?: Account) => {
+    const a = picked ?? account;
+    if (!a || starting.current) return;
+    starting.current = true;
     setBusy(true); setError('');
-    savePicker({ last: account.key });
+    if (a.key !== key) setKey(a.key);
+    savePicker({ last: a.key });
     try {
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start', {
-        cwd, profileId: account.profile.id,
-        model: model || undefined, effort: effort || undefined,
-        mode: mode || undefined, speed: speed || undefined,
+        cwd, profileId: a.profile.id,
+        model: a.prefs?.default || undefined,
+        effort: a.defaults?.effort || undefined,
+        mode: (a.defaults?.mode === 'plan' ? '' : a.defaults?.mode) || undefined,
+        speed: a.defaults?.speed || undefined,
       }, 70_000);
       onStarted(r.session);
-    } catch (e: any) { setError(e.message); setBusy(false); }
+    } catch (e: any) { setError(e.message); setBusy(false); starting.current = false; }
   };
+
+  // Enter is the start button: on an agent row it starts that agent, with
+  // nothing focused it starts the selected one. preventDefault keeps the
+  // key from also firing the row's click, which would only select it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || e.repeat || e.defaultPrevented || choosing || starting.current) return;
+      const el = e.target as HTMLElement | null;
+      if (!el || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable) return;
+      const row = el.closest('[data-acct]') as HTMLElement | null;
+      const a = row
+        ? shown?.find((x) => x.key === row.dataset.acct)
+        : el.closest('button, a, [role="button"]') ? null : account;
+      if (!a) return;
+      e.preventDefault();
+      void start(a);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   const eng = account ? engineOf(account.engine) : null;
 
@@ -4214,9 +4228,10 @@ function Start({ client, env, cwd, onBack, onStarted }: {
             const e = engineOf(a.engine);
             return (
               <button
-                key={a.key} title={a.aliases.join(', ')}
+                key={a.key} title={a.aliases.join(', ')} data-acct={a.key}
                 className={`row tall${a.key === key ? ' active' : ''}`}
                 onClick={() => setKey(a.key)}
+                onDoubleClick={() => void start(a)}
               >
                 <EngineMark engine={e.cls} />
                 <span className="grow">
@@ -4250,7 +4265,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
           <button
             className="primary big"
             disabled={busy}
-            onClick={start}
+            onClick={() => void start()}
           >
             {busy ? 'starting…' : `Start ${eng?.label}`}
           </button>
