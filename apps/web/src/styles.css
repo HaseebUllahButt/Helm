@@ -256,21 +256,6 @@ code, pre, kbd { font-family: var(--mono); }
 .menu button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .menu button:disabled { color: var(--mutedfg); opacity: 0.7; }
 .menu button.destructive { color: var(--red); }
-/* A thread's ⋯: an icon per line, switches for the two things that toggle,
-   and quiet rules between the groups. */
-.thread-menu { min-width: 256px; padding: 6px; }
-.thread-menu button { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 8px 10px; }
-.thread-menu button > .icon { flex: none; color: var(--icon); }
-.thread-menu button.destructive > .icon { color: currentColor; }
-.thread-menu button:hover:not(:disabled) > .icon { color: var(--text); }
-.thread-menu button.destructive:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
-.thread-menu button.destructive:hover:not(:disabled) > .icon { color: var(--red); }
-.thread-menu button + button.destructive { margin-top: 0; }
-.thread-menu button + button.destructive::before { display: none; }
-.thread-menu .switch { margin-left: auto; width: 34px; height: 20px; }
-.thread-menu .switch i { top: 3px; left: 3px; width: 14px; height: 14px; }
-.thread-menu .switch.on i { transform: translateX(14px); }
-.thread-menu hr { border: none; height: 1px; margin: 5px 8px; background: var(--line); }
 .menu button + button.destructive { margin-top: 4px; position: relative; }
 .menu button + button.destructive::before {
   content: ''; position: absolute; left: 6px; right: 6px; top: -3px; height: 1px; background: var(--line);
@@ -1433,7 +1418,7 @@ pre.snippet {
   .usage-legend { width: 100%; }
 }
 
-.usage-note { display: flex; overflow-wrap: anywhere; flex-direction: column; align-items: flex-start; gap: 3px; margin-top: 14px; }
+.usage-note { flex-direction: column; align-items: flex-start; gap: 3px; margin-top: 14px; }
 
 /* ------------------------------------------------------------ new in this pass */
 
@@ -1589,7 +1574,7 @@ button.sheet-editlink:hover { color: var(--text); }
    the app is inside it. */
 .need {
   display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left;
-  margin: 4px 0 12px; padding: 14px 15px 15px; border-radius: 18px; position: relative; overflow: hidden;
+  margin: 4px 0 12px; padding: 14px 15px 8px; border-radius: 18px; position: relative; overflow: hidden;
   background: var(--need-bg);
   border: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
   box-shadow: inset 0 2px 0 color-mix(in srgb, var(--amber) 70%, transparent);
@@ -1833,6 +1818,11 @@ button.sheet-editlink:hover { color: var(--text); }
 .changes { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg); animation: screen-in 0.16s var(--ease); }
 .changesbtn { position: relative; }
 .changesbtn.has { color: var(--text-dim); }
+.menu .git-mobile-only, .moredot.git-mobile-only { display: none; }
+@media (max-width: 599px) and (hover: none) and (pointer: coarse) {
+  .changesbtn { display: none; }
+  .menu .git-mobile-only, .moredot.git-mobile-only { display: block; }
+}
 .git-head { border-bottom: 1px solid var(--line); background: var(--bg); }
 .git-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; max-width: var(--measure); width: 100%; margin: 0 auto; padding: 8px 14px 10px; }
 @media (min-width: 900px) { .git-toolbar { padding: 10px 24px; } }
@@ -2010,8 +2000,6 @@ button.sheet-editlink:hover { color: var(--text); }
   background: var(--sky); color: #06202f; font-size: 10px; font-weight: 700;
 }
 :root[data-theme="light"] .cbadge { color: #fff; }
-/* How many helpers a thread has: a count, not news, so no colour. */
-.cbadge.quiet, :root[data-theme="light"] .cbadge.quiet { background: var(--raised); color: var(--text-dim); box-shadow: inset 0 0 0 1px var(--line-2); }
 /* Lavender is a tile colour in the dark; as text on white it needs ink. */
 :root[data-theme="light"] .gst.sR, :root[data-theme="light"] .pr-state.merged { color: #5b45b0; }
 
@@ -2146,22 +2134,21 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .modesheet-label { padding: 8px 12px 2px; font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--mutedfg); }
 
 
-/* A card that is a container: the main tap area, and a quiet way out of it
-   in the corner. */
+/* A card that is a container: the main tap area, and a quiet row under it. */
 .need-main { display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left; color: inherit; }
-.need-main .need-k { padding-right: 34px; }
-.need-x {
-  position: absolute; top: 7px; right: 7px; width: 34px; height: 34px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center; color: var(--need-m);
-  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+.need-foot { display: flex; justify-content: flex-end; min-height: 30px; }
+.need-snooze { font-size: var(--t-meta); color: var(--need-m); padding: 4px 10px; min-height: 32px; border-radius: 8px; }
+.need-snooze:hover { background: var(--hover); color: var(--text); }
+.snooze-opts { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center; }
+.snooze-opts button {
+  height: 32px; padding: 0 12px; border-radius: 16px; font-size: var(--t-meta);
+  background: var(--accent); color: var(--text);
 }
-.need-x:hover { background: color-mix(in srgb, var(--amber) 14%, transparent); color: var(--text); }
-/* A thread that needs you but whose card was dismissed: one amber dot in
-   front of it, under "running". */
-.thread-row .wdot {
-  flex: none; width: 8px; height: 8px; margin: 0 -3px 0 1px; border-radius: 50%; background: var(--amber);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 18%, transparent);
-}
+.snooze-opts button:hover:not(:disabled) { background: var(--hover); }
+.snooze-opts button:disabled { opacity: 0.4; }
+.snooze-custom { display: inline-flex; gap: 6px; align-items: center; }
+.snooze-custom input { width: auto; padding: 4px 8px; font-size: var(--t-meta); border-radius: 15px; height: 30px; }
+.snooze-opts .snooze-x { margin-left: auto; width: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 
 .bubble-meta .branch { font-size: var(--t-micro); color: var(--mutedfg); padding: 0 6px 0 0; border-radius: 6px; display: inline-flex; align-items: center; gap: 4px; }
 .bubble-meta .branch:hover { color: var(--text); }
@@ -2307,6 +2294,7 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 /* Header controls that trade places with a menu item at phone width. */
 @media (max-width: 599px) { .wide-only { display: none !important; } }
 @media (min-width: 600px) { .narrow-only { display: none !important; } }
+.moredot { position: absolute; top: 7px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--sky); }
 @media (min-width: 900px) { :root[data-theme="light"] .sidebar .rows.plain { box-shadow: none; } }
 /* At 200% zoom a phone is under 340px wide: the title keeps its line and
    the state chip steps aside - the transcript and the sheet still say it. */
@@ -2385,98 +2373,38 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .team-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
 .team-actions button { min-height: 36px; font-size: var(--t-meta); padding: 6px 10px; }
 .thread-details-launch { position: relative; }
-
-/* The thread's details: one sheet, one row of tabs, and the content. */
-.thread-details-back {
-  position: fixed; inset: 0; z-index: 60; display: flex; justify-content: flex-end;
-  background: rgb(6 7 10 / 52%); animation: details-fade 0.18s var(--ease);
-}
-.thread-details {
-  width: min(720px, 56vw); height: 100%; display: flex; flex-direction: column; background: var(--bg);
-  border-left: 1px solid var(--line-2); box-shadow: -24px 0 60px -20px rgb(0 0 0 / 60%);
-  animation: details-in-side 0.22s var(--ease);
-}
-@keyframes details-fade { from { opacity: 0; } }
-@keyframes details-in-side { from { transform: translateX(24px); opacity: 0; } }
-@keyframes details-in-up { from { transform: translateY(32px); opacity: 0.4; } }
-@media (prefers-reduced-motion: reduce) { .thread-details-back, .thread-details { animation: none; } }
-.sheet-grip { display: none; }
-.details-heading { display: flex; align-items: center; gap: 8px; padding: 14px 14px 12px 16px; border-bottom: 1px solid var(--line); }
-.details-tabs {
-  flex: 1; min-width: 0; display: flex; gap: 2px; padding: 3px; border-radius: 12px;
-  background: var(--card); border: 1px solid var(--line); overflow-x: auto; scrollbar-width: none;
-}
-.details-tabs::-webkit-scrollbar { display: none; }
-.details-tabs button {
-  flex: 1 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  min-height: 36px; padding: 6px 10px; border: none; border-radius: 9px; background: transparent;
-  font-size: var(--t-meta); font-weight: 550; color: var(--mutedfg); white-space: nowrap;
-  transition: background 0.15s var(--ease), color 0.15s var(--ease);
-}
-.details-tabs button:hover { color: var(--text); }
-.details-tabs button[aria-selected="true"] { background: var(--raised); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / 25%), inset 0 0 0 1px var(--line-2); }
-:root[data-theme="light"] .details-tabs button[aria-selected="true"] { box-shadow: 0 1px 2px rgb(26 29 36 / 12%), inset 0 0 0 1px var(--line-2); }
-.tab-count {
-  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent);
-  font: 600 var(--t-micro)/18px var(--mono); color: var(--text-dim); text-align: center;
-}
-.details-tabs button[aria-selected="true"] .tab-count { background: color-mix(in srgb, var(--primary-q) 24%, transparent); color: var(--text); }
-.details-close { flex: none; }
-.details-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 16px 18px max(18px, env(safe-area-inset-bottom)); }
+.thread-details-back { position: fixed; inset: 0; z-index: 60; background: #0005; display: flex; justify-content: flex-end; }
+.thread-details { width: min(680px, 52vw); height: 100%; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); box-shadow: -12px 0 40px #0002; }
+.details-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 18px 20px 12px; }
+.details-heading > div { min-width: 0; }
+.details-heading h2 { margin: 0; font-size: var(--t-title); }
+.details-heading p { margin: 4px 0 0; font-size: var(--t-meta); color: var(--text-dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.details-tabs { display: flex; gap: 4px; padding: 0 14px 10px; border-bottom: 1px solid var(--line); }
+.details-tabs button { flex: 1; min-height: 40px; padding: 8px 4px; border: none; background: transparent; font-size: var(--t-meta); }
+.details-tabs button[aria-selected="true"] { background: var(--raised); color: var(--text); }
+.details-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 16px max(16px, env(safe-area-inset-bottom)); }
+.thread-overview dl { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 16px; padding: 8px; font-size: var(--t-meta); }
+.thread-overview dt { color: var(--text-dim); }
+.thread-overview dd { margin: 0; overflow-wrap: anywhere; }
 .thread-details .delegation-panel { width: 100%; max-height: none; box-shadow: none; border: none; padding: 0; background: transparent; }
+.thread-details .delegation-heading { padding: 4px 0 12px; }
 .thread-details .delegation-body { padding: 0; overflow: visible; }
-/* Git inside the sheet: the sheet scrolls and the sheet has the tabs. */
-.changes.embedded { position: static; inset: auto; z-index: auto; display: block; animation: none; background: transparent; margin: -16px -18px 0; }
-.changes.embedded .git-head { border-bottom: none; background: transparent; }
-.changes.embedded .git-toolbar { padding: 12px 18px 0; }
-.changes.embedded .scroll { overflow: visible; display: block; }
-.changes.embedded .pad.column { padding: 12px 18px 8px; max-width: none; }
-.git-refresh { margin-left: auto; width: 32px; height: 32px; }
-
-/* Repeat: a message the thread is sent on a timer. */
-.schedules-intro { margin: 0 0 14px; font-size: var(--t-meta); line-height: 1.55; color: var(--text-dim); }
-.schedules-intro i { font-style: normal; color: var(--text); }
-.schedule-card {
-  display: grid; gap: 10px; padding: 14px; margin: 0 0 10px; border: 1px solid var(--line);
-  border-radius: var(--radius-xl); background: var(--card); font-size: var(--t-meta);
-}
-.schedule-card.paused .schedule-top strong, .schedule-card.paused > p { color: var(--mutedfg); }
-.schedule-top { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.schedule-top .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.schedule-top strong { font-size: var(--t-body); font-weight: 600; color: var(--text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.schedule-top small { color: var(--mutedfg); }
-.schedule-icon {
-  flex: none; width: 34px; height: 34px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--primary-q) 14%, transparent); color: var(--primary-q);
-}
-.schedule-card.paused .schedule-icon { background: var(--accent); color: var(--icon); }
-.schedule-card > p { margin: 0; padding-left: 46px; color: var(--text-dim); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
-.schedule-card .error { margin: 0; }
-.schedule-actions { display: flex; align-items: center; gap: 4px; padding-left: 46px; }
-.schedule-actions .grow { flex: 1; color: var(--mutedfg); }
-.schedule-actions button { min-height: 32px; padding: 4px 10px; border-radius: var(--radius-md); font-size: var(--t-meta); color: var(--text-dim); background: transparent; border: none; }
-.schedule-actions button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
-.schedule-actions button.destructive { color: var(--red); }
-.schedule-actions button.primary { background: var(--pill-bg); color: var(--pill-fg); font-weight: 650; padding: 4px 16px; }
-.schedule-new {
-  display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 46px;
-  border: 1px dashed var(--line-2); border-radius: var(--radius-xl); background: transparent;
-  color: var(--text-dim); font-size: var(--t-body); font-weight: 550;
-}
-.schedule-new:hover:not(:disabled) { background: var(--hover); color: var(--text); border-style: solid; }
-.schedule-new:disabled { opacity: 0.5; }
-.schedule-form { display: grid; gap: 12px; padding: 14px; margin-bottom: 10px; border: 1px solid var(--line-2); border-radius: var(--radius-xl); background: var(--card); }
-.schedule-form label { display: grid; gap: 6px; font-size: var(--t-meta); color: var(--text-dim); font-weight: 550; }
-.schedule-form .optional { font-weight: 400; color: var(--mutedfg); }
-.schedule-form input, .schedule-form textarea, .schedule-form select { width: 100%; padding: 10px; font-weight: 400; color: var(--text); }
-.schedule-form .schedule-actions button { width: auto; flex: none; min-height: 38px; }
-.schedule-form textarea { resize: vertical; }
-.schedule-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.schedule-form .schedule-actions { padding-left: 0; }
-.schedule-notice { font-size: var(--t-meta); color: var(--emerald); }
+.thread-details .changes { position: relative; inset: auto; min-height: 65vh; z-index: auto; animation: none; }
+.thread-details .changes > .bar { display: none; }
+.details-refresh { float: right; margin: 0 0 10px; }
 .thread-recovery { flex: none; display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 16px; margin: 8px 16px; background: var(--card); border: 1px solid var(--amber-text); border-radius: 10px; font-size: var(--t-meta); }
 .thread-recovery p { margin: 4px 0 0; overflow-wrap: anywhere; max-height: 70px; overflow: auto; color: var(--text-dim); }
 .thread-recovery button { flex: none; min-height: 40px; }
+.thread-schedules h3 { margin: 4px 0 12px; }
+.schedule-card { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 12px; margin: 12px 0; font-size: var(--t-meta); }
+.schedule-card > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
+.schedule-card p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.schedule-card small { display: block; color: var(--text-dim); margin-top: 6px; }
+.schedule-card .team-actions { padding: 12px 0 0; }
+.schedule-form { display: grid; gap: 12px; padding: 12px 0; }
+.schedule-form label { display: grid; gap: 6px; font-size: var(--t-meta); }
+.schedule-form input, .schedule-form textarea { width: 100%; padding: 10px; }
+.delivery-choice { max-width: 140px; font-size: var(--t-micro); padding: 6px; min-height: 34px; }
 .thread-reference-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
 .thread-reference-chips button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-micro); padding: 6px 8px; }
 .queued-row { flex-wrap: wrap; }
@@ -2484,65 +2412,13 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .queue-actions button { min-height: 32px; font-size: var(--t-micro); }
 @media (max-width: 700px) {
   .thread-details-back { align-items: flex-end; }
-  .thread-details {
-    width: 100%; height: min(90dvh, 900px); border: 1px solid var(--line-2); border-bottom: none; border-radius: 22px 22px 0 0;
-    box-shadow: 0 -20px 50px -20px rgb(0 0 0 / 60%); animation-name: details-in-up;
-  }
-  .sheet-grip { display: block; flex: none; width: 38px; height: 4px; margin: 8px auto 0; border-radius: 2px; background: var(--line-2); }
-  .details-heading { padding: 10px 10px 12px 12px; }
-  .details-tabs button { padding: 6px 8px; }
-  .details-content { padding: 14px 14px max(18px, env(safe-area-inset-bottom)); }
-  .changes.embedded { margin: -14px -14px 0; }
-  .changes.embedded .git-toolbar { padding: 12px 14px 0; }
-  .changes.embedded .pad.column { padding: 12px 14px 8px; }
-  .schedule-row { grid-template-columns: 1fr; }
+  .thread-details { width: 100%; height: min(88dvh, 900px); border: 1px solid var(--line); border-bottom: none; border-radius: 18px 18px 0 0; }
+  .details-heading { padding: 16px 16px 10px; }
+  .details-content { padding: 12px; }
   .team-summary { margin: 6px 10px; max-height: 26vh; }
   .team-task { flex-wrap: wrap; }
   .team-state { margin-left: auto; }
   .thread-recovery { margin: 6px 10px; }
+  .delivery-choice { max-width: 116px; }
   .team-actions button, .queue-actions button { min-height: 40px; }
 }
-
-/* Limits: what is left, per account. Bars fill with what remains, so a short
-   bar is the warning - the way a fuel gauge reads, not a progress bar. */
-.limit-check { margin-left: auto; min-height: 28px; padding: 4px 12px; text-transform: none; letter-spacing: 0; font-weight: 500; }
-.limit-check:disabled { opacity: 0.6; cursor: default; }
-.limit-card { padding: 14px 16px; margin-bottom: 10px; }
-.limit-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-.limit-card-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.limit-card-title b { font-size: var(--t-body); font-weight: 600; color: var(--text); }
-.limit-card-title span { font-size: var(--t-micro); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.limit-plan {
-  flex: none; font-size: var(--t-micro); color: var(--text-80);
-  padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line-2);
-}
-.limit-note { margin-top: 8px; font-size: var(--t-meta); color: var(--red); }
-.limit-row { margin-top: 12px; }
-.limit-row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.limit-label { font-size: var(--t-meta); color: var(--text-80); }
-.limit-left { font-size: var(--t-body); font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
-.limit-track {
-  position: relative; margin: 6px 0 5px; height: 8px; border-radius: 999px;
-  background: color-mix(in oklab, var(--emerald) 16%, transparent);
-}
-.limit-track span { display: block; height: 100%; border-radius: 999px; background: var(--emerald); }
-.limit-track i {
-  position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px;
-  border-radius: 1px; background: var(--text-dim); opacity: 0.55;
-}
-.limit-row.mid .limit-track { background: color-mix(in oklab, var(--amber) 16%, transparent); }
-.limit-row.mid .limit-track span { background: var(--amber); }
-.limit-row.mid .limit-left { color: var(--amber-text); }
-.limit-row.low .limit-track { background: color-mix(in oklab, var(--red) 18%, transparent); }
-.limit-row.low .limit-track span { background: var(--red); }
-.limit-row.low .limit-left { color: var(--red); }
-.limit-row.renewed .limit-track span { background: color-mix(in oklab, var(--emerald) 45%, transparent); }
-.limit-row.renewed .limit-left { color: var(--text-dim); font-weight: 500; }
-.limit-reset { font-size: var(--t-micro); color: var(--text-dim); line-height: 1.45; }
-.limit-reset b { font-weight: 600; color: var(--amber-text); }
-.limit-extra { margin-top: 10px; font-size: var(--t-meta); color: var(--text-80); }
-.limit-extra + .limit-extra { margin-top: 2px; }
-.limit-foot { margin-top: 10px; font-size: var(--t-micro); color: var(--mutedfg); }
-.limit-foot.old { color: var(--amber-text); }
-.limit-error { color: var(--red); }
-.limit-empty { margin: 2px 4px 8px; font-size: var(--t-micro); color: var(--text-dim); line-height: 1.5; }

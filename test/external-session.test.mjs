@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import { existsSync, appendFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, appendFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -43,7 +43,7 @@ devinStore.exec(`
   );
 `);
 devinStore.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)')
-  .run(devinId, 'Devin history', '/work/Maser', 'swe-test', 1, 2, 0);
+  .run(devinId, 'Devin history', '/tmp/Maser', 'swe-test', 1, 2, 0);
 devinStore.prepare('INSERT INTO message_nodes VALUES (?, ?, ?, ?, ?, ?, ?)')
   .run(1, devinId, 1, null, JSON.stringify({ message_id: 'du1', role: 'user', content: 'old prompt' }), 1, null);
 devinStore.prepare('INSERT INTO message_nodes VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -51,9 +51,9 @@ devinStore.prepare('INSERT INTO message_nodes VALUES (?, ?, ?, ?, ?, ?, ?)')
 devinStore.close();
 process.env.XDG_DATA_HOME = devinData;
 writeFileSync(transcript, [
-  JSON.stringify({ type: 'session_meta', payload: { id: threadId, cwd: '/work/Maser', cli_version: '0.154.0' } }),
+  JSON.stringify({ type: 'session_meta', payload: { id: threadId, cwd: '/tmp/Maser', cli_version: '0.154.0' } }),
   JSON.stringify({ type: 'turn_context', payload: {
-    cwd: '/work/Maser', model: 'gpt-5.6-sol', effort: 'high', approval_policy: 'never',
+    cwd: '/tmp/Maser', model: 'gpt-5.6-sol', effort: 'high', approval_policy: 'never',
     sandbox_policy: { type: 'dangerFullAccess' },
   } }),
   JSON.stringify({ type: 'response_item', timestamp: new Date().toISOString(), payload: {
@@ -70,7 +70,7 @@ writeFileSync(transcript, [
 ].join('\n') + '\n');
 writeFileSync(lock, '');
 writeFileSync(claudeTranscript, [
-  JSON.stringify({ type: 'user', uuid: 'cu1', cwd: '/work/Maser', timestamp: new Date().toISOString(), message: { role: 'user', content: 'hello claude' } }),
+  JSON.stringify({ type: 'user', uuid: 'cu1', cwd: '/tmp/Maser', timestamp: new Date().toISOString(), message: { role: 'user', content: 'hello claude' } }),
   JSON.stringify({ type: 'assistant', uuid: 'ca1', timestamp: new Date().toISOString(), message: { id: 'ca1', role: 'assistant', model: 'claude-test', content: [{ type: 'text', text: 'working externally' }], usage: { input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 20 } } }),
 ].join('\n') + '\n');
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
@@ -130,7 +130,7 @@ test('an active external Codex thread is monitored, then continued after handoff
   const profiles = [{ id: 'codex', engine: 'codex', env: { CODEX_HOME: codexHome } }];
   const found = (await inventory(profiles)).find((x) => x.id === threadId);
   assert.equal(found.active, true);
-  assert.equal(found.cwd, '/work/Maser');
+  assert.equal(found.cwd, '/tmp/Maser');
   assert.equal(found.transcript, transcript);
 
   let driver;
@@ -139,7 +139,7 @@ test('an active external Codex thread is monitored, then continued after handoff
     makeDriver: (_engine, opts) => (driver = new FakeDriver(opts)),
   });
   const monitored = await sessions.resumeExternal({
-    engine: 'codex', account: 'codex', id: threadId, cwd: '/work/Maser', title: 'Maser work',
+    engine: 'codex', account: 'codex', id: threadId, cwd: '/tmp/Maser', title: 'Maser work',
   });
   assert.equal(monitored.external, true);
   assert.equal(monitored.driver, 'codex');
@@ -199,7 +199,7 @@ test('an active external Claude thread is monitored and status does not take own
       makeDriver: (_engine, opts) => (driver = new FakeDriver(opts)),
     });
     const monitored = await sessions.resumeExternal({
-      engine: 'claude', account: 'claude', id: claudeId, cwd: '/work/Maser', title: 'Claude work',
+      engine: 'claude', account: 'claude', id: claudeId, cwd: '/tmp/Maser', title: 'Claude work',
     });
     assert.equal(monitored.external, true);
     await sessions.input(monitored.id, '/status');
@@ -236,7 +236,7 @@ test('an inactive Devin history opens without starting a provider process', asyn
     },
   });
   const opened = await sessions.resumeExternal({
-    engine: 'devin', account: found.account, id: devinId, cwd: '/work/Maser', title: found.title,
+    engine: 'devin', account: found.account, id: devinId, cwd: '/tmp/Maser', title: found.title,
   });
   assert.equal(opened.external, true);
   assert.equal(opened.driver, undefined);
@@ -249,7 +249,7 @@ test('detected sessions enter working and done without opening or stopping the e
   const id = '01a0cafe-0000-7000-8000-000000000002';
   const path = join(sessionsDir, `rollout-test-${id}.jsonl`);
   const writerLock = join(locksDir, `${id}.lock`);
-  writeFileSync(path, JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/work/external-work' } }) + '\n'
+  writeFileSync(path, JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/tmp/external-work' } }) + '\n'
     + JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }) + '\n');
   writeFileSync(writerLock, '');
   writeFileSync(join(codexHome, 'session_index.jsonl'), JSON.stringify({ id, thread_name: 'Fix external status' }) + '\n');
@@ -276,81 +276,4 @@ test('detected sessions enter working and done without opening or stopping the e
   rmSync(writerLock);
   assert.equal((await sessions.list()).find((s) => s.id === opened.id).status, 'done', 'a vanished writer cannot remain working');
   await sessions.archive(foundId, true);
-});
-
-/** The kernel start time of a process, as Claude records it. */
-const procStart = (pid) => {
-  const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-  return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
-};
-
-test('a Claude thread typed at a keyboard is live, takes the CLI\'s title, and is taken over on the first send', async (t) => {
-  if (process.platform !== 'linux') return t.skip('reads /proc');
-  const id = '44444444-4444-4444-8444-444444444444';
-  const path = join(claudeProject, `${id}.jsonl`);
-  writeFileSync(path, [
-    JSON.stringify({ type: 'user', uuid: 'ku1', cwd: '/work/Maser', timestamp: new Date().toISOString(), message: { role: 'user', content: 'tidy the readme' } }),
-    JSON.stringify({ type: 'assistant', uuid: 'ka1', timestamp: new Date().toISOString(), message: { id: 'ka1', role: 'assistant', model: 'claude-test', stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] } }),
-  ].join('\n') + '\n');
-  // Claude appends and closes - the process holds nothing open. It is
-  // known by its record under sessions/<pid>.json instead.
-  const cli = spawn(process.execPath, ['-e', `
-    process.on('SIGTERM', () => process.exit(0));
-    console.log('ready');
-    setInterval(() => {}, 1000);
-  `], { stdio: ['ignore', 'pipe', 'inherit'] });
-  await once(cli.stdout, 'data');
-  mkdirSync(join(claudeHome, 'sessions'), { recursive: true });
-  writeFileSync(join(claudeHome, 'sessions', `${cli.pid}.json`), JSON.stringify({
-    pid: cli.pid, sessionId: id, cwd: '/work/Maser', procStart: procStart(cli.pid), kind: 'interactive', entrypoint: 'cli',
-  }));
-  try {
-    const { inventory } = await import('../packages/connect/src/inventory.js');
-    const profiles = [{ id: 'claude', engine: 'claude', env: { CLAUDE_CONFIG_DIR: claudeHome } }];
-    const found = (await inventory(profiles)).find((x) => x.id === id);
-    assert.equal(found.active, true);
-    assert.equal(found.writerPid, cli.pid);
-
-    let driver;
-    const { Sessions } = await import('../packages/connect/src/sessions.js');
-    const sessions = new Sessions(new Runtime(), {
-      makeDriver: (_engine, opts) => (driver = new FakeDriver(opts)),
-    });
-    const monitored = await sessions.resumeExternal({ engine: 'claude', account: 'claude', id, cwd: '/work/Maser' });
-    assert.equal(monitored.external, true);
-    assert.equal(monitored.externalActive, true);
-    assert.equal(monitored.title, 'tidy the readme');
-
-    // The CLI names the thread after the first reply; the next list adopts it.
-    appendFileSync(path, JSON.stringify({ type: 'ai-title', aiTitle: 'Readme tidy-up', sessionId: id }) + '\n');
-    const listed = (await sessions.list({ includeDetected: true })).find((s) => s.id === monitored.id);
-    assert.equal(listed.alive, true);
-    assert.equal(listed.title, 'Readme tidy-up');
-    assert.equal(sessions.get(monitored.id).titleBy, 'cli');
-
-    const exited = once(cli, 'exit');
-    await sessions.input(monitored.id, 'now the changelog');
-    await exited;
-    assert.equal(sessions.get(monitored.id).external, false);
-    assert.equal(driver.sent, 'now the changelog');
-    assert.equal(sessions.get(monitored.id).title, 'Readme tidy-up', 'the CLI\'s name survives the takeover');
-  } finally {
-    try { process.kill(cli.pid, 'SIGKILL'); } catch { /* already exited */ }
-  }
-});
-
-test('threads from temp and scratch folders are read but never listed', async () => {
-  const id = '55555555-5555-4555-8555-555555555555';
-  const scratchProject = join(claudeHome, 'projects', '-tmp-clsteer');
-  mkdirSync(scratchProject, { recursive: true });
-  writeFileSync(join(scratchProject, `${id}.jsonl`),
-    JSON.stringify({ type: 'user', uuid: 'su1', cwd: join(tmpdir(), 'clsteer'), message: { role: 'user', content: 'run uptime' } }) + '\n');
-  const { inventory } = await import('../packages/connect/src/inventory.js');
-  const profiles = [{ id: 'claude', engine: 'claude', env: { CLAUDE_CONFIG_DIR: claudeHome } }];
-  assert.ok((await inventory(profiles)).some((x) => x.id === id), 'inventory still knows it');
-  const { Sessions } = await import('../packages/connect/src/sessions.js');
-  const sessions = new Sessions(new Runtime(), { makeDriver: () => new FakeDriver({}) });
-  const listed = await sessions.list({ includeDetected: true });
-  assert.equal(listed.some((s) => s.engineSessionId === id), false);
-  assert.ok(listed.some((s) => s.engineSessionId === claudeId), 'ordinary found rows still show');
 });

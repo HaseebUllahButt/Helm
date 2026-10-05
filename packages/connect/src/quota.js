@@ -50,9 +50,8 @@ export function windowLabel(window, fallback = 'Limit') {
   return `${mins}m limit`;
 }
 
-// "prolite" is the $100 Pro tier, 5x Plus; "pro" the $200 one, 20x.
 const PLAN_NAMES = {
-  free: 'Free', prolite: 'Pro 5x', pro: 'Pro 20x', plus: 'Plus',
+  free: 'Free', prolite: 'Pro Lite', pro: 'Pro', plus: 'Plus',
   team: 'Team', business: 'Business', edu: 'Edu', enterprise: 'Enterprise',
 };
 

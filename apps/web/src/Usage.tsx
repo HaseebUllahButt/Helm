@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Client, Environment, UsageReport, UsageGroup, UsageTotals } from './client';
 import { hitRate, cacheSaved } from './client';
 import { loadUsage, saveUsage, mergeReports, today, daysAgo } from './usageCache';
 import { BackIcon } from './Icon';
-import { LimitsSection } from './Limits';
 
 /**
  * What the agents on this network have cost.
@@ -34,8 +33,6 @@ const FACETS = [
   { id: 'project', label: 'Folder' },
   { id: 'machine', label: 'Machine' },
 ] as const;
-
-type Metric = 'cost' | 'tokens';
 
 type WindowId = typeof WINDOWS[number]['id'];
 type FacetId = typeof FACETS[number]['id'];
@@ -74,8 +71,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [win, setWin] = useState<WindowId>('7d');
-  const [facet, setFacet] = useState<FacetId>('engine');
-  const [metric, setMetric] = useState<Metric>('cost');
+  const [facet, setFacet] = useState<FacetId>('model');
 
   // A machine can leave the network while the screen scoped to it is open;
   // the select is controlled, so the scope falls back to every machine
@@ -94,17 +90,10 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
    */
   const since = WINDOWS.find((w) => w.id === win)!.from();
 
-  const requestKey = `${scope}:${win}:${envs.map((e) => e.id).join(',')}`;
-  const liveAnswered = useRef(new Set<string>());
-  const activeRequest = useRef({ key: requestKey });
-  if (activeRequest.current.key !== requestKey) activeRequest.current = { key: requestKey };
   const fetchReport = (env: Environment, rebuild: boolean) => {
-    const key = activeRequest.current;
     setPending((p) => new Set(p).add(env.id));
     client.usage(env.id, { since: since || undefined, by: ['engine', 'model', 'provider', 'project'], rebuild })
       .then((report) => {
-        if (activeRequest.current !== key) return;
-        liveAnswered.current.add(env.id);
         setFailed((f) => { const { [env.id]: _gone, ...rest } = f; return rest; });
         if (report.stale) {
           // The hub answered for a machine that is asleep - a memory too,
@@ -121,27 +110,21 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
         setRemembered((r) => { const { [env.id]: _drop, ...rest } = r; return rest; });
         saveUsage(env.id, report, win);
       })
-      .catch((e) => activeRequest.current === key && setFailed((f) => ({ ...f, [env.id]: String(e?.message || e) })))
-      .finally(() => { if (activeRequest.current === key) setPending((p) => { const n = new Set(p); n.delete(env.id); return n; }); });
+      .catch((e) => setFailed((f) => ({ ...f, [env.id]: String(e?.message || e) })))
+      .finally(() => setPending((p) => { const n = new Set(p); n.delete(env.id); return n; }));
   };
 
   useEffect(() => {
     let live = true;
-    liveAnswered.current = new Set();
-    setReports({});
-    setRemembered({});
-    setPending(new Set());
-    setFailed({});
     for (const env of targets) {
       loadUsage(env.id, win).then((hit) => {
-        if (!live || !hit || liveAnswered.current.has(env.id)) return;
+        if (!live || !hit) return;
         setReports((r) => (r[env.id] ? r : { ...r, [env.id]: hit.report }));
         setRemembered((r) => ({ ...r, [env.id]: hit.at }));
       });
       fetchReport(env, false);
     }
-    const timer = setInterval(() => targets.forEach((e) => fetchReport(e, false)), 60_000);
-    return () => { live = false; clearInterval(timer); };
+    return () => { live = false; };
   }, [scope, envs.map((e) => e.id).join(','), win]);
 
   const answered = targets.filter((e) => reports[e.id]);
@@ -185,32 +168,21 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
           </select>
         </label>
 
-        <LimitsSection client={client} targets={targets} />
-
-        <div className="section">Spend</div>
-        <div className="filterbar usage-filters">
-          {WINDOWS.map((w) => (
-            <button key={w.id} className={`usage-chip${w.id === win ? ' on' : ''}`} onClick={() => setWin(w.id)}>
-              {w.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="filterbar usage-filters" role="group" aria-label="Usage metric">
-          {(['cost', 'tokens'] as const).map((m) => (
-            <button key={m} aria-pressed={metric === m} className={`usage-chip${metric === m ? ' on' : ''}`} onClick={() => setMetric(m)}>
-              {m === 'cost' ? 'Cost' : 'Tokens'}
-            </button>
-          ))}
-        </div>
-
         {loading && <div className="empty quiet">reading what the CLIs recorded…</div>}
 
         {!loading && (
           <>
-            <Headline metric={metric} totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />
+            <div className="filterbar usage-filters">
+              {WINDOWS.map((w) => (
+                <button key={w.id} className={`usage-chip${w.id === win ? ' on' : ''}`} onClick={() => setWin(w.id)}>
+                  {w.label}
+                </button>
+              ))}
+            </div>
+
+            <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />
             <CacheCard totals={scoped} />
-            <Spend days={days} metric={metric} />
+            <Spend days={days} />
 
             <div className="section">where it went</div>
             <div className="filterbar usage-filters">
@@ -220,17 +192,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
                 </button>
               ))}
             </div>
-            <DonutBreakdown groups={groups} facet={facet} metric={metric} />
-            {scoped.summaryOnly && <div className="diag usage-note">BroMyLimits reports daily totals; model, folder, cache and turn details are unavailable for those records.</div>}
-            {scoped.undated && <div className="diag usage-note">Includes archived usage with no recorded date; archived usage is excluded from date windows and the daily chart.</div>}
-            {answered.some((env) => failed[env.id] || reports[env.id].accounts.some((a) => a.source === 'bromylimits')) && (
-              <div className="diag usage-note">{answered.map((env) => {
-                const bml = reports[env.id].accounts.find((a) => a.source === 'bromylimits');
-                const said = bml ? (bml.sourceError ? 'BroMyLimits did not answer, so only what the CLIs wrote is counted' : 'totals from BroMyLimits') : '';
-                const note = [said, failed[env.id] && `couldn't refresh (${failed[env.id]})`].filter(Boolean).join(', ');
-                return note ? <span key={env.id}>{env.name}: {note}. </span> : null;
-              })}</div>
-            )}
+            <DonutBreakdown groups={groups} facet={facet} />
 
             <Provenance
               answered={answered.length}
@@ -251,13 +213,12 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
  * The one number the screen leads with, and the three that give it scale.
  * Exactly one hero per view; the tiles beside it are not competing heroes.
  */
-function Headline({ totals, window, metric }: { totals: UsageTotals; window: string; metric: Metric }) {
+function Headline({ totals, window }: { totals: UsageTotals; window: string }) {
   return (
     <div className="card usage-hero">
-      <div className="usage-hero-fig">{metric === 'tokens' ? tokens(totals.total) : money(totals.costUsd)}</div>
+      <div className="usage-hero-fig">{money(totals.costUsd)}</div>
       <div className="usage-hero-cap">
-        {metric === 'tokens' ? `Tokens, ${window.toLowerCase()} · ${totals.total.toLocaleString()} exact · ${money(totals.costUsd)} API-equivalent` : `API-equivalent, ${window.toLowerCase()} · ${tokens(totals.total)} tokens`}
-        {!totals.summaryOnly && ` · ${totals.turns.toLocaleString()} turns`}
+        API-equivalent, {window.toLowerCase()} · {tokens(totals.total)} tokens · {totals.turns.toLocaleString()} turns
       </div>
     </div>
   );
@@ -280,7 +241,7 @@ const cachePercent = (rate: number) => {
 function CacheCard({ totals }: { totals: UsageTotals }) {
   const rate = hitRate(totals);
   const saved = cacheSaved(totals);
-  if (totals.summaryOnly || (!totals.cacheRead && !totals.input)) return null;
+  if (!totals.cacheRead && !totals.input) return null;
   return (
     <div className="card usage-cache">
       <div className="usage-cache-top">
@@ -307,25 +268,23 @@ function CacheCard({ totals }: { totals: UsageTotals }) {
  * what is plotted. Bars are capped and carry a 2px surface gap, and only the
  * peak is labelled; every other value lives in the tooltip.
  */
-function Spend({ days, metric }: { days: { date: string; costUsd: number; total: number }[]; metric: Metric }) {
+function Spend({ days }: { days: { date: string; costUsd: number; total: number }[] }) {
   if (days.length < 2) return null;
-  const value = (d: typeof days[number]) => metric === 'tokens' ? d.total : d.costUsd;
-  const fmt = metric === 'tokens' ? tokens : money;
-  const peak = Math.max(...days.map(value), 0);
+  const peak = Math.max(...days.map((d) => d.costUsd), 0);
   if (peak <= 0) return null;
-  const peakDay = days.find((d) => value(d) === peak);
+  const peakDay = days.find((d) => d.costUsd === peak);
   return (
     <div className="card usage-spend">
       <div className="usage-spend-head">
-        <span className="usage-spend-title">{metric === 'tokens' ? 'Tokens per day' : 'Cost per day'}</span>
-        <span className="usage-spend-peak">peak {fmt(peak)}</span>
+        <span className="usage-spend-title">Cost per day</span>
+        <span className="usage-spend-peak">peak {money(peak)}</span>
       </div>
       <div className="usage-bars">
         {days.map((d) => (
           <span
             key={d.date}
             className={`usage-bar${d === peakDay ? ' peak' : ''}`}
-            style={{ height: `${Math.max(2, (value(d) / peak) * 100)}%` }}
+            style={{ height: `${Math.max(2, (d.costUsd / peak) * 100)}%` }}
             title={`${d.date} · ${money(d.costUsd)} · ${tokens(d.total)} tokens`}
           />
         ))}
@@ -352,9 +311,9 @@ const SLICE_COLORS = [
   'var(--amber)', 'var(--opencode)', 'var(--mutedfg)',
 ];
 
-function DonutBreakdown({ groups, facet, metric }: { groups: ChartGroup[]; facet: FacetId; metric: Metric }) {
+function DonutBreakdown({ groups, facet }: { groups: ChartGroup[]; facet: FacetId }) {
   if (!groups.length) return <div className="empty quiet">nothing recorded yet</div>;
-  const priced = metric === 'cost' && groups.some((g) => g.costUsd > 0);
+  const priced = groups.some((g) => g.costUsd > 0);
   const value = (g: ChartGroup) => (priced ? g.costUsd : g.total);
   const name = (g: ChartGroup) =>
     facet === 'project' ? shortFolder(g.project || '')
@@ -440,7 +399,7 @@ function Provenance({ answered, total, stale, unpriced, rescanning, onRescan }: 
         {stale > 0 ? `, ${stale} from memory` : ''}
       </span>
       <span>
-        costs are API-equivalent estimates or CLI-reported costs
+        costs are published rates × real tokens
         {unpriced ? ' · some models have no published rate and are counted in tokens only' : ''}
       </span>
       {/* The daemon aggregates what it already read; a rescan re-reads the
@@ -465,7 +424,6 @@ function groupBy(groups: UsageGroup[], facet: GroupFacet): UsageGroup[] {
       (cur as any)[f] += (g as any)[f] || 0;
     }
     if (g.unpriced) cur.unpriced = true;
-    if (g.summaryOnly) cur.summaryOnly = true;
     // Once a fold spans engines, the dot would be a lie about which one.
     if (cur.engine !== g.engine) cur.engine = undefined;
   }

@@ -324,10 +324,10 @@ to the last 32,000 characters. Open the thread for the full conversation.
 changes, agents, schedules, and task transfer in one panel. It opens as a
 side panel on desktop and a bottom sheet on phones.
 
-While an agent works, a new message reaches it at its next step, so a quick
-command like `/usage` answers straight away instead of waiting for the task.
-A waiting message's **Send now** steers the live turn on supported CLIs.
-Queued messages can be edited, reordered, removed, or withdrawn into the composer until delivery starts. Edits, order,
+While an agent works, the composer defaults to **After this task**. On
+supported CLIs, **At next step** hands input over at a tool boundary and
+**Send now** steers the live turn. Queued messages can be edited, reordered,
+removed, or withdrawn into the composer until delivery starts. Edits, order,
 attachments, and attached context survive a daemon restart. Delivery already
 accepted by a CLI is not automatically replayed.
 
@@ -475,34 +475,6 @@ authorizes the write on the target.
 (`0600`) - and `--target-folder` chooses where it lands.
 
 ## What it costs
-
-**Limits left** heads the Usage screen: for each Claude, Codex and Devin
-account, how much of every limit window is left, when it comes back, the
-plan, and any credits. A note appears when the pace so far would run out
-before the window renews. Each machine reads what its CLIs already wrote -
-Codex's rollouts, the limits a Claude or Codex chat in helm reports, Claude's
-own cache, and a BroMyLimits dashboard's Claude snapshots when one runs -
-so nothing is fetched in the background except Devin's quota, which it keeps
-nowhere locally. **Check now** asks Claude and Codex directly, at most once
-every two minutes per account. The last answer is kept in `HELM_DIR/limits.json`
-and on the device.
-
-The **Cost / Tokens** switch changes the headline, daily chart and breakdown.
-Tokens mode includes free and unpriced models, with the exact total below the headline.
-
-Each machine connects to its own installed BroMyLimits service (loopback port
-47291 by default, or the `PORT` in `cc-usage-dashboard.service` and its overrides).
-Set `HELM_BROMYLIMITS_URL` in the Helm service environment for a different URL,
-or `off` to use only native CLI records. Dashboard totals replace overlapping
-engines; other engines retain their native records. Remote accounts in a
-BroMyLimits mesh are excluded to prevent counting other machines twice.
-
-The current BroMyLimits API supplies daily account totals, so its model,
-folder, cache and turn details are marked unavailable. Undated archived
-usage appears only in All and is excluded from daily charts. The screen shows
-the source URL, observation time, cached status and any connection failure;
-a failed dashboard connection falls back to CLI records with limited coverage.
-
 
 Every agent CLI records its own token usage next to its transcripts, and that
 record is the complete one: it covers sessions helm never started, and it

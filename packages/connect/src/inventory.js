@@ -1,12 +1,10 @@
 import { readdir, stat, open } from 'node:fs/promises';
 import { existsSync, readdirSync, readlinkSync, readFileSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, basename, resolve } from 'node:path';
+import { join, basename } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { HOME, expand, collapse } from './paths.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { sessionActivity } from './transcript.js';
-import { promptTitle } from './titles.js';
 
 /**
  * Sessions that already exist on this machine, whether or not helm started
@@ -100,14 +98,13 @@ function writerPid(path) {
  * a cursor-agent running as bare `node` never masquerade as a TUI someone
  * is typing into.
  */
-function interactiveProcesses(engine, all = false) {
+function interactiveProcesses(engine) {
   const out = new Map();
   for (const { pid, argv } of procs().list) {
     try {
       if (!isInteractiveProc(engine, argv)) continue;
       const cwd = readlinkSync(`/proc/${pid}/cwd`);
-      if (all) out.set(cwd, [...(out.get(cwd) ?? []), Number(pid)]);
-      else if (!out.has(cwd)) out.set(cwd, Number(pid));
+      if (!out.has(cwd)) out.set(cwd, Number(pid));
     } catch { /* process exited or belongs to another user */ }
   }
   return out;
@@ -124,10 +121,7 @@ async function newest(dir, filter, limit) {
       const full = join(d, e.name);
       if (e.isDirectory()) await walk(full, depth + 1);
       else if (filter(e.name)) {
-        try {
-          const s = await stat(full);
-          out.push({ path: full, mtime: s.mtimeMs, size: s.size });
-        } catch { /* vanished */ }
+        try { out.push({ path: full, mtime: (await stat(full)).mtimeMs }); } catch { /* vanished */ }
       }
     }
   };
@@ -137,18 +131,14 @@ async function newest(dir, filter, limit) {
 
 // -------------------------------------------------------------------- codex
 
-/**
- * The names Codex itself gave its threads.
- *
- * Two stores, because Codex moved: `session_index.jsonl` carried
- * `thread_name` for TUI sessions, and the newer `state_<n>.sqlite` keeps a
- * `threads` table whose `name` is the generated name and whose `title` is
- * the opening message. The index only ever covered about half the rollouts
- * on this laptop, which is why so many rows were named for their folder.
- */
-async function codexNames(codexHome) {
-  const names = new Map(); // id -> { name, prompt }
-  const indexFile = join(codexHome, 'session_index.jsonl');
+async function codex(home, account) {
+  const codexHome = expand(home);
+  const root = join(codexHome, 'sessions');
+  if (!existsSync(root)) return [];
+
+  // The index carries human titles; the rollouts carry the working directory.
+  const titles = new Map();
+  const indexFile = join(expand(home), 'session_index.jsonl');
   if (existsSync(indexFile)) {
     try {
       const fh = await open(indexFile, 'r');
@@ -158,50 +148,11 @@ async function codexNames(codexHome) {
         if (!line.trim()) continue;
         try {
           const r = JSON.parse(line);
-          if (r.id && r.thread_name) names.set(r.id, { name: String(r.thread_name), prompt: '' });
+          if (r.id) titles.set(r.id, r.thread_name);
         } catch { /* partial write at the tail */ }
       }
     } catch { /* index is a nicety, not a requirement */ }
   }
-  let db = null;
-  try {
-    db = readdirSync(codexHome)
-      .filter((n) => /^state_\d+\.sqlite$/.test(n))
-      .sort((a, b) => Number(b.match(/\d+/)[0]) - Number(a.match(/\d+/)[0]))[0] ?? null;
-  } catch { /* no home */ }
-  if (!db) return names;
-  try {
-    const conn = new DatabaseSync(join(codexHome, db), { readOnly: true });
-    try {
-      let rows;
-      try {
-        rows = conn.prepare('SELECT id, name, title, first_user_message FROM threads').all();
-      } catch {
-        rows = conn.prepare('SELECT id, NULL AS name, title, NULL AS first_user_message FROM threads').all();
-      }
-      for (const r of rows) {
-        if (!r.id) continue;
-        const prior = names.get(r.id);
-        names.set(r.id, {
-          name: (r.name && String(r.name).trim()) || prior?.name || '',
-          // A thread helm started opens with helm's own notes to the agent;
-          // the name belongs to what the owner typed after them.
-          prompt: String(r.first_user_message || r.title || '').replace(/^(?:\[helm [^\]\n]*\]\n\n)+/, ''),
-        });
-      }
-    } finally { conn.close(); }
-  } catch { /* a locked or half-migrated db is not worth failing over */ }
-  return names;
-}
-
-async function codex(home, account) {
-  const codexHome = expand(home);
-  const root = join(codexHome, 'sessions');
-  if (!existsSync(root)) return [];
-
-  // Codex's own names live beside the rollouts; the rollouts carry the
-  // working directory.
-  const names = await codexNames(codexHome);
 
   const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE);
   const out = [];
@@ -216,15 +167,11 @@ async function codex(home, account) {
       if ((p.source && typeof p.source === 'object' && Object.hasOwn(p.source, 'subagent'))
         || p.thread_source === 'subagent' || p.threadSource === 'subagent') continue;
       const active = existsSync(join(codexHome, 'thread-writer-locks', `${p.session_id ?? p.id}.lock`));
-      const own = names.get(p.session_id ?? p.id);
       out.push({
         engine: 'codex',
         account,
         id: p.session_id ?? p.id,
-        title: own?.name || promptTitle([own?.prompt], 90) || basename(p.cwd ?? '') || 'codex session',
-        // Set when the title is the CLI's own name for the thread, so a
-        // helm record of it adopts that name rather than keeping its own.
-        named: !!own?.name,
+        title: titles.get(p.session_id ?? p.id) || basename(p.cwd ?? '') || 'codex session',
         cwd: collapse(p.cwd ?? HOME),
         updatedAt: f.mtime,
         // Kept machine-side by the inventory RPC. Sessions uses the exact
@@ -241,130 +188,11 @@ async function codex(home, account) {
 
 // ------------------------------------------------------------------- claude
 
-/**
- * The name Claude Code gave a session.
- *
- * The CLI writes it into the transcript once the first reply is in -
- * `{"type":"ai-title","aiTitle":"…"}` - and `/rename` adds a
- * `{"type":"custom-title","customTitle":"…"}` later. Neither sits at a fixed
- * line: the whole first turn, tool calls included, comes before it. So each
- * file is scanned once, and after that only the bytes written since, keyed
- * on the path. `claude -p` (what helm drives) never writes one.
- */
-const titleScans = new Map();
-async function claudeTitle(path, size) {
-  let scan = titleScans.get(path);
-  if (!scan || scan.offset > size) scan = { offset: 0, ai: '', custom: '' };
-  if (size > scan.offset) {
-    const fh = await open(path, 'r');
-    try {
-      let carry = Buffer.alloc(0);
-      let pos = scan.offset;
-      const buf = Buffer.alloc(256 << 10);
-      while (pos < size) {
-        const { bytesRead } = await fh.read(buf, 0, buf.length, pos);
-        if (!bytesRead) break;
-        pos += bytesRead;
-        const chunk = Buffer.concat([carry, buf.subarray(0, bytesRead)]);
-        const cut = chunk.lastIndexOf(10);
-        if (cut < 0) { carry = chunk; continue; }
-        for (const line of chunk.subarray(0, cut).toString('utf8').split('\n')) {
-          if (!line.includes('-title"')) continue;
-          const r = parse(line);
-          if (r?.type === 'ai-title' && r.aiTitle) scan.ai = String(r.aiTitle);
-          else if (r?.type === 'custom-title' && (r.customTitle ?? r.title)) scan.custom = String(r.customTitle ?? r.title);
-        }
-        carry = Buffer.from(chunk.subarray(cut + 1));
-        // A torn final line is read again next time, once it is whole.
-        scan.offset = pos - carry.length;
-      }
-    } finally {
-      await fh.close();
-    }
-    titleScans.set(path, scan);
-    if (titleScans.size > 512) titleScans.delete(titleScans.keys().next().value);
-  }
-  return scan.custom || scan.ai || '';
-}
-
-/**
- * Whether `pid` is still the process a record was written for. Claude's
- * records carry the kernel start time of the process (`procStart`, field
- * 22 of /proc/<pid>/stat), which is what tells a live session from a
- * recycled pid. Where /proc is not there, existence is all there is.
- */
-function processIs(pid, procStart) {
-  try { process.kill(pid, 0); } catch (e) { if (e.code !== 'EPERM') return false; }
-  if (procStart == null || procStart === '') return true;
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    // The command name is parenthesised and may contain spaces; the fields
-    // after the closing paren start at field 3.
-    const after = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    return after[19] === String(procStart);
-  } catch { return true; }
-}
-
-/**
- * When a process started, in epoch ms, or null where /proc cannot say.
- * Field 22 of /proc/<pid>/stat is clock ticks since boot, which Linux
- * reports to userspace at 100 a second; boot time is whole seconds.
- */
-let bootMs = null;
-function startedAt(pid) {
-  try {
-    bootMs ??= Number(/^btime (\d+)$/m.exec(readFileSync('/proc/stat', 'utf8'))[1]) * 1000;
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
-    return Number.isFinite(ticks) && bootMs ? bootMs + ticks * 10 : null;
-  } catch { return null; }
-}
-
-/**
- * Claude Code does not hold its transcript open - it appends and closes -
- * so the open-file walk never sees it, and a session typed at a keyboard
- * looked finished the moment it was listed. What the CLI does keep is one
- * record per live process, <home>/sessions/<pid>.json, naming the session
- * id, the folder and the process start token, removed when it exits.
- */
-function claudeLive(home) {
-  const out = new Map(); // sessionId -> { pid, cwd, entrypoint }
-  const dir = join(expand(home), 'sessions');
-  let names = [];
-  try { names = readdirSync(dir); } catch { return out; }
-  for (const name of names) {
-    if (!/^\d+\.json$/.test(name)) continue;
-    try {
-      const r = JSON.parse(readFileSync(join(dir, name), 'utf8'));
-      if (!r?.sessionId || !r.pid) continue;
-      if (!processIs(Number(r.pid), r.procStart)) continue;
-      out.set(String(r.sessionId), { pid: Number(r.pid), cwd: r.cwd, entrypoint: r.entrypoint });
-    } catch { /* a torn write, or a record from a crash */ }
-  }
-  return out;
-}
-
-/**
- * Whether `pid` is the live Claude process writing `transcript`. Sessions
- * asks this before handing a keyboard session over to helm: a signal must
- * reach the process that owns the thread and nothing else.
- */
-export function claudeProcessOwns(transcript, pid, sessionId) {
-  if (!transcript || !pid || !sessionId) return false;
-  // <home>/projects/<folder>/<id>.jsonl
-  const home = resolve(transcript, '..', '..', '..');
-  try {
-    const r = JSON.parse(readFileSync(join(home, 'sessions', `${pid}.json`), 'utf8'));
-    return String(r?.sessionId) === String(sessionId) && Number(r.pid) === Number(pid) && processIs(Number(pid), r.procStart);
-  } catch { return false; }
-}
-
 async function claude(home, account) {
   const root = join(expand(home), 'projects');
   if (!existsSync(root)) return [];
 
   const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE * 2);
-  const live = claudeLive(home);
   const out = [];
   for (const f of files) {
     let cwd = null;
@@ -394,15 +222,12 @@ async function claude(home, account) {
     // A sidechain file is a subagent's transcript, not a session you resume.
     if (sidechain || !cwd) continue;
 
-    const id = basename(f.path, '.jsonl');
-    const own = await claudeTitle(f.path, f.size ?? 0);
-    const pid = writerPid(f.path) ?? live.get(id)?.pid ?? null;
+    const pid = writerPid(f.path);
     out.push({
       engine: 'claude',
       account,
-      id,
-      title: (own || title).replace(/\s+/g, ' ').slice(0, 90) || basename(cwd),
-      named: !!own,
+      id: basename(f.path, '.jsonl'),
+      title: title.replace(/\s+/g, ' ').slice(0, 90) || basename(cwd),
       cwd: collapse(cwd),
       updatedAt: f.mtime,
       transcript: f.path,
@@ -566,53 +391,17 @@ function opencode(home, account, engine = 'opencode') {
 // ----------------------------------------------------------------- pi / omp
 
 /**
- * Whether a pi-family process found in a log's directory is that log's
- * writer. Being in the directory is not enough on its own: a pi opened at
- * a fresh prompt writes nothing until the first message, so the newest log there
- * is some older conversation it never touched - and every pi left open in
- * a folder brought one of those back as running. The process owns a log
- * only if it wrote to it since it started, or was opened on it by name.
- */
-function piOwns(pid, file, id) {
-  let argv;
-  try { argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); }
-  catch { return { named: true, owns: false }; }
-  if (argv.includes('--no-session')) return { named: true, owns: false };
-  const at = argv.findIndex((a) => /^--session(-id)?(=|$)/.test(a));
-  if (at >= 0) {
-    const want = argv[at].includes('=') ? argv[at].slice(argv[at].indexOf('=') + 1) : argv[at + 1];
-    // `--session` takes a file or a partial id; `--session-id` an exact id.
-    const exact = /^--session-id(?:=|$)/.test(argv[at]);
-    const owns = !!want && (exact ? String(id) === want
-      : String(id).startsWith(want) || file.path === resolve(readlinkSync(`/proc/${pid}/cwd`), want));
-    return { named: true, owns };
-  }
-  const started = startedAt(pid);
-  // Boot time is whole seconds, so allow for it.
-  return { named: false, owns: started != null && file.mtime >= started - 2_000 };
-}
-
-/** Recheck an opened Pi monitor against the same evidence as inventory. */
-export function piProcessOwns(transcript, pid, sessionId, engine, cwd) {
-  try {
-    const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
-    if (!isInteractiveProc(engine, argv) || readlinkSync(`/proc/${pid}/cwd`) !== expand(cwd)) return false;
-    return piOwns(pid, { path: transcript, mtime: statSync(transcript).mtimeMs }, sessionId).owns;
-  } catch { return false; }
-}
-
-/**
  * Pi-family session logs: <home>/sessions/<dash-cwd>/<ts>_<uuid>.jsonl, whose
  * header record carries `id` and `cwd` outright. omp writes an extra `title`
  * record first. A live writer either holds the file open or shows up as an
- * interactive process in the session's directory (see `piOwns`).
+ * interactive process in the session's directory.
  */
 async function piFamily(engine, home, account) {
   const root = join(expand(home), ENGINES[engine]?.sessionsDir ?? 'sessions');
   if (!existsSync(root)) return [];
 
   const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE * 2);
-  const active = interactiveProcesses(engine, true);
+  const active = interactiveProcesses(engine);
   const claimed = new Set();
   const out = [];
   for (const f of files) {
@@ -639,16 +428,9 @@ async function piFamily(engine, home, account) {
       if (!meta?.id) continue;
       const cwd = meta.cwd ?? meta.workingDirectory ?? HOME;
       let pid = writerPid(f.path);
-      if (pid) claimed.add(pid);
       if (!pid) {
-        for (const p of active.get(cwd) ?? []) {
-          if (claimed.has(p)) continue;
-          const { named, owns } = piOwns(p, f, meta.id);
-          // Newest first: an unnamed process can only own this log, so an
-          // older one in the folder is never its; a named one may be older.
-          if (owns || !named) claimed.add(p);
-          if (owns) { pid = p; break; }
-        }
+        const p = active.get(cwd);
+        if (p && !claimed.has(cwd)) { claimed.add(cwd); pid = p; }
       }
       out.push({
         engine,
@@ -950,25 +732,6 @@ async function muse(home, account) {
 }
 
 // ---------------------------------------------------------------- public API
-
-/**
- * Scratch work: a CLI run in the system temp folder, or in a folder named
- * as a scratch pad or sandbox. Every test run and one-off check leaves a
- * transcript behind, and on a machine that is worked at they outnumber the
- * real threads. The lists leave them out; `inventory()` itself still reads
- * them, so a row opened before can always be found again by its id.
- */
-const TEMP_ROOTS = [...new Set(
-  [tmpdir(), process.env.TMPDIR, '/tmp', '/var/tmp', '/private/tmp', '/dev/shm']
-    .filter(Boolean).map((p) => resolve(p)),
-)];
-const SCRATCH_NAME = /^(scratch|sandbox|tmp|temp)$|[-_.](scratch|sandbox)$|^(scratch|sandbox)[-_.]/i;
-export function isScratch(cwd) {
-  if (typeof cwd !== 'string' || !cwd) return false;
-  const abs = resolve(expand(cwd));
-  if (TEMP_ROOTS.some((r) => abs === r || abs.startsWith(r + '/'))) return true;
-  return abs.split('/').some((seg) => SCRATCH_NAME.test(seg));
-}
 
 /**
  * Every past session this machine knows about, newest first.

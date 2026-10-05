@@ -80,28 +80,6 @@ class FakeDriver extends EventEmitter {
   async kill() { this.killed = true; this.push('status', { status: 'exited' }); }
 }
 
-test('a lost driver closes unfinished turns and permits the next message to resume', async () => {
-  const { Sessions } = await import('../packages/connect/src/sessions.js');
-  const { EventLog } = await import('../packages/connect/src/events.js');
-  const events = new EventLog(join(process.env.HELM_DIR, 'events-driver-lost'));
-  const sessions = new Sessions(new StubRuntime(), {
-    events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
-  });
-  const session = await sessions.start({ cwd: '/work', profileId: 'codex' });
-  await sessions.input(session.id, 'First message');
-  const driver = FakeDriver.made.at(-1);
-  driver.ask();
-  driver.push('status', { status: 'exited' });
-  assert.equal(session.status, 'idle');
-  assert.equal(events.activeTurn(session.id), null);
-  assert.deepEqual(events.pending(session.id), []);
-  await sessions.input(session.id, 'Resume this thread');
-  const resumed = FakeDriver.made.at(-1);
-  assert.notEqual(resumed, driver);
-  assert.equal(resumed.sent.at(-1), 'Resume this thread');
-  await sessions.kill(session.id);
-});
-
 test('explicit queue mode survives tool steps and supports edits, ordering, and context references', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
@@ -506,41 +484,6 @@ test('a restart writes the settle into the log, so the chat stops drawing "worki
     .filter((e) => e.type === 'turn.start')
     .filter((e) => !log.some((d) => d.type === 'turn.done' && d.turnId === e.turnId));
   assert.equal(open.length, 0, 'no turn left open');
-});
-
-test('listing and Stop settle a busy thread whose driver and hosted process are gone', async () => {
-  const { Sessions } = await import('../packages/connect/src/sessions.js');
-  const { EventLog } = await import('../packages/connect/src/events.js');
-  const events = new EventLog(join(process.env.HELM_DIR, 'events-missed-exit'));
-  const host = () => Object.assign(new EventEmitter(), { hasProc: () => false });
-  const original = new Sessions(new StubRuntime(), { events, procHost: host(),
-    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
-  const one = await original.start({ cwd: '/tmp', profileId: 'claudea' });
-  await original.input(one.id, 'work');
-  FakeDriver.made.at(-1).ask();
-  const two = await original.start({ cwd: '/tmp', profileId: 'claudea' });
-  await original.input(two.id, 'other work');
-  await original.input(two.id, 'withdraw this');
-  const withdrawn = original.history(two.id).events.findLast((e) => e.type === 'turn.start' && e.queued);
-  original.dequeue(two.id, withdrawn.turnId);
-
-  // There is no exit notification left for the daemon to receive.
-  const again = new Sessions(new StubRuntime(), { events, procHost: host() });
-  const pushed = [];
-  again.on('event', ({ id, event }) => pushed.push({ id, ...event }));
-  await again.interrupt(two.id);
-  assert.equal(again.get(two.id).status, 'idle', 'Stop reconciles the gone process');
-  assert.ok(!events.tail(two.id, 0).some((e) => e.type === 'turn.done' && e.turnId === withdrawn.turnId), 'removed queue tickets stay removed');
-  const listed = (await again.list()).find((s) => s.id === one.id);
-  assert.equal(listed.status, 'idle');
-  assert.equal(listed.alive, false);
-  assert.equal(events.pending(one.id).length, 0);
-  assert.ok(pushed.some((e) => e.id === one.id && e.type === 'turn.done' && e.status === 'interrupted'));
-  assert.ok(pushed.some((e) => e.id === one.id && e.type === 'permission.resolved'));
-  const count = events.last(one.id);
-  await again.list();
-  assert.equal(events.last(one.id), count, 'repeated polls do not append duplicate settles');
-  await original.stop();
 });
 
 test('queued prompts and attachments are replayed after a daemon restart', async () => {

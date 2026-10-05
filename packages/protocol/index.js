@@ -189,9 +189,6 @@ export const M = {
   // The same scan as a raw bucket map - what a hub stores so it can still
   // answer usage.report for this machine after it disconnects.
   USAGE_BUCKETS: 'usage.buckets',  // { rebuild? } -> { buckets, accounts, scan, at }
-  // How much of each account's rate limits is left. Read from what the CLIs
-  // wrote; `refresh` also asks Claude and Codex upstream.
-  USAGE_LIMITS: 'usage.limits',    // { refresh? } -> { accounts: [{ account, engine, name, windows[], ... }], at }
 
   // Code-only handoff. The envelope is end-to-end encrypted to the target's
   // machine key; no provider profile or environment is part of it. The key

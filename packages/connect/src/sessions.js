@@ -27,7 +27,7 @@ import { defaultMode, modeFromAuto } from './modes.js';
 import { delegationMode, delegationOutput, trackDelegationReply } from './delegation.js';
 import { authStatuses } from './auth.js';
 import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
-import { inventory, claudeProcessOwns, piProcessOwns, isScratch } from './inventory.js';
+import { inventory } from './inventory.js';
 import { hostedProcId } from './hosted-process.js';
 import { GREETING, informative, promptTitle } from './titles.js';
 
@@ -70,9 +70,7 @@ export const DRIVERS = {
  * start (`titleBy: 'user'`) always wins.
  */
 const TITLE_AFTER = 2;
-// `cli` is the name the CLI wrote into its own store for a thread it
-// started; it is adopted as is - the gate below is for names helm makes up.
-const TITLE_RANK = { auto: 1, agent: 2, cli: 2, user: 3 };
+const TITLE_RANK = { auto: 1, agent: 2, user: 3 };
 
 /** A title cut to fit, with the cut said out loud. */
 const clip = (text, max) => (text.length > max ? text.slice(0, max - 1) + '…' : text);
@@ -481,9 +479,6 @@ export class Sessions extends EventEmitter {
           s.externalPid = current.writerPid || null;
           s.transcript = current.transcript || s.transcript;
           s.updatedAt = current.updatedAt;
-          // The CLI names its thread after the first reply, often after this
-          // record was opened; its name is the thread's name from then on.
-          if (current.named && current.title) this.#titled(s, current.title, 'cli');
         }
         const active = this.#externalActive(s);
         // This record is a read-only window onto another process until its
@@ -497,14 +492,6 @@ export class Sessions extends EventEmitter {
         continue;
       }
       if (s.driver) {
-        // A missed exit or a Stop on an already-gone process must not keep
-        // a busy row forever. Account-wide Codex hosts use their own id.
-        if (!this.#drivers.has(s.id) && !this.#sending.has(s.id)
-          && ['working', 'blocked'].includes(s.status)) {
-          const profile = s.driver === 'codex' ? loadProfiles()?.profiles?.find((p) => p.id === s.profileId) : null;
-          const procId = hostedProcId(s, profile ? materialize(profile) : null);
-          if (!(procId && this.procs.hasProc(procId))) this.#procGone(s.id);
-        }
         out.push({ ...wire(s), archived: !!s.archived, alive: this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
         continue;
       }
@@ -531,9 +518,6 @@ export class Sessions extends EventEmitter {
         const id = `found:${x.engine}:${x.id}`;
         const mark = this.#marks.get(id);
         if (mark === 'removed' || known.has(`${x.engine}:${x.id}`) || this.isDelegatedConversation(x.engine, x.id)) continue;
-        // Test runs and one-off checks in temp and scratch folders are not
-        // threads anyone comes back to.
-        if (isScratch(x.cwd)) continue;
         // A runtime pane without a native ID can still represent this CLI.
         if (x.active && out.some((s) => s.paneId && s.alive && s.engine === x.engine && expand(s.cwd) === expand(x.cwd))) continue;
         out.push({ id, engine: x.engine, engineSessionId: x.id, account: x.account,
@@ -1009,8 +993,6 @@ export class Sessions extends EventEmitter {
   #onDriverEvent(s, d, e) {
     if (this.#drivers.get(s.id) !== d && e.type !== 'status') return;
     trackDelegationReply(s, e);
-    // The account's rate limits outlive the chat that reported them.
-    if (e.type === 'limits') this.emit('limits', { profileId: s.profileId, event: e });
     let forwarded = e;
     const staleClaudeConversation = s.engine === 'claude'
       && e.type === 'turn.done'
@@ -1059,7 +1041,6 @@ export class Sessions extends EventEmitter {
       // which is how a queue survives the process dying mid-turn. The pump
       // reads s.status to know the agent is free, so it runs after it lands.
       if (status === 'idle' || e.status === 'exited') this.#steps.delete(s.id);
-      if (e.status === 'exited') this.#procGone(s.id);
       if (status === 'idle') this.#pump(s);
       if (e.status === 'exited') return;
     }
@@ -1199,10 +1180,8 @@ export class Sessions extends EventEmitter {
       }
     }
     // The gate is about *generated* names being premature. A name the owner
-    // typed is never premature, and neither is one the CLI already shows.
-    if (by === 'auto' || by === 'agent') {
-      if ((s.prompts ?? 0) + (s.turns ?? 0) < TITLE_AFTER) return;
-    }
+    // typed is never premature.
+    if (by !== 'user' && (s.prompts ?? 0) + (s.turns ?? 0) < TITLE_AFTER) return;
     if ((TITLE_RANK[by] ?? 0) < (TITLE_RANK[s.titleBy] ?? 0)) return;
     const named = clip(clean, 80);
     if (s.title === named && s.titleBy === by) return;
@@ -1423,11 +1402,7 @@ export class Sessions extends EventEmitter {
       try { return readlinkSync(join(dir, fd)) === s.transcript; } catch { return false; }
     });
     if (held) return true;
-    // Claude appends and closes, but keeps a record of each live process
-    // that names its session and start time - as exact as a held file.
-    if (s.engine === 'claude') return claudeProcessOwns(s.transcript, s.externalPid, s.engineSessionId);
-    if (s.engine === 'pi' || s.engine === 'omp') return piProcessOwns(s.transcript, s.externalPid, s.engineSessionId, s.engine, s.cwd);
-    const byProc = ['opencode', 'opencode2', 'devin', 'grok', 'cursor', 'muse'].includes(s.engine);
+    const byProc = ['opencode', 'opencode2', 'devin', 'pi', 'omp', 'grok', 'cursor', 'muse'].includes(s.engine);
     if (!byProc) return false;
     try {
       const argv = readFileSync(`/proc/${s.externalPid}/cmdline`, 'utf8').split('\0').filter(Boolean);
@@ -1665,11 +1640,6 @@ export class Sessions extends EventEmitter {
     if (s && (queued.length || handed.length)) s.lastSeq = this.events.last(id);
     const d = this.#drivers.get(id);
     if (d) stopping.push(d.interrupt());
-    else if (s?.driver) {
-      const profile = s.driver === 'codex' ? loadProfiles()?.profiles?.find((p) => p.id === s.profileId) : null;
-      const procId = hostedProcId(s, profile ? materialize(profile) : null);
-      if (!(procId && this.procs.hasProc(procId))) this.#procGone(id);
-    }
     const results = await Promise.allSettled(stopping);
     const failed = results.find((result) => result.status === 'rejected');
     if (failed) throw new Error(`Some work could not be stopped: ${failed.reason?.message || failed.reason}`);
@@ -2789,17 +2759,14 @@ export class Sessions extends EventEmitter {
     const s = this.#index.get(id);
     if (!s?.driver || this.#drivers.has(id)) return;
     const tail = this.events.tail(id, 0);
-    const closed = new Set(tail.filter((e) => e.type === 'turn.done' || e.type === 'turn.remove').map((e) => e.turnId));
-    const queued = new Set((this.#outbox.get(id) ?? []).map((item) => item.turnId));
+    const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
     for (const e of tail) {
-      if (e.type !== 'turn.start' || closed.has(e.turnId) || queued.has(e.turnId)) continue;
+      if (e.type !== 'turn.start' || closed.has(e.turnId)) continue;
       closed.add(e.turnId);
-      const event = this.events.append(id, { type: 'turn.done', turnId: e.turnId, status: 'interrupted', error: 'agent exited' });
-      this.emit('event', { id, event });
+      this.events.append(id, { type: 'turn.done', turnId: e.turnId, status: 'interrupted', error: 'agent exited' });
     }
     for (const p of this.events.pending(id)) {
-      const event = this.events.append(id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
-      this.emit('event', { id, event });
+      this.events.append(id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
     }
     if (s.status === 'idle') return;
     s.status = 'idle';

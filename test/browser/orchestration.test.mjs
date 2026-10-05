@@ -29,9 +29,9 @@ before(async () => {
       return {ok:true};
     }};
     function Compose() {
-      const [draft,setDraft]=useState(''); const [references,setReferences]=useState([]);
+      const [draft,setDraft]=useState(''); const [delivery,setDelivery]=useState('queue'); const [references,setReferences]=useState([]);
       return <Composer draft={draft} setDraft={setDraft} engine="Claude" keys={false} working steers
-        onSend={()=>{window.sent={draft,references}}}
+        delivery={delivery} onDelivery={setDelivery} onSend={()=>{window.sent={draft,delivery,references}}}
         referenceOptions={[{id:'design',title:'Design review'}]} references={references}
         onReference={id=>setReferences([{id,title:'Design review'}])} onRemoveReference={()=>setReferences([])}
         queued={[{turn:{id:'one'},text:'First task',attachments:0},{turn:{id:'two'},text:'Second task',attachments:0}]}
@@ -39,7 +39,7 @@ before(async () => {
         onMoveQueued={(turn,direction)=>window.action=['move',turn.id,direction]}
         onSendQueued={turn=>window.action=['send',turn.id]} />;
     }
-    function Details() { const [tab,onTab]=useState('agents'); return <ThreadDetails client={client} env={env} session={session} tab={tab} onTab={onTab} git={null} reloadGit={()=>{}} onClose={()=>root.render(null)} />; }
+    function Details() { const [tab,onTab]=useState('overview'); return <ThreadDetails client={client} env={env} session={session} tab={tab} onTab={onTab} git={null} reloadGit={()=>{}} onClose={()=>root.render(null)} />; }
     window.showComposer=()=>root.render(<Compose/>);
     window.showDetails=()=>root.render(<Details/>);
     window.showTeam=()=>root.render(<TeamSummary team={[
@@ -63,7 +63,7 @@ async function pageFor(context, width = 1280) {
   return page;
 }
 
-test('composer selects thread references with the keyboard and has no delivery picker', async (context) => {
+test('composer selects thread references with the keyboard and keeps steer versus queue explicit', async (context) => {
   const page = await pageFor(context, 390);
   await page.evaluate(() => window.showComposer());
   const input = page.getByPlaceholder('Message Claude…');
@@ -72,9 +72,9 @@ test('composer selects thread references with the keyboard and has no delivery p
   await input.press('Enter');
   await page.getByRole('button', { name: 'Remove context: Design review' }).waitFor();
   assert.equal(await input.inputValue(), 'Check ');
-  assert.equal(await page.getByLabel('Message delivery').count(), 0);
+  await page.getByLabel('Message delivery').selectOption('steer');
   await page.getByRole('button', { name: 'send', exact: true }).click();
-  assert.deepEqual(await page.evaluate(() => window.sent), { draft: 'Check ', references: [{ id: 'design', title: 'Design review' }] });
+  assert.deepEqual(await page.evaluate(() => window.sent), { draft: 'Check ', delivery: 'steer', references: [{ id: 'design', title: 'Design review' }] });
   await page.getByRole('button', { name: 'Move up: Second task' }).click();
   assert.deepEqual(await page.evaluate(() => window.action), ['move', 'two', -1]);
   await page.getByRole('button', { name: 'Remove queued message: First task' }).click();
@@ -87,25 +87,21 @@ test('thread details create, pause, run and delete a schedule on the selected ma
   const page = await pageFor(context, 390);
   await page.evaluate(() => window.showDetails());
   const dialog = page.getByRole('dialog', { name: 'Thread details' });
-  assert.deepEqual(await dialog.getByRole('tab').allInnerTexts(), ['Agents', 'Repeat'], 'no Git tabs without a repository, and no overview');
-  await dialog.getByRole('tab', { name: 'Repeat' }).click();
-  await dialog.getByRole('button', { name: 'New repeat' }).click();
-  await dialog.getByLabel('Message', { exact: true }).fill('Review open changes');
-  await dialog.getByLabel('How often').selectOption({ label: 'Every day' });
-  await dialog.getByLabel(/^Name/).fill('Morning review');
-  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
-  await dialog.getByText('every day · next', { exact: false }).waitFor();
-  assert.equal(await page.evaluate(() => window.calls.find(call => call.method === 'schedule.save').params.intervalMinutes), 1440);
-  await dialog.getByRole('switch', { name: 'Pause' }).click();
-  await dialog.getByRole('switch', { name: 'Resume' }).waitFor();
-  await dialog.getByText('Paused · every day').waitFor();
-  await dialog.getByRole('button', { name: 'Send now' }).click();
-  await dialog.getByText('Sent. The reply shows up in the chat.').waitFor();
+  await dialog.getByRole('tab', { name: 'Schedules' }).click();
+  await dialog.getByRole('button', { name: 'New scheduled task' }).click();
+  await dialog.getByLabel('Name', { exact: true }).fill('Morning review');
+  await dialog.getByLabel('Task', { exact: true }).fill('Review open changes');
+  await dialog.getByLabel('Every (minutes)').fill('1440');
+  await dialog.getByRole('button', { name: 'Save schedule' }).click();
+  await dialog.getByRole('button', { name: 'Pause', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Resume', exact: true }).waitFor();
+  await dialog.getByRole('button', { name: 'Run now' }).click();
+  await dialog.getByText('Task sent. Its result appears in this conversation.').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await capture(page, 'orchestration-schedules-phone.png');
   assert.equal(await page.evaluate(() => window.calls.every(call => call.env === 'laptop')), true);
   await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
-  await dialog.locator('.schedule-card').waitFor({ state: 'detached' });
+  await dialog.getByText('No scheduled tasks for this thread.').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 

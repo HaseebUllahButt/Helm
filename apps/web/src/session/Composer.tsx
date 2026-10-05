@@ -22,7 +22,7 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe, delivery, onDelivery, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
@@ -61,6 +61,8 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
    * a button that cannot work should not be drawn.
    */
   onTranscribe?: (audio: string, mime: string) => Promise<string>;
+  delivery?: 'auto' | 'queue' | 'steer';
+  onDelivery?: (delivery: 'auto' | 'queue' | 'steer') => void;
   onEditQueued?: (turn: Turn) => void;
   onRemoveQueued?: (turn: Turn) => void;
   onMoveQueued?: (turn: Turn, direction: -1 | 1) => void;
@@ -429,6 +431,9 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                 chips under the box cost a line of screen on every visit to
                 say what never changes between messages. */}
             {foot ? <div className="slab-controls">{foot}</div> : <span className="spacer" />}
+            {onDelivery && (working || waiting) && <select className="delivery-choice" aria-label="Message delivery" value={delivery} onChange={(event) => onDelivery(event.target.value as 'auto' | 'queue' | 'steer')}>
+              <option value="queue">After this task</option>{steers && <><option value="auto">At next step</option><option value="steer">Send now</option></>}
+            </select>}
             {working && onStop && (
               <button className="stop" onClick={onStop} title="stop the agent" aria-label="stop the agent">
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>

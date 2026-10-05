@@ -53,16 +53,13 @@ const STATUS_NAME: Record<GitFile['status'], string> = { M: 'Modified', A: 'Adde
 const TABS = ['graph', 'changes'] as const;
 type Tab = typeof TABS[number];
 
-export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen, embedded = false, view }: {
+export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen }: {
   client: Client; env: Environment; cwd: string; status: GitStatus; reload: () => void; onClose: () => void;
   onOpen?: (s: Session) => void;
-  /** Inside the thread's details sheet, which has its own close and its own tabs. */
-  embedded?: boolean; view?: Tab;
 }) {
   // The badge that opened this counted changed files, so that is where it
   // lands; with nothing changed the graph is the news. Either is one tab away.
-  const [own, setTab] = useState<Tab>(() => ((status.files?.length ?? 0) + (status.more ?? 0) > 0 ? 'changes' : 'graph'));
-  const tab = view ?? own;
+  const [tab, setTab] = useState<Tab>(() => ((status.files?.length ?? 0) + (status.more ?? 0) > 0 ? 'changes' : 'graph'));
   const [refresh, setRefresh] = useState(0);
   const files = status.files ?? [];
   const key = viewedKey(env.id, status.root ?? cwd);
@@ -114,15 +111,15 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
   };
 
   return (
-    <div className={`changes${embedded ? ' embedded' : ''}`}>
-      {!embedded && <div className="bar">
+    <div className="changes">
+      <div className="bar">
         <button className="iconbtn back" aria-label="Back to the conversation" onClick={onClose}><BackIcon /></button>
         <div className="titles">
           <h1>Git</h1>
           <span className="sub"><Route machine={env.name} folder={cwd} /></span>
         </div>
         <button className="iconbtn" title="Refresh Git" aria-label="Refresh Git" onClick={() => { reload(); setRefresh((n) => n + 1); }}><Icon name="refresh" size={17} /></button>
-      </div>}
+      </div>
       <div className="git-head"><div className="git-toolbar">
         <div className="git-context">
           <span className="git-branch" title={status.branch ? `On ${status.branch}${status.upstream ? `, tracking ${status.upstream}` : ''}` : 'Detached HEAD'}>
@@ -136,7 +133,6 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
             </span>
           )}
           {status.worktree && <span className="git-wt">worktree</span>}
-          {embedded && <button className="iconbtn git-refresh" title="Refresh" aria-label="Refresh Git" onClick={() => { reload(); setRefresh((n) => n + 1); }}><Icon name="refresh" size={15} /></button>}
           {pr && (
             <a className="git-pr" href={pr.url} target="_blank" rel="noreferrer" title={`#${pr.number} ${pr.title}`}
               aria-label={`Pull request #${pr.number}, ${prState}: ${pr.title}`}>
@@ -146,7 +142,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
             </a>
           )}
         </div>
-        {!view && <div className="git-tabs" role="tablist" aria-label="Git views" onKeyDown={(event) => {
+        <div className="git-tabs" role="tablist" aria-label="Git views" onKeyDown={(event) => {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
           event.preventDefault();
           pick(event.key === 'Home' ? 'graph' : event.key === 'End' ? 'changes' : tab === 'graph' ? 'changes' : 'graph', true);
@@ -158,12 +154,12 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
               {name === 'changes' && total > 0 && <>{' '}<span className="git-count">{total}</span></>}
             </button>
           ))}
-        </div>}
+        </div>
       </div></div>
       <div className="scroll"><div className="pad column">
-        {tab === 'graph' ? <div id="git-graph-panel" role={view ? undefined : 'tabpanel'} aria-labelledby={view ? undefined : 'git-graph-tab'}>
+        {tab === 'graph' ? <div id="git-graph-panel" role="tabpanel" aria-labelledby="git-graph-tab">
           <GitGraph client={client} env={env} cwd={cwd} refreshKey={`${status.head?.commit}:${refresh}`} onOpen={onOpen} />
-        </div> : <div id="git-changes-panel" role={view ? undefined : 'tabpanel'} aria-labelledby={view ? undefined : 'git-changes-tab'}>
+        </div> : <div id="git-changes-panel" role="tabpanel" aria-labelledby="git-changes-tab">
         {files.length === 0 ? (
           <div className="git-empty">
             <span className="git-empty-icon ok"><Icon name="check" size={18} /></span>

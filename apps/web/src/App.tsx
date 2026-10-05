@@ -233,15 +233,6 @@ const ownTerminal = (s: Session) => s.engine === 'shell' && !s.archived && s.ali
  */
 const WEEK = 7 * 24 * 60 * 60_000;
 const needsAttention = (session: Session) => session.status === 'blocked' || !!session.team?.blocked || !!session.team?.failed || ['error', 'limited', 'restart'].includes(session.recovery?.kind ?? '');
-/**
- * "Running" is a turn in flight - or, for a thread helm did not start, a
- * live process. A CLI left open at its prompt is still running on that
- * machine and belongs in the sidebar; a helm thread between turns only has
- * a warm driver, which is not work happening.
- */
-const isRunning = (s: Session) =>
-  s.status === 'working' || !!s.team?.working
-  || ((!!s.adopted || !!s.external) && s.alive === true);
 const thisWeek = (s: Session) =>
   s.alive === true || needsAttention(s) || s.status === 'working' ||
   (s.updatedAt ?? 0) >= Date.now() - WEEK;
@@ -439,35 +430,34 @@ function Shell({ client, conn, onSignOut }: {
   const [toast, setToast] = useState<Toast | null>(null);
   const [palette, setPalette] = useState(false);
   /**
-   * "Needs you" cards waved away on this device. The thread itself is not
-   * touched: one that needs an answer stays paused until it gets one, and
-   * it keeps a yellow dot under "running" so it is not forgotten. The card
-   * comes back when the thread asks something new. The value is how many
-   * questions it had when it was dismissed.
+   * Threads put off until later, on this device. A thread waiting on you that
+   * you cannot get to yet should stop being the loudest thing on Home and stop
+   * raising toasts - and come back on its own, because forgetting it would
+   * make snoozing the same as ignoring.
    */
-  const [dismissed, setDismissed] = useState<Record<string, number>>(() => {
-    try { return JSON.parse(localStorage.getItem('helm.dismissed') || '{}'); } catch { return {}; }
+  const [snoozed, setSnoozed] = useState<Record<string, number>>(() => {
+    try { return JSON.parse(localStorage.getItem('helm.snoozed') || '{}'); } catch { return {}; }
   });
+  const snoozedRef = useRef(snoozed);
+  snoozedRef.current = snoozed;
   const tick = useNow(30_000);
-  const [dismissUndo, setDismissUndo] = useState<{ key: string; title: string } | null>(null);
-  const setDismiss = useCallback((key: string, pending: number | null) => {
-    setDismissed((all) => {
-      if (pending == null && !(key in all)) return all;
+  const [snoozeUndo, setSnoozeUndo] = useState<{ key: string; title: string; until: number } | null>(null);
+  const setSnooze = (key: string, until: number | null) => {
+    setSnoozed((all) => {
       const next = { ...all };
-      if (pending == null) delete next[key]; else next[key] = pending;
-      try { localStorage.setItem('helm.dismissed', JSON.stringify(next)); } catch { /* full */ }
+      if (until == null) delete next[key]; else next[key] = until;
+      // Forget the ones whose time has passed, so the store does not grow for ever.
+      for (const k of Object.keys(next)) if (next[k] <= Date.now()) delete next[k];
+      try { localStorage.setItem('helm.snoozed', JSON.stringify(next)); } catch { /* full */ }
       return next;
     });
-  }, []);
-  const dismissedNow = (envId: string, s: Session) => {
-    const at = dismissed[`${envId}:${s.id}`];
-    return at != null && (s.pending ?? 0) <= at;
   };
+  const snoozedNow = (envId: string, id: string) => (snoozed[`${envId}:${id}`] ?? 0) > tick;
   useEffect(() => {
-    if (!dismissUndo) return;
-    const timer = setTimeout(() => setDismissUndo(null), 6000);
+    if (!snoozeUndo) return;
+    const timer = setTimeout(() => setSnoozeUndo(null), 7000);
     return () => clearTimeout(timer);
-  }, [dismissUndo]);
+  }, [snoozeUndo]);
   const [help, setHelp] = useState(false);
   /** Every machine's last-said session list, for the ones that are asleep. */
   const [snap, setSnap] = useState<{ machines: Record<string, { name: string; at: number; sessions: Session[] }> } | null>(null);
@@ -681,18 +671,17 @@ function Shell({ client, conn, onSignOut }: {
         // for the one you are looking at, so it is not toasted about.
         const s = payload?.session;
         if (payload?.transition?.to === 'blocked' && s && !s.delegation) {
-          // A new question brings back a card that was dismissed.
-          setDismiss(`${e}:${s.id}`, null);
           const top = nav.current.stack[nav.current.stack.length - 1];
           const looking = top?.kind === 'session' && top.session.id === s.id;
-          if (!looking) {
+          const asleep = (snoozedRef.current[`${e}:${s.id}`] ?? 0) > Date.now();
+          if (!looking && !asleep) {
             setToast({ envId: e, session: s, at: Date.now() });
             try { navigator.vibrate?.(60); } catch { /* no haptics here */ }
           }
         }
       }
     });
-  }, [loadEnvs, loadSessions, client, setDismiss]);
+  }, [loadEnvs, loadSessions, client]);
 
   useEffect(() => {
     const catchUp = () => { if (!document.hidden) loadEnvs(); };
@@ -788,7 +777,7 @@ function Shell({ client, conn, onSignOut }: {
     go('a:settings', 'Settings', 'preferences', [{ kind: 'app-settings' }]);
     go('a:updates', 'Updates', 'version upgrade machines', [{ kind: 'app-settings' }, { kind: 'updates' }]);
     go('a:devices', 'Devices & pairing', 'phone key link', [{ kind: 'app-settings' }, { kind: 'devices' }]);
-    go('a:cost', 'Usage and limits', 'usage limits left quota tokens spend cost', [{ kind: 'usage' }]);
+    go('a:cost', 'What it has cost', 'usage tokens spend', [{ kind: 'usage' }]);
     go('a:defaults', 'CLI defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
     for (const t of ['light', 'dark', 'system'] as Theme[]) {
       items.push({
@@ -878,6 +867,7 @@ function Shell({ client, conn, onSignOut }: {
   };
   const openSession = (envId: string, s: Session) => {
     if (s.id.startsWith('found:')) { void resumeFound(envId, s); return; }
+    if (snoozed[`${envId}:${s.id}`]) setSnooze(`${envId}:${s.id}`, null);
     navigate([{ kind: 'env' }, { kind: 'session', session: s }], envId);
   };
   // A session that changed under an open view: refresh the machine's list and
@@ -924,7 +914,7 @@ function Shell({ client, conn, onSignOut }: {
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived);
   const workingThreadsOn = (machine: Environment) =>
-    machine.online ? agentsOf(machine.id).filter(isRunning) : [];
+    machine.online ? agentsOf(machine.id).filter((thread) => thread.status === 'working' || (thread.team?.working ?? 0) > 0) : [];
   const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(needsAttention).length;
 
   /**
@@ -957,16 +947,11 @@ function Shell({ client, conn, onSignOut }: {
         id: s.engineSessionId, cwd: s.cwd,
       }, 60_000);
       loadSessions(envId);
-      navigate([{ kind: 'env' }, { kind: 'session', session: r.session }], envId);
+      navigate([...nav.current.stack, { kind: 'session', session: r.session }], envId);
     } catch (e: any) {
       setError(`could not continue that thread: ${e.message}`);
     } finally { setResuming(null); }
   };
-
-  // A `found:` row is a CLI's own history until the machine is asked to pick
-  // it up - opening it has to go through resume, not straight to a view.
-  const openThread = (envId: string, s: Session) =>
-    s.id.startsWith('found:') ? resumeFound(envId, s) : openSession(envId, s);
 
   const voiceEnvs = envs.filter((e) => e.online && e.info.voice);
   const transcribeVia = (preferred?: string) => {
@@ -1040,35 +1025,24 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const blockedAll = envs.flatMap((e) => agentsOf(e.id).filter(needsAttention).map((s) => ({ env: e, s })));
-  const blocked = blockedAll.filter(({ env: e, s }) => !dismissedNow(e.id, s));
-  const quiet = blockedAll.filter(({ env: e, s }) => !s.brain && dismissedNow(e.id, s));
-  // A dismissal ends once its thread stops needing you, so the next time it
-  // asks, the card is back.
-  useEffect(() => {
-    for (const key of Object.keys(dismissed)) {
-      const cut = key.indexOf(':');
-      const list = sessions[key.slice(0, cut)];
-      if (!list) continue; // that machine has not answered yet
-      const s = list.find((x) => x.id === key.slice(cut + 1));
-      if (!s || !needsAttention(s)) setDismiss(key, null);
-    }
-  }, [sessions, dismissed, setDismiss]);
+  const blocked = blockedAll.filter(({ env: e, s }) => !snoozedNow(e.id, s.id));
+  const asleep = blockedAll.filter(({ env: e, s }) => snoozedNow(e.id, s.id));
   // Home is one list across every machine: what needs you, and what is
   // running. A brain has its own place under "brains".
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
-  const runningNow = [...quiet, ...everyone.filter(({ env: machine, s: thread }) => machine.online && !needsAttention(thread) && isRunning(thread))].sort(byNewest);
+  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !needsAttention(thread) && (thread.status === 'working' || !!thread.team?.working)).sort(byNewest);
   const runningCount = envs.reduce((total, machine) => total + workingThreadsOn(machine).length, 0);
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
   // older work stays available on its machine and through search.
   const doneNow = everyone.filter(({ s }) => (s.driver || s.adopted) && (s.turns ?? 0) > 0
-    && !isRunning(s) && !needsAttention(s)
+    && s.status !== 'working' && !s.team?.working && !needsAttention(s)
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
   const doneIsSaved = doneNow.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));
-  const dismissThread = (envId: string, s: Session) => {
-    setDismiss(`${envId}:${s.id}`, s.pending ?? 0);
-    setDismissUndo({ key: `${envId}:${s.id}`, title: s.title });
+  const snoozeThread = (envId: string, s: Session, until: number) => {
+    setSnooze(`${envId}:${s.id}`, until);
+    setSnoozeUndo({ key: `${envId}:${s.id}`, title: s.title, until });
   };
 
   // On a phone the two panes are one screen at a time: the main pane is shown
@@ -1131,17 +1105,30 @@ function Shell({ client, conn, onSignOut }: {
 
             {blocked.map(({ env: e, s }) => (
               <NeedCard
-                key={s.id} s={s} machine={e.name} onOpen={() => openThread(e.id, s)}
-                onDismiss={() => dismissThread(e.id, s)}
+                key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)}
+                onSnooze={(until) => snoozeThread(e.id, s, until)}
               />
             ))}
+
+            {asleep.length > 0 && (
+              <Fold title="snoozed" count={asleep.length} remember="sidebar:snoozed">
+                <div className="rows plain">
+                  {asleep.map(({ env: e, s }) => (
+                    <HomeRow
+                      key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)}
+                      note={`back ${when(snoozed[`${e.id}:${s.id}`])}`}
+                    />
+                  ))}
+                </div>
+              </Fold>
+            )}
 
             {runningNow.length > 0 && (
               <>
                 <div className="section">running</div>
                 <div className="rows plain">
                   {runningNow.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} waiting={needsAttention(s)} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openThread(e.id, s)} />
+                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} />
                   ))}
                 </div>
               </>
@@ -1149,10 +1136,11 @@ function Shell({ client, conn, onSignOut }: {
 
             {doneNow.length > 0 && (
               <Fold title="done" count={doneNow.length} note={doneIsSaved ? 'saved' : undefined} remember="sidebar:done">
+                <p className="note">Threads with replies, not running or needing attention · last 3 days. This is not a count of successful tasks.</p>
                 {doneIsSaved && <p className="note">Includes saved lists · syncing when connected</p>}
                 <div className="rows plain">
                   {doneNow.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openThread(e.id, s)} />
+                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} />
                   ))}
                 </div>
               </Fold>
@@ -1440,10 +1428,10 @@ function Shell({ client, conn, onSignOut }: {
           onOpen={() => { const t = toast; setToast(null); openSession(t.envId, t.session); }} />
       )}
 
-      {dismissUndo && (
+      {snoozeUndo && (
         <div className="undo" role="status">
-          <span className="undo-text"><b>Dismissed</b> · it waits under Running</span>
-          <button onClick={() => { setDismiss(dismissUndo.key, null); setDismissUndo(null); }}>Undo</button>
+          <span className="undo-text">Snoozed <b>{snoozeUndo.title}</b> until {when(snoozeUndo.until)}</span>
+          <button onClick={() => { setSnooze(snoozeUndo.key, null); setSnoozeUndo(null); }}>Undo</button>
         </div>
       )}
       {palette && <Palette items={paletteItems()} onClose={() => setPalette(false)} engineOf={engineOf} />}
@@ -2293,9 +2281,9 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const live = (s: Session) => s.engine !== 'shell' && !s.archived && hit(s);
   const mine = rows.filter(live);
   const blocked = mine.filter(needsAttention).sort(byRecent);
-  const working = mine.filter((s) => !needsAttention(s) && isRunning(s)).sort(byRecent);
+  const working = mine.filter((s) => !needsAttention(s) && (s.status === 'working' || !!s.team?.working)).sort(byRecent);
 
-  const rest = mine.filter((s) => !needsAttention(s) && !isRunning(s));
+  const rest = mine.filter((s) => !needsAttention(s) && s.status !== 'working' && !s.team?.working);
   const recent = rest.filter((s) => !botThread(s)).sort(byRecent).slice(0, 3);
   const recentIds = new Set(recent.map((s) => s.id));
 
@@ -2915,8 +2903,31 @@ const dirName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
  * answer itself lives in the session, where the diff or the command is on
  * screen to be read before Allow is tapped.
  */
-function NeedCard({ s, machine, onOpen, onDismiss }: { s: Session; machine: string; onOpen: () => void; onDismiss: () => void }) {
+/** "3:40 pm", "tomorrow 9:00 am", "Mon 9:00 am" - when a snooze ends, in words. */
+const when = (ts: number) => {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const days = Math.round((new Date(d.toDateString()).getTime() - new Date(new Date().toDateString()).getTime()) / 86_400_000);
+  return days <= 0 ? time : days === 1 ? `tomorrow ${time}` : `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
+};
+
+/** Later today, tomorrow morning, next week: the ways a thread usually gets put off. */
+function snoozeChoices(): { label: string; at: number }[] {
+  const now = new Date();
+  const at = (days: number, hour: number) => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(hour, 0, 0, 0); return d.getTime(); };
+  const dow = now.getDay();
+  return [
+    { label: '1 hour', at: Date.now() + 3_600_000 },
+    { label: '3 hours', at: Date.now() + 3 * 3_600_000 },
+    { label: 'Tomorrow, 9 am', at: at(1, 9) },
+    { label: 'Next week', at: at(((8 - dow) % 7) || 7, 9) },
+  ];
+}
+
+function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: string; onOpen: () => void; onSnooze: (until: number) => void }) {
   const now = useNow();
+  const [choosing, setChoosing] = useState(false);
+  const [custom, setCustom] = useState('');
   const eng = engineOf(s.engine);
   const n = s.pending ?? 0;
   return (
@@ -2935,25 +2946,42 @@ function NeedCard({ s, machine, onOpen, onDismiss }: { s: Session; machine: stri
         </span>
         <span className="need-go">{s.team?.blocked ? `${s.team.blocked} child tasks need approval` : s.team?.failed ? `${s.team.failed} child tasks failed` : s.recovery ? 'Review task recovery' : 'Review and answer'}<Icon name="forward" size={17} /></span>
       </button>
-      <button className="need-x" onClick={onDismiss} aria-label={`Dismiss: ${s.title}`} title="Dismiss"><Icon name="close" size={15} /></button>
+      <div className="need-foot">
+        {!choosing ? (
+          <button className="need-snooze" onClick={() => setChoosing(true)}>Snooze…</button>
+        ) : (
+          <div className="snooze-opts">
+            {snoozeChoices().map((c) => (
+              <button key={c.label} onClick={() => onSnooze(c.at)}>{c.label}</button>
+            ))}
+            <span className="snooze-custom">
+              <input
+                type="datetime-local" value={custom} aria-label="snooze until"
+                min={new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16)}
+                onChange={(e) => setCustom(e.target.value)}
+              />
+              <button disabled={!custom || new Date(custom).getTime() <= Date.now()} onClick={() => onSnooze(new Date(custom).getTime())}>Set</button>
+            </span>
+            <button className="snooze-x" onClick={() => setChoosing(false)} aria-label="cancel"><Icon name="close" size={14} /></button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 /** One line of Home: the mark, the thread, where it runs, and what it is doing. */
-function HomeRow({ s, machine, onOpen, note, selected = false, waiting = false }: { s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean; waiting?: boolean }) {
+function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean }) {
   const now = useNow();
   const eng = engineOf(s.engine);
   return (
-    <button className={`row tall thread-row${selected ? ' active' : ''}${waiting ? ' waiting' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
-      {waiting && <i className="wdot" aria-label="needs you" />}
+    <button className={`row tall thread-row${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
       <EngineMark engine={eng.cls} />
       <span className="grow">
         <span className="rt"><span className="rt-text">{s.title}</span></span>
         <span className="rm">{dirName(s.cwd)} · {machine}</span>
       </span>
       {note ? <span className="when">{note}</span>
-        : waiting ? <StatusChip status="blocked" at={s.updatedAt} />
         : s.status === 'working' || !!s.team?.working
         ? <StatusChip status="working" at={s.updatedAt} />
         : s.updatedAt ? <span className="when">{waitingSince(s.updatedAt, now)}</span> : null}
@@ -3342,8 +3370,8 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
           </button>
           <button className="row" onClick={() => onOpen({ kind: 'usage' })}>
             <span className="grow">
-              <span className="rt">Usage and limits</span>
-              <span className="rm">what's left on each account, tokens and spend</span>
+              <span className="rt">What it has cost</span>
+              <span className="rm">tokens, spend and cache across every machine</span>
             </span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
@@ -4046,6 +4074,10 @@ function Start({ client, env, cwd, onBack, onStarted }: {
 }) {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [key, setKey] = useState<string>('');
+  const [model, setModel] = useState('');
+  const [effort, setEffort] = useState('');
+  const [mode, setMode] = useState('');
+  const [speed, setSpeed] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const prefs = useRef(loadPrefs());
@@ -4120,47 +4152,29 @@ function Start({ client, env, cwd, onBack, onStarted }: {
     }
   };
 
-  // A ref, not the busy state: two Enters inside one render would both pass
-  // a state check, and two sessions would start for one key press.
-  const starting = useRef(false);
-  const start = async (picked?: Account) => {
-    const a = picked ?? account;
-    if (!a || starting.current) return;
-    starting.current = true;
+  // The defaults belong to the machine/account, not this browser, so opening
+  // the same picker from a phone or laptop starts the same CLI configuration.
+  useEffect(() => {
+    if (!account) return;
+    setModel(account.prefs?.default ?? '');
+    setEffort(account.defaults?.effort ?? '');
+    setMode(account.defaults?.mode === 'plan' ? '' : account.defaults?.mode ?? '');
+    setSpeed(account.defaults?.speed ?? '');
+  }, [account?.key]);
+
+  const start = async () => {
+    if (!account) return;
     setBusy(true); setError('');
-    if (a.key !== key) setKey(a.key);
-    savePicker({ last: a.key });
+    savePicker({ last: account.key });
     try {
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start', {
-        cwd, profileId: a.profile.id,
-        model: a.prefs?.default || undefined,
-        effort: a.defaults?.effort || undefined,
-        mode: (a.defaults?.mode === 'plan' ? '' : a.defaults?.mode) || undefined,
-        speed: a.defaults?.speed || undefined,
+        cwd, profileId: account.profile.id,
+        model: model || undefined, effort: effort || undefined,
+        mode: mode || undefined, speed: speed || undefined,
       }, 70_000);
       onStarted(r.session);
-    } catch (e: any) { setError(e.message); setBusy(false); starting.current = false; }
+    } catch (e: any) { setError(e.message); setBusy(false); }
   };
-
-  // Enter is the start button: on an agent row it starts that agent, with
-  // nothing focused it starts the selected one. preventDefault keeps the
-  // key from also firing the row's click, which would only select it.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Enter' || e.repeat || e.defaultPrevented || choosing || starting.current) return;
-      const el = e.target as HTMLElement | null;
-      if (!el || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable) return;
-      const row = el.closest('[data-acct]') as HTMLElement | null;
-      const a = row
-        ? shown?.find((x) => x.key === row.dataset.acct)
-        : el.closest('button, a, [role="button"]') ? null : account;
-      if (!a) return;
-      e.preventDefault();
-      void start(a);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
 
   const eng = account ? engineOf(account.engine) : null;
 
@@ -4187,10 +4201,9 @@ function Start({ client, env, cwd, onBack, onStarted }: {
             const e = engineOf(a.engine);
             return (
               <button
-                key={a.key} title={a.aliases.join(', ')} data-acct={a.key}
+                key={a.key} title={a.aliases.join(', ')}
                 className={`row tall${a.key === key ? ' active' : ''}`}
                 onClick={() => setKey(a.key)}
-                onDoubleClick={() => void start(a)}
               >
                 <EngineMark engine={e.cls} />
                 <span className="grow">
@@ -4224,7 +4237,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
           <button
             className="primary big"
             disabled={busy}
-            onClick={() => void start()}
+            onClick={start}
           >
             {busy ? 'starting…' : `Start ${eng?.label}`}
           </button>

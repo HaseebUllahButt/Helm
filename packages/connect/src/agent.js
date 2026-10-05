@@ -19,10 +19,8 @@ import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, pic
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
-import { inventory, isScratch } from './inventory.js';
+import { inventory } from './inventory.js';
 import { UsageReader, foldBuckets } from '@helm/usage';
-import { connectBroMyLimits } from '@helm/usage/bromylimits';
-import { Limits } from './limits.js';
 import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
@@ -279,8 +277,6 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
-    this.limits = new Limits({ profiles: currentProfiles });
-    this.sessions.on('limits', ({ profileId, event }) => this.limits.note(profileId, event));
     try { this.schedules = new Schedules({ sessions: this.sessions }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     this.sessions.delegationBrief = delegationNote;
@@ -824,8 +820,7 @@ export class Daemon {
   async #usageRollup(rebuild = false) {
     this.usage ??= new UsageReader({ indexPath: join(HELM_DIR, 'usage-index.json') });
     const profiles = await currentProfiles();
-    const native = await this.usage.buckets(profiles, { rebuild });
-    return connectBroMyLimits(native, { machineId: this.net.self, rebuild });
+    return this.usage.buckets(profiles, { rebuild });
   }
 
   /** The hubs we can actually talk to right now. */
@@ -1465,7 +1460,7 @@ export class Daemon {
         const marks = this.sessions.marks();
         const recent = [];
         for (const x of await inventory(await currentProfiles())) {
-          if (this.sessions.isDelegatedConversation(x.engine, x.id) || isScratch(x.cwd)) continue;
+          if (this.sessions.isDelegatedConversation(x.engine, x.id)) continue;
           const mark = marks[`found:${x.engine}:${x.id}`];
           if (mark === 'removed') continue;
           // Transcript paths are machine-private. The app only needs the
@@ -1557,7 +1552,6 @@ export class Daemon {
           by: Array.isArray(p.by) && p.by.length ? p.by : ['engine', 'model'],
           accounts: rollup.accounts,
           scan: rollup.scan,
-          at: rollup.at,
         });
       }
 
@@ -1565,10 +1559,6 @@ export class Daemon {
       // ever asks for a folded report.
       case M.USAGE_BUCKETS:
         return this.#usageRollup(!!p.rebuild);
-
-      case M.USAGE_LIMITS:
-        this.limits ??= new Limits({ profiles: currentProfiles });
-        return this.limits.report({ refresh: !!p.refresh });
 
       case M.CODE_KEY: {
         // Proving the code key is for machines: a handoff's whole chain of
