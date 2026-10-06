@@ -18,7 +18,7 @@ import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
 import type { Decision, Turn } from './types';
-import { TeamSummary, useThreadTeam } from './TeamSummary';
+import { useThreadTeam } from './TeamSummary';
 import { ThreadDetails, type DetailsTab } from './ThreadDetails';
 import { ExternalSessionNotice } from './ExternalSessionNotice';
 import { QueueEdit } from './QueueEdit';
@@ -358,28 +358,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     onSession(r.session);
   });
 
-  // Watching a long turn with the screen going dark every thirty seconds is
-  // the other half of "working": hold a wake lock while asked. The OS drops
-  // it when the page hides, so it is re-taken every time the page comes back.
-  const [keepAwake, setKeepAwake] = useState(false);
-  const wakeable = typeof navigator !== 'undefined' && 'wakeLock' in navigator;
-  useEffect(() => {
-    if (!keepAwake) return;
-    let live = true;
-    let sentinel: { release: () => Promise<void> } | null = null;
-    const hold = async () => {
-      try { sentinel = await (navigator as any).wakeLock.request('screen'); } catch { /* battery saver */ }
-    };
-    const again = () => { if (live && document.visibilityState === 'visible') hold(); };
-    hold();
-    document.addEventListener('visibilitychange', again);
-    return () => {
-      live = false;
-      document.removeEventListener('visibilitychange', again);
-      sentinel?.release().catch(() => {});
-    };
-  }, [keepAwake]);
-
   const all = options?.modes ?? [];
   const mode = all.find((m) => m.id === session.mode);
 
@@ -517,7 +495,14 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           </span>
         </div>
         {chip(status)}
-        <button className="iconbtn thread-details-launch" aria-label="Thread details" title="Agents, changes and schedules" onClick={() => setDetails('overview')}><Icon name="subagents" size={17} />{changed > 0 && <b className="cbadge">{changed}</b>}</button>
+        {/* Git gets its own button with the count of changed files: it is
+            the thing most often checked. The other opens agents and repeats. */}
+        {git.status?.repo && !session.brain && (
+          <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
+            onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
+        )}
+        <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents and scheduled tasks"
+          onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{team.length > 0 && <b className="cbadge quiet">{team.length}</b>}</button>
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -530,27 +515,19 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             </svg>
           </button>
         )}
-        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} />{changed > 0 && !session.brain && <i className="moredot git-mobile-only" aria-hidden="true" />}</button>
+        <button className="iconbtn" title="more" aria-label="more" aria-haspopup="menu" aria-expanded={menu === 'more'} onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="more" size={18} /></button>
+        {/* Only what the buttons beside it do not already reach. */}
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
-            {git.status?.repo && !session.brain && (
-              <button onClick={() => setDetails('changes')}>
-                Git graph and changes{changed > 0 ? ` · ${changed > 99 ? '99+' : changed}` : ''}
-              </button>
+            <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
+            {!session.brain && onSendTask && !session.external && (
+              <button disabled={!env.online} onClick={onSendTask}>Send to another machine</button>
             )}
-            <button onClick={() => setDetails('agents')}>Subagents</button>
-            <button onClick={() => setDetails('schedules')}>Scheduled tasks</button>
+            {!session.brain && <button onClick={() => { setMenu(null); void saveAsDefaults(); }}>Use these settings for new chats</button>}
             <button aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
               {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
             </button>
-            {!session.brain && <button onClick={() => { setMenu(null); void saveAsDefaults(); }}>Use these settings for new chats</button>}
-            <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
             {session.delegation?.parentId && onOpenSession && <button onClick={openParent}>Open parent thread</button>}
-            {wakeable && (
-              <button aria-pressed={keepAwake} onClick={() => setKeepAwake((v) => !v)}>
-                {keepAwake ? 'Let the screen sleep' : 'Keep the screen awake'}
-              </button>
-            )}
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
             <button className="destructive" onClick={kill}>{session.nativeCodex ? 'Remove from Helm' : 'Delete thread'}</button>
           </div>
@@ -561,7 +538,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         original={session.parent} onOpenSession={onOpenMachineSession} />
       <ExternalSessionNotice session={session}
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
-      <TeamSummary team={team} onManage={() => setDetails('agents')} onOpen={onOpenSession} onStop={stop} onReview={git.status?.repo ? () => setDetails('changes') : undefined} />
       {session.recovery && !working && <div className="thread-recovery" role="status"><div><strong>{session.recovery.kind === 'limited' ? 'Usage limit reached' : session.recovery.kind === 'restart' ? 'Task paused' : session.recovery.kind === 'error' ? 'Task failed' : 'Task stopped'}</strong><p>{session.recovery.kind === 'restart' ? 'The agent stopped. Resume from the saved conversation.' : session.recovery.message}</p></div>
         {!working && !pending && <button disabled={busy || !env.online} onClick={() => void call(() => client.rpc(env.id, 'session.recover', { id: session.id }))}>Resume task</button>}</div>}
       <Transcript
@@ -606,7 +582,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       </Composer>
 
       {details && <ThreadDetails client={client} env={env} session={session} tab={details} onTab={setDetails} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
-        onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined} onTransfer={!session.external && !session.brain ? onSendTask : undefined} />}
+        onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined} />}
       {editingQueue && <QueueEdit turn={editingQueue} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSave={async (text, attachments) => {
         if (await queueAction(editingQueue, 'session.queue-edit', { text, attachments })) setEditingQueue(null);
       }} />}

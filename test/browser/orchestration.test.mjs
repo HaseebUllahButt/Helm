@@ -39,7 +39,7 @@ before(async () => {
         onMoveQueued={(turn,direction)=>window.action=['move',turn.id,direction]}
         onSendQueued={turn=>window.action=['send',turn.id]} />;
     }
-    function Details() { const [tab,onTab]=useState('overview'); return <ThreadDetails client={client} env={env} session={session} tab={tab} onTab={onTab} git={null} reloadGit={()=>{}} onClose={()=>root.render(null)} />; }
+    function Details() { const [tab,onTab]=useState('agents'); return <ThreadDetails client={client} env={env} session={session} tab={tab} onTab={onTab} git={null} reloadGit={()=>{}} onClose={()=>root.render(null)} />; }
     function ComposeImages() {
       const [draft,setDraft]=useState('Compare '); const [attachments,setAttachments]=useState([]);
       window.imageDraft=()=>draft;

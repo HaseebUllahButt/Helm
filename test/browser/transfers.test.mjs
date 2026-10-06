@@ -34,7 +34,7 @@ test('task return review preserves local choices and offers the original convers
   } finally {await browser.close();}
 });
 
-test('thread details exposes Send task and keeps notifications in the menu on desktop and mobile', async () => {
+test('the menu sends the task to another machine and keeps notifications, on desktop and mobile', async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
@@ -64,12 +64,14 @@ test('thread details exposes Send task and keeps notifications in the menu on de
       await page.goto('http://helm-task-test/');
       await page.addStyleTag({content:readFileSync('apps/web/src/styles.css','utf8')});
       await page.addScriptTag({content:bundle.outputFiles[0].text});
-      await page.getByRole('button', { name: 'Thread details', exact: true }).click();
-      await page.getByRole('dialog', { name: 'Thread details' }).getByRole('button', { name: 'Send task to another machine', exact: true }).click();
-      assert.equal(await page.evaluate(()=>window.sendTaskClicked),true);
-      assert.equal(await page.getByRole('button',{name:/completion alerts|completion notifications/}).count(),0);
       await page.getByRole('button',{name:'more',exact:true}).click();
-      assert.equal(await page.locator('.menu').getByRole('button',{name:'Send task to another machine',exact:true}).count(),0);
+      await page.locator('.menu').getByRole('button',{name:'Send to another machine',exact:true}).click();
+      assert.equal(await page.evaluate(()=>window.sendTaskClicked),true);
+      await page.getByRole('button',{name:'more',exact:true}).click();
+      // Nothing in the menu that a button beside it already opens.
+      for (const gone of ['Git graph and changes', 'Subagents', 'Scheduled tasks', 'Keep the screen awake']) {
+        assert.equal(await page.locator('.menu').getByRole('button',{name:gone}).count(),0, gone);
+      }
       const notification = page.getByRole('button',{name:'Turn completion alerts off',exact:true});
       assert.equal(await notification.getAttribute('aria-pressed'),'true');
       await notification.click();
