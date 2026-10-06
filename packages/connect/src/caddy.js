@@ -108,3 +108,48 @@ export async function configureFreeHttps(hostname, port = 8787) {
     await rm(temp, { recursive: true, force: true });
   }
 }
+
+/**
+ * Let this hub serve public links (`helm share`): every <name>.<host> gets
+ * its own certificate the first time it is opened. A wildcard certificate
+ * would need DNS control, which a free sslip.io name does not give, so Caddy
+ * issues them one by one ("on demand") - and asks the hub first, so only
+ * names that are really shared ever get one.
+ *
+ * The ask is a global option, and Caddy only takes those at the very top of
+ * its config. Helm's own file is imported first on a machine `helm setup`
+ * configured; on one where something else comes first, this refuses rather
+ * than rewrite someone else's Caddyfile.
+ */
+export function shareSites(hostname, port = 8787) {
+  return `{\n    on_demand_tls {\n        ask http://127.0.0.1:${port}/api/share/ask\n    }\n}\n\n`
+    + `${hostname} {\n    reverse_proxy 127.0.0.1:${port}\n}\n\n`
+    + `*.${hostname} {\n    tls {\n        on_demand\n    }\n    reverse_proxy 127.0.0.1:${port}\n}\n`;
+}
+
+export async function configureShareHttps(hostname, port = 8787) {
+  const main = await privilegedRead(CADDYFILE);
+  const first = String(main ?? '').split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#'));
+  if (first !== IMPORT_LINE) {
+    throw new Error(`${CADDYFILE} has other sites before Helm's; put "${IMPORT_LINE}" first, then run this again`);
+  }
+  const original = await privilegedRead(HELM_CADDYFILE);
+  const temp = await mkdtemp(join(tmpdir(), 'helm-caddy-'));
+  const file = join(temp, 'helm.caddy');
+  try {
+    await writeFile(file, shareSites(hostname, port), { mode: 0o600 });
+    await installFile(file, HELM_CADDYFILE);
+    try {
+      await exec('sudo', ['caddy', 'validate', '--config', CADDYFILE, '--adapter', 'caddyfile']);
+      await exec('sudo', ['systemctl', 'reload', 'caddy']);
+    } catch (err) {
+      if (original != null) {
+        await writeFile(file, original, { mode: 0o600 });
+        await installFile(file, HELM_CADDYFILE).catch(() => {});
+      }
+      throw new Error(`could not set up links in Caddy: ${err.stderr || err.message}`);
+    }
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+}

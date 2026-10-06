@@ -15,6 +15,7 @@ import { DrivenSession } from './session/DrivenSession';
 import { ExternalSessionNotice } from './session/ExternalSessionNotice';
 import { EngineMark } from './EngineMark';
 import { NotificationToast } from './NotificationToast';
+import { PublicLinks } from './PublicLinks';
 import { BackIcon, Icon, toolKind } from './Icon';
 import { Route } from './Route';
 import { QrCode } from './QrCode';
@@ -3480,6 +3481,9 @@ function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
 
         <div className="section">kind</div>
         <MachineKind client={client} env={env} onChanged={onRenamed} />
+
+        <div className="section">public links</div>
+        <PublicLinks client={client} env={env} />
 
         <div className="section">CLI accounts</div>
         {accounts === null && !error && <div className="empty quiet">looking for agents…</div>}

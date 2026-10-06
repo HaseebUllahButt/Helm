@@ -18,6 +18,8 @@ vm.runInNewContext(source.slice(start, end), {
   server: { on: (_event, fn) => { upgrade = fn; } },
   tokenFromProtocols: () => null,
   clientTokenFrom: () => null,
+  // No share hosts here: these are all helm's own paths.
+  shares: { owns: () => false },
 });
 
 function request(url) {

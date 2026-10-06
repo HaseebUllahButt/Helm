@@ -45,6 +45,9 @@ export async function startRelay({
   // credential say it may.
   const media = (await import('./media.js')).createMediaRoute({ online, callEnv, openTcp });
 
+  // Public links on <name>.<this host> - see share.js.
+  const shares = (await import('./share.js')).createShareRoute({ online, callEnv, openTcp });
+
   const serveStatic = createStaticHandler({ webRoot, securityHeaders: SECURITY_HEADERS });
 
   // What the app checks against its own bundle: the hashed asset this hub's
@@ -103,9 +106,15 @@ export async function startRelay({
           return null;
         });
 
+  const loopback = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+
   const server = createServer((req, res) => {
-    helmPath(req);
-    Promise.resolve(routeHelm(req, res)).catch((err) => {
+    // A share's host is never helm: everything on it belongs to the shared
+    // app. Caddy's certificate check is answered to Caddy alone.
+    const handled = shares.owns(req) ? shares.route(req, res)
+      : req.url.startsWith('/api/share/ask?') && loopback(req) && !req.headers['x-forwarded-for'] ? shares.ask(req, res).then(() => true)
+      : null;
+    Promise.resolve(handled ?? (helmPath(req), routeHelm(req, res))).catch((err) => {
       // A handler that fails mid-answer - a media stream is the usual one -
       // cannot become a 500, only a dropped connection.
       if (res.headersSent) return res.destroy();
@@ -125,6 +134,10 @@ export async function startRelay({
       .find((p) => p.startsWith('helm1.')) || null;
 
   server.on('upgrade', (req, socket, head) => {
+    if (shares.owns(req)) {
+      shares.upgrade(req, socket, head).catch(() => socket.destroy());
+      return;
+    }
     // Upgrade listeners are synchronous EventEmitter callbacks: a malformed
     // request target must not throw out of this handler and kill the hub.
     let url;

@@ -231,6 +231,12 @@ export const M = {
   // /media/<machine>/stream on any hub, which a <video> element can speak
   // directly. `media.ticket` mints the short-lived credential that URL
   // carries, because a media element cannot set an Authorization header.
+  // Public links: a name, a local port, maybe a password (protocol/share.js).
+  // The hub asks every machine for its list when a link is opened.
+  SHARE_LIST: 'share.list',        // {} -> { shares[] }  incl. the password hash, for the hub to check
+  SHARE_ADD: 'share.add',          // { name?, port, password? } -> { share }
+  SHARE_REMOVE: 'share.remove',    // { name } -> { removed }
+
   MEDIA_INFO: 'media.info',        // {} -> { kind, port, roots[] }   the media listener's loopback port
   MEDIA_ROOTS: 'media.roots',      // {} -> { roots[] }   the shared-folder allowlist
   MEDIA_ROOT_ADD: 'media.root_add',    // { path } -> { roots[] }

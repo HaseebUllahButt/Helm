@@ -68,6 +68,10 @@ const usage = () => {
   helm machines                     machines in this network
   helm redesignate [machine] <kind> what a machine is for: pc, vm or nas
   helm nas [machine] [add|remove <folder>]   what a nas shares
+  helm share <port> [--name <n>] [--password [pw]]
+                                  a public https link to a port here, served by your VM
+  helm share list | stop <name>   what is shared, and stopping it
+  helm share setup                once, on the VM: let it serve the links
   helm remove <id>                  remove a controller or machine, permanently
   helm leave                        remove this machine from its network
 
@@ -1569,6 +1573,92 @@ function listMachines() {
  * too when it is up - falling back to writing the file directly, which the
  * media handler re-reads on every request anyway.
  */
+/**
+ * `helm share <port>` - a public https link to something running here, served
+ * by the network's public home (helm's own ngrok). `list`, `stop <name>`, and
+ * `setup` (once, on the public home: lets Caddy issue the links' certificates).
+ */
+async function shareCmd() {
+  const net = requireNetwork();
+  const shareLib = await import('@helm/protocol/share');
+  const local = await import('../src/shares.js');
+  const args = rest.filter((a, i) => !a.startsWith('--') && !['--name', '--password', '--on'].includes(rest[i - 1]));
+  const verb = /^\d+$/.test(args[0] ?? '') ? 'add' : (args.shift() ?? 'list');
+  const on = strFlag('on');
+  const target = on ? machineId(on) : net.self;
+  const where = net.machines[target]?.name ?? 'this machine';
+  const host = shareLib.publicHosts(net)[0];
+  const link = (name) => host ? `https://${name}.${host}` : `(no public address: ${name})`;
+  const call = (method, params) => target === net.self
+    ? Promise.resolve(method === M.SHARE_LIST ? { shares: local.listShares().map(local.publicShare) }
+      : method === M.SHARE_REMOVE ? { removed: local.removeShare(params.name) }
+      : { share: local.publicShare(local.addShare(params)) })
+    : hubRpc(net, target, method, params, { timeout: 15_000 });
+
+  if (verb === 'setup') {
+    const { configureShareHttps } = await import('../src/caddy.js');
+    const own = (net.machines[net.self]?.endpoints ?? []).map((u) => { try { return new URL(u); } catch { return null; } })
+      .find((u) => u?.protocol === 'https:');
+    if (!own) die('run this on the machine with the public https address (your VM)');
+    await configureShareHttps(own.hostname, net.port || 8787);
+    console.log(`\n  links can now be served as https://<name>.${own.hostname}\n`);
+    return;
+  }
+
+  if (verb === 'list' || verb === 'ls') {
+    const machines = Object.values(net.machines).filter((m) => !net.revoked?.[m.id]);
+    const rows = await Promise.all(machines.map(async (m) => {
+      try {
+        const { shares } = m.id === net.self ? { shares: local.listShares().map(local.publicShare) }
+          : await hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 5000 });
+        return shares.map((x) => ({ ...x, machine: m.name }));
+      } catch { return []; }
+    }));
+    const all = rows.flat();
+    if (!all.length) { console.log('\n  nothing shared.  helm share <port> [--name <name>] [--password <pw>]\n'); return; }
+    console.log('');
+    for (const x of all) console.log(`  ${link(x.name)}  ->  ${x.machine}:${x.port}${x.password ? '  (password)' : ''}`);
+    console.log('');
+    return;
+  }
+
+  if (verb === 'stop' || verb === 'rm' || verb === 'remove') {
+    const name = args[0];
+    if (!name) die('usage: helm share stop <name> [--on <machine>]');
+    const { removed } = await call(M.SHARE_REMOVE, { name });
+    console.log(removed ? `\n  stopped ${link(name)}\n` : `\n  ${where} is not sharing "${name}"\n`);
+    return;
+  }
+
+  if (verb !== 'add') die('usage: helm share <port> [--name <name>] [--password [pw]] [--on <machine>] | list | stop <name> | setup');
+  const port = Number(args[0]);
+  let password = flagOf('password');
+  // `--password` with nothing after it: make one up and say what it is.
+  if (password === true) password = shareLib.randomShareName() + shareLib.randomShareName();
+  const name = strFlag('name');
+  if (name && !shareLib.shareName(name)) die(`a link name is ${shareLib.NAME_RULE}`);
+  // A name is the whole address, so it must be free across the network.
+  if (name) {
+    const others = Object.values(net.machines).filter((m) => m.id !== target && !net.revoked?.[m.id]);
+    const clash = (await Promise.all(others.map((m) => hubRpc(net, m.id, M.SHARE_LIST, {}, { timeout: 4000 })
+      .then(({ shares }) => shares.some((x) => x.name === name.toLowerCase()) ? m.name : null).catch(() => null)))).find(Boolean);
+    if (clash) die(`"${name}" is already shared from ${clash}; pick another name`);
+  }
+  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, replace: true });
+  const url = link(share.name);
+  console.log(`\n  ${url}\n  -> ${where}, port ${share.port}${share.password ? `\n  password: ${password}` : ''}`);
+  if (!host) { console.log('\n  No machine in this network has a public https address, so nobody can open it yet.\n'); return; }
+  // The first visit is when the certificate is made; do it now, so the
+  // person you send it to does not wait - and so a problem shows up here.
+  try {
+    const r = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
+    console.log(r.status === 502 ? `\n  The link works, but nothing answered on port ${share.port} here yet.\n`
+      : `\n  Live. Stop it with: helm share stop ${share.name}${on ? ` --on ${on}` : ''}\n`);
+  } catch (err) {
+    console.log(`\n  Saved, but the link did not answer yet (${err.cause?.code || err.message}).\n  If this is new, run \`helm share setup\` once on your VM.\n`);
+  }
+}
+
 async function nasCmd() {
   const net = requireNetwork();
   const args = rest.filter((a) => !a.startsWith('--'));
@@ -1751,6 +1841,10 @@ try {
 
     case 'nas':
       await nasCmd();
+      break;
+
+    case 'share':
+      await shareCmd();
       break;
 
     case 'remove':

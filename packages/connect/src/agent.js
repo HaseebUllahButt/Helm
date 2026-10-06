@@ -26,6 +26,8 @@ import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
+import { listShares, addShare, removeShare, publicShare } from './shares.js';
+import { publicHosts } from '@helm/protocol/share';
 import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
@@ -1141,6 +1143,12 @@ export class Daemon {
     }
   }
 
+  /** A share as a member sees it: no hash, and the address it answers on. */
+  #shareView = (share) => {
+    const host = publicHosts(loadNetwork() ?? this.net)[0];
+    return { ...publicShare(share), url: host ? `https://${share.name}.${host}` : null };
+  };
+
   // Stream ids are only unique within one hub, and we are attached to
   // several; scope them so two hubs cannot collide on the same number.
   #key = (link, sid) => `${link.id} ${sid}`;
@@ -1165,6 +1173,8 @@ export class Daemon {
     return [
       Number(process.env.HELM_SSH_PORT || 22),
       this.#media?.port,
+      // Ports shared on purpose with `helm share`, and only those.
+      ...listShares().map((share) => share.port),
       ...(Array.isArray(extra) ? extra.map(Number) : []),
     ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
   }
@@ -1279,6 +1289,22 @@ export class Daemon {
        */
       case M.MACHINE_SET_KIND:
         return this.setMachineKind(String(p.kind ?? '').toLowerCase(), { address: p.address });
+
+      // Public links. `share.list` is what a hub asks when a link is opened;
+      // it carries the password hash so the hub can check a visitor without
+      // a round trip here. Apps get `publicShare`, without it.
+      case M.SHARE_LIST: {
+        const shares = listShares();
+        // Only a hub's own call (no member behind it) gets the hashes.
+        return { shares: p.forHub && !caller ? shares : shares.map(this.#shareView) };
+      }
+      case M.SHARE_ADD: {
+        const taken = (p.replace ? [] : listShares()).find((x) => x.name === String(p.name ?? '').toLowerCase());
+        if (taken) throw new Error(`"${taken.name}" is already shared from here (port ${taken.port}); use replace`);
+        return { share: this.#shareView(addShare(p)) };
+      }
+      case M.SHARE_REMOVE:
+        return { removed: removeShare(p.name) };
 
       case M.MEDIA_INFO:
       case M.MEDIA_ROOTS:

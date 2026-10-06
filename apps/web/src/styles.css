@@ -2561,3 +2561,16 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 
 /* Settings: the connection note sits apart from the rows around it. */
 .pad.column > details.note { margin: 6px 4px 2px; }
+
+/* Public links (helm share), in a machine's settings. */
+.links { display: flex; flex-direction: column; gap: 8px; }
+.link-row { gap: 6px; }
+.link-row .rt { font-family: var(--mono); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-row button, .link-row .iconbtn { flex: none; width: auto; margin: 0; min-height: 34px; padding: 4px 10px; font-size: var(--t-meta); }
+.danger-text { color: var(--red); }
+.link-add { align-self: flex-start; width: auto; margin: 0; display: inline-flex; align-items: center; gap: 6px; }
+.link-form { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.link-form label { display: grid; gap: 4px; font-size: var(--t-micro); color: var(--mutedfg); }
+.link-form .field { margin: 0; }
+.link-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.link-actions button { width: auto; margin: 0; }
