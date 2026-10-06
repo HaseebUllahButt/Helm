@@ -1133,11 +1133,10 @@ function Shell({ client, conn, onSignOut }: {
             <button
               type="button" className="home-search" onClick={() => setNewChat({})}
               disabled={!envs.some((e) => e.online)}
-              aria-label="New chat" aria-keyshortcuts="Control+Shift+O Meta+Shift+O N" title="New chat (Ctrl+Shift+O)"
+              aria-label="New chat" aria-keyshortcuts="Control+Shift+O Meta+Shift+O N" title="New chat (N or Ctrl+Shift+O / ⌘⇧O)"
             >
               <Icon name="plus" size={15} />
               <span className="grow">New chat</span>
-              <kbd className="wide-only">N</kbd>
             </button>
 
             {blocked.map(({ env: e, s }) => (

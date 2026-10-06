@@ -340,7 +340,6 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
               {attachments.map((a, i) => (
                 <span key={i} className="attach-preview" title={`[Image #${i + 1}] ${a.name}`}>
                   <img src={a.url} alt={`Image #${i + 1}`} />
-                  <span className="attach-label" aria-hidden="true">#{i + 1}</span>
                   <button onClick={() => removeAttachment(i)} title={`remove Image #${i + 1}`} aria-label={`remove Image #${i + 1}`}><Icon name="close" size={12} /></button>
                 </span>
               ))}

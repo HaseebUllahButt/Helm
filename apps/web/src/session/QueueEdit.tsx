@@ -60,7 +60,6 @@ export function QueueEdit({ turn, busy, onCancel, onSave }: {
             {images.map((a, i) => (
               <span key={i} className="attach-preview" title={`[Image #${i + 1}] ${a.filename}`}>
                 <img src={`data:${a.mime};base64,${a.data}`} alt={`Image #${i + 1}`} />
-                <span className="attach-label" aria-hidden="true">#{i + 1}</span>
                 <button type="button" onClick={() => remove(i)} aria-label={`remove Image #${i + 1}`}><Icon name="close" size={12} /></button>
               </span>
             ))}
