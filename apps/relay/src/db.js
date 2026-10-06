@@ -159,6 +159,9 @@ for (const [table, column, spec] of [
   // Wrong guesses against the current window, so one that is being attacked
   // can be burned rather than left standing for its full ten minutes.
   ['auth_state', 'failures', 'INTEGER NOT NULL DEFAULT 0'],
+  // Taken out by the Helm app on this computer itself, which the desktop
+  // notifier answers for instead (see desktop-notify.js).
+  ['push_subs', 'local', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {
   const has = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
   if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${spec}`);
@@ -245,6 +248,8 @@ export const q = {
   pushAll: db.prepare('SELECT * FROM push_subs'),
   pushForDevice: db.prepare('SELECT * FROM push_subs WHERE device_id = ?'),
   pushDelete: db.prepare('DELETE FROM push_subs WHERE endpoint = ?'),
+  pushMarkLocal: db.prepare('UPDATE push_subs SET local = ? WHERE endpoint = ?'),
+  pushMarkLocalDevice: db.prepare('UPDATE push_subs SET local = 1 WHERE device_id = ? AND local = 0'),
 
   // The handoff queue. Insert is a plain INSERT on purpose: a same-id retry
   // must never replace the stored payload, so a conflict is the caller's

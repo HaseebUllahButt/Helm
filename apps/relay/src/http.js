@@ -7,6 +7,7 @@ import {
 } from '@helm/protocol/network';
 import { ROLE } from '@helm/protocol/identity';
 import { fanOut } from './notify.js';
+import { desktop } from './desktop-notify.js';
 
 /** Compare two secrets without leaking where they first differ. */
 const safeEqual = (a, b) => {
@@ -19,6 +20,15 @@ const LOOPBACK_HOST = /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])(:\d+)?$/;
 
 // A public Helm page can inherit this computer's membership, but only if
 // its exact origin is already an address in this computer's network.
+/** A page served to this computer's own browser, not one proxied from outside. */
+function localPage(req) {
+  if (!isLoopback(req) || !LOOPBACK_HOST.test(String(req.headers.host))) return false;
+  if (req.headers['x-forwarded-for'] || req.headers['x-forwarded-host']) return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try { return LOOPBACK_HOST.test(new URL(origin).host); } catch { return false; }
+}
+
 function desktopOrigin(req, net) {
   if (!isLoopback(req) || !LOOPBACK_HOST.test(String(req.headers.host))) return null;
   const origin = req.headers.origin;
@@ -611,7 +621,30 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
         return json(res, 400, { error: 'that is not a push subscription' });
       }
       q.pushSet.run(endpoint, claims.sub, p256dh, auth, String(body.label ?? '').slice(0, 60), now());
+      q.pushMarkLocal.run(localPage(req) ? 1 : 0, endpoint);
       return json(res, 200, { ok: true });
+    }
+
+    // A Helm window on this computer, waiting to be told to open a chat (a
+    // desktop notification was clicked) and saying what it is showing, so an
+    // alert about that chat stays quiet. See desktop-notify.js.
+    if (path === '/api/desktop/wait' && req.method === 'POST') {
+      if (!localPage(req)) return json(res, 403, { error: 'only a Helm window on this computer' });
+      const body = await readBody(req).catch(() => ({}));
+      const id = `${claims.sub}:${String(body.window ?? '').slice(0, 40)}`;
+      const state = {
+        focused: !!body.focused,
+        envId: body.envId ? String(body.envId) : null,
+        sessionId: body.sessionId ? String(body.sessionId) : null,
+      };
+      // A device signed in from this computer's own page only ever subscribes
+      // from it, so subscriptions it took out before this existed are its too.
+      q.pushMarkLocalDevice.run(claims.sub);
+      const { windows } = desktop();
+      req.on('close', () => { if (!res.writableEnded) windows.forget(id); });
+      const open = await windows.wait(id, state);
+      if (res.destroyed) return;
+      return json(res, 200, { open, desktop: desktop().capable });
     }
 
     if (path === '/api/push/unsubscribe' && req.method === 'POST') {

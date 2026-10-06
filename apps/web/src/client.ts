@@ -1784,6 +1784,16 @@ export class Client {
   pushKey() { return this.http<{ key: string }>('/api/push/key'); }
 
   /** Remember where to reach this browser when the app is closed. */
+  /**
+   * A Helm window on this computer, held open at its own hub: says what it
+   * shows, and comes back with a chat to open when a desktop notification is
+   * clicked. Only the page's own origin can answer for this computer.
+   */
+  desktopWait(body: { window: string; focused: boolean; envId: string | null; sessionId: string | null }, signal: AbortSignal) {
+    return this.httpAt<{ open: { envId: string | null; sessionId: string | null } | null; desktop: boolean }>(
+      location.origin, '/api/desktop/wait', { method: 'POST', body: JSON.stringify(body), signal });
+  }
+
   pushSubscribe(body: { endpoint: string; keys: unknown; label?: string }) {
     return this.http<{ ok: true }>('/api/push/subscribe', {
       method: 'POST', body: JSON.stringify(body),

@@ -8,6 +8,7 @@ import {
   loadNetwork, saveNetwork, roster, mergeRoster, rosterHash, watchNetwork,
 } from '@helm/protocol/network';
 import { fanOut, isNew } from './notify.js';
+import { desktop } from './desktop-notify.js';
 
 const HEARTBEAT_MS = 30_000;
 // Longer than the CLI's 120s call timeout: the relay must not report a
@@ -402,7 +403,15 @@ export function createWsLayer() {
         // by the tag it is closing.
         if (!payload?.tag || (!payload.resolve && !payload?.title)) return;
         if (!payload.resolve && !isNew(payload.tag)) return;
-        fanOut(q.pushAll.all(), payload, {
+        // This computer's own Helm app turned notifications on: show them
+        // natively and leave its browser subscription out of the push.
+        let rows = q.pushAll.all();
+        const here = desktop();
+        if (here.capable && rows.some((row) => row.local)) {
+          rows = rows.filter((row) => !row.local);
+          if (payload.resolve || !here.windows.watching(payload.envId, payload.sessionId)) here.notifier.show(payload);
+        }
+        fanOut(rows, payload, {
           drop: (endpoint) => q.pushDelete.run(endpoint),
           log: (line) => console.error(`[helm] ${line}`),
         }).then((sent) => {
