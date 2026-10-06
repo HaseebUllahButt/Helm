@@ -61,26 +61,27 @@ export class Terminals extends EventEmitter {
   /** Which terminals are still running - what a reconnecting daemon asks. */
   list() { return [...this.#live.keys()]; }
 
-  async open(id, { cwd, cols = 80, rows = 24, env = {}, shell } = {}) {
+  async open(id, { cwd, cols = 80, rows = 24, env = {}, shell, cmd, args, exactEnv = false } = {}) {
     if (this.#live.has(id)) return this.#live.get(id);
     const pty = await loadPty();
     if (!pty) throw new Error(`no pty support on this machine: ${ptyError?.message}`);
 
-    const file = shell || process.env.SHELL || '/bin/bash';
-    const child = pty.spawn(file, ['-l'], {
+    const file = cmd || shell || process.env.SHELL || '/bin/bash';
+    const child = pty.spawn(file, cmd ? (args ?? []) : ['-l'], {
       name: 'xterm-256color',
       cols, rows,
       cwd: cwd || homedir(),
-      env: { ...process.env, ...env, TERM: 'xterm-256color' },
+      env: { ...(exactEnv ? {} : process.env), ...env, TERM: env.TERM || 'xterm-256color' },
     });
 
-    const t = { pty: child, ring: '', pending: '', timer: null, viewUntil: 0, lastOut: 0, cols, rows };
+    const t = { pty: child, ring: '', pending: '', timer: null, views: new Map(), sizes: new Map(), lead: null, lastOut: 0, lastData: Date.now(), cols, rows };
     this.#live.set(id, t);
 
     child.onData((chunk) => {
       // The ring is kept whether or not anyone is looking, so that opening the
       // terminal shows what happened while you were away.
       t.ring = trim(t.ring + chunk);
+      t.lastData = Date.now();
       if (!this.#viewed(t)) return;
       t.pending += chunk;
 
@@ -103,6 +104,7 @@ export class Terminals extends EventEmitter {
     });
 
     child.onExit(({ exitCode }) => {
+      if (t.closed) return; // close() already said so
       this.#flush(id);
       this.#live.delete(id);
       this.emit('exit', { id, code: exitCode });
@@ -111,7 +113,11 @@ export class Terminals extends EventEmitter {
     return t;
   }
 
-  #viewed(t) { return Date.now() < t.viewUntil; }
+  #viewed(t) {
+    const now = Date.now();
+    for (const [viewer, until] of t.views) if (until <= now) t.views.delete(viewer);
+    return t.views.size > 0;
+  }
 
   #flush(id) {
     const t = this.#live.get(id);
@@ -121,6 +127,13 @@ export class Terminals extends EventEmitter {
     const text = t.pending;
     t.pending = '';
     this.emit('data', { id, text });
+  }
+
+  /** How long it has drawn nothing, with nobody looking; 0 while watched. */
+  unwatchedQuiet(id) {
+    const t = this.#live.get(id);
+    if (!t || this.#viewed(t)) return 0;
+    return Date.now() - t.lastData;
   }
 
   /** Everything worth drawing, without claiming to be watching it. */
@@ -135,29 +148,41 @@ export class Terminals extends EventEmitter {
    * The caller clears its screen and writes this, so a reconnect cannot show
    * the same bytes twice.
    */
-  view(id, { cols, rows } = {}) {
+  view(id, { cols, rows, viewer = 'legacy', persistent = false } = {}) {
     const ring = this.scrollback(id);
-    this.#live.get(id).viewUntil = Date.now() + VIEW_TTL_MS;
-    if (cols && rows) this.resize(id, cols, rows);
+    const t = this.#live.get(id);
+    t.views.set(viewer, persistent ? Infinity : Date.now() + VIEW_TTL_MS);
+    // Looking does not take the size from somebody already using it: a phone
+    // opening the laptop's CLI would otherwise leave the laptop 45 columns wide.
+    if (cols && rows) this.resize(id, cols, rows, viewer);
     return ring;
   }
 
   /** Still watching, nothing to redraw. */
-  renew(id) {
+  renew(id, viewer = 'legacy') {
     const t = this.#live.get(id);
     if (!t) throw new Error('that terminal has ended');
-    t.viewUntil = Date.now() + VIEW_TTL_MS;
+    if (t.views.get(viewer) !== Infinity) t.views.set(viewer, Date.now() + VIEW_TTL_MS);
     return { ok: true };
   }
 
-  unview(id) {
+  unview(id, viewer = 'legacy') {
     const t = this.#live.get(id);
-    if (t) t.viewUntil = 0;
+    if (!t) return;
+    t.views.delete(viewer);
+    t.sizes.delete(viewer);
+    if (t.lead !== viewer) return;
+    // Hand the size to whoever is still looking.
+    t.lead = null;
+    const [next] = [...t.sizes.keys()].filter((v) => t.views.has(v));
+    if (next) this.#lead(t, next);
   }
 
-  write(id, data) {
+  /** Typing is what makes a viewer the one the program draws for. */
+  write(id, data, viewer = 'legacy') {
     const t = this.#live.get(id);
     if (!t) throw new Error('that terminal has ended');
+    if (t.lead !== viewer && t.sizes.has(viewer)) this.#lead(t, viewer);
     t.pty.write(data);
   }
 
@@ -166,10 +191,18 @@ export class Terminals extends EventEmitter {
    * renders for 80 columns and the phone reflows the result, which is why
    * anything that draws a box used to arrive in pieces.
    */
-  resize(id, cols, rows) {
+  resize(id, cols, rows, viewer = 'legacy') {
     const t = this.#live.get(id);
-    if (!t) return;
-    if (!cols || !rows || (t.cols === cols && t.rows === rows)) return;
+    if (!t || !cols || !rows) return;
+    t.sizes.set(viewer, { cols, rows });
+    const leading = t.lead && t.lead !== viewer && t.views.has(t.lead) && t.sizes.has(t.lead);
+    if (!leading) this.#lead(t, viewer);
+  }
+
+  #lead(t, viewer) {
+    t.lead = viewer;
+    const { cols, rows } = t.sizes.get(viewer);
+    if (t.cols === cols && t.rows === rows) return;
     t.cols = cols; t.rows = rows;
     try { t.pty.resize(cols, rows); } catch { /* it exited between the check and here */ }
   }
@@ -179,7 +212,11 @@ export class Terminals extends EventEmitter {
     if (!t) return;
     if (t.timer) clearTimeout(t.timer);
     this.#live.delete(id);
+    // Say it ended now, once: a program that ignores the hangup may take
+    // its time, and nobody can reach this terminal any more anyway.
+    t.closed = true;
     try { t.pty.kill(); } catch { /* already gone */ }
+    this.emit('exit', { id, code: null });
   }
 
   closeAll() { for (const id of [...this.#live.keys()]) this.close(id); }

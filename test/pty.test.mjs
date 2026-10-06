@@ -90,4 +90,23 @@ test('closing a terminal ends its shell and forgets it', opts, async (t) => {
   assert.throws(() => terms.write('t4', 'x'), /ended/);
 });
 
+test('a connected native client keeps output after a lease gap while a disconnected viewer receives none', opts, async t => {
+  const {terms,text,seen}=terminals(t);
+  await terms.open('persistent',{cwd:process.env.HELM_DIR});
+  terms.view('persistent',{viewer:'laptop',persistent:true});
+  terms.view('persistent',{viewer:'phone'});
+  const now = Date.now;
+  Date.now=()=>now()+120000;
+  try {
+    terms.renew('persistent','laptop');
+    terms.write('persistent','echo after-lease-gap\r');
+    await until(()=>text().includes('after-lease-gap'));
+    terms.unview('persistent','laptop');
+    seen.length=0;
+    terms.write('persistent','echo no-live-viewer\r');
+    await until(()=>terms.scrollback('persistent').includes('no-live-viewer'));
+    assert.equal(text().includes('no-live-viewer'),false);
+  } finally { Date.now=now; }
+});
+
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));

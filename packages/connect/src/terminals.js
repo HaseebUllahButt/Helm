@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { connect } from 'node:net';
 import { spawn } from 'node:child_process';
-import { existsSync, unlinkSync, mkdirSync, openSync, lstatSync, chmodSync } from 'node:fs';
+import { existsSync, unlinkSync, mkdirSync, openSync, lstatSync, chmodSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -53,6 +53,31 @@ export const SOCKET_PATH =
  */
 export const PROC_SOCKET_PATH =
   process.env.HELM_PROCS_SOCKET || join(socketDir, `helm-procs-${helmTag}.sock`);
+/**
+ * The CLI terminals' host is versioned by its own code. An update that
+ * changes it starts a new host for new terminals and leaves the old one
+ * holding the CLIs already running in it - an update never closes a CLI
+ * somebody is using. The old one leaves once its last terminal ends.
+ */
+const hostCode = createHash('sha256');
+for (const file of ['./pty.js', '../bin/helm-terminals.js', './terminals.js']) {
+  try { hostCode.update(readFileSync(fileURLToPath(new URL(file, import.meta.url)))); } catch { /* packaged differently */ }
+}
+export const NATIVE_HOST_VERSION = hostCode.digest('hex').slice(0, 8);
+export const NATIVE_SOCKET_PATH =
+  process.env.HELM_NATIVE_SOCKET || join(socketDir, `helm-native-${helmTag}-${NATIVE_HOST_VERSION}.sock`);
+export const NATIVE_UNIT = `helm-native-${NATIVE_HOST_VERSION}`;
+
+/** Earlier versions' CLI hosts that may still hold running terminals. */
+export function olderNativeSockets() {
+  if (process.env.HELM_NATIVE_SOCKET) return [];
+  try {
+    return readdirSync(socketDir)
+      .filter((name) => name.startsWith(`helm-native-${helmTag}`) && name.endsWith('.sock'))
+      .map((name) => join(socketDir, name))
+      .filter((path) => path !== NATIVE_SOCKET_PATH);
+  } catch { return []; }
+}
 
 /** Where a host that fails to start says why. */
 export const HOST_LOG = join(HELM_DIR, 'terminals.log');
@@ -97,6 +122,7 @@ export class TerminalHost extends EventEmitter {
    * session id is its id here, so `hasProc(s.id)` is the whole check.
    */
   #procs = new Set();
+  #nativeSessions = new Map();
   /** proc id -> the driver's listeners, once one has bound the stream */
   #procListeners = new Map();
   /** proc id -> output nobody is holding yet, kept for whichever driver asks */
@@ -119,6 +145,7 @@ export class TerminalHost extends EventEmitter {
 
   has(id) { return this.#ids.has(id); }
   list() { return [...this.#ids]; }
+  nativeSessions() { return [...this.#nativeSessions.values()]; }
 
   /**
    * Connect, starting a host if there is not one already.
@@ -217,6 +244,7 @@ export class TerminalHost extends EventEmitter {
       this.#pty = !!msg.pty;
       this.#ids = new Set(msg.ids ?? []);
       this.#procs = new Set(msg.procs ?? []);
+      this.#nativeSessions = new Map((msg.nativeSessions ?? []).map((s) => [s.id, s]));
       this.emit('hello', msg);
       return;
     }
@@ -247,9 +275,15 @@ export class TerminalHost extends EventEmitter {
       else this.emit('proc.exit', { id: msg.id, code: msg.code });
       return;
     }
+    if (msg.t === 'native.open') {
+      this.#ids.add(msg.session.id);
+      this.#nativeSessions.set(msg.session.id, msg.session);
+      this.emit('native.open', msg.session);
+    }
     if (msg.t === 'data') this.emit('data', { id: msg.id, text: msg.text });
     if (msg.t === 'exit') {
       this.#ids.delete(msg.id);
+      this.#nativeSessions.delete(msg.id);
       this.emit('exit', { id: msg.id, code: msg.code });
     }
   }
@@ -333,14 +367,14 @@ export class TerminalHost extends EventEmitter {
 
   async open(id, opts = {}) {
     await this.ensure();
-    await this.#call({ t: 'open', id, ...opts });
+    const r = await this.#call({ t: 'open', id, ...opts });
     this.#ids.add(id);
-    return { id };
+    return { id, pid: r?.pid ?? null };
   }
 
-  async view(id, { cols, rows } = {}) {
+  async view(id, { cols, rows, persistent = false } = {}) {
     await this.ensure();
-    const r = await this.#call({ t: 'view', id, cols, rows });
+    const r = await this.#call({ t: 'view', id, cols, rows, persistent });
     return r.text;
   }
 
@@ -407,4 +441,71 @@ export class TerminalHost extends EventEmitter {
     this.#sock?.destroy();
     this.#sock = null;
   }
+}
+
+/**
+ * Every CLI terminal host on this machine, as one: new terminals open in the
+ * current version's host, and each running one is reached in whichever host
+ * holds it. An older host is let go as soon as it holds nothing, so it can
+ * exit on its own.
+ */
+export class NativeHosts extends EventEmitter {
+  #current;
+  #older = new Map();
+  #olderPaths;
+  #make;
+
+  constructor({ current, olderPaths = olderNativeSockets, make = (socketPath) => new TerminalHost({ socketPath, unit: 'helm-native-old' }) } = {}) {
+    super();
+    this.#current = current ?? new TerminalHost({ socketPath: NATIVE_SOCKET_PATH, unit: NATIVE_UNIT });
+    this.#olderPaths = olderPaths;
+    this.#make = make;
+    this.#forward(this.#current);
+  }
+
+  #forward(host, older = false) {
+    for (const event of ['data', 'native.open', 'hello']) host.on(event, (payload) => this.emit(event, payload));
+    host.on('exit', (payload) => {
+      this.emit('exit', payload);
+      if (older && !host.list().length) this.#release(host);
+    });
+  }
+
+  #release(host) {
+    for (const [path, h] of this.#older) if (h === host) this.#older.delete(path);
+    host.detach();
+  }
+
+  async #adoptOlder() {
+    for (const path of this.#olderPaths()) {
+      if (this.#older.has(path)) continue;
+      const host = this.#make(path);
+      if (!(await host.ensure({ spawn: false }).catch(() => false)) || !host.list().length) { host.detach(); continue; }
+      this.#older.set(path, host);
+      this.#forward(host, true);
+      this.emit('hello', {});
+    }
+  }
+
+  get usable() { return this.#current.usable; }
+  #all() { return [this.#current, ...this.#older.values()]; }
+  #owner(id) { return this.#all().find((h) => h.has(id)) ?? this.#current; }
+
+  async ensure(opts = {}) {
+    const ok = await this.#current.ensure(opts);
+    await this.#adoptOlder();
+    return ok;
+  }
+  has(id) { return this.#all().some((h) => h.has(id)); }
+  list() { return this.#all().flatMap((h) => h.list()); }
+  nativeSessions() { return this.#all().flatMap((h) => h.nativeSessions()); }
+  open(id, opts) { return this.#current.open(id, opts); }
+  view(id, opts) { return this.#owner(id).view(id, opts); }
+  renew(id) { return this.#owner(id).renew(id); }
+  unview(id) { return this.#owner(id).unview(id); }
+  write(id, data) { return this.#owner(id).write(id, data); }
+  resize(id, cols, rows) { return this.#owner(id).resize(id, cols, rows); }
+  close(id) { return this.#owner(id).close(id); }
+  async shutdown() { for (const h of this.#all()) await h.shutdown(); this.#older.clear(); }
+  detach() { for (const h of this.#all()) h.detach(); this.#older.clear(); }
 }

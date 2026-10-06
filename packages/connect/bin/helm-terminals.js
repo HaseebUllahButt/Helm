@@ -26,6 +26,13 @@ delete process.env.HELM_PROCS_SOCKET;
 
 /** With nothing left to hold, there is no reason to stay resident. */
 const IDLE_EXIT_MS = 60_000;
+/**
+ * A CLI started from a terminal outlives that window, so the app can carry
+ * it on. One nobody is watching that has drawn nothing for this long is
+ * sitting at its prompt: end it. A working TUI redraws its spinner, and the
+ * conversation stays in the CLI's history to resume.
+ */
+const NATIVE_ABANDONED_MS = Number(process.env.HELM_NATIVE_ABANDONED_MS) || 30 * 60_000;
 /** Per-proc output kept while nobody is attached - a restart's worth, not a history. */
 const PROC_BACKLOG_MAX = 256 * 1024;
 
@@ -41,6 +48,9 @@ let idleTimer = null;
  * attach so a turn that finished mid-restart still reports its end.
  */
 const procs = new Map();
+// Launch metadata contains no environment or credentials. It lets a new
+// daemon discover native CLIs even when the laptop terminal has detached.
+const nativeSessions = new Map();
 
 const send = (sock, msg) => {
   if (sock.writable) sock.write(JSON.stringify(msg) + '\n');
@@ -48,7 +58,15 @@ const send = (sock, msg) => {
 const broadcast = (msg) => { for (const c of clients) send(c, msg); };
 
 terminals.on('data', ({ id, text }) => broadcast({ t: 'data', id, text }));
-terminals.on('exit', ({ id, code }) => { broadcast({ t: 'exit', id, code }); armIdleExit(); });
+terminals.on('exit', ({ id, code }) => { nativeSessions.delete(id); broadcast({ t: 'exit', id, code }); armIdleExit(); });
+setInterval(() => {
+  for (const id of nativeSessions.keys()) {
+    if (terminals.unwatchedQuiet(id) >= NATIVE_ABANDONED_MS) {
+      nativeSessions.delete(id);
+      terminals.close(id);
+    }
+  }
+}, Math.min(60_000, NATIVE_ABANDONED_MS)).unref?.();
 
 function procOut(id, data) {
   if (clients.size === 0) {
@@ -145,17 +163,27 @@ function armIdleExit() {
   idleTimer.unref?.();
 }
 
-async function handle(msg) {
+async function handle(msg, viewer) {
   switch (msg.t) {
     case 'open':
-      await terminals.open(msg.id, msg);
-      return { ok: true };
-    case 'view':    return { text: terminals.view(msg.id, msg) };
-    case 'renew':   return terminals.renew(msg.id);
-    case 'unview':  terminals.unview(msg.id); return { ok: true };
-    case 'write':   terminals.write(msg.id, msg.data); return { ok: true };
-    case 'resize':  terminals.resize(msg.id, msg.cols, msg.rows); return { ok: true };
-    case 'close':   terminals.close(msg.id); armIdleExit(); return { ok: true };
+      {
+        const terminal = await terminals.open(msg.id, msg);
+        if (msg.native && !nativeSessions.has(msg.id)) {
+          const session = { id: msg.id, engine: msg.native.engine, cwd: msg.cwd,
+            configHome: msg.native.configHome, nativePid: terminal.pty.pid,
+            conversation: msg.native.conversation ?? null, createdAt: Date.now() };
+          nativeSessions.set(msg.id, session);
+          broadcast({ t: 'native.open', session });
+        }
+        return { ok: true, pid: terminal.pty.pid };
+      }
+    case 'view':    return { text: terminals.view(msg.id, { ...msg, viewer }) };
+    case 'renew':   return terminals.renew(msg.id, viewer);
+    case 'unview':  terminals.unview(msg.id, viewer); return { ok: true };
+    case 'write':   terminals.write(msg.id, msg.data, viewer); return { ok: true };
+    case 'resize':  terminals.resize(msg.id, msg.cols, msg.rows, viewer); return { ok: true };
+    // The pty's own exit event reports the end, once.
+    case 'close':   nativeSessions.delete(msg.id); terminals.close(msg.id); armIdleExit(); return { ok: true };
     case 'list':    return { ids: terminals.list() };
 
     // Pipe-stdio processes, held on the same terms as the ptys.
@@ -195,7 +223,7 @@ const server = createServer((sock) => {
   // Say what we are straight away, so a daemon that has just restarted knows
   // which terminals and agent processes survived without having to ask - then
   // hand it anything those processes said while nobody was listening.
-  send(sock, { t: 'hello', pty: !!pty, reason: pty ? null : ptyUnavailable(), ids: terminals.list(), procs: [...procs.keys()] });
+  send(sock, { t: 'hello', pty: !!pty, reason: pty ? null : ptyUnavailable(), ids: terminals.list(), procs: [...procs.keys()], nativeSessions: [...nativeSessions.values()] });
   for (const [id, p] of procs) {
     if (p.backlog) { send(sock, { t: 'proc.data', id, data: p.backlog }); p.backlog = ''; }
   }
@@ -211,14 +239,14 @@ const server = createServer((sock) => {
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }
       try {
-        send(sock, { t: 'ok', rid: msg.rid, result: await handle(msg) });
+        send(sock, { t: 'ok', rid: msg.rid, result: await handle(msg, sock) });
       } catch (err) {
         send(sock, { t: 'err', rid: msg.rid, error: String(err?.message || err) });
       }
     }
   });
 
-  const gone = () => { clients.delete(sock); armIdleExit(); };
+  const gone = () => { clients.delete(sock); for (const id of terminals.list()) terminals.unview(id, sock); armIdleExit(); };
   sock.on('close', gone);
   sock.on('error', gone);
 });
