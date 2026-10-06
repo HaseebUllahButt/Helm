@@ -28,6 +28,7 @@ export const ENGINES = {
     resumeArgs: (id) => ['resume', id],
     // Run headless through `codex app-server` (drivers/codex.js).
     driver: 'codex',
+    proc: { nonInteractiveSub: ['app-server', 'exec', 'login', 'logout', 'mcp', 'remote-control'] },
   },
   claude: {
     id: 'claude',
@@ -39,6 +40,8 @@ export const ENGINES = {
     resumeArgs: (id) => ['--resume', id],
     // Run headless through `claude -p` stream-json (drivers/claude.js).
     driver: 'claude',
+    proc: { nonInteractiveFlags: ['-p', '--print', '--input-format', '--output-format'],
+      nonInteractiveSub: ['auth', 'mcp', 'update', 'install', 'doctor', 'remote-control'] },
   },
   opencode: {
     id: 'opencode',
@@ -292,7 +295,7 @@ export function isInteractiveProc(engine, argv) {
   const e = ENGINES[engine];
   if (!e?.bin || !Array.isArray(argv) || !argv.length) return false;
   const spec = e.proc ?? {};
-  const names = spec.names ?? [e.bin];
+  const names = [...(spec.names ?? [e.bin]), ...[e.bin, ...(e.altBins ?? [])].map((bin) => `.${bin}-helm-native`)];
   const prefixes = spec.namesPrefix ?? [];
   const at = argv.findIndex((x) => {
     const name = x.split('/').pop();
