@@ -171,6 +171,7 @@ async function handle(msg, viewer) {
         if (msg.native && !nativeSessions.has(msg.id)) {
           const session = { id: msg.id, engine: msg.native.engine, cwd: msg.cwd,
             configHome: msg.native.configHome, nativePid: terminal.pty.pid,
+            nativeChat: !!msg.native.nativeChat,
             conversation: msg.native.conversation ?? null, createdAt: Date.now() };
           nativeSessions.set(msg.id, session);
           broadcast({ t: 'native.open', session });

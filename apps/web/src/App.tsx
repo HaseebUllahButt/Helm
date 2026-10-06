@@ -13,6 +13,9 @@ import { Composer } from './session/Composer';
 import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
 import { ExternalSessionNotice } from './session/ExternalSessionNotice';
+import { useSessionLog } from './session/useSessionLog';
+import { PermissionSheet } from './session/PermissionSheet';
+import type { Decision } from './session/types';
 import { EngineMark } from './EngineMark';
 import { NotificationToast } from './NotificationToast';
 import { PublicLinks } from './PublicLinks';
@@ -4313,7 +4316,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const [raw, setRaw] = useState(isShell || !!session.nativeCli);
+  const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat);
   const [status, setStatus] = useState(session.status);
   // When it entered the status it is in, for "working 14m" beside the word.
   const [statusAt, setStatusAt] = useState(session.updatedAt);
@@ -4333,9 +4336,10 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     reading.current = true;
     let success = false;
     try {
-      const r = await client.rpc<{ messages: Message[] }>(env.id, 'session.messages', { id: session.id }, 15_000);
+      const r = await client.rpc<{ messages: Message[]; status?: Session['status'] }>(env.id, 'session.messages', { id: session.id }, 15_000);
       if (!mounted.current) return;
       setMessages(r.messages);
+      if (r.status) setStatus(r.status);
       setReadError(''); success = true;
       saveMessages(env.id, session.id, r.messages);
     } catch (e: any) { if (mounted.current) setReadError(e.message); }
@@ -4383,14 +4387,18 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   // transcript whose process is gone cannot change at all.
   useLiveInterval(status === 'exited' ? null : 15_000, refresh, [status, refresh]);
 
+  const [sending, setSending] = useState(false);
   const send = async () => {
     const body = draft;
-    if (!body.trim()) return;
-    setDraft('');
-    setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now() }] : m);
-    try { await client.rpc(env.id, 'session.input', { id: session.id, data: body + '\n' }); }
-    catch (e: any) { setError(e.message); setDraft(body); }
-    setTimeout(refresh, 600);
+    if (!body.trim() || sending) return;
+    setSending(true); setError('');
+    try {
+      await client.rpc(env.id, 'session.input', { id: session.id, data: body + '\n' });
+      setDraft(current => current === body ? '' : current);
+      setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now() }] : m);
+      setTimeout(refresh, 600);
+    } catch (e: any) { setError(e.message); }
+    finally { setSending(false); }
   };
 
   const key = async (k: string) => {
@@ -4511,9 +4519,11 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
         <Composer
           onTranscribe={onTranscribe}
           draft={draft} setDraft={setDraft} onSend={send} onKey={key}
+          keys={!session.nativeChat} preparing={sending}
           waiting={status === 'blocked'} engine={eng.label}
           history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
         >
+          {session.nativeChat && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
           {(error || (!messages && readError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || readError}</div>}
         </Composer>
       )}
@@ -4523,6 +4533,21 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
 }
 
 // --------------------------------------------------------------------- chat
+
+function NativeClaudeApprovals({ client, env, sessionId }: { client: Client; env: string; sessionId: string }) {
+  const { log, refresh } = useSessionLog(client, env, sessionId);
+  const pending = log.pending[0];
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const answer = async (decision: Decision) => {
+    if (!pending) return;
+    setBusy(true); setError('');
+    try { await client.rpc(env, 'session.answer', { id: sessionId, requestId: pending.requestId, decision }); await refresh(); }
+    catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+  return <>{pending && <PermissionSheet key={pending.requestId} permission={pending} busy={busy} onAnswer={d => void answer(d)} />}
+    {error && <div className="error" role="alert">{error}</div>}</>;
+}
 
 
 function ago(ts: number | null | undefined) {

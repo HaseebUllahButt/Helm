@@ -10,6 +10,7 @@ import { ENGINES } from './engines.js';
 const marker = '# Helm native CLI integration';
 const manifestFile = join(HELM_DIR, 'native-cli.json');
 const launcher = fileURLToPath(new URL('../bin/helm-native-cli.js', import.meta.url));
+const claudeChannel = fileURLToPath(new URL('../bin/helm-claude-channel.js', import.meta.url));
 const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
 const nativeEngines = Object.values(ENGINES).filter((e) => e.bin && !e.plain && !e.managed).map((e) => e.id);
 
@@ -285,6 +286,12 @@ export async function runNativeCli(engine, cmd, args) {
   // one Helm took over, say - joins it instead of starting a second copy.
   const joined = sharedConversation(host.nativeSessions(), engine, configHome, args);
   const id = joined?.id ?? `native-${randomBytes(8).toString('hex')}`;
+  // Opt-in prototype: native Claude accepts messages and approvals through
+  // its channel while Helm renders the shared conversation transcript.
+  const nativeChat = engine === 'claude' && process.env.HELM_NATIVE_CHAT === '1';
+  if (nativeChat && !joined) args = [...args, '--mcp-config', JSON.stringify({ mcpServers: {
+    'helm-native': { command: process.execPath, args: [claudeChannel] },
+  } }), '--dangerously-load-development-channels', 'server:helm-native'];
   return new Promise(async (resolve, reject) => {
     let finished = false;
     let started = false;
@@ -314,7 +321,7 @@ export async function runNativeCli(engine, cmd, args) {
     on(host, 'exit', (e) => { if (e.id === id) finish(e.code ?? 0); });
     try {
       if (!joined) await host.open(id, { cmd, args, cwd: process.cwd(), ...size(), exactEnv: true,
-        env: { ...process.env, HELM_NATIVE_SESSION: id }, native: { engine, configHome } });
+        env: { ...process.env, HELM_NATIVE_SESSION: id }, native: { engine, configHome, nativeChat } });
       if (finished) return;
       process.stdin.setRawMode(true);
       started = true;

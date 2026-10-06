@@ -126,6 +126,44 @@ for (const width of [1280, 390]) test(`a normal native CLI opens with keyboard c
   assert.equal(await page.evaluate(() => window.nativeCalls.some(c => c.method === 'session.kill')), false);
 });
 
+for (const width of [1280, 390]) test(`native Claude channel opens as a Helm chat at ${width}px`, async context => {
+  const { page, boot } = await pageFor(context, { width, height: 900 });
+  page.setDefaultTimeout(5000);
+  await boot();
+  await page.evaluate(() => {
+    const session = { id: 'native-chat', title: 'Helm interface demo', engine: 'claude', cwd: '/work/helm',
+      nativeCli: true, nativeChat: true, pty: true, shared: true, alive: true, status: 'idle', updatedAt: Date.now() };
+    const client = window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [session] });
+    const fallback = client.rpc;
+    window.chatCalls = []; window.chatMessages = [{ role: 'assistant', text: 'This is the Helm conversation interface.', tools: [] }];
+    client.rpc = (env, method, params) => {
+      window.chatCalls.push({ method, params });
+      if (method === 'session.messages') return Promise.resolve({ messages: window.chatMessages, status: 'idle' });
+      if (method === 'session.events') return Promise.resolve({ events: [], pending: [], last: 0, session: { status: 'idle' } });
+      if (['session.watch', 'session.unwatch'].includes(method)) return Promise.resolve({ ok: true, last: 0 });
+      if (method === 'session.input') {
+        window.chatMessages = [...window.chatMessages, { role: 'user', text: params.data.trim(), tools: [] }, { role: 'assistant', text: 'Your message reached the same Claude session.', tools: [] }];
+        return Promise.resolve({ ok: true });
+      }
+      return fallback(env, method);
+    };
+    window.mount(client);
+  });
+  await page.locator('.sidebar').getByRole('button', { name: 'done 1', exact: true }).click();
+  await page.locator('.sidebar').getByText('Helm interface demo', { exact: true }).click();
+  await page.getByText('This is the Helm conversation interface.', { exact: true }).waitFor();
+  assert.equal(await page.locator('.xterm-host').count(), 0);
+  const composer = page.locator('.slab textarea');
+  await composer.fill('Hello from Helm');
+  await page.getByRole('button', { name: 'send', exact: true }).click();
+  await page.getByText('Your message reached the same Claude session.', { exact: true }).waitFor();
+  const calls = await page.evaluate(() => window.chatCalls);
+  assert.deepEqual(calls.find(c => c.method === 'session.input').params, { id: 'native-chat', data: 'Hello from Helm\n' });
+  assert.equal(calls.some(c => c.method === 'session.attach'), false);
+  assert.equal(await page.locator('.slab .quick').count(), 0);
+  await page.screenshot({ path: `/tmp/helm-native-chat-${width}.png` });
+});
+
 test('project timeout errors clear on recovery and late failures cannot replace a fresh list', async context => {
   const { page, boot } = await pageFor(context, { width: 1280, height: 900 });
   await boot();

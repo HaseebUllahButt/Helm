@@ -34,6 +34,7 @@ import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from
 import { openFiles, processArgv, processCwd } from './procinfo.js';
 import { GREETING, bareTitle, informative, promptTitle } from './titles.js';
 import { askPreview } from './notify.js';
+import { claudeChannelRpc } from './claude-channel.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -306,12 +307,45 @@ export class Sessions extends EventEmitter {
       try {
         await this.nativeTerminals.ensure({ spawn: false });
         await this.#discoverNativeCodex(await getProfiles());
+        for (const s of this.#index.values()) if (s.nativeChat) await this.#syncNativeChat(s).catch(() => {});
       } catch (err) { this.log(`native CLI discovery: ${err.message}`); }
     }, 2500);
     this.nativePoll.unref?.();
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
+
+  async #syncNativeChat(s) {
+    const channel = await claudeChannelRpc(s.id, 'status');
+    const owners = s.nativeHome && s.engineSessionId
+      ? claudeLiveSessions(s.nativeHome).get(s.engineSessionId) ?? [] : [];
+    const live = claudeLiveStatus(owners.filter(p => descendsFrom(p.pid, s.nativePid)));
+    const closed = live && live !== 'blocked'
+      ? channel.permissions.filter(p => Date.now() - p.at > 2500).map(p => p.request_id) : [];
+    if (closed.length) {
+      await claudeChannelRpc(s.id, 'clear', { ids: closed });
+      channel.permissions = channel.permissions.filter(p => !closed.includes(p.request_id));
+    }
+    const known = new Set(this.events.pending(s.id).map(p => p.requestId));
+    const current = new Set(channel.permissions.map(p => p.request_id));
+    for (const p of channel.permissions) if (!known.has(p.request_id)) {
+      const event = this.events.append(s.id, { type: 'permission.request', requestId: p.request_id,
+        kind: p.tool_name === 'Bash' ? 'command' : 'tool', tool: p.tool_name,
+        title: p.description || `Allow ${p.tool_name}?`, detail: p.input_preview, at: p.at,
+        options: [{ id: 'allow', role: 'allow', label: 'Allow once' }, { id: 'deny', role: 'deny', label: 'Deny' }], defaultTo: 'deny' });
+      this.emit('event', { id: s.id, event });
+    }
+    for (const requestId of known) if (!current.has(requestId)) {
+      const event = this.events.append(s.id, { type: 'permission.resolved', requestId });
+      this.emit('event', { id: s.id, event });
+    }
+    const status = channel.permissions.length ? 'blocked' : live ?? s.status;
+    if (status !== s.status || known.size !== current.size) {
+      s.status = status; s.updatedAt = Date.now(); this.#save();
+      this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id), ...pendingSummary(this.events.pending(s.id)) });
+    }
+    return channel;
+  }
 
   /** What the last list found, so opening a row it just showed skips a rescan. */
   #lastDetected = null;
@@ -402,11 +436,18 @@ export class Sessions extends EventEmitter {
 
   #adoptNative(meta) {
     if (!meta?.id || !ENGINES[meta.engine]?.bin || ENGINES[meta.engine].plain) return;
-    if (this.#index.has(meta.id)) return;
+    if (this.#index.has(meta.id)) {
+      const existing = this.#index.get(meta.id);
+      if (existing.nativeCli && existing.nativeChat !== !!meta.nativeChat) {
+        existing.nativeChat = !!meta.nativeChat; this.#save();
+      }
+      return;
+    }
     const session = { id: meta.id, engine: meta.engine, cwd: meta.cwd,
       title: basename(meta.cwd) || meta.engine, titleBy: null,
       profileId: null, pty: true, nativeCli: true, shared: true,
       nativePid: meta.nativePid, nativeHome: meta.configHome,
+      nativeChat: !!meta.nativeChat,
       ...(meta.conversation ? { engineSessionId: meta.conversation } : {}),
       status: 'idle', createdAt: meta.createdAt, updatedAt: meta.createdAt };
     this.#index.set(meta.id, session);
@@ -667,7 +708,9 @@ export class Sessions extends EventEmitter {
             this.#save();
           }
         }
-        out.push({ ...wire(s), alive, status: alive ? (s.nativeCli ? s.status : 'shell') : 'exited', adopted: false });
+        if (s.nativeChat && alive) await this.#syncNativeChat(s).catch(() => {});
+        out.push({ ...wire(s), alive, status: alive ? (s.nativeCli ? s.status : 'shell') : 'exited', adopted: false,
+          ...pendingSummary(this.events.pending(s.id)) });
         continue;
       }
       const pane = live.get(s.paneId);
@@ -1955,6 +1998,16 @@ export class Sessions extends EventEmitter {
   }
 
   async answer(id, requestId, decision) {
+    const s = this.get(id);
+    if (s.nativeChat) {
+      await this.#syncNativeChat(s);
+      if (!this.events.pending(id).some(p => p.requestId === requestId)) throw new Error('that approval has already closed');
+      if (!['allow', 'deny'].includes(decision?.option)) throw new Error('choose allow or deny');
+      await claudeChannelRpc(id, 'answer', { requestId, behavior: decision.option });
+      const event = this.events.append(id, { type: 'permission.resolved', requestId, decision });
+      this.emit('event', { id, event });
+      return { ok: true };
+    }
     const d = this.#drivers.get(id);
     if (!d) throw new Error('the agent is not running; that prompt is gone');
     await d.answer(requestId, decision);
@@ -2163,10 +2216,14 @@ export class Sessions extends EventEmitter {
    */
   async messages(id, { limit = 120 } = {}) {
     const s = this.get(id);
+    if (s.nativeChat) await this.#syncNativeChat(s).catch(() => {});
     if (s.driver) return { messages: [], source: 'events' };
     // A launched native process must be linked by process identity, never
     // by the newest file in a folder where several CLIs may be running.
-    if (s.nativeCli && !s.transcript) return { messages: [], source: null };
+    if (s.nativeCli && !s.transcript) return s.nativeChat
+      ? { messages: this.events.since(id, 0).filter(e => e.type === 'native.message').slice(-limit)
+          .map(e => ({ role: 'user', text: e.text, tools: [], at: e.at })), status: s.status, source: null }
+      : { messages: [], source: null };
     if (!s.transcript) {
       const profiles = await getProfiles();
       const profile = profiles.find((p) => p.id === s.profileId);
@@ -2195,10 +2252,16 @@ export class Sessions extends EventEmitter {
     }
     // Asking for messages is how a chat view says it is watching.
     this.#watchTranscript(id, s.transcript);
+    const messages = [...await readMessages({ engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit })];
+    if (s.nativeChat) {
+      for (const event of this.events.since(id, 0)) if (event.type === 'native.message') {
+        messages.push({ role: 'user', text: event.text, tools: [], at: event.at });
+      }
+      messages.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+    }
     return {
-      messages: await readMessages({
-        engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit,
-      }),
+      messages: messages.slice(-limit),
+      status: s.status,
       source: s.transcript,
     };
   }
@@ -2382,6 +2445,17 @@ export class Sessions extends EventEmitter {
       throw new Error('choose up to three other threads as context');
     }
     if (references.length && (raw || !s.driver || text.trimStart().startsWith('/'))) throw new Error('thread context needs an ordinary agent message');
+    if (s.nativeChat && !raw) {
+      if (attachments.length) throw new Error('Image messages are not supported in this shared-chat preview yet');
+      if (!this.nativeTerminals.has(id)) throw new Error('Claude is no longer running');
+      if (text.trimStart().startsWith('/')) throw new Error('Claude slash commands are not supported in this shared-chat preview yet');
+      await claudeChannelRpc(id, 'send', { text: text.trim() });
+      const event = this.events.append(id, { type: 'native.message', text: text.trim() });
+      this.emit('event', { id, event });
+      s.hasInput = true; s.updatedAt = Date.now(); this.#save();
+      this.emit('session', { ...wire(s), alive: true });
+      return { ok: true };
+    }
     if (source !== 'user' && s.stoppedAt) throw new Error('the thread was stopped');
     if (delivery === 'steer' && ['working', 'blocked'].includes(s.status)
       && typeof this.#drivers.get(id)?.steer !== 'function') throw new Error(`${s.engine} cannot steer its current turn; queue the message instead`);

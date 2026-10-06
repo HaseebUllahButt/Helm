@@ -2,6 +2,8 @@ import type { Turn } from './types';
 
 /** Display old wire envelopes without changing the stored user message. */
 export function userMessage(text?: string, attachments: Turn['attachments'] = []) {
+  const channel = text?.match(/^\s*<channel\s+source="helm-native"[^>]*>\s*([\s\S]*?)\s*<\/channel>\s*$/);
+  if (channel) text = channel[1];
   const reply = text?.match(/^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*<\/send_user_message_question_reply>\s*$/);
   if (reply) {
     try {
