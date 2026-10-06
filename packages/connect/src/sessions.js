@@ -33,6 +33,7 @@ import { hostedProcId } from './hosted-process.js';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
 import { openFiles, processArgv, processCwd } from './procinfo.js';
 import { GREETING, bareTitle, informative, promptTitle } from './titles.js';
+import { askPreview } from './notify.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -115,6 +116,9 @@ const EXTERNAL = /^(pane:|found:)/;
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
+/** How many prompts wait, and what the newest one is about. */
+const pendingSummary = (pending) => ({ pending: pending.length, ask: pending.length ? askPreview(pending[pending.length - 1]) : null });
+
 export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, ...s }) =>
   typeof s.title === 'string' && /\[(?:Image|Pasted text) #/.test(s.title) ? { ...s, title: bareTitle(s.title) || s.title } : s;
 
@@ -642,7 +646,7 @@ export class Sessions extends EventEmitter {
         continue;
       }
       if (s.driver) {
-        out.push({ ...wire(s), archived: !!s.archived, alive: s.nativeSocket ? !!this.#drivers.get(s.id)?.nativeConnected : this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
+        out.push({ ...wire(s), archived: !!s.archived, alive: s.nativeSocket ? !!this.#drivers.get(s.id)?.nativeConnected : this.#drivers.has(s.id), adopted: false, ...pendingSummary(this.events.pending(s.id)) });
         continue;
       }
       if (s.pty) {

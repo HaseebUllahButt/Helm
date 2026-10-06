@@ -5,6 +5,7 @@ import type { Change, Item, Turn } from './types';
 import { money, seconds } from '../format';
 import { Icon, toolKind } from '../Icon';
 import { userMessage } from './userMessage';
+import { plainError } from './problem';
 
 /**
  * The conversation, live.
@@ -330,6 +331,23 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
   );
 }
 
+/** A failure, said plainly; what the CLI printed is one tap away. */
+function ErrorLine({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const plain = plainError(text);
+  const differs = plain !== text.trim();
+  return (
+    <div className="act bad errline">
+      <span className="aicon bad"><Icon name="alert" size={15} /></span>
+      <span className="alabel wrap">
+        {plain}
+        {differs && <button className="errline-more" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Hide details' : 'Details'}</button>}
+        {open && <pre className="errline-raw">{text}</pre>}
+      </span>
+    </div>
+  );
+}
+
 function ItemView({ item, byParent, commandOutput }: { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean }) {
   switch (item.kind) {
     case 'text': return <TextItem item={item} commandOutput={commandOutput} />;
@@ -338,7 +356,7 @@ function ItemView({ item, byParent, commandOutput }: { item: Item; byParent: Map
     case 'command': return <CommandItem item={item} />;
     case 'edit': return <EditItem item={item} />;
     case 'subagent': return <SubagentItem item={item} byParent={byParent} />;
-    case 'error': return <div className="act bad"><span className="aicon bad"><Icon name="alert" size={15} /></span><span className="alabel wrap">{item.text}</span></div>;
+    case 'error': return <ErrorLine text={item.text ?? ''} />;
     default: return null;
   }
 }
@@ -371,7 +389,7 @@ function clock(ts?: number) {
   return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
 }
 
-const TurnView = memo(function TurnView({ turn, items, head = true, tail = true, working, blocked, onResend, onWithdraw, onBranch }: {
+const TurnView = memo(function TurnView({ turn, items, head = true, tail = true, saidBelow = false, working, blocked, onResend, onWithdraw, onBranch }: {
   turn: Turn;
   revision?: number;
   /**
@@ -380,6 +398,8 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
    * the working pulse and the footer, and the slices between are just items.
    */
   items?: Item[];
+  /** The next turn is only this one's error line, which already says why. */
+  saidBelow?: boolean;
   head?: boolean;
   tail?: boolean;
   working: boolean; blocked: boolean; onResend?: (turn: Turn) => void; onWithdraw?: (turn: Turn) => void;
@@ -484,12 +504,14 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
         )}
         {tail && d && (d.status === 'interrupted' ? <div className="turn-meta">stopped</div>
           : d.status === 'error' ? (
-            <div className="turn-meta bad">
-              {d.error || 'the turn failed'}
+            // The error line says why; this only marks the turn, unless
+            // nothing else says anything. A bare error turn needs neither.
+            !turn.text && turn.items.some((it) => it.kind === 'error') ? null : <div className="turn-meta bad">
+              {saidBelow || turn.items.some((it) => it.kind === 'error') || !d.error ? 'Failed' : plainError(d.error)}
               {failed && onResend && (
                 // A message that never reached the agent deserves a way to
                 // try again that does not start with retyping it.
-                <button className="resend" onClick={() => onResend(turn)}>resend</button>
+                <button className="resend" onClick={() => onResend(turn)}>Send again</button>
               )}
             </div>
           )
@@ -584,8 +606,16 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     insideByHost.set(t.insideOf, [...(insideByHost.get(t.insideOf) ?? []), t]);
     hostedIds.add(t.id);
   }
+  // A failure can arrive as two turns: the message's, ended with the
+  // error, then a bare one holding only the error line. The line says why,
+  // so the message's turn just says it failed.
+  const saidBelow = new Set<string>();
+  turns.forEach((t, i) => {
+    const next = turns[i + 1];
+    if (next && !next.text && next.items.some((it) => it.kind === 'error')) saidBelow.add(t.id);
+  });
   const view = (t: Turn, items?: Item[], head = true, tail = true, key: string = t.id) => (
-    <TurnView key={key} turn={t} revision={t.revision} items={items} head={head} tail={tail}
+    <TurnView key={key} turn={t} revision={t.revision} items={items} head={head} tail={tail} saidBelow={saidBelow.has(t.id)}
       working={working && t === openTurn} blocked={status === 'blocked'}
       onResend={onResend ? resend : undefined} onWithdraw={onWithdraw ? withdraw : undefined}
       onBranch={onBranch && t !== turns[0] ? branch : undefined} />

@@ -6,6 +6,7 @@ import { Composer } from './Composer';
 import { MAX_ATTACHMENTS, looksLikeImage, prepareImage } from './image';
 import { EngineMark } from '../EngineMark';
 import { PermissionSheet } from './PermissionSheet';
+import { RecoveryCard } from './RecoveryCard';
 import { Controls, type Kind } from './Controls';
 import { Transcript, splitNote } from './Transcript';
 import { useGitStatus } from './Changes';
@@ -253,6 +254,13 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       .map((a) => ({ name: a.filename, mime: a.mime, data: a.data!, url: `data:${a.mime};base64,${a.data}` }));
     void sendText(turn.text.trim(), atts, (turn.references ?? []).map((id) => referenceOptions.find((item) => item.id === id) ?? { id, title: id }));
   };
+  // A failed turn is sent again as it was written; anything else (a pause,
+  // a limit, a stop) carries on from the saved conversation.
+  // The last message's turn, past a bare turn holding only the error line.
+  const lastTurn = [...transcriptTurns].reverse().find((turn) => turn.text?.trim());
+  const retry = session.recovery?.kind === 'error' && lastTurn?.done?.status === 'error'
+    ? () => resend(lastTurn)
+    : () => void call(() => client.rpc(env.id, 'session.recover', { id: session.id }));
 
   // A queue action in flight, by ticket: the daemon's events are the source
   // of truth for what left the queue, so the button just waits it out.
@@ -538,8 +546,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         original={session.parent} onOpenSession={onOpenMachineSession} />
       <ExternalSessionNotice session={session}
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
-      {session.recovery && !working && <div className="thread-recovery" role="status"><div><strong>{session.recovery.kind === 'limited' ? 'Usage limit reached' : session.recovery.kind === 'restart' ? 'Task paused' : session.recovery.kind === 'error' ? 'Task failed' : 'Task stopped'}</strong><p>{session.recovery.kind === 'restart' ? 'The agent stopped. Resume from the saved conversation.' : session.recovery.message}</p></div>
-        {!working && !pending && <button disabled={busy || !env.online} onClick={() => void call(() => client.rpc(env.id, 'session.recover', { id: session.id }))}>Resume task</button>}</div>}
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
@@ -577,6 +583,9 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {(error || (!log.loaded && logError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || logError}</div>}
         {notice && !error && <div className="notice floating" role="status" onClick={() => setNotice('')}><Icon name="check" size={14} />{notice}</div>}
         {controls.sheet}
+        {session.recovery && !working && !pending && (
+          <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} />
+        )}
         {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}
         {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
       </Composer>

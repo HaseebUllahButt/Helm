@@ -207,7 +207,7 @@ test('graph and branded notifications fit a phone, and dismissal does not naviga
   await page.getByRole('button',{name:'Dismiss notification'}).waitFor();
   const bounds = await page.locator('.toast').boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390);
-  assert.equal((await page.locator('.toast').innerText()).replace(/\s+/g,' '),'Helm Codex needs you Review mobile notifications › ×');
+  assert.equal((await page.locator('.toast').innerText()).replace(/\s+/g,' '),'Codex needs you Review mobile notifications');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true);
   await shot('git-notification-phone.png');
   await page.getByRole('button',{name:'Dismiss notification'}).click();

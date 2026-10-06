@@ -94,9 +94,12 @@ for (const width of [1280, 390]) test(`recovery notice is compact and hidden for
     window.sessionFixture.recovery = { kind: 'restart', message: 'This task was interrupted when its agent stopped. Its conversation is saved.', at: Date.now() };
     window.mountDriven();
   });
-  const notice = page.locator('.thread-recovery');
+  const notice = page.locator('.recovery');
   await notice.getByText('Task paused', { exact: true }).waitFor();
-  assert.ok((await notice.boundingBox()).height < (width > 500 ? 70 : 120));
+  await notice.getByRole('button', { name: 'Resume', exact: true }).waitFor();
+  const box = await notice.boundingBox();
+  assert.ok(box.height < (width > 500 ? 130 : 170), `height ${box.height}`);
+  assert.ok(box.x >= 0 && box.x + box.width <= width);
   await page.screenshot({ path: `/tmp/helm-recovery-thread-${width}.png` });
   await page.evaluate(() => {
     window.sessionFixture.status = 'working';

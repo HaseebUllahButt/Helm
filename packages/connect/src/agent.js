@@ -25,7 +25,7 @@ import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
-import { describe as describeAsk, describeDone } from './notify.js';
+import { describe as describeAsk, describeDone, askPreview } from './notify.js';
 import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
@@ -391,7 +391,14 @@ export class Daemon {
     });
     this.sessions.on('event', ({ id, event }) => {
       this.#queueEvent(id, event);
-      if (event?.type === 'permission.request') this.#notify(id, event);
+      if (event?.type === 'permission.request') {
+        this.#notify(id, event);
+        // The list only hears "blocked"; this says what about, so the
+        // in-app notice and the Needs-you card can show the question.
+        let session = null;
+        try { session = this.sessions.get(id); } catch { /* gone already */ }
+        if (session) this.#emit(E.SESSION_UPDATE, { session: { ...wire(session), ask: askPreview(event) }, asked: true });
+      }
       // The matching "needs you" is stale the moment anyone answers - on
       // this device, another, or the CLI itself. Hubs pass `resolve` through
       // to the service worker, which closes the notification by its tag.

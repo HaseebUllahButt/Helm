@@ -631,14 +631,20 @@ function Shell({ client, conn, onSignOut }: {
         // on a phone the sidebar that would say so is hidden behind the
         // session you are in. The sheet inside that session is the notice
         // for the one you are looking at, so it is not toasted about.
+        // A machine that knows what was asked follows "blocked" a moment
+        // later with `asked`; that fills in the notice already showing, or
+        // raises one for a second prompt in a thread that was already waiting.
         const s = payload?.session;
-        if (payload?.transition?.to === 'blocked' && s && !s.delegation) {
+        if ((payload?.transition?.to === 'blocked' || payload?.asked) && s && !s.delegation) {
           const top = nav.current.stack[nav.current.stack.length - 1];
           const looking = top?.kind === 'session' && top.session.id === s.id;
           const asleep = (snoozedRef.current[`${e}:${s.id}`] ?? 0) > Date.now();
           if (!looking && !asleep) {
-            setToast({ envId: e, session: s, at: Date.now() });
-            try { navigator.vibrate?.(60); } catch { /* no haptics here */ }
+            setToast((cur) => {
+              const same = cur?.envId === e && cur.session.id === s.id && Date.now() - cur.at < 3000;
+              if (!same) { try { navigator.vibrate?.(60); } catch { /* no haptics here */ } }
+              return { envId: e, session: same ? { ...cur.session, ...s } : s, at: same ? cur.at : Date.now() };
+            });
           }
         }
       }
@@ -683,8 +689,9 @@ function Shell({ client, conn, onSignOut }: {
   }, [wide, selected, envs]);
 
   // Keys, on a keyboard. Ctrl/Cmd+K opens the palette; "/" opens it too;
-  // Ctrl/Cmd+Shift+O (or "n") starts a new chat; Ctrl/Cmd+[ and ] walk back
-  // and forward; "?" lists them. The single letters never fire while you are
+  // Ctrl/Cmd+Shift+O (or "n") starts a new chat, and so does Ctrl/Cmd+N in
+  // the installed app, the one place a browser lets a page have it;
+  // Ctrl/Cmd+[ and ] walk back and forward; "?" lists them. The single letters never fire while you are
   // typing into something, and a phone never sends any of them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -692,7 +699,9 @@ function Shell({ client, conn, onSignOut }: {
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName ?? '') || !!el?.isContentEditable;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); setPalette((v) => !v); return; }
-      if (mod && e.shiftKey && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
+      // A terminal keeps Ctrl+N: it is "next line" to a shell.
+      const ctrlN = !e.shiftKey && (e.key === 'n' || e.key === 'N') && !el?.closest?.('.xterm');
+      if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       if (typing || mod || e.altKey) return;
@@ -788,14 +797,6 @@ function Shell({ client, conn, onSignOut }: {
     document.title = parts.length ? `${parts.join(' · ')} · helm` : 'helm';
     return () => { document.title = 'helm'; };
   }, [view, env?.id, blockedCount, conn.online]);
-
-  // The toast is a glance, not a summons: it dismisses itself rather than
-  // sit over the composer until it is acknowledged.
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 9000);
-    return () => clearTimeout(timer);
-  }, [toast]);
 
   /**
    * What an offline machine last said about itself.
@@ -1396,7 +1397,7 @@ function Shell({ client, conn, onSignOut }: {
       {/* Another thread started waiting while this one was open. A tap on
           the toast is the whole journey to answering it. */}
       {toast && (
-        <NotificationToast session={toast.session} onDismiss={() => setToast(null)}
+        <NotificationToast session={toast.session} machine={envs.find((m) => m.id === toast.envId)?.name} onDismiss={() => setToast(null)}
           onOpen={() => { const t = toast; setToast(null); openSession(t.envId, t.session); }} />
       )}
 
@@ -2906,12 +2907,17 @@ function snoozeChoices(): { label: string; at: number }[] {
   ];
 }
 
+const NEED_GO: Record<string, string> = {
+  question: 'Answer', command: 'Review the command', edit: 'Review the change', plan: 'Review the plan', tool: 'Review and allow',
+};
+
 function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: string; onOpen: () => void; onSnooze: (until: number) => void }) {
   const now = useNow();
   const [choosing, setChoosing] = useState(false);
   const [custom, setCustom] = useState('');
   const eng = engineOf(s.engine);
   const n = s.pending ?? 0;
+  const ask = s.status === 'blocked' ? s.ask : null;
   return (
     <div className={`need${s.recovery && s.status !== 'blocked' ? ' need-recovery' : ''}`}>
       <button className="need-main" onClick={onOpen}>
@@ -2926,7 +2932,8 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
             <span className="need-m">{eng.label} · {dirName(s.cwd)} · {machine}</span>
           </span>
         </span>
-        <span className="need-go">{s.team?.blocked ? `${s.team.blocked} child tasks need approval` : s.team?.failed ? `${s.team.failed} child tasks failed` : s.recovery ? 'View task' : 'Review and answer'}<Icon name="forward" size={15} /></span>
+        {ask?.text && <span className={`need-q${ask.kind === 'command' ? ' mono' : ''}`}>{ask.text}{ask.more ? ` (+${ask.more} more)` : ''}</span>}
+        <span className="need-go">{s.team?.blocked ? `${s.team.blocked} child tasks need approval` : s.team?.failed ? `${s.team.failed} child tasks failed` : s.recovery && !ask ? 'View task' : NEED_GO[ask?.kind ?? ''] ?? 'Review and answer'}<Icon name="forward" size={15} /></span>
       </button>
       <div className={`need-foot${choosing ? ' is-choosing' : ''}`}>
         {!choosing ? (

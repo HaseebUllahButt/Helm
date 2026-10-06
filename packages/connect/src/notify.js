@@ -25,6 +25,28 @@ export function describe(session, event) {
   };
 }
 
+/**
+ * What a waiting prompt is about, for the owner's own screens: the in-app
+ * notice and the "Needs you" card. Those are the app, behind its sign-in, so
+ * unlike a lock-screen push they can carry the question itself - the first
+ * line of it, never the whole tool input.
+ */
+export function askPreview(event) {
+  if (event?.type !== 'permission.request') return null;
+  const line = (v) => {
+    const t = String(v ?? '').split('\n').find((l) => l.trim())?.replace(/\s+/g, ' ').trim() ?? '';
+    return t.length > 120 ? `${t.slice(0, 119)}…` : t;
+  };
+  const question = event.kind === 'question' || !!event.questions?.length;
+  const kind = question ? 'question' : ['command', 'edit', 'plan'].includes(event.kind) ? event.kind : 'tool';
+  const text = question ? line(event.questions?.[0]?.question)
+    : kind === 'command' ? line(event.detail)
+    : kind === 'edit' ? line(event.title)
+    : kind === 'plan' ? ''
+    : line(event.title || event.tool);
+  return { kind, text, more: question ? Math.max(0, (event.questions?.length ?? 1) - 1) : 0 };
+}
+
 export function describeDone(session, at = Date.now()) {
   return {
     title: `Helm · ${agentLabel(session?.engine)} finished`, body: notificationContext(session),
