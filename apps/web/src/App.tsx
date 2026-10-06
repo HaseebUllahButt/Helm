@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEven
 import { Confirm, Sheet, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
 import { Palette, ShortcutsHelp, type PaletteItem } from './Palette';
+import { NewChat } from './NewChat';
+import { accountsFrom, loadPrefs, savePrefs, rememberFolder, recentFolders, type Account, type PickerPrefs } from './accounts';
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
@@ -146,59 +148,6 @@ const Gear = () => (
     <circle cx="12" cy="12" r="3" />
   </svg>
 );
-
-/**
- * An account is a CLI plus the home directory (or credential) it runs with.
- * A shell full of aliases yields the same account many times over, each with
- * different flags - `d`, `codexp`, `codexpx` are all "Codex, personal". The
- * flags are choices to make when starting, not separate things to pick from,
- * so collapse the aliases to accounts and keep the plainest alias of each as
- * the one to launch.
- */
-interface Account {
-  key: string;
-  engine: string;
-  account: string;
-  token: boolean;
-  profile: Profile;
-  aliases: string[];
-  prefs?: ModelPrefs | null;
-  defaults?: { effort?: string; mode?: string; speed?: string } | null;
-}
-
-function accountsFrom(profiles: Profile[]): Account[] {
-  const by = new Map<string, Account>();
-  for (const p of profiles) {
-    if (p.engine === 'shell' || (p as any).disabled) continue;
-    const home = Object.values(p.env ?? {}).find((v) => /^[~/]/.test(v));
-    // Engine + home + credential is what makes an account; an alias that
-    // also unsets a variable is the same account with a different mood. The
-    // daemon computes the same key, which is what its model prefs index by.
-    const key = p.account ?? [p.engine, home ?? '', [...(p.envFrom ?? [])].sort().join(',')].join('|');
-    const leaf = home?.split('/').pop() ?? '';
-    const suffix = leaf.replace(/^\.?(claude|codex|opencode2|opencode|devin|config|grok|cursor|rovodev|gemini|kimi-code|kimi|muse|omp|pi|agent)-?/, '');
-    const existing = by.get(key);
-    if (existing) {
-      existing.aliases.push(p.id);
-      existing.prefs ??= p.prefs;
-      existing.defaults ??= p.defaults;
-      // Fewest arguments = the plainest way to launch this account.
-      if ((p.args ?? []).length < (existing.profile.args ?? []).length) existing.profile = p;
-      continue;
-    }
-    by.set(key, {
-      key, engine: p.engine,
-      // A wrapper account has no home to name it by; its alias (a1) is the name.
-      account: suffix || (p.wraps ? p.id : 'default'),
-      token: (p.envFrom ?? []).some((k) => /TOKEN|KEY/i.test(k)),
-      profile: p, aliases: [p.id], prefs: p.prefs, defaults: p.defaults,
-    });
-  }
-  const order = ['claude', 'codex', 'opencode', 'opencode2', 'devin', 'grok', 'cursor', 'pi', 'omp', 'rovo', 'antigravity', 'agy', 'gemini', 'kimi', 'muse'];
-  const rank = (e: string) => { const i = order.indexOf(e); return i < 0 ? order.length : i; };
-  return [...by.values()].sort((a, b) =>
-    (rank(a.engine) - rank(b.engine)) || a.account.localeCompare(b.account));
-}
 
 /**
  * A folder's short name, and the path only when it says something extra.
@@ -434,6 +383,8 @@ function Shell({ client, conn, onSignOut }: {
   /** "thread X needs you" while a different session is on screen. */
   const [toast, setToast] = useState<Toast | null>(null);
   const [palette, setPalette] = useState(false);
+  /** The keyboard new-chat box; `envId` skips straight to that machine's folders. */
+  const [newChat, setNewChat] = useState<{ envId?: string } | null>(null);
   /**
    * Threads put off until later, on this device. A thread waiting on you that
    * you cannot get to yet should stop being the loudest thing on Home and stop
@@ -732,19 +683,22 @@ function Shell({ client, conn, onSignOut }: {
   }, [wide, selected, envs]);
 
   // Keys, on a keyboard. Ctrl/Cmd+K opens the palette; "/" opens it too;
-  // Ctrl/Cmd+[ and ] walk back and forward; "?" lists them. None of them
-  // fire while you are typing into something, and a phone never sends them.
+  // Ctrl/Cmd+Shift+O (or "n") starts a new chat; Ctrl/Cmd+[ and ] walk back
+  // and forward; "?" lists them. The single letters never fire while you are
+  // typing into something, and a phone never sends any of them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName ?? '') || !!el?.isContentEditable;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); setPalette((v) => !v); return; }
+      if (mod && e.shiftKey && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       if (typing || mod || e.altKey) return;
       if (e.key === '?') { e.preventDefault(); setHelp(true); return; }
-      if (e.key === '/') { e.preventDefault(); setPalette(true); }
+      if (e.key === '/') { e.preventDefault(); setPalette(true); return; }
+      if (e.key === 'n' && !document.querySelector('[aria-modal="true"]')) { e.preventDefault(); setNewChat({}); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -774,8 +728,8 @@ function Shell({ client, conn, onSignOut }: {
       }
       if (e.online) {
         items.push({
-          id: `new:${e.id}`, group: 'action', title: `New session on ${e.name}`, keywords: 'start create agent',
-          run: () => navigate([{ kind: 'env' }, { kind: 'new' }], e.id),
+          id: `new:${e.id}`, group: 'action', title: `New chat on ${e.name}`, keywords: 'start create agent session',
+          run: () => setNewChat({ envId: e.id }),
         });
         items.push({
           id: `send:${e.id}`, group: 'action', title: `Send a project from ${e.name}`,
@@ -783,6 +737,7 @@ function Shell({ client, conn, onSignOut }: {
         });
       }
     }
+    items.push({ id: 'a:new', group: 'action', title: 'New chat', keywords: 'start create agent session', run: () => setNewChat({}) });
     const go = (id: string, title: string, keywords: string, stack: MainView[]) =>
       items.push({ id, group: 'action', title, keywords, run: () => navigate(stack) });
     go('a:settings', 'Settings', 'preferences', [{ kind: 'app-settings' }]);
@@ -1109,6 +1064,15 @@ function Shell({ client, conn, onSignOut }: {
             >
               <Icon name="search" size={15} />
               <span className="grow">Search anything</span>
+            </button>
+            <button
+              type="button" className="home-search" onClick={() => setNewChat({})}
+              disabled={!envs.some((e) => e.online)}
+              aria-label="New chat" aria-keyshortcuts="Control+Shift+O Meta+Shift+O N" title="New chat (Ctrl+Shift+O)"
+            >
+              <Icon name="plus" size={15} />
+              <span className="grow">New chat</span>
+              <kbd className="wide-only">N</kbd>
             </button>
 
             {blocked.map(({ env: e, s }) => (
@@ -1443,6 +1407,13 @@ function Shell({ client, conn, onSignOut }: {
         </div>
       )}
       {palette && <Palette items={paletteItems()} onClose={() => setPalette(false)} engineOf={engineOf} />}
+      {newChat && (
+        <NewChat
+          client={client} envs={envs} envId={newChat.envId} near={selected} engineOf={engineOf}
+          onClose={() => setNewChat(null)}
+          onStarted={(envId, s) => { loadSessions(envId); navigate([{ kind: 'env' }, { kind: 'session', session: s }], envId); }}
+        />
+      )}
       {help && <ShortcutsHelp onClose={() => setHelp(false)} />}
 
       {unpairing && (
@@ -3736,15 +3707,9 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
   // is usually nested a few levels under home, and remembering the last few
   // turns "open it again" into one tap instead of five. Three stay on top:
   // enough to cover "the one I was just in" without becoming a second list.
-  const RECENT = `helm-folders:${env.id}`;
-  const [recent] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem(RECENT) || '[]'); } catch { return []; }
-  });
+  const [recent] = useState<string[]>(() => recentFolders(env.id));
   const pick = async (p: string) => {
-    try {
-      const next = [p, ...recent.filter((r) => r !== p)].slice(0, 6);
-      localStorage.setItem(RECENT, JSON.stringify(next));
-    } catch { /* full */ }
+    rememberFolder(env.id, p);
     setError(''); setPicking(true);
     try { await onPick(p); }
     catch (e: any) { setError(e.message); }
@@ -4036,17 +4001,6 @@ function MediaView({ client, env, onBack }: {
 
 // -------------------------------------------------------------------- start
 
-/**
- * Which agents the picker shows and which one was used last. A machine new
- * enough keeps these itself (`picker.prefs`), so every phone and laptop sees
- * the same list; this browser's copy is only for older machines, and is
- * moved onto the machine the first time a newer one is opened.
- */
-const PREFS = 'helm.prefs';
-type Prefs = Record<string, { account?: string; hidden?: string[] }>;
-interface PickerPrefs { hidden: string[]; last: string | null; agent?: string | null; favs?: Record<string, string[]> }
-const loadPrefs = (): Prefs => { try { return JSON.parse(localStorage.getItem(PREFS) || '{}'); } catch { return {}; } };
-const savePrefs = (p: Prefs) => { try { localStorage.setItem(PREFS, JSON.stringify(p)); } catch { /* full */ } };
 
 /**
  * One screen, one decision: which account runs here.

@@ -2166,6 +2166,19 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .palette-heading { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 0 18px; color: var(--mutedfg); font-size: var(--t-meta); font-weight: 550; }
 .palette-heading button { min-height: 36px; }
 
+/* The new-chat box: machine › folder › CLI, the step you are on lit. */
+.newchat-steps { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.newchat-steps span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+.newchat-steps span.on { color: var(--text); }
+.newchat-steps svg { flex: none; opacity: 0.6; }
+.newchat-row { display: flex; align-items: center; gap: 2px; }
+.newchat-row .palette-row { flex: 1; min-width: 0; }
+.newchat-row .palette-row:disabled { opacity: 0.5; }
+.newchat-into { flex: none; color: var(--mutedfg); }
+.newchat .palette-title .tag { margin-left: 8px; }
+.newchat .palette-list .error { margin: 8px 12px; }
+.home-search kbd { font-size: 10.5px; padding: 1px 5px; }
+
 /* A branch rail identifies the account and model behind every delegated task. */
 .subagents-launch { position: relative; }
 .delegation-panel {
