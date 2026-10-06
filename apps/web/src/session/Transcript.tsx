@@ -427,7 +427,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           {display.attachments?.map((a, i) => (a.data
             // A blob the log has swept past still has its name, and saying
             // so beats a browser's broken-image glyph.
-            ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={a.filename} loading="lazy" decoding="async" />
+            ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={`Image #${i + 1}${a.filename ? ` · ${a.filename}` : ''}`} loading="lazy" decoding="async" />
             : <span key={i} className="turn-image-gone" title={a.filename}><Icon name="image" size={14} /> {a.filename || 'image'} — no longer stored</span>
           ))}
           <span className="bubble-meta">
@@ -462,7 +462,9 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
             let j = i;
             while (j < roots.length && quiet(roots[j])) j += 1;
             const run = roots.slice(i, j);
-            const live = !d && j === roots.length && run.some((x) => x.status === 'streaming');
+            // A chat read from another CLI's history has no streaming steps;
+            // its open turn's last run is still what it is doing now.
+            const live = !d && j === roots.length && (run.some((x) => x.status === 'streaming') || (tail && !!working));
             // A lone thought, or a single quiet one-line tool call, is already
             // one line; anything more, or anything with output, folds.
             const single = run.length === 1 && (run[0].kind === 'thinking' || (run[0].kind === 'tool' && !run[0].output && !run[0].error));

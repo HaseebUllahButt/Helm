@@ -20,6 +20,8 @@ import { useSessionLog } from './useSessionLog';
 import type { Decision, Turn } from './types';
 import { TeamSummary, useThreadTeam } from './TeamSummary';
 import { ThreadDetails, type DetailsTab } from './ThreadDetails';
+import { ExternalSessionNotice } from './ExternalSessionNotice';
+import { QueueEdit } from './QueueEdit';
 import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
 import { TaskReturn } from './TaskReturn';
@@ -77,7 +79,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [details, setDetails] = useState<DetailsTab | null>(null);
-  const [delivery, setDelivery] = useState<'auto' | 'queue' | 'steer'>('queue');
   const [editingQueue, setEditingQueue] = useState<Turn | null>(null);
   const [references, setReferencesRaw] = useState<{ id: string; title: string }[]>([]);
   const setReferences = useCallback((next: SetStateAction<{ id: string; title: string }[]>) => {
@@ -185,12 +186,12 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
    */
   const onAttach = async (files: FileList) => {
     const chosen = Array.from(files);
-    if (!chosen.length) return;
+    if (!chosen.length) return 0;
     const failures: string[] = [];
     const available = Math.max(0, MAX_ATTACHMENTS - attachments.length);
     if (!available) {
       setError(`Image not added — ${MAX_ATTACHMENTS} images is the limit for one message.`);
-      return;
+      return 0;
     }
     const selected = chosen.slice(0, available);
     if (chosen.length > selected.length) {
@@ -213,6 +214,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       }
       if (next.length) setAttachments((current) => [...current, ...next].slice(0, MAX_ATTACHMENTS));
       if (failures.length) setError(`Image not added — ${failures.join('; ')}`);
+      return next.length;
     } finally {
       setPreparingImages((count) => Math.max(0, count - 1));
     }
@@ -221,7 +223,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     setReferences([]);
     setDraft(''); setAttachments([]);
     const clearedAt = editRevision.current;
-    try { await client.rpc(env.id, 'session.input', { id: session.id, data: body, delivery, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000); }
+    try { await client.rpc(env.id, 'session.input', { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000); }
     catch (e: any) {
       setError(e.message);
       // Only restore the failed send if the composer is still exactly in the
@@ -501,6 +503,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           <span className="sub">
             <EngineMark engine={session.engine} />
             <Route machine={env.name} folder={session.brain ? undefined : session.cwd} />
+            {session.nativeCodex && <span> · Live CLI</span>}
             {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
               <span key={part}><span className="sep"> · </span>{part}</span>
             ))}
@@ -549,15 +552,17 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
               </button>
             )}
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
-            <button className="destructive" onClick={kill}>Delete thread</button>
+            <button className="destructive" onClick={kill}>{session.nativeCodex ? 'Remove from Helm' : 'Delete thread'}</button>
           </div>
         )}
       </div>
 
       <TaskReturn client={client} envId={env.id} transfer={session.taskTransfer}
         original={session.parent} onOpenSession={onOpenMachineSession} />
+      <ExternalSessionNotice session={session}
+        onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       <TeamSummary team={team} onManage={() => setDetails('agents')} onOpen={onOpenSession} onStop={stop} onReview={git.status?.repo ? () => setDetails('changes') : undefined} />
-      {session.recovery && <div className="thread-recovery" role="status"><div><strong>{session.recovery.kind === 'limited' ? 'Usage limit reached' : session.recovery.kind === 'restart' ? 'Interrupted after restart' : session.recovery.kind === 'error' ? 'Task failed' : 'Task stopped'}</strong><p>{session.recovery.message}</p></div>
+      {session.recovery && !working && <div className="thread-recovery" role="status"><div><strong>{session.recovery.kind === 'limited' ? 'Usage limit reached' : session.recovery.kind === 'restart' ? 'Task paused' : session.recovery.kind === 'error' ? 'Task failed' : 'Task stopped'}</strong><p>{session.recovery.kind === 'restart' ? 'The agent stopped. Resume from the saved conversation.' : session.recovery.message}</p></div>
         {!working && !pending && <button disabled={busy || !env.online} onClick={() => void call(() => client.rpc(env.id, 'session.recover', { id: session.id }))}>Resume task</button>}</div>}
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
@@ -575,7 +580,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
         commands={commands}
-        delivery={delivery} onDelivery={setDelivery}
         referenceOptions={referenceOptions} references={references}
         onReference={(id) => { const item = referenceOptions.find((option) => option.id === id); if (item) setReferences((current) => [...current, item].slice(0, 3)); }}
         onRemoveReference={(id) => setReferences((current) => current.filter((item) => item.id !== id))}
@@ -603,8 +607,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
 
       {details && <ThreadDetails client={client} env={env} session={session} tab={details} onTab={setDetails} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined} onTransfer={!session.external && !session.brain ? onSendTask : undefined} />}
-      {editingQueue && <TextPrompt title="Edit queued message" multiline value={editingQueue.text} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSubmit={async (text) => {
-        if (await queueAction(editingQueue, 'session.queue-edit', { text })) setEditingQueue(null);
+      {editingQueue && <QueueEdit turn={editingQueue} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSave={async (text, attachments) => {
+        if (await queueAction(editingQueue, 'session.queue-edit', { text, attachments })) setEditingQueue(null);
       }} />}
 
       {branching && (
@@ -626,9 +630,9 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
 
       {ask === 'kill' && (
         <Confirm
-          title={`Delete "${session.title}"?`}
-          body="The agent is closed and this conversation is removed from helm."
-          confirmLabel="Delete" danger busy={busy}
+          title={session.nativeCodex ? `Remove "${session.title}" from Helm?` : `Delete "${session.title}"?`}
+          body={session.nativeCodex ? 'The conversation remains in Codex and its terminal keeps running.' : 'The agent is closed and this conversation is removed from helm.'}
+          confirmLabel={session.nativeCodex ? 'Remove' : 'Delete'} danger busy={busy}
           onCancel={() => setAsk(null)}
           onConfirm={async () => {
             setAsk(null);

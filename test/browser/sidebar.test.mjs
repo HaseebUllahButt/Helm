@@ -32,12 +32,49 @@ before(async () => {
   } }], bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   script = bundle.outputFiles[0].text;
   css = (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '');
+  css += await readFile('node_modules/@xterm/xterm/css/xterm.css', 'utf8');
   browser = await chromium.launch({ headless: true, ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
 });
 after(async () => browser?.close());
 
-async function pageFor(testContext, viewport) {
-  const context = await browser.newContext({ viewport });
+for (const width of [1280, 390]) test(`a resumed task clears stale recovery and paused cards stay compact at ${width}px`, async t => {
+  const { page, boot } = await pageFor(t, { width, height: 900 });
+  await boot();
+  await page.evaluate(() => {
+    const listeners = new Set();
+    const paused = { id: 'paused', title: 'Fix external session control', cwd: '/project/helm', engine: 'codex', profileId: 'codex', driver: 'codex', status: 'idle', alive: true, turns: 1, updatedAt: Date.now(), recovery: { kind: 'restart', message: 'Saved conversation', at: Date.now() } };
+    const client = window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [paused] });
+    client.on = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+    const rpc = client.rpc;
+    client.rpc = (env, method, params) => method === 'session.list' && window.blockRelist ? new Promise(() => {}) : rpc(env, method, params);
+    window.resumeTask = () => {
+      window.blockRelist = true;
+      const { recovery, ...resumed } = paused;
+      for (const listener of listeners) listener('laptop', 'session.update', { session: { ...resumed, status: 'working' } });
+    };
+    window.finishTask = () => {
+      const { recovery, ...finished } = paused;
+      for (const listener of listeners) listener('laptop', 'session.update', { session: { ...finished, status: 'idle' } });
+    };
+    window.mount(client);
+  });
+  const card = page.locator('.sidebar .need-recovery');
+  await card.getByText('Task paused', { exact: false }).waitFor();
+  await page.screenshot({ path: `/tmp/helm-recovery-sidebar-${width}.png` });
+  assert.ok((await card.boundingBox()).height < 165, `recovery uses a compact thread card: ${JSON.stringify(await card.boundingBox())}`);
+  const action = card.locator('.need-go');
+  assert.equal(await action.evaluate(element => getComputedStyle(element).backgroundColor), 'rgba(0, 0, 0, 0)', 'recovery is not a large filled warning button');
+  await page.screenshot({ path: `/tmp/helm-recovery-sidebar-${width}.png` });
+  await page.evaluate(() => window.resumeTask());
+  await page.locator('.sidebar .need').waitFor({ state: 'detached' });
+  await page.locator('.sidebar').getByText('Fix external session control', { exact: true }).waitFor();
+  await page.screenshot({ path: `/tmp/helm-recovery-resumed-${width}.png` });
+  await page.evaluate(() => window.finishTask());
+  assert.equal(await page.locator('.sidebar .need').count(), 0, 'the cleared warning does not return when the turn finishes');
+});
+
+async function pageFor(testContext, viewport, options = {}) {
+  const context = await browser.newContext({ viewport, ...options });
   testContext.after(() => context.close());
   const page = await context.newPage();
   const errors = []; page.on('pageerror', error => errors.push(error.message));
@@ -47,6 +84,47 @@ async function pageFor(testContext, viewport) {
   testContext.after(() => assert.deepEqual(errors, []));
   return { page, boot };
 }
+
+for (const width of [1280, 390]) test(`a normal native CLI opens with keyboard control on ${width}px`, async context => {
+  const touch = width < 500;
+  const { page, boot } = await pageFor(context, { width, height: 900 }, touch ? { hasTouch: true, isMobile: true } : {});
+  await boot();
+  await page.evaluate(() => {
+    const machine = { id: 'laptop', name: 'Laptop', online: true, info: {} };
+    const session = { id: 'native-example', title: 'Native Claude session', engine: 'claude', cwd: '/work/helm',
+      nativeCli: true, pty: true, shared: true, alive: true, status: 'idle', updatedAt: Date.now() };
+    const client = window.makeClient([machine], { laptop: [session] });
+    const fallback = client.rpc;
+    window.nativeCalls = [];
+    client.rpc = (env, method, params) => {
+      window.nativeCalls.push({ method, params });
+      if (method === 'session.attach') return Promise.resolve({ pty: true, text: 'Permission: run harmless command? [y/n]\r\n' });
+      if (method === 'session.messages') return Promise.resolve({ messages: [] });
+      if (['session.input', 'session.resize', 'session.detach'].includes(method)) return Promise.resolve({ ok: true });
+      return fallback(env, method);
+    };
+    window.mount(client);
+  });
+  await page.locator('.sidebar').getByRole('button', { name: 'done 1', exact: true }).click();
+  await page.locator('.sidebar').getByText('Native Claude session', { exact: true }).click();
+  const terminal = page.locator('.xterm-helper-textarea');
+  await terminal.waitFor();
+  await terminal.press('y');
+  await terminal.press('Enter');
+  // T3's key row: one row, only while typing, and only on a touch screen.
+  const keys = page.locator('.termkeys button');
+  assert.equal(await keys.count(), 14);
+  assert.equal(await page.locator('.termkeys').isVisible(), touch);
+  await page.locator('.termkeys button[aria-label="Down"]').dispatchEvent('pointerdown', { button: 0 });
+  await page.waitForFunction(() => window.nativeCalls.filter(c => c.method === 'session.input').length >= 3);
+  const calls = await page.evaluate(() => window.nativeCalls.filter(c => c.method === 'session.input'));
+  assert.deepEqual(calls.map(c => c.params.data), ['y', '\r', '\x1b[B']);
+  assert.ok(calls.every(c => c.params.id === 'native-example' && c.params.raw === true));
+  await page.screenshot({ path: `/tmp/helm-native-control-${width}.png` });
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await page.waitForFunction(() => window.nativeCalls.some(c => c.method === 'session.detach' && c.params.watcher));
+  assert.equal(await page.evaluate(() => window.nativeCalls.some(c => c.method === 'session.kill')), false);
+});
 
 test('project timeout errors clear on recovery and late failures cannot replace a fresh list', async context => {
   const { page, boot } = await pageFor(context, { width: 1280, height: 900 });
@@ -131,7 +209,7 @@ test('Done is newest first across machines, retires at three days, and the foote
   assert.ok(await palette.getByRole('option', { name: /Almost retired/ }).isVisible(), 'retirement preserves searchable history');
 });
 
-test('Running counts only count working threads on online machines', async testContext => {
+test('Running counts only working threads and excludes idle native sessions', async testContext => {
   const { page, boot } = await pageFor(testContext, { width: 390, height: 844 });
   await boot();
   await page.evaluate(() => {
@@ -142,6 +220,9 @@ test('Running counts only count working threads on online machines', async testC
       laptop: [
         session('Busy', {status:'working'}),
         session('Idle alive', {alive:true}),
+        session('External idle', {alive:true,externalActive:true,adopted:true,status:'idle'}),
+        session('Shared idle', {alive:true,shared:true,status:'idle'}),
+        session('Shared stopped', {alive:false,shared:true,status:'idle'}),
         session('Waiting', {status:'blocked', alive:true}),
         session('Busy archived', {status:'working', archived:true}),
         session('Busy shell', {status:'working', engine:'shell'}),
@@ -173,6 +254,9 @@ test('Running counts only count working threads on online machines', async testC
   const runningSection = sectionRows('running');
   assert.ok(await runningSection.getByText('Busy', { exact: true }).isVisible());
   assert.equal(await runningSection.getByText('Idle alive', { exact: true }).count(), 0);
+  assert.equal(await runningSection.getByText('External idle', { exact: true }).count(), 0);
+  assert.equal(await runningSection.getByText('Shared idle', { exact: true }).count(), 0);
+  assert.equal(await runningSection.getByText('Shared stopped', { exact: true }).count(), 0);
   assert.equal(await sidebar.getByText('Stale work', { exact: true }).count(), 0, 'a disconnected machine’s cached work is not shown as running');
   await sidebar.getByRole('button', { name: 'Search threads, machines and folders' }).click();
   const palette = page.getByRole('dialog', { name: 'Command palette' });
@@ -193,8 +277,9 @@ test('Running counts only count working threads on online machines', async testC
   const runningTotal = machineSummaries.reduce((total, text) => total + (+(/^(\d+) running$/.exec(text)?.[1] ?? 0)), 0);
   assert.equal(runningTotal, +(/(\d+) running/.exec(readout)[1]), 'sidebar per-machine counts add up to the readout');
   const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^done$/ }) });
-  await done.getByRole('button', { name: 'done 2', exact: true }).click();
+  await done.getByRole('button', { name: 'done 5', exact: true }).click();
   assert.ok(await done.getByText('Idle alive', { exact: true }).isVisible());
+  assert.ok(await done.getByText('Shared stopped', { exact: true }).isVisible());
   await rows.filter({ hasText: 'vm' }).click();
   await page.locator('.main.showing h1').filter({ hasText: 'vm' }).waitFor();
 });

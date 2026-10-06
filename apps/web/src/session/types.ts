@@ -308,7 +308,11 @@ export function apply(state: LogState, e: HelmEvent): void {
     }
     case 'turn.edit': {
       const turn = state.turns.find((entry) => entry.id === e.turnId);
-      if (turn?.queued && !turn.delivered) { turn.text = e.text; turn.revision = e.seq; }
+      if (turn?.queued && !turn.delivered) {
+        turn.text = e.text;
+        if (e.attachments) turn.attachments = e.attachments;
+        turn.revision = e.seq;
+      }
       return;
     }
     case 'turn.images': {

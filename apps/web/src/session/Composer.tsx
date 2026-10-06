@@ -22,13 +22,14 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe, delivery, onDelivery, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
   foot?: React.ReactNode; danger?: boolean;
   children?: React.ReactNode;
-  onAttach?: (files: FileList) => void;
+  /** Resolves to how many images were added, so each gets its "[Image #N]". */
+  onAttach?: (files: FileList) => void | Promise<number | void>;
   attachments?: { name: string; url: string }[];
   onRemoveAttachment?: (i: number) => void;
   /** False when the running model cannot see images: no clip, no paste. */
@@ -61,8 +62,6 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
    * a button that cannot work should not be drawn.
    */
   onTranscribe?: (audio: string, mime: string) => Promise<string>;
-  delivery?: 'auto' | 'queue' | 'steer';
-  onDelivery?: (delivery: 'auto' | 'queue' | 'steer') => void;
   onEditQueued?: (turn: Turn) => void;
   onRemoveQueued?: (turn: Turn) => void;
   onMoveQueued?: (turn: Turn, direction: -1 | 1) => void;
@@ -120,6 +119,34 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
       ?.scrollIntoView({ block: 'nearest' });
   }, [pick, open]);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const draftNow = useRef(draft);
+  draftNow.current = draft;
+
+  /**
+   * "[Image #N]" goes where the cursor was, the way Claude Code and Codex
+   * write it, so "compare [Image #1] with [Image #2]" says which is which.
+   * The driver puts the same label before each picture it sends.
+   */
+  const attach = async (files: FileList) => {
+    if (!onAttach) return;
+    const el = ref.current;
+    const at = el && document.activeElement === el ? el.selectionStart : draftNow.current.length;
+    const before = attachments?.length ?? 0;
+    const added = await onAttach(files);
+    if (!added) return;
+    const tokens = Array.from({ length: added }, (_, k) => `[Image #${before + k + 1}]`).join(' ');
+    const now = draftNow.current;
+    const pre = now.slice(0, Math.min(at, now.length)), post = now.slice(pre.length);
+    setDraft(`${pre}${pre && !/\s$/.test(pre) ? ' ' : ''}${tokens}${/^\s/.test(post) ? '' : ' '}${post}`);
+  };
+  /** Its label leaves with it, and the ones after it move up a number. */
+  const removeAttachment = (index: number) => {
+    const gone = index + 1;
+    setDraft(draftNow.current
+      .replace(new RegExp(`\\[Image #${gone}\\] ?`, 'g'), '')
+      .replace(/\[Image #(\d+)\]/g, (label, n) => Number(n) > gone ? `[Image #${Number(n) - 1}]` : label));
+    onRemoveAttachment?.(index);
+  };
   const fileRef = useRef<HTMLInputElement>(null);
 
   /**
@@ -224,7 +251,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
     if (!canAttach || !onAttach) { onAttachUnsupported?.(); return true; }
     const dt = new DataTransfer();
     images.forEach((f) => dt.items.add(f));
-    onAttach(dt.files);
+    void attach(dt.files);
     return true;
   };
 
@@ -279,7 +306,6 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             <div className="queued-panel">
               <div className="queued-head">
                 <b>{queued.length} waiting</b>
-                <span>Messages waiting for delivery</span>
               </div>
               {queued.map((item, index) => {
                 const label = item.text || (item.attachments === 1 ? 'Image' : `${item.attachments} images`);
@@ -294,20 +320,15 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                       )}
                     </span>
                     {/* Once the CLI has it there is no taking it back -
-                        neither CLI can - so the button goes. */}
-                    {item.delivered ? <span className="queued-sent">sent</span> : onWithdrawQueued && (
-                      <button
-                        disabled={busy}
-                        onClick={() => onWithdrawQueued(item.turn)}
-                        title={`take back into the draft: ${name}`}
-                        aria-label={`withdraw queued message: ${name}`}
-                      >withdraw</button>
-                    )}
-                    {!item.delivered && <div className="queue-actions">
-                      {onEditQueued && <button disabled={busy} onClick={() => onEditQueued(item.turn)}>Edit</button>}
-                      {onMoveQueued && <><button disabled={busy || index === 0 || queued[index - 1]?.delivered} aria-label={`Move up: ${name}`} onClick={() => onMoveQueued(item.turn, -1)}>↑</button><button disabled={busy || index === queued.length - 1} aria-label={`Move down: ${name}`} onClick={() => onMoveQueued(item.turn, 1)}>↓</button></>}
+                        neither CLI can - so the buttons go. Edit covers
+                        taking it back; arrows only when there is an order. */}
+                    {item.delivered ? <span className="queued-sent">sent</span> : <div className="queue-actions">
+                      {onEditQueued
+                        ? <button disabled={busy} aria-label={`Edit queued message: ${name}`} onClick={() => onEditQueued(item.turn)}>Edit</button>
+                        : onWithdrawQueued && <button disabled={busy} onClick={() => onWithdrawQueued(item.turn)} title={`take back into the draft: ${name}`} aria-label={`withdraw queued message: ${name}`}>withdraw</button>}
+                      {onMoveQueued && queued.length > 1 && <><button disabled={busy || index === 0 || queued[index - 1]?.delivered} aria-label={`Move up: ${name}`} onClick={() => onMoveQueued(item.turn, -1)}>↑</button><button disabled={busy || index === queued.length - 1} aria-label={`Move down: ${name}`} onClick={() => onMoveQueued(item.turn, 1)}>↓</button></>}
                       {onSendQueued && steers && <button disabled={busy} onClick={() => onSendQueued(item.turn)}>Send now</button>}
-                      {onRemoveQueued && <button disabled={busy} aria-label={`Remove queued message: ${name}`} onClick={() => onRemoveQueued(item.turn)}>Remove</button>}
+                      {onRemoveQueued && <button className="queue-remove" disabled={busy} title="Remove" aria-label={`Remove queued message: ${name}`} onClick={() => onRemoveQueued(item.turn)}><Icon name="close" size={12} /></button>}
                     </div>}
                   </div>
                 );
@@ -317,9 +338,10 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
           {attachments && attachments.length > 0 && (
             <div className="attach-previews">
               {attachments.map((a, i) => (
-                <span key={i} className="attach-preview" title={a.name}>
-                  <img src={a.url} alt={a.name} />
-                  <button onClick={() => onRemoveAttachment?.(i)} title={`remove ${a.name}`} aria-label={`remove ${a.name}`}><Icon name="close" size={12} /></button>
+                <span key={i} className="attach-preview" title={`[Image #${i + 1}] ${a.name}`}>
+                  <img src={a.url} alt={`Image #${i + 1}`} />
+                  <span className="attach-label" aria-hidden="true">#{i + 1}</span>
+                  <button onClick={() => removeAttachment(i)} title={`remove Image #${i + 1}`} aria-label={`remove Image #${i + 1}`}><Icon name="close" size={12} /></button>
                 </span>
               ))}
             </div>
@@ -380,7 +402,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
           <div className="slab-foot">
             {onAttach && canAttach && (
               <>
-                <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} multiple style={{ display: 'none' }} onChange={(e) => { if (e.target.files?.length) onAttach(e.target.files); e.target.value = ''; }} />
+                <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} multiple style={{ display: 'none' }} onChange={(e) => { if (e.target.files?.length) void attach(e.target.files); e.target.value = ''; }} />
                 {/* A paperclip drawn rather than an emoji: the emoji rendered in
                     the platform's own colour, which made it the only coloured
                     glyph in the chrome and the brightest thing in the composer. */}
@@ -431,9 +453,6 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                 chips under the box cost a line of screen on every visit to
                 say what never changes between messages. */}
             {foot ? <div className="slab-controls">{foot}</div> : <span className="spacer" />}
-            {onDelivery && (working || waiting) && <select className="delivery-choice" aria-label="Message delivery" value={delivery} onChange={(event) => onDelivery(event.target.value as 'auto' | 'queue' | 'steer')}>
-              <option value="queue">After this task</option>{steers && <><option value="auto">At next step</option><option value="steer">Send now</option></>}
-            </select>}
             {working && onStop && (
               <button className="stop" onClick={onStop} title="stop the agent" aria-label="stop the agent">
                 <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="currentColor" /></svg>

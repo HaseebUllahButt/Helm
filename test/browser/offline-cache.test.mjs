@@ -305,5 +305,5 @@ test('resuming on HTTP clears the saved-workspace disconnect notice without wait
   assert.equal(await page.locator('.sidebar .error').count(),0);
   await page.evaluate(()=>{window.failed=false;window.dispatchEvent(new Event('focus'));});
   await page.waitForFunction(()=>!document.querySelector('.sidebar').textContent.includes('Saved workspace · reconnecting'));
-  await page.locator('.sidebar').getByText('Recovered machine',{exact:true}).waitFor();
+  await page.locator('.sidebar .rt-text').getByText('Recovered machine',{exact:true}).waitFor();
 });

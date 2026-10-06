@@ -2,6 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
+import { readFile } from 'node:fs/promises';
 
 let browser;
 let script;
@@ -34,6 +35,7 @@ before(async () => {
         },
       };
       const session = { id: 'chat', title: 'Chat', cwd: '/tmp', engine: 'codex', driver: 'codex', profileId: 'codex', status: 'idle', turns: 1 };
+      window.sessionFixture = session;
       function DrivenProbe() {
         return <DrivenSession client={client} env={{ id: 'machine', name: 'Laptop', online: true, info: {} }} session={session}
           onBack={() => {}} onClosed={() => {}} onArchived={() => {}} onSession={() => {}} />;
@@ -82,6 +84,29 @@ test('a failed send does not overwrite a newer draft or its saved copy', async (
   await page.getByText('simulated connection loss', { exact: true }).waitFor();
   assert.equal(await area.inputValue(), 'new unsent draft');
   assert.equal(await page.evaluate(() => localStorage.getItem('helm-draft:machine:chat')), 'new unsent draft');
+});
+
+for (const width of [1280, 390]) test(`recovery notice is compact and hidden for a live turn at ${width}px`, async t => {
+  const page = await pageFor(t);
+  await page.setViewportSize({ width, height: 844 });
+  await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
+  await page.evaluate(() => {
+    window.sessionFixture.recovery = { kind: 'restart', message: 'This task was interrupted when its agent stopped. Its conversation is saved.', at: Date.now() };
+    window.mountDriven();
+  });
+  const notice = page.locator('.thread-recovery');
+  await notice.getByText('Task paused', { exact: true }).waitFor();
+  assert.ok((await notice.boundingBox()).height < (width > 500 ? 70 : 120));
+  await page.screenshot({ path: `/tmp/helm-recovery-thread-${width}.png` });
+  await page.evaluate(() => {
+    window.sessionFixture.status = 'working';
+    window.customRpc = (_env, method) => method === 'session.events'
+      ? Promise.resolve({ events: [{ seq: 1, type: 'status', status: 'working', at: Date.now() }], pending: [], last: 1, session: { status: 'working' } })
+      : Promise.resolve({});
+    window.dispatchEvent(new Event('focus'));
+    window.mountDriven();
+  });
+  await notice.waitFor({ state: 'detached' });
 });
 
 test('durable auth restoration yields to a re-pairing during the IDB read', async (t) => {

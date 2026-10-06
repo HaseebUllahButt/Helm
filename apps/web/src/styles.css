@@ -830,7 +830,11 @@ pre.snippet {
 .attach-status { color: var(--mutedfg); font-size: var(--t-micro); white-space: nowrap; }
 .attach-previews { display: flex; gap: 8px; padding: 8px 10px 0; flex-wrap: wrap; }
 .attach-preview { position: relative; display: inline-block; }
-.attach-preview img { max-width: 120px; max-height: 90px; border-radius: 8px; display: block; }
+.attach-preview img { width: 72px; height: 56px; object-fit: cover; border-radius: 8px; display: block; border: 1px solid var(--line); }
+.attach-label {
+  position: absolute; left: 4px; bottom: 4px; padding: 0 5px; border-radius: 5px;
+  background: rgb(0 0 0 / 65%); color: #fff; font: 600 11px/16px var(--mono);
+}
 .attach-preview button {
   position: absolute; top: -8px; right: -8px; width: 20px; height: 20px;
   border-radius: 50%; border: none; background: rgb(0 0 0 / 60%); color: #fff;
@@ -881,7 +885,8 @@ pre.snippet {
 .queued-row button:hover { color: var(--text); }
 
 /* Images already sent, inside the owner's own message. */
-.turn-image { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; }
+/* Sent pictures are thumbnails in a row; a tap opens the full one. */
+.turn-image { max-width: min(100%, 220px); max-height: 160px; object-fit: cover; border-radius: 8px; margin: 8px 6px 0 0; display: inline-block; vertical-align: top; border: 1px solid var(--line); }
 .turn-image-gone {
   display: inline-block; margin-top: 8px; padding: 6px 10px; border-radius: 8px;
   background: color-mix(in srgb, var(--raised) 70%, transparent);
@@ -925,32 +930,23 @@ pre.snippet {
 .xterm-host .xterm { height: 100%; padding: 10px 6px 6px 12px; }
 .xterm-host .xterm-viewport { background: #0d0f12 !important; }
 .xterm-viewport { -webkit-overflow-scrolling: touch; }
-/* The keys a phone keyboard does not have: two rows that fit any phone,
-   so nothing hides off the edge and a tap is never a scroll. */
+/* The keys a phone keyboard does not have, as T3 Code has them: one row
+   that scrolls sideways, shown only while typing on a touch screen. */
 .termkeys {
-  display: flex; flex-direction: column; gap: 6px; flex: none;
-  width: 100%; max-width: 760px; align-self: center;
-  padding: 0 0 max(8px, env(safe-area-inset-bottom));
+  display: flex; gap: 6px; flex: none; overflow-x: auto; scrollbar-width: none;
+  padding: 0 0 max(6px, env(safe-area-inset-bottom));
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
-.termkeys-row { display: flex; gap: 5px; }
+.termkeys::-webkit-scrollbar { display: none; }
 .termkeys button {
-  flex: 1 1 0; min-width: 0; min-height: 40px; padding: 0 2px; border-radius: 9px;
+  flex: none; min-width: 44px; min-height: 36px; padding: 0 10px; border-radius: 8px;
   font: 500 var(--t-meta) var(--mono); color: var(--text);
   background: var(--raised); border: 1px solid var(--line);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--line) 80%, transparent);
   touch-action: manipulation; -webkit-tap-highlight-color: transparent;
 }
-.termkeys button.wide { flex-grow: 1.5; }
-.termkeys button:active { background: var(--accent); transform: translateY(1px); box-shadow: none; }
+.termkeys button:active { background: var(--accent); }
 .termkeys button[aria-pressed="true"] { background: var(--primary); border-color: transparent; color: #fff; }
-@media (hover: hover) { .termkeys button:hover { background: var(--accent); } }
-@media (min-width: 900px) {
-  /* A computer has the real keys; one slim row is enough. */
-  .termkeys { flex-direction: row; gap: 5px; }
-  .termkeys-row { flex: 1; }
-  .termkeys button { min-height: 32px; }
-}
+@media (pointer: fine) { .termkeys { display: none; } }
 .terminal-copied {
   position: absolute; right: 18px; bottom: 52px; z-index: 5; pointer-events: none;
   padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
@@ -1569,18 +1565,18 @@ button.sheet-editlink:hover { color: var(--text); }
 .linkish.addproject { margin-top: 10px; }
 .linkish.more:hover, .linkish.addproject:hover { color: var(--text); }
 
-/* Needs you: the one thing on Home that is allowed to be loud. Plate with an
-   amber edge and an amber rule along the top; the one filled amber button in
-   the app is inside it. */
+/* Attention stays readable as a compact thread row. Amber identifies the
+   waiting state; actions keep the same quiet treatment as other threads. */
 .need {
   display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left;
-  margin: 4px 0 12px; padding: 14px 15px 8px; border-radius: 18px; position: relative; overflow: hidden;
-  background: var(--need-bg);
-  border: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
-  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--amber) 70%, transparent);
+  margin: 4px 0 10px; padding: 11px 12px 5px; border-radius: 10px; position: relative; overflow: hidden;
+  background: var(--card);
+  border: 1px solid var(--line);
   transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
 }
-.need:hover { border-color: color-mix(in srgb, var(--amber) 50%, transparent); }
+.need:hover { border-color: var(--line-2); }
+.need-recovery .need-k { color: var(--mutedfg); }
+.need-recovery .need-k i { background: var(--mutedfg); box-shadow: none; }
 .need-k {
   display: flex; align-items: center; gap: 8px; color: var(--amber-text);
   font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase;
@@ -1594,14 +1590,14 @@ button.sheet-editlink:hover { color: var(--text); }
 .need-t { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .need-t .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .need-title {
-  font-size: var(--t-title); font-weight: 600; letter-spacing: -0.012em; color: var(--text);
+  font-size: var(--t-body); font-weight: 600; letter-spacing: -0.012em; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.need-m { font-size: var(--t-meta); color: var(--need-m); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.need-m { font-size: var(--t-meta); color: var(--mutedfg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .need-go {
-  display: flex; align-items: center; justify-content: space-between;
-  height: 44px; padding: 0 14px 0 16px; border-radius: 12px;
-  background: var(--amber); color: var(--on-amber); font-size: var(--t-body); font-weight: 650;
+  display: flex; align-items: center; justify-content: flex-start; gap: 7px;
+  min-height: 28px; padding: 0 1px; max-width: calc(100% - 70px);
+  color: var(--text-dim); font-size: var(--t-meta); font-weight: 500;
 }
 .need-go svg { display: block; }
 
@@ -1674,7 +1670,7 @@ button.sheet-editlink:hover { color: var(--text); }
 .chip-pick:active, .iconbtn:active:not(:disabled) {
   background: var(--hover); transition-duration: 0s;
 }
-.need:active { background: var(--need-bg-on); }
+.need:active { background: var(--hover); }
 
 /* A new screen arrives rather than snapping in. Opacity only: nothing moves,
    so nothing can land in the wrong place under a thumb. */
@@ -1787,8 +1783,8 @@ button.sheet-editlink:hover { color: var(--text); }
 :root[data-theme="light"] .slab { box-shadow: 0 1px 2px rgb(26 29 36 / 8%), 0 12px 28px -16px rgb(26 29 36 / 22%); }
 :root[data-theme="light"] .slab::after { box-shadow: none; }
 :root[data-theme="light"] .segmented button.on { box-shadow: 0 1px 2px rgb(26 29 36 / 12%), inset 0 0 0 1px var(--line-2); }
-:root[data-theme="light"] .need { box-shadow: inset 0 2px 0 var(--amber), 0 1px 2px rgb(26 29 36 / 6%); }
-:root[data-theme="light"] .need-title { color: #241a06; }
+:root[data-theme="light"] .need { box-shadow: 0 1px 2px rgb(26 29 36 / 6%); }
+:root[data-theme="light"] .need-title { color: var(--text); }
 :root[data-theme="light"] .switch.on i { background: #fff; }
 :root[data-theme="light"] .diff .add { background: color-mix(in srgb, var(--diff-add) 12%, transparent); }
 :root[data-theme="light"] .diff .del { background: color-mix(in srgb, var(--diff-del) 11%, transparent); }
@@ -2135,9 +2131,10 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 
 
 /* A card that is a container: the main tap area, and a quiet row under it. */
-.need-main { display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left; color: inherit; }
-.need-foot { display: flex; justify-content: flex-end; min-height: 30px; }
-.need-snooze { font-size: var(--t-meta); color: var(--need-m); padding: 4px 10px; min-height: 32px; border-radius: 8px; }
+.need-main { display: flex; flex-direction: column; gap: 8px; width: 100%; text-align: left; color: inherit; }
+.need-foot { display: flex; justify-content: flex-end; align-self: flex-end; min-height: 28px; margin-top: -34px; position: relative; }
+.need-foot.is-choosing { align-self: stretch; margin-top: 4px; }
+.need-snooze { font-size: var(--t-meta); color: var(--mutedfg); padding: 3px 4px; min-height: 28px; border-radius: 6px; }
 .need-snooze:hover { background: var(--hover); color: var(--text); }
 .snooze-opts { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; align-items: center; }
 .snooze-opts button {
@@ -2392,9 +2389,11 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .thread-details .changes { position: relative; inset: auto; min-height: 65vh; z-index: auto; animation: none; }
 .thread-details .changes > .bar { display: none; }
 .details-refresh { float: right; margin: 0 0 10px; }
-.thread-recovery { flex: none; display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 16px; margin: 8px 16px; background: var(--card); border: 1px solid var(--amber-text); border-radius: 10px; font-size: var(--t-meta); }
-.thread-recovery p { margin: 4px 0 0; overflow-wrap: anywhere; max-height: 70px; overflow: auto; color: var(--text-dim); }
-.thread-recovery button { flex: none; min-height: 40px; }
+.thread-recovery { flex: none; display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 9px 12px; margin: 4px 16px; background: transparent; border: 1px solid var(--line); border-radius: 6px; font-size: var(--t-meta); }
+.thread-recovery > div { min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px; }
+.thread-recovery strong { font-weight: 550; white-space: nowrap; }
+.thread-recovery p { margin: 0; overflow-wrap: anywhere; color: var(--mutedfg); }
+.thread-recovery button { flex: none; min-height: 32px; padding: 4px 10px; background: var(--raised); border: 1px solid var(--line); font-size: var(--t-meta); }
 .thread-schedules h3 { margin: 4px 0 12px; }
 .schedule-card { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 12px; margin: 12px 0; font-size: var(--t-meta); }
 .schedule-card > div:first-child { display: flex; justify-content: space-between; gap: 12px; }
@@ -2404,11 +2403,11 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .schedule-form { display: grid; gap: 12px; padding: 12px 0; }
 .schedule-form label { display: grid; gap: 6px; font-size: var(--t-meta); }
 .schedule-form input, .schedule-form textarea { width: 100%; padding: 10px; }
-.delivery-choice { max-width: 140px; font-size: var(--t-micro); padding: 6px; min-height: 34px; }
 .thread-reference-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
 .thread-reference-chips button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-micro); padding: 6px 8px; }
 .queued-row { flex-wrap: wrap; }
 .queue-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.queue-actions .queue-remove { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; color: var(--mutedfg); }
 .queue-actions button { min-height: 32px; font-size: var(--t-micro); }
 @media (max-width: 700px) {
   .thread-details-back { align-items: flex-end; }
@@ -2419,6 +2418,23 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
   .team-task { flex-wrap: wrap; }
   .team-state { margin-left: auto; }
   .thread-recovery { margin: 6px 10px; }
-  .delivery-choice { max-width: 116px; }
   .team-actions button, .queue-actions button { min-height: 40px; }
 }
+
+/* Pairing by camera: centred, with the white quiet zone the code needs. */
+.qr { display: block; margin: 4px auto 12px; border-radius: 10px; max-width: 100%; height: auto; }
+
+/* Getting started: a quiet card at the top of the sidebar until all ticked. */
+.welcome { margin: 10px 0 12px; padding: 10px 12px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.welcome-head { display: flex; align-items: center; justify-content: space-between; font-size: var(--t-meta); margin-bottom: 4px; }
+.welcome-head .iconbtn { min-width: 28px; min-height: 28px; }
+.welcome-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: var(--t-meta); }
+.welcome-row .grow { display: flex; flex-direction: column; min-width: 0; }
+.welcome-row .rm { color: var(--mutedfg); font-size: var(--t-micro); overflow: hidden; text-overflow: ellipsis; }
+.welcome-mark { flex: none; width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; color: var(--mutedfg); border: 1px solid var(--line-2); }
+.welcome-row.ok .welcome-mark { color: var(--green, #6ee7b7); border-color: currentColor; }
+.welcome-row.ok .rt { color: var(--text-dim); }
+.welcome-go { flex: none; font-size: var(--t-micro); padding: 4px 9px; min-height: 28px; border-radius: 7px; border: 1px solid var(--line); background: var(--raised); }
+
+.modal-actions .spacer { flex: 1; }
+.queue-edit-add { display: inline-flex; align-items: center; gap: 6px; }

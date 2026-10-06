@@ -10,10 +10,13 @@ import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
+import { ExternalSessionNotice } from './session/ExternalSessionNotice';
 import { EngineMark } from './EngineMark';
 import { NotificationToast } from './NotificationToast';
 import { BackIcon, Icon, toolKind } from './Icon';
 import { Route } from './Route';
+import { QrCode } from './QrCode';
+import { Welcome } from './Welcome';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import {
@@ -233,7 +236,9 @@ const ownTerminal = (s: Session) => s.engine === 'shell' && !s.archived && s.ali
  * app cannot make.
  */
 const WEEK = 7 * 24 * 60 * 60_000;
-const needsAttention = (session: Session) => session.status === 'blocked' || !!session.team?.blocked || !!session.team?.failed || ['error', 'limited', 'restart'].includes(session.recovery?.kind ?? '');
+const needsAttention = (session: Session) => session.status === 'blocked' || !!session.team?.blocked || !!session.team?.failed || (session.status !== 'working' && ['error', 'limited', 'restart'].includes(session.recovery?.kind ?? ''));
+// Running describes work in progress, not a process waiting for input.
+const runningThread = (s: Session) => s.status === 'working' || !!s.team?.working;
 const thisWeek = (s: Session) =>
   s.alive === true || needsAttention(s) || s.status === 'working' ||
   (s.updatedAt ?? 0) >= Date.now() - WEEK;
@@ -355,7 +360,7 @@ type MainView =
   | { kind: 'models'; account: Account }
   // Which phones and browsers hold a key to this network: pair another, or
   // stop trusting one.
-  | { kind: 'devices' }
+  | { kind: 'devices'; pair?: boolean }
   // One page for everything that is not the day's work: machine defaults,
   // what it has all cost, and this device's pairing, alerts and install.
   | { kind: 'app-settings' }
@@ -656,11 +661,17 @@ function Shell({ client, conn, onSignOut }: {
         // (the daemon sends `session` and `status` together), each one a
         // relay round trip before the sidebar moved.
         const up = payload?.session as Session | undefined;
+        // A conversation that was taken over lives on as a new thread: the
+        // screen showing it follows, rather than going blank.
+        if (up?.movedTo) {
+          const top = nav.current.stack[nav.current.stack.length - 1];
+          if (top?.kind === 'session' && top.session.id === up.id) openSession(e, up.movedTo);
+        }
         if (up?.id) {
           setSessions((all) => {
             const list = all[e];
             if (!list?.some((x) => x.id === up.id)) return all;
-            return { ...all, [e]: list.map((x) => (x.id === up.id ? { ...x, ...up } : x)) };
+            return { ...all, [e]: list.map((x) => (x.id === up.id ? { ...x, ...up, recovery: up.recovery } : x)) };
           });
         }
         clearTimeout(relist.current[e]);
@@ -877,7 +888,7 @@ function Shell({ client, conn, onSignOut }: {
   const onSessionChanged = (envId: string) => (s: Session) => {
     loadSessions(envId);
     restate(nav.current.stack.map((v) => (
-      v.kind === 'session' && v.session.id === s.id ? { kind: 'session', session: { ...v.session, ...s } } : v)));
+      v.kind === 'session' && v.session.id === s.id ? { kind: 'session', session: { ...v.session, ...s, recovery: s.recovery } } : v)));
   };
   const push = (v: MainView) => navigate([...nav.current.stack, v]);
   const back = () => {
@@ -915,7 +926,7 @@ function Shell({ client, conn, onSignOut }: {
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived);
   const workingThreadsOn = (machine: Environment) =>
-    machine.online ? agentsOf(machine.id).filter((thread) => thread.status === 'working' || (thread.team?.working ?? 0) > 0) : [];
+    machine.online ? agentsOf(machine.id).filter((thread) => !needsAttention(thread) && runningThread(thread)) : [];
   const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(needsAttention).length;
 
   /**
@@ -931,11 +942,8 @@ function Shell({ client, conn, onSignOut }: {
   /**
    * Continue a conversation that was started at a keyboard.
    *
-   * The row came out of a CLI's own history and has no process behind it, so
-   * there is nothing to attach to: the machine starts a fresh driven session
-   * carrying the old conversation's id, the engine resumes it, and what comes
-   * back is an ordinary helm thread. It takes a moment - a CLI is starting -
-   * so the row says so rather than looking ignored.
+   * Opening reads the exact conversation without starting or stopping an
+   * agent. Sending later hands the conversation to Helm when its CLI is idle.
    */
   const [resuming, setResuming] = useState<string | null>(null);
   const resumeFound = async (envId: string, s: Session) => {
@@ -1032,13 +1040,13 @@ function Shell({ client, conn, onSignOut }: {
   // running. A brain has its own place under "brains".
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
-  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !needsAttention(thread) && (thread.status === 'working' || !!thread.team?.working)).sort(byNewest);
+  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !needsAttention(thread) && runningThread(thread)).sort(byNewest);
   const runningCount = envs.reduce((total, machine) => total + workingThreadsOn(machine).length, 0);
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
   // older work stays available on its machine and through search.
-  const doneNow = everyone.filter(({ s }) => (s.driver || s.adopted) && (s.turns ?? 0) > 0
-    && s.status !== 'working' && !s.team?.working && !needsAttention(s)
+  const doneNow = everyone.filter(({ s }) => ((s.driver || s.adopted) && (s.turns ?? 0) > 0 || s.nativeCli && s.alive)
+    && !runningThread(s) && !needsAttention(s)
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
   const doneIsSaved = doneNow.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));
   const snoozeThread = (envId: string, s: Session, until: number) => {
@@ -1103,6 +1111,9 @@ function Shell({ client, conn, onSignOut }: {
               <Icon name="search" size={15} />
               <span className="grow">Search anything</span>
             </button>
+
+            <Welcome client={client} envs={envs} engineLabel={(id) => engineOf(id).label}
+              onPair={() => navigate([{ kind: 'app-settings' }, { kind: 'devices', pair: true }])} />
 
             {blocked.map(({ env: e, s }) => (
               <NeedCard
@@ -1231,10 +1242,10 @@ function Shell({ client, conn, onSignOut }: {
             <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
           </Suspense>
         ) : view.kind === 'devices' ? (
-          <DevicesView client={client} onBack={back} />
+          <DevicesView client={client} onBack={back} pairNow={!!view.pair} />
         ) : view.kind === 'updates' ? (
           <Suspense fallback={<ViewLoading title="Updates" onBack={back} />}>
-            <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} />
+            <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
           </Suspense>
         ) : view.kind === 'network-settings' ? (
           <NetworkSettings
@@ -1379,7 +1390,7 @@ function Shell({ client, conn, onSignOut }: {
               restate([{ kind: 'env' }, { kind: 'session', session: s }]);
             }}
           />
-        ) : view.session.driver ? (
+        ) : (view.session.driver || (sessions[env.id] ?? []).find((s) => s.id === view.session.id)?.driver) ? (
           <DrivenSession
             key={`${env.id}:${view.session.id}`}
             client={client} env={env} conn={conn} onTranscribe={transcribeVia(env.id)}
@@ -1926,7 +1937,7 @@ function InstallPwa() {
  * is marked, because "remove the one I am holding" is a question with a
  * different answer than "remove the old tablet".
  */
-function DevicesView({ client, onBack }: { client: Client; onBack: () => void }) {
+function DevicesView({ client, onBack, pairNow = false }: { client: Client; onBack: () => void; pairNow?: boolean }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [error, setError] = useState('');
   const [removing, setRemoving] = useState<Device | null>(null);
@@ -1996,6 +2007,13 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
     } catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
   };
+  // Arrived from "Show QR code": the code is what they came for.
+  const pairedOnOpen = useRef(false);
+  useEffect(() => {
+    if (!pairNow || pairedOnOpen.current) return;
+    pairedOnOpen.current = true;
+    void pair();
+  }, [pairNow]);
 
   const remove = async () => {
     const d = removing;
@@ -2059,13 +2077,14 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
           <div className="setup-open">
             {expired ? (
               <p className="note">This link has expired and no longer works.</p>
-            ) : (
+            ) : (<>
+              <QrCode value={invite.link} label="Pairing code: scan with the phone you are adding" />
               <p className="note">
-                Open this link on the device you are pairing. It carries a
-                pairing secret - treat it like a password. It stops working
-                in about {minutesLeft} min, or as soon as someone uses it.
+                Scan this with the phone's camera, or open the link below on
+                the device you are pairing. Treat it like a password: it stops
+                working in about {minutesLeft} min, or as soon as someone uses it.
               </p>
-            )}
+            </>)}
             {!expired && <pre className="snippet">{invite.link}</pre>}
             <div className="rows">
               {!expired && (
@@ -2932,10 +2951,10 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
   const eng = engineOf(s.engine);
   const n = s.pending ?? 0;
   return (
-    <div className="need">
+    <div className={`need${s.recovery && s.status !== 'blocked' ? ' need-recovery' : ''}`}>
       <button className="need-main" onClick={onOpen}>
         <span className="need-k">
-          <i />Needs you{s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
+          <i />{s.recovery && s.status !== 'blocked' ? 'Task paused' : 'Needs you'}{s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
           {n > 1 && <span className="need-n">{n}</span>}
         </span>
         <span className="need-t">
@@ -2945,9 +2964,9 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
             <span className="need-m">{eng.label} · {dirName(s.cwd)} · {machine}</span>
           </span>
         </span>
-        <span className="need-go">{s.team?.blocked ? `${s.team.blocked} child tasks need approval` : s.team?.failed ? `${s.team.failed} child tasks failed` : s.recovery ? 'Review task recovery' : 'Review and answer'}<Icon name="forward" size={17} /></span>
+        <span className="need-go">{s.team?.blocked ? `${s.team.blocked} child tasks need approval` : s.team?.failed ? `${s.team.failed} child tasks failed` : s.recovery ? 'View task' : 'Review and answer'}<Icon name="forward" size={15} /></span>
       </button>
-      <div className="need-foot">
+      <div className={`need-foot${choosing ? ' is-choosing' : ''}`}>
         {!choosing ? (
           <button className="need-snooze" onClick={() => setChoosing(true)}>Snooze…</button>
         ) : (
@@ -2985,6 +3004,7 @@ function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; m
       {note ? <span className="when">{note}</span>
         : s.status === 'working' || !!s.team?.working
         ? <StatusChip status="working" at={s.updatedAt} />
+        : s.externalActive || (s.shared && s.alive) ? <span className="chip">idle</span>
         : s.updatedAt ? <span className="when">{waitingSince(s.updatedAt, now)}</span> : null}
     </button>
   );
@@ -4293,7 +4313,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const [raw, setRaw] = useState(isShell);
+  const [raw, setRaw] = useState(isShell || !!session.nativeCli);
   const [status, setStatus] = useState(session.status);
   // When it entered the status it is in, for "working 14m" beside the word.
   const [statusAt, setStatusAt] = useState(session.updatedAt);
@@ -4422,7 +4442,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           </span>
         </div>
         <StatusChip status={status} at={statusAt} />
-        {!isShell && !isExternal && (
+        {!isShell && !isExternal && !session.nativeCli && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
           </button>
@@ -4443,7 +4463,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
             <button onClick={() => setNaming(true)}>Rename thread</button>
             {!isExternal && onSendTask && <button disabled={!env.online} onClick={onSendTask}>Send task to another machine</button>}
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
-            <button className="destructive" onClick={() => setKilling(true)}>Delete thread</button>
+            <button className="destructive" onClick={() => setKilling(true)}>{session.nativeCli ? 'End session' : 'Delete thread'}</button>
           </div>
         ))}
       </div>
@@ -4469,16 +4489,18 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
       )}
       {killing && (
         <Confirm
-          title={isShell ? `Close "${session.title}"?` : `Delete "${session.title}"?`}
+          title={isShell ? `Close "${session.title}"?` : session.nativeCli ? `End "${session.title}"?` : `Delete "${session.title}"?`}
           body={isShell
             ? 'Anything still running in it stops.'
-            : 'The agent process is closed and the thread is removed from helm.'}
-          confirmLabel={isShell ? 'Close' : 'Delete'} danger
+            : session.nativeCli ? 'This stops the same CLI running on your laptop. Closing this view leaves it running.' : 'The agent process is closed and the thread is removed from helm.'}
+          confirmLabel={isShell ? 'Close' : session.nativeCli ? 'End session' : 'Delete'} danger
           onCancel={() => setKilling(false)}
           onConfirm={() => { setKilling(false); kill(); }}
         />
       )}
 
+      <ExternalSessionNotice session={session}
+        onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       {raw
         ? <Suspense fallback={<div className="xterm-host" />}>
             <Terminal client={client} env={env.id} sessionId={session.id} />
@@ -4563,7 +4585,7 @@ function Turn({ m }: { m: Message }) {
     return (
       <div className="turn user">
         <div className="bubble">{display.text}{display.attachments?.map((a, i) => a.data
-          ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} loading="lazy" decoding="async" />
+          ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={`Image #${i + 1}${a.filename ? ` · ${a.filename}` : ''}`} loading="lazy" decoding="async" />
           : <span key={i} className="turn-image-gone"><Icon name="image" size={14} /> {a.filename} — no longer stored</span>
         )}</div>
       </div>

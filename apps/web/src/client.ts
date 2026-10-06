@@ -34,7 +34,11 @@ export interface Environment {
     voice?: boolean;
     runtime?: { version: string };
     /** Which helm this machine runs; null where it is not a git checkout. */
-    version?: { commit: string; branch: string; subject: string; updatable: boolean } | null;
+    version?: { commit: string; full?: string; time?: number; dirty?: boolean; dir?: string; branch: string; subject: string; updatable: boolean } | null;
+    /** This machine and another both have their own saved changes. */
+    sync?: { diverged: boolean; with: string } | null;
+    /** Whether normal `claude`/`codex` commands typed here show up in Helm. */
+    cliLink?: { on: boolean; commands: string[] };
   };
 }
 
@@ -81,8 +85,19 @@ export interface Session {
   lastUsage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputIncludesCache?: boolean; at: number; model?: string };
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;
+  /** A managed provider shared by the terminal client and paired apps. */
+  shared?: boolean;
   /** Set on a terminal helm owns: a pty, not a herdr pane. */
   pty?: boolean;
+  /** A normal local CLI launch; app and laptop share its native terminal. */
+  nativeCli?: boolean;
+  /** Joined through Codex's existing shared local daemon. */
+  nativeCodex?: boolean;
+  /** Moving a CLI open before Helm into a shared terminal. */
+  takeover?: 'waiting' | null;
+  takeoverError?: string | null;
+  /** Where a taken-over conversation went. */
+  movedTo?: Session;
   model?: string | null;
   /** What the CLI said it actually started with, when nothing was picked. */
   engineModel?: string | null;

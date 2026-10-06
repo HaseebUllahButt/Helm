@@ -13,31 +13,25 @@ import type { Client } from './client';
  * Arrows, Home and End change with the program's cursor-key mode (`app`):
  * vim, less and full-screen agents switch it on and expect ESC O A, not ESC [ A.
  */
-type TermKey = { label: string; aria: string; bytes?: (app: boolean) => string; paste?: boolean; ctrl?: boolean; repeat?: boolean; wide?: boolean };
+type TermKey = { label: string; aria: string; bytes?: (app: boolean) => string; paste?: boolean; clear?: boolean; mod?: 'ctrl' | 'alt'; repeat?: boolean };
 const csi = (normal: string, app: string) => (on: boolean) => (on ? app : normal);
-const TERMKEYS: TermKey[][] = [
-  [
-    { label: 'esc', aria: 'Escape', bytes: () => '\x1b' },
-    { label: 'tab', aria: 'Tab', bytes: () => '\t' },
-    { label: 'ctrl', aria: 'Control, applies to the next key', ctrl: true },
-    { label: '←', aria: 'Left', bytes: csi('\x1b[D', '\x1bOD'), repeat: true },
-    { label: '↑', aria: 'Up', bytes: csi('\x1b[A', '\x1bOA'), repeat: true },
-    { label: '↓', aria: 'Down', bytes: csi('\x1b[B', '\x1bOB'), repeat: true },
-    { label: '→', aria: 'Right', bytes: csi('\x1b[C', '\x1bOC'), repeat: true },
-    { label: '⌫', aria: 'Backspace', bytes: () => '\x7f', repeat: true },
-    { label: '⏎', aria: 'Enter', bytes: () => '\r', wide: true },
-  ],
-  [
-    { label: '^C', aria: 'Control C, interrupt', bytes: () => '\x03' },
-    { label: '^D', aria: 'Control D, end of input', bytes: () => '\x04' },
-    { label: '^Z', aria: 'Control Z, suspend', bytes: () => '\x1a' },
-    { label: '^R', aria: 'Control R, search history', bytes: () => '\x12' },
-    { label: 'home', aria: 'Home', bytes: csi('\x1b[H', '\x1bOH') },
-    { label: 'end', aria: 'End', bytes: csi('\x1b[F', '\x1bOF') },
-    { label: 'pgup', aria: 'Page up', bytes: () => '\x1b[5~', repeat: true },
-    { label: 'pgdn', aria: 'Page down', bytes: () => '\x1b[6~', repeat: true },
-    { label: 'paste', aria: 'Paste from clipboard', paste: true, wide: true },
-  ],
+// T3 Code's set: one row that scrolls, only while typing on a phone. A
+// computer has the real keys, and the phone keyboard has Enter and delete.
+const TERMKEYS: TermKey[] = [
+  { label: 'esc', aria: 'Escape', bytes: () => '\x1b' },
+  { label: 'ctrl', aria: 'Control, applies to the next key', mod: 'ctrl' },
+  { label: 'alt', aria: 'Alt, applies to the next key', mod: 'alt' },
+  { label: 'tab', aria: 'Tab', bytes: () => '\t' },
+  { label: 'paste', aria: 'Paste from clipboard', paste: true },
+  { label: 'clear', aria: 'Clear the screen', clear: true },
+  { label: '↑', aria: 'Up', bytes: csi('\x1b[A', '\x1bOA'), repeat: true },
+  { label: '↓', aria: 'Down', bytes: csi('\x1b[B', '\x1bOB'), repeat: true },
+  { label: '←', aria: 'Left', bytes: csi('\x1b[D', '\x1bOD'), repeat: true },
+  { label: '→', aria: 'Right', bytes: csi('\x1b[C', '\x1bOC'), repeat: true },
+  { label: '~', aria: 'Tilde', bytes: () => '~' },
+  { label: '|', aria: 'Pipe', bytes: () => '|' },
+  { label: '/', aria: 'Slash', bytes: () => '/' },
+  { label: '-', aria: 'Dash', bytes: () => '-' },
 ];
 
 /**
@@ -60,8 +54,9 @@ export function Terminal({ client, env, sessionId }: {
   const host = useRef<HTMLDivElement>(null);
   const term = useRef<Xterm | null>(null);
   const [note, setNote] = useState('');
-  const [ctrlArmed, setCtrlArmed] = useState(false);
-  const ctrlPending = useRef(false);
+  const [armed, setArmed] = useState<'ctrl' | 'alt' | null>(null);
+  const pending = useRef<'ctrl' | 'alt' | null>(null);
+  const [typing, setTyping] = useState(false);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeat = useRef<{ delay?: ReturnType<typeof setTimeout>; every?: ReturnType<typeof setInterval> }>({});
   const flash = (text: string) => {
@@ -83,20 +78,21 @@ export function Terminal({ client, env, sessionId }: {
       send(text);
     } catch { flash('Clipboard blocked'); }
   };
-  const disarm = () => { ctrlPending.current = false; setCtrlArmed(false); };
+  const disarm = () => { pending.current = null; setArmed(null); };
   const stopRepeat = () => {
     clearTimeout(repeat.current.delay);
     clearInterval(repeat.current.every);
     repeat.current = {};
   };
   const press = (k: TermKey) => {
-    if (k.ctrl) {
-      ctrlPending.current = !ctrlPending.current;
-      setCtrlArmed(ctrlPending.current);
+    if (k.mod) {
+      pending.current = pending.current === k.mod ? null : k.mod;
+      setArmed(pending.current);
       return;
     }
     disarm();
     if (k.paste) { void paste(); return; }
+    if (k.clear) { term.current?.clear(); return; }
     const once = () => send(k.bytes!(!!term.current?.modes.applicationCursorKeysMode));
     once();
     if (k.repeat) {
@@ -147,6 +143,7 @@ export function Terminal({ client, env, sessionId }: {
     let seen = '';
     let stopped = false;
     let isPty = false;
+    const watcher = globalThis.crypto?.randomUUID?.() ?? `terminal-${Date.now()}-${Math.random()}`;
 
     const show = (text: string, reset: boolean) => {
       if (reset) {
@@ -170,7 +167,7 @@ export function Terminal({ client, env, sessionId }: {
     const attach = async (renew = false) => {
       try {
         const r = await client.rpc<{ text: string | null; pty?: boolean }>(env, 'session.attach', {
-          id: sessionId, lines: 400, ansi: true, cols: xterm.cols, rows: xterm.rows, renew,
+          id: sessionId, lines: 400, ansi: true, cols: xterm.cols, rows: xterm.rows, renew, watcher,
         });
         if (stopped) return;
         isPty = !!r.pty;
@@ -181,9 +178,17 @@ export function Terminal({ client, env, sessionId }: {
       } catch { /* offline; the reconnect handler tries again */ }
     };
 
+    xterm.textarea?.addEventListener('focus', () => setTyping(true));
+    // A tap on a key can blur for a moment before it takes the focus back.
+    let away: ReturnType<typeof setTimeout> | undefined;
+    xterm.textarea?.addEventListener('focus', () => clearTimeout(away));
+    xterm.textarea?.addEventListener('blur', () => { away = setTimeout(() => { if (!stopped) setTyping(false); }, 150); });
     const typed = xterm.onData((data) => {
       let input = data;
-      if (ctrlPending.current && data.length === 1) {
+      if (pending.current === 'alt' && data.length === 1) {
+        disarm();
+        input = `\x1b${data}`;
+      } else if (pending.current === 'ctrl' && data.length === 1) {
         disarm();
         if (data === ' ') {
           input = '\0';
@@ -250,7 +255,7 @@ export function Terminal({ client, env, sessionId }: {
       watch?.disconnect();
       window.removeEventListener('resize', refit);
       window.visualViewport?.removeEventListener('resize', refit);
-      client.rpc(env, 'session.detach', { id: sessionId }, 5_000).catch(() => {});
+      client.rpc(env, 'session.detach', { id: sessionId, watcher }, 5_000).catch(() => {});
       xterm.dispose();
     };
   }, [client, env, sessionId]);
@@ -258,36 +263,31 @@ export function Terminal({ client, env, sessionId }: {
   return (
     <div className="terminal-wrap">
       <div className="xterm-host" ref={host} />
-      <div className="termkeys" role="toolbar" aria-label="Terminal keys">
-        {TERMKEYS.map((row, i) => (
-          <div className="termkeys-row" key={i}>
-            {row.map((k) => (
-              <button
-                key={k.label}
-                type="button"
-                className={k.wide ? 'wide' : undefined}
-                aria-label={k.aria}
-                title={k.aria}
-                aria-pressed={k.ctrl ? ctrlArmed : undefined}
-                // Pressed on the way down, not on release: it is a keyboard.
-                // Taking the default away keeps the focus - and so the phone
-                // keyboard - on the terminal.
-                onPointerDown={(event) => {
-                  if (event.button !== 0) return;
-                  event.preventDefault();
-                  press(k);
-                }}
-                onPointerUp={stopRepeat}
-                onPointerLeave={stopRepeat}
-                onPointerCancel={stopRepeat}
-                onContextMenu={(event) => event.preventDefault()}
-                // Enter or Space on a focused button, from a hardware keyboard.
-                onClick={(event) => { if (event.detail === 0) { press(k); stopRepeat(); } }}
-              >{k.label}</button>
-            ))}
-          </div>
+      {typing && <div className="termkeys" role="toolbar" aria-label="Terminal keys">
+        {TERMKEYS.map((k) => (
+          <button
+            key={k.label}
+            type="button"
+            aria-label={k.aria}
+            title={k.aria}
+            aria-pressed={k.mod ? armed === k.mod : undefined}
+            // Pressed on the way down, not on release: it is a keyboard.
+            // Taking the default away keeps the focus - and so the phone
+            // keyboard - on the terminal.
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.preventDefault();
+              press(k);
+            }}
+            onPointerUp={stopRepeat}
+            onPointerLeave={stopRepeat}
+            onPointerCancel={stopRepeat}
+            onContextMenu={(event) => event.preventDefault()}
+            // Enter or Space on a focused button, from a hardware keyboard.
+            onClick={(event) => { if (event.detail === 0) { press(k); stopRepeat(); } }}
+          >{k.label}</button>
         ))}
-      </div>
+      </div>}
       {note && <div className="terminal-copied" role="status">{note}</div>}
     </div>
   );

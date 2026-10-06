@@ -29,9 +29,9 @@ before(async () => {
       return {ok:true};
     }};
     function Compose() {
-      const [draft,setDraft]=useState(''); const [delivery,setDelivery]=useState('queue'); const [references,setReferences]=useState([]);
+      const [draft,setDraft]=useState(''); const [references,setReferences]=useState([]);
       return <Composer draft={draft} setDraft={setDraft} engine="Claude" keys={false} working steers
-        delivery={delivery} onDelivery={setDelivery} onSend={()=>{window.sent={draft,delivery,references}}}
+        onSend={()=>{window.sent={draft,references}}}
         referenceOptions={[{id:'design',title:'Design review'}]} references={references}
         onReference={id=>setReferences([{id,title:'Design review'}])} onRemoveReference={()=>setReferences([])}
         queued={[{turn:{id:'one'},text:'First task',attachments:0},{turn:{id:'two'},text:'Second task',attachments:0}]}
@@ -40,7 +40,16 @@ before(async () => {
         onSendQueued={turn=>window.action=['send',turn.id]} />;
     }
     function Details() { const [tab,onTab]=useState('overview'); return <ThreadDetails client={client} env={env} session={session} tab={tab} onTab={onTab} git={null} reloadGit={()=>{}} onClose={()=>root.render(null)} />; }
+    function ComposeImages() {
+      const [draft,setDraft]=useState('Compare '); const [attachments,setAttachments]=useState([]);
+      window.imageDraft=()=>draft;
+      const px=(i)=>{ const c=document.createElement('canvas'); c.width=160; c.height=110; const g=c.getContext('2d'); g.fillStyle=['#3b82f6','#10b981','#f59e0b'][i%3]; g.fillRect(0,0,160,110); return c.toDataURL(); };
+      return <Composer draft={draft} setDraft={setDraft} engine="Claude" keys={false} onSend={()=>{}}
+        attachments={attachments} onRemoveAttachment={i=>setAttachments(a=>a.filter((_,j)=>j!==i))}
+        onAttach={async files=>{ const next=[...files].map((f,i)=>({name:f.name,mime:'image/png',data:'',url:px(i+f.name.charCodeAt(0))})); setAttachments(a=>[...a,...next]); return next.length; }} />;
+    }
     window.showComposer=()=>root.render(<Compose/>);
+    window.showImages=()=>root.render(<ComposeImages/>);
     window.showDetails=()=>root.render(<Details/>);
     window.showTeam=()=>root.render(<TeamSummary team={[
       {session:{...session,id:'worker',title:'Build the form',createdAt:Date.now()-120000,delegation:{status:'working'}},depth:0},
@@ -63,7 +72,7 @@ async function pageFor(context, width = 1280) {
   return page;
 }
 
-test('composer selects thread references with the keyboard and keeps steer versus queue explicit', async (context) => {
+test('composer selects thread references and sends without a delivery selector', async (context) => {
   const page = await pageFor(context, 390);
   await page.evaluate(() => window.showComposer());
   const input = page.getByPlaceholder('Message Claude…');
@@ -72,15 +81,40 @@ test('composer selects thread references with the keyboard and keeps steer versu
   await input.press('Enter');
   await page.getByRole('button', { name: 'Remove context: Design review' }).waitFor();
   assert.equal(await input.inputValue(), 'Check ');
-  await page.getByLabel('Message delivery').selectOption('steer');
+  assert.equal(await page.getByLabel('Message delivery').count(), 0);
+  assert.equal(await page.getByText('After this task', { exact: true }).count(), 0);
   await page.getByRole('button', { name: 'send', exact: true }).click();
-  assert.deepEqual(await page.evaluate(() => window.sent), { draft: 'Check ', delivery: 'steer', references: [{ id: 'design', title: 'Design review' }] });
+  assert.deepEqual(await page.evaluate(() => window.sent), { draft: 'Check ', references: [{ id: 'design', title: 'Design review' }] });
   await page.getByRole('button', { name: 'Move up: Second task' }).click();
   assert.deepEqual(await page.evaluate(() => window.action), ['move', 'two', -1]);
   await page.getByRole('button', { name: 'Remove queued message: First task' }).click();
   assert.deepEqual(await page.evaluate(() => window.action), ['remove', 'one']);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await capture(page, 'orchestration-composer-phone.png');
+});
+
+test('pasted images are labelled where the cursor was and renumbered when one goes', async (context) => {
+  const page = await pageFor(context, 390);
+  await page.evaluate(() => window.showImages());
+  const input = page.getByPlaceholder('Message Claude…');
+  await input.click();
+  await input.press('End');
+  const paste = (names) => page.evaluate((names) => {
+    const dt = new DataTransfer();
+    for (const name of names) dt.items.add(new File([new Uint8Array([137, 80, 78, 71])], name, { type: 'image/png' }));
+    document.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, names);
+  await paste(['a.png']);
+  await page.waitForFunction(() => window.imageDraft() === 'Compare [Image #1] ');
+  await input.press('End');
+  await input.pressSequentially('with ');
+  await paste(['b.png', 'c.png']);
+  await page.waitForFunction(() => window.imageDraft() === 'Compare [Image #1] with [Image #2] [Image #3] ');
+  assert.equal(await page.locator('.attach-preview').nth(1).getAttribute('title'), '[Image #2] b.png');
+  await page.screenshot({ path: '/tmp/helm-image-labels.png' });
+  await page.getByRole('button', { name: 'remove Image #1' }).dispatchEvent('click');
+  await page.waitForFunction(() => window.imageDraft() === 'Compare with [Image #1] [Image #2] ');
+  assert.equal(await page.locator('.attach-preview').count(), 2);
 });
 
 test('thread details create, pause, run and delete a schedule on the selected machine', async (context) => {
