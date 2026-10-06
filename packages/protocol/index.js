@@ -110,7 +110,8 @@ export const M = {
   ENV_RENAME: 'env.rename',        // { name } -> { id, name }
   // Pull this machine to the newest helm and restart it. Asked of the machine
   // itself: an update is a git reset and a restart, and only it can do either.
-  ENV_UPDATE: 'env.update',        // {} -> { updated, reason?, restarting?, version }
+  ENV_UPDATE: 'env.update',        // { replace? } -> { updated, reason?, backup?, restarting?, version }  from GitHub, only when asked
+  ENV_BUNDLE: 'env.bundle',        // { have } -> { head, bundle }  this machine's saved version, for another to take
   // What a machine is for ('pc' | 'vm' | 'nas'), asked of the machine itself
   // for the same reason as a rename: `kind` lives on its own roster record.
   MACHINE_SET_KIND: 'machine.set_kind', // { kind, address? } -> { id, kind, from, changed, notes[] }
@@ -141,6 +142,7 @@ export const M = {
   SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id } -> { session, status, complete, output, pending }
   SESSION_DELEGATION_MESSAGE: 'session.delegation-message', // { parentId, id, data } -> { ok }
   SESSION_ATTACH: 'session.attach',// { id, cols, rows } -> { session, scrollback }
+  SESSION_CONNECT: 'session.connect', // { id } -> { session }  share one managed provider with CLI and app
   SESSION_DETACH: 'session.detach',// { id }
   SESSION_INPUT: 'session.input',  // { id, data }
   SESSION_RESIZE: 'session.resize',// { id, cols, rows }
@@ -181,6 +183,7 @@ export const M = {
   VOICE_TRANSCRIBE: 'voice.transcribe', // { audio(base64), mime? } -> { text }
   SESSION_COMMANDS: 'session.commands',   // { id } -> { commands: [{name, description, source}] }
   SESSION_RESUME: 'session.resume',// { engine, account, id, cwd } -> { session }
+  SESSION_TAKEOVER: 'session.takeover', // { id, cancel? } -> { waiting }  move a CLI open before Helm into a shared terminal
   SESSION_ADOPT: 'session.adopt',  // { paneId } -> { session }  take over a pane
   // What this machine's agents have spent, read from what each CLI already
   // wrote. Pre-aggregated here: a phone over the hub gets day-by-model

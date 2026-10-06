@@ -160,7 +160,7 @@ test('already imported completed Codex images recover once, survive reopening, a
   assert.equal(reopened.history(session.id).last, correction.seq);
 });
 
-test('an active external Codex thread is monitored, then continued after handoff', async () => {
+test('an active external Codex thread is monitored, then managed after its owner closes', async (t) => {
   // Stand in for Codex's writer: it holds the rollout open and removes the
   // lock during a graceful SIGTERM, exactly what takeover waits for.
   const writer = spawn(process.execPath, ['--input-type=module', '-e', `
@@ -173,6 +173,7 @@ test('an active external Codex thread is monitored, then continued after handoff
     console.log('ready');
     setInterval(() => {}, 1000);
   `], { stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => { try { writer.kill('SIGKILL'); } catch {} });
   await once(writer.stdout, 'data');
 
   const { inventory } = await import('../packages/connect/src/inventory.js');
@@ -200,9 +201,15 @@ test('an active external Codex thread is monitored, then continued after handoff
   assert.equal(sessions.get(monitored.id).external, true, 'read-only commands do not acquire the writer');
   assert.equal(existsSync(lock), true, 'the external CLI keeps running while status is inspected');
   assert.equal(driver.sent, '/status');
+  await assert.rejects(sessions.input(monitored.id, 'do not interrupt'), /still owns/);
+  assert.doesNotThrow(() => process.kill(writer.pid, 0));
+  appendFileSync(transcript, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n');
+  await assert.rejects(sessions.input(monitored.id, 'leave idle owner alone'), /still owns/);
+  assert.doesNotThrow(() => process.kill(writer.pid, 0));
   const exited = once(writer, 'exit');
-  await sessions.input(monitored.id, 'take it from here');
+  writer.kill('SIGTERM');
   await exited;
+  await sessions.input(monitored.id, 'take it from here');
   assert.equal(sessions.get(monitored.id).external, false);
   assert.equal(sessions.get(monitored.id).driver, 'codex');
   assert.equal(driver.engineSessionId, threadId);
@@ -214,6 +221,69 @@ test('an active external Codex thread is monitored, then continued after handoff
     'the monitored transcript remains visible after the view becomes driven');
   assert.ok(history.some((e) => e.type === 'item.start' && e.kind === 'tool' && e.name === 'exec'),
     'Codex tool calls from the external rollout remain visible too');
+});
+
+test('Claude registry identifies append-per-write terminals and rejects stale or ambiguous owners', async (t) => {
+  const id = '11111111-2222-4333-8444-555555555556';
+  const path = join(claudeProject, `${id}.jsonl`);
+  const registry = join(claudeHome, 'sessions');
+  mkdirSync(registry, { recursive: true });
+  writeFileSync(path, [
+    { type: 'user', uuid: 'reg-user', cwd: root, message: { content: 'registry test' } },
+    { type: 'assistant', uuid: 'reg-answer', message: { content: [{ type: 'text', text: 'finished' }], stop_reason: 'end_turn' } },
+  ].map(x => JSON.stringify(x)).join('\n') + '\n');
+  const launch = async (sessionId = id) => {
+    const child = spawn(process.execPath, ['-e', 'console.log("ready"); setInterval(() => {}, 1000)'],
+      { argv0: 'claude', cwd: root, stdio: ['ignore', 'pipe', 'inherit'] });
+    t.after(() => { try { child.kill('SIGKILL'); } catch {} });
+    await once(child.stdout, 'data');
+    const stat = readFileSync(`/proc/${child.pid}/stat`, 'utf8');
+    const procStart = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+    const record = { pid: child.pid, sessionId, cwd: root, kind: 'interactive', procStart, status: 'busy' };
+    const file = join(registry, `${child.pid}.json`);
+    const save = () => writeFileSync(file, JSON.stringify(record));
+    save();
+    t.after(() => rmSync(file, { force: true }));
+    return { child, record, file, save };
+  };
+  const owner = await launch();
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const profiles = [{ id: 'claude', engine: 'claude', env: { CLAUDE_CONFIG_DIR: claudeHome } }];
+  const find = async () => (await inventory(profiles)).find(x => x.id === id);
+  assert.equal((await find()).active, true, 'no transcript descriptor is held');
+  assert.equal((await find()).status, 'working', 'registry beats old completed transcript');
+  let driver;
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new Runtime(), { makeDriver: (_engine, opts) => (driver = new FakeDriver(opts)) });
+  const opened = await sessions.resumeExternal({ engine: 'claude', account: 'claude', id });
+  await assert.rejects(sessions.input(opened.id, 'wait for completion'), /still owns/);
+  assert.equal(driver, undefined);
+  assert.doesNotThrow(() => process.kill(owner.child.pid, 0));
+  owner.record.status = 'idle'; owner.save();
+  const idle = (await sessions.list()).find(s => s.id === opened.id);
+  assert.equal(idle.status, 'idle');
+  assert.equal(idle.externalActive, true, 'open idle terminal stays live');
+
+  owner.record.procStart = '0'; owner.save();
+  assert.equal((await find()).active, false, 'reused PID cannot claim a thread');
+  const stat = readFileSync(`/proc/${owner.child.pid}/stat`, 'utf8');
+  owner.record.procStart = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]; owner.save();
+  const duplicate = await launch();
+  duplicate.record.status = 'idle'; duplicate.save();
+  await assert.rejects(sessions.input(opened.id, 'ambiguous owner'), /still owns/);
+  assert.doesNotThrow(() => process.kill(owner.child.pid, 0));
+  assert.doesNotThrow(() => process.kill(duplicate.child.pid, 0));
+  const secondExit = once(duplicate.child, 'exit'); duplicate.child.kill(); await secondExit;
+  await assert.rejects(sessions.connect(opened.id), /still owns/);
+  const exited = once(owner.child, 'exit');
+  owner.child.kill();
+  await exited;
+  await sessions.connect(opened.id);
+  await sessions.input(opened.id, 'continue on phone');
+  assert.equal(driver.engineSessionId, id);
+  assert.equal(driver.sent, 'continue on phone');
+  assert.equal(sessions.get(opened.id).external, false);
+  assert.equal((await find()).active, false, 'stale records left by exited processes are ignored');
 });
 
 test('Codex rollout state restores status fields before another model turn', async () => {
@@ -259,9 +329,11 @@ test('an active external Claude thread is monitored and status does not take own
     assert.match(status, /\*\*Model:\*\* claude-test/);
     assert.match(status, /\*\*Input:\*\* 10/);
 
+    await assert.rejects(sessions.input(monitored.id, 'continue here'), /still owns/);
     const exited = once(writer, 'exit');
-    await sessions.input(monitored.id, 'continue here');
+    writer.kill();
     await exited;
+    await sessions.input(monitored.id, 'continue here');
     assert.equal(sessions.get(monitored.id).external, false);
     assert.equal(driver.sent, 'continue here');
   } finally {
@@ -311,7 +383,7 @@ test('detected sessions enter working and done without opening or stopping the e
   assert.equal((await get()).alive, true);
   appendFileSync(path, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n');
   const done = await get();
-  assert.equal(done.status, 'done');
+  assert.equal(done.status, 'idle');
   assert.equal(done.turns, 1);
   assert.equal(done.alive, true, 'an idle CLI can remain open after completing its turn');
   assert.equal(existsSync(writerLock), true);

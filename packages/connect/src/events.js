@@ -28,6 +28,7 @@ import { HELM_DIR } from './paths.js';
 
 export const EVENTS_DIR = join(HELM_DIR, 'events');
 const KEEP = 2000;
+export const EVENT_KEEP = KEEP;
 
 /**
  * What one reply may weigh, and what one event may weigh inside it.

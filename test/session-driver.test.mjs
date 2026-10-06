@@ -61,6 +61,7 @@ class FakeDriver extends EventEmitter {
   async steer(text, images = []) {
     this.steered = [...(this.steered ?? []), { text, images }];
   }
+
   ask() {
     this.push('status', { status: 'blocked' });
     this.push('permission.request', { requestId: 'r1', kind: 'command', title: 'Run a command', options: [] });
@@ -177,6 +178,46 @@ test('queue order, edited text and reference snapshots survive a daemon restart'
   await restarted.kill(reference.id);
   await original.kill(session.id);
   await original.kill(reference.id);
+});
+
+class ImageDriver extends FakeDriver {
+  async sendWithAttachments(text, images = []) {
+    this.images = [...(this.images ?? []), images.map((image) => image.filename)];
+    return this.send(text);
+  }
+}
+
+test('a queued message edited to add, keep and drop pictures sends exactly those, even after a restart', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const directory = join(process.env.HELM_DIR, 'events-edited-images');
+  const drivers = new Map();
+  const options = () => ({
+    events: new EventLog(directory),
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+    makeDriver: (engine, opts) => { const d = new ImageDriver({ engine, ...opts }); drivers.set(opts.env.HELM_SESSION_ID, d); return d; },
+  });
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  const original = new Sessions(new StubRuntime(), options());
+  const session = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  await original.input(session.id, 'Work');
+  await original.input(session.id, 'Compare [Image #1]', { delivery: 'queue',
+    attachments: [{ filename: 'old.png', mime: 'image/png', data: png }] });
+  const [ticket] = original.history(session.id).events.filter((event) => event.type === 'turn.start' && event.queued);
+  original.editQueued(session.id, ticket.turnId, 'Compare [Image #1] with [Image #2]', [
+    { filename: 'kept.png', mime: 'image/png', data: png }, { filename: 'new.png', mime: 'image/png', data: png }]);
+  assert.throws(() => original.editQueued(session.id, ticket.turnId, 'x', [{ filename: 'a.txt', mime: 'text/plain', data: 'aGk=' }]), /only images/);
+  const restarted = new Sessions(new StubRuntime(), options());
+  await restarted.resume();
+  const driver = drivers.get(session.id);
+  driver.push('turn.done', { turnId: 't1', status: 'ok' });
+  driver.push('status', { status: 'idle' });
+  const deadline = Date.now() + 2000;
+  while (!driver.images?.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(driver.images, [['kept.png', 'new.png']]);
+  assert.match(driver.sent.at(-1), /^Compare \[Image #1\] with \[Image #2\]/);
+  await restarted.kill(session.id);
+  await original.kill(session.id);
 });
 
 test('returned context is delivered once and destination input stays locked after return', async () => {
@@ -576,6 +617,7 @@ for (const profileId of ['claudea', 'codex']) test(`a surviving ${profileId} pro
     events: new EventLog(dir), makeDriver, procHost: procHost(false),
   });
   const s = await original.start({ cwd: '/tmp', profileId });
+  original.events.append(s.id, { type: 'turn.start', turnId: 'orphan-from-older-run', text: 'an old unfinished record' });
   await original.input(s.id, 'active turn');
   await original.input(s.id, 'still queued');
   const activeTurn = original.history(s.id).events.find((e) => e.type === 'turn.start' && e.turnId === 't1');
@@ -589,6 +631,7 @@ for (const profileId of ['claudea', 'codex']) test(`a surviving ${profileId} pro
   assert.equal(rebound.started, true, 'a surviving agent is reattached without opening its thread');
   assert.equal(rebound.openTurn(), activeTurn.turnId, 'queued messages do not replace the active turn');
   assert.equal(restarted.get(s.id).status, 'working', 'the host process is still in the active turn');
+  assert.equal(restarted.get(s.id).recovery, undefined, 'settling an old record does not claim the surviving agent stopped');
   assert.equal(restarted.history(s.id).events.some((e) =>
     e.type === 'turn.done' && e.turnId === activeTurn.turnId), false, 'the live turn stays open');
   assert.deepEqual(restarted.dequeue(s.id, queuedTurn.turnId), {

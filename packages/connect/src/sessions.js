@@ -11,9 +11,9 @@ import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
 import { optionArgs } from './models.js';
 import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
-import { EventLog, activeTurnFromEvents } from './events.js';
+import { EventLog, activeTurnFromEvents, EVENT_KEEP } from './events.js';
 import { ClaudeDriver } from './drivers/claude.js';
-import { CodexDriver, canInspectExternalCodex } from './drivers/codex.js';
+import { CodexDriver, canInspectExternalCodex, nativeCodexThreads, nativeCodexSocket } from './drivers/codex.js';
 import { OpencodeDriver, Opencode2Driver } from './drivers/opencode.js';
 import { DevinDriver } from './drivers/devin.js';
 import { GrokDriver } from './drivers/grok.js';
@@ -26,9 +26,12 @@ import { devinUsageReport } from './devin-usage.js';
 import { defaultMode, modeFromAuto } from './modes.js';
 import { delegationMode, delegationOutput, trackDelegationReply } from './delegation.js';
 import { authStatuses } from './auth.js';
-import { TerminalHost, PROC_SOCKET_PATH } from './terminals.js';
+import { TerminalHost, NativeHosts, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory } from './inventory.js';
+import { claudeLiveSessions, claudeLiveStatus, descendsFrom } from './external-process.js';
 import { hostedProcId } from './hosted-process.js';
+import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
+import { openFiles, processArgv, processCwd } from './procinfo.js';
 import { GREETING, informative, promptTitle } from './titles.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
@@ -112,7 +115,7 @@ const EXTERNAL = /^(pane:|found:)/;
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
-export const wire = ({ promptSample, unsent, transcript, externalLock, externalPid, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, ...s }) => s;
+export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, ...s }) => s;
 
 const EXTERNAL_INFO_COMMANDS = [
   { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
@@ -213,12 +216,16 @@ export class Sessions extends EventEmitter {
   #adopted = new Map();
   /** sessionId -> live driver */
   #drivers = new Map();
+  /** sessionId -> an in-flight managed connection shared by joining clients */
+  #connections = new Map();
   /** sessionId -> reap timer */
   #reapers = new Map();
   /** sessionId -> (view identity -> expiry), independent leases per device/tab */
   #watching = new Map();
   /** external id -> 'archived' | 'removed', for rows helm does not own */
   #marks = new Map();
+  /** When a row was removed, so new activity in its CLI can bring it back. */
+  #removedAt = new Map();
   /**
    * sessionId -> messages accepted but not yet handed to the agent.
    *
@@ -246,13 +253,15 @@ export class Sessions extends EventEmitter {
   /** session object -> in-flight full-rollout reconciliation */
   #imports = new WeakMap();
 
-  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null } = {}) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE } = {}) {
     super();
     this.runtime = runtime;
     this.events = events;
     this.log = log;
+    this.nativeDiscovery = nativeDiscovery;
     this.makeDriver = makeDriver ?? ((engine, opts) => new DRIVERS[engine](opts));
     this.terminals = terminals;
+    this.nativeTerminals = nativeHost ?? new NativeHosts();
     // Agent processes live on a second host behind a second socket, so this
     // feature does not wait on - or cost - whatever the pty host is holding.
     this.procs = procHost ?? new TerminalHost({ socketPath: PROC_SOCKET_PATH, unit: 'helm-procs' });
@@ -271,6 +280,133 @@ export class Sessions extends EventEmitter {
     // An agent process that dies while no driver holds it still leaves the
     // record: close what it left open so the session stops reading as busy.
     this.procs.on('proc.exit', ({ id }) => this.#procGone(id));
+    this.nativeTerminals.on('data', (d) => this.emit('data', d));
+    this.nativeTerminals.on('native.open', (s) => this.#adoptNative(s));
+    this.nativeTerminals.on('hello', () => {
+      for (const s of this.nativeTerminals.nativeSessions()) this.#adoptNative(s);
+    });
+    this.nativeTerminals.on('exit', ({ id, code }) => {
+      const s = this.#index.get(id);
+      if (!s?.nativeCli) return;
+      // Its conversation lives on in the CLI's history list; a dead row
+      // here would only be a second, unusable copy of it.
+      this.#index.delete(id);
+      this.#save();
+      this.emit('exit', { id, code });
+      this.emit('session', { ...wire(s), status: 'exited', alive: false });
+    });
+    for (const s of this.nativeTerminals.nativeSessions()) this.#adoptNative(s);
+    this.nativePoll = setInterval(async () => {
+      if (!this.nativeDiscovery) return;
+      try {
+        await this.nativeTerminals.ensure({ spawn: false });
+        await this.#discoverNativeCodex(await getProfiles());
+      } catch (err) { this.log(`native CLI discovery: ${err.message}`); }
+    }, 2500);
+    this.nativePoll.unref?.();
+  }
+
+  #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
+
+  /** What the last list found, so opening a row it just showed skips a rescan. */
+  #lastDetected = null;
+
+  /** Several screens list at once; one scan of every process serves them. */
+  #inventoryScan = null;
+  #inventory(profiles) {
+    if (this.#inventoryScan) return this.#inventoryScan;
+    const work = inventory(profiles);
+    this.#inventoryScan = work;
+    const done = () => { if (this.#inventoryScan === work) this.#inventoryScan = null; };
+    work.then(done, done);
+    return work;
+  }
+
+  #nativeDiscovery = null;
+  #nativeDiscovered = false;
+  async #discoverNativeCodex(profiles) {
+    if (!this.nativeDiscovery) return;
+    if (this.#nativeDiscovery) return this.#nativeDiscovery;
+    const work = (async () => {
+      const accounts = new Map();
+      for (const p of profiles.filter((p) => p.engine === 'codex')) {
+        const home = expand(p.env?.CODEX_HOME || ENGINES.codex.defaultHome);
+        if (!accounts.has(home)) accounts.set(home, p);
+      }
+      const results = await Promise.allSettled([...accounts.values()].map((p) => nativeCodexThreads(p, this.log)));
+      const accountProfiles = [...accounts.values()];
+      for (const [accountIndex, result] of results.entries()) {
+        if (result.status !== 'fulfilled') continue;
+        const loaded = new Set((result.value || []).map(thread => thread.id));
+        if (result.value) for (const session of this.#index.values()) {
+          if (!session.nativeSocket || session.profileId !== accountProfiles[accountIndex].id || loaded.has(session.engineSessionId)) continue;
+          const driver = this.#drivers.get(session.id);
+          if (!driver) continue;
+          await driver.suspend();
+          this.#drivers.delete(session.id);
+          session.status = 'idle';
+          this.emit('session', { ...wire(session), alive: false });
+        }
+        if (!result.value) continue;
+        for (const thread of result.value) {
+          const removed = `found:codex:${thread.id}`;
+          if (this.#marks.get(removed) === 'removed') {
+            // Removing hides it; using it again in the terminal undoes that.
+            const at = this.#removedAt.get(removed);
+            if (!at || thread.updatedAt * 1000 <= at) continue;
+            this.#marks.delete(removed);
+            this.#removedAt.delete(removed);
+          }
+          const existing = [...this.#index.values()].find((s) => s.engine === 'codex' && s.engineSessionId === thread.id);
+          // An idle Helm conversation resumed in a normal terminal moves to
+          // that daemon too. Never detach a private turn that is still active.
+          if (existing?.driver && !existing.external && !existing.nativeSocket
+            && (['working', 'blocked', 'starting'].includes(existing.status) || this.hasActiveDelegations(existing.id))) continue;
+          const s = existing ?? { id: randomBytes(6).toString('hex'), createdAt: thread.createdAt * 1000 };
+          const first = !s.nativeSocket;
+          const gainedTranscript = !s.transcript && !!thread.path;
+          if (first) {
+            await this.#drivers.get(s.id)?.suspend?.();
+            this.#drivers.delete(s.id);
+            delete s.mode;
+          }
+          Object.assign(s, { engine: 'codex', engineSessionId: thread.id,
+            profileId: thread.profileId, cwd: thread.cwd, transcript: thread.path,
+            driver: 'codex', nativeSocket: thread.nativeSocket, nativeCodex: true,
+            shared: true, external: false, externalActive: false, externalSource: true, adopted: false,
+            updatedAt: thread.updatedAt * 1000 });
+          if (!s.titleBy) s.title = thread.name || thread.preview?.slice(0, 80) || basename(thread.cwd);
+          const blocked = thread.status?.activeFlags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
+          s.status = blocked ? 'blocked' : thread.status?.type === 'active' ? 'working' : 'idle';
+          this.#index.set(s.id, s);
+          if (first) {
+            this.#save();
+            this.emit('session', { ...wire(s), alive: true });
+          }
+          if (first || gainedTranscript) await this.#importExternalTranscript(s);
+          {
+            try { const d = await this.#driver(s); d.transcript = s.transcript; await d.start(); }
+            catch (err) { this.#drivers.delete(s.id); this.log(`codex native attach: ${err.message}`); }
+          }
+        }
+      }
+    })();
+    this.#nativeDiscovery = work;
+    try { await work; this.#nativeDiscovered = true; } finally { if (this.#nativeDiscovery === work) this.#nativeDiscovery = null; }
+  }
+
+  #adoptNative(meta) {
+    if (!meta?.id || !ENGINES[meta.engine]?.bin || ENGINES[meta.engine].plain) return;
+    if (this.#index.has(meta.id)) return;
+    const session = { id: meta.id, engine: meta.engine, cwd: meta.cwd,
+      title: basename(meta.cwd) || meta.engine, titleBy: null,
+      profileId: null, pty: true, nativeCli: true, shared: true,
+      nativePid: meta.nativePid, nativeHome: meta.configHome,
+      ...(meta.conversation ? { engineSessionId: meta.conversation } : {}),
+      status: 'idle', createdAt: meta.createdAt, updatedAt: meta.createdAt };
+    this.#index.set(meta.id, session);
+    this.#save();
+    this.emit('session', { ...wire(session), alive: true });
   }
 
   isDriven(s) { return !!s?.driver; }
@@ -330,6 +466,7 @@ export class Sessions extends EventEmitter {
         this.#index.set(s.id, s);
       }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
+      for (const [id, at] of Object.entries(raw.removedAt || {})) this.#removedAt.set(id, at);
     } catch { /* a corrupt index must not stop the daemon booting */ }
   }
 
@@ -341,6 +478,7 @@ export class Sessions extends EventEmitter {
         version: 1,
         sessions: [...this.#index.values()],
         external: Object.fromEntries(this.#marks),
+        removedAt: Object.fromEntries(this.#removedAt),
       }, null, 2),
       { mode: 0o600 }
     );
@@ -440,8 +578,17 @@ export class Sessions extends EventEmitter {
     // The runtime is the authority on what is still alive; our index only
     // remembers which of those panes are ours.
     const live = await this.runtime.listLive();
-    const detected = includeDetected && !parentId ? await inventory(await getProfiles()) : [];
+    const profiles = await getProfiles();
+    // A hung Codex daemon must not stall every list: after the first, wait
+    // a second at most and let the 2.5s poll catch up behind it.
+    const discovery = this.#discoverNativeCodex(profiles).catch((err) => this.log(`native CLI discovery: ${err.message}`));
+    if (!this.#nativeDiscovered) await discovery;
+    else await Promise.race([discovery, new Promise((r) => setTimeout(r, 1000).unref?.())]);
+    await this.nativeTerminals.ensure({ spawn: false }).catch(() => false);
+    const detected = (includeDetected && !parentId) || [...this.#index.values()].some((s) => s.external || s.nativeCli)
+      ? await this.#inventory(profiles) : [];
     const detectedById = new Map(detected.map((s) => [`${s.engine}:${s.id}`, s]));
+    if (detected.length) this.#lastDetected = { at: Date.now(), byId: detectedById };
 
     const out = [];
     const ours = new Set([...this.#index.values()].map((s) => s.paneId));
@@ -474,6 +621,8 @@ export class Sessions extends EventEmitter {
 
     for (const s of this.#index.values()) {
       if (s.external) {
+        const profile = profiles.find((p) => p.id === s.profileId);
+        s.externalHome = profile?.env?.[ENGINES[s.engine]?.homeEnv] ?? ENGINES[s.engine]?.defaultHome;
         const current = detectedById.get(`${s.engine}:${s.engineSessionId}`);
         if (current) {
           s.externalPid = current.writerPid || null;
@@ -492,12 +641,28 @@ export class Sessions extends EventEmitter {
         continue;
       }
       if (s.driver) {
-        out.push({ ...wire(s), archived: !!s.archived, alive: this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
+        out.push({ ...wire(s), archived: !!s.archived, alive: s.nativeSocket ? !!this.#drivers.get(s.id)?.nativeConnected : this.#drivers.has(s.id), adopted: false, pending: this.events.pending(s.id).length });
         continue;
       }
       if (s.pty) {
-        const alive = this.terminals.has(s.id);
-        out.push({ ...wire(s), alive, status: alive ? 'shell' : 'exited', adopted: false });
+        const alive = this.#terminal(s).has(s.id);
+        if (s.nativeCli && alive) {
+          const profile = profiles.find((p) => p.engine === s.engine &&
+            expand(p.env?.[ENGINES[s.engine].homeEnv] || ENGINES[s.engine].defaultHome) === s.nativeHome);
+          const current = detected.find((x) => x.engine === s.engine &&
+            (x.id === s.engineSessionId || (x.writerPid && s.nativePid && descendsFrom(x.writerPid, s.nativePid))));
+          if (profile) s.profileId = profile.id;
+          if (current) {
+            s.engineSessionId = current.id;
+            s.transcript = current.transcript;
+            s.status = current.status;
+            s.turns = current.turns;
+            if (!s.titleBy) s.title = current.title || s.title;
+            s.updatedAt = Math.max(s.updatedAt, current.updatedAt || 0);
+            this.#save();
+          }
+        }
+        out.push({ ...wire(s), alive, status: alive ? (s.nativeCli ? s.status : 'shell') : 'exited', adopted: false });
         continue;
       }
       const pane = live.get(s.paneId);
@@ -855,6 +1020,8 @@ export class Sessions extends EventEmitter {
       // reads this as "resume", not "start".
       engineSessionId,
       transcript,
+      ...(profile.engine === 'codex' && this.nativeDiscovery && nativeCodexSocket(profile)
+        ? { nativeSocket: nativeCodexSocket(profile), nativeManaged: true, shared: true } : {}),
       // A branch's first conversation is a copy of another's; cleared once it
       // has had a turn of its own.
       forkFrom: forkFrom || undefined,
@@ -949,8 +1116,9 @@ export class Sessions extends EventEmitter {
     };
     d = this.makeDriver(s.driver, {
       cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
-      model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
+      model: s.nativeSocket && !s.nativeManaged ? null : s.model, effort: s.nativeSocket && !s.nativeManaged ? null : s.effort, mode: s.mode, speed: s.nativeSocket && !s.nativeManaged ? null : s.speed,
       engineSessionId: s.engineSessionId,
+      nativeSocket: s.nativeSocket,
       unsent: !!s.unsent,
       // helm's brief to the agent - which CLI accounts it can delegate to -
       // as standing instructions rather than glued onto the owner's first
@@ -1027,6 +1195,7 @@ export class Sessions extends EventEmitter {
       if (s.delegation && !s.stoppedAt && ['working', 'blocked'].includes(status)) s.delegation.status = status;
       if (s.delegation) this.#updateTeam(s);
       if (e.status === 'exited' && this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
+      if (e.status === 'exited' && s.shared) this.emit('session', { ...s, alive: false });
       this.#reap(s, status);
       if (status !== s.status && this.#index.has(s.id)) {
         const previous = s.status;
@@ -1195,7 +1364,7 @@ export class Sessions extends EventEmitter {
   #reap(s, status) {
     clearTimeout(this.#reapers.get(s.id));
     this.#reapers.delete(s.id);
-    if (status !== 'idle') return;
+    if (status !== 'idle' || s.shared) return;
     const t = setTimeout(() => {
       const d = this.#drivers.get(s.id);
       if (d && d.status === 'idle') d.kill().catch(() => {});
@@ -1275,7 +1444,11 @@ export class Sessions extends EventEmitter {
     // guess it from the working directory: several old conversations can
     // share one folder, and guessing the newest one is how opening a chat
     // displays the wrong conversation.
-    const found = (await inventory(profiles)).find((x) => x.engine === engine && x.id === id);
+    // Fresh enough to trust: the row was on screen a moment ago. Liveness is
+    // rechecked when a message is sent, so a stale "active" costs nothing.
+    const recent = this.#lastDetected && Date.now() - this.#lastDetected.at < 30_000
+      ? this.#lastDetected.byId.get(`${engine}:${id}`) : null;
+    const found = recent ?? (await this.#inventory(profiles)).find((x) => x.engine === engine && x.id === id);
     if (!found) throw new Error(`that ${engine} conversation is no longer available on this machine; refresh the list`);
 
     // Opening history must not create a provider process. Besides being
@@ -1295,6 +1468,7 @@ export class Sessions extends EventEmitter {
         externalLock: engine === 'codex'
           ? join(expand(homeOf(profile)), 'thread-writer-locks', `${id}.lock`) : null,
         external: true,
+        externalHome: homeOf(profile),
         externalSource: true,
         externalActive: false,
         adopted: true,
@@ -1333,6 +1507,7 @@ export class Sessions extends EventEmitter {
         externalPid: found.writerPid || null,
         driver: engine,
         external: true,
+        externalHome: homeOf(profile),
         externalSource: true,
         externalActive: true,
         adopted: true,
@@ -1369,7 +1544,9 @@ export class Sessions extends EventEmitter {
 
   async #refreshExternalActivity(s, active = this.#externalActive(s)) {
     const activity = await sessionActivity({ engine: s.engine, path: s.transcript,
-      sessionId: s.engineSessionId, active, updatedAt: s.updatedAt });
+      sessionId: s.engineSessionId, active, updatedAt: s.updatedAt,
+      liveStatus: s.engine === 'claude' && s.externalHome
+        ? claudeLiveStatus(claudeLiveSessions(s.externalHome).get(s.engineSessionId) ?? []) : null });
     if (!s.external || this.#index.get(s.id) !== s) return { status: s.status, turns: s.turns ?? 0 };
     if (s.status !== activity.status || s.externalActive !== active || s.turns !== activity.turns) {
       const from = s.status;
@@ -1383,7 +1560,9 @@ export class Sessions extends EventEmitter {
 
   #externalActive(s) {
     if (!s.external) return false;
-    if (s.engine === 'codex') return !!(s.externalLock && existsSync(s.externalLock));
+    if (s.engine === 'claude' && s.externalHome
+      && claudeLiveSessions(s.externalHome).has(s.engineSessionId)) return true;
+    if (s.engine === 'codex' && s.externalLock && existsSync(s.externalLock)) return true;
     if (!s.externalPid) return false;
     try { process.kill(s.externalPid, 0); return this.#processOwnsTranscript(s); }
     catch { return false; }
@@ -1391,42 +1570,151 @@ export class Sessions extends EventEmitter {
 
   #processOwnsTranscript(s) {
     if (!s.externalPid || !s.transcript) return false;
+    if (s.engine === 'claude' && s.externalHome) {
+      const owners = claudeLiveSessions(s.externalHome).get(s.engineSessionId) ?? [];
+      if (owners.length) return owners.length === 1 && owners[0].pid === s.externalPid && !!owners[0].procStart;
+    }
     // An open file descriptor is the strongest claim - it names the exact
     // transcript. Database stores and append-per-write logs are not held
     // open though, so for those engines inventory matched the process by
     // its interactive argv and directory instead; re-check the same way.
-    const dir = `/proc/${s.externalPid}/fd`;
-    let fds = [];
-    try { fds = readdirSync(dir); } catch { /* process exited */ }
-    const held = fds.some((fd) => {
-      try { return readlinkSync(join(dir, fd)) === s.transcript; } catch { return false; }
-    });
+    const held = openFiles([s.externalPid], (path) => path === s.transcript).length > 0;
     if (held) return true;
     const byProc = ['opencode', 'opencode2', 'devin', 'pi', 'omp', 'grok', 'cursor', 'muse'].includes(s.engine);
     if (!byProc) return false;
-    try {
-      const argv = readFileSync(`/proc/${s.externalPid}/cmdline`, 'utf8').split('\0').filter(Boolean);
-      if (!isInteractiveProc(s.engine, argv)) return false;
-      return readlinkSync(`/proc/${s.externalPid}/cwd`) === s.cwd;
-    } catch { return false; }
+    const argv = processArgv(s.externalPid);
+    if (!argv || !isInteractiveProc(s.engine, argv)) return false;
+    return processCwd(s.externalPid) === s.cwd;
   }
 
-  /** Release the external writer as part of the first send from Helm. */
+  /** A transcript is history, not a live provider control connection. */
   async #handoffExternal(s) {
+    // Re-discover at send time: a monitor may have been opened before the
+    // CLI started or before its process changed. Never start a second writer
+    // from a cached 'done' row, or terminate a turn that is still doing work.
+    const profiles = await getProfiles();
+    const profile = profiles.find((p) => p.id === s.profileId);
+    s.externalHome = profile?.env?.[ENGINES[s.engine]?.homeEnv] ?? ENGINES[s.engine]?.defaultHome;
+    const found = (await inventory(profiles)).find((x) => x.engine === s.engine && x.id === s.engineSessionId);
+    if (found) { s.externalPid = found.writerPid; s.transcript = found.transcript; }
     if (!this.#externalActive(s)) return;
-    if (!this.#processOwnsTranscript(s)) {
-      throw new Error(`Helm cannot identify the external ${s.engine} process safely; close it on the machine first`);
+    await this.#refreshExternalActivity(s, true);
+    throw new Error(`The external ${s.engine} CLI still owns this conversation. Close it on the machine before continuing in Helm. For live control from both terminal and app, start with helm chat <account>.`);
+  }
+
+  #takeovers = new Map();
+
+  /**
+   * Bring a CLI that was open before Helm into a terminal both sides share,
+   * without cutting its work off: it moves at the prompt, or right after the
+   * step it is on, then carries on. The app follows it to the new thread.
+   */
+  async takeOver(id) {
+    const s = this.get(id);
+    if (!s.external || !this.#externalActive(s)) throw new Error('this conversation is not open in a terminal');
+    if (!ENGINES[s.engine]?.resumeArgs) throw new Error(`${ENGINES[s.engine]?.label ?? s.engine} cannot be moved yet; close it in the terminal to continue here`);
+    if (this.#takeovers.has(id)) return { waiting: true };
+    const owners = s.engine === 'claude' ? claudeLiveSessions(s.externalHome).get(s.engineSessionId) ?? [] : [];
+    const pid = owners[0]?.pid ?? s.externalPid;
+    if (!pid) throw new Error('could not find the terminal this conversation is open in');
+    readProcess(pid); // fails now, not after the wait, if it cannot be read
+    const cancel = new AbortController();
+    this.#takeovers.set(id, cancel);
+    s.takeover = 'waiting';
+    this.emit('session', { ...wire(s), alive: true });
+    const status = () => {
+      if (s.engine === 'claude') return claudeLiveStatus(claudeLiveSessions(s.externalHome).get(s.engineSessionId) ?? []) ?? s.status;
+      return s.status;
+    };
+    (async () => {
+      const { wasWorking } = await safePoint({ status, transcript: s.transcript, signal: cancel.signal, pid });
+      const proc = readProcess(pid);
+      const first = (await readMessages({ engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, all: true }))
+        .find((m) => m.role === 'user')?.text ?? '';
+      const { cmd, args } = resumeCommand(s.engine, proc.argv, s.engineSessionId, first);
+      await stopProcess(pid);
+      const moved = `native-${randomBytes(8).toString('hex')}`;
+      const configHome = expand(proc.env[ENGINES[s.engine].homeEnv] || ENGINES[s.engine].defaultHome);
+      const opened = await this.nativeTerminals.open(moved, { cmd, args, cwd: proc.cwd || expand(s.cwd), cols: 120, rows: 36,
+        exactEnv: true, env: { ...proc.env, HELM_NATIVE_SESSION: moved },
+        native: { engine: s.engine, configHome, conversation: s.engineSessionId } });
+      this.#adoptNative({ id: moved, engine: s.engine, cwd: proc.cwd || expand(s.cwd), configHome, nativePid: opened.pid, createdAt: Date.now() });
+      const next = this.#index.get(moved);
+      Object.assign(next, { engineSessionId: s.engineSessionId, transcript: s.transcript, profileId: s.profileId,
+        title: s.title, titleBy: s.titleBy, status: wasWorking ? 'working' : 'idle' });
+      const bin = ENGINES[s.engine].bin;
+      tellTerminal(proc.tty, `Helm: this chat moved to Helm. Type \`${bin} ${s.engine === 'codex' ? 'resume --last' : '-c'}\` here to keep using it in this window.`);
+      if (wasWorking) await this.#nudge(moved);
+      this.#takeovers.delete(id);
+      this.#drivers.get(id)?.kill?.();
+      this.#drivers.delete(id);
+      this.#index.delete(id);
+      this.#save();
+      this.emit('session', { ...wire(s), takeover: null, status: 'exited', alive: false, movedTo: { ...wire(next), alive: true } });
+      this.emit('session', { ...wire(next), alive: true });
+    })().catch((err) => {
+      this.#takeovers.delete(id);
+      s.takeover = null;
+      if (err.message !== 'cancelled') this.log(`take over ${id}: ${err.message}`);
+      this.emit('session', { ...wire(s), alive: this.#externalActive(s), takeoverError: err.message === 'cancelled' ? null : err.message });
+    });
+    return { waiting: true };
+  }
+
+  cancelTakeOver(id) {
+    this.#takeovers.get(id)?.abort();
+    return { ok: true };
+  }
+
+  /** Once the reopened CLI has drawn its screen and gone quiet, say carry on. */
+  async #nudge(id) {
+    const host = this.nativeTerminals;
+    let last = 0, seen = false;
+    const onData = (d) => { if (d.id === id) { seen = true; last = Date.now(); } };
+    host.on('data', onData);
+    try {
+      await host.view(id, { cols: 120, rows: 36 });
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline && (!seen || Date.now() - last < 2000)) await new Promise((r) => setTimeout(r, 200));
+      await host.write(id, 'continue');
+      await new Promise((r) => setTimeout(r, 300));
+      await host.write(id, '\r');
+    } finally {
+      host.off('data', onData);
+      host.unview(id);
     }
-    process.kill(s.externalPid, 'SIGTERM');
-    const deadline = Date.now() + 8_000;
-    while (this.#externalActive(s) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  /** Both frontends use this provider; disconnecting a frontend leaves it alive. */
+  async connect(id) {
+    if (this.#connections.has(id)) return this.#connections.get(id);
+    const work = this.#connect(id);
+    this.#connections.set(id, work);
+    try { return await work; }
+    finally { this.#connections.delete(id); }
+  }
+
+  async #connect(id) {
+    const s = this.get(id);
+    if (s.external) {
+      await this.#importExternalTranscript(s);
+      await this.#handoffExternal(s);
+      Object.assign(s, { external: false, externalActive: false, adopted: false,
+        externalLock: null, driver: s.engine, status: 'idle', notifyDone: true });
+      s.mode ??= defaultMode(s.engine);
+      this.#drivers.get(id)?.enableWriting?.();
     }
-    if (this.#externalActive(s)) throw new Error(`the external ${s.engine} process did not release the session`);
-    s.externalActive = false;
+    if (!s.driver) throw new Error('this session does not have a managed provider');
+    const d = await this.#driver(s);
+    await d.start();
+    s.engineSessionId = d.engineSessionId;
+    s.shared = true;
     s.updatedAt = Date.now();
+    clearTimeout(this.#reapers.get(id));
+    this.#reapers.delete(id);
     this.#save();
-    this.emit('session', s);
+    this.emit('session', { ...s, alive: true });
+    return { ...wire(s), alive: true };
   }
 
   /** Seed Helm's event view with the transcript it was monitoring. */
@@ -1508,6 +1796,17 @@ export class Sessions extends EventEmitter {
         if (this.#index.has(s.id)) this.#save();
       }
       return;
+    }
+    // The log keeps its last couple of thousand events. A long chat opened
+    // for the first time used to write every one and trim as it went, which
+    // got slower the longer the chat: start where the kept part starts, on
+    // a message the owner wrote. The CLI's own history still has the rest.
+    const cost = (m) => m.role === 'user' ? 1 : (m.tools?.length ?? 0) * 2 + (m.text ? 3 : 0) + 1;
+    let budget = EVENT_KEEP * 0.8, from = messages.length;
+    while (from > imported && budget - cost(messages[from - 1]) > 0) budget -= cost(messages[--from]);
+    if (from > imported) {
+      while (from < messages.length && messages[from].role !== 'user') from++;
+      imported = from;
     }
     let turnId = null;
     const close = () => {
@@ -1851,6 +2150,9 @@ export class Sessions extends EventEmitter {
   async messages(id, { limit = 120 } = {}) {
     const s = this.get(id);
     if (s.driver) return { messages: [], source: 'events' };
+    // A launched native process must be linked by process identity, never
+    // by the newest file in a folder where several CLIs may be running.
+    if (s.nativeCli && !s.transcript) return { messages: [], source: null };
     if (!s.transcript) {
       const profiles = await getProfiles();
       const profile = profiles.find((p) => p.id === s.profileId);
@@ -1890,6 +2192,7 @@ export class Sessions extends EventEmitter {
   async read(id, { lines = 200, source = 'recent', ansi = false } = {}) {
     const s = this.get(id);
     if (s.driver) throw new Error('a headless session has no terminal');
+    if (s.pty) return { text: await this.#terminal(s).view(id), session: wire(s) };
     const res = await this.runtime.read(this.#handle(s), { lines, source, ansi });
     return { text: res.text, session: s };
   }
@@ -1914,7 +2217,7 @@ export class Sessions extends EventEmitter {
    * A watch lives as long as viewers keep renewing it; a phone that vanishes
    * mid-session stops costing anything within a minute.
    */
-  async attach(id, { lines = 400, ansi = true, cols, rows, renew = false } = {}) {
+  async attach(id, { lines = 400, ansi = true, cols, rows, renew = false, watcher = 'legacy' } = {}) {
     const s = this.get(id);
     if (s.driver) throw new Error('a headless session has no terminal');
     // helm's own terminal needs no polling: the pty pushes as it writes. The
@@ -1922,10 +2225,11 @@ export class Sessions extends EventEmitter {
     // with it, so a reconnect cannot paint the same bytes twice - which is
     // also why a renewal deliberately returns nothing to draw.
     if (s.pty) {
+      this.watch(id, watcher);
       const text = renew
-        ? (await this.terminals.renew(id), null)
-        : await this.terminals.view(id, { cols, rows });
-      return { text, pty: true, session: s };
+        ? (await this.#terminal(s).renew(id), null)
+        : await this.#terminal(s).view(id, { cols, rows });
+      return { text, pty: true, session: wire(s) };
     }
     const existing = this.#watchers.get(id);
     if (existing) {
@@ -1966,8 +2270,9 @@ export class Sessions extends EventEmitter {
     return { text: w.last, session: s };
   }
 
-  detach(id) {
-    this.terminals.unview(id);
+  detach(id, watcher = 'legacy') {
+    this.unwatch(id, watcher);
+    if (!this.watching(id)) this.#terminal(this.#index.get(id) ?? {}).unview(id);
     const w = this.#watchers.get(id);
     if (!w) return { ok: true };
     clearTimeout(w.timer);
@@ -2269,7 +2574,7 @@ export class Sessions extends EventEmitter {
         const q = this.#outbox.get(s.id) ?? [];
         q.push(item);
         this.#outbox.set(s.id, q);
-        if (delivery === 'steer' && s.status === 'working' && !this.#sending.has(s.id)) await this.sendNow(s.id, turnId);
+        if ((delivery === 'steer' || delivery === 'auto' && s.nativeSocket && !referenceContext && compact == null && !clean.trimStart().startsWith('/')) && s.status === 'working' && !this.#sending.has(s.id)) await this.sendNow(s.id, turnId);
         else if (delivery === 'auto') void this.#handOver(s);
         return { ok: true };
       }
@@ -2282,7 +2587,12 @@ export class Sessions extends EventEmitter {
       }
       return { ok: true };
     }
-    if (s.pty) { await this.terminals.write(id, text); return { ok: true }; }
+    if (s.pty) {
+      if (attachments.length) throw new Error('paste or attach files in the native CLI');
+      if (s.nativeCli && !raw) throw new Error('use Live control to send input to this CLI');
+      await this.#terminal(s).write(id, text);
+      return { ok: true };
+    }
     const handle = this.#handle(s);
     if (s.agentName && !raw) {
       this.#prompted(s, text);
@@ -2450,15 +2760,19 @@ export class Sessions extends EventEmitter {
     return { ok: true, found: true, text: item.text };
   }
 
-  editQueued(id, turnId, text) {
+  /** `attachments`, when given, replaces the message's images: added, kept or removed. */
+  editQueued(id, turnId, text, attachments) {
     const session = this.get(id);
-    if (typeof text !== 'string' || !text.trim() || text.length > 32000) throw new Error('queued messages need 1–32000 characters');
+    const images = attachments === undefined ? null : acceptImages(attachments);
+    if (typeof text !== 'string' || text.length > 32000 || (!text.trim() && !images?.length)) throw new Error('queued messages need 1–32000 characters');
     if (this.#sending.has(id)) throw new Error('a message is being delivered; try again');
     const item = this.#outbox.get(id)?.find((entry) => entry.turnId === turnId);
     if (!item) throw new Error('this message has already left the queue');
     if (item.compact != null || text.trimStart().startsWith('/')) throw new Error('withdraw slash commands before editing them');
-    const event = this.events.append(id, { type: 'turn.edit', turnId, text: text.trim() });
+    const event = this.events.append(id, { type: 'turn.edit', turnId, text: text.trim(),
+      ...(images ? { attachments: images.map((a) => this.events.putAttachment(id, a)) } : {}) });
     item.text = text.trim();
+    if (images) item.images = images;
     session.lastSeq = event.seq;
     this.emit('event', { id, event });
     return { ok: true };
@@ -2633,7 +2947,7 @@ export class Sessions extends EventEmitter {
    */
   resize(id, cols, rows) {
     const s = this.get(id);
-    if (s.pty) this.terminals.resize(id, cols, rows);
+    if (s.pty) this.#terminal(s).resize(id, cols, rows);
     return { ok: true };
   }
 
@@ -2642,7 +2956,7 @@ export class Sessions extends EventEmitter {
     if (s.driver) throw new Error('a headless session has no terminal');
     const bytes = keys.map(KEY_BYTES).join('');
     if (s.pty) {
-      this.terminals.write(id, bytes);
+      this.#terminal(s).write(id, bytes);
       return { ok: true };
     }
     // The same bytes, down the same road typing takes. herdr's own key
@@ -2657,6 +2971,10 @@ export class Sessions extends EventEmitter {
     // CLI's own transcript is its data, not helm's, and stays where it is.
     if (id.startsWith('found:')) return this.#mark(id, 'removed');
     const s = this.get(id);
+    if (s.nativeSocket) {
+      this.#marks.set(`found:codex:${s.engineSessionId}`, 'removed');
+      this.#removedAt.set(`found:codex:${s.engineSessionId}`, Date.now());
+    }
     if (s.external) {
       // Close only Helm's monitor. The external CLI and its transcript are
       // deliberately untouched; its inventory row can be opened again.
@@ -2684,7 +3002,7 @@ export class Sessions extends EventEmitter {
       return { ok: true };
     }
     if (s.pty) {
-      await this.terminals.close(id);
+      await this.#terminal(s).close(id);
       this.#index.delete(id);
       this.#save();
       this.emit('session', { ...s, status: 'exited', alive: false });
@@ -2722,6 +3040,7 @@ export class Sessions extends EventEmitter {
 
   #mark(id, state) {
     if (state) this.#marks.set(id, state); else this.#marks.delete(id);
+    if (state === 'removed') this.#removedAt.set(id, Date.now()); else this.#removedAt.delete(id);
     this.#save();
     const session = { id, adopted: true, archived: state === 'archived', removed: state === 'removed' };
     this.emit('session', session);
@@ -2782,13 +3101,14 @@ export class Sessions extends EventEmitter {
    */
   async adoptTerminals() {
     const ok = await this.terminals.ensure({ spawn: false }).catch(() => false);
+    await this.nativeTerminals.ensure({ spawn: false }).catch(() => false);
     // The proc host's hello carries which agent processes survived; resume()
     // reads that list to leave their open turns and questions standing.
     await this.procs.ensure({ spawn: false }).catch(() => false);
     let changed = false;
     for (const s of [...this.#index.values()]) {
       if (!s.pty) continue;
-      if (ok && this.terminals.has(s.id)) continue;
+      if (this.#terminal(s).has(s.id)) continue;
       this.#index.delete(s.id);
       changed = true;
       this.emit('session', { ...s, status: 'exited', alive: false });
@@ -2827,8 +3147,11 @@ export class Sessions extends EventEmitter {
 
   /** Rebuild unsent tickets from the log and settle turns that cannot resume. */
   #restoreOpenTurns(s, tail, processAlive) {
-    const edits = new Map(tail.filter((event) => event.type === 'turn.edit').map((event) => [event.turnId, event.text]));
-    tail = tail.map((event) => event.type === 'turn.start' && edits.has(event.turnId) ? { ...event, text: edits.get(event.turnId) } : event);
+    const edits = new Map(tail.filter((event) => event.type === 'turn.edit').map((event) => [event.turnId, event]));
+    tail = tail.map((event) => {
+      const edit = event.type === 'turn.start' && edits.get(event.turnId);
+      return edit ? { ...event, text: edit.text, ...(edit.attachments ? { attachments: edit.attachments } : {}) } : event;
+    });
     const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
     const removed = new Set(tail.filter((e) => e.type === 'turn.remove').map((e) => e.turnId));
     const accepted = new Set(tail.filter((e) => e.type === 'turn.accept').map((e) => e.turnId));
@@ -2905,7 +3228,7 @@ export class Sessions extends EventEmitter {
       }
       if (processAlive && active?.turnId === e.turnId) continue;
       settle(e.turnId, echoed ? 'ok' : 'interrupted', echoed ? null : 'helm restarted');
-      if (!echoed) s.recovery = { kind: 'restart', message: 'This task was interrupted when its agent stopped. Its conversation is saved.', at: Date.now() };
+      if (!echoed && !processAlive) s.recovery = { kind: 'restart', message: 'The agent stopped. Resume from the saved conversation.', at: Date.now() };
     }
 
     if (revive.length) {
@@ -2931,6 +3254,7 @@ export class Sessions extends EventEmitter {
       const profile = profiles.find((p) => p.id === s.profileId);
       const procId = hostedProcId(s, s.driver === 'codex' && profile ? materialize(profile) : null);
       if (procId && this.procs.hasProc(procId)) {
+        if (s.recovery?.kind === 'restart') delete s.recovery;
         const tail = this.events.tail(s.id, 0);
         this.#restoreOpenTurns(s, tail, true);
         s.lastSeq = this.events.last(s.id);
@@ -2985,6 +3309,9 @@ export class Sessions extends EventEmitter {
 
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
+    clearInterval(this.nativePoll);
+    this.nativeDiscovery = false;
+    await this.#nativeDiscovery?.catch(() => {});
     await Promise.allSettled([...this.#drivers.values()].map((d) => {
       d.flush?.();
       return d.suspend?.() ?? d.kill();
@@ -2994,6 +3321,7 @@ export class Sessions extends EventEmitter {
     // agents outlive this daemon by design. A socket left open here kept a
     // stopped daemon's process alive indefinitely.
     this.terminals.detach?.();
+    this.nativeTerminals.detach?.();
     this.procs.detach?.();
   }
 }
