@@ -616,8 +616,11 @@ export class AcpDriver extends Driver {
       return;
     }
     const prompt = text ? [{ type: 'text', text }] : [];
+    // Labelled in order, so "[Image #2]" in the message names this one.
+    let n = 0;
     for (const a of attachments ?? []) {
       if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
+      prompt.push({ type: 'text', text: `[Image #${++n}]` });
       prompt.push({ type: 'image', mimeType: a.mime, data: a.data });
     }
     if (!prompt.length) return this.send('(empty message)');

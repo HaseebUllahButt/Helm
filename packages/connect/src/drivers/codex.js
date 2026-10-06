@@ -1,5 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 import { codexProcId } from '../hosted-process.js';
 import { Driver, readJsonLines, checkVersion } from './index.js';
@@ -217,7 +219,7 @@ const THREAD_VARS = ['HELM_SESSION_ID', 'HELM_PROFILE_ID', 'HELM_ENGINE', 'HELM_
 const serverEnv = (env = {}) => Object.fromEntries(Object.entries(env).filter(([k]) => !THREAD_VARS.includes(k)));
 
 /** One app-server process, shared by every thread on the same account. */
-class CodexServer {
+export class CodexServer {
   #child = null;
   #pipe = null;
   #hosted = false;
@@ -230,19 +232,22 @@ class CodexServer {
   /** spawned child threadId -> the driver that owns its parent thread */
   #aliases = new Map();
   #starting = null;
+  #socket = null;
 
-  constructor(cmd, env, log, procHost) {
-    Object.assign(this, { cmd, env, log, procHost });
+  constructor(cmd, env, log, procHost, nativeSocket = null) {
+    Object.assign(this, { cmd, env, log, procHost, nativeSocket });
     this.procId = codexProcId(cmd, env);
   }
 
-  static for(cmd, env, log, procHost) {
+  static for(cmd, env, log, procHost, nativeSocket = null) {
     const home = env.CODEX_HOME ?? '';
-    const key = `${cmd}|${home}`;
-    if (!servers.has(key)) servers.set(key, new CodexServer(cmd, env, log, procHost));
+    const key = `${cmd}|${home}|${nativeSocket ?? ''}`;
+    if (!servers.has(key)) servers.set(key, new CodexServer(cmd, env, log, procHost, nativeSocket));
     else servers.get(key).procHost = procHost ?? servers.get(key).procHost;
     return servers.get(key);
   }
+
+  get nativeConnected() { return this.#socket?.readyState === WebSocket.OPEN; }
 
   attach(driver) {
     // A fresh driver connects before thread/start gives it an id. Replace its
@@ -254,6 +259,10 @@ class CodexServer {
     this.#drivers.delete(driver.threadId);
     for (const [tid, d] of this.#aliases) if (d === driver) this.#aliases.delete(tid);
     if (stop && !this.#drivers.size) this.#stop();
+  }
+
+  releaseNativeDiscovery() {
+    if (this.nativeSocket && !this.#drivers.size) this.#stop();
   }
 
   /**
@@ -276,9 +285,37 @@ class CodexServer {
   #route(threadId) { return this.#drivers.get(threadId) ?? this.#aliases.get(threadId); }
 
   async ensure() {
-    if (this.#child || this.#pipe) return this.#adopted;
+    if (this.#starting) return this.#starting;
+    if (this.#child || this.#pipe || this.#socket?.readyState === WebSocket.OPEN) return this.#adopted;
     if (this.#starting) return this.#starting;
     this.#starting = (async () => {
+      if (this.nativeSocket) {
+        const ws = new WebSocket(`ws+unix://${this.nativeSocket}:/`);
+        this.#socket = ws;
+        ws.on('message', (raw) => {
+          if (this.#socket !== ws) return;
+          try { this.#onMessage(JSON.parse(String(raw))); } catch (err) { this.log(`codex native: ${err.message}`); }
+        });
+        ws.on('error', (err) => this.log(`codex native: ${err.message}`));
+        ws.on('close', () => {
+          if (this.#socket !== ws) return;
+          this.#socket = null;
+          for (const resolve of this.#calls.values()) resolve({ error: { message: 'Codex native connection closed' } });
+          this.#calls.clear();
+          for (const d of this.#drivers.values()) d.serverExited(null, 'local daemon connection closed');
+        });
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { ws.terminate(); reject(new Error('Codex native daemon connection timed out')); }, 3000);
+          ws.once('open', () => { clearTimeout(timer); resolve(); });
+          ws.once('error', (err) => { clearTimeout(timer); reject(err); });
+        });
+        const init = await this.call('initialize', {
+          clientInfo: { name: 'helm', title: 'Helm', version: '0.1.0' }, capabilities: { experimentalApi: true },
+        });
+        if (init.error) { ws.close(); throw new Error(init.error.message); }
+        this.notify('initialized');
+        return false;
+      }
       await checkVersion('codex', this.cmd, this.env, CODEX_MIN_VERSION, this.log);
       // The server exits if its home does not exist yet.
       if (this.env.CODEX_HOME) mkdirSync(expand(this.env.CODEX_HOME), { recursive: true });
@@ -338,6 +375,7 @@ class CodexServer {
   }
 
   #stop() {
+    if (this.#socket) { this.#socket.close(); return; }
     const child = this.#child;
     const pipe = this.#pipe;
     if (!child && !pipe) return;
@@ -349,6 +387,7 @@ class CodexServer {
   }
 
   write(obj) {
+    if (this.#socket?.readyState === WebSocket.OPEN) return this.#socket.send(JSON.stringify(obj));
     if (this.#pipe) return this.#pipe.write(JSON.stringify(obj) + '\n');
     if (!this.#child?.stdin.writable) throw new Error('codex is not running');
     this.#child.stdin.write(JSON.stringify(obj) + '\n');
@@ -358,6 +397,10 @@ class CodexServer {
     const id = ++this.#seq;
     return new Promise((resolve) => {
       this.#calls.set(id, resolve);
+      if (this.nativeSocket) setTimeout(() => {
+        if (!this.#calls.delete(id)) return;
+        resolve({ error: { message: `Codex native ${method} timed out` } });
+      }, 5000).unref?.();
       try { this.write({ jsonrpc: '2.0', id, method, params }); }
       catch (e) { this.#calls.delete(id); resolve({ error: { message: e.message } }); }
     });
@@ -393,7 +436,7 @@ class CodexServer {
       // The server is asking us something (an approval).
       const d = this.#route(m.params?.threadId);
       if (d) d.onServerRequest(m);
-      else this.respond(m.id, { decision: 'decline' });
+      else if (!this.nativeSocket) this.respond(m.id, { decision: 'decline' });
       return;
     }
     if (m.id !== undefined) {
@@ -409,6 +452,31 @@ class CodexServer {
       }
     }
   }
+}
+
+/** Read the native daemon, without creating one or acquiring another writer. */
+export function nativeCodexSocket(profile) {
+  const socket = join(expand(profile.env?.CODEX_HOME || '~/.codex'), 'app-server-control', 'app-server-control.sock');
+  return existsSync(socket) ? socket : null;
+}
+
+export async function nativeCodexThreads(profile, log = () => {}) {
+  const socket = nativeCodexSocket(profile);
+  if (!socket) return null;
+  const server = CodexServer.for(profile.cmd || 'codex', profile.env || {}, log, null, socket);
+  try {
+    await server.ensure();
+    const loaded = await server.call('thread/loaded/list', {});
+    if (loaded.error) return null;
+    const threads = await Promise.all((loaded.result.data || []).map(async (id) => {
+      const read = await server.call('thread/read', { threadId: id, includeTurns: false });
+      const thread = read.result?.thread;
+      return thread && !thread.parentThreadId && thread.canAcceptDirectInput === true
+        ? { ...thread, path: thread.path && existsSync(thread.path) ? thread.path : null, nativeSocket: socket, profileId: profile.id } : null;
+    }));
+    return threads.filter(Boolean);
+  } catch (err) { log(`codex native discovery: ${err.message}`); return null; }
+  finally { server.releaseNativeDiscovery(); }
 }
 
 // -------------------------------------------------------------- the driver
@@ -455,16 +523,28 @@ export class CodexDriver extends Driver {
   #requests = new Map();
   /** Texts handed to the running turn that Codex has not used yet. */
   #steers = [];
+  #nativeTurnStarts = new Set();
+  #nativeSubscribed = false;
 
   constructor(opts) {
     super({ engine: 'codex', ...opts });
     this.threadId = this.engineSessionId ?? null;
     this.monitorOnly = !!opts.monitorOnly;
+    this.nativeSocket = opts.nativeSocket || null;
     this.instructions = opts.instructions || null;
     this.helmDelegation = !!opts.helmDelegation;
   }
 
+  get nativeConnected() { return !!this.#server?.nativeConnected; }
+
+  async #subscribeNative() {
+    if (!this.nativeSocket || this.#nativeSubscribed) return;
+    const res = await this.#server.call('thread/resume', { threadId: this.threadId, excludeTurns: true });
+    if (!res.error) this.#nativeSubscribed = true;
+  }
+
   #policy() {
+    if (this.nativeSocket && !this.mode) return { approvalPolicy: undefined, sandbox: this.info?.sandbox, sandboxPolicy: undefined };
     const mode = modeFor('codex', this.mode);
     return {
       approvalPolicy: mode?.approvalPolicy ?? 'on-request',
@@ -474,13 +554,14 @@ export class CodexDriver extends Driver {
   }
 
   async start() {
-    if (this.#started) return;
+    if (this.#started && (!this.nativeSocket || this.#nativeSubscribed)) return;
     const server = await this.#connectOnly();
     if (this.#serverAdopted && this.threadId) {
       // The app-server itself survived on helm-procs. Its thread state and
       // any in-flight turn are already live; sending thread/resume here would
       // race the old turn instead of simply reconnecting to it.
-      this.#turnId = this.openTurn?.() ?? null;
+      const savedTurn = this.openTurn?.();
+      this.#turnId = savedTurn && !savedTurn.startsWith('local-') ? savedTurn : null;
       this.#rolloutState = await codexSessionState(this.transcript);
       this.#usage = this.#rolloutState.usage ?? this.#usage;
       this.info = {
@@ -505,8 +586,13 @@ export class CodexDriver extends Driver {
     const common = { cwd: this.cwd, approvalPolicy, sandbox, ...(this.model ? { model: this.model } : {}),
       ...(this.instructions ? { developerInstructions: this.instructions } : {}),
       ...(Object.keys(config).length ? { config } : {}) };
+    // A newly opened TUI has a loaded thread before its first prompt creates
+    // a rollout. Resume is invalid until then; direct input still works.
+    const nativeEmpty = this.nativeSocket && (!this.transcript || !existsSync(this.transcript));
     const res = this.threadId
-      ? await server.call('thread/resume', { threadId: this.threadId, excludeTurns: true, ...common })
+      ? nativeEmpty
+        ? await server.call('thread/read', { threadId: this.threadId, includeTurns: false })
+        : await server.call('thread/resume', { threadId: this.threadId, excludeTurns: true, ...(this.nativeSocket ? {} : common) })
       : await server.call('thread/start', common);
     if (res.error) throw new Error(`codex ${this.threadId ? 'resume' : 'start'} failed: ${res.error.message}`);
     this.threadId = res.result.thread.id;
@@ -527,13 +613,25 @@ export class CodexDriver extends Driver {
       cliVersion: res.result.thread?.cliVersion ?? this.#rolloutState.cliVersion,
     };
     this.#started = true;
+    if (this.nativeSocket) this.#nativeSubscribed = !nativeEmpty;
+    if (this.nativeSocket) {
+      const savedTurn = this.openTurn?.();
+      this.#turnId = savedTurn && !savedTurn.startsWith('local-') ? savedTurn : null;
+      const status = res.result.thread?.status;
+      if (!this.#turnId && status?.type === 'active') {
+        const active = await server.call('thread/read', { threadId: this.threadId, includeTurns: true });
+        this.#turnId = active.result?.thread?.turns?.findLast((turn) => turn.status === 'inProgress')?.id ?? null;
+      }
+      const blocked = status?.activeFlags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
+      this.push('status', { status: blocked ? 'blocked' : status?.type === 'active' ? 'working' : 'idle' });
+    }
     this.emit('init', this.info);
   }
 
   /** Initialize app-server for account reads without resuming the thread. */
   async #connectOnly() {
     if (this.#server) return this.#server;
-    const server = CodexServer.for(this.cmd, this.env, this.log, this.procHost);
+    const server = CodexServer.for(this.cmd, this.env, this.log, this.procHost, this.nativeSocket);
     // Register before binding the pipe: ensure() synchronously replays the
     // host's buffered notifications, including completions during downtime.
     server.attach(this);
@@ -552,6 +650,11 @@ export class CodexDriver extends Driver {
 
   serverExited(code, stderr) {
     this.#server = null;
+    if (this.nativeSocket) {
+      this.#started = false;
+      this.#nativeSubscribed = false;
+      return;
+    }
     for (const requestId of [...this.pending.keys()]) this.push('permission.resolved', { requestId, decision: 'cancelled' });
     if (!this.killed) this.push('error', { message: `codex exited with code ${code}${stderr ? `: ${stderr.trim().split('\n').pop()}` : ''}`, kind: 'exit' });
     this.push('status', { status: 'exited' });
@@ -592,7 +695,11 @@ export class CodexDriver extends Driver {
       throw new Error(res.error.message);
     }
     this.#turnId = res.result.turn.id;
-    this.push('turn.start', { turnId: this.#turnId, text });
+    await this.#subscribeNative();
+    if (!this.nativeSocket || !this.#nativeTurnStarts.has(this.#turnId)) {
+      this.push('turn.start', { turnId: this.#turnId, text });
+      if (this.nativeSocket) this.#nativeTurnStarts.add(this.#turnId);
+    }
   }
 
   /** app-server does not advertise these: they are client-side in Codex TUI. */
@@ -820,8 +927,11 @@ export class CodexDriver extends Driver {
     await this.start();
     const policy = this.#policy();
     const input = text ? [{ type: 'text', text, text_elements: [] }] : [];
+    // Labelled in order, so "[Image #2]" in the message names this one.
+    let n = 0;
     for (const a of attachments ?? []) {
       if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
+      input.push({ type: 'text', text: `[Image #${++n}]`, text_elements: [] });
       input.push({ type: 'image', url: `data:${a.mime};base64,${a.data}` });
     }
     if (!input.length) return this.send('(empty message)');
@@ -844,7 +954,11 @@ export class CodexDriver extends Driver {
       throw new Error(res.error.message);
     }
     this.#turnId = res.result.turn.id;
-    this.push('turn.start', { turnId: this.#turnId, text });
+    await this.#subscribeNative();
+    if (!this.nativeSocket || !this.#nativeTurnStarts.has(this.#turnId)) {
+      this.push('turn.start', { turnId: this.#turnId, text });
+      if (this.nativeSocket) this.#nativeTurnStarts.add(this.#turnId);
+    }
   }
 
   /**
@@ -858,22 +972,31 @@ export class CodexDriver extends Driver {
     await this.start();
     if (!this.#turnId) throw new Error('codex has no active turn to steer');
     const input = text ? [{ type: 'text', text, text_elements: [] }] : [];
+    // Labelled in order, so "[Image #2]" in the message names this one.
+    let n = 0;
     for (const a of attachments ?? []) {
       if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
+      input.push({ type: 'text', text: `[Image #${++n}]`, text_elements: [] });
       input.push({ type: 'image', url: `data:${a.mime};base64,${a.data}` });
     }
     if (!input.length) input.push({ type: 'text', text: '(empty message)', text_elements: [] });
+    const content = input.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+    this.#steers.push(content);
     const res = await this.#server.call('turn/steer', {
       threadId: this.threadId,
       expectedTurnId: this.#turnId,
       input,
       clientUserMessageId: randomUUID(),
     });
-    if (res.error) throw new Error(res.error.message);
-    this.#steers.push(input.filter((b) => b.type === 'text').map((b) => b.text).join('\n'));
+    if (res.error) {
+      const index = this.#steers.lastIndexOf(content);
+      if (index >= 0) this.#steers.splice(index, 1);
+      throw new Error(res.error.message);
+    }
   }
 
   async answer(requestId, decision) {
+    if (this.nativeSocket && !this.nativeConnected) await this.start();
     const req = this.pending.get(requestId);
     const raw = this.#requests.get(requestId);
     if (!req || !raw) throw new Error(`no pending request ${requestId}`);
@@ -883,7 +1006,7 @@ export class CodexDriver extends Driver {
       case 'item/fileChange/requestApproval': {
         const available = raw.params.availableDecisions ?? [];
         const amend = available.find((d) => typeof d === 'object' && d.acceptWithExecpolicyAmendment);
-        result = decision.option === 'deny' ? { decision: 'decline' }
+        result = decision.option === 'deny' ? { decision: this.nativeSocket && available.includes('cancel') && !available.includes('decline') ? 'cancel' : 'decline' }
           : decision.option === 'always' ? { decision: amend ?? 'acceptForSession' }
           : { decision: 'accept' };
         break;
@@ -928,6 +1051,12 @@ export class CodexDriver extends Driver {
   async kill() {
     this.killed = true;
     if (!this.#server) return;
+    if (this.nativeSocket) {
+      this.#server.detach(this);
+      this.#server = null;
+      this.push('status', { status: 'exited' });
+      return;
+    }
     for (const requestId of [...this.pending.keys()]) {
       try { await this.answer(requestId, { option: 'deny' }); } catch { /* gone */ }
     }
@@ -978,6 +1107,13 @@ export class CodexDriver extends Driver {
         this.#turnId = p.turn?.id ?? this.#turnId;
         this.push('status', { status: 'working' });
         return;
+      case 'thread/status/changed': {
+        if (!this.nativeSocket) return;
+        const status = p.status;
+        const blocked = status?.activeFlags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
+        this.push('status', { status: blocked ? 'blocked' : status?.type === 'active' ? 'working' : 'idle' });
+        return;
+      }
       case 'item/started': return this.#onItemStarted(p.item, p.turnId);
       case 'item/completed': return this.#onItemCompleted(p.item);
       case 'item/agentMessage/delta':
@@ -1056,10 +1192,16 @@ export class CodexDriver extends Driver {
       // Codex records a steered message when it uses it: after the step in
       // flight, before the next. That is where it joins the conversation.
       case 'userMessage': {
-        if (parentId || !this.#steers.length) return;
+        if (parentId) return;
         const text = (item.content ?? []).filter((b) => b?.type === 'text').map((b) => b.text).join('\n');
         const i = this.#steers.indexOf(text);
-        if (i < 0) return;
+        if (i < 0) {
+          if (this.nativeSocket && base.turnId && !this.#nativeTurnStarts.has(base.turnId)) {
+            this.#nativeTurnStarts.add(base.turnId);
+            this.push('turn.start', { turnId: base.turnId, text });
+          }
+          return;
+        }
         this.#steers.splice(i, 1);
         this.push('input.consumed', { text });
         return;
@@ -1150,6 +1292,7 @@ export class CodexDriver extends Driver {
   onServerRequest(m) {
     const requestId = String(m.id);
     const p = m.params ?? {};
+    if (this.nativeSocket && p.turnId) this.#turnId = p.turnId;
     this.#requests.set(requestId, { id: m.id, method: m.method, params: p });
     const known = this.#items.get(p.itemId) ?? {};
     let kind, title, detail, questions;
@@ -1193,7 +1336,7 @@ export class CodexDriver extends Driver {
     }
     if (kind !== 'question') options.push({ id: 'deny', role: 'deny', label: 'Deny' });
 
-    this.push('status', { status: 'blocked' });
+    if (p.isBlocking !== false) this.push('status', { status: 'blocked' });
     this.push('permission.request', {
       requestId, itemId: p.itemId, kind, tool: m.method.split('/')[1], title, detail,
       parentId: p.threadId && p.threadId !== this.threadId ? this.#subagentThreads.get(p.threadId) : undefined,

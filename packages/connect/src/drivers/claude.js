@@ -258,8 +258,11 @@ export class ClaudeDriver extends Driver {
     if (!this.#pipe || !this.#inTurn) throw new Error('claude has no active turn to steer');
     const content = [];
     if (text) content.push({ type: 'text', text });
+    // Labelled in order, so "[Image #2]" in the message names this one.
+    let n = 0;
     for (const a of attachments ?? []) {
       if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
+      content.push({ type: 'text', text: `[Image #${++n}]` });
       content.push({ type: 'image', source: { type: 'base64', media_type: a.mime, data: a.data } });
     }
     if (!content.length) content.push({ type: 'text', text: '(empty message)' });
@@ -284,8 +287,11 @@ export class ClaudeDriver extends Driver {
     await this.start();
     const content = [];
     if (text) content.push({ type: 'text', text });
+    // Labelled in order, so "[Image #2]" in the message names this one.
+    let n = 0;
     for (const a of attachments ?? []) {
       if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
+      content.push({ type: 'text', text: `[Image #${++n}]` });
       content.push({ type: 'image', source: { type: 'base64', media_type: a.mime, data: a.data } });
     }
     if (!content.length) return this.send('(empty message)');
