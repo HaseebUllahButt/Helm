@@ -14,6 +14,7 @@ before(async () => {
       import { createRoot } from 'react-dom/client';
       import { DrivenSession } from './apps/web/src/session/DrivenSession';
       import { Composer } from './apps/web/src/session/Composer';
+      import { PermissionSheet } from './apps/web/src/session/PermissionSheet';
       import * as auth from './apps/web/src/store';
       import { txn, idb } from './apps/web/src/idb';
 
@@ -46,6 +47,10 @@ before(async () => {
       }
       window.mountDriven = () => root.render(<DrivenProbe />);
       window.mountIme = () => root.render(<ImeProbe />);
+      window.mountQuestion = () => root.render(<PermissionSheet busy={false}
+        permission={{kind:'question',title:'Claude',questions:[{question:'Which color?',options:[{label:'Blue'},{label:'Green'}]}]}}
+        onAnswer={answer => { (window.answers ??= []).push(answer); }} />);
+      window.unmount = () => root.render(null);
       Object.assign(window, { auth, txn, idb });
     `, resolveDir: process.cwd(), loader: 'tsx' },
     bundle: true, write: false, format: 'iife', jsx: 'automatic',
@@ -70,6 +75,23 @@ async function pageFor(t) {
   await page.addScriptTag({ content: script });
   return page;
 }
+
+for (const action of ['change', 'type', 'unmount']) test(`question auto-submit cancels its old choice on ${action}`, async t => {
+  const page = await pageFor(t);
+  await page.clock.install({ time: new Date('2026-10-06T12:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-10-06T12:00:01Z'));
+  await page.evaluate(() => window.mountQuestion());
+  await page.getByRole('radio', { name: /Blue/ }).click();
+  if (action === 'change') await page.getByRole('radio', { name: /Green/ }).click();
+  if (action === 'type') await page.getByLabel('Your own answer').fill('Purple');
+  if (action === 'unmount') {
+    await page.evaluate(() => window.unmount());
+    await page.getByRole('radio').waitFor({ state: 'detached' });
+  }
+  await page.clock.runFor(200);
+  assert.deepEqual(await page.evaluate(() => window.answers ?? []),
+    action === 'change' ? [{ option: 'allow', answers: { 'Which color?': 'Green' } }] : []);
+});
 
 test('a failed send does not overwrite a newer draft or its saved copy', async (t) => {
   const page = await pageFor(t);

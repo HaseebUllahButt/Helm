@@ -189,6 +189,9 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
 
   /** Go on from a question that now has an answer: the next open one, or send. */
   const sent = useRef(false);
+  const autoAdvance = useRef<ReturnType<typeof setTimeout>>();
+  const cancelAdvance = () => clearTimeout(autoAdvance.current);
+  useEffect(() => cancelAdvance, []);
   // A send that failed leaves the card up; it can be tried again.
   useEffect(() => { if (!busy) sent.current = false; }, [busy]);
   const advance = (now: Record<string, string>) => {
@@ -200,6 +203,8 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
   };
 
   const choose = (q: Question, label: string) => {
+    if (busy || sent.current) return;
+    cancelAdvance();
     if (q.multiSelect) {
       setPicked((all) => {
         const have = all[key(q)] ?? [];
@@ -212,13 +217,14 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
     const nextOther = { ...other, [key(q)]: '' };
     setPicked(nextPicked); setOther(nextOther);
     const now = answersWith(nextPicked, nextOther);
-    setTimeout(() => advance(now), 140);
+    autoAdvance.current = setTimeout(() => advance(now), 140);
   };
   const type = (q: Question, text: string) => {
+    cancelAdvance();
     setOther({ ...other, [key(q)]: text });
     if (!q.multiSelect && text.trim()) setPicked({ ...picked, [key(q)]: [] });
   };
-  const confirm = () => { if (q && answers[key(q)]) advance(answers); };
+  const confirm = () => { cancelAdvance(); if (q && answers[key(q)]) advance(answers); };
 
   // Digits and Enter, for whoever is at a keyboard - never while a text box
   // has the cursor, where they are just typing.
@@ -257,7 +263,7 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
             {questions.map((x, i) => (
               <button key={key(x)} role="tab" aria-selected={i === step} aria-label={x.header || `Question ${i + 1}`}
                 title={x.header || `Question ${i + 1}`}
-                className={`q-dot${i === step ? ' on' : ''}${answers[key(x)] ? ' done' : ''}`} onClick={() => setStep(i)} />
+                className={`q-dot${i === step ? ' on' : ''}${answers[key(x)] ? ' done' : ''}`} onClick={() => { cancelAdvance(); setStep(i); }} />
             ))}
             <span className="q-count">{step + 1} of {questions.length}</span>
           </span>
