@@ -1512,7 +1512,10 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
   const [linkSecretFailed, setLinkSecretFailed] = useState(false);
 
   const finish = (auth: Auth) => {
-    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    // Shell consumes navigation links after sign-in; discard only auth hashes.
+    if (location.hash && !/^#open=[^/]+\/.+$/.test(location.hash) && location.hash !== '#devices') {
+      history.replaceState(null, '', location.pathname + location.search);
+    }
     onDone(auth);
   };
 
