@@ -2424,17 +2424,6 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 /* Pairing by camera: centred, with the white quiet zone the code needs. */
 .qr { display: block; margin: 4px auto 12px; border-radius: 10px; max-width: 100%; height: auto; }
 
-/* Getting started: a quiet card at the top of the sidebar until all ticked. */
-.welcome { margin: 10px 0 12px; padding: 10px 12px 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
-.welcome-head { display: flex; align-items: center; justify-content: space-between; font-size: var(--t-meta); margin-bottom: 4px; }
-.welcome-head .iconbtn { min-width: 28px; min-height: 28px; }
-.welcome-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: var(--t-meta); }
-.welcome-row .grow { display: flex; flex-direction: column; min-width: 0; }
-.welcome-row .rm { color: var(--mutedfg); font-size: var(--t-micro); overflow: hidden; text-overflow: ellipsis; }
-.welcome-mark { flex: none; width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; color: var(--mutedfg); border: 1px solid var(--line-2); }
-.welcome-row.ok .welcome-mark { color: var(--green, #6ee7b7); border-color: currentColor; }
-.welcome-row.ok .rt { color: var(--text-dim); }
-.welcome-go { flex: none; font-size: var(--t-micro); padding: 4px 9px; min-height: 28px; border-radius: 7px; border: 1px solid var(--line); background: var(--raised); }
 
 .modal-actions .spacer { flex: 1; }
 .queue-edit-add { display: inline-flex; align-items: center; gap: 6px; }

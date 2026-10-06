@@ -16,7 +16,6 @@ import { NotificationToast } from './NotificationToast';
 import { BackIcon, Icon, toolKind } from './Icon';
 import { Route } from './Route';
 import { QrCode } from './QrCode';
-import { Welcome } from './Welcome';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import {
@@ -360,7 +359,7 @@ type MainView =
   | { kind: 'models'; account: Account }
   // Which phones and browsers hold a key to this network: pair another, or
   // stop trusting one.
-  | { kind: 'devices'; pair?: boolean }
+  | { kind: 'devices' }
   // One page for everything that is not the day's work: machine defaults,
   // what it has all cost, and this device's pairing, alerts and install.
   | { kind: 'app-settings' }
@@ -1112,9 +1111,6 @@ function Shell({ client, conn, onSignOut }: {
               <span className="grow">Search anything</span>
             </button>
 
-            <Welcome client={client} envs={envs} engineLabel={(id) => engineOf(id).label}
-              onPair={() => navigate([{ kind: 'app-settings' }, { kind: 'devices', pair: true }])} />
-
             {blocked.map(({ env: e, s }) => (
               <NeedCard
                 key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)}
@@ -1242,7 +1238,7 @@ function Shell({ client, conn, onSignOut }: {
             <UsageView client={client} envs={envs} initialEnvId={view.envId} onBack={back} />
           </Suspense>
         ) : view.kind === 'devices' ? (
-          <DevicesView client={client} onBack={back} pairNow={!!view.pair} />
+          <DevicesView client={client} onBack={back} />
         ) : view.kind === 'updates' ? (
           <Suspense fallback={<ViewLoading title="Updates" onBack={back} />}>
             <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
@@ -1937,7 +1933,7 @@ function InstallPwa() {
  * is marked, because "remove the one I am holding" is a question with a
  * different answer than "remove the old tablet".
  */
-function DevicesView({ client, onBack, pairNow = false }: { client: Client; onBack: () => void; pairNow?: boolean }) {
+function DevicesView({ client, onBack }: { client: Client; onBack: () => void }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [error, setError] = useState('');
   const [removing, setRemoving] = useState<Device | null>(null);
@@ -2007,13 +2003,6 @@ function DevicesView({ client, onBack, pairNow = false }: { client: Client; onBa
     } catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
   };
-  // Arrived from "Show QR code": the code is what they came for.
-  const pairedOnOpen = useRef(false);
-  useEffect(() => {
-    if (!pairNow || pairedOnOpen.current) return;
-    pairedOnOpen.current = true;
-    void pair();
-  }, [pairNow]);
 
   const remove = async () => {
     const d = removing;
