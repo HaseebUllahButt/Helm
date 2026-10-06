@@ -2,17 +2,18 @@ import { useDialog } from './useDialog';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { EngineMark } from './EngineMark';
 import { Icon } from './Icon';
-import type { Client, DirEntry, Environment, Project, Session } from './client';
-import { accountsFrom, loadPrefs, recentFolders, rememberFolder, savePrefs, type Account, type PickerPrefs } from './accounts';
+import type { Client, DirEntry, Environment, Session } from './client';
+import { accountsFrom, loadPrefs, rememberFolder, savePrefs, type Account, type PickerPrefs } from './accounts';
 
 /**
  * A new chat without the mouse: machine, then folder, then CLI, in one box.
  *
  * Each step is a list you type into to narrow, move through with the arrows
  * and pick from with Enter. Backspace in an empty box steps back. The folder
- * step lists folders only - a new chat never continues an old one - and
- * opens the recent ones and the machine's projects first; typing searches
- * every folder on that machine, and → opens a folder to look inside it.
+ * step is the machine's folders as a tree, starting at home, and nothing else
+ * - a new chat never continues an old one. Enter picks a folder, → opens it
+ * in place to show the folders inside, ← closes it again. Typing searches
+ * every folder on that machine; a result opens with → the same way.
  */
 
 type Step = 'machine' | 'folder' | 'cli';
@@ -26,8 +27,8 @@ interface Row {
   icon?: 'machine' | 'folder' | 'repo';
   tag?: string;
   disabled?: boolean;
-  /** A folder that can be opened with → to see what is inside. */
-  into?: string;
+  /** A folder: how deep in the tree, and whether it is opened. */
+  folder?: { path: string; depth: number; open: boolean; parent?: string };
   pick: () => void;
 }
 
@@ -38,11 +39,6 @@ const matches = (row: Row, q: string) => {
 };
 
 const leaf = (p: string) => p.replace(/\/$/, '').split('/').pop() || p;
-const parent = (p: string) => {
-  const trimmed = p.replace(/\/$/, '');
-  const i = trimmed.lastIndexOf('/');
-  return i <= 0 ? (trimmed.startsWith('/') ? '/' : trimmed) : trimmed.slice(0, i);
-};
 
 export function NewChat({ client, envs, envId, near, onClose, onStarted, engineOf }: {
   client: Client;
@@ -69,12 +65,10 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
   const [busy, setBusy] = useState(false);
 
   // Folder step.
-  const [projects, setProjects] = useState<Project[]>([]);
   const [home, setHome] = useState<DirEntry[] | null>(null);
-  /** The folders opened with →, deepest last, each with what was typed
-   * before opening it, so ⌫ returns to the same list. Empty is the suggestions. */
-  const [trail, setTrail] = useState<{ path: string; q: string }[]>([]);
-  const [inside, setInside] = useState<{ path: string; entries: DirEntry[] } | null>(null);
+  /** The folders opened with →, by row id; what is inside each, once asked. */
+  const [opened, setOpened] = useState<Set<string>>(new Set());
+  const [inside, setInside] = useState<Record<string, DirEntry[] | null>>({});
   const [hits, setHits] = useState<{ name: string; path: string; repo: boolean }[] | null>(null);
 
   // CLI step.
@@ -88,9 +82,7 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
   useEffect(() => {
     if (!machine) return;
     let stale = false;
-    setProjects([]); setHome(null); setAccounts(null); setPicker(null); setTrail([]);
-    client.rpc<{ projects: Project[] }>(machine.id, 'project.list', {}, 20_000)
-      .then((r) => { if (!stale) setProjects(r.projects ?? []); }).catch(() => { /* recent folders still show */ });
+    setHome(null); setAccounts(null); setPicker(null); setOpened(new Set()); setInside({});
     client.rpc<{ entries: DirEntry[] }>(machine.id, 'fs.list', { path: '~' })
       .then((r) => { if (!stale) setHome(r.entries); }).catch((e) => { if (!stale) { setHome([]); setError(e.message); } });
     client.rpc<any>(machine.id, 'profile.list')
@@ -105,19 +97,23 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
     return () => { stale = true; };
   }, [client, machine]);
 
-  const here = trail.at(-1)?.path ?? null;
-  useEffect(() => {
-    if (!machine || !here) { setInside(null); return; }
-    let stale = false;
-    client.rpc<{ path: string; entries: DirEntry[] }>(machine.id, 'fs.list', { path: here })
-      .then((r) => { if (!stale) setInside({ path: r.path, entries: r.entries }); })
-      .catch((e) => { if (!stale) setError(e.message); });
-    return () => { stale = true; };
-  }, [client, machine, here]);
+  const expand = (path: string, id: string) => {
+    setOpened((all) => new Set(all).add(id));
+    if (!machine || path in inside) return;
+    setInside((all) => ({ ...all, [path]: null }));
+    client.rpc<{ entries: DirEntry[] }>(machine.id, 'fs.list', { path })
+      .then((r) => setInside((all) => ({ ...all, [path]: r.entries })))
+      .catch((e) => { setInside((all) => ({ ...all, [path]: [] })); setError(e.message); });
+  };
+  const collapse = (id: string) => setOpened((all) => {
+    // Closing a folder closes everything opened inside it too.
+    const next = new Set([...all].filter((o) => o !== id && !o.startsWith(`${id}>`)));
+    return next;
+  });
 
   // Typing in the suggestions searches the whole machine, from its index.
   const query = q.trim();
-  const searching = step === 'folder' && !here && !!query;
+  const searching = step === 'folder' && !!query;
   useEffect(() => {
     if (!searching || !machine) { setHits(null); return; }
     setHits(null);
@@ -129,7 +125,9 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
     return () => clearTimeout(t);
   }, [searching, query, client, machine]);
 
-  const pickFolder = (path: string) => { setFolder(path); go('cli'); };
+  // Stepping back from the CLIs lands on the same folder in the same list.
+  const folderSpot = useRef({ q: '', id: '' });
+  const pickFolder = (path: string, id: string) => { folderSpot.current = { q, id }; setFolder(path); go('cli'); };
 
   const start = async (a: Account) => {
     if (!machine || busy) return;
@@ -163,25 +161,30 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
       return all.filter((r) => matches(r, query)).sort((a, b) => Number(!!a.disabled) - Number(!!b.disabled));
     }
     if (step === 'folder') {
-      const folderRow = (path: string, group: string, repo = false, title = leaf(path)): Row => ({
-        id: `${group}:${path}`, title, sub: path, group, icon: repo ? 'repo' : 'folder', into: path, pick: () => pickFolder(path),
-      });
-      if (here) {
-        const at = inside?.path ?? here;
-        const subs = (inside?.entries ?? []).filter((e) => !query || e.name.toLowerCase().includes(query.toLowerCase()));
-        return [
-          ...(query ? [] : [{ ...folderRow(at, 'this folder'), title: `Start in ${leaf(at)}`, into: undefined }]),
-          ...subs.map((e) => folderRow(e.path, 'inside', e.isRepo, e.name)),
-        ];
+      // A row's id is its place in the tree - "~/dev>helm>apps" - which can
+      // never equal a top-level folder's own path, "~/dev/helm/apps".
+      const out: Row[] = [];
+      const add = (path: string, title: string, repo: boolean, depth: number, parent?: string, sub?: string) => {
+        const id = parent ? `${parent}>${title}` : path;
+        const open = opened.has(id);
+        out.push({ id, title, sub, icon: repo ? 'repo' : 'folder', folder: { path, depth, open, parent }, pick: () => pickFolder(path, id) });
+        if (!open) return;
+        const kids = inside[path];
+        if (kids === null || kids === undefined) out.push({ id: `${id}>…`, title: 'looking…', disabled: true, folder: { path, depth: depth + 1, open: false, parent: id }, pick: () => {} });
+        else if (!kids.length) out.push({ id: `${id}>…`, title: 'no folders inside', disabled: true, folder: { path, depth: depth + 1, open: false, parent: id }, pick: () => {} });
+        else for (const k of kids) add(k.path, k.name, k.isRepo, depth + 1, id);
+      };
+      if (searching) {
+        // A hit inside another hit is one → away from it; listing both is
+        // the same folder twice.
+        const all = hits ?? [];
+        for (const h of all) {
+          if (all.some((o) => o !== h && h.path.startsWith(`${o.path.replace(/\/$/, '')}/`))) continue;
+          add(h.path, h.name, h.repo, 0, undefined, h.path);
+        }
       }
-      if (searching) return (hits ?? []).map((h) => folderRow(h.path, 'found', h.repo, h.name));
-      const seen = new Set<string>();
-      const once = (r: Row) => { if (seen.has(r.sub!)) return false; seen.add(r.sub!); return true; };
-      return [
-        ...recentFolders(machine?.id ?? '').slice(0, 5).map((p) => folderRow(p, 'recent')),
-        ...projects.map((p) => folderRow(p.path, 'projects', true, p.title || leaf(p.path))),
-        ...(home ?? []).map((e) => folderRow(e.path, 'home', e.isRepo, e.name)),
-      ].filter(once);
+      else for (const e of home ?? []) add(e.path, e.name, e.isRepo, 0);
+      return out;
     }
     const hidden = new Set(picker?.hidden ?? []);
     const shown = (accounts ?? []).filter((a) => !hidden.has(a.key));
@@ -196,7 +199,7 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
       tag: a.key === picker?.agent ? 'default' : a.key === picker?.last ? 'last used' : undefined,
       pick: () => void start(a),
     })).filter((r) => matches(r, query));
-  }, [step, envs, machine, query, here, inside, searching, hits, projects, home, accounts, picker, folder, busy]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, envs, machine, query, opened, inside, searching, hits, home, accounts, picker, folder, busy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // On the machine step the one you are on is where the cursor starts.
   useEffect(() => {
@@ -204,6 +207,15 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
     const i = rows.findIndex((r) => r.id === (machine?.id ?? near) && !r.disabled);
     setAt(i >= 0 ? i : 0);
   }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Back from the CLIs: put the cursor on the folder that was picked, once
+  // its list is on screen again.
+  const returning = useRef('');
+  useEffect(() => {
+    if (step !== 'folder' || !returning.current) return;
+    const i = rows.findIndex((r) => r.id === returning.current);
+    if (i >= 0) { setAt(i); returning.current = ''; }
+  }, [step, rows]);
 
   const selected = Math.max(0, Math.min(at, rows.length - 1));
   useEffect(() => {
@@ -219,19 +231,31 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
     }
     setAt(i);
   };
-  const open = (path: string) => { setTrail((t) => [...t, { path, q }]); setQ(''); setAt(0); };
   const back = () => {
     setError('');
-    if (step === 'cli') go('folder');
-    else if (step === 'folder' && trail.length) { setQ(trail.at(-1)!.q); setTrail((t) => t.slice(0, -1)); setAt(0); }
+    if (step === 'cli') { go('folder'); setQ(folderSpot.current.q); returning.current = folderSpot.current.id; }
     else if (step === 'folder') go('machine');
+  };
+  // → opens a folder, or steps into one already open; ← closes it, or steps
+  // out to the folder it is in - the way every file tree answers the arrows.
+  const right = (row: Row) => {
+    const f = row.folder!;
+    if (!f.open) { expand(f.path, row.id); return; }
+    const next = rows[selected + 1];
+    if (next?.folder?.parent === row.id && !next.disabled) setAt(selected + 1);
+  };
+  const left = (row: Row) => {
+    const f = row.folder!;
+    if (f.open) { collapse(row.id); return; }
+    const up = rows.findIndex((r) => r.id === f.parent);
+    if (up >= 0) { collapse(f.parent!); setAt(up); }
   };
 
   const loading = step === 'folder'
-    ? (here ? !inside : searching ? hits === null : home === null && !projects.length)
+    ? (searching ? hits === null : home === null)
     : step === 'cli' ? accounts === null : false;
   const placeholder = step === 'machine' ? 'Which machine?'
-    : step === 'folder' ? (here ? `Inside ${leaf(inside?.path ?? here)}` : `Which folder on ${machine?.name}?`)
+    : step === 'folder' ? `Which folder on ${machine?.name}?`
     : 'Which CLI?';
 
   return (
@@ -257,12 +281,14 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
             const row = rows[selected];
-            const atEnd = e.currentTarget.selectionStart === q.length;
             if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
             else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
             else if (e.key === 'Enter') { e.preventDefault(); if (row && !row.disabled) row.pick(); }
-            else if (e.key === 'ArrowRight' && atEnd && row?.into) { e.preventDefault(); open(row.into); }
-            else if ((e.key === 'Backspace' || e.key === 'ArrowLeft') && !q) { e.preventDefault(); back(); }
+            // In the folder tree the side arrows belong to the tree, even
+            // with a search typed: nobody edits a folder name mid-word here.
+            else if (e.key === 'ArrowRight' && row?.folder) { e.preventDefault(); right(row); }
+            else if (e.key === 'ArrowLeft' && row?.folder) { e.preventDefault(); left(row); }
+            else if ((e.key === 'Backspace' || (e.key === 'ArrowLeft' && step !== 'folder')) && !q) { e.preventDefault(); back(); }
           }}
         />
         <div className="palette-list" ref={list} role="listbox" id={listId} aria-label={placeholder}>
@@ -270,7 +296,7 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
           {!busy && loading && !rows.length && <div className="empty quiet">{step === 'cli' ? 'looking for CLIs…' : 'looking…'}</div>}
           {!busy && !loading && !rows.length && (
             <div className="empty quiet">
-              {step === 'machine' ? 'No machine matches.' : step === 'folder' ? (here ? 'No folders inside.' : 'No folder matches.') : 'No CLI matches.'}
+              {step === 'machine' ? 'No machine matches.' : step === 'folder' ? (searching ? 'No folder matches.' : 'No folders here.') : 'No CLI matches.'}
             </div>
           )}
           {!busy && rows.map((row, i) => {
@@ -278,26 +304,29 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
             return (
               <div key={row.id}>
                 {head && <div className="palette-group">{row.group}</div>}
-                <div className="newchat-row">
+                <div className={`newchat-row${row.folder ? ' tree' : ''}`} style={row.folder ? { paddingLeft: row.folder.depth * 22 } : undefined}>
+                  {row.folder && (row.disabled ? <span className="newchat-twisty" /> : (
+                    <button
+                      className={`newchat-twisty${row.folder.open ? ' open' : ''}`} tabIndex={-1}
+                      title={row.folder.open ? `close ${row.title}` : `open ${row.title}`}
+                      aria-label={row.folder.open ? `close ${row.title}` : `open ${row.title}`}
+                      onClick={() => { setAt(i); if (row.folder!.open) collapse(row.id); else expand(row.folder!.path, row.id); }}
+                    ><Icon name="forward" size={14} /></button>
+                  ))}
                   <button
                     role="option" id={`${listId}-${i}`} tabIndex={-1} aria-selected={i === selected}
                     aria-disabled={row.disabled || undefined} disabled={row.disabled}
+                    aria-expanded={row.folder && !row.disabled ? row.folder.open : undefined}
                     className={`palette-row${i === selected ? ' on' : ''}`}
                     onMouseMove={() => setAt(i)} onClick={() => row.pick()}
                   >
                     {row.engine ? <EngineMark engine={engineOf(row.engine).cls} />
-                      : <span className="pglyph"><Icon name={row.icon ?? 'folder'} size={15} /></span>}
+                      : !row.disabled && <span className="pglyph"><Icon name={row.icon ?? 'folder'} size={15} /></span>}
                     <span className="grow">
                       <span className="palette-title">{row.title}{row.tag && <span className="tag">{row.tag}</span>}</span>
                       {row.sub && <span className="palette-sub">{row.sub}</span>}
                     </span>
                   </button>
-                  {row.into && (
-                    <button
-                      className="iconbtn newchat-into" tabIndex={-1} title={`look inside ${row.title}`} aria-label={`look inside ${row.title}`}
-                      onClick={() => open(row.into!)}
-                    ><Icon name="forward" size={15} /></button>
-                  )}
                 </div>
               </div>
             );
@@ -307,7 +336,7 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
         <div className="palette-foot">
           <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
           <span><kbd>Enter</kbd> {step === 'cli' ? 'start' : 'choose'}</span>
-          {step === 'folder' && <span><kbd>→</kbd> look inside</span>}
+          {step === 'folder' && <span><kbd>→</kbd><kbd>←</kbd> open, close</span>}
           {step !== 'machine' && !busy && <span><kbd>⌫</kbd> back</span>}
           <span><kbd>Esc</kbd> close</span>
         </div>

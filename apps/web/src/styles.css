@@ -2174,7 +2174,13 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 .newchat-row { display: flex; align-items: center; gap: 2px; }
 .newchat-row .palette-row { flex: 1; min-width: 0; }
 .newchat-row .palette-row:disabled { opacity: 0.5; }
-.newchat-into { flex: none; color: var(--mutedfg); }
+.newchat-twisty { flex: none; width: 26px; height: 32px; display: inline-flex; align-items: center; justify-content: center; color: var(--mutedfg); border-radius: 7px; }
+.newchat-twisty svg { transition: transform 0.12s var(--ease); }
+.newchat-twisty.open svg { transform: rotate(90deg); }
+button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
+/* A tree row is one line: the indent already says where it is. */
+.newchat-row.tree .palette-row { min-height: 40px; padding-top: 6px; padding-bottom: 6px; padding-left: 6px; }
+.newchat-row.tree .palette-row:disabled .palette-title { color: var(--mutedfg); font-weight: 450; }
 .newchat .palette-title .tag { margin-left: 8px; }
 .newchat .palette-list .error { margin: 8px 12px; }
 .home-search kbd { font-size: 10.5px; padding: 1px 5px; }
