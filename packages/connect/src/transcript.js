@@ -439,6 +439,15 @@ export async function sessionActivity({ engine, path, sessionId, active = false,
   return { status, turns: phase === 'done' || status === 'done' ? 1 : 0, updatedAt };
 }
 
+const sameTool = (a, b) => a?.name === b?.name && a?.input === b?.input;
+function combine(a, b) {
+  const text = !a.text ? b.text : !b.text ? a.text
+    : b.text.startsWith(a.text) ? b.text : a.text.endsWith(b.text) ? a.text : `${a.text}\n\n${b.text}`;
+  // A snapshot repeats the calls before it; a block line adds one more.
+  const snapshot = b.tools.length >= a.tools.length && a.tools.every((t, i) => sameTool(t, b.tools[i]));
+  return { ...b, text: clip(text), tools: snapshot ? b.tools : [...a.tools, ...b.tools], thinking: a.thinking || b.thinking, at: a.at };
+}
+
 async function claudeMessages(path, { all = false } = {}) {
   const found = [];
   await readLines(path, (rec) => {
@@ -458,14 +467,17 @@ async function claudeMessages(path, { all = false } = {}) {
       thinking, at: rec.timestamp, sourceId: msg.id ?? rec.uuid,
     });
   }, { tailBytes: all ? Infinity : 4 << 20 });
-  // Claude may persist successive snapshots of a streaming message. The
-  // last copy has the complete text/tool set.
+  // One reply reaches the file as several lines sharing its id: current
+  // Claude Code writes each block - thinking, the text, every tool call - on
+  // a line of its own; older versions rewrote growing snapshots. Combine
+  // them: keeping only the last line kept the last tool call and dropped
+  // everything Claude said before it.
   const out = [], byId = new Map();
   for (const message of found) {
     if (!message.sourceId) { out.push(message); continue; }
     const at = byId.get(message.sourceId);
     if (at == null) { byId.set(message.sourceId, out.length); out.push(message); }
-    else out[at] = message;
+    else out[at] = combine(out[at], message);
   }
   return out;
 }

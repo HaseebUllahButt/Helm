@@ -527,6 +527,18 @@ export class EventLog {
   /** The agent's live turn, even when unsent queued messages follow it. */
   activeTurn(id) { return activeTurnFromEvents(this.#open(id).events); }
 
+  /**
+   * Start a log over from empty without reusing its numbers: a client holding
+   * the old copy sees its history jump and reloads it whole.
+   */
+  restart(id) {
+    const seq = this.#open(id).seq;
+    this.remove(id);
+    const log = this.#open(id);
+    log.seq = seq;
+    log.first = seq + 1;
+  }
+
   remove(id) {
     this.#logs.delete(id);
     this.#pending.delete(id);

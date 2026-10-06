@@ -1732,6 +1732,14 @@ export class Sessions extends EventEmitter {
     const messages = await readMessages({
       engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, all: true,
     });
+    // Claude chats copied before replies were read whole are missing what
+    // Claude said between its tool calls: copy those once more, from scratch.
+    if (s.engine === 'claude' && s.external && (s.externalImported ?? 0) > 0 && s.externalTextVersion !== 1) {
+      this.events.restart(s.id);
+      s.externalImported = 0;
+      s.externalTail = null;
+    }
+    if (s.engine === 'claude') s.externalTextVersion = 1;
     let imported = Math.min(s.externalImported ?? 0, messages.length);
     if (s.engine === 'codex' && s.externalImagesVersion !== 1 && imported) {
       // The old parser omitted image-only messages entirely. Translate its
@@ -1829,17 +1837,18 @@ export class Sessions extends EventEmitter {
         turnId = nextId();
         append({ type: 'turn.start', turnId, text: '', imported: true });
       }
-      for (const tool of message.tools ?? []) {
-        const itemId = nextId();
-        append({ type: 'item.start', id: itemId, turnId, kind: 'tool', name: tool.name, input: tool.input });
-        append({ type: 'item.done', id: itemId, turnId, status: 'ok' });
-      }
+      // What Claude says comes before the calls it makes in the same reply.
       let textItemId = null;
       if (message.text) {
         textItemId = nextId();
         append({ type: 'item.start', id: textItemId, turnId, kind: 'text' });
         append({ type: 'item.delta', id: textItemId, turnId, text: message.text });
         append({ type: 'item.done', id: textItemId, turnId, status: 'ok' });
+      }
+      for (const tool of message.tools ?? []) {
+        const itemId = nextId();
+        append({ type: 'item.start', id: itemId, turnId, kind: 'tool', name: tool.name, input: tool.input });
+        append({ type: 'item.done', id: itemId, turnId, status: 'ok' });
       }
       if (message.sourceId) s.externalTail = {
         sourceId: message.sourceId, turnId, itemId: textItemId,
