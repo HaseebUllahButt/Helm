@@ -1186,6 +1186,15 @@ pre.snippet {
   .chip-pick .chip-label { display: none; }
   .chip-pick .cg svg { width: 17px; height: 17px; }
 }
+/* How much of the account's limits is used, at the end of the control row. */
+.limits-line {
+  flex: none; align-self: center; padding: 0 4px 0 8px; white-space: nowrap;
+  font: var(--t-micro) var(--mono); color: var(--mutedfg); font-variant-numeric: tabular-nums;
+}
+.limits-line .lw.warn { color: var(--amber-text); }
+.limits-line .lw.bad { color: var(--red); }
+/* A phone keeps the longest window: the weekly one is the one that ends a week. */
+@media (max-width: 599px) { .limits-line .lw.short { display: none; } .limits-line .lw:not(.short) .sep { display: none; } }
 .slab.danger::after { border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .modesheet-note { padding: 0 8px 8px; font-size: var(--t-meta); color: var(--mutedfg); }
 

@@ -73,8 +73,11 @@ export function DictationKey({ client, envs, onSaved }: {
       {adding && (
         <form className="link-form" onSubmit={save}>
           <label>Groq key
-            <input className="field" type="password" placeholder="gsk_…" value={key} autoFocus
-                   autoComplete="off" spellCheck={false} onChange={(e) => setKey(e.target.value)} />
+            {/* Plain text, not a password field: hidden fields make the
+                browser offer to save a password, which is a web page's question. */}
+            <input className="field" type="text" placeholder="gsk_…" value={key} autoFocus
+                   autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} data-1p-ignore
+                   onChange={(e) => setKey(e.target.value)} />
           </label>
           <p className="note" style={{ margin: 0 }}>
             Get one at console.groq.com/keys. It is checked with Groq, then kept on each of your machines - never on this device.
