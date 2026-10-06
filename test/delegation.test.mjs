@@ -448,3 +448,17 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
     assert.equal(result.session.model, 'opus');
   } finally { env.terminate(); hub.stop(); }
 });
+
+test('agents are told which machine they are on and how to reach the others', async () => {
+  const { helmBrief } = await import('../packages/connect/src/delegation.js');
+  const net = { self: 'a', machines: {
+    a: { id: 'a', name: 'Laptop' }, b: { id: 'b', name: 'VM', kind: 'vm' },
+    c: { id: 'c', name: 'twin' }, d: { id: 'd', name: 'twin' },
+  } };
+  const brief = helmBrief(net);
+  assert.match(brief, /running on Laptop/);
+  assert.match(brief, /The others: VM \(vm\), twin\./, 'each name once; ssh can only reach one of them');
+  assert.match(brief, /ssh -o ConnectTimeout=15 <name>/);
+  assert.ok(brief.endsWith(delegationNote()));
+  assert.equal(helmBrief({ self: 'a', machines: { a: net.machines.a } }), delegationNote(), 'alone: nothing to reach');
+});

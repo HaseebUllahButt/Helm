@@ -34,6 +34,31 @@ export function delegationNote() {
   return '[Helm: Delegate only with helm delegate <account> --model <model> --wait --json -- "<task>", never native subagents. Discover accounts/models with helm agents --json only when needed.]';
 }
 
+/**
+ * What every agent Helm starts is told about where it is: which of the
+ * owner's machines it runs on, the others, and how to act on them. "Go to
+ * the VM and restart nginx" should not need the owner to explain how to get
+ * there - Helm already put an `ssh <name>` route to every machine in
+ * ~/.ssh/config, and the `helm` commands reach the rest.
+ *
+ * Kept to a few lines: it rides along in every session.
+ */
+export function helmBrief(net) {
+  const machines = Object.values(net?.machines ?? {});
+  const self = net?.machines?.[net?.self];
+  const seen = new Set();
+  const others = machines
+    .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
+    .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
+  if (!self?.name || !others.length) return delegationNote();
+  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}.
+- Run something on another machine: ssh -o ConnectTimeout=15 <name> '<command>' (Helm set up these logins; no password).
+- Copy a folder there: helm copy <machine> <folder> --target-folder <absolute-path>.
+- Which machines are on and what is running where: helm digest. Read a session: helm thread <id>. Message it: helm say <id> <text>.
+- Start an agent on another machine: helm spawn <machine> <folder> <account> <task>.]
+${delegationNote()}`;
+}
+
 /** Read-only parents cannot acquire write access through a different CLI. */
 export function delegationMode(engine, parentMode, requested, configured = null, parentEngine = engine) {
   const modes = modesFor(engine);

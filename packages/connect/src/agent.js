@@ -40,7 +40,7 @@ import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted } from './update.js';
 import * as gitq from './git.js';
-import { agentCatalog, delegationNote } from './delegation.js';
+import { agentCatalog, helmBrief } from './delegation.js';
 import { Schedules } from './schedules.js';
 
 const RECONNECT_MIN = 250;
@@ -316,7 +316,7 @@ export class Daemon {
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
     try { this.schedules = new Schedules({ sessions: this.sessions }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
-    this.sessions.delegationBrief = delegationNote;
+    this.sessions.delegationBrief = () => helmBrief(loadNetwork() ?? this.net);
     this.handoffs = new Handoffs({
       sessions: this.sessions,
       network: () => loadNetwork() ?? this.net,
