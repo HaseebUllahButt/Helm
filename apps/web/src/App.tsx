@@ -698,10 +698,11 @@ function Shell({ client, conn, onSignOut }: {
   }, [wide, selected, envs]);
 
   // Keys, on a keyboard. Ctrl/Cmd+K opens the palette; "/" opens it too;
-  // Ctrl/Cmd+Shift+O (or "n") starts a new chat, and so does Ctrl/Cmd+N in
-  // the installed app, the one place a browser lets a page have it;
-  // Ctrl/Cmd+[ and ] walk back and forward; "?" lists them. The single letters never fire while you are
-  // typing into something, and a phone never sends any of them.
+  // Ctrl/Cmd+N starts a new chat - never a bare "n", which the owner hit by
+  // accident. In an ordinary browser tab the browser keeps Ctrl+N, so
+  // Ctrl/Cmd+Shift+O does the same there. Ctrl/Cmd+[ and ] walk back and
+  // forward; "?" lists them. The single keys never fire while you are typing
+  // into something, and a phone never sends any of them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
@@ -715,8 +716,7 @@ function Shell({ client, conn, onSignOut }: {
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
       if (typing || mod || e.altKey) return;
       if (e.key === '?') { e.preventDefault(); setHelp(true); return; }
-      if (e.key === '/') { e.preventDefault(); setPalette(true); return; }
-      if (e.key === 'n' && !document.querySelector('[aria-modal="true"]')) { e.preventDefault(); setNewChat({}); }
+      if (e.key === '/') { e.preventDefault(); setPalette(true); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -1136,7 +1136,7 @@ function Shell({ client, conn, onSignOut }: {
             <button
               type="button" className="home-search" onClick={() => setNewChat({})}
               disabled={!envs.some((e) => e.online)}
-              aria-label="New chat" aria-keyshortcuts="Control+Shift+O Meta+Shift+O N" title="New chat (N or Ctrl+Shift+O / ⌘⇧O)"
+              aria-label="New chat" aria-keyshortcuts="Control+N Meta+N Control+Shift+O Meta+Shift+O" title="New chat (Ctrl+N)"
             >
               <Icon name="plus" size={15} />
               <span className="grow">New chat</span>

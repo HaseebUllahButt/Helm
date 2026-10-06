@@ -128,9 +128,8 @@ export function Palette({ items, onClose, engineOf }: {
 const SHORTCUTS: [string, string][] = [
   ['Ctrl/⌘ K', 'Command palette'],
   ['/', 'Search threads'],
-  ['Ctrl/⌘ N', 'New chat, in the installed app'],
-  ['Ctrl/⌘ Shift O', 'New chat'],
-  ['N', 'New chat, when not typing'],
+  ['Ctrl/⌘ N', 'New chat'],
+  ['Ctrl/⌘ Shift O', 'New chat, in a browser tab'],
   ['Ctrl/⌘ [', 'Back'],
   ['Ctrl/⌘ ]', 'Forward'],
   ['Enter', 'Send a message'],
