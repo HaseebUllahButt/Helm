@@ -81,6 +81,10 @@ const usage = () => {
   helm digest [--json]              every machine, folder and running session
   helm thread <id> [-n 40]          the recent conversation of one session
   helm say <id> <text...>           send a prompt into an existing session
+  helm chat <account> [-- text]    share a live agent between this terminal and the app
+  helm chat --attach <id>          reconnect to the same managed session
+  helm chat <account> --resume <id> continue a native conversation after its CLI closes
+  helm integrate [--remove]        manage automatic control of normal CLI commands
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
   helm delegate <account> --model <id> --wait --json -- "<task>"
                                     run a CLI subagent in the current folder
@@ -187,8 +191,10 @@ async function printDeviceLink(args = rest) {
   if (!value.password) throw new Error('your Helm home did not hand back a password');
   const pairUrl = `${base}/#pair=${encodeURIComponent(value.password)}`;
   const valid = Math.max(1, Math.round((value.expiresAt - Date.now()) / 60_000));
-  console.log(`\n  Open this private link on the phone or browser you are adding:\n`);
-  console.log(`    ${pairUrl}\n`);
+  const { terminalQr } = await import('../src/qr-terminal.js');
+  console.log(`\n  Scan this with the phone you are adding, or open the link on it:\n`);
+  console.log(terminalQr(pairUrl).split('\n').map((line) => `    ${line}`).join('\n'));
+  console.log(`\n    ${pairUrl}\n`);
   console.log(`  It expires in ${valid} minute${valid === 1 ? '' : 's'}.`);
   console.log('  Once paired, that device stays signed in until you remove it.\n');
 }
@@ -255,15 +261,21 @@ async function up() {
     return;
   }
 
-  // A daemon systemd started keeps itself current: make sure the update
-  // timer exists, then a machine that ever lands this code follows new
-  // releases on its own from then on. INVOCATION_ID is set only for units
-  // systemd launched, so a foreground `helm up` is untouched.
+  // Helm never follows GitHub by itself any more: a self-hosted install is
+  // the owner's to change. Machines keep each other on the newest version
+  // the owner saved; the GitHub timer earlier versions installed goes.
   if (process.env.INVOCATION_ID) {
-    // The daemon's own PATH is the one that found node, git and npm.
-    import('../src/update.js').then((m) => m.ensureUpdateTimer({ searchPath: process.env.PATH })).catch(() => {});
+    import('../src/update.js').then((m) => m.removeUpdateTimer()).catch(() => {});
   }
 
+  if (!process.env.HELM_NATIVE_BYPASS) {
+    const report = (err) => console.error(`helm: native CLI integration: ${err.message}`);
+    try {
+      const { integrateNativeCommands } = await import('../src/native-cli.js');
+      // Also picks up a CLI installed since the last start.
+      try { integrateNativeCommands(); } catch (err) { report(err); }
+    } catch (err) { report(err); }
+  }
   useHubDb();
   const { up: bringUp } = await import('../src/serve.js');
   // A tunnel is opt-in now. It exists for the one case that genuinely needs
@@ -1787,8 +1799,11 @@ try {
     case 'self-update':
     case 'update': {
       const { selfUpdate } = await import('../src/update.js');
-      const r = await selfUpdate();
+      // GitHub's version, only when asked. --replace overrides this machine's
+      // own changes and keeps them on a backup branch.
+      const r = await selfUpdate(undefined, { replace: rest.includes('--replace') });
       if (!r.updated) { console.log(`  not updated - ${r.reason}`); break; }
+      if (r.backup) console.log(`  your changes are kept on branch ${r.backup}`);
       console.log(r.restarting?.length
         ? `  updated - ${r.restarting.join(', ')} will restart safely; active threads are preserved`
         : '  updated - restart helm to pick it up');
@@ -1956,6 +1971,23 @@ try {
     case 'say':
       await say();
       break;
+
+    case 'integrate': {
+      const { integrateNativeCommands, removeNativeLaunchers } = await import('../src/native-cli.js');
+      const off = rest.includes('--remove');
+      const commands = off ? removeNativeLaunchers() : integrateNativeCommands({ enable: true });
+      if (off) console.log(commands.length ? `Turned off for: ${commands.join(', ')}. Open a new terminal.` : 'Already off.');
+      else console.log(commands.length ? `On for: ${commands.join(', ')}. Open a new terminal, then use them as normal.` : 'No supported CLI found on PATH.');
+      break;
+    }
+    case 'chat': {
+      const { connectHub } = await import('../src/hub-client.js');
+      const { runChat } = await import('../src/chat-cli.js');
+      const net = requireNetwork();
+      const connection = await connectHub(net, net.self);
+      await runChat(rest, { connection });
+      break;
+    }
 
     case 'spawn':
       await spawn_();

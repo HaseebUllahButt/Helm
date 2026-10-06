@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
  */
 // The update lock lives in HELM_DIR; never the real one from a test.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-update-dir-'));
-const { selfUpdate, unsafeRestartSessions, autoUpdate, currentVersion } = await import('../packages/connect/src/update.js');
+const { selfUpdate, unsafeRestartSessions, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted } = await import('../packages/connect/src/update.js');
 const { codexProcId } = await import('../packages/connect/src/hosted-process.js');
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
@@ -229,9 +229,10 @@ test('the machine list is told which commit runs, and whether the app may update
   assert.equal((await currentVersion(installed)).updatable, false);
   git(installed, ['checkout', '--', 'v']);
 
-  // Nor a checkout pinned to a commit, as a release worktree is.
+  // A checkout pinned to a commit can still take a saved version.
   git(installed, ['checkout', '-q', '--detach', 'HEAD']);
-  assert.equal((await currentVersion(installed)).updatable, false);
+  assert.equal((await currentVersion(installed)).updatable, true);
+  assert.ok((await currentVersion(installed)).time > 0, 'how new it is decides which machine is the source');
   void remote;
 });
 
@@ -251,7 +252,7 @@ test('commits made here and not pushed are never reset away', async () => {
   commit(remote, 'two'); // origin moved on too, so head !== tip
   const r = await update(installed);
   assert.equal(r.updated, false);
-  assert.match(r.reason, /1 commit not pushed/);
+  assert.match(r.reason, /1 commit of your own changes/);
   assert.equal(git(installed, ['rev-parse', 'HEAD']), head, 'the local commit survives');
 });
 
@@ -276,25 +277,61 @@ test('a lock left by a crashed update goes stale instead of blocking forever', a
   assert.equal((await update(installed)).updated, true);
 });
 
-test('the daemon checks on its own only as a systemd service, and not twice in a row', async () => {
-  const saved = { ...process.env };
-  let runs = 0;
-  const run = async () => { runs += 1; return { updated: false, reason: 'already at x' }; };
-  try {
-    delete process.env.HELM_NO_SERVICE; delete process.env.HELM_NO_UPDATE; delete process.env.INVOCATION_ID;
-    assert.equal(await autoUpdate({ run, now: 1e12 }), null, 'a foreground helm up never updates itself');
-    process.env.INVOCATION_ID = 'x';
-    process.env.HELM_NO_UPDATE = '1';
-    assert.equal(await autoUpdate({ run, now: 1e12 }), null);
-    delete process.env.HELM_NO_UPDATE;
-    // This dev checkout is not a clean main checkout, so even a service stops
-    // at the guard - which is the point: it never touches a working tree.
-    const v = await currentVersion();
-    const first = await autoUpdate({ run, now: 2e12 });
-    if (v?.updatable) assert.equal(runs, 1); else assert.equal(first.reason, 'not an updatable checkout');
-    assert.equal(await autoUpdate({ run, now: 2e12 + 60_000 }), null, 'too soon after the last check');
-  } finally {
-    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
-    Object.assign(process.env, saved);
-  }
+// ------------------------------------------------- the owner's own versions
+
+const own = (dir, file, text) => {
+  git(dir, ['config', 'user.email', 't@t']); git(dir, ['config', 'user.name', 't']);
+  writeFileSync(join(dir, file), `${text}\n`);
+  git(dir, ['add', '.']); git(dir, ['commit', '-qm', text]);
+  return git(dir, ['rev-parse', 'HEAD']);
+};
+const sync = (dir, bundle) => syncFromBundle(bundle, dir, { rebuild: false, restart: false });
+
+test('GitHub only replaces my changes when asked, and keeps them on a backup branch', async () => {
+  const { remote, installed } = make();
+  const mine = own(installed, 'mine.txt', 'my change');
+  writeFileSync(join(installed, 'draft.txt'), 'not saved yet\n');
+  commit(remote, 'upstream');
+  const r = await selfUpdate(installed, { rebuild: false, restart: false, replace: true });
+  assert.equal(r.updated, true);
+  assert.equal(git(installed, ['rev-parse', 'HEAD']), git(remote, ['rev-parse', 'HEAD']));
+  assert.equal(git(installed, ['rev-parse', r.backup]), mine, 'the saved change is on the backup branch');
+  assert.match(git(installed, ['stash', 'list']), /helm backup/, 'the unsaved one is stashed');
+});
+
+test('a newer saved version on another machine is copied over, never past changes made here', async () => {
+  const { remote, installed: a } = make();
+  const b = join(remote, '..', 'b');
+  execFileSync('git', ['clone', '-q', remote, b]);
+  // The laptop's agent saves a change; the VM has none of its own.
+  const saved = own(a, 'feature.txt', 'feature');
+  const { bundle } = await makeBundle({ have: [git(b, ['rev-parse', 'HEAD'])] }, a);
+  const r = await sync(b, bundle);
+  assert.equal(r.updated, true);
+  assert.equal(git(b, ['rev-parse', 'HEAD']), saved);
+  // Asking again sends nothing: it already has it.
+  assert.equal((await makeBundle({ have: [saved] }, a)).bundle, null);
+  // Both now save their own changes: neither is overwritten.
+  own(a, 'x.txt', 'laptop only');
+  const vmOwn = own(b, 'y.txt', 'vm only');
+  const r2 = await sync(b, (await makeBundle({ have: [saved] }, a)).bundle);
+  assert.equal(r2.updated, false);
+  assert.equal(r2.diverged, true);
+  assert.equal(git(b, ['rev-parse', 'HEAD']), vmOwn);
+});
+
+test('unsaved edits never take a synced version, and a version saved here is built in place', async () => {
+  const { remote, installed: a } = make();
+  const b = join(remote, '..', 'b2');
+  execFileSync('git', ['clone', '-q', remote, b]);
+  own(a, 'f.txt', 'one');
+  writeFileSync(join(b, 'draft.txt'), 'half done\n');
+  const r = await sync(b, (await makeBundle({ have: [] }, a)).bundle);
+  assert.match(r.reason, /unsaved/);
+  const running = git(a, ['rev-parse', 'HEAD']);
+  const next = own(a, 'g.txt', 'two');
+  const built = await rebuildIfCommitted(running, a, { rebuild: false, restart: false });
+  assert.equal(built.updated, true);
+  assert.equal(git(a, ['rev-parse', 'HEAD']), next, 'the saved change stays where it is');
+  assert.equal((await rebuildIfCommitted(next, a, { rebuild: false, restart: false })).reason, 'nothing new');
 });

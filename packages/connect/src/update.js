@@ -39,14 +39,16 @@ export async function currentVersion(dir = ROOT) {
     // machine with five hubs to dial used to run twenty git commands at once.
     const [status, head] = await Promise.all([
       git(['status', '--porcelain=v2', '--branch']),
-      git(['log', '-1', '--format=%h%x00%s']),
+      git(['log', '-1', '--format=%h%x00%s%x00%ct%x00%H']),
     ]);
     const lines = status.split('\n');
     const branch = lines.find((l) => l.startsWith('# branch.head '))?.slice(14).trim() ?? '';
     const dirty = lines.some((l) => l && !l.startsWith('#'));
-    const [commit, subject] = head.trim().split('\0');
+    const [commit, subject, time, full] = head.trim().split('\0');
     // A detached checkout reads "(detached)"; callers have always seen "HEAD".
-    return { commit, branch: branch === '(detached)' ? 'HEAD' : branch, subject, updatable: branch === BRANCH && !dirty };
+    // `updatable` now means "can take a saved version": any clean checkout.
+    return { commit, full, time: Number(time) || 0, dirty, dir, subject,
+      branch: branch === '(detached)' ? 'HEAD' : branch, updatable: !dirty };
   } catch {
     return null;
   }
@@ -105,9 +107,16 @@ export async function restartWhenSafe(units) {
  * an npm install or a live service to bounce.
  */
 export async function selfUpdate(dir = ROOT, opts = {}) {
-  // One update at a time per machine: the timer, the daemon's own check and
-  // a phone's Update button can all fire together, and two `git reset`s and
-  // `npm install`s racing in one checkout is how a deploy gets corrupted.
+  return locked(() => updateLocked(dir, opts));
+}
+
+/**
+ * One update at a time per machine: a sync from another machine, a local
+ * rebuild and a phone's GitHub button can all fire together, and two
+ * `git reset`s and `npm install`s racing in one checkout is how a deploy
+ * gets corrupted.
+ */
+async function locked(work) {
   const lock = join(HELM_DIR, 'update.lock');
   try {
     mkdirSync(HELM_DIR, { recursive: true });
@@ -116,7 +125,70 @@ export async function selfUpdate(dir = ROOT, opts = {}) {
   } catch {
     return { updated: false, reason: 'an update is already running' };
   }
-  try { return await updateLocked(dir, opts); } finally { rmSync(lock, { force: true }); }
+  try { return await work(); } finally { rmSync(lock, { force: true }); }
+}
+
+const gitIn = (dir) => (args, opts) => exec('git', ['-C', dir, ...args], opts).then((r) => r.stdout.trim());
+
+/**
+ * This machine's saved version, packed for another machine to take: only
+ * the commits it does not have yet when it says which it has.
+ */
+export async function makeBundle({ have = [] } = {}, dir = ROOT) {
+  const git = gitIn(dir);
+  const known = [];
+  for (const commit of have) {
+    if (/^[0-9a-f]{7,40}$/.test(commit) && await git(['cat-file', '-e', `${commit}^{commit}`]).then(() => true, () => false)) known.push(`^${commit}`);
+  }
+  const tmp = join(HELM_DIR, `bundle-${process.pid}-${Date.now()}.git`);
+  try {
+    // Nothing new to send is not an error: say so instead of an empty bundle.
+    const head = await git(['rev-parse', 'HEAD']);
+    if (known.includes(`^${head}`)) return { head, bundle: null };
+    await git(['bundle', 'create', tmp, 'HEAD', ...known]);
+    return { head, bundle: readFileSync(tmp).toString('base64') };
+  } finally { rmSync(tmp, { force: true }); }
+}
+
+/**
+ * Take another machine's newer saved version. Only ever moves forward from
+ * what is here: if both machines have their own changes, neither is
+ * overwritten - the owner (or their agent) combines them.
+ */
+export async function syncFromBundle(bundle, dir = ROOT, { rebuild = true, restart = true } = {}) {
+  return locked(async () => {
+    const git = gitIn(dir);
+    if (!existsSync(join(dir, '.git'))) return { updated: false, reason: `${dir} is not a git checkout` };
+    await recoverUpdate(dir, git);
+    if (await git(['status', '--porcelain'])) return { updated: false, reason: 'unsaved changes here' };
+    const tmp = join(HELM_DIR, `incoming-${process.pid}-${Date.now()}.git`);
+    let tip;
+    try {
+      writeFileSync(tmp, Buffer.from(bundle, 'base64'));
+      await git(['fetch', '--quiet', tmp, 'HEAD']);
+      tip = await git(['rev-parse', 'FETCH_HEAD']);
+    } finally { rmSync(tmp, { force: true }); }
+    const head = await git(['rev-parse', 'HEAD']);
+    if (head === tip) return { updated: false, reason: `already at ${tip.slice(0, 7)}` };
+    if (!(await git(['merge-base', '--is-ancestor', head, tip]).then(() => true, () => false))) {
+      return { updated: false, reason: 'both machines have their own changes', diverged: true };
+    }
+    return applyCommit(dir, git, { head, tip, rebuild, restart });
+  });
+}
+
+/**
+ * The owner's agent saved a change to Helm on this machine: build it and
+ * restart into it. Unsaved edits are left alone until they are saved.
+ */
+export async function rebuildIfCommitted(running, dir = ROOT, { rebuild = true, restart = true } = {}) {
+  return locked(async () => {
+    const git = gitIn(dir);
+    if (await git(['status', '--porcelain'])) return { updated: false, reason: 'unsaved changes here' };
+    const head = await git(['rev-parse', 'HEAD']);
+    if (!running || head === running) return { updated: false, reason: 'nothing new' };
+    return applyCommit(dir, git, { head: running, tip: head, rebuild, restart, rollback: false });
+  });
 }
 
 /** An update that died mid-way must not block the next one forever. */
@@ -170,6 +242,15 @@ async function ensurePty(dir) {
 async function requestRestart() {
   const restarting = [];
   const failed = [];
+  // macOS: the LaunchAgent restarts it. Asked from a separate process group
+  // a few seconds out, so this reply - and the restart's own caller - finish.
+  if (platform() === 'darwin') {
+    const label = `gui/${process.getuid?.()}/dev.helm.serve`;
+    if (!(await exec('launchctl', ['print', label]).then(() => true, () => false))) return { restarting, failed };
+    const { spawn } = await import('node:child_process');
+    spawn('/bin/sh', ['-c', `sleep 5; launchctl kickstart -k ${label}`], { detached: true, stdio: 'ignore' }).unref();
+    return { restarting: ['dev.helm.serve'], failed };
+  }
   for (const unit of DAEMON_UNITS) if (await unitActive(unit)) restarting.push(unit);
   if (restarting.length) {
     try {
@@ -199,7 +280,7 @@ async function recoverUpdate(dir, git) {
   const head = await git(['rev-parse', 'HEAD']).catch(() => '');
   const dirty = await git(['status', '--porcelain']).catch(() => null);
   if (state.phase === 'prepared') {
-    if (head === state.targetHead && dirty === '') {
+    if (head === state.targetHead && dirty === '' && state.rollback !== false) {
       await git(['reset', '--hard', '--quiet', state.previousHead]);
     }
     // The reset either restored the old commit, or the checkout was changed
@@ -214,15 +295,26 @@ async function recoverUpdate(dir, git) {
   return null;
 }
 
-async function updateLocked(dir, { rebuild = true, restart = true } = {}) {
+async function updateLocked(dir, { rebuild = true, restart = true, replace = false } = {}) {
   const git = (args) => exec('git', ['-C', dir, ...args]).then((r) => r.stdout.trim());
   if (!existsSync(join(dir, '.git'))) return { updated: false, reason: `${dir} is not a git checkout` };
   if (!(await git(['remote', 'get-url', 'origin']).catch(() => ''))) {
     return { updated: false, reason: 'no origin remote' };
   }
-  const on = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
-  if (on !== BRANCH) return { updated: false, reason: `checkout is on ${on}, not ${BRANCH}` };
   const resumed = await recoverUpdate(dir, git);
+  // Replacing local changes with GitHub's version is only ever asked for in
+  // so many words, and even then nothing is thrown away: the changes are
+  // kept on a backup branch (and in a stash, if any were unsaved).
+  let backup = null;
+  if (replace) {
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+    if (await git(['status', '--porcelain'])) await git(['stash', 'push', '--include-untracked', '-m', `helm backup ${stamp}`]);
+    backup = `helm-backup-${stamp}`;
+    await git(['branch', backup, 'HEAD']);
+  } else {
+    const on = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    if (on !== BRANCH) return { updated: false, reason: `checkout is on ${on}, not ${BRANCH}` };
+  }
   // Recovery can have restored a previous commit, so re-check the clean
   // branch before fetching and deciding what remains to do.
   if (await git(['status', '--porcelain'])) return { updated: false, reason: 'uncommitted changes' };
@@ -245,25 +337,37 @@ async function updateLocked(dir, { rebuild = true, restart = true } = {}) {
   // The VM's checkout is one you commit from, and an update asked for from a
   // phone must never be the thing that eats them.
   const ahead = Number(await git(['rev-list', '--count', `origin/${BRANCH}..HEAD`]).catch(() => '0'));
-  if (ahead > 0) return { updated: false, reason: `${ahead} commit${ahead === 1 ? '' : 's'} not pushed yet` };
+  if (ahead > 0 && !replace) return { updated: false, reason: `${ahead} commit${ahead === 1 ? '' : 's'} of your own changes here - choose replace to use GitHub's version` };
+  const result = await applyCommit(dir, git, { head, tip, rebuild, restart });
+  return backup ? { ...result, backup } : result;
+}
 
+/**
+ * Move the checkout to `tip`, install, build and restart - journaled, so a
+ * crash part-way has a way back, and rolled back if the build fails.
+ */
+async function applyCommit(dir, git, { head, tip, rebuild = true, restart = true, rollback = true }) {
   say(`updating ${head.slice(0, 7)} -> ${tip.slice(0, 7)}`);
-  writeUpdateState({ dir, previousHead: head, targetHead: tip, phase: 'prepared', restart });
+  writeUpdateState({ dir, previousHead: head, targetHead: tip, phase: 'prepared', restart, rollback });
   try {
-    await git(['reset', '--hard', '--quiet', `origin/${BRANCH}`]);
-    if (rebuild) {
+    // Dependencies only when they changed: most changes are a few files.
+    const depsChanged = head === tip || !!(await git(['diff', '--name-only', head, tip, '--', 'package-lock.json']).catch(() => 'yes'));
+    await git(['reset', '--hard', '--quiet', tip]);
+    if (rebuild && (depsChanged || !existsSync(join(dir, 'node_modules')))) {
       say('installing dependencies');
       // Install the committed dependency tree without rewriting its lockfile.
       // An install-induced dirty tree would disable rollback and every retry.
       await gentle('npm', ['ci', '--include=dev', '--silent', '--no-fund', '--no-audit'], { cwd: dir });
       await ensurePty(dir);
+    }
+    if (rebuild) {
       say('building the app');
       await gentle('npm', ['--workspace', '@helm/web', 'run', 'build', '--silent'], { cwd: dir });
     }
     // Mark the source and build complete before touching systemd. If this
     // process dies while scheduling a restart, the next run can finish that
     // part without reinstalling or moving the checkout again.
-    writeUpdateState({ dir, previousHead: head, targetHead: tip, phase: 'built', restart });
+    writeUpdateState({ dir, previousHead: head, targetHead: tip, phase: 'built', restart, rollback });
   } catch (error) {
     // A failed build must make the next attempt eligible again. The clean
     // deployment checkout is still at the journaled target, so restore HEAD;
@@ -271,9 +375,11 @@ async function updateLocked(dir, { rebuild = true, restart = true } = {}) {
     // are never reset here.
     const now = await git(['rev-parse', 'HEAD']).catch(() => '');
     const dirty = await git(['status', '--porcelain']).catch(() => null);
-    if (now === tip && dirty === '') {
+    // A version the owner saved here is theirs: a failed build leaves it in
+    // place for them (or their agent) to fix, rather than moving it away.
+    if (now === tip && dirty === '' && rollback) {
       await git(['reset', '--hard', '--quiet', head]).then(clearUpdateState);
-    }
+    } else clearUpdateState();
     throw error;
   }
 
@@ -284,78 +390,6 @@ async function updateLocked(dir, { rebuild = true, restart = true } = {}) {
   const result = await requestRestart();
   if (!result.failed.length) clearUpdateState();
   return { updated: true, ...result };
-}
-
-/**
- * The daemon's own check, for the moments the timer cannot see: just after
- * it starts (a machine that was off for days), and when it comes back online
- * after being away. Quiet, background, at most once per `minGapMs`; it never
- * delays startup and never touches a development or pinned checkout - the
- * same guards as `selfUpdate` apply. Only a daemon systemd started does
- * this, because only there can the update restart it afterwards.
- */
-let autoRun = null;
-let autoAt = 0;
-export function autoUpdate({ minGapMs = 10 * 60_000, now = Date.now(), run = selfUpdate } = {}) {
-  if (process.env.HELM_NO_UPDATE === '1' || process.env.HELM_NO_SERVICE === '1') return Promise.resolve(null);
-  if (!process.env.INVOCATION_ID) return Promise.resolve(null);
-  if (autoRun) return autoRun;
-  if (now - autoAt < minGapMs) return Promise.resolve(null);
-  autoAt = now;
-  autoRun = (async () => {
-    const v = await currentVersion();
-    if (!v?.updatable) return { updated: false, reason: 'not an updatable checkout' };
-    const r = await run();
-    if (r.updated) console.log(`[helm] updated itself${r.restarting?.length ? ' - restarting' : ''}`);
-    return r;
-  })().catch((err) => ({ updated: false, reason: err?.message || String(err) }))
-    .finally(() => { autoRun = null; });
-  return autoRun;
-}
-
-/**
- * The pair that lets a machine follow new releases on its own: a oneshot
- * that self-updates, on a timer. Idempotent - written again only when the
- * content drifts - so the daemon can ensure it every start and a machine
- * that lands this code by any means keeps itself current from then on.
- */
-export async function ensureUpdateTimer({ searchPath } = {}) {
-  if (platform() !== 'linux' || process.env.HELM_NO_SERVICE === '1') return false;
-  if (process.env.HELM_NO_UPDATE === '1') return false;
-  mkdirSync(unitDir, { recursive: true });
-
-  const service = `[Unit]
-Description=helm self-update
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-TimeoutStartSec=0
-ExecStart=${[process.execPath, binPath, 'self-update'].map(systemdArg).join(' ')}
-Environment=NODE_ENV=production
-${searchPath ? `Environment=${systemdArg(`PATH=${searchPath}`)}\n` : ''}`;
-  const timer = `[Unit]
-Description=helm self-update
-
-[Timer]
-OnBootSec=5min
-OnUnitActiveSec=30min
-RandomizedDelaySec=2min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-`;
-  let wrote = false;
-  for (const [name, text] of [[UPDATE_SERVICE, service], [UPDATE_TIMER, timer]]) {
-    const file = join(unitDir, name);
-    const prev = existsSync(file) ? readFileSync(file, 'utf8') : null;
-    if (prev !== text) { writeFileSync(file, text); wrote = true; }
-  }
-  if (wrote) await exec('systemctl', ['--user', 'daemon-reload']);
-  await exec('systemctl', ['--user', 'enable', '--now', UPDATE_TIMER]);
-  return true;
 }
 
 /** Remove the update pair - the daemon's own unit is service.js's business. */

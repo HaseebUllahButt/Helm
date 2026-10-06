@@ -36,7 +36,7 @@ import { Handoffs } from './handoffs.js';
 import { TaskTransfers } from './task-transfer.js';
 import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
-import { selfUpdate, currentVersion, autoUpdate } from './update.js';
+import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted } from './update.js';
 import * as gitq from './git.js';
 import { agentCatalog, delegationNote } from './delegation.js';
 import { Schedules } from './schedules.js';
@@ -56,6 +56,8 @@ const WARM_DELAY_MS = 2_000;
 const UPDATE_AFTER_START_MS = 20_000;
 /** A gap this long between ticks means the machine slept. */
 const WAKE_TICK_MS = 60_000;
+/** How often machines compare saved versions. */
+const SYNC_EVERY_MS = 2 * 60_000;
 const WAKE_GAP_MS = 5 * 60_000;
 /** Disconnected from every other hub this long, then back: check for an update. */
 const BACK_ONLINE_MS = 10 * 60_000;
@@ -221,6 +223,39 @@ export class Daemon {
   #versionP = null;
   #about = null;
   #wake = null;
+  #syncing = false;
+  /** Set when this machine and another both have their own changes. */
+  syncNote = null;
+
+  async #syncVersions() {
+    if (this.#syncing || process.env.HELM_NO_UPDATE === '1' || process.env.HELM_NO_SERVICE === '1') return;
+    // Only a daemon the service manager started can restart itself into a
+    // new version: systemd on Linux, the LaunchAgent on macOS.
+    if (!process.env.INVOCATION_ID && process.env.XPC_SERVICE_NAME !== 'dev.helm.serve') return;
+    this.#syncing = true;
+    try {
+      const mine = await currentVersion();
+      const running = (await this.#versionP)?.full;
+      if (!mine || mine.dirty) return;
+      if (running && mine.full !== running) {
+        const r = await rebuildIfCommitted(running);
+        if (r.updated) { console.log('[helm] built the version saved here - restarting'); return; }
+      }
+      const net = loadNetwork() ?? this.net;
+      const peers = await Promise.all(Object.keys(net.machines ?? {}).filter((id) => id !== this.id).map((id) =>
+        hubRpc(net, id, M.ENV_INFO, {}, { timeout: 8000 }).then((info) => ({ id, name: info.name, v: info.version }), () => null)));
+      const newer = peers.filter((p) => p?.v?.full && p.v.full !== mine.full && p.v.time > mine.time)
+        .sort((a, b) => b.v.time - a.v.time)[0];
+      if (!newer) { this.syncNote = null; return; }
+      const { bundle } = await hubRpc(net, newer.id, M.ENV_BUNDLE, { have: [mine.full] }, { timeout: 120_000 });
+      if (!bundle) return;
+      const r = await syncFromBundle(bundle);
+      this.syncNote = r.diverged ? { diverged: true, with: newer.name ?? newer.id } : null;
+      if (r.updated) console.log(`[helm] took the newer version saved on ${newer.name ?? newer.id} - restarting`);
+    } catch (err) {
+      console.error('[helm] version sync:', err?.message || err);
+    } finally { this.#syncing = false; }
+  }
   #offlineSince = null;
   #tunnels = new Map();
   #brainTimer = null;
@@ -404,18 +439,13 @@ export class Daemon {
     this.#syncMedia().catch((err) =>
       console.error('[helm] nas media:', err?.message || err));
 
-    // Keep current without anyone asking: a quiet check soon after start - a
-    // machine that was off for days comes back on today's helm - and again
-    // whenever it wakes from sleep. autoUpdate decides whether it may.
-    const first = setTimeout(() => { if (!this.#stopped) autoUpdate(); }, UPDATE_AFTER_START_MS);
+    // Every machine runs the owner's newest saved Helm, without GitHub: a
+    // version saved here is built and started, and a newer one saved on
+    // another machine is copied over the network. Soon after start, then
+    // every couple of minutes.
+    const first = setTimeout(() => { if (!this.#stopped) void this.#syncVersions(); }, UPDATE_AFTER_START_MS);
     first.unref?.();
-    let last = Date.now();
-    this.#wake = setInterval(() => {
-      const now = Date.now();
-      // The interval stops while the machine sleeps; a long gap means it woke.
-      if (now - last > WAKE_GAP_MS && !this.#stopped) autoUpdate();
-      last = now;
-    }, WAKE_TICK_MS);
+    this.#wake = setInterval(() => { if (!this.#stopped) void this.#syncVersions(); }, SYNC_EVERY_MS);
     this.#wake.unref?.();
   }
 
@@ -426,7 +456,7 @@ export class Daemon {
       if (!remote.some((l) => l.connected)) this.#offlineSince ??= Date.now();
       return;
     }
-    if (this.#offlineSince && Date.now() - this.#offlineSince > BACK_ONLINE_MS) autoUpdate();
+    if (this.#offlineSince && Date.now() - this.#offlineSince > BACK_ONLINE_MS) void this.#syncVersions();
     this.#offlineSince = null;
   }
 
@@ -937,6 +967,9 @@ export class Daemon {
       // only offers a microphone when something in the network can, so a
       // button that could not possibly work is never drawn.
       voice: canTranscribe(),
+      sync: this.syncNote,
+      // Whether a `claude` typed in a terminal here shows up in Helm.
+      cliLink: await import('./native-cli.js').then((m) => m.nativeIntegrationStatus()).catch(() => null),
       startedAt: Date.now(),
     };
   }
@@ -1184,8 +1217,12 @@ export class Daemon {
       case M.GIT_WORKTREE: return gitq.addWorktree(p.cwd, p.name);
       case M.GIT_PR: return { pr: await gitq.pullRequest(p.cwd) };
 
+      case M.ENV_BUNDLE: return makeBundle({ have: Array.isArray(p.have) ? p.have : [] });
+
+      // GitHub's version, only when the owner asks; `replace` keeps their
+      // own changes on a backup branch and then uses GitHub's.
       case M.ENV_UPDATE: {
-        const r = await selfUpdate();
+        const r = await selfUpdate(undefined, { replace: !!p.replace });
         // The restart is on a five second timer, so this reply gets out first.
         return { ...r, version: r.updated ? null : this.version };
       }
@@ -1403,8 +1440,10 @@ export class Daemon {
       // reply carries the current screen so the viewer has something at once.
       case M.SESSION_ATTACH:  return this.sessions.attach(p.id, {
         lines: p.lines ?? 400, ansi: p.ansi ?? true, cols: p.cols, rows: p.rows,
+        renew: p.renew === true, watcher: p.watcher,
       });
-      case M.SESSION_DETACH:  return this.sessions.detach(p.id);
+      case M.SESSION_CONNECT: return { session: await this.sessions.connect(p.id) };
+      case M.SESSION_DETACH:  return this.sessions.detach(p.id, p.watcher);
       case M.SESSION_RESIZE:  return this.sessions.resize(p.id, p.cols, p.rows);
       case M.SESSION_INPUT:   return this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments, delivery: p.delivery, references: p.references });
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
@@ -1435,7 +1474,7 @@ export class Daemon {
       case M.SESSION_INTERRUPT: return this.sessions.interrupt(p.id);
       case M.SESSION_DEQUEUE:  return this.sessions.dequeue(p.id, p.turnId);
       case M.SESSION_SEND_NOW: return this.sessions.sendNow(p.id, p.turnId);
-      case M.SESSION_QUEUE_EDIT: return this.sessions.editQueued(p.id, p.turnId, p.text);
+      case M.SESSION_QUEUE_EDIT: return this.sessions.editQueued(p.id, p.turnId, p.text, p.attachments);
       case M.SESSION_QUEUE_REORDER: return this.sessions.reorderQueue(p.id, p.turnIds);
       case M.SESSION_RECOVER: return this.sessions.recover(p.id);
       case M.SCHEDULE_LIST:
@@ -1527,6 +1566,9 @@ export class Daemon {
       // has had a name for this since the beginning and nothing behind it.
       case M.SESSION_RESUME:
         return { session: wire(await this.sessions.resumeExternal(p)) };
+
+      case M.SESSION_TAKEOVER:
+        return p.cancel ? this.sessions.cancelTakeOver(p.id) : this.sessions.takeOver(p.id);
 
       // The device records; the machine holding the key does the rest, so no
       // phone ever has to be trusted with one.

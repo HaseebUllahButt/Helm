@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react';
-import type { Client, Environment } from './client';
+import type { Client, Environment, Profile, Session } from './client';
 import { BackIcon, Icon } from './Icon';
+import { Confirm } from './Modal';
 
 /**
- * Which helm each machine runs, and a way to bring them all to the newest.
+ * Which Helm each machine runs, and the two ways to bring in GitHub's.
  *
- * An update is a git reset and a restart on the machine itself, so this only
- * ever asks: the machine decides whether it may (a clean checkout on main),
- * and says why when it will not. The VM goes first - a machine that has been
- * upgraded refuses to link to a hub that has not, so the always-on hub has to
- * be the newest thing in the network before anything else moves.
+ * Nothing here is needed day to day: machines keep each other on the newest
+ * version the owner saved, by themselves, over their own network. GitHub is
+ * only ever asked for - either by an agent that brings it in and keeps the
+ * owner's changes, or by replacing those changes (kept on a backup branch).
  */
 
 type Outcome = { state: 'working' | 'done' | 'same' | 'refused' | 'failed'; text: string };
@@ -17,16 +17,25 @@ type Outcome = { state: 'working' | 'done' | 'same' | 'refused' | 'failed'; text
 const order = (a: Environment, b: Environment) =>
   Number(b.kind === 'vm') - Number(a.kind === 'vm') || a.name.localeCompare(b.name);
 
-/** "already at 3871d20" and "checkout is on HEAD, not main" read fine as they are. */
-const said = (reason?: string) => (reason ? reason.replace(/^already at .*/, 'already the newest') : 'not updated');
+const AGENT_TASK = `Update this Helm install from GitHub while keeping every change made here.
+Fetch origin main, then merge it into the current version (do not reset or discard anything).
+Resolve any conflicts in favour of keeping the local customisations working, run the tests
+(npm test), and commit the result. Do not push. When it is committed, Helm rebuilds itself and
+the other machines pick the new version up on their own.`;
 
-export function UpdatesView({ client, envs, onBack, onRefresh }: {
+export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: {
   client: Client; envs: Environment[]; onBack: () => void; onRefresh: () => void;
+  onOpenSession?: (envId: string, session: Session) => void;
 }) {
   const [out, setOut] = useState<Record<string, Outcome>>({});
-  const [all, setAll] = useState(false);
+  const [replacing, setReplacing] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const sorted = [...envs].sort(order);
-  const versions = new Set(sorted.filter((e) => e.online && e.info.version).map((e) => e.info.version!.commit));
+  const online = sorted.filter((e) => e.online && e.info.version);
+  const newest = [...online].sort((a, b) => (b.info.version?.time ?? 0) - (a.info.version?.time ?? 0))[0];
+  const versions = new Set(online.map((e) => e.info.version!.commit));
 
   // A machine that was updated restarts and reconnects on its own; ask again
   // for what it now says it runs.
@@ -36,30 +45,37 @@ export function UpdatesView({ client, envs, onBack, onRefresh }: {
     return () => timers.forEach(clearTimeout);
   }, [out, onRefresh]);
 
-  const one = async (env: Environment) => {
-    setOut((o) => ({ ...o, [env.id]: { state: 'working', text: 'updating…' } }));
+  const replaceAll = async () => {
+    setReplacing(false); setBusy(true);
+    for (const env of online) {
+      setOut((o) => ({ ...o, [env.id]: { state: 'working', text: 'getting GitHub’s version…' } }));
+      try {
+        const r: any = await client.rpc(env.id, 'env.update', { replace: true }, 300_000);
+        setOut((o) => ({ ...o, [env.id]: r.updated
+          ? { state: 'done', text: `updated${r.backup ? ` - your changes are kept on ${r.backup}` : ''}` }
+          : { state: r.reason?.startsWith('already') ? 'same' : 'refused', text: r.reason?.replace(/^already at .*/, 'already GitHub’s version') ?? 'not updated' } }));
+      } catch (e: any) {
+        setOut((o) => ({ ...o, [env.id]: { state: 'failed', text: e.message } }));
+      }
+    }
+    setBusy(false);
+  };
+
+  const askAgent = async () => {
+    setAsking(false);
+    const env = newest;
+    if (!env?.info.version?.dir) { setError('No machine said where its Helm is installed.'); return; }
+    setBusy(true); setError('');
     try {
-      const r = await client.updateEnv(env.id);
-      setOut((o) => ({
-        ...o,
-        [env.id]: r.updated
-          ? { state: 'done', text: 'updated - restarting safely' }
-          : { state: r.reason?.startsWith('already') ? 'same' : 'refused', text: said(r.reason) },
-      }));
-    } catch (e: any) {
-      setOut((o) => ({ ...o, [env.id]: { state: 'failed', text: e.message } }));
-    }
+      const { profiles } = await client.rpc<{ profiles: Profile[] }>(env.id, 'profile.list');
+      const profile = profiles.find((p) => p.engine === 'claude') ?? profiles.find((p) => p.engine === 'codex') ?? profiles.find((p) => p.engine !== 'shell');
+      if (!profile) throw new Error(`No AI tool is set up on ${env.name}.`);
+      const r = await client.rpc<{ session: Session }>(env.id, 'session.start', { cwd: env.info.version.dir, profileId: profile.id }, 70_000);
+      await client.rpc(env.id, 'session.input', { id: r.session.id, data: AGENT_TASK }, 70_000);
+      onOpenSession?.(env.id, r.session);
+    } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
   };
-
-  const everything = async () => {
-    setAll(true);
-    for (const env of sorted) {
-      if (env.online && env.info.version?.updatable) await one(env);
-    }
-    setAll(false);
-  };
-
-  const canAny = sorted.some((e) => e.online && e.info.version?.updatable);
 
   return (
     <>
@@ -67,16 +83,13 @@ export function UpdatesView({ client, envs, onBack, onRefresh }: {
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
           <h1>Updates</h1>
-          <span className="sub">{versions.size > 1 ? `${versions.size} versions in use` : 'which helm each machine runs'}</span>
+          <span className="sub">{versions.size > 1 ? 'catching up' : 'every machine on your newest version'}</span>
         </div>
       </div>
       <div className="scroll"><div className="pad column">
-        <button className="action" disabled={!canAny || all} onClick={everything}>
-          <span className="plus"><Icon name="arrow-up" size={15} /></span>{all ? 'updating…' : 'Update every machine'}
-        </button>
         <p className="note">
-          The VM goes first. A machine only updates if its helm is a clean checkout of main; one that is
-          pinned to a release, or being developed on, says so and is left alone.
+          Your machines keep each other on the newest version of Helm you saved - including changes
+          your agent makes to it. Nothing comes from GitHub unless you ask below.
         </p>
 
         <div className="section">machines</div>
@@ -85,8 +98,10 @@ export function UpdatesView({ client, envs, onBack, onRefresh }: {
             const v = env.info.version;
             const o = out[env.id];
             const note = !env.online ? 'offline'
-              : !v ? 'version unknown - an older helm, update it by hand once'
-              : !v.updatable ? (v.branch === 'main' ? 'has local changes' : `pinned (${v.branch === 'HEAD' ? 'a release checkout' : v.branch})`)
+              : !v ? 'version unknown - an older Helm'
+              : env.info.sync?.diverged ? `has its own changes, and so does ${env.info.sync.with} - ask your agent to combine them`
+              : v.dirty ? 'unsaved changes here - shared once saved'
+              : newest && v.commit !== newest.info.version?.commit ? `catching up with ${newest.name}`
               : null;
             return (
               <div key={env.id} className="row tall">
@@ -96,18 +111,33 @@ export function UpdatesView({ client, envs, onBack, onRefresh }: {
                   <span className="rm">{v ? <><code>{v.commit}</code> · {v.subject}</> : 'unknown version'}</span>
                   {(o?.text || note) && <span className={`rm wrap up-${o?.state ?? 'note'}`}>{o?.text ?? note}</span>}
                 </span>
-                {env.online && v?.updatable && (
-                  <button
-                    className="linkish" disabled={all || o?.state === 'working'}
-                    onClick={() => one(env)}
-                  >{o?.state === 'working' ? '…' : 'update'}</button>
-                )}
               </div>
             );
           })}
           {!sorted.length && <div className="empty quiet">No machines are paired yet</div>}
         </div>
+
+        <div className="section">GitHub</div>
+        <button className="action" disabled={busy || !newest} onClick={() => setAsking(true)}>
+          <span className="plus"><Icon name="arrow-up" size={15} /></span>Let my agent update it
+        </button>
+        <p className="note">Your agent brings in GitHub’s new version and keeps your changes. Recommended.</p>
+        <button className="row" disabled={busy || !online.length} onClick={() => setReplacing(true)}>
+          <span className="grow"><span className="rt destructive">Replace with GitHub’s version</span>
+            <span className="rm">Overrides your changes to Helm on every machine. A backup is kept.</span></span>
+        </button>
+        {error && <div className="error">{error}</div>}
       </div></div>
+      {asking && (
+        <Confirm title="Let your agent update Helm?" confirmLabel="Start"
+          body={`An agent on ${newest?.name ?? 'your newest machine'} merges GitHub’s version into yours and saves it. Your other machines follow.`}
+          onCancel={() => setAsking(false)} onConfirm={askAgent} />
+      )}
+      {replacing && (
+        <Confirm title="Replace with GitHub’s version?" confirmLabel="Replace" danger
+          body="This overrides every change made to Helm on your machines, including your agent's. They are kept on a backup branch and can be brought back. To keep them instead, let your agent update it."
+          onCancel={() => setReplacing(false)} onConfirm={replaceAll} />
+      )}
     </>
   );
 }

@@ -5,13 +5,13 @@ import { build } from 'esbuild';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 
-test('an arriving update preserves the page and draft until Reload is chosen', async () => {
+test('an arriving update waits while someone is typing, then reloads by itself', async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
     import { AppUpdate } from './apps/web/src/AppUpdate';
     window.reloads = 0;
-    createRoot(document.getElementById('root')).render(<AppUpdate reload={() => window.reloads++} />);
+    createRoot(document.getElementById('root')).render(<AppUpdate quietMs={400} reload={() => window.reloads++} />);
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   const browser = await chromium.launch({ headless: true,
     ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}),
@@ -25,27 +25,24 @@ test('an arriving update preserves the page and draft until Reload is chosen', a
     await page.goto('http://helm-test/');
     await page.getByLabel('Draft').fill('keep this unsent message');
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
-    await page.getByRole('status').waitFor();
+    // Mid-sentence: the update waits, however long that takes.
+    await page.waitForTimeout(6_500);
     assert.equal(await page.evaluate(() => window.reloads), 0);
     assert.equal(await page.getByLabel('Draft').inputValue(), 'keep this unsent message');
-    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-    assert.equal(await page.evaluate(() => window.reloads), 0);
-    await page.getByRole('button', { name: 'Reload', exact: true }).click();
-    assert.equal(await page.evaluate(() => window.reloads), 1);
-    await page.getByRole('button', { name: 'Later', exact: true }).click();
-    assert.equal(await page.getByRole('status').count(), 0);
-    assert.equal(await page.getByLabel('Draft').inputValue(), 'keep this unsent message');
+    // Stepped away from the box: the next quiet moment reloads.
+    await page.evaluate(() => document.activeElement.blur());
+    await page.waitForFunction(() => window.reloads === 1, null, { timeout: 8_000 });
   } finally { await browser.close(); }
 });
 
-test('an installed worker loads the new build on explicit reload despite a slow network, without clearing pairing', async context => {
+test('an installed worker loads the new build by itself despite a slow network, without clearing pairing', async context => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
     import { AppUpdate } from './apps/web/src/AppUpdate';
     import { clearRefreshMarker } from './apps/web/src/reload';
     clearRefreshMarker();
-    createRoot(document.getElementById('root')).render(<AppUpdate />);
+    createRoot(document.getElementById('root')).render(<AppUpdate quietMs={200} />);
     navigator.serviceWorker.register('/sw.js');
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   const worker = await readFile('apps/web/public/sw.js', 'utf8');
@@ -79,8 +76,7 @@ test('an installed worker loads the new build on explicit reload despite a slow 
   await page.evaluate(() => { localStorage.setItem('helm.auth', 'keep-pairing'); localStorage.setItem('saved-draft', 'keep-draft'); });
   version = 'new'; delay = 900;
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-  await page.getByRole('button', { name: 'Reload', exact: true }).click();
-  await page.waitForFunction(() => window.loadedBuild === '/assets/index-new.js');
+  await page.waitForFunction(() => window.loadedBuild === '/assets/index-new.js', null, { timeout: 15_000 });
   assert.equal(new URL(page.url()).hash, '#open=vm/chat');
   assert.equal(new URL(page.url()).search, '');
   assert.deepEqual(await page.evaluate(() => [localStorage.getItem('helm.auth'), localStorage.getItem('saved-draft')]), ['keep-pairing', 'keep-draft']);

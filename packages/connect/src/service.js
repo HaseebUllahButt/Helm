@@ -121,9 +121,9 @@ WantedBy=default.target
 `
   );
 
-  // The update pair comes with the daemon: helm-update.timer runs
-  // `helm self-update` so the machine follows new releases on its own.
-  await (await import('./update.js')).ensureUpdateTimer({ searchPath }).catch(() => false);
+  // No GitHub timer: machines keep each other on the owner's own newest
+  // saved version (agent.js), and GitHub is a button in Settings.
+  await (await import('./update.js')).removeUpdateTimer().catch(() => {});
 
   await exec('systemctl', ['--user', 'daemon-reload']);
   // `enable --now` does not restart a unit that is already active, so a
