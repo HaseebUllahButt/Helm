@@ -12,7 +12,7 @@ import { forWire } from './events.js';
 import { optionArgs } from './models.js';
 import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
 import { EventLog, activeTurnFromEvents, EVENT_KEEP } from './events.js';
-import { ClaudeDriver } from './drivers/claude.js';
+import { ClaudeDriver, permissionCard } from './drivers/claude.js';
 import { CodexDriver, canInspectExternalCodex, nativeCodexThreads, nativeCodexSocket } from './drivers/codex.js';
 import { OpencodeDriver, Opencode2Driver } from './drivers/opencode.js';
 import { DevinDriver } from './drivers/devin.js';
@@ -34,7 +34,7 @@ import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from
 import { openFiles, processArgv, processCwd } from './procinfo.js';
 import { GREETING, bareTitle, informative, promptTitle } from './titles.js';
 import { askPreview } from './notify.js';
-import { claudeChannelRpc } from './claude-channel.js';
+import { startHookServer } from './claude-hooks.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -307,44 +307,78 @@ export class Sessions extends EventEmitter {
       try {
         await this.nativeTerminals.ensure({ spawn: false });
         await this.#discoverNativeCodex(await getProfiles());
-        for (const s of this.#index.values()) if (s.nativeChat) await this.#syncNativeChat(s).catch(() => {});
       } catch (err) { this.log(`native CLI discovery: ${err.message}`); }
     }, 2500);
     this.nativePoll.unref?.();
+    this.hooks = startHookServer((native, event, reply) => this.#onHook(native, event, reply))
+      .then((h) => { h.server.unref(); return h; })
+      .catch((err) => { this.log(`claude hooks: ${err.message}`); return null; });
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
 
-  async #syncNativeChat(s) {
-    const channel = await claudeChannelRpc(s.id, 'status');
-    const owners = s.nativeHome && s.engineSessionId
-      ? claudeLiveSessions(s.nativeHome).get(s.engineSessionId) ?? [] : [];
-    const live = claudeLiveStatus(owners.filter(p => descendsFrom(p.pid, s.nativePid)));
-    const closed = live && live !== 'blocked'
-      ? channel.permissions.filter(p => Date.now() - p.at > 2500).map(p => p.request_id) : [];
-    if (closed.length) {
-      await claudeChannelRpc(s.id, 'clear', { ids: closed });
-      channel.permissions = channel.permissions.filter(p => !closed.includes(p.request_id));
+  /** requestId -> { id, reply, raw }: a terminal Claude's question, waiting in its hook. */
+  #hookAsks = new Map();
+
+  /**
+   * What a terminal Claude's hooks say it is doing (claude-hooks.js). The
+   * transcript is still where the conversation is read from; hooks add the
+   * three things it cannot say - which file it is, that Claude is waiting on
+   * a person, and when it is done.
+   */
+  #onHook(native, event, reply) {
+    // The first hook can beat the host's "a terminal opened" notice.
+    if (!this.#index.has(native)) {
+      for (const meta of this.nativeTerminals.nativeSessions()) if (meta.id === native) this.#adoptNative(meta);
     }
-    const known = new Set(this.events.pending(s.id).map(p => p.requestId));
-    const current = new Set(channel.permissions.map(p => p.request_id));
-    for (const p of channel.permissions) if (!known.has(p.request_id)) {
-      const event = this.events.append(s.id, { type: 'permission.request', requestId: p.request_id,
-        kind: p.tool_name === 'Bash' ? 'command' : 'tool', tool: p.tool_name,
-        title: p.description || `Allow ${p.tool_name}?`, detail: p.input_preview, at: p.at,
-        options: [{ id: 'allow', role: 'allow', label: 'Allow once' }, { id: 'deny', role: 'deny', label: 'Deny' }], defaultTo: 'deny' });
-      this.emit('event', { id: s.id, event });
-    }
-    for (const requestId of known) if (!current.has(requestId)) {
-      const event = this.events.append(s.id, { type: 'permission.resolved', requestId });
-      this.emit('event', { id: s.id, event });
-    }
-    const status = channel.permissions.length ? 'blocked' : live ?? s.status;
-    if (status !== s.status || known.size !== current.size) {
+    const s = this.#index.get(native);
+    if (!s?.nativeCli) return reply(null);
+    const name = event.hook_event_name;
+    const setStatus = (status) => {
+      if (s.status === status) return;
       s.status = status; s.updatedAt = Date.now(); this.#save();
       this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id), ...pendingSummary(this.events.pending(s.id)) });
+    };
+    if (name === 'PermissionRequest') {
+      const requestId = `hook-${randomBytes(6).toString('hex')}`;
+      const card = permissionCard(event.tool_name, event.tool_input ?? {}, { permission_suggestions: event.permission_suggestions });
+      this.#hookAsks.set(requestId, { id: s.id, reply, raw: card.raw, kind: card.kind });
+      // Answered on the terminal instead: Claude ends this hook's wait.
+      reply.onClose(() => this.#closeHookAsk(requestId));
+      const pending = this.events.append(s.id, { type: 'permission.request', requestId, ...card });
+      this.emit('event', { id: s.id, event: pending });
+      setStatus('blocked');
+      return;
     }
-    return channel;
+    reply(null);
+    if (name === 'SessionStart') {
+      s.nativeChat = true;
+      if (event.session_id) s.engineSessionId = event.session_id;
+      if (event.transcript_path) s.transcript = event.transcript_path;
+      this.#save();
+      if (s.transcript) this.#watchTranscript(s.id, s.transcript);
+      this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id) });
+      return;
+    }
+    // Anything that only happens after the question was settled settles it.
+    if (['UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd'].includes(name)) {
+      for (const [requestId, ask] of this.#hookAsks) if (ask.id === s.id) this.#closeHookAsk(requestId);
+    }
+    if (name === 'UserPromptSubmit' || name === 'PostToolUse') setStatus('working');
+    else if (name === 'Stop' || (name === 'Notification' && event.notification_type === 'idle_prompt')) setStatus('idle');
+  }
+
+  #closeHookAsk(requestId, decision) {
+    const ask = this.#hookAsks.get(requestId);
+    if (!ask) return;
+    this.#hookAsks.delete(requestId);
+    const event = this.events.append(ask.id, { type: 'permission.resolved', requestId, ...(decision ? { decision } : {}) });
+    this.emit('event', { id: ask.id, event });
+    const s = this.#index.get(ask.id);
+    if (s && s.status === 'blocked' && ![...this.#hookAsks.values()].some((a) => a.id === s.id)) {
+      s.status = 'working'; s.updatedAt = Date.now(); this.#save();
+      this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id), ...pendingSummary(this.events.pending(s.id)) });
+    }
   }
 
   /** What the last list found, so opening a row it just showed skips a rescan. */
@@ -708,7 +742,8 @@ export class Sessions extends EventEmitter {
             this.#save();
           }
         }
-        if (s.nativeChat && alive) await this.#syncNativeChat(s).catch(() => {});
+        // A question waiting in a hook outranks what the process record says.
+        if ([...this.#hookAsks.values()].some((a) => a.id === s.id)) s.status = 'blocked';
         out.push({ ...wire(s), alive, status: alive ? (s.nativeCli ? s.status : 'shell') : 'exited', adopted: false,
           ...pendingSummary(this.events.pending(s.id)) });
         continue;
@@ -1999,13 +2034,20 @@ export class Sessions extends EventEmitter {
 
   async answer(id, requestId, decision) {
     const s = this.get(id);
-    if (s.nativeChat) {
-      await this.#syncNativeChat(s);
-      if (!this.events.pending(id).some(p => p.requestId === requestId)) throw new Error('that approval has already closed');
-      if (!['allow', 'deny'].includes(decision?.option)) throw new Error('choose allow or deny');
-      await claudeChannelRpc(id, 'answer', { requestId, behavior: decision.option });
-      const event = this.events.append(id, { type: 'permission.resolved', requestId, decision });
-      this.emit('event', { id, event });
+    const ask = this.#hookAsks.get(requestId);
+    if (s.nativeCli) {
+      if (!ask || ask.id !== id) throw new Error('that question was already answered on the terminal');
+      // The same answer `claude -p` takes, printed by the waiting hook.
+      let response;
+      if (decision?.option === 'deny') response = { behavior: 'deny', message: decision.message || 'The owner declined this from Helm.' };
+      else {
+        response = { behavior: 'allow' };
+        if (decision?.option === 'always' && ask.raw?.permission_suggestions?.length) response.updatedPermissions = ask.raw.permission_suggestions;
+        if (ask.kind === 'question' && decision?.answers) response.updatedInput = { ...ask.raw.input, answers: decision.answers };
+        else if (decision?.updatedInput) response.updatedInput = decision.updatedInput;
+      }
+      ask.reply({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: response } });
+      this.#closeHookAsk(requestId, decision?.option);
       return { ok: true };
     }
     const d = this.#drivers.get(id);
@@ -2216,14 +2258,10 @@ export class Sessions extends EventEmitter {
    */
   async messages(id, { limit = 120 } = {}) {
     const s = this.get(id);
-    if (s.nativeChat) await this.#syncNativeChat(s).catch(() => {});
     if (s.driver) return { messages: [], source: 'events' };
     // A launched native process must be linked by process identity, never
     // by the newest file in a folder where several CLIs may be running.
-    if (s.nativeCli && !s.transcript) return s.nativeChat
-      ? { messages: this.events.since(id, 0).filter(e => e.type === 'native.message').slice(-limit)
-          .map(e => ({ role: 'user', text: e.text, tools: [], at: e.at })), status: s.status, source: null }
-      : { messages: [], source: null };
+    if (s.nativeCli && !s.transcript) return { messages: [], status: s.status, source: null };
     if (!s.transcript) {
       const profiles = await getProfiles();
       const profile = profiles.find((p) => p.id === s.profileId);
@@ -2252,15 +2290,9 @@ export class Sessions extends EventEmitter {
     }
     // Asking for messages is how a chat view says it is watching.
     this.#watchTranscript(id, s.transcript);
-    const messages = [...await readMessages({ engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit })];
-    if (s.nativeChat) {
-      for (const event of this.events.since(id, 0)) if (event.type === 'native.message') {
-        messages.push({ role: 'user', text: event.text, tools: [], at: event.at });
-      }
-      messages.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
-    }
+    const messages = await readMessages({ engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit });
     return {
-      messages: messages.slice(-limit),
+      messages,
       status: s.status,
       source: s.transcript,
     };
@@ -2446,14 +2478,18 @@ export class Sessions extends EventEmitter {
     }
     if (references.length && (raw || !s.driver || text.trimStart().startsWith('/'))) throw new Error('thread context needs an ordinary agent message');
     if (s.nativeChat && !raw) {
-      if (attachments.length) throw new Error('Image messages are not supported in this shared-chat preview yet');
-      if (!this.nativeTerminals.has(id)) throw new Error('Claude is no longer running');
-      if (text.trimStart().startsWith('/')) throw new Error('Claude slash commands are not supported in this shared-chat preview yet');
-      await claudeChannelRpc(id, 'send', { text: text.trim() });
-      const event = this.events.append(id, { type: 'native.message', text: text.trim() });
-      this.emit('event', { id, event });
+      if (attachments.length) throw new Error('Pictures cannot be sent to a terminal Claude from Helm yet.');
+      if (!this.nativeTerminals.has(id)) throw new Error('Claude is no longer running in that terminal.');
+      if ([...this.#hookAsks.values()].some((a) => a.id === id)) throw new Error('Answer Claude\'s question first.');
+      // Typed into the terminal, as the person at the keyboard would: pasted
+      // whole (so new lines stay in the message), then Enter. Claude queues
+      // it if it is busy, exactly as it does for typing.
+      const body = text.replace(/\r\n?/g, '\n').trim();
+      if (!body) return { ok: true };
+      await this.nativeTerminals.write(id, `\x1b[200~${body}\x1b[201~`);
+      await new Promise((r) => setTimeout(r, 60));
+      await this.nativeTerminals.write(id, '\r');
       s.hasInput = true; s.updatedAt = Date.now(); this.#save();
-      this.emit('session', { ...wire(s), alive: true });
       return { ok: true };
     }
     if (source !== 'user' && s.stoppedAt) throw new Error('the thread was stopped');
@@ -3398,6 +3434,7 @@ export class Sessions extends EventEmitter {
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
     clearInterval(this.nativePoll);
+    (await this.hooks?.catch(() => null))?.close();
     this.nativeDiscovery = false;
     await this.#nativeDiscovery?.catch(() => {});
     await Promise.allSettled([...this.#drivers.values()].map((d) => {

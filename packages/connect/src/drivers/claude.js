@@ -617,10 +617,7 @@ export class ClaudeDriver extends Driver {
         response: { behavior: 'deny', message: 'Plan mode is disabled in Helm. Execute the assigned task directly; do not request plan approval.' } } });
       return;
     }
-    const kind = tool === 'AskUserQuestion' ? 'question'
-      : tool === 'ExitPlanMode' ? 'plan'
-      : tool === 'Bash' ? 'command'
-      : EDIT_TOOLS.has(tool) ? 'edit' : 'tool';
+    const kind = permissionKind(tool);
 
     // `auto` lets Claude's safety classifier make the call. If Claude still
     // sends a permission request here, don't turn that safety stop into a
@@ -643,64 +640,83 @@ export class ClaudeDriver extends Driver {
       return;
     }
 
-    const title = stripAnsi(r.title) || (
-      kind === 'command' ? 'Run a command'
-      : kind === 'edit' ? `${tool === 'Write' ? 'Write' : 'Edit'} ${r.description || input.file_path?.split('/').pop() || 'a file'}`
-      : kind === 'question' ? 'Claude has a question'
-      : kind === 'plan' ? 'Claude has a plan'
-      : tool === 'Task' ? `Spawn a subagent${input.subagent_type ? ` (${input.subagent_type})` : ''}`
-      : `${r.display_name || tool}${r.description ? ` · ${r.description}` : ''}`);
-
-    const detail = kind === 'command' ? input.command
-      : kind === 'plan' ? input.plan
-      : kind === 'edit' ? this.#editDetail(tool, input)
-      : kind === 'question' ? undefined
-      : clip(JSON.stringify(input, null, 2), 4000);
-
-    const options = [];
-    if (kind === 'question') {
-      // The card is the answer surface; the options are the questions'.
-    } else if (kind === 'plan') {
-      options.push({ id: 'allow', role: 'allow', label: 'Approve plan' }, { id: 'deny', role: 'deny', label: 'Keep planning' });
-    } else {
-      options.push({ id: 'allow', role: 'allow', label: 'Allow' });
-      if (r.permission_suggestions?.length && !r.suppress_always_allow_rule) {
-        options.push({ id: 'always', role: 'allow-always', label: this.#alwaysLabel(r.permission_suggestions, tool) });
-      }
-      options.push({ id: 'deny', role: 'deny', label: 'Deny' });
-    }
-
     this.push('status', { status: 'blocked' });
     this.push('permission.request', {
       requestId: m.request_id,
       itemId: r.tool_use_id,
       parentId: m.parent_tool_use_id ?? r.parent_tool_use_id ?? undefined,
-      kind, tool, title,
-      detail: stripAnsi(detail),
-      reason: stripAnsi(r.decision_reason) || undefined,
-      input: kind === 'question' || kind === 'plan' ? undefined : input,
-      questions: kind === 'question' ? input.questions : undefined,
-      options,
-      defaultTo: r.default_to_no ? 'deny' : 'allow',
-      allowEdit: kind === 'command' || kind === 'plan',
-      raw: { input, permission_suggestions: r.permission_suggestions },
+      ...permissionCard(tool, input, r),
     });
   }
 
-  #alwaysLabel(suggestions, tool) {
-    const s = suggestions[0];
-    if (s?.type === 'setMode' && s.mode === 'acceptEdits') return 'Allow all edits this session';
-    if (s?.type === 'addRules') {
-      const rule = s.rules?.[0]?.ruleContent;
-      return rule ? `Always allow ${tool}(${rule.length > 24 ? rule.slice(0, 24) + '…' : rule})` : `Always allow ${tool}`;
-    }
-    return 'Always allow';
-  }
 
-  #editDetail(tool, input) {
-    if (tool === 'Write') return { path: input.file_path, content: clip(input.content, 20_000) };
-    if (tool === 'Edit') return { path: input.file_path, old: clip(input.old_string, 10_000), new: clip(input.new_string, 10_000), all: !!input.replace_all };
-    if (tool === 'MultiEdit') return { path: input.file_path, edits: (input.edits ?? []).slice(0, 20).map((e) => ({ old: clip(e.old_string, 4000), new: clip(e.new_string, 4000) })) };
-    return { path: input.notebook_path ?? input.file_path, content: clip(input.new_source, 10_000) };
-  }
 }
+
+/** What kind of card a tool's permission request is. */
+export const permissionKind = (tool) => tool === 'AskUserQuestion' ? 'question'
+  : tool === 'ExitPlanMode' ? 'plan'
+  : tool === 'Bash' ? 'command'
+  : EDIT_TOOLS.has(tool) ? 'edit' : 'tool';
+
+function alwaysLabel(suggestions, tool) {
+  const s = suggestions[0];
+  if (s?.type === 'setMode' && s.mode === 'acceptEdits') return 'Allow all edits this session';
+  if (s?.type === 'addRules') {
+    const rule = s.rules?.[0]?.ruleContent;
+    return rule ? `Always allow ${tool}(${rule.length > 24 ? rule.slice(0, 24) + '…' : rule})` : `Always allow ${tool}`;
+  }
+  return 'Always allow';
+}
+
+function editDetail(tool, input) {
+  if (tool === 'Write') return { path: input.file_path, content: clip(input.content, 20_000) };
+  if (tool === 'Edit') return { path: input.file_path, old: clip(input.old_string, 10_000), new: clip(input.new_string, 10_000), all: !!input.replace_all };
+  if (tool === 'MultiEdit') return { path: input.file_path, edits: (input.edits ?? []).slice(0, 20).map((e) => ({ old: clip(e.old_string, 4000), new: clip(e.new_string, 4000) })) };
+  return { path: input.notebook_path ?? input.file_path, content: clip(input.new_source, 10_000) };
+}
+
+/**
+ * The card for one permission request, from what Claude says about it -
+ * the same whether it came over `claude -p`'s control channel or from a
+ * terminal Claude's PermissionRequest hook. `r` carries the extras only the
+ * control channel has (title, description, reason, defaults).
+ */
+export function permissionCard(tool, input = {}, r = {}) {
+  const kind = permissionKind(tool);
+  const title = stripAnsi(r.title) || (
+    kind === 'command' ? 'Run a command'
+    : kind === 'edit' ? `${tool === 'Write' ? 'Write' : 'Edit'} ${r.description || input.file_path?.split('/').pop() || 'a file'}`
+    : kind === 'question' ? 'Claude has a question'
+    : kind === 'plan' ? 'Claude has a plan'
+    : tool === 'Task' ? `Spawn a subagent${input.subagent_type ? ` (${input.subagent_type})` : ''}`
+    : `${r.display_name || tool}${r.description ? ` · ${r.description}` : ''}`);
+  const detail = kind === 'command' ? input.command
+    : kind === 'plan' ? input.plan
+    : kind === 'edit' ? editDetail(tool, input)
+    : kind === 'question' ? undefined
+    : clip(JSON.stringify(input, null, 2), 4000);
+  const options = [];
+  if (kind === 'question') {
+    // The card is the answer surface; the options are the questions'.
+  } else if (kind === 'plan') {
+    options.push({ id: 'allow', role: 'allow', label: 'Approve plan' }, { id: 'deny', role: 'deny', label: 'Keep planning' });
+  } else {
+    options.push({ id: 'allow', role: 'allow', label: 'Allow' });
+    if (r.permission_suggestions?.length && !r.suppress_always_allow_rule) {
+      options.push({ id: 'always', role: 'allow-always', label: alwaysLabel(r.permission_suggestions, tool) });
+    }
+    options.push({ id: 'deny', role: 'deny', label: 'Deny' });
+  }
+  return {
+    kind, tool, title,
+    detail: stripAnsi(detail),
+    reason: stripAnsi(r.decision_reason) || undefined,
+    input: kind === 'question' || kind === 'plan' ? undefined : input,
+    questions: kind === 'question' ? input.questions : undefined,
+    options,
+    defaultTo: r.default_to_no ? 'deny' : 'allow',
+    allowEdit: kind === 'command' || kind === 'plan',
+    raw: { input, permission_suggestions: r.permission_suggestions },
+  };
+}
+
