@@ -3385,7 +3385,7 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
           <button className="row" onClick={() => onOpen({ kind: 'updates' })}>
             <span className="grow">
               <span className="rt">Updates</span>
-              <span className="rm">which helm each machine runs, and update them</span>
+              <span className="rm">your version on every machine, and GitHub’s</span>
             </span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
