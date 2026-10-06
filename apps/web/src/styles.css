@@ -2582,3 +2582,18 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .link-form .field { margin: 0; }
 .link-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .link-actions button { width: auto; margin: 0; }
+
+/* Sidebar thread rows, arranged as T3 Code does: where and when on top, the
+   title, then the branch with status and agent. Helm's own colours and type. */
+.row.thread-row.tri { flex-direction: column; align-items: stretch; gap: 2px; min-height: 0; padding: 8px 10px 9px; }
+.tri-top, .tri-bot { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: var(--t-micro); color: var(--mutedfg); }
+.tri-top svg, .tri-bot svg { flex: none; opacity: .8; }
+.tri-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tri-when { margin-left: auto; flex: none; padding-left: 8px; font-variant-numeric: tabular-nums; }
+.tri-title { font-size: var(--t-body); font-weight: 500; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
+.row.thread-row.tri:hover .tri-title, .row.thread-row.tri.active .tri-title { color: var(--text); }
+.tri-branch { font-family: var(--mono); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tri-end { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
+.tri-end .chip { font-size: 10.5px; padding: 0 6px; min-height: 18px; }
+.tri-mark.mark { width: 18px; height: 18px; border-radius: 5px; }
+.tri-mark.mark svg { width: 11px; height: 11px; }

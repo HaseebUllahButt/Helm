@@ -35,6 +35,7 @@ import { openFiles, processArgv, processCwd } from './procinfo.js';
 import { GREETING, bareTitle, informative, promptTitle } from './titles.js';
 import { askPreview } from './notify.js';
 import { startHookServer } from './claude-hooks.js';
+import { gitBranch } from './git-head.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -779,6 +780,8 @@ export class Sessions extends EventEmitter {
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
     return out.filter((s) => parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation)
       .map((s) => s.delegations ? { ...s, delegations: this.#visibleDelegations(s) } : s)
+      // The branch each thread's folder is on, for the sidebar's third line.
+      .map((s) => (s.cwd ? { ...s, branch: gitBranch(s.cwd) } : s))
       .sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 

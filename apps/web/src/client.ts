@@ -73,6 +73,8 @@ export interface Session {
   id: string;
   title: string;
   cwd: string;
+  /** The git branch the folder is on, read by the machine; null outside a repo. */
+  branch?: string | null;
   engine: string;
   profileId: string;
   status: Status;

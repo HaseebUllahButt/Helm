@@ -3034,17 +3034,24 @@ function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; m
   const now = useNow();
   const eng = engineOf(s.engine);
   return (
-    <button className={`row tall thread-row${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
-      <EngineMark engine={eng.cls} />
-      <span className="grow">
-        <span className="rt"><span className="rt-text">{s.title}</span></span>
-        <span className="rm">{dirName(s.cwd)} · {machine}</span>
+    // T3's arrangement in Helm's look: where it is and when, then the title,
+    // then the branch with how it is doing and which agent it is.
+    <button className={`row tall thread-row tri${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
+      <span className="tri-top">
+        <Icon name="folder" size={12} />
+        <span className="tri-where">{dirName(s.cwd)} · {machine}</span>
+        <span className="tri-when">{note ?? (s.updatedAt ? waitingSince(s.updatedAt, now) : '')}</span>
       </span>
-      {note ? <span className="when">{note}</span>
-        : s.status === 'working' || !!s.team?.working
-        ? <StatusChip status="working" at={s.updatedAt} />
-        : s.externalActive || (s.shared && s.alive) ? <span className="chip">idle</span>
-        : s.updatedAt ? <span className="when">{waitingSince(s.updatedAt, now)}</span> : null}
+      <span className="tri-title">{s.title}</span>
+      <span className="tri-bot">
+        {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
+        <span className="tri-end">
+          {s.status === 'working' || !!s.team?.working
+            ? <StatusChip status="working" at={s.updatedAt} />
+            : s.externalActive || (s.shared && s.alive) ? <span className="chip">idle</span> : null}
+          <EngineMark engine={eng.cls} className="tri-mark" />
+        </span>
+      </span>
     </button>
   );
 }
