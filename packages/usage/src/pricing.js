@@ -77,9 +77,10 @@ export function claudeModelCost(modelName, tokens, asOfDate) {
 export const CODEX_PRICING = {
   // input / cachedInput / output, $ per million tokens (standard, short context)
   'gpt-6-astra': { input: 10, cachedInput: 1, output: 50 },
+  'gpt-6.1-sol': { input: 2, cachedInput: 0.1, output: 10 },
   'gpt-6-sol': { input: 2, cachedInput: 0.2, output: 10 },
   'gpt-6-luna': { input: 0.1, cachedInput: 0.01, output: 0.5 },
-  'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
+  'gpt-5.6-sol': { input: 4, cachedInput: 0.4, output: 20 },
   'gpt-5.6-terra': { input: 2, cachedInput: 0.2, output: 12 },
   'gpt-5.6-luna': { input: 0.2, cachedInput: 0.02, output: 1.2 },
   'gpt-5.5': { input: 5, cachedInput: 0.5, output: 30 },
@@ -95,6 +96,20 @@ export const CODEX_PRICING_PRE_CUT = {
   'gpt-5.6-luna': { input: 1.0, cachedInput: 0.1, output: 6 },
   'gpt-5.6-terra': { input: 2.5, cachedInput: 0.25, output: 15 },
 };
+// Sol's promotional cut began 2026-08-21; before it, the old card.
+export const CODEX_SOL_PROMO_START_MS = Date.parse('2026-08-21T00:00:00Z');
+export const CODEX_PRICING_PRE_SOL_PROMO = {
+  'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
+};
+
+/** A Codex model's card on the day the tokens were spent, or undefined. */
+export function codexRatesFor(modelName, date) {
+  const key = String(modelName || '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  const ms = date ? Date.parse(date) : NaN;
+  if (Number.isFinite(ms) && ms < CODEX_CUTOVER_MS && CODEX_PRICING_PRE_CUT[key]) return CODEX_PRICING_PRE_CUT[key];
+  if (Number.isFinite(ms) && ms < CODEX_SOL_PROMO_START_MS && CODEX_PRICING_PRE_SOL_PROMO[key]) return CODEX_PRICING_PRE_SOL_PROMO[key];
+  return CODEX_PRICING[key];
+}
 
 export const ANTIGRAVITY_PRICING = {
   'gemini-3.7-flash': { input: 0.75, cachedInput: 0.1875, output: 3.75 },
@@ -175,10 +190,7 @@ export function cacheRatesFor(modelName, engine, asOfDate) {
       // and this used to answer with today's rate whatever date it was given.
       // priceBucket honoured it and this did not, so cache savings on tokens
       // spent before the cut were understated fivefold on gpt-5.6-luna.
-      const key = String(modelName || '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
-      const ms = asOfDate ? Date.parse(asOfDate) : NaN;
-      const pre = Number.isFinite(ms) && ms < CODEX_CUTOVER_MS && CODEX_PRICING_PRE_CUT[key];
-      return flat(pre || CODEX_PRICING[key]);
+      return flat(codexRatesFor(modelName, asOfDate));
     }
     case 'antigravity':
       return flat(ANTIGRAVITY_PRICING[normalizeAntigravityModelName(modelName)]);
@@ -204,11 +216,7 @@ export function priceBucket(engine, modelName, tokens, date) {
   }
   // Codex and the OpenAI-rate engines: the bucket already holds fresh input
   // separately from cached, so this prices it directly.
-  const key = String(modelName || '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
-  const ms = date ? Date.parse(date) : NaN;
-  const rates = (Number.isFinite(ms) && ms < CODEX_CUTOVER_MS && CODEX_PRICING_PRE_CUT[key])
-    ? CODEX_PRICING_PRE_CUT[key]
-    : CODEX_PRICING[key];
+  const rates = codexRatesFor(modelName, date);
   if (!rates) return null;
   const input = ((tokens.input || 0) * rates.input) / 1e6;
   const cacheRead = ((tokens.cacheRead || 0) * rates.cachedInput) / 1e6;

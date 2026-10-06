@@ -66,6 +66,15 @@ test('1-hour cache writes are priced at 2x input, and Opus 5.5 has a price', () 
   assert.ok(priceBucket('devin', 'claude-opus-5', { input: 1e6 }, '2026-09-20'));
 });
 
+test('Codex gpt-6.1-sol has a price, and Sol is priced by the day it was used', () => {
+  const sol61 = priceBucket('codex', 'gpt-6.1-sol', { input: 1e6, output: 1e6, cacheRead: 1e6 }, '2026-10-06');
+  assert.ok(sol61, 'gpt-6.1-sol must not be unpriced');
+  assert.ok(Math.abs(sol61.total - 12.1) < 1e-9);
+  const sol = (date) => priceBucket('codex', 'gpt-5.6-sol', { input: 1e6, output: 1e6, cacheRead: 1e6 }, date).total;
+  assert.ok(Math.abs(sol('2026-08-20') - 35.5) < 1e-9, 'before the promo: the old card');
+  assert.ok(Math.abs(sol('2026-08-21') - 24.4) < 1e-9, 'from the promo on: the cut card');
+});
+
 test('an old transcript that is resumed is counted again', async () => {
   const dir = tmp();
   const f = join(dir, 's.jsonl');
