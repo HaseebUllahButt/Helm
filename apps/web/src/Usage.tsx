@@ -366,7 +366,8 @@ function DonutBreakdown({ groups, facet }: { groups: ChartGroup[]; facet: FacetI
             </g>
           </svg>
           <div className="usage-donut-center">
-            <span className="usage-donut-total">{fmt(total)}</span>
+            {/* Long totals step down a size so they stay inside the hole. */}
+            <span className={`usage-donut-total${fmt(total).length > 7 ? ' xlong' : fmt(total).length > 5 ? ' long' : ''}`}>{fmt(total)}</span>
             <span className="usage-donut-unit">{priced ? 'total cost' : 'total tokens'}</span>
           </div>
         </div>

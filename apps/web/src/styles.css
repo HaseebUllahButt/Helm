@@ -1300,27 +1300,35 @@ pre.snippet {
 .turn.user details.turn-note summary { cursor: pointer; white-space: nowrap; }
 .turn.user details.turn-note[open] summary { margin-bottom: 4px; }
 
-/* Speaking a prompt. The microphone is a control like the paperclip until it
-   is live, and then it is the loudest thing in the composer - a recording you
-   have forgotten about is the failure worth designing against. */
-.ctl.mic.rec {
-  color: var(--amber-text);
-  background: color-mix(in srgb, var(--amber) 14%, transparent);
+/* Speaking a prompt. The microphone keeps its size: recording turns it red,
+   with a soft disc that grows with your voice and a ring that ripples out, so
+   a live mic is unmistakable without the bar growing. Transcribing dims it
+   under a small spinner. */
+.ctl.mic { position: relative; }
+.ctl.mic.rec { color: var(--red); background: transparent; }
+.ctl.mic.rec:hover { background: transparent; color: var(--red); }
+.ctl.mic svg { position: relative; }
+.mic-wave {
+  position: absolute; inset: 5px; border-radius: 50%; pointer-events: none;
+  background: color-mix(in srgb, var(--red) 20%, transparent);
+  transform: scale(calc(0.8 + var(--lvl, 0) * 0.6)); transition: transform 0.08s linear;
 }
-.ctl.mic.rec svg { animation: micpulse 1.6s ease-in-out infinite; }
-.attach-status.rec { color: var(--amber-text); font-variant-numeric: tabular-nums; }
+.mic-wave::after {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--red) 60%, transparent);
+  animation: micring 1.5s ease-out infinite;
+}
+@keyframes micring { from { transform: scale(0.9); opacity: 0.9; } to { transform: scale(1.6); opacity: 0; } }
+.ctl.mic.busy, .ctl.mic.busy:hover { background: transparent; }
+.ctl.mic.busy svg { opacity: 0.35; }
+.ctl.mic.busy::after {
+  content: ''; position: absolute; inset: 6px; border-radius: 50%;
+  border: 1.5px solid var(--line-2); border-top-color: var(--text-dim);
+  animation: micspin 0.8s linear infinite;
+}
+@keyframes micspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .mic-wave::after, .ctl.mic.busy::after { animation: none; } }
 .attach-status.bad { color: var(--red); }
-@keyframes micpulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.45 } }
-@media (prefers-reduced-motion: reduce) { .ctl.mic.rec svg { animation: none; } }
-.attach-status.rec { display: inline-flex; align-items: center; gap: 7px; }
-.attach-status .level {
-  display: inline-block; width: 34px; height: 3px; border-radius: 2px;
-  background: color-mix(in srgb, var(--amber) 22%, transparent); overflow: hidden;
-}
-.attach-status .level i {
-  display: block; width: 100%; height: 100%; background: var(--amber);
-  transform-origin: left; transition: transform 0.08s linear;
-}
 .section.fold .note-inline {
   text-transform: none; letter-spacing: 0; color: var(--mutedfg); font-weight: 400; font-size: var(--t-micro);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
@@ -1458,7 +1466,17 @@ pre.snippet {
   .usage-legend { width: 100%; }
 }
 
-.usage-note { flex-direction: column; align-items: flex-start; gap: 3px; margin-top: 14px; }
+/* Each note on its own line: as inline spans they ran together ("memorycosts"). */
+.usage-note { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; margin-top: 14px; }
+.usage-donut-total.long { font-size: 19px; }
+.usage-donut-total.xlong { font-size: 16px; }
+/* A phone keeps the facet chips on one line and lets them scroll sideways. */
+@media (max-width: 480px) {
+  .usage-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: -2px; padding-inline: 2px; }
+  .usage-filters::-webkit-scrollbar { display: none; }
+  .usage-chip { flex: none; padding: 6px 11px; }
+  .usage-donut { width: 164px; height: 164px; }
+}
 
 /* ------------------------------------------------------------ new in this pass */
 

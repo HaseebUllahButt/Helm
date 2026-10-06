@@ -414,14 +414,20 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
               </>
             )}
             {onTranscribe && dictation.state !== 'unsupported' && (
+              // Recording never grows the bar: the mic itself turns red and
+              // breathes with your voice; transcribing dims it under a spinner.
               <button
-                className={`ctl icon mic${dictation.state === 'recording' ? ' rec' : ''}`}
+                className={`ctl icon mic${dictation.state === 'recording' ? ' rec' : ''}${dictation.state === 'working' ? ' busy' : ''}`}
+                style={dictation.state === 'recording' ? { '--lvl': Math.min(1, dictation.level * 6) } as React.CSSProperties : undefined}
                 onClick={dictation.toggle}
                 disabled={dictation.state === 'working'}
-                title={dictation.state === 'recording' ? 'stop and transcribe' : 'speak a prompt (ctrl+shift+space)'}
-                aria-label={dictation.state === 'recording' ? 'stop recording' : 'speak a prompt'}
+                title={dictation.state === 'recording' ? `recording ${fmtSeconds(dictation.seconds)} · tap to stop`
+                  : dictation.state === 'working' ? 'transcribing…' : 'speak a prompt (ctrl+shift+space)'}
+                aria-label={dictation.state === 'recording' ? `stop recording, ${fmtSeconds(dictation.seconds)}`
+                  : dictation.state === 'working' ? 'transcribing' : 'speak a prompt'}
                 aria-pressed={dictation.state === 'recording'}
               >
+                {dictation.state === 'recording' && <span className="mic-wave" aria-hidden="true" />}
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <rect x="9" y="2.5" width="6" height="11" rx="3" />
@@ -429,20 +435,6 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                 </svg>
               </button>
             )}
-            {dictation.state === 'recording' && (
-              <span className="attach-status rec">
-                {fmtSeconds(dictation.seconds)}
-                {/* Whether the microphone is hearing anything, while there is
-                    still time to do something about it. Recording a muted mic
-                    for thirty seconds and being told afterwards is the failure
-                    this is here to prevent. */}
-                <span className="level" aria-hidden="true">
-                  <i style={{ transform: `scaleX(${Math.min(1, dictation.level * 6)})` }} />
-                </span>
-                tap to stop
-              </span>
-            )}
-            {dictation.state === 'working' && <span className="attach-status">transcribing…</span>}
             {dictation.error && (
               <button className="attach-status bad" onClick={dictation.clearError} title="dismiss">{dictation.error}</button>
             )}
