@@ -1234,7 +1234,7 @@ export class Client {
    * after that, because the daemon keeps a per-file index. The timeout is
    * generous for exactly that first call.
    */
-  usage(env: string, opts: { since?: string; until?: string; by?: string[]; rebuild?: boolean } = {}) {
+  usage(env: string, opts: { model?: string; since?: string; until?: string; by?: string[]; rebuild?: boolean } = {}) {
     return this.rpc<UsageReport>(env, 'usage.report', opts, 120_000);
   }
 

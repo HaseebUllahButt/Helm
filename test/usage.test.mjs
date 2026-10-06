@@ -369,3 +369,17 @@ test('a bucket key round-trips, including a folder with no value', () => {
   assert.deepEqual(splitKey(bucketKey({ date: '2026-09-10', model: 'm' })),
     { date: '2026-09-10', model: 'm', project: '' });
 });
+
+test('model drill-down filters totals, daily series and groups before folding', () => {
+  const bucket = (engine, total) => ({ engine, account: 'one', input: total, output: 0, total, turns: 1 });
+  const rows = {
+    ['one\x002026-10-01|claude-opus-5|/work']: bucket('claude', 100),
+    ['one\x002026-10-02|claude-opus-5|/work']: bucket('claude', 200),
+    ['one\x002026-10-02|claude-sonnet-4|/work']: bucket('claude', 900),
+  };
+  const report = foldBuckets(rows, { model: 'claude-opus-5', since: '2026-10-02' });
+  assert.equal(report.totals.total, 200);
+  assert.deepEqual(report.daily.map(d => [d.date, d.total]), [['2026-10-02', 200]]);
+  assert.deepEqual(report.groups.map(g => g.model), ['claude-opus-5']);
+  assert.equal(foldBuckets(rows, { model: '' }).totals.total, 0, 'unknown model is a filter too');
+});

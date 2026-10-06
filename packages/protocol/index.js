@@ -189,7 +189,8 @@ export const M = {
   // What this machine's agents have spent, read from what each CLI already
   // wrote. Pre-aggregated here: a phone over the hub gets day-by-model
   // buckets, never the gigabytes of transcript behind them.
-  USAGE_REPORT: 'usage.report',    // { since?, until?, by?[], rebuild? } -> { totals, daily[], groups[], accounts[], scan }
+  USAGE_LIMITS: 'usage.limits',    // latest provider-reported windows per account
+  USAGE_REPORT: 'usage.report',    // { model?, since?, until?, by?[], rebuild? } -> { totals, daily[], groups[], accounts[], scan }
   // The same scan as a raw bucket map - what a hub stores so it can still
   // answer usage.report for this machine after it disconnects.
   USAGE_BUCKETS: 'usage.buckets',  // { rebuild? } -> { buckets, accounts, scan, at }

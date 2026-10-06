@@ -1621,10 +1621,14 @@ export class Daemon {
        * holding the rollup can keep answering for us after we go to sleep -
        * the same trick digest's snapshot.json plays for the brain.
        */
+      case M.USAGE_LIMITS:
+        return this.sessions.accountLimits(await currentProfiles());
+
       case M.USAGE_REPORT: {
         const rollup = await this.#usageRollup(!!p.rebuild);
         this.broadcastFrame(T.USAGE_SYNC, rollup);
         return foldBuckets(rollup.buckets, {
+          model: typeof p.model === 'string' ? p.model : null,
           since: p.since ?? null,
           until: p.until ?? null,
           by: Array.isArray(p.by) && p.by.length ? p.by : ['engine', 'model'],

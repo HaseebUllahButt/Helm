@@ -216,9 +216,9 @@ export class UsageReader {
    * offers as facets. `by` names the dimensions worth grouping - anything not
    * asked for is summed away here rather than on the phone.
    */
-  async report(profiles, { since = null, until = null, by = ['engine', 'model'], rebuild = false } = {}) {
+  async report(profiles, { model = null, since = null, until = null, by = ['engine', 'model'], rebuild = false } = {}) {
     const { buckets, stats, accounts } = await this.collect(profiles, { rebuild });
-    return foldBuckets(buckets, { since, until, by, accounts, scan: stats });
+    return foldBuckets(buckets, { model, since, until, by, accounts, scan: stats });
   }
 }
 
@@ -229,7 +229,7 @@ export class UsageReader {
  * stored copy still windows and facets exactly like a fresh one.
  */
 export function foldBuckets(buckets, {
-  since = null, until = null, by = ['engine', 'model'],
+  since = null, until = null, model: selectedModel = null, by = ['engine', 'model'],
   accounts = [], scan = {}, at = null,
 } = {}) {
   const daily = new Map();
@@ -240,6 +240,7 @@ export function foldBuckets(buckets, {
   for (const [full, b] of entries) {
     const key = full.slice(full.indexOf('\x00') + 1);
     const { date, model, project } = splitKey(key);
+    if (selectedModel !== null && model !== selectedModel) continue;
     if (since && date < since) continue;
     if (until && date > until) continue;
 

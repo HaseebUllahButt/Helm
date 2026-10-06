@@ -1420,7 +1420,7 @@ pre.snippet {
 .usage-spend-peak { font-size: var(--t-micro); color: var(--text-dim); }
 /* Bars are capped and never fill their slot - the leftover is air. The 2px gap
    in the surface colour is what separates neighbours; no stroke is drawn. */
-.usage-bars { display: flex; align-items: flex-end; gap: 2px; height: 96px; margin: 12px 0 6px; }
+.usage-bars { display: flex; justify-content: space-between; align-items: flex-end; gap: 2px; height: 96px; margin: 12px 0 6px; }
 .usage-bar {
   flex: 1 1 0; min-width: 0; max-width: 24px;
   background: color-mix(in oklab, var(--primary-t) 55%, transparent);
@@ -2615,3 +2615,37 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tri-end .chip { font-size: 10.5px; padding: 0 6px; min-height: 18px; }
 .tri-mark.mark { width: 18px; height: 18px; border-radius: 5px; }
 .tri-mark.mark svg { width: 11px; height: 11px; }
+
+/* Account allowance reads like the machine list; each provider window stays
+   distinct, so a weekly cap never masquerades as a second account. */
+.usage-limits { padding: 14px 18px; margin-bottom: 18px; }
+.usage-limits-note { color: var(--text-dim); font-size: var(--t-micro); line-height: 1.55; margin: 6px 0; }
+.usage-account { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(0, 2fr); gap: 16px; padding: 13px 0; border-top: 1px solid var(--line); }
+.usage-account-name { min-width: 0; font-size: var(--t-meta); }
+.usage-account-name b { display: block; overflow-wrap: anywhere; }
+.usage-account-name b span { font-weight: 400; color: var(--text-dim); }
+.usage-account-name small, .usage-allowance small { display: block; color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.5; }
+.usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.usage-allowance { font-size: var(--t-micro); min-width: 0; }
+.usage-allowance > div:first-child { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 8px; }
+.usage-allowance .usage-meter { height: 5px; margin: 6px 0; }
+.usage-allowance.expired b { font-weight: 400; color: var(--text-dim); }
+.usage-legend-name.usage-model-link { text-align: left; min-height: 32px; padding: 4px 0; text-decoration: underline; text-underline-offset: 3px; }
+.usage-more-models { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; font-size: var(--t-meta); }
+.usage-more-models summary { cursor: pointer; color: var(--text-dim); min-height: 32px; }
+.usage-model-extra { display: flex; justify-content: space-between; gap: 12px; width: 100%; min-height: 36px; text-align: left; }
+.usage-model-extra > span:first-child { overflow-wrap: anywhere; min-width: 0; }
+.usage-model-extra > span:last-child { flex: none; color: var(--text-dim); }
+.modal:has(.usage-model-detail) { max-width: 580px; max-height: calc(100dvh - 40px); overflow-y: auto; }
+.usage-model-detail .modal-title { overflow-wrap: anywhere; min-width: 0; }
+.usage-model-detail .modal-head button { flex: none; width: auto; margin: 0; }
+.usage-token-detail { margin: 16px 0 8px; font-size: var(--t-meta); }
+.usage-token-detail > div { display: flex; justify-content: space-between; gap: 12px; margin: 6px 0; }
+.usage-token-detail dt { color: var(--text-dim); }
+.usage-token-detail dd { margin: 0; font-variant-numeric: tabular-nums; }
+@media (max-width: 480px) {
+  .usage-account { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .usage-account-name { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .usage-account-name small { flex: none; }
+  .usage-limits > .usage-spend-head { flex-wrap: wrap; gap: 4px; }
+}

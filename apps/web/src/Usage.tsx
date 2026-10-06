@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Client, Environment, UsageReport, UsageGroup, UsageTotals } from './client';
 import { hitRate, cacheSaved } from './client';
 import { loadUsage, saveUsage, mergeReports, today, daysAgo } from './usageCache';
 import { BackIcon } from './Icon';
+import { AccountLimits } from './AccountLimits';
+import { Sheet } from './Modal';
 
 /**
  * What the agents on this network have cost.
@@ -72,6 +74,9 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [win, setWin] = useState<WindowId>('7d');
   const [facet, setFacet] = useState<FacetId>('model');
+  const [model, setModel] = useState<string | null>(null);
+  const generation = useRef(0);
+  const received = useRef(new Set<string>());
 
   // A machine can leave the network while the screen scoped to it is open;
   // the select is controlled, so the scope falls back to every machine
@@ -91,9 +96,12 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
   const since = WINDOWS.find((w) => w.id === win)!.from();
 
   const fetchReport = (env: Environment, rebuild: boolean) => {
+    const request = generation.current;
     setPending((p) => new Set(p).add(env.id));
     client.usage(env.id, { since: since || undefined, by: ['engine', 'model', 'provider', 'project'], rebuild })
       .then((report) => {
+        if (request !== generation.current) return;
+        received.current.add(env.id);
         setFailed((f) => { const { [env.id]: _gone, ...rest } = f; return rest; });
         if (report.stale) {
           // The hub answered for a machine that is asleep - a memory too,
@@ -108,24 +116,27 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
         }
         setReports((r) => ({ ...r, [env.id]: report }));
         setRemembered((r) => { const { [env.id]: _drop, ...rest } = r; return rest; });
-        saveUsage(env.id, report, win);
+        saveUsage(env.id, report, win, since);
       })
-      .catch((e) => setFailed((f) => ({ ...f, [env.id]: String(e?.message || e) })))
-      .finally(() => setPending((p) => { const n = new Set(p); n.delete(env.id); return n; }));
+      .catch((e) => { if (request === generation.current) setFailed((f) => ({ ...f, [env.id]: String(e?.message || e) })); })
+      .finally(() => { if (request === generation.current) setPending((p) => { const n = new Set(p); n.delete(env.id); return n; }); });
   };
 
   useEffect(() => {
     let live = true;
+    generation.current++;
+    received.current = new Set();
+    setReports({}); setRemembered({}); setFailed({}); setPending(new Set()); setModel(null);
     for (const env of targets) {
-      loadUsage(env.id, win).then((hit) => {
-        if (!live || !hit) return;
+      loadUsage(env.id, win, since).then((hit) => {
+        if (!live || !hit || received.current.has(env.id)) return;
         setReports((r) => (r[env.id] ? r : { ...r, [env.id]: hit.report }));
         setRemembered((r) => ({ ...r, [env.id]: hit.at }));
       });
       fetchReport(env, false);
     }
-    return () => { live = false; };
-  }, [scope, envs.map((e) => e.id).join(','), win]);
+    return () => { live = false; generation.current++; };
+  }, [client, scope, envs.map((e) => e.id).join(','), win, since]);
 
   const answered = targets.filter((e) => reports[e.id]);
   const merged = useMemo(
@@ -168,18 +179,24 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
           </select>
         </label>
 
+        <AccountLimits client={client} targets={targets} />
+
+        <div className="filterbar usage-filters">
+          {WINDOWS.map((w) => (
+            <button key={w.id} className={`usage-chip${w.id === win ? ' on' : ''}`} onClick={() => setWin(w.id)}>
+              {w.label}
+            </button>
+          ))}
+        </div>
+
         {loading && <div className="empty quiet">reading what the CLIs recorded…</div>}
 
-        {!loading && (
+        {!loading && answered.length === 0 && <div className="empty quiet">
+          <p>{targets.length ? 'Usage unavailable. No machine has returned a report.' : 'No machines to report usage.'}</p>
+          {!!targets.length && <button className="linkish" onClick={() => targets.forEach(e => fetchReport(e, false))}>Retry usage</button>}
+        </div>}
+        {!loading && answered.length > 0 && (
           <>
-            <div className="filterbar usage-filters">
-              {WINDOWS.map((w) => (
-                <button key={w.id} className={`usage-chip${w.id === win ? ' on' : ''}`} onClick={() => setWin(w.id)}>
-                  {w.label}
-                </button>
-              ))}
-            </div>
-
             <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />
             <CacheCard totals={scoped} />
             <Spend days={days} />
@@ -192,7 +209,8 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
                 </button>
               ))}
             </div>
-            <DonutBreakdown groups={groups} facet={facet} />
+            <DonutBreakdown groups={groups} facet={facet} onModel={setModel} />
+            {Object.keys(failed).length > 0 && <p className="usage-limits-note">Usage unavailable from {targets.filter(e => failed[e.id]).map(e => e.name).join(', ')}. Retry with the rescan button.</p>}
 
             <Provenance
               answered={answered.length}
@@ -205,8 +223,53 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
           </>
         )}
       </div></div>
+      {model !== null && <ModelDetail key={`${scope}:${win}:${model}`} client={client} targets={targets} model={model} since={since}
+        window={WINDOWS.find(w => w.id === win)!.label} onClose={() => setModel(null)} />}
     </>
   );
+}
+
+function ModelDetail({ client, targets, model, since, window, onClose }: {
+  client: Client; targets: Environment[]; model: string; since: string; window: string; onClose: () => void;
+}) {
+  const [reports, setReports] = useState<Record<string, UsageReport>>({});
+  const [done, setDone] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    for (const env of targets) {
+      client.usage(env.id, { model, since: since || undefined, by: ['model'] }).then(report => {
+        // Older daemons ignore unknown filters. Never show their whole bill
+        // as this model's history.
+        if (report.groups.some(g => g.model !== model) || (!report.groups.length && report.totals.total > 0)) return;
+        if (live) setReports(r => ({ ...r, [env.id]: report }));
+      }).catch(() => {}).finally(() => { if (live) setDone(d => [...d, env.id]); });
+    }
+    return () => { live = false; };
+  }, [client, model, since, targets.map(e => e.id).join(',')]);
+  const merged = mergeReports(Object.entries(reports).map(([env, report]) => ({ env, report })));
+  const t = merged.totals;
+  const answered = Object.keys(reports).length;
+  const pending = done.length < targets.length;
+  return <Sheet label={`${model || 'Unknown model'} usage`} onClose={onClose}>
+    <div className="usage-model-detail">
+      <div className="modal-head"><div className="modal-title">{model || 'Unknown model'}</div><button className="ghost" onClick={onClose}>Close</button></div>
+      <p className="usage-limits-note">{window} · {targets.map(e => e.name).join(', ')}</p>
+      {pending && <p role="status" className="usage-limits-note">Reading model history…</p>}
+      {answered > 0 && <>
+        <Headline totals={t} window={window} />
+        {t.unpriced && <p className="usage-limits-note">Cost is incomplete: some usage has no published rate.</p>}
+        <Spend days={merged.daily} />
+        <dl className="usage-token-detail">
+          {([['Fresh input', t.input], ['Output', t.output], ['Cache read', t.cacheRead], ['Cache write', t.cacheWrite], ['Reasoning', t.reasoning]] as const)
+            .map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count.toLocaleString()}</dd></div>)}
+        </dl>
+        <p className="usage-limits-note">Reasoning is included in output where the provider reports it.</p>
+        <CacheCard totals={t} />
+      </>}
+      {!pending && answered === 0 && <p className="usage-limits-note">Model history unavailable. The machines may be offline or need an update.</p>}
+      <p className="usage-limits-note">{answered} of {targets.length} machines reporting{Object.values(reports).some(r => r.stale) ? ' · includes remembered usage' : ''}.</p>
+    </div>
+  </Sheet>;
 }
 
 /**
@@ -269,22 +332,27 @@ function CacheCard({ totals }: { totals: UsageTotals }) {
  * peak is labelled; every other value lives in the tooltip.
  */
 function Spend({ days }: { days: { date: string; costUsd: number; total: number }[] }) {
-  if (days.length < 2) return null;
-  const peak = Math.max(...days.map((d) => d.costUsd), 0);
+  const dated = days.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d.date));
+  if (!dated.length) return null;
+  days = dated;
+  const priced = days.some(d => d.costUsd > 0);
+  const value = (d: typeof days[number]) => priced ? d.costUsd : d.total;
+  const fmt = priced ? money : tokens;
+  const peak = Math.max(...days.map(value), 0);
   if (peak <= 0) return null;
-  const peakDay = days.find((d) => d.costUsd === peak);
+  const peakDay = days.find((d) => value(d) === peak);
   return (
     <div className="card usage-spend">
       <div className="usage-spend-head">
-        <span className="usage-spend-title">Cost per day</span>
-        <span className="usage-spend-peak">peak {money(peak)}</span>
+        <span className="usage-spend-title">{priced ? 'Estimated cost per day' : 'Tokens per day'}</span>
+        <span className="usage-spend-peak">peak {fmt(peak)}</span>
       </div>
       <div className="usage-bars">
         {days.map((d) => (
           <span
             key={d.date}
             className={`usage-bar${d === peakDay ? ' peak' : ''}`}
-            style={{ height: `${Math.max(2, (d.costUsd / peak) * 100)}%` }}
+            style={{ height: `${value(d) > 0 ? Math.max(2, (value(d) / peak) * 100) : 0}%` }}
             title={`${d.date} · ${money(d.costUsd)} · ${tokens(d.total)} tokens`}
           />
         ))}
@@ -311,7 +379,7 @@ const SLICE_COLORS = [
   'var(--amber)', 'var(--opencode)', 'var(--mutedfg)',
 ];
 
-function DonutBreakdown({ groups, facet }: { groups: ChartGroup[]; facet: FacetId }) {
+function DonutBreakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: FacetId; onModel: (model: string) => void }) {
   if (!groups.length) return <div className="empty quiet">nothing recorded yet</div>;
   const priced = groups.some((g) => g.costUsd > 0);
   const value = (g: ChartGroup) => (priced ? g.costUsd : g.total);
@@ -379,13 +447,21 @@ function DonutBreakdown({ groups, facet }: { groups: ChartGroup[]; facet: FacetI
           {slices.map((s, i) => (
             <li className="usage-legend-row" key={s.key}>
               <span className="usage-legend-dot" style={{ background: SLICE_COLORS[i] }} />
-              <span className="usage-legend-name">{s.name}</span>
+              {facet === 'model' && s.key !== 'other'
+                ? <button className="linkish usage-legend-name usage-model-link" onClick={() => onModel(big[i].model ?? '')}>{s.name}</button>
+                : <span className="usage-legend-name">{s.name}</span>}
               <span className="usage-legend-value">{fmt(s.value)}</span>
               <span className="usage-legend-share">{share(s.value).toFixed(1)}%</span>
             </li>
           ))}
         </ul>
       </div>
+      {facet === 'model' && sorted.length > big.length && <details className="usage-more-models">
+        <summary>More models ({sorted.length - big.length})</summary>
+        {sorted.slice(big.length).map(g => <button key={g.model ?? ''} className="linkish usage-model-extra" onClick={() => onModel(g.model ?? '')}>
+          <span>{g.model || 'unknown'}</span><span>{g.unpriced && !g.costUsd ? `${tokens(g.total)} tokens` : fmt(value(g))}</span>
+        </button>)}
+      </details>}
     </div>
   );
 }

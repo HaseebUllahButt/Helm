@@ -36,6 +36,7 @@ import { GREETING, bareTitle, informative, promptTitle } from './titles.js';
 import { askPreview } from './notify.js';
 import { claudeChatArgs, startHookServer } from './claude-hooks.js';
 import { gitBranch } from './git-head.js';
+import { AccountLimits } from './account-limits.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -264,6 +265,7 @@ export class Sessions extends EventEmitter {
     super();
     this.runtime = runtime;
     this.events = events;
+    this.limits = new AccountLimits();
     this.log = log;
     this.nativeDiscovery = nativeDiscovery;
     this.makeDriver = makeDriver ?? ((engine, opts) => new DRIVERS[engine](opts));
@@ -333,6 +335,13 @@ export class Sessions extends EventEmitter {
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
+
+  async accountLimits(profiles) {
+    this.limitsSeed ??= this.limits.seed(this.#index.values(), profiles, this.events.dir)
+      .catch(err => this.log(`account limits: ${err.message}`));
+    await this.limitsSeed;
+    return this.limits.report(profiles);
+  }
 
   /** requestId -> { id, reply, raw }: a terminal Claude's question, waiting in its hook. */
   #hookAsks = new Map();
@@ -1243,7 +1252,13 @@ export class Sessions extends EventEmitter {
       log: (m) => this.log(`[${s.id}] ${m}`),
     });
     this.#drivers.set(s.id, d);
-    d.on('event', (e) => this.#onDriverEvent(s, d, e));
+    d.on('event', (e) => {
+      if (e.type === 'limits' && this.#drivers.get(s.id) === d) {
+        try { this.limits.record(accountKey(profile), e); }
+        catch (err) { this.log(`account limits: ${err.message}`); }
+      }
+      this.#onDriverEvent(s, d, e);
+    });
     // Both CLIs announce what they actually started with. Keep it: when the
     // owner has not picked a model, this is the only way to say which one is
     // running instead of showing the word "model". It is reported, not

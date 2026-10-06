@@ -136,6 +136,7 @@ export function createWsLayer() {
     if (!row) return null;
     try {
       const report = foldBuckets(JSON.parse(row.buckets), {
+        model: typeof params.model === 'string' ? params.model : null,
         since: params.since ?? null,
         until: params.until ?? null,
         by: Array.isArray(params.by) && params.by.length ? params.by : ['engine', 'model'],

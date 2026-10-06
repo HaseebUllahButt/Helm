@@ -1,10 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { transform } from 'esbuild';
+import { build } from 'esbuild';
 
-const source = await readFile(new URL('../apps/web/src/session/limits.ts', import.meta.url), 'utf8');
-const { code } = await transform(source, { loader: 'ts', format: 'esm' });
+const bundle = await build({ entryPoints: ['apps/web/src/session/limits.ts'], bundle: true, write: false, format: 'esm' });
+const code = bundle.outputFiles[0].text;
 const { limitWindows, current } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
 
 test("Claude's rate_limit_event reads as 5h and 7d percentages", () => {
@@ -19,7 +18,12 @@ test("Codex's windows are named by their length", () => {
   assert.deepEqual(limitWindows({ codex: { limitId: 'codex' } }), [], 'a sparse update says nothing');
 });
 
-test('a window past its reset time is back to nothing', () => {
-  const [w] = current([{ label: '5h', used: 80, resetsAt: 100 }], 200_000);
-  assert.equal(w.used, 0);
+test('an expired reading is unknown until a new provider report arrives', () => {
+  assert.deepEqual(current([{ label: '5h', used: 80, resetsAt: 100 }], 200_000), []);
+});
+
+test('null and malformed quota fields never become free allowance', () => {
+  assert.deepEqual(limitWindows({ claude: { utilization: null } }), []);
+  assert.deepEqual(limitWindows({ codex: { primary: { usedPercent: null, windowDurationMins: 300 } } }), []);
+  assert.deepEqual(limitWindows({ claude: { utilization: '' } }), []);
 });

@@ -80,6 +80,12 @@ test('a hub answers usage.report for a sleeping machine from its last rollup', a
   assert.equal(windowed.ok, true);
   assert.equal(windowed.result.totals.turns, 0, 'the stored rollup still honours the window');
 
+  const matching = await ask({ model: 'swe-2' });
+  assert.equal(matching.result.totals.input, 5000);
+  const other = await ask({ model: 'another-model' });
+  assert.equal(other.result.totals.total, 0);
+  assert.deepEqual(other.result.daily, []);
+
   const gone = await ask({});
   assert.equal(gone.ok, true);
 
