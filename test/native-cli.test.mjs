@@ -139,3 +139,27 @@ test.after(async () => {
   if (await host.ensure({ spawn: false })) await host.shutdown();
   rmSync(root, { recursive: true, force: true });
 });
+
+test('Helm answers its own channel warning once, and nothing else', async () => {
+  const { channelConsent } = await import('../packages/connect/src/native-cli.js');
+  const sent = [];
+  const watch = channelConsent((t) => sent.push(t));
+  watch('\x1b[1mWARNING: Loading\x1b[1Cdevelopment channels\x1b[0m');
+  assert.deepEqual(sent, [], 'not until the choice is on screen');
+  watch('\n\x1b[36m❯ 1. I am using this for\x1b[1Clocal development\x1b[0m\n  2. Exit');
+  watch('Loading development channels ... local development');
+  assert.deepEqual(sent, ['\r']);
+  const other = [];
+  channelConsent((t) => other.push(t))('Quick safety check: Is this a project you trust?');
+  assert.deepEqual(other, []);
+});
+
+test('an older Claude without channels keeps the plain terminal', async () => {
+  const { claudeTakesChannels } = await import('../packages/connect/src/native-cli.js');
+  const bin = join(root, 'fake-claude'), old = join(root, 'old-claude');
+  writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 }); writeFileSync(old, '#!/bin/sh\n#old\n', { mode: 0o755 });
+  const fail = (text) => () => { throw Object.assign(new Error('exit 1'), { stdout: '', stderr: text }); };
+  assert.equal(claudeTakesChannels(bin, { run: fail('Error: Input contained only whitespace. Provide a prompt') }), true);
+  assert.equal(claudeTakesChannels(bin, { run: fail("error: unknown option '--x'") }), true, 'remembered per version');
+  assert.equal(claudeTakesChannels(old, { run: fail("error: unknown option '--dangerously-load-development-channels'") }), false);
+});

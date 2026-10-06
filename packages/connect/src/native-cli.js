@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
-import { accessSync, constants, existsSync, lstatSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { accessSync, constants, existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HELM_DIR, HOME, expand } from './paths.js';
@@ -269,6 +269,52 @@ export function sharedConversation(open, engine, configHome, args, cwd = process
   return null;
 }
 
+const CHANNEL_FLAG = '--dangerously-load-development-channels';
+const channelSupportFile = join(HELM_DIR, 'claude-channels.json');
+
+/**
+ * Whether this Claude takes Helm's chat link. An older one rejects the flag
+ * with "unknown option" and exits, which would break plain `claude`, so ask
+ * it once per installed version: an empty `-p` run fails on the empty prompt
+ * if the flag is known and on the flag if not, without reaching the API.
+ */
+export function claudeTakesChannels(cmd, { run = execFileSync } = {}) {
+  let stamp;
+  try { const real = realpathSync(cmd); const st = statSync(real); stamp = `${real}:${st.size}:${st.mtimeMs}`; }
+  catch { return false; }
+  let cache = {};
+  try { cache = JSON.parse(readFileSync(channelSupportFile, 'utf8')) ?? {}; } catch { /* first time */ }
+  if (typeof cache[stamp] === 'boolean') return cache[stamp];
+  let ok;
+  try {
+    run(cmd, ['-p', CHANNEL_FLAG, 'server:helm-probe'], { input: ' ', encoding: 'utf8', timeout: 15_000, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, HELM_NATIVE_BYPASS: '1' } });
+    ok = true;
+  } catch (err) {
+    const out = `${err.stdout ?? ''}${err.stderr ?? ''}`;
+    ok = !/unknown option/i.test(out) && /whitespace|prompt/i.test(out);
+  }
+  try { mkdirSync(HELM_DIR, { recursive: true }); writeFileSync(channelSupportFile, JSON.stringify({ [stamp]: ok })); } catch { /* asked again next time */ }
+  return ok;
+}
+
+/**
+ * Claude asks before loading a channel that is not on its approved list -
+ * a red "Loading development channels" screen at every start. This one is
+ * Helm's own, added by Helm on this machine, so Helm answers it: the first
+ * choice ("I am using this for local development") is already selected.
+ */
+export function channelConsent(write, { windowMs = 30_000 } = {}) {
+  let seen = '', done = false;
+  const started = Date.now();
+  return (text) => {
+    if (done || Date.now() - started > windowMs) return;
+    // Spacing is gone with the escapes: a screen moves its cursor rather than
+    // printing every space, so compare the letters alone.
+    seen = (seen + String(text).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[^a-z]/gi, '').toLowerCase()).slice(-4000);
+    if (seen.includes('loadingdevelopmentchannels') && seen.includes('localdevelopment')) { done = true; write('\r'); }
+  };
+}
+
 /** The local terminal is a client of the same persistent PTY as the phone.
  * Unmodified provider executable, exact argv and invoking shell environment.
  * Closing the client does not send EOF or a signal to the provider.
@@ -286,12 +332,14 @@ export async function runNativeCli(engine, cmd, args) {
   // one Helm took over, say - joins it instead of starting a second copy.
   const joined = sharedConversation(host.nativeSessions(), engine, configHome, args);
   const id = joined?.id ?? `native-${randomBytes(8).toString('hex')}`;
-  // Opt-in prototype: native Claude accepts messages and approvals through
-  // its channel while Helm renders the shared conversation transcript.
-  const nativeChat = engine === 'claude' && process.env.HELM_NATIVE_CHAT === '1';
-  if (nativeChat && !joined) args = [...args, '--mcp-config', JSON.stringify({ mcpServers: {
+  // A terminal Claude is a normal chat in Helm: it takes messages and
+  // approvals through Helm's channel while Helm shows its own transcript.
+  // HELM_NATIVE_CHAT=0 keeps the terminal screen instead.
+  const nativeChat = engine === 'claude' && !joined && process.env.HELM_NATIVE_CHAT !== '0' && claudeTakesChannels(cmd);
+  if (nativeChat) args = [...args, '--mcp-config', JSON.stringify({ mcpServers: {
     'helm-native': { command: process.execPath, args: [claudeChannel] },
-  } }), '--dangerously-load-development-channels', 'server:helm-native'];
+  } }), CHANNEL_FLAG, 'server:helm-native'];
+  const consent = nativeChat ? channelConsent((text) => host.write(id, text).catch(() => {})) : () => {};
   return new Promise(async (resolve, reject) => {
     let finished = false;
     let started = false;
@@ -316,6 +364,7 @@ export async function runNativeCli(engine, cmd, args) {
     const backlog = [];
     on(host, 'data', (d) => {
       if (d.id !== id) return;
+      consent(d.text);
       if (replaying) backlog.push(d.text); else process.stdout.write(d.text);
     });
     on(host, 'exit', (e) => { if (e.id === id) finish(e.code ?? 0); });
@@ -332,7 +381,9 @@ export async function runNativeCli(engine, cmd, args) {
       process.stdin.resume();
       // Subscribe before the snapshot; data is not broadcast until view().
       // Persistent: a laptop that slept past the view lease keeps its output.
-      process.stdout.write(await host.view(id, { ...size(), persistent: true }));
+      const screen = await host.view(id, { ...size(), persistent: true });
+      consent(screen);
+      process.stdout.write(screen);
       replaying = false;
       for (const chunk of backlog) process.stdout.write(chunk);
       timer = setInterval(refresh, 20_000);
