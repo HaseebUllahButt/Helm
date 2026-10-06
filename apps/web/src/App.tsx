@@ -2095,6 +2095,8 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
           </button>
         )}
 
+        <div className="rows"><AddMachine client={client} /></div>
+
         <div className="section">paired</div>
         <div className="rows">
           {devices === null && !error && <div className="empty quiet">asking the hub…</div>}
@@ -3359,68 +3361,46 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <div className="titles"><h1>Settings</h1><span className="sub">this network, this device</span></div>
+        <div className="titles"><h1>Settings</h1></div>
       </div>
       <div className="scroll"><div className="pad column">
-        <div className="section">machines</div>
         <div className="rows">
-          <button className="row" onClick={() => onOpen({ kind: 'network-settings' })}>
-            <span className="grow">
-              <span className="rt">CLI defaults</span>
-              <span className="rm">model, thinking and permissions on every machine</span>
-            </span>
+          <button className="row" onClick={() => onOpen({ kind: 'devices' })}>
+            <span className="grow"><span className="rt">Devices & pairing</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
-          <button className="row" onClick={() => onOpen({ kind: 'updates' })}>
-            <span className="grow">
-              <span className="rt">Updates</span>
-              <span className="rm">your version on every machine, and GitHub’s</span>
-            </span>
+          <button className="row" onClick={() => onOpen({ kind: 'network-settings' })}>
+            <span className="grow"><span className="rt">CLI defaults</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
           <button className="row" onClick={() => onOpen({ kind: 'usage' })}>
-            <span className="grow">
-              <span className="rt">What it has cost</span>
-              <span className="rm">tokens, spend and cache across every machine</span>
-            </span>
+            <span className="grow"><span className="rt">Usage & cost</span></span>
+            <span className="chev"><Icon name="forward" size={15} /></span>
+          </button>
+          <button className="row" onClick={() => onOpen({ kind: 'updates' })}>
+            <span className="grow"><span className="rt">Updates</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
         </div>
 
         <div className="section">appearance</div>
         <div className="rows">
-          <Suspense fallback={(
-            <div className="row appearance">
-              <span className="grow"><span className="rt">Appearance settings</span><span className="rm">loading…</span></span>
-            </div>
-          )}>
+          <Suspense fallback={<div className="row appearance"><span className="grow"><span className="rt">Appearance</span></span></div>}>
             <AppearanceSettings />
           </Suspense>
+          <Notifications client={client} />
+          <InstallPwa />
         </div>
 
-        <div className="section">this device</div>
+        <details className="note">
+          <summary>Connection details</summary>
+          <p>App address: {location.origin}</p>
+          <p>App build: {document.querySelector<HTMLScriptElement>('script[type="module"]')?.src.split('/').at(-1) ?? 'development'}</p>
+          <p>Hub: {client.relay}</p>
+          <p>Socket: {client.connected ? 'connected' : 'reconnecting'}</p>
+          {client.lastError && <p>Last connection error: {client.lastError}</p>}
+        </details>
         <div className="rows">
-          <button className="row" onClick={() => onOpen({ kind: 'devices' })}>
-            <span className="grow">
-              <span className="rt">Devices & pairing</span>
-              <span className="rm">what holds a key to this network</span>
-            </span>
-            <span className="chev"><Icon name="forward" size={15} /></span>
-          </button>
-          <AddMachine client={client} />
-          <Notifications client={client} />
-          <button className="row" onClick={reloadApp}>
-            <span className="grow"><span className="rt">Reload app</span><span className="rm">get the current web app without clearing pairing or saved chats</span></span>
-          </button>
-          <details className="note">
-            <summary>Connection details</summary>
-            <p>App address: {location.origin}</p>
-            <p>App build: {document.querySelector<HTMLScriptElement>('script[type="module"]')?.src.split('/').at(-1) ?? 'development'}</p>
-            <p>Hub: {client.relay}</p>
-            <p>Socket: {client.connected ? 'connected' : 'reconnecting'}</p>
-            {client.lastError && <p>Last connection error: {client.lastError}</p>}
-          </details>
-          <InstallPwa />
           <button className="row destructive" onClick={onUnpair}>
             <span className="grow"><span className="rt">Unpair this device</span></span>
           </button>

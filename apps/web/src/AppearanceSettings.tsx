@@ -10,25 +10,23 @@ export function AppearanceSettings() {
     saveAppearance(next);
     applyAppearance(next);
   };
-  const seg = <K extends keyof Appearance>(k: K, label: string, note: string, options: [Appearance[K], string][], className = '') => (
+  // One line each: the name, and its choices beside it.
+  const seg = <K extends keyof Appearance>(k: K, label: string, options: [Appearance[K], string][], className = '') => (
     <div className={`row appearance${className ? ` ${className}` : ''}`}>
-      <span className="grow">
-        <span className="rt">{label}</span>
-        <span className="rm">{note}</span>
-        <span className="segmented">
-          {options.map(([v, text]) => (
-            <button key={String(v)} className={a[k] === v ? 'on' : ''} aria-pressed={a[k] === v} onClick={() => set(k, v)}>{text}</button>
-          ))}
-        </span>
+      <span className="grow"><span className="rt">{label}</span></span>
+      <span className="segmented" role="group" aria-label={label}>
+        {options.map(([v, text]) => (
+          <button key={String(v)} className={a[k] === v ? 'on' : ''} aria-pressed={a[k] === v} onClick={() => set(k, v)}>{text}</button>
+        ))}
       </span>
     </div>
   );
   return (
     <>
-      {seg('theme', 'Theme', 'Light reads better outdoors', [['system', 'System'], ['dark', 'Dark'], ['light', 'Light']])}
-      {seg('diff', 'Diff colours', 'Blue and orange if red and green look alike', [['green', 'Green / red'], ['blue', 'Blue / orange']])}
-      {seg('width', 'Chat width', 'On a wide screen', [['comfortable', 'Comfortable'], ['wide', 'Wide']], 'wide-only')}
-      {seg('density', 'Lists', 'How much of each thread fits', [['comfortable', 'Comfortable'], ['compact', 'Compact']])}
+      {seg('theme', 'Theme', [['system', 'Auto'], ['dark', 'Dark'], ['light', 'Light']])}
+      {seg('diff', 'Diff colours', [['green', 'Green/red'], ['blue', 'Blue/orange']])}
+      {seg('width', 'Chat width', [['comfortable', 'Normal'], ['wide', 'Wide']], 'wide-only')}
+      {seg('density', 'Lists', [['comfortable', 'Roomy'], ['compact', 'Compact']])}
     </>
   );
 }

@@ -1804,8 +1804,8 @@ button.sheet-editlink:hover { color: var(--text); }
 :root[data-density="compact"] .row .rm { font-size: var(--t-micro); }
 
 /* The appearance controls sit inside a settings row. */
-.row.appearance { align-items: flex-start; height: auto; padding-block: 10px; }
-.row.appearance .segmented { margin-top: 8px; }
+.row.appearance { align-items: center; height: auto; padding-block: 8px; gap: 10px; }
+.row.appearance .segmented { flex: none; }
 
 
 /* ------------------------------------------------------------------ changes */
@@ -2427,3 +2427,6 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 
 .modal-actions .spacer { flex: 1; }
 .queue-edit-add { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Settings: the connection note sits apart from the rows around it. */
+.pad.column > details.note { margin: 6px 4px 2px; }

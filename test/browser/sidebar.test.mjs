@@ -168,7 +168,8 @@ test('settings expose the app route and build without exposing pairing credentia
   await page.getByText('Hub: https://hub.example', { exact: true }).waitFor();
   await page.getByText('App build: development', { exact: true }).waitFor();
   await page.getByText('Last connection error: connection stopped responding', { exact: true }).waitFor();
-  assert.equal(await page.getByRole('button', { name: /^Reload app/ }).count(), 1);
+  // The app reloads itself when a new build lands; no button for it.
+  assert.equal(await page.getByRole('button', { name: /^Reload app/ }).count(), 0);
   assert.doesNotMatch(await page.locator('.main').innerText(), /helm1\./);
 });
 
