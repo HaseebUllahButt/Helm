@@ -117,13 +117,15 @@ Run this anywhere that can reach the Helm home:
 helm add controller
 ```
 
-It prints one private link such as:
+It prints a QR code and one private link such as:
 
 ```text
 https://helm.example.com/#pair=abc123
 ```
 
-Open it on the device you want to use. The link expires after ten minutes; the
+Scan the code with the phone's camera, or open the link on the device you want
+to use. **Settings → Devices → Pair another device** shows the same QR code in
+the app, and the **Getting started** card on Home links straight to it. The link expires after ten minutes; the
 paired device stays connected until removed.
 
 ### Add another computer
@@ -239,6 +241,130 @@ Closing helm does not end a conversation: sessions resume on the next message
 Plain terminals, and agents you started at the keyboard, still run in
 [herdr](https://herdr.dev) panes and show as a terminal.
 
+### Conversations started outside Helm
+
+Helm discovers saved conversations in the CLI accounts configured on each
+connected machine. Live external CLIs appear in **Running**, including ones
+waiting at their prompt, labelled **idle**. Opening a conversation reads its
+live transcript without launching another agent or stopping the original.
+Claude's local session registry identifies each terminal by its native session
+ID, process ID and process start time, even when several terminals share a
+folder and their transcripts are closed between writes. Codex uses its writer
+lock or an open rollout file. Process ownership is checked on Linux (/proc)
+and macOS (ps and lsof); other systems may only expose saved history.
+
+A CLI that was already open before Helm shows **Open in a terminal** with a
+**Take over** button. Taking over never cuts work off: at the prompt (or at a
+permission question) it moves at once; mid-task it waits until the current
+step - a command, an edit - has landed in the conversation. Helm then closes
+that process, reopens the same conversation with the same command, settings,
+account and folder in a terminal both sides share, and sends "continue" if it
+was working. The app follows to the new thread, and the old window says
+`claude -c` (or `codex resume --last`) there joins the same live terminal.
+
+### One live session from terminal and app
+
+Keep using `claude`, `codex`, and aliases such as `claudea` or `codexx`.
+Recent Codex versions already use a shared local app-server daemon. Helm joins
+its loaded local threads directly, preserving the same conversation, running
+turn and pending approvals. Prompts and approval/question answers work in
+Helm's chat interface and in Codex's terminal. Local desktop threads are covered
+when that app uses the same reachable daemon and exposes direct input.
+
+For Claude Code and the other supported terminal CLIs (Pi, OMP, Devin,
+OpenCode 1/2, Grok, Cursor, Rovo, Antigravity CLI, Gemini, Kimi and Muse),
+Helm puts a small launcher for each installed command in `~/.helm/bin` and
+adds that folder to the front of PATH in your shell's startup file (bash, zsh
+or fish). Nothing of the CLI's own is replaced: each launcher finds the real
+command after itself on every run, so provider self-updates and reinstalls
+need no repair. Open a new terminal after the first start. Interactive launches run the **unmodified
+provider CLI** inside a persistent terminal, with the arguments, account
+environment and working folder supplied by your shell. No provider login is added.
+
+Sessions appear automatically in Helm. Only actively working sessions appear
+in **Running**; idle sessions remain available in the recent list and on their
+machine. Open one on any paired
+device to type, choose options, answer questions and grant or deny permissions
+through the same native CLI interface. The laptop and app are clients of one
+process. Closing either view leaves it running; **End session** stops that
+process, and one nobody is watching that has sat at its prompt for 30 minutes
+ends on its own (its conversation stays in the CLI's history). The host
+computer must stay awake and reachable. Whoever typed last sets the terminal's
+size, so looking from a phone never shrinks the laptop's. An update to Helm's
+terminal code starts a new terminal host for new CLIs; running ones stay in
+the old host until they end.
+
+These CLI paths use a native terminal, rather than Helm's structured chat forms.
+Claude Desktop, cloud sessions, `claude --bg`, and CLIs called
+by an explicit binary path outside the integrated command are not covered.
+Noninteractive scripts, login/update commands, and Helm's own headless drivers
+retain their provider path. `HELM_NATIVE_BYPASS=1` bypasses integration for one
+command. `helm integrate --remove` removes the launchers and the PATH line and
+keeps it off; `helm integrate` turns it back on. Commands replaced in place by
+earlier Helm versions are restored automatically.
+
+For Helm's structured chat interface, the optional managed terminal client
+also remains available:
+
+```bash
+helm chat claude
+helm chat codex --mode ask -- "Work on this project"
+helm chat --attach <Helm-session-ID>
+helm chat claude --resume <native-session-ID>
+```
+
+Use the exact account ID when you have several logins. Login stays in the
+provider CLI; Helm adds no provider sign-in. `--resume` requires the original
+CLI to be closed. The terminal client and paired web/mobile apps control one
+backend process and the same native conversation, including messages, tool
+permissions, structured questions and interruptions. Idle sessions leave
+**Running** but remain available to continue. Ctrl+C or `/detach` disconnects this frontend without
+stopping the agent; reconnect with the printed session ID. `/stop` interrupts
+the turn. `/end` stops the agent and deletes its Helm thread.
+
+At a permission prompt use `/allow`, `/always` (only when offered), or `/deny`,
+optionally followed by the request ID. For questions use
+`/answer <question number> <choice number or text>`; include the request ID
+first if several requests are pending. Answer all questions in a request before
+it is submitted. A response in the app resolves the same request in the terminal.
+
+The headless adapters follow [T3 Code's managed provider design](https://github.com/pingdotgg/t3code):
+its Codex adapter owns an app-server connection; its Claude adapter maintains a
+streaming query and pending tool/question callbacks. Helm uses its existing
+Codex app-server and unmodified Claude Code stream-json drivers for the same
+control flow. It does not import T3's SDK, dependencies or authentication flow.
+See [CodexAdapterV2](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts)
+and [ClaudeAdapterV2](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts).
+
+The T3 comparison above describes this optional managed provider path. T3's
+code is not evidence of universal attachment to arbitrary terminal or desktop
+processes; the normal-command integration keeps the live terminal instead.
+
+## Updates
+
+Helm is yours to change: tell your agent to change it, and it does. Helm never
+pulls from GitHub by itself. Every couple of minutes each machine checks:
+
+- a new version **saved** (committed) in its own Helm checkout is built and
+  started;
+- a newer saved version on another of your machines is copied over your own
+  Helm network and started.
+
+Unsaved edits never spread, and a machine only ever moves forward from what it
+has: if two machines both have their own changes, neither is overwritten, and
+**Settings → Updates** says so. Open apps reload by themselves at a quiet
+moment when a new version lands.
+
+GitHub's version is a choice in **Settings → Updates**:
+
+- **Let my agent update it** starts an agent on your newest machine that
+  merges GitHub's version into yours, keeps your changes, runs the tests and
+  saves the result. Your other machines follow.
+- **Replace with GitHub's version** overrides your changes on every machine.
+  They are kept on a `helm-backup-…` branch (and a stash, if unsaved).
+
+`helm update --replace` is the same replacement from a terminal.
+
 ## CLI subagents
 
 Open **Thread details → Agents** (or **Subagents** in the thread menu) to choose a CLI account, model,
@@ -324,9 +450,11 @@ to the last 32,000 characters. Open the thread for the full conversation.
 changes, agents, schedules, and task transfer in one panel. It opens as a
 side panel on desktop and a bottom sheet on phones.
 
-While an agent works, the composer defaults to **After this task**. On
-supported CLIs, **At next step** hands input over at a tool boundary and
-**Send now** steers the live turn. Queued messages can be edited, reordered,
+There is no message-delivery selector. Native terminal sessions pass input
+straight to the CLI, retaining that CLI's own queue and interruption behavior.
+Managed Claude and Codex chats hand follow-up input to the running turn at a
+tool boundary; adapters without steering queue it until the turn finishes.
+Queued messages can be edited, reordered,
 removed, or withdrawn into the composer until delivery starts. Edits, order,
 attachments, and attached context survive a daemon restart. Delivery already
 accepted by a CLI is not automatically replayed.
