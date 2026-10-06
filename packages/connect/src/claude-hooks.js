@@ -1,7 +1,7 @@
 import { createConnection, createServer } from 'node:net';
 import { createHash } from 'node:crypto';
-import { chmodSync, unlinkSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { chmodSync, readFileSync, unlinkSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HELM_DIR } from './paths.js';
 import { NATIVE_SOCKET_PATH } from './terminals.js';
@@ -50,6 +50,25 @@ export function hookSettings(node = process.execPath, script = hookScript) {
 
 const quote = (s) => `'${String(s).replaceAll("'", "'\\''")}'`;
 
+/** Claude accepts one settings override; retain its settings and append our hooks. */
+export function claudeChatArgs(args, cwd = process.cwd()) {
+  const rest = [];
+  let settings = {};
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg !== '--settings' && !arg.startsWith('--settings=')) { rest.push(arg); continue; }
+    const value = arg === '--settings' ? args[++i] : arg.slice('--settings='.length);
+    if (!value) throw new Error('--settings needs a JSON object or file');
+    settings = JSON.parse(value.trimStart().startsWith('{') ? value : readFileSync(resolve(cwd, value), 'utf8'));
+    if (!settings || Array.isArray(settings) || typeof settings !== 'object') throw new Error('--settings needs a JSON object');
+  }
+  const hooks = { ...settings.hooks };
+  for (const [name, entries] of Object.entries(JSON.parse(hookSettings()).hooks)) {
+    hooks[name] = [...(hooks[name] ?? []), ...entries];
+  }
+  return [...rest, '--settings', JSON.stringify({ ...settings, hooks })];
+}
+
 /**
  * Listen for hooks. `onEvent(native, event, reply)` gets the Helm session id
  * the terminal was opened under, Claude's hook input, and `reply(output)`:
@@ -58,11 +77,14 @@ const quote = (s) => `'${String(s).replaceAll("'", "'\\''")}'`;
  */
 export async function startHookServer(onEvent, path = hookSocketPath()) {
   try { unlinkSync(path); } catch { /* none left over */ }
+  const sockets = new Set();
   const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.setEncoding('utf8');
     let data = '', handled = false, replied = false;
     const closers = [];
     socket.on('error', () => {});
-    socket.on('close', () => { if (!replied) for (const fn of closers) fn(); });
+    socket.on('close', () => { sockets.delete(socket); if (!replied) for (const fn of closers) fn(); });
     socket.on('data', (chunk) => {
       if (handled) return;
       data += chunk;
@@ -83,13 +105,20 @@ export async function startHookServer(onEvent, path = hookSocketPath()) {
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(path, resolve); });
   chmodSync(path, 0o600);
-  return { server, close: () => { server.close(); try { unlinkSync(path); } catch { /* gone */ } } };
+  return { server, close: () => {
+    const closed = new Promise((resolve) => server.close(resolve));
+    // server.close alone leaves approval sockets (and the old daemon) alive.
+    for (const socket of sockets) socket.destroy();
+    try { unlinkSync(path); } catch { /* gone */ }
+    return closed;
+  } };
 }
 
 /** The hook's side: hand the event over and print whatever comes back. */
 export function sendHook(native, event, { path = hookSocketPath(), timeoutMs = 3000 } = {}) {
   return new Promise((resolve) => {
     const socket = createConnection(path);
+    socket.setEncoding('utf8');
     let input = '', done = false;
     const finish = (value) => { if (done) return; done = true; socket.destroy(); resolve(value); };
     // Only a question waits on a person; everything else is a notice.

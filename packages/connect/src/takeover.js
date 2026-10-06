@@ -36,8 +36,7 @@ function processEnv(pid) {
   return { ...process.env, ...env };
 }
 
-const VALUE_FLAGS = new Set(['--resume', '-r', '--session', '--session-id', '--fork-session']);
-const BARE_FLAGS = new Set(['--continue', '-c']);
+const VALUE_FLAGS = new Set(['--resume', '-r', '--session', '--session-id', '--restore', '--conversation']);
 
 /**
  * The same command, pointed at this conversation. Settings stay; whatever
@@ -47,11 +46,12 @@ const BARE_FLAGS = new Set(['--continue', '-c']);
 export function resumeCommand(engine, argv, conversation, openingPrompt = '') {
   const [cmd, ...rest] = argv;
   const args = [];
+  const bareFlags = new Set(engine === 'codex' ? ['--last', '--fork'] : ['--continue', '-c', '--fork-session']);
   const said = openingPrompt.trim();
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (VALUE_FLAGS.has(a)) { i++; continue; }
-    if (BARE_FLAGS.has(a) || VALUE_FLAGS.has(a.split('=')[0])) continue;
+    if (bareFlags.has(a) || VALUE_FLAGS.has(a.split('=')[0])) continue;
     if (engine === 'codex' && a === 'resume') { if (rest[i + 1] && !rest[i + 1].startsWith('-')) i++; continue; }
     if (said && a.trim() === said) continue;
     args.push(a);

@@ -4458,7 +4458,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           </span>
         </div>
         <StatusChip status={status} at={statusAt} />
-        {!isShell && !isExternal && !session.nativeCli && (
+        {!isShell && !isExternal && (!session.nativeCli || session.nativeChat) && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
           </button>

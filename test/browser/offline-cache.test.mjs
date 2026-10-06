@@ -92,7 +92,7 @@ test('saved imported chats retain their Done count and resume account before liv
   await done.waitFor();
   assert.match(await done.innerText(), /saved/);
   await done.click();
-  await page.getByText('Includes saved lists · syncing when connected', { exact: true }).waitFor();
+  await page.locator('.sidebar').getByText('Imported', { exact: true }).waitFor();
   const imported = await page.evaluate(() => JSON.parse(localStorage.getItem('helm.workspace:' + window.scope)).sessions.machine.find(session => session.id === 'Imported'));
   assert.equal(imported.adopted, true);
   assert.equal(imported.account, 'second-account');
@@ -102,7 +102,8 @@ test('saved imported chats retain their Done count and resume account before liv
     window.reads = async (_env, method) => method === 'session.list' ? { sessions: window.savedSessions } : { projects: [], recent: [] };
     window.dispatchEvent(new Event('online'));
   });
-  await page.getByText('Includes saved lists · syncing when connected', { exact: true }).waitFor({ state: 'detached' });
+  await page.waitForFunction(() => ![...document.querySelectorAll('.sidebar button')]
+    .some(button => /^done 2.*saved/.test(button.textContent)));
   assert.equal(await done.count(), 1);
   assert.doesNotMatch(await done.innerText(), /saved/);
 });

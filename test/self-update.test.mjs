@@ -47,8 +47,10 @@ test('update restart waits for busy unhosted agents while hosted threads continu
     { id: 'idle', driver: 'claude', status: 'idle' },
     { id: 'shell', pty: true, status: 'shell' },
     { id: 'external', driver: 'codex', external: true, status: 'working' },
+    { id: 'native-question', nativeCli: true, nativeChat: true, status: 'blocked' },
+    { id: 'native-working', nativeCli: true, nativeChat: true, status: 'working' },
   ];
-  assert.deepEqual(unsafeRestartSessions(sessions, (id) => id === 'hosted').map((s) => s.id), ['working', 'question']);
+  assert.deepEqual(unsafeRestartSessions(sessions, (id) => id === 'hosted').map((s) => s.id), ['working', 'question', 'native-question']);
   assert.deepEqual(unsafeRestartSessions(sessions.map((s) => ({ ...s, status: 'idle' })), () => false), []);
 });
 

@@ -60,6 +60,8 @@ const unitActive = (unit) =>
 /** Hosted processes can survive replacement; other busy agents must finish first. */
 export function unsafeRestartSessions(sessions, hasProc, profiles = []) {
   return sessions.filter((s) => {
+    // Native Claude approval replies live on a socket in this daemon too.
+    if (s.nativeChat && s.status === 'blocked') return true;
     if (!s.driver || s.external || !['working', 'blocked'].includes(s.status)) return false;
     // Codex's outstanding approval RPCs are daemon-local. Keep the old
     // daemon until those are answered rather than lose an answerable prompt.

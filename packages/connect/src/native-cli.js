@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { HELM_DIR, HOME, expand } from './paths.js';
 import { NativeHosts } from './terminals.js';
 import { ENGINES } from './engines.js';
-import { hookSettings } from './claude-hooks.js';
+import { claudeChatArgs } from './claude-hooks.js';
 
 const marker = '# Helm native CLI integration';
 const manifestFile = join(HELM_DIR, 'native-cli.json');
@@ -259,11 +259,17 @@ function direct(cmd, args) {
  * Which shared terminal `--resume <id>` or `-c` means, if one is open: the
  * same conversation, or for -c the one in this folder on this account.
  */
-export function sharedConversation(open, engine, configHome, args, cwd = process.cwd()) {
+export function sharedConversation(open, engine, configHome, args, cwd = process.cwd(), sessions = []) {
+  if (args.includes('--fork-session') || (engine === 'codex' && args.includes('--fork'))) return null;
   const at = args.findIndex((a) => a === '--resume' || a === '-r' || (engine === 'codex' && a === 'resume'));
-  const wanted = at >= 0 ? args[at + 1] : null;
-  const latest = args.includes('-c') || args.includes('--continue') || (engine === 'codex' && args.includes('--last'));
-  const mine = open.filter((s) => s.engine === engine && s.configHome === configHome);
+  const wanted = at >= 0 ? args[at + 1] : args.find((a) => a.startsWith('--resume='))?.slice('--resume='.length);
+  const latest = engine === 'codex' ? args.includes('--last') : args.includes('-c') || args.includes('--continue');
+  const mine = open.filter((s) => s.engine === engine && s.configHome === configHome).map((meta) => {
+    // A new terminal's conversation ID is only known after SessionStart.
+    // The daemon saves it, while the persistent host still has launch metadata.
+    const saved = sessions.find((s) => s.id === meta.id && s.engine === engine);
+    return saved?.engineSessionId ? { ...meta, conversation: saved.engineSessionId } : meta;
+  });
   if (wanted && !wanted.startsWith('-')) return mine.find((s) => s.conversation === wanted) ?? null;
   if (latest) return mine.filter((s) => s.cwd === cwd).sort((a, b) => b.createdAt - a.createdAt)[0] ?? null;
   return null;
@@ -284,14 +290,16 @@ export async function runNativeCli(engine, cmd, args) {
   if (!await host.ensure()) { host.detach(); return direct(cmd, args); }
   // Continuing a conversation that is already open in a shared terminal -
   // one Helm took over, say - joins it instead of starting a second copy.
-  const joined = sharedConversation(host.nativeSessions(), engine, configHome, args);
+  let sessions = [];
+  try { sessions = JSON.parse(readFileSync(join(HELM_DIR, 'sessions.json'), 'utf8')).sessions ?? []; } catch { /* first launch */ }
+  const joined = sharedConversation(host.nativeSessions(), engine, configHome, args, process.cwd(), sessions);
   const id = joined?.id ?? `native-${randomBytes(8).toString('hex')}`;
   // A terminal Claude is a normal chat in Helm. Claude's own hooks tell Helm
   // what it is doing and carry answers back (claude-hooks.js); what Helm
   // sends is typed into this terminal. HELM_NATIVE_CHAT=0 keeps the terminal
   // screen in Helm instead.
   const nativeChat = engine === 'claude' && !joined && process.env.HELM_NATIVE_CHAT !== '0';
-  if (nativeChat) args = [...args, '--settings', hookSettings()];
+  if (nativeChat) args = claudeChatArgs(args);
   return new Promise(async (resolve, reject) => {
     let finished = false;
     let started = false;

@@ -60,6 +60,10 @@ test('reopening keeps the settings and drops what picked the conversation and th
     { cmd: '/bin/claude', args: ['--permission-mode', 'plan', '--resume', 'abc'] });
   assert.deepEqual(resumeCommand('codex', ['/bin/codex', 'resume', 'old', '--yolo'], 'abc'),
     { cmd: '/bin/codex', args: ['resume', 'abc', '--yolo'] });
+  assert.deepEqual(resumeCommand('claude', ['/bin/claude', '--fork-session', '--model', 'opus'], 'abc'),
+    { cmd: '/bin/claude', args: ['--model', 'opus', '--resume', 'abc'] });
+  assert.deepEqual(resumeCommand('codex', ['/bin/codex', '-c', 'model="test"', 'resume', '--last'], 'abc'),
+    { cmd: '/bin/codex', args: ['resume', 'abc', '-c', 'model="test"'] });
 });
 
 test('claude -c or --resume in the old window joins the shared terminal instead of starting another', () => {
@@ -69,6 +73,16 @@ test('claude -c or --resume in the old window joins the shared terminal instead 
   assert.equal(sharedConversation(open, 'claude', '/h', ['-c'], '/w').id, 'native-b');
   assert.equal(sharedConversation(open, 'claude', '/other', ['-c'], '/w'), null, 'another account is another conversation');
   assert.equal(sharedConversation(open, 'claude', '/h', [], '/w'), null);
+  assert.equal(sharedConversation(open, 'claude', '/h', ['--resume=abc'], '/w').id, 'native-a');
+  assert.equal(sharedConversation(open, 'claude', '/h', ['--resume', 'abc', '--fork-session'], '/w'), null);
+  assert.equal(sharedConversation(open.map(s => ({ ...s, engine: 'codex' })), 'codex', '/h', ['-c', 'model="test"'], '/w'), null,
+    'Codex -c config starts a new conversation instead of joining the latest');
+  assert.equal(sharedConversation(open, 'claude', '/h', ['--resume', 'fresh'], '/w',
+    [{ id: 'native-b', engine: 'claude', engineSessionId: 'fresh' }]).id, 'native-b',
+    'resume joins a conversation learned from SessionStart after launch');
+  assert.equal(sharedConversation(open, 'claude', '/h', ['--resume', 'abc'], '/w',
+    [{ id: 'native-a', engine: 'claude', engineSessionId: 'cleared' }]), null,
+    'a later SessionStart replaces stale host metadata after clear');
 });
 
 test('take over waits for the running step, then moves the same CLI into a shared terminal and carries on', { skip: !pty && 'no pty' }, async (t) => {
@@ -102,12 +116,16 @@ test('take over waits for the running step, then moves the same CLI into a share
   assert.throws(() => process.kill(original, 0), 'the old copy has closed');
   const next = sessions.get(moved.id);
   assert.equal(next.nativeCli, true);
+  assert.equal(next.nativeChat, true, 'takeover keeps Claude in the normal chat view');
   assert.equal(next.engineSessionId, conversation);
   let shared = (await sessions.attach(moved.id)).text;
   sessions.on('data', (d) => { if (d.id === moved.id) shared += d.text; });
   await until(() => shared.includes('GOT=continue'), 20000);
-  const args = JSON.parse(shared.match(/ARGS=(\[[^\]]*\])/)[1]);
-  assert.deepEqual(args, ['--model', 'opus', '--resume', conversation]);
+  const args = JSON.parse(shared.match(/ARGS=(.+) ACCOUNT=/)[1]);
+  assert.deepEqual(args.slice(0, 4), ['--model', 'opus', '--resume', conversation]);
+  assert.equal(args[4], '--settings');
+  assert.ok(JSON.parse(args[5]).hooks.PermissionRequest);
+  assert.equal(host.nativeSessions().find((s) => s.id === next.id).nativeChat, true);
   assert.match(shared, new RegExp(`ACCOUNT=${home}`));
   assert.throws(() => sessions.get(external.id), 'the old monitor row is gone');
 });

@@ -34,7 +34,7 @@ import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from
 import { openFiles, processArgv, processCwd } from './procinfo.js';
 import { GREETING, bareTitle, informative, promptTitle } from './titles.js';
 import { askPreview } from './notify.js';
-import { startHookServer } from './claude-hooks.js';
+import { claudeChatArgs, startHookServer } from './claude-hooks.js';
 import { gitBranch } from './git-head.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
@@ -273,6 +273,13 @@ export class Sessions extends EventEmitter {
     // feature does not wait on - or cost - whatever the pty host is holding.
     this.procs = procHost ?? new TerminalHost({ socketPath: PROC_SOCKET_PATH, unit: 'helm-procs' });
     this.#load();
+    // A daemon killed abruptly cannot answer its old hook sockets. Leave the
+    // terminal's own prompt available, without showing an unanswerable card.
+    for (const s of this.#index.values()) if (s.nativeCli) {
+      for (const pending of this.events.pending(s.id)) {
+        this.events.append(s.id, { type: 'permission.resolved', requestId: pending.requestId });
+      }
+    }
     runtime.on('status', (e) => this.#onStatus(e));
     runtime.on('closed', (e) => this.#onClosed(e));
     // A pty's bytes go out on the same event a watched pane's text does, so
@@ -295,6 +302,10 @@ export class Sessions extends EventEmitter {
     this.nativeTerminals.on('exit', ({ id, code }) => {
       const s = this.#index.get(id);
       if (!s?.nativeCli) return;
+      for (const [requestId, ask] of this.#hookAsks) if (ask.id === id) {
+        ask.reply(null);
+        this.#closeHookAsk(requestId);
+      }
       // Its conversation lives on in the CLI's history list; a dead row
       // here would only be a second, unusable copy of it.
       this.#index.delete(id);
@@ -304,6 +315,11 @@ export class Sessions extends EventEmitter {
     });
     for (const s of this.nativeTerminals.nativeSessions()) this.#adoptNative(s);
     this.nativePoll = setInterval(async () => {
+      // Chat viewers do not attach xterm. Keep a quiet long-running tool or
+      // pending question out of the terminal host's abandoned-CLI reaper.
+      for (const s of this.#index.values()) if (s.nativeChat && ['working', 'blocked'].includes(s.status)) {
+        this.nativeTerminals.renew(s.id).catch(() => {});
+      }
       if (!this.nativeDiscovery) return;
       try {
         await this.nativeTerminals.ensure({ spawn: false });
@@ -320,6 +336,8 @@ export class Sessions extends EventEmitter {
 
   /** requestId -> { id, reply, raw }: a terminal Claude's question, waiting in its hook. */
   #hookAsks = new Map();
+  /** Keep each pasted message and its Enter together across app clients. */
+  #nativeInputs = new Map();
 
   /**
    * What a terminal Claude's hooks say it is doing (claude-hooks.js). The
@@ -1717,14 +1735,20 @@ export class Sessions extends EventEmitter {
       const proc = readProcess(pid);
       const first = (await readMessages({ engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, all: true }))
         .find((m) => m.role === 'user')?.text ?? '';
-      const { cmd, args } = resumeCommand(s.engine, proc.argv, s.engineSessionId, first);
+      const resumed = resumeCommand(s.engine, proc.argv, s.engineSessionId, first);
+      const nativeChat = s.engine === 'claude' && proc.env.HELM_NATIVE_CHAT !== '0';
+      const cmd = resumed.cmd, args = nativeChat ? claudeChatArgs(resumed.args, proc.cwd || expand(s.cwd)) : resumed.args;
+      if (cancel.signal.aborted) throw new Error('cancelled');
+      // Prepare the host before closing the original provider.
+      if (!await this.nativeTerminals.ensure()) throw new Error('the shared terminal could not start');
+      if (cancel.signal.aborted) throw new Error('cancelled');
       await stopProcess(pid);
       const moved = `native-${randomBytes(8).toString('hex')}`;
       const configHome = expand(proc.env[ENGINES[s.engine].homeEnv] || ENGINES[s.engine].defaultHome);
       const opened = await this.nativeTerminals.open(moved, { cmd, args, cwd: proc.cwd || expand(s.cwd), cols: 120, rows: 36,
         exactEnv: true, env: { ...proc.env, HELM_NATIVE_SESSION: moved },
-        native: { engine: s.engine, configHome, conversation: s.engineSessionId } });
-      this.#adoptNative({ id: moved, engine: s.engine, cwd: proc.cwd || expand(s.cwd), configHome, nativePid: opened.pid, createdAt: Date.now() });
+        native: { engine: s.engine, configHome, conversation: s.engineSessionId, nativeChat } });
+      this.#adoptNative({ id: moved, engine: s.engine, cwd: proc.cwd || expand(s.cwd), configHome, nativePid: opened.pid, nativeChat, createdAt: Date.now() });
       const next = this.#index.get(moved);
       Object.assign(next, { engineSessionId: s.engineSessionId, transcript: s.transcript, profileId: s.profileId,
         title: s.title, titleBy: s.titleBy, status: wasWorking ? 'working' : 'idle' });
@@ -2016,6 +2040,7 @@ export class Sessions extends EventEmitter {
     const viewers = this.#watching.get(id) ?? new Map();
     viewers.set(watcher, Date.now() + WATCH_TTL_MS);
     this.#watching.set(id, viewers);
+    if (session.nativeChat) this.nativeTerminals.renew(id).catch(() => {});
     return { ok: true, last: this.events.last(id), status: session.status };
   }
 
@@ -2482,18 +2507,23 @@ export class Sessions extends EventEmitter {
     if (references.length && (raw || !s.driver || text.trimStart().startsWith('/'))) throw new Error('thread context needs an ordinary agent message');
     if (s.nativeChat && !raw) {
       if (attachments.length) throw new Error('Pictures cannot be sent to a terminal Claude from Helm yet.');
-      if (!this.nativeTerminals.has(id)) throw new Error('Claude is no longer running in that terminal.');
-      if ([...this.#hookAsks.values()].some((a) => a.id === id)) throw new Error('Answer Claude\'s question first.');
       // Typed into the terminal, as the person at the keyboard would: pasted
       // whole (so new lines stay in the message), then Enter. Claude queues
       // it if it is busy, exactly as it does for typing.
       const body = text.replace(/\r\n?/g, '\n').trim();
       if (!body) return { ok: true };
-      await this.nativeTerminals.write(id, `\x1b[200~${body}\x1b[201~`);
-      await new Promise((r) => setTimeout(r, 60));
-      await this.nativeTerminals.write(id, '\r');
-      s.hasInput = true; s.updatedAt = Date.now(); this.#save();
-      return { ok: true };
+      const send = (this.#nativeInputs.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
+        if (!this.nativeTerminals.has(id)) throw new Error('Claude is no longer running in that terminal.');
+        if ([...this.#hookAsks.values()].some((a) => a.id === id)) throw new Error('Answer Claude\'s question first.');
+        await this.nativeTerminals.write(id, `\x1b[200~${body}\x1b[201~`);
+        await new Promise((r) => setTimeout(r, 60));
+        await this.nativeTerminals.write(id, '\r');
+        s.hasInput = true; s.updatedAt = Date.now(); this.#save();
+        return { ok: true };
+      });
+      this.#nativeInputs.set(id, send);
+      try { return await send; }
+      finally { if (this.#nativeInputs.get(id) === send) this.#nativeInputs.delete(id); }
     }
     if (source !== 'user' && s.stoppedAt) throw new Error('the thread was stopped');
     if (delivery === 'steer' && ['working', 'blocked'].includes(s.status)
@@ -3437,7 +3467,7 @@ export class Sessions extends EventEmitter {
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
     clearInterval(this.nativePoll);
-    (await this.hooks?.catch(() => null))?.close();
+    await (await this.hooks?.catch(() => null))?.close();
     this.nativeDiscovery = false;
     await this.#nativeDiscovery?.catch(() => {});
     await Promise.allSettled([...this.#drivers.values()].map((d) => {

@@ -1,13 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-hooks-'));
 process.env.HELM_DIR = join(root, 'helm');
-const { hookSettings, startHookServer, sendHook } = await import('../packages/connect/src/claude-hooks.js');
+const { claudeChatArgs, hookSettings, startHookServer, sendHook } = await import('../packages/connect/src/claude-hooks.js');
 const path = join(root, 'hooks.sock');
+
+test('chat hooks retain explicit settings and existing hooks, including a relative settings file', () => {
+  const settings = { permissions: { deny: ['Read(.env)'] }, hooks: { Stop: [{ hooks: [{ type: 'command', command: 'my-hook' }] }] } };
+  writeFileSync(join(root, 'settings.json'), JSON.stringify(settings));
+  for (const arg of [['--settings', 'settings.json'], [`--settings=${JSON.stringify(settings)}`]]) {
+    const args = claudeChatArgs(['--model', 'opus', ...arg], root);
+    assert.deepEqual(args.slice(0, 3), ['--model', 'opus', '--settings']);
+    const merged = JSON.parse(args[3]);
+    assert.deepEqual(merged.permissions, settings.permissions);
+    assert.deepEqual(merged.hooks.Stop[0], settings.hooks.Stop[0]);
+    assert.equal(merged.hooks.Stop.length, 2);
+    assert.ok(merged.hooks.PermissionRequest);
+  }
+});
+
+test('closing the hook server releases a waiting permission and its socket', async () => {
+  let received;
+  const ready = new Promise((r) => { received = r; });
+  const h = await startHookServer((_native, _event, reply) => { received(); }, path);
+  const waiting = sendHook('native-1', { hook_event_name: 'PermissionRequest' }, { path });
+  await ready;
+  const closed = new Promise((r) => h.server.once('close', r));
+  h.close();
+  assert.equal(await waiting, null);
+  await closed;
+});
 
 test('the settings add Helm to each hook Claude has, waiting long only for a question', () => {
   const { hooks } = JSON.parse(hookSettings('/usr/bin/node', "/opt/it's/hook.js"));

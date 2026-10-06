@@ -140,6 +140,8 @@ for (const width of [1280, 390]) test(`native Claude channel opens as a Helm cha
       window.chatCalls.push({ method, params });
       if (method === 'session.messages') return Promise.resolve({ messages: window.chatMessages, status: 'idle' });
       if (method === 'session.events') return Promise.resolve({ events: [], pending: [], last: 0, session: { status: 'idle' } });
+      if (method === 'session.attach') return Promise.resolve({ pty: true, text: 'Claude terminal prompt\r\n' });
+      if (['session.detach', 'session.resize'].includes(method)) return Promise.resolve({ ok: true });
       if (['session.watch', 'session.unwatch'].includes(method)) return Promise.resolve({ ok: true, last: 0 });
       if (method === 'session.input') {
         window.chatMessages = [...window.chatMessages, { role: 'user', text: params.data.trim(), tools: [] }, { role: 'assistant', text: 'Your message reached the same Claude session.', tools: [] }];
@@ -161,6 +163,10 @@ for (const width of [1280, 390]) test(`native Claude channel opens as a Helm cha
   assert.deepEqual(calls.find(c => c.method === 'session.input').params, { id: 'native-chat', data: 'Hello from Helm\n' });
   assert.equal(calls.some(c => c.method === 'session.attach'), false);
   assert.equal(await page.locator('.slab .quick').count(), 0);
+  await page.getByRole('button', { name: 'show the terminal', exact: true }).click();
+  await page.locator('.xterm-helper-textarea').waitFor({ state: 'attached' });
+  await page.getByRole('button', { name: 'show the conversation', exact: true }).click();
+  await page.getByText('Your message reached the same Claude session.', { exact: true }).waitFor();
   await page.screenshot({ path: `/tmp/helm-native-chat-${width}.png` });
 });
 
@@ -231,7 +237,7 @@ test('Done is newest first across machines, retires at three days, and the foote
   const sidebar = page.locator('.sidebar');
   const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^done$/ }) });
   await done.getByRole('button', { name: 'done 35', exact: true }).click();
-  const titles = await done.locator('.rt-text').allTextContents();
+  const titles = await done.locator('.tri-title').allTextContents();
   assert.equal(titles.length, 35, 'all recent threads remain until their own retirement time');
   assert.deepEqual(titles.slice(-4), ['Newest', 'Yesterday', 'Two days ago', 'Almost retired']);
   assert.equal(titles[0], 'Recent 0');
