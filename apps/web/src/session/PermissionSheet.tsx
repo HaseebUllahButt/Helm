@@ -158,11 +158,11 @@ function EditDetail({ detail }: { detail: any }) {
 // --------------------------------------------------------------- questions
 
 /**
- * One question at a time. Several questions stacked in one scrolling card
- * hid the second one below the fold, and the only button stayed grey until
- * you found it. Now each question has the whole card, a tab says which are
- * done, and picking a single answer moves on by itself. On a keyboard 1-9
- * pick and Enter moves on, whenever you are not typing somewhere.
+ * One question at a time, as plainly as it can be put: who is asking, the
+ * question, and the answers as rows. Tapping a single answer is the answer -
+ * it moves to the next question, or sends when it was the last one left.
+ * Only picking several, or typing your own, needs a button. On a keyboard
+ * 1-9 pick and Enter sends, whenever you are not typing somewhere.
  */
 function QuestionSheet({ permission: p, onAnswer, busy }: {
   permission: Permission; onAnswer: (d: Decision) => void; busy: boolean;
@@ -174,56 +174,66 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
   const now = useNow();
   const key = (q: Question) => q.question;
 
-  const answers: Record<string, string> = {};
-  for (const q of questions) {
-    const chosen = picked[key(q)] ?? [];
-    const free = (other[key(q)] ?? '').trim();
-    const all = free ? [...chosen, free] : chosen;
-    if (all.length) answers[key(q)] = all.join(', ');
-  }
-  const complete = questions.every((q) => answers[key(q)]);
+  const answersWith = (pickedNow: Record<string, string[]>, otherNow: Record<string, string>) => {
+    const out: Record<string, string> = {};
+    for (const q of questions) {
+      const chosen = pickedNow[key(q)] ?? [];
+      const free = (otherNow[key(q)] ?? '').trim();
+      const all = free ? [...chosen, free] : chosen;
+      if (all.length) out[key(q)] = all.join(', ');
+    }
+    return out;
+  };
+  const answers = answersWith(picked, other);
   const q = questions[Math.min(step, questions.length - 1)];
-  const last = step >= questions.length - 1;
-  const firstOpen = questions.findIndex((x) => !answers[key(x)]);
+
+  /** Go on from a question that now has an answer: the next open one, or send. */
+  const sent = useRef(false);
+  // A send that failed leaves the card up; it can be tried again.
+  useEffect(() => { if (!busy) sent.current = false; }, [busy]);
+  const advance = (now: Record<string, string>) => {
+    if (busy || sent.current) return;
+    const open = questions.findIndex((x) => !now[key(x)]);
+    // Two quick taps must not answer twice.
+    if (open < 0) { sent.current = true; onAnswer({ option: 'allow', answers: now }); return; }
+    setStep(open);
+  };
 
   const choose = (q: Question, label: string) => {
-    const have = picked[key(q)] ?? [];
     if (q.multiSelect) {
-      setPicked({ ...picked, [key(q)]: have.includes(label) ? have.filter((x) => x !== label) : [...have, label] });
+      setPicked((all) => {
+        const have = all[key(q)] ?? [];
+        return { ...all, [key(q)]: have.includes(label) ? have.filter((x) => x !== label) : [...have, label] };
+      });
       return;
     }
     // A single answer is either a listed one or what was typed, not both.
-    setPicked({ ...picked, [key(q)]: [label] });
-    setOther({ ...other, [key(q)]: '' });
-    const at = questions.indexOf(q);
-    if (at < questions.length - 1) setTimeout(() => setStep((s) => (s === at ? at + 1 : s)), 180);
+    const nextPicked = { ...picked, [key(q)]: [label] };
+    const nextOther = { ...other, [key(q)]: '' };
+    setPicked(nextPicked); setOther(nextOther);
+    const now = answersWith(nextPicked, nextOther);
+    setTimeout(() => advance(now), 140);
   };
   const type = (q: Question, text: string) => {
     setOther({ ...other, [key(q)]: text });
     if (!q.multiSelect && text.trim()) setPicked({ ...picked, [key(q)]: [] });
   };
-  const send = () => { if (complete && !busy) onAnswer({ option: 'allow', answers }); };
-  const next = () => {
-    if (busy || !answers[key(q)]) return;
-    if (!last) setStep(step + 1);
-    else if (complete) send();
-    else if (firstOpen >= 0) setStep(firstOpen);
-  };
+  const confirm = () => { if (q && answers[key(q)]) advance(answers); };
 
   // Digits and Enter, for whoever is at a keyboard - never while a text box
   // has the cursor, where they are just typing.
-  const keys = useRef({ q, next, choose });
-  keys.current = { q, next, choose };
+  const keys = useRef({ q, confirm, choose });
+  keys.current = { q, confirm, choose };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName ?? '') || el?.isContentEditable) return;
       if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector('[aria-modal="true"]')) return;
-      const { q, next, choose } = keys.current;
+      const { q, confirm, choose } = keys.current;
       if (!q) return;
       const n = Number(e.key);
       if (n >= 1 && n <= q.options.length) { e.preventDefault(); choose(q, q.options[n - 1].label); }
-      else if (e.key === 'Enter') { e.preventDefault(); next(); }
+      else if (e.key === 'Enter') { e.preventDefault(); confirm(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -231,26 +241,29 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
 
   if (!q) return null;
   const chosen = picked[key(q)] ?? [];
+  const free = other[key(q)] ?? '';
   const preview = q.options.find((o) => o.preview && chosen.includes(o.label))?.preview;
-  const action = !last ? 'Next' : complete ? (questions.length > 1 ? 'Send answers' : 'Send answer') : 'Answer the rest';
+  // A button only when a tap cannot be the answer: several picked, or typed.
+  const needsButton = q.multiSelect ? chosen.length > 0 || !!free.trim() : !!free.trim();
+  const remaining = questions.filter((x) => x !== q && !answers[key(x)]).length;
 
   return (
     <div className="sheet question">
-      <div className="sheet-head">
-        <i className="sdot blocked" /><b>{p.title}</b>
-        {p.at && <span className="sheet-wait">waiting {waitingSince(p.at, now)}</span>}
+      <div className="q-head">
+        <i className="sdot blocked" />
+        <span className="q-who">{p.title}</span>
+        {questions.length > 1 && (
+          <span className="q-steps" role="tablist" aria-label="Questions">
+            {questions.map((x, i) => (
+              <button key={key(x)} role="tab" aria-selected={i === step} aria-label={x.header || `Question ${i + 1}`}
+                title={x.header || `Question ${i + 1}`}
+                className={`q-dot${i === step ? ' on' : ''}${answers[key(x)] ? ' done' : ''}`} onClick={() => setStep(i)} />
+            ))}
+            <span className="q-count">{step + 1} of {questions.length}</span>
+          </span>
+        )}
+        {p.at && <span className="q-wait">{waitingSince(p.at, now)}</span>}
       </div>
-      {questions.length > 1 && (
-        <div className="q-steps" role="tablist" aria-label="Questions">
-          {questions.map((x, i) => (
-            <button key={key(x)} role="tab" aria-selected={i === step}
-              className={`q-step${i === step ? ' on' : ''}${answers[key(x)] ? ' done' : ''}`} onClick={() => setStep(i)}>
-              <span className="q-step-n">{answers[key(x)] ? <Icon name="check" size={11} /> : i + 1}</span>
-              <span className="q-step-t">{x.header || `Question ${i + 1}`}</span>
-            </button>
-          ))}
-        </div>
-      )}
       <div className="sheet-body">
         <div className="q-text">{q.question}</div>
         {q.multiSelect && <div className="q-hint">Pick any that apply</div>}
@@ -258,35 +271,36 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
           {q.options.map((o, i) => {
             const on = chosen.includes(o.label);
             return (
-              <button key={o.label} role={q.multiSelect ? 'checkbox' : 'radio'} aria-checked={on}
-                className={`q-opt${on ? ' on' : ''}`} onClick={() => choose(q, o.label)}>
-                <span className={`q-key${q.multiSelect ? ' box' : ''}`}>{on ? <Icon name="check" size={12} /> : i + 1}</span>
+              <button key={o.label} role={q.multiSelect ? 'checkbox' : 'radio'} aria-checked={on} disabled={busy}
+                className={`q-opt${on ? ' on' : ''}${q.multiSelect ? ' multi' : ''}`} onClick={() => choose(q, o.label)}>
+                {q.multiSelect && <span className="q-box">{on && <Icon name="check" size={11} />}</span>}
                 <span className="grow">
                   <span className="q-label">{o.label}</span>
                   {o.description && <span className="q-desc">{o.description}</span>}
                 </span>
+                <kbd className="q-num">{i + 1}</kbd>
               </button>
             );
           })}
-          <label className={`q-opt q-free${(other[key(q)] ?? '').trim() ? ' on' : ''}`}>
-            <span className="q-key"><Icon name="edit" size={12} /></span>
-            <input
-              type={q.secret ? 'password' : 'text'} value={other[key(q)] ?? ''}
-              placeholder={q.options.length ? 'Something else…' : 'Type your answer…'}
-              aria-label="Your own answer"
-              onChange={(e) => type(q, e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); next(); } }}
-            />
-          </label>
+        </div>
+        <div className={`q-free${free.trim() ? ' on' : ''}`}>
+          <input
+            type={q.secret ? 'password' : 'text'} value={free}
+            placeholder={q.options.length ? 'Or type your own answer' : 'Type your answer'}
+            aria-label="Your own answer"
+            onChange={(e) => type(q, e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirm(); } }}
+          />
         </div>
         {preview && <pre className="q-preview">{preview}</pre>}
       </div>
-      <div className="sheet-actions q-actions">
-        {step > 0 && <button className="ghost" onClick={() => setStep(step - 1)}>Back</button>}
-        <button className="primary" disabled={busy || !answers[key(q)]} onClick={next}>
-          {busy ? 'Sending…' : action}
-        </button>
-      </div>
+      {(needsButton || busy) && (
+        <div className="q-actions">
+          <button className="primary" disabled={busy || !answers[key(q)]} onClick={confirm}>
+            {busy ? 'Sending…' : remaining ? 'Next' : 'Send'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
