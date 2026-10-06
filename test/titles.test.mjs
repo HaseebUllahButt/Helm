@@ -17,3 +17,10 @@ test('long fallback titles end at a word boundary and preserve substantive text'
   assert.equal(title, 'investigate why the authentication refresh endpoint…');
   assert.equal(promptTitle(['Fix <Button> rendering']), 'Fix <Button> rendering');
 });
+
+test('a title is what the owner said, without the CLIs\' image and paste labels', async () => {
+  const { bareTitle, promptTitle } = await import('../packages/connect/src/titles.js');
+  assert.equal(bareTitle('[Image #1] how is this triggered'), 'how is this triggered');
+  assert.equal(bareTitle('[Pasted text #2 +40 lines] fix this'), 'fix this');
+  assert.equal(promptTitle(['[Image #1] how is this triggered']), 'how is this triggered');
+});

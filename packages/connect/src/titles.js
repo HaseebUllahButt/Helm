@@ -2,8 +2,16 @@
 export const GREETING = /^(hi+|hey+|hello+|yo|sup|hiya|howdy|test(ing)?|ping|ok(ay)?|thanks?( you)?|good (morning|afternoon|evening))[.\s!?,]*$/i;
 
 /** Find the request, skipping greetings and the context wrappers CLIs prepend. */
+/**
+ * A title is what the owner said. "[Image #1]" and "[Pasted text #2 +40
+ * lines]" are labels the CLIs put in the message for the model, not words.
+ */
+export function bareTitle(title) {
+  return String(title ?? '').replace(/\[(?:Image|Pasted text) #\d+[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 export function informative(text) {
-  const body = String(text ?? '').replace(
+  const body = bareTitle(text) === '' ? '' : String(text ?? '').replace(/\[(?:Image|Pasted text) #\d+[^\]]*\] ?/g, '').replace(
     /<(environment_context|recommended_plugins|system_reminder|instructions|[\w-]+_instructions)\b[^>]*>[\s\S]*?<\/\1>/gi,
     '',
   );

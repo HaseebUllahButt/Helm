@@ -32,7 +32,7 @@ import { claudeLiveSessions, claudeLiveStatus, descendsFrom } from './external-p
 import { hostedProcId } from './hosted-process.js';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
 import { openFiles, processArgv, processCwd } from './procinfo.js';
-import { GREETING, informative, promptTitle } from './titles.js';
+import { GREETING, bareTitle, informative, promptTitle } from './titles.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -115,7 +115,8 @@ const EXTERNAL = /^(pane:|found:)/;
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
-export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, ...s }) => s;
+export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, ...s }) =>
+  typeof s.title === 'string' && /\[(?:Image|Pasted text) #/.test(s.title) ? { ...s, title: bareTitle(s.title) || s.title } : s;
 
 const EXTERNAL_INFO_COMMANDS = [
   { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },

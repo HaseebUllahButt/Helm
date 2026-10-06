@@ -7,6 +7,7 @@ import { ENGINES, isInteractiveProc } from './engines.js';
 import { sessionActivity } from './transcript.js';
 import { claudeLiveSessions, claudeLiveStatus } from './external-process.js';
 import { processList, processCwd, openFiles } from './procinfo.js';
+import { bareTitle } from './titles.js';
 
 /**
  * Sessions that already exist on this machine, whether or not helm started
@@ -777,6 +778,7 @@ export async function inventory(profiles = []) {
   // The sqlite readers scan shared data dirs, so a second account of the same
   // engine returns the same rows; the id, not the account, says which they are.
   const known = new Set();
+  for (const s of all) if (s.title) s.title = bareTitle(s.title) || s.title;
   return all
     .filter((s) => s.id)
     .filter((s) => {
