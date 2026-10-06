@@ -111,6 +111,62 @@ export function codexRatesFor(modelName, date) {
   return CODEX_PRICING[key];
 }
 
+/**
+ * Every other CLI's models: OpenCode's own catalogue and the providers behind
+ * it, as listed on models.dev (the catalogue OpenCode prices from), checked
+ * 2026-10-06. $ per million tokens; cacheWrite is given only where the
+ * provider bills writes apart, otherwise a write costs input.
+ *
+ * OpenCode's free models are listed at $0 on purpose: OpenCode records their
+ * cost as nothing, and leaving them out made them read as unknown rather than
+ * free. Models nobody publishes a rate for - OpenCode's union-alpha, Devin's
+ * swe-2 and compactor, Codex's own codex-auto-review and chatgpt-web - stay
+ * out, so they still say unpriced.
+ */
+const FREE = { input: 0, cachedInput: 0, output: 0 };
+export const OTHER_PRICING = {
+  'big-pickle': FREE,
+  'fledge-alpha-free': FREE,
+  'hy3-free': FREE,
+  'ling-3.0-flash-fin-free': FREE,
+  'longcat-2.0-free': FREE,
+  'mimo-v2.5-free': FREE,
+  'mimo-v2.6-flash-free': FREE,
+  'muse-spark-1.2-contributor-free': FREE,
+  'muse-spark-1.3-contributor-free': FREE,
+  'nemotron-3-ultra-free': FREE,
+  'nemotron-3.5-lightning-free': FREE,
+  'deepseek-v4-flash': { input: 0.14, cachedInput: 0.028, output: 0.28 },
+  'deepseek-v4.1-flash': { input: 0.3, cachedInput: 0.006, output: 1.2 },
+  'deepseek-v4-pro': { input: 1.74, cachedInput: 0.145, output: 3.84 },
+  'glm-5.3-flash': { input: 0.15, cachedInput: 0.03, output: 0.5 },
+  'gpt-5.4-mini-fast': { input: 1.5, cachedInput: 0.15, output: 9 },
+  'grok-4.20-0309-non-reasoning': { input: 1.25, cachedInput: 0.2, output: 2.5 },
+  'grok-4.5': { input: 2, cachedInput: 0.3, output: 6 },
+  'grok-4.6': { input: 2, cachedInput: 0.5, output: 6 },
+  'hy3': { input: 0.14, cachedInput: 0.035, output: 0.58 },
+  'hy4-preview': { input: 0.834, cachedInput: 0.042, output: 2.501 },
+  'minimax-m3': { input: 0.3, cachedInput: 0.06, output: 1.2 },
+  'muse-spark-1.2': { input: 1.25, cachedInput: 0.15, output: 4.25 },
+};
+
+/**
+ * Rates for a model outside Claude's and Codex's own tables, or undefined.
+ * Devin names models with dashes for dots and the effort tacked on -
+ * `gpt-5-6-sol-high` is gpt-5.6-sol, `deepseek-v4-1-flash-high` is
+ * deepseek-v4.1-flash - so its names are read that way too.
+ */
+export function otherRatesFor(modelName, date) {
+  const name = String(modelName || '').replace(/^[a-z0-9-]+\//, '');
+  const plain = name.replace(/-(?:minimal|low|medium|high|xhigh|max)$/, '');
+  for (const id of [name, plain, plain.replace(/(\d)-(\d)/g, '$1.$2')]) {
+    if (OTHER_PRICING[id]) return OTHER_PRICING[id];
+    const codex = codexRatesFor(id, date);
+    if (codex) return codex;
+  }
+  return undefined;
+}
+
 export const ANTIGRAVITY_PRICING = {
   'gemini-3.7-flash': { input: 0.75, cachedInput: 0.1875, output: 3.75 },
   'gemini-3.6-flash': { input: 0.5, cachedInput: 0.125, output: 3.0 },
@@ -194,8 +250,10 @@ export function cacheRatesFor(modelName, engine, asOfDate) {
     }
     case 'antigravity':
       return flat(ANTIGRAVITY_PRICING[normalizeAntigravityModelName(modelName)]);
-    default:
-      return null;
+    default: {
+      const r = otherRatesFor(modelName, asOfDate);
+      return r ? { input: r.input, cacheRead: r.cachedInput, cacheWrite: r.cacheWrite ?? r.input } : null;
+    }
   }
 }
 
@@ -217,9 +275,19 @@ export function priceBucket(engine, modelName, tokens, date) {
   // Codex and the OpenAI-rate engines: the bucket already holds fresh input
   // separately from cached, so this prices it directly.
   const rates = codexRatesFor(modelName, date);
-  if (!rates) return null;
-  const input = ((tokens.input || 0) * rates.input) / 1e6;
-  const cacheRead = ((tokens.cacheRead || 0) * rates.cachedInput) / 1e6;
-  const output = ((tokens.output || 0) * rates.output) / 1e6;
-  return { input, output, cacheWrite: 0, cacheRead, total: input + output + cacheRead };
+  if (rates) {
+    const input = ((tokens.input || 0) * rates.input) / 1e6;
+    const cacheRead = ((tokens.cacheRead || 0) * rates.cachedInput) / 1e6;
+    const output = ((tokens.output || 0) * rates.output) / 1e6;
+    return { input, output, cacheWrite: 0, cacheRead, total: input + output + cacheRead };
+  }
+  // OpenCode, Devin and the rest. They record cache writes apart, which bill
+  // at the write rate where a provider has one and at input otherwise.
+  const other = otherRatesFor(modelName, date);
+  if (!other) return null;
+  const input = ((tokens.input || 0) * other.input) / 1e6;
+  const cacheRead = ((tokens.cacheRead || 0) * other.cachedInput) / 1e6;
+  const cacheWrite = ((tokens.cacheWrite || 0) * (other.cacheWrite ?? other.input)) / 1e6;
+  const output = ((tokens.output || 0) * other.output) / 1e6;
+  return { input, output, cacheWrite, cacheRead, total: input + output + cacheWrite + cacheRead };
 }

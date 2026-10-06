@@ -321,16 +321,20 @@ function DonutBreakdown({ groups, facet }: { groups: ChartGroup[]; facet: FacetI
         : String((g as any)[facet] || 'unknown');
 
   const sorted = [...groups].sort((a, b) => value(b) - value(a));
-  const slices = sorted.slice(0, 5).map((g, i) => ({
+  const whole = sorted.reduce((s, g) => s + value(g), 0);
+  // The few that matter get a row each; anything under 1% of the total is
+  // folded into one "Other", which is left out when it comes to nothing.
+  const big = sorted.filter((g, i) => i < 5 && whole > 0 && value(g) / whole >= 0.01);
+  const slices = big.map((g, i) => ({
     // Two folders can shorten to the same display name, so the key falls
     // back to position, not text.
     key: g.key ?? `${i}`,
     name: name(g),
     value: value(g),
   }));
-  const rest = sorted.slice(5);
-  if (rest.length) {
-    slices.push({ key: 'other', name: 'Other', value: rest.reduce((s, g) => s + value(g), 0) });
+  const restValue = sorted.slice(big.length).reduce((s, g) => s + value(g), 0);
+  if (restValue > 0 && (priced ? restValue >= 0.005 : restValue / whole >= 0.001)) {
+    slices.push({ key: 'other', name: 'Other', value: restValue });
   }
   const total = slices.reduce((s, x) => s + x.value, 0);
   if (total <= 0) return <div className="empty quiet">nothing recorded yet</div>;
