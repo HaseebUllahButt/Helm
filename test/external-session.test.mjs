@@ -201,10 +201,10 @@ test('an active external Codex thread is monitored, then managed after its owner
   assert.equal(sessions.get(monitored.id).external, true, 'read-only commands do not acquire the writer');
   assert.equal(existsSync(lock), true, 'the external CLI keeps running while status is inspected');
   assert.equal(driver.sent, '/status');
-  await assert.rejects(sessions.input(monitored.id, 'do not interrupt'), /still owns/);
+  await assert.rejects(sessions.input(monitored.id, 'do not interrupt'), /still owns|started outside Helm/);
   assert.doesNotThrow(() => process.kill(writer.pid, 0));
   appendFileSync(transcript, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n');
-  await assert.rejects(sessions.input(monitored.id, 'leave idle owner alone'), /still owns/);
+  await assert.rejects(sessions.input(monitored.id, 'leave idle owner alone'), /still owns|started outside Helm/);
   assert.doesNotThrow(() => process.kill(writer.pid, 0));
   const exited = once(writer, 'exit');
   writer.kill('SIGTERM');
@@ -256,7 +256,7 @@ test('Claude registry identifies append-per-write terminals and rejects stale or
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const sessions = new Sessions(new Runtime(), { makeDriver: (_engine, opts) => (driver = new FakeDriver(opts)) });
   const opened = await sessions.resumeExternal({ engine: 'claude', account: 'claude', id });
-  await assert.rejects(sessions.input(opened.id, 'wait for completion'), /still owns/);
+  await assert.rejects(sessions.input(opened.id, 'wait for completion'), /still owns|started outside Helm/);
   assert.equal(driver, undefined);
   assert.doesNotThrow(() => process.kill(owner.child.pid, 0));
   owner.record.status = 'idle'; owner.save();
@@ -270,11 +270,11 @@ test('Claude registry identifies append-per-write terminals and rejects stale or
   owner.record.procStart = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]; owner.save();
   const duplicate = await launch();
   duplicate.record.status = 'idle'; duplicate.save();
-  await assert.rejects(sessions.input(opened.id, 'ambiguous owner'), /still owns/);
+  await assert.rejects(sessions.input(opened.id, 'ambiguous owner'), /still owns|started outside Helm/);
   assert.doesNotThrow(() => process.kill(owner.child.pid, 0));
   assert.doesNotThrow(() => process.kill(duplicate.child.pid, 0));
   const secondExit = once(duplicate.child, 'exit'); duplicate.child.kill(); await secondExit;
-  await assert.rejects(sessions.connect(opened.id), /still owns/);
+  await assert.rejects(sessions.connect(opened.id), /still owns|started outside Helm/);
   const exited = once(owner.child, 'exit');
   owner.child.kill();
   await exited;
@@ -329,7 +329,7 @@ test('an active external Claude thread is monitored and status does not take own
     assert.match(status, /\*\*Model:\*\* claude-test/);
     assert.match(status, /\*\*Input:\*\* 10/);
 
-    await assert.rejects(sessions.input(monitored.id, 'continue here'), /still owns/);
+    await assert.rejects(sessions.input(monitored.id, 'continue here'), /still owns|started outside Helm/);
     const exited = once(writer, 'exit');
     writer.kill();
     await exited;
