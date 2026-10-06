@@ -221,7 +221,7 @@ test('external activity reads native completion fields while writers remain open
     { type: 'assistant', message: { role: 'assistant', stop_reason: null, content } },
   ].map(JSON.stringify).join('\n') + '\n');
   write([{ type: 'text', text: 'Fixed it' }]);
-  assert.equal((await sessionActivity({ engine: 'claude', path, active: true })).status, 'done');
+  assert.equal((await sessionActivity({ engine: 'claude', path, active: true })).status, 'idle');
   write([{ type: 'tool_use', name: 'Bash', id: 'tool', input: {} }]);
   assert.equal((await sessionActivity({ engine: 'claude', path, active: true })).status, 'working');
 
@@ -234,7 +234,7 @@ test('external activity reads native completion fields while writers remain open
     put('user', { content: [{ type: 'text', text: 'Do it' }] }, 1);
     assert.equal((await read()).status, 'working');
     put('assistant', { content: [{ type: 'text', text: 'Done' }] }, 2);
-    assert.equal((await read()).status, 'done');
+    assert.equal((await read()).status, 'idle');
     put('assistant', { finishReason: 'tool-calls', content: [{ type: 'tool', name: 'shell' }] }, 3);
     assert.equal((await read()).status, 'working');
   } finally { db.close(); }

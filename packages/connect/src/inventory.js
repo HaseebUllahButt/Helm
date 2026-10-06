@@ -5,6 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { HOME, expand, collapse } from './paths.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { sessionActivity } from './transcript.js';
+import { claudeLiveSessions, claudeLiveStatus } from './external-process.js';
+import { processList, processCwd, openFiles } from './procinfo.js';
 
 /**
  * Sessions that already exist on this machine, whether or not helm started
@@ -56,24 +58,15 @@ const parse = (line) => { try { return JSON.parse(line); } catch { return null; 
 let procSnap = null;
 function procs() {
   if (procSnap) return procSnap;
+  const list = processList();
+  // Linux reads descriptors cheaply for everything; on macOS lsof is asked
+  // only about processes that look like one of the CLIs.
+  const names = /claude|codex|opencode|devin|grok|cursor|pi|omp|muse|gemini|kimi|rovo|agy|antigravity/;
+  const candidates = process.platform === 'linux' ? list.map((p) => p.pid)
+    : list.filter(({ argv }) => names.test(argv.slice(0, 3).join(' '))).map((p) => p.pid);
   const files = new Map();
-  const list = [];
-  let pids = [];
-  try { pids = readdirSync('/proc').filter((x) => /^\d+$/.test(x)); } catch { /* not Linux */ }
-  for (const pid of pids) {
-    const dir = `/proc/${pid}/fd`;
-    try {
-      for (const fd of readdirSync(dir)) {
-        try {
-          const target = readlinkSync(join(dir, fd));
-          if (target.startsWith('/') && !files.has(target)) files.set(target, Number(pid));
-        } catch { /* fd closed */ }
-      }
-    } catch { /* another user's, or gone */ }
-    try {
-      const argv = readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
-      if (argv.length) list.push({ pid: Number(pid), argv });
-    } catch { /* gone */ }
+  for (const f of openFiles(candidates, (path) => path.endsWith('.jsonl'))) {
+    if (f.write && !files.has(f.path)) files.set(f.path, f.pid);
   }
   procSnap = { at: Date.now(), files, list };
   return procSnap;
@@ -103,15 +96,15 @@ function interactiveProcesses(engine) {
   for (const { pid, argv } of procs().list) {
     try {
       if (!isInteractiveProc(engine, argv)) continue;
-      const cwd = readlinkSync(`/proc/${pid}/cwd`);
-      if (!out.has(cwd)) out.set(cwd, Number(pid));
+      const cwd = processCwd(pid);
+      if (cwd && !out.has(cwd)) out.set(cwd, Number(pid));
     } catch { /* process exited or belongs to another user */ }
   }
   return out;
 }
 
 /** Newest files first, capped - we never want to stat an entire history. */
-async function newest(dir, filter, limit) {
+async function newest(dir, filter, limit, required = () => false) {
   const out = [];
   const walk = async (d, depth = 0) => {
     if (depth > 5) return;
@@ -126,7 +119,8 @@ async function newest(dir, filter, limit) {
     }
   };
   await walk(dir);
-  return out.sort((a, b) => b.mtime - a.mtime).slice(0, limit);
+  const sorted = out.sort((a, b) => b.mtime - a.mtime);
+  return sorted.filter((f, i) => i < limit || required(f.path));
 }
 
 // -------------------------------------------------------------------- codex
@@ -154,7 +148,10 @@ async function codex(home, account) {
     } catch { /* index is a nicety, not a requirement */ }
   }
 
-  const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE);
+  let locked = [];
+  try { locked = readdirSync(join(codexHome, 'thread-writer-locks')).filter(x => x.endsWith('.lock')).map(x => x.slice(0, -5)); } catch {}
+  const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE,
+    path => procs().files.has(path) || locked.some(id => path.endsWith(`${id}.jsonl`)));
   const out = [];
   for (const f of files) {
     try {
@@ -166,7 +163,8 @@ async function codex(home, account) {
       // task timeline, not another row in the owner's recent history.
       if ((p.source && typeof p.source === 'object' && Object.hasOwn(p.source, 'subagent'))
         || p.thread_source === 'subagent' || p.threadSource === 'subagent') continue;
-      const active = existsSync(join(codexHome, 'thread-writer-locks', `${p.session_id ?? p.id}.lock`));
+      const pid = writerPid(f.path);
+      const active = !!pid || existsSync(join(codexHome, 'thread-writer-locks', `${p.session_id ?? p.id}.lock`));
       out.push({
         engine: 'codex',
         account,
@@ -179,7 +177,7 @@ async function codex(home, account) {
         // newest transcript in the folder can select an unrelated chat.
         transcript: f.path,
         active,
-        writerPid: active ? writerPid(f.path) : null,
+        writerPid: pid,
       });
     } catch { /* not a rollout we understand */ }
   }
@@ -192,9 +190,14 @@ async function claude(home, account) {
   const root = join(expand(home), 'projects');
   if (!existsSync(root)) return [];
 
-  const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE * 2);
+  const live = claudeLiveSessions(home);
+  const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE * 2,
+    path => live.has(basename(path, '.jsonl')));
   const out = [];
   for (const f of files) {
+    if (f.path.includes('/subagents/')) continue;
+    const id = basename(f.path, '.jsonl');
+    if (out.length >= PER_ENGINE && !live.has(id)) continue;
     let cwd = null;
     let title = '';
     let sidechain = false;
@@ -222,19 +225,20 @@ async function claude(home, account) {
     // A sidechain file is a subagent's transcript, not a session you resume.
     if (sidechain || !cwd) continue;
 
-    const pid = writerPid(f.path);
+    const owners = live.get(id) ?? [];
+    const pid = owners[0]?.pid ?? writerPid(f.path);
     out.push({
       engine: 'claude',
       account,
-      id: basename(f.path, '.jsonl'),
+      id,
       title: title.replace(/\s+/g, ' ').slice(0, 90) || basename(cwd),
       cwd: collapse(cwd),
       updatedAt: f.mtime,
       transcript: f.path,
       active: !!pid,
       writerPid: pid,
+      liveStatus: claudeLiveStatus(owners),
     });
-    if (out.length >= PER_ENGINE) break;
   }
   return out;
 }
@@ -768,6 +772,7 @@ export async function inventory(profiles = []) {
   const all = (await Promise.allSettled(jobs)).flatMap((r) => r.status === 'fulfilled' ? r.value : []);
   await Promise.all(all.map(async (s) => Object.assign(s, await sessionActivity({
     engine: s.engine, path: s.transcript, sessionId: s.id, active: s.active, updatedAt: s.updatedAt,
+    liveStatus: s.liveStatus,
   }))));
   // The sqlite readers scan shared data dirs, so a second account of the same
   // engine returns the same rows; the id, not the account, says which they are.

@@ -193,12 +193,14 @@ function blocks(content) {
   const parts = [];
   const tools = [];
   let thinking = false;
-  for (const b of content) {
+  for (const [i, b] of content.entries()) {
     if (!b || typeof b !== 'object') continue;
     switch (b.type) {
       case 'text':
       case 'output_text':
       case 'input_text':
+        // Helm's "[Image #N]" label just before each picture is for the model.
+        if (/^\[Image #\d+\]$/.test(b.text ?? '') && /image/.test(content[i + 1]?.type ?? '')) break;
         if (b.text) parts.push(b.text);
         break;
       case 'thinking':
@@ -367,7 +369,7 @@ export async function codexSessionState(path) {
 // A writer lock says who owns a conversation, not whether a turn is running.
 // Read a bounded tail and cache by file revision so list refreshes stay cheap.
 const activityCache = new Map();
-export async function sessionActivity({ engine, path, sessionId, active = false, updatedAt = 0 }) {
+export async function sessionActivity({ engine, path, sessionId, active = false, updatedAt = 0, liveStatus = null }) {
   if (!active) return { status: 'done', turns: 1, updatedAt };
   let phase = null;
   try {
@@ -432,10 +434,9 @@ export async function sessionActivity({ engine, path, sessionId, active = false,
       else if (last?.role === 'assistant' && last.text?.trim()) phase = 'done';
     }
   } catch { /* older schemas and partial writes use the activity fallback */ }
-  // An exited writer cannot still be working. Engines without a completion
-  // marker use recent activity, never process existence alone.
-  const status = phase ?? (Date.now() - updatedAt < 30_000 ? 'working' : 'idle');
-  return { status, turns: status === 'done' ? 1 : 0, updatedAt };
+  // Process existence and a recent file write do not prove active work.
+  const status = liveStatus ?? (phase === 'done' ? 'idle' : phase) ?? 'idle';
+  return { status, turns: phase === 'done' || status === 'done' ? 1 : 0, updatedAt };
 }
 
 async function claudeMessages(path, { all = false } = {}) {
