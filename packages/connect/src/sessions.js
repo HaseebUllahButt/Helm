@@ -1604,7 +1604,7 @@ export class Sessions extends EventEmitter {
     if (found) { s.externalPid = found.writerPid; s.transcript = found.transcript; }
     if (!this.#externalActive(s)) return;
     await this.#refreshExternalActivity(s, true);
-    throw new Error(`The external ${s.engine} CLI still owns this conversation. Close it on the machine before continuing in Helm. For live control from both terminal and app, start with helm chat <account>.`);
+    throw new Error(`This ${s.engine} chat was started outside Helm's shared terminal. Use Take over above to continue here without manually closing it. New terminal chats share automatically when Helm's CLI integration is on.`);
   }
 
   #takeovers = new Map();

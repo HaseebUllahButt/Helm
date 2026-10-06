@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-native-test-'));
 process.env.HELM_DIR = join(root, 'helm');
@@ -13,7 +14,7 @@ process.env.HELM_NATIVE_SOCKET = join(root, 'native.sock');
 mkdirSync(process.env.HELM_DIR);
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ version: 1, profiles: [] }));
 const { TerminalHost, NATIVE_SOCKET_PATH } = await import('../packages/connect/src/terminals.js');
-const { interactiveLaunch, installNativeLaunchers } = await import('../packages/connect/src/native-cli.js');
+const { interactiveLaunch, installNativeLaunchers, integrateNativeCommands, removeNativeLaunchers } = await import('../packages/connect/src/native-cli.js');
 const { loadPty } = await import('../packages/connect/src/pty.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 
@@ -43,6 +44,31 @@ test('launchers are idempotent and only cover CLIs Helm can share', () => {
   assert.equal(readFileSync(join(dir, 'claude'), 'utf8'), first);
   installNativeLaunchers({}, { dir });
   assert.throws(() => readFileSync(join(dir, 'claude')));
+});
+
+test('bash login PATH changes cannot bypass the shared CLI launcher', () => {
+  const home = join(root, 'shell-home'), real = join(home, 'local-bin'), dir = join(home, 'helm-bin');
+  mkdirSync(real, { recursive: true });
+  writeFileSync(join(real, 'claude'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const rc = join(home, '.bashrc'), login = join(home, '.bash_profile');
+  writeFileSync(rc, '# existing interactive configuration\n');
+  writeFileSync(login, `. '${rc}'\nexport PATH='${real}':"$PATH"\n`);
+  const originalPath = process.env.PATH, originalShell = process.env.SHELL;
+  process.env.PATH = `${real}:/usr/bin:/bin`; process.env.SHELL = '/bin/bash';
+  try {
+    integrateNativeCommands({ enable: true, home, dir });
+    const installed = readFileSync(login, 'utf8');
+    assert.equal(execFileSync('/bin/bash', ['--noprofile', '--norc', '-c', '. "$1"; command -v claude', 'test', login],
+      { encoding: 'utf8', env: { ...process.env, PATH: `${real}:/usr/bin:/bin` } }).trim(), join(dir, 'claude'));
+    integrateNativeCommands({ enable: true, home, dir });
+    assert.equal(readFileSync(login, 'utf8'), installed, 'repair remains idempotent');
+    removeNativeLaunchers({ home, dir });
+    assert.equal(readFileSync(login, 'utf8').includes('helm: normal CLI'), false);
+    assert.match(readFileSync(login, 'utf8'), /export PATH=/, 'keep the owner login configuration');
+  } finally {
+    process.env.PATH = originalPath;
+    if (originalShell === undefined) delete process.env.SHELL; else process.env.SHELL = originalShell;
+  }
 });
 
 for (const engine of ['claude', 'pi', 'devin', 'opencode']) test(`${engine}: native launch preserves arguments and account; phone answers after laptop closes and daemon restarts`, { skip: !(await loadPty()) }, async (t) => {
@@ -82,6 +108,10 @@ rl.question('Permission: allow harmless operation? [y/n] ', answer=>{
   const row = rows.find((s) => s.id === meta.id);
   assert.equal(row.shared, true); assert.equal(row.alive, true);
   assert.equal(row.nativeHome, undefined, 'internal account paths stay machine-side');
+  await first.attach(meta.id);
+  await first.input(meta.id, 'y\r', { raw: true });
+  await until(() => local.includes('APPROVAL=y') && local.includes('Question:'));
+  assert.equal(host.nativeSessions()[0].nativePid, identity.pid, 'Helm controls the same process while the laptop CLI stays open');
   // The laptop disappears without ending the provider.
   client.kill('SIGTERM');
   await first.stop();
@@ -90,14 +120,12 @@ rl.question('Permission: allow harmless operation? [y/n] ', answer=>{
   t.after(async () => { await second.stop(); });
   await second.adoptTerminals();
   const snapshot = await second.attach(meta.id);
-  assert.match(snapshot.text, /Permission:/);
+  assert.match(snapshot.text, /Question:/);
   await assert.rejects(second.input(meta.id, 'an ordinary message'), /Live control/,
     'chat messages must never press Enter into a native permission menu');
   assert.equal(secondHost.nativeSessions()[0].nativePid, identity.pid);
   let remote = snapshot.text;
   second.on('data', (d) => { if (d.id === meta.id) remote += d.text; });
-  await second.input(meta.id, 'y\r', { raw: true });
-  await until(() => remote.includes('APPROVAL=y') && remote.includes('Question:'));
   await second.input(meta.id, 'blue\r', { raw: true });
   await until(() => remote.includes('ANSWER=blue') && remote.includes('Message:'));
   await second.input(meta.id, 'continue on phone\r', { raw: true });

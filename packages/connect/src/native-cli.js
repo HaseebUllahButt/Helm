@@ -76,8 +76,14 @@ function rcFiles(home) {
   const files = [];
   const add = (path, always = false) => { if (always || existsSync(path)) files.push(path); };
   add(join(home, '.bashrc'), shell === 'bash');
-  // macOS Terminal starts bash as a login shell, which reads this one instead.
-  if (process.platform === 'darwin') add(join(home, '.bash_profile'), shell === 'bash');
+  // Login shells read the first existing login file after /etc/profile.
+  // Install at its end too: a PATH change after sourcing .bashrc otherwise
+  // puts the original provider ahead of Helm and silently bypasses sharing.
+  if (shell === 'bash' || existsSync(join(home, '.bashrc'))) {
+    const login = ['.bash_profile', '.bash_login', '.profile']
+      .map((name) => join(home, name)).find((path) => existsSync(path));
+    add(login ?? join(home, '.bash_profile'), shell === 'bash');
+  }
   add(join(home, '.zshrc'), shell === 'zsh');
   if (shell === 'fish' || existsSync(join(home, '.config', 'fish'))) files.push(join(home, '.config', 'fish', 'conf.d', 'helm.fish'));
   return files;
