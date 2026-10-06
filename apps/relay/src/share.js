@@ -101,10 +101,38 @@ export function createShareRoute({ online, callEnv, openTcp }) {
 
   async function lookup(name) {
     const age = Date.now() - cache.at;
+    // A known name is answered from memory and checked again behind the
+    // request: asking every machine costs a round trip, which on a slow link
+    // was most of a page load. A stopped share can be served once more from
+    // memory - and then its machine refuses the tunnel anyway.
+    if (cache.map.has(name)) {
+      if (age > CACHE_MS) refresh().catch(() => {});
+      return cache.map.get(name);
+    }
     // A name not seen yet is looked for again, but not on every request: a
     // stranger guessing names must not turn into an RPC storm.
-    if (age > CACHE_MS || (!cache.map.has(name) && age > MISS_MS)) await refresh();
+    if (age > MISS_MS) await refresh();
     return cache.map.get(name) ?? null;
+  }
+
+  // One connection pool per shared port. Opening a tunnel is a round trip
+  // to the machine; a page with thirty files paid it thirty times.
+  const agents = new Map();
+  function agentFor(share) {
+    const key = `${share.env}:${share.port}`;
+    let agent = agents.get(key);
+    if (agent) return agent;
+    agent = new http.Agent({ keepAlive: true, maxSockets: 8, maxFreeSockets: 4, timeout: 30_000 });
+    agent.createConnection = (_options, done) => {
+      openTcp(share.env, share.port).then((stream) => {
+        // The machine closing its end must free the slot, or the pool would
+        // hand the next request a tunnel nobody is reading.
+        stream.once('end', () => stream.destroy());
+        done(null, stream);
+      }, (err) => done(err));
+    };
+    agents.set(key, agent);
+    return agent;
   }
 
   /** `mockups` from mockups.130-210-33-163.sslip.io, if that is one of ours. */
@@ -192,12 +220,7 @@ export function createShareRoute({ online, callEnv, openTcp }) {
       else { res.writeHead(401, { 'content-type': 'text/plain' }); res.end('password required'); }
       return true;
     }
-    let socket;
-    try { socket = await openTcp(share.env, share.port); }
-    catch (err) { offline(res, share, err); return true; }
-    const agent = new http.Agent({ keepAlive: false });
-    agent.createConnection = () => socket;
-    const up = http.request({ method: req.method, path, headers: upstreamHeaders(req, share), agent });
+    const up = http.request({ method: req.method, path, headers: upstreamHeaders(req, share), agent: agentFor(share) });
     up.on('response', (ur) => {
       const out = [];
       for (let i = 0; i < ur.rawHeaders.length; i += 2) {
@@ -206,7 +229,9 @@ export function createShareRoute({ online, callEnv, openTcp }) {
       res.writeHead(ur.statusCode, ur.statusMessage, out);
       ur.pipe(res);
     });
-    res.on('close', () => up.destroy());
+    // A visitor who leaves mid-answer frees the tunnel; one who got the
+    // whole answer leaves it in the pool for the next request.
+    res.on('close', () => { if (!res.writableFinished) up.destroy(); });
     up.on('error', (err) => {
       if (res.headersSent) res.destroy();
       else offline(res, share, err);

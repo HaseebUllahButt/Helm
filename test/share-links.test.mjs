@@ -84,6 +84,20 @@ test('a shared port answers on its name, as a local visit', async () => {
   assert.equal(JSON.parse(posted.text).body, 'a=1&b=2');
 });
 
+test('a page and its files share a few tunnels, and an idle close does not hang the next', async () => {
+  const before = machine.opened;
+  for (let i = 0; i < 20; i++) assert.equal((await request('app.links.test', `/f${i}`)).status, 200);
+  assert.ok(machine.opened - before <= 2, `opened ${machine.opened - before} tunnels for 20 requests`);
+  // The app drops idle keep-alive connections (Node does after 5s); the
+  // next request must get a fresh tunnel, not a dead one.
+  app.keepAliveTimeout = 100;
+  await request('app.links.test', '/warm');
+  await new Promise((r) => setTimeout(r, 400));
+  const after = await Promise.race([request('app.links.test', '/after-idle'), new Promise((r) => setTimeout(() => r({ status: 'hung' }), 5000))]);
+  assert.equal(after.status, 200);
+  app.keepAliveTimeout = 5000;
+});
+
 test('an unknown name, or a dead app, says so in words', async () => {
   const missing = await request('nope.links.test');
   assert.equal(missing.status, 404);
@@ -189,6 +203,7 @@ async function fakeMachine(id, list) {
     headers: { authorization: `Bearer ${mintToken(net.key, { net: net.id, sub: id, role: 'machine' })}` },
   });
   const tunnels = new Map();
+  ws.opened = 0;
   const send = (o) => ws.send(JSON.stringify(o));
   ws.on('message', (raw) => {
     const msg = JSON.parse(raw);
@@ -196,6 +211,7 @@ async function fakeMachine(id, list) {
       send({ t: T.RPC_RESULT, id: msg.id, ok: true, result: msg.method === 'share.list' ? { shares: list } : {} });
     } else if (msg.t === T.TUNNEL_OPEN) {
       if (!list.some((s) => s.port === msg.port)) return send({ t: T.TUNNEL_CLOSE, sid: msg.sid, reason: 'port not allowed' });
+      ws.opened += 1;
       const sock = tcpConnect({ host: '127.0.0.1', port: msg.port });
       tunnels.set(msg.sid, sock);
       sock.on('connect', () => send({ t: T.TUNNEL_READY, sid: msg.sid }));
