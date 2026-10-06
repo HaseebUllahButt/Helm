@@ -29,6 +29,19 @@ export const DEVIN_MIN_VERSION = '3000.10.0';
  */
 const DEVIN_USAGE = { name: 'usage', description: 'Show account quota and usage', source: 'devin' };
 
+const FUSION_MODEL = /^(fusion-.+)-(low|medium|high|xhigh|max)(-sidekick-.+)$/;
+
+export function normalizeDevinModel(value, catalog) {
+  if (typeof value !== 'string' || !catalog?.models?.length || catalog.models.includes(value)) return null;
+  const requested = value.match(FUSION_MODEL);
+  if (!requested || !catalog.efforts?.includes(requested[2])) return null;
+  const candidates = catalog.models.filter((candidate) => {
+    const parsed = typeof candidate === 'string' ? candidate.match(FUSION_MODEL) : null;
+    return parsed && parsed[1] === requested[1] && parsed[3] === requested[3];
+  });
+  return candidates.length === 1 ? { model: candidates[0], effort: requested[2] } : null;
+}
+
 /**
  * What `/` can mean in a devin session when the agent never said so itself.
  * `devin acp` advertises its commands with available_commands_update, and
@@ -71,6 +84,10 @@ export class DevinDriver extends AcpDriver {
       effortId: 'thought_level',
       fallbackCommands: DEVIN_COMMANDS,
       extraCommands: [DEVIN_USAGE],
+      normalizeModel: normalizeDevinModel,
+      adoptOption: (driver) => driver.effort
+        ? ['thought_level', driver.effort]
+        : driver.model ? ['model', driver.model] : null,
       localCommand: (driver, text) =>
         /^\/usage\s*$/i.test(String(text).trim())
           ? () => devinUsageReport({

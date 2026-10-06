@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
-import { DevinDriver, DEVIN_COMMANDS } from '../packages/connect/src/drivers/devin.js';
+import { DevinDriver, DEVIN_COMMANDS, normalizeDevinModel } from '../packages/connect/src/drivers/devin.js';
 import { OpencodeDriver } from '../packages/connect/src/drivers/opencode.js';
 
 // The mode-switch stream is a `devin acp` session whose agent reports the
@@ -146,6 +146,266 @@ test('devin: a refused model says so, and the record lands on what is running', 
   assert.equal(driver.effort, 'high', 'a refused effort snaps back to the agent\'s level');
   assert.equal(log.of('error').filter((e) => /bogus/.test(e.message)).length, 1);
   await driver.kill();
+});
+
+const FUSION_ALIAS = 'fusion-gpt-6-1-sol-medium-sidekick-swe-2-high';
+const FUSION_CANONICAL = 'fusion-gpt-6-1-sol-high-sidekick-swe-2-high';
+
+const fusionOptions = (effort = 'high') => [
+  { id: 'mode', currentValue: 'accept-edits', options: [{ value: 'accept-edits', name: 'Code' }] },
+  { id: 'model', currentValue: FUSION_CANONICAL, options: [{ value: FUSION_CANONICAL, name: 'Fusion Sol High' }] },
+  { id: 'thought_level', currentValue: effort, options: [
+    { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' },
+  ] },
+];
+
+const adoptPipe = ({ response, buffered = [] } = {}) => {
+  let onData;
+  let onExit;
+  let closed = false;
+  const writes = [];
+  const emit = (message) => onData?.(`${JSON.stringify(message)}\n`);
+  const finish = () => {
+    if (closed) return;
+    closed = true;
+    queueMicrotask(() => onExit?.({ code: 0 }));
+  };
+  return {
+    writes,
+    write(data) {
+      const message = JSON.parse(data);
+      writes.push(message);
+      if (message.method === 'session/set_config_option') {
+        queueMicrotask(() => emit({ jsonrpc: '2.0', id: message.id, ...response(message) }));
+      }
+    },
+    end: finish,
+    kill: finish,
+    onData(callback) {
+      onData = callback;
+      for (const message of buffered) queueMicrotask(() => emit(message));
+    },
+    onExit(callback) { onExit = callback; },
+    detach() {},
+  };
+};
+
+const hosted = (pipe, id = 'adopted') => ({
+  openCalls: 0,
+  hasProc: (candidate) => candidate === id,
+  procPipe: (candidate) => candidate === id ? pipe : null,
+  async openProc() { this.openCalls++; },
+});
+
+const pendingPermission = {
+  requestId: 'permission-1', acpId: 42,
+  acpOptions: [{ optionId: 'allow_once', kind: 'allow_once', name: 'Allow' }],
+};
+
+test('devin: hosted adoption hydrates the catalog with a same-value effort setter', async (t) => {
+  const fake = fakeCli('devin', 'plain');
+  const pipe = adoptPipe({ response: () => ({ result: { configOptions: fusionOptions('high') } }) });
+  const procHost = hosted(pipe);
+  const messages = [];
+  const driver = new DevinDriver({
+    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'edit',
+    model: FUSION_CANONICAL, effort: 'high', engineSessionId: 'e910dc39002c',
+    procHost, procId: 'adopted', openTurn: () => 'turn-live',
+    pendingEvents: () => [pendingPermission], log: (message) => messages.push(message),
+  });
+  const events = collect(driver);
+  t.after(() => driver.kill());
+
+  await driver.start();
+  assert.deepEqual(driver.info, { model: FUSION_CANONICAL, effort: 'high' });
+  assert.deepEqual(driver.catalog().models, [FUSION_CANONICAL]);
+  assert.equal(driver.catalog().effort, 'high');
+  assert.equal(driver.pending.has('permission-1'), true);
+  assert.equal(procHost.openCalls, 0);
+  assert.deepEqual(pipe.writes.map((m) => m.method), ['session/set_config_option']);
+  assert.deepEqual(pipe.writes[0].params, {
+    sessionId: 'e910dc39002c', configId: 'thought_level', value: 'high',
+  });
+  assert.deepEqual(events.of('error'), []);
+  assert.deepEqual(messages, []);
+
+  await driver.answer('permission-1', { option: 'allow' });
+  assert.equal(pipe.writes.at(-1).id, 42, 'the restored pending permission remains answerable');
+});
+
+test('devin: hosted adoption falls back to the stored model when effort is absent', async (t) => {
+  const fake = fakeCli('devin', 'plain');
+  const pipe = adoptPipe({ response: () => ({ result: { configOptions: fusionOptions('high') } }) });
+  const procHost = hosted(pipe);
+  const driver = new DevinDriver({
+    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'edit',
+    model: FUSION_CANONICAL, engineSessionId: 'e910dc39002c',
+    procHost, procId: 'adopted',
+  });
+  t.after(() => driver.kill());
+
+  await driver.start();
+  assert.deepEqual(pipe.writes.map((m) => [m.method, m.params.configId, m.params.value]), [
+    ['session/set_config_option', 'model', FUSION_CANONICAL],
+  ]);
+  assert.deepEqual(driver.info, { model: FUSION_CANONICAL, effort: 'high' });
+});
+
+test('devin: failed adoption refresh preserves the open turn and saved settings', async (t) => {
+  const fake = fakeCli('devin', 'plain');
+  const pipe = adoptPipe({ response: () => ({ error: { code: -32001, message: 'catalog unavailable' } }) });
+  const procHost = hosted(pipe);
+  const messages = [];
+  const driver = new DevinDriver({
+    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'edit',
+    model: FUSION_CANONICAL, effort: 'high', engineSessionId: 'e910dc39002c',
+    procHost, procId: 'adopted', openTurn: () => 'turn-live',
+    pendingEvents: () => [pendingPermission], log: (message) => messages.push(message),
+  });
+  const events = collect(driver);
+  t.after(() => driver.kill());
+
+  await driver.start();
+  assert.equal(driver.model, FUSION_CANONICAL);
+  assert.equal(driver.effort, 'high');
+  assert.deepEqual(events.of('error'), []);
+  assert.equal(driver.pending.has('permission-1'), true);
+  assert.ok(messages.some((message) => /adoption config refresh unavailable/.test(message)));
+  assert.deepEqual(pipe.writes.map((m) => m.method), ['session/set_config_option']);
+});
+
+test('devin: buffered config options avoid an adoption refresh RPC', async (t) => {
+  const fake = fakeCli('devin', 'plain');
+  const pipe = adoptPipe({
+    response: () => { throw new Error('refresh should be skipped'); },
+    buffered: [{
+      jsonrpc: '2.0', method: 'session/update',
+      params: { update: { sessionUpdate: 'config_option_update', configOptions: fusionOptions('high') } },
+    }],
+  });
+  const procHost = hosted(pipe);
+  const driver = new DevinDriver({
+    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'edit',
+    model: FUSION_CANONICAL, effort: 'high', engineSessionId: 'e910dc39002c',
+    procHost, procId: 'adopted',
+  });
+  t.after(() => driver.kill());
+
+  await driver.start();
+  assert.equal(pipe.writes.length, 0);
+  assert.deepEqual(driver.info, { model: FUSION_CANONICAL, effort: 'high' });
+  assert.equal(driver.catalog().current, FUSION_CANONICAL);
+});
+
+test('opencode: hosted adoption without a callback stays zero-RPC', async (t) => {
+  const fake = fakeCli('opencode', 'plain');
+  const pipe = adoptPipe({ response: () => { throw new Error('adoption should not write'); } });
+  const procHost = hosted(pipe, 'opencode-adopted');
+  const driver = new OpencodeDriver({
+    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir, mode: 'ask',
+    engineSessionId: 'opencode-session', procHost, procId: 'opencode-adopted',
+  });
+  t.after(() => driver.kill());
+
+  await driver.start();
+  assert.deepEqual(pipe.writes, []);
+});
+
+test('devin: an unadvertised Fusion effort maps to the advertised model and thought level', async (t) => {
+  const { driver, log, fake } = make('fusion-initial', { model: FUSION_ALIAS });
+  t.after(() => driver.kill());
+  let init;
+  driver.on('init', (info) => { init = info; });
+  await driver.start();
+  assert.equal(driver.model, FUSION_CANONICAL);
+  assert.equal(driver.effort, 'medium');
+  assert.equal(driver.catalog().current, FUSION_CANONICAL);
+  assert.equal(driver.catalog().effort, 'medium');
+  assert.deepEqual(driver.info, { model: FUSION_CANONICAL, effort: 'medium' });
+  assert.deepEqual(init, { model: FUSION_CANONICAL, effort: 'medium' });
+  assert.deepEqual(log.of('error'), []);
+  assert.ok(log.of('settings').some((e) => e.model === FUSION_CANONICAL));
+  assert.ok(log.of('settings').some((e) => e.effort === 'medium'));
+  assert.deepEqual(
+    fake.stdinLines().filter((l) => l.method === 'session/set_config_option').map((l) => [l.params.configId, l.params.value]),
+    [['model', FUSION_CANONICAL], ['thought_level', 'medium'], ['mode', 'accept-edits']],
+  );
+});
+
+test('devin: a Fusion alias still applies thought level when its canonical model is current', async (t) => {
+  const { driver, log, fake } = make('fusion-mid', { model: FUSION_CANONICAL, effort: 'high' });
+  t.after(() => driver.kill());
+  await driver.start();
+  const settingsBefore = log.of('settings').length;
+  await driver.setModel(FUSION_ALIAS);
+  assert.equal(driver.model, FUSION_CANONICAL);
+  assert.equal(driver.effort, 'medium');
+  assert.equal(driver.catalog().current, FUSION_CANONICAL);
+  assert.equal(driver.catalog().effort, 'medium');
+  assert.ok(log.of('settings').slice(settingsBefore).some((e) => e.model === FUSION_CANONICAL));
+  assert.ok(log.of('settings').slice(settingsBefore).some((e) => e.effort === 'medium'));
+  const calls = fake.stdinLines().filter((l) => l.method === 'session/set_config_option');
+  assert.deepEqual(calls.slice(-2).map((l) => [l.params.configId, l.params.value]), [
+    ['model', FUSION_CANONICAL], ['thought_level', 'medium'],
+  ]);
+  assert.deepEqual(log.of('error'), []);
+});
+
+test('devin: model normalization only translates an unadvertised, unambiguous Fusion variant', () => {
+  const requested = 'fusion-gpt-6-2-sol-medium-sidekick-swe-2-high';
+  const candidate = 'fusion-gpt-6-2-sol-high-sidekick-swe-2-high';
+  const catalog = { models: [candidate], efforts: ['medium', 'high'] };
+  assert.deepEqual(normalizeDevinModel(requested, catalog), { model: candidate, effort: 'medium' });
+  assert.equal(normalizeDevinModel(candidate, catalog), null);
+  assert.equal(normalizeDevinModel('gpt-6-2-sol-medium', { models: [candidate], efforts: ['medium', 'high'] }), null);
+  assert.equal(normalizeDevinModel(requested, null), null);
+  assert.equal(normalizeDevinModel(requested, { models: [candidate], efforts: ['high'] }), null);
+  assert.equal(normalizeDevinModel(requested, { models: ['fusion-gpt-6-2-sol-high-sidekick-swe-2-low'], efforts: ['medium', 'high'] }), null);
+  assert.equal(normalizeDevinModel(requested, { models: [candidate, 'fusion-gpt-6-2-sol-xhigh-sidekick-swe-2-high'], efforts: ['medium', 'high'] }), null);
+  assert.equal(normalizeDevinModel(requested, { models: ['fusion-gpt-6-2-sol-high-sidekick-other-high'], efforts: ['medium', 'high'] }), null);
+});
+
+test('devin: a mapped model refusal does not send its thought level', async (t) => {
+  const { driver, log, fake } = make('fusion-model-refused', { model: FUSION_ALIAS });
+  t.after(() => driver.kill());
+  await driver.start();
+  assert.equal(driver.model, FUSION_CANONICAL);
+  assert.equal(driver.info.effort, 'high');
+  assert.equal(log.of('error').filter((e) => e.kind === 'settings').length, 1);
+  assert.equal(fake.stdinLines().some((l) => l.method === 'session/set_config_option' && l.params.configId === 'thought_level'), false);
+});
+
+test('devin: a refused mapped thought level keeps the accepted model and actual effort', async (t) => {
+  const { driver, log } = make('fusion-effort-refused', { model: FUSION_ALIAS });
+  t.after(() => driver.kill());
+  await driver.start();
+  assert.equal(driver.model, FUSION_CANONICAL);
+  assert.equal(driver.effort, 'high');
+  assert.equal(driver.info.effort, 'high');
+  assert.ok(log.of('error').some((e) => e.kind === 'settings' && /medium/.test(e.message)));
+  assert.equal(log.of('error').some((e) => e.kind === 'settings' && /model.*refused|model.*offer/i.test(e.message)), false);
+});
+
+test('devin: explicit startup effort wins over a normalized Fusion effort', async (t) => {
+  const { driver } = make('fusion-initial', { model: FUSION_ALIAS, effort: 'high' });
+  t.after(() => driver.kill());
+  await driver.start();
+  assert.equal(driver.model, FUSION_CANONICAL);
+  assert.equal(driver.effort, 'high');
+  assert.equal(driver.catalog().effort, 'high');
+  assert.deepEqual(driver.info, { model: FUSION_CANONICAL, effort: 'high' });
+});
+
+test('devin: empty setting acknowledgments preserve accepted model and effort', async (t) => {
+  const { driver, log } = make('empty-ack', { model: 'gpt-6-sol-medium', effort: 'medium' });
+  t.after(() => driver.kill());
+  await driver.start();
+  assert.equal(driver.model, 'gpt-6-sol-medium');
+  assert.equal(driver.effort, 'medium');
+  assert.equal(driver.catalog().current, 'gpt-6-sol-medium');
+  assert.equal(driver.catalog().effort, 'medium');
+  assert.deepEqual(driver.info, { model: 'gpt-6-sol-medium', effort: 'medium' });
+  assert.deepEqual(log.of('error'), []);
 });
 
 test('opencode: no fallback list means an unadvertised palette is empty', async () => {

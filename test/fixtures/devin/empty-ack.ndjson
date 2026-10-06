@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":"rec-1","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{}},"agentInfo":{"name":"empty-ack","title":"Devin Agent","version":"0.0.0-dev"}}}
+{"jsonrpc":"2.0","id":"rec-2","result":{"sessionId":"empty-ack","configOptions":[{"id":"mode","currentValue":"accept-edits","options":[{"value":"accept-edits","name":"Code"}]},{"id":"model","currentValue":"gpt-6-luna-medium","options":[{"value":"gpt-6-luna-medium","name":"Luna Medium"},{"value":"gpt-6-sol-medium","name":"Sol Medium"}]},{"id":"thought_level","currentValue":"high","options":[{"value":"medium","name":"Medium"},{"value":"high","name":"High"}]}]}}
+{"jsonrpc":"2.0","id":"rec-3","result":{}}
+{"jsonrpc":"2.0","id":"rec-4","result":{}}
+{"jsonrpc":"2.0","id":"rec-5","result":{}}

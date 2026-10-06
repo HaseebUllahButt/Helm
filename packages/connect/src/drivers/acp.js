@@ -237,17 +237,15 @@ export class AcpDriver extends Driver {
     // The choices made in the app land on the live session. The agent may
     // lack the option entirely (an unknown model, a mode it does not have);
     // a refused set is worth a log line, not a dead session.
+    const startupEffort = this.effort;
+    if (this.model) await this.#applyModel(this.model);
     const mode = this.spec.acpMode(this.mode);
-    for (const [configId, value] of [
-      ['model', this.model],
-      ['mode', mode],
-      [this.spec.effortId, this.spec.effortId ? this.effort : null],
-    ]) {
-      if (!configId || !value) continue;
-      const r = await this.#setOption(configId, value);
-      if (r.error) this.#refused(configId, value, r.error);
+    if (mode) {
+      const r = await this.#setOption('mode', mode);
+      if (r.error) this.#refused('mode', mode, r.error);
       else this.#takeOptions(r.result);
     }
+    if (startupEffort) await this.#applyEffort(startupEffort);
     // From here the agent's own switches - its /code, /fast, and the like -
     // are real changes, mirrored into settings by #modeChanged/#optionsChanged.
     this.#live = true;
@@ -337,6 +335,7 @@ export class AcpDriver extends Driver {
         this.push('settings', { mode: back.id });
       }
     }
+    this.#syncInfo();
   }
 
   /**
@@ -426,6 +425,74 @@ export class AcpDriver extends Driver {
     return this.#call('session/set_config_option', { sessionId: this.engineSessionId, configId, value });
   }
 
+  #syncInfo() {
+    if (!this.info) return;
+    const model = this.#options.find((o) => o.id === 'model')?.currentValue;
+    const effort = this.spec.effortId ? this.#options.find((o) => o.id === this.spec.effortId)?.currentValue : null;
+    this.info = { ...this.info, model: model ?? this.model, effort: effort ?? null };
+  }
+
+  async #applyModel(requested) {
+    const normalized = this.spec.normalizeModel?.(requested, this.catalog()) ?? null;
+    const model = normalized?.model ?? requested;
+    const resolvedEffort = normalized?.effort ?? null;
+    this.model = requested || null;
+    const cached = this.#options.find((o) => o.id === 'model');
+    const cachedValue = cached?.currentValue;
+    if (!this.#pipe || !this.engineSessionId || !requested) return;
+    const r = await this.#setOption('model', model);
+    if (r.error) {
+      this.#refused('model', requested, r.error);
+      return;
+    }
+    const changed = this.#optionsChanged(r.result);
+    const responseOption = r.result?.configOptions?.find((o) => o?.id === 'model');
+    const responseValue = Object.hasOwn(responseOption ?? {}, 'currentValue')
+      ? responseOption.currentValue
+      : Object.hasOwn(r.result?.models ?? {}, 'currentModelId') ? r.result.models.currentModelId : undefined;
+    const current = this.#options.find((o) => o.id === 'model')?.currentValue;
+    const moved = current != null && current !== cachedValue;
+    const actual = responseValue ?? (moved ? current : model);
+    if (cached && actual !== this.#options.find((o) => o.id === 'model')?.currentValue) {
+      const configOptions = [{ ...cached, currentValue: actual }];
+      const effort = this.#options.find((o) => o.id === this.spec.effortId);
+      if (effort) configOptions.push(effort);
+      changed.push(...this.#optionsChanged({ configOptions }));
+    }
+    this.model = actual;
+    this.#syncInfo();
+    if (requested !== actual && (!this.#live || (!changed.some((o) => o.id === 'model') && !moved))) {
+      this.push('settings', { model: actual });
+    }
+    if (resolvedEffort) await this.#applyEffort(resolvedEffort, true);
+  }
+
+  async #applyEffort(effort, forceSettings = false) {
+    this.effort = effort || null;
+    const cached = this.#options.find((o) => o.id === this.spec.effortId);
+    const cachedValue = cached?.currentValue;
+    if (!this.#pipe || !this.engineSessionId || !this.spec.effortId || !effort) return;
+    const r = await this.#setOption(this.spec.effortId, effort);
+    if (r.error) {
+      this.#refused(this.spec.effortId, effort, r.error);
+      return;
+    }
+    const changed = this.#optionsChanged(r.result);
+    const responseOption = r.result?.configOptions?.find((o) => o?.id === this.spec.effortId);
+    const responseValue = Object.hasOwn(responseOption ?? {}, 'currentValue') ? responseOption.currentValue : undefined;
+    const current = this.#options.find((o) => o.id === this.spec.effortId)?.currentValue;
+    const moved = current != null && current !== cachedValue;
+    const actual = responseValue ?? (moved ? current : effort);
+    if (cached && actual !== this.#options.find((o) => o.id === this.spec.effortId)?.currentValue) {
+      changed.push(...this.#optionsChanged({ configOptions: [{ ...cached, currentValue: actual }] }));
+    }
+    this.effort = actual;
+    this.#syncInfo();
+    if ((forceSettings || effort !== actual) && (!this.#live || !changed.some((o) => o.id === this.spec.effortId))) {
+      this.push('settings', { effort: actual });
+    }
+  }
+
   /**
    * A pipe the daemon owns outright - the pre-host way, for machines where
    * no host is listening. Shape matches what `TerminalHost.procPipe` hands
@@ -503,7 +570,7 @@ export class AcpDriver extends Driver {
    * there is no initialize, no session/load; just recover what the event
    * log was still holding open and carry on listening.
    */
-  #adoptPipe(pipe) {
+  async #adoptPipe(pipe) {
     this.#hosted = true;
     this.#live = true;
     this.#bindPipe(pipe);
@@ -511,6 +578,25 @@ export class AcpDriver extends Driver {
     for (const e of this.pendingEvents?.() ?? []) {
       this.#requests.set(e.requestId, { id: e.acpId ?? e.requestId, options: e.acpOptions ?? [] });
       this.pending.set(e.requestId, e);
+    }
+
+    const choice = this.spec.adoptOption?.(this) ?? null;
+    if (choice && this.engineSessionId) {
+      await Promise.resolve();
+      if (!this.#options.length) {
+        const [configId, value] = choice;
+        const r = await this.#setOption(configId, value);
+        if (r.error) {
+          this.log(`${this.engine}: adoption config refresh unavailable (${r.error.message})`);
+        } else {
+          this.#optionsChanged(r.result);
+        }
+      }
+      const catalog = this.catalog();
+      this.info = {
+        model: catalog?.current ?? this.model,
+        effort: catalog?.effort ?? this.effort ?? null,
+      };
     }
     this.emit('init', this.info ?? { model: this.model, effort: this.effort });
   }
@@ -684,12 +770,7 @@ export class AcpDriver extends Driver {
   }
 
   async setModel(model) {
-    this.model = model || null;
-    if (this.#pipe && this.engineSessionId && model) {
-      const r = await this.#setOption('model', model);
-      if (r.error) this.#refused('model', model, r.error);
-      else this.#optionsChanged(r.result);
-    }
+    await this.#applyModel(model);
   }
 
   async setMode(id) {
@@ -703,12 +784,7 @@ export class AcpDriver extends Driver {
   }
 
   async setEffort(effort) {
-    this.effort = effort || null;
-    if (this.#pipe && this.engineSessionId && this.spec.effortId && effort) {
-      const r = await this.#setOption(this.spec.effortId, effort);
-      if (r.error) this.#refused(this.spec.effortId, effort, r.error);
-      else this.#takeOptions(r.result);
-    }
+    await this.#applyEffort(effort);
   }
 
   async kill() {
@@ -813,7 +889,7 @@ export class AcpDriver extends Driver {
    */
   #optionsChanged(u) {
     const changed = this.#takeOptions(u);
-    if (!this.#live) return;
+    if (!this.#live) return changed;
     for (const o of changed) {
       if (o.id === this.spec.effortId) {
         this.effort = o.currentValue || null;
@@ -828,6 +904,8 @@ export class AcpDriver extends Driver {
         this.#modeChanged(o.currentValue);
       }
     }
+    this.#syncInfo();
+    return changed;
   }
 
   /**
