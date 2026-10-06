@@ -32,7 +32,7 @@ import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot 
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { HubMesh } from './hub-mesh.js';
-import { transcribe, canTranscribe } from './voice.js';
+import { transcribe, canTranscribe, setGroqKey } from './voice.js';
 import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
 import { Handoffs } from './handoffs.js';
 import { TaskTransfers } from './task-transfer.js';
@@ -1606,6 +1606,7 @@ export class Daemon {
       // The device records; the machine holding the key does the rest, so no
       // phone ever has to be trusted with one.
       case M.VOICE_TRANSCRIBE: return transcribe({ audio: p.audio, mime: p.mime, prompt: p.prompt });
+      case M.VOICE_KEY: return setGroqKey(p.key);
 
       // Nothing to compute: the answer is the round trip itself.
       /**

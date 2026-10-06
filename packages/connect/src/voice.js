@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { HOME, HELM_DIR } from './paths.js';
 import { loadSettings } from './settings.js';
@@ -54,10 +54,32 @@ const read = (file) => {
  * idea which is live.
  */
 export function groqKey() {
+  // Except the one pasted into Settings, which is the newest word on it.
   const configured = loadSettings()?.voice?.keyFile;
-  const files = configured ? [configured, ...KEY_FILES] : KEY_FILES;
+  const files = configured ? [KEY_FILES[0], configured, ...KEY_FILES.slice(1)] : KEY_FILES;
   for (const file of files) if (existsSync(file)) { const k = read(file); if (k) return k; }
   return process.env.HELM_GROQ_KEY || process.env.GROQ_API_KEY || null;
+}
+
+/**
+ * Keep a key pasted into Settings, once Groq has said it works. The app sends
+ * it to every machine, so dictation keeps working whichever ones are on.
+ */
+export async function setGroqKey(key, { fetchImpl = fetch } = {}) {
+  const value = String(key ?? '').trim();
+  if (!/^[\x21-\x7e]{20,200}$/.test(value)) throw new Error('that does not look like a Groq key');
+  let res;
+  try {
+    res = await fetchImpl('https://api.groq.com/openai/v1/models', {
+      headers: { authorization: `Bearer ${value}` }, signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) { throw new Error(`could not reach Groq to check it: ${err.message}`); }
+  if (res.status === 401 || res.status === 403) throw new Error('Groq did not accept that key');
+  if (!res.ok) throw new Error(`Groq answered ${res.status} when checking the key`);
+  mkdirSync(HELM_DIR, { recursive: true });
+  writeFileSync(KEY_FILES[0], `${value}\n`, { mode: 0o600 });
+  chmodSync(KEY_FILES[0], 0o600);
+  return { voice: canTranscribe() };
 }
 
 /** Whether this machine can turn speech into text, for `env.info`. */
@@ -85,7 +107,7 @@ export function extensionFor(mime) {
 export async function transcribe({ audio, mime = 'audio/webm', prompt, signal } = {}) {
   const key = groqKey();
   if (!key) {
-    throw Object.assign(new Error('no Groq key on this machine - put one in ~/.helm/groq-api-key'), { code: 'no_key' });
+    throw Object.assign(new Error('no Groq key on this machine - add one in Settings, under Dictation'), { code: 'no_key' });
   }
   const bytes = Buffer.isBuffer(audio) ? audio : Buffer.from(String(audio ?? ''), 'base64');
   if (!bytes.length) throw new Error('no audio');

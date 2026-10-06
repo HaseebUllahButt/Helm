@@ -16,6 +16,7 @@ import { ExternalSessionNotice } from './session/ExternalSessionNotice';
 import { EngineMark } from './EngineMark';
 import { NotificationToast } from './NotificationToast';
 import { PublicLinks } from './PublicLinks';
+import { DictationKey } from './DictationKey';
 import { BackIcon, Icon, toolKind } from './Icon';
 import { Route } from './Route';
 import { QrCode } from './QrCode';
@@ -1258,7 +1259,8 @@ function Shell({ client, conn, onSignOut }: {
       <section className={`main${showMain ? ' showing' : ''}`}>
         {view.kind === 'app-settings' ? (
           <SettingsView
-            client={client} onBack={back}
+            client={client} envs={envs} onBack={back}
+            onVoice={(ids) => setEnvs((list) => list.map((m) => (ids.includes(m.id) ? { ...m, info: { ...m.info, voice: true } } : m)))}
             onOpen={(v) => push(v)} onUnpair={() => setUnpairing(true)}
           />
         ) : view.kind === 'usage' ? (
@@ -3394,8 +3396,8 @@ const startSummary = (a: Account) => {
  * the gear instead of under the machine list, where it outweighed the
  * machines themselves.
  */
-function SettingsView({ client, onBack, onOpen, onUnpair }: {
-  client: Client; onBack: () => void;
+function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }: {
+  client: Client; envs: Environment[]; onBack: () => void; onVoice: (envIds: string[]) => void;
   onOpen: (v: MainView) => void; onUnpair: () => void;
 }) {
   return (
@@ -3423,6 +3425,9 @@ function SettingsView({ client, onBack, onOpen, onUnpair }: {
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
         </div>
+
+        <div className="section">dictation</div>
+        <DictationKey client={client} envs={envs} onSaved={onVoice} />
 
         <div className="section">appearance</div>
         <div className="rows">

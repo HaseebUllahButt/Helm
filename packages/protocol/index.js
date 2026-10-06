@@ -181,6 +181,7 @@ export const M = {
   BRAIN_SNAPSHOT: 'brain.snapshot',// {} -> { text, snapshot }  the whole network as the brain reads it
   // Speech to text, on a machine that holds the key rather than on the device.
   VOICE_TRANSCRIBE: 'voice.transcribe', // { audio(base64), mime? } -> { text }
+  VOICE_KEY: 'voice.key',               // { key } -> { voice }  checked with Groq, then kept in ~/.helm/groq-api-key
   SESSION_COMMANDS: 'session.commands',   // { id } -> { commands: [{name, description, source}] }
   SESSION_RESUME: 'session.resume',// { engine, account, id, cwd } -> { session }
   SESSION_TAKEOVER: 'session.takeover', // { id, cancel? } -> { waiting }  move a CLI open before Helm into a shared terminal
