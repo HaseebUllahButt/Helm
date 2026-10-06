@@ -1616,7 +1616,7 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
           {!isLocal && !/Android|iPhone|iPad|iPod/.test(navigator.userAgent) && (
             <p className="note" style={{ textAlign: 'center' }}>
               Already ran <code>helm join</code> here?{' '}
-              <a href="http://127.0.0.1:8787/">Open this computer's Helm</a>.
+              <a href="http://127.0.0.1:8787/" target="_self">Open this computer's Helm</a>.
             </p>
           )}
         </form>

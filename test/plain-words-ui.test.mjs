@@ -40,6 +40,7 @@ test('browser keys are caught; editing and finding keys are not', () => {
   for (const k of ['n', 't', 'p', 's', 'o', 'h', 'j', 'd', 'l']) assert.ok(isBrowserKey(key(k)), `Ctrl+${k}`);
   for (const k of ['N', 'T', 'B', 'Delete']) assert.ok(isBrowserKey(key(k, { shiftKey: true })), `Ctrl+Shift+${k}`);
   assert.ok(isBrowserKey(key('n', { ctrlKey: false, metaKey: true })), 'Cmd+N');
+  assert.ok(isBrowserKey(key('F1', { ctrlKey: false })), 'F1 opens browser help');
   for (const k of ['c', 'v', 'x', 'z', 'a', 'f', 'r', 'w', 'k', '+', '-']) assert.ok(!isBrowserKey(key(k)), `Ctrl+${k} stays`);
   assert.ok(!isBrowserKey(key('n', { ctrlKey: false })), 'plain n is typing');
   assert.ok(!isBrowserKey(key('i', { shiftKey: true })), 'devtools stay');
