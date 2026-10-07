@@ -28,7 +28,7 @@ import { delegationMode, delegationOutput, trackDelegationReply } from './delega
 import { authStatuses } from './auth.js';
 import { TerminalHost, NativeHosts, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory } from './inventory.js';
-import { claudeLiveSessions, claudeLiveStatus, descendsFrom } from './external-process.js';
+import { claudeLiveSessions, claudeLiveStatus, descendsFrom, dedupeNativeConversations } from './external-process.js';
 import { hostedProcId } from './hosted-process.js';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
 import { openFiles, processArgv, processCwd } from './procinfo.js';
@@ -757,13 +757,19 @@ export class Sessions extends EventEmitter {
         if (s.nativeCli && alive) {
           const profile = profiles.find((p) => p.engine === s.engine &&
             expand(p.env?.[ENGINES[s.engine].homeEnv] || ENGINES[s.engine].defaultHome) === s.nativeHome);
+          const owned = (pid) => !!pid && !!s.nativePid && descendsFrom(pid, s.nativePid);
+          const claudeOwners = s.engine === 'claude' && s.nativeHome ? claudeLiveSessions(s.nativeHome) : null;
+          // Prefer the terminal's actual process over its previous conversation
+          // ID: two terminals may have resumed the same transcript.
           const current = detected.find((x) => x.engine === s.engine &&
-            (x.id === s.engineSessionId || (x.writerPid && s.nativePid && descendsFrom(x.writerPid, s.nativePid))));
+            (owned(x.writerPid) || claudeOwners?.get(x.id)?.some((owner) => owned(owner.pid))))
+            ?? detected.find((x) => x.engine === s.engine && x.id === s.engineSessionId);
           if (profile) s.profileId = profile.id;
           if (current) {
             s.engineSessionId = current.id;
             s.transcript = current.transcript;
-            s.status = current.status;
+            const owners = claudeOwners?.get(current.id)?.filter((owner) => owned(owner.pid)) ?? [];
+            s.status = claudeLiveStatus(owners) ?? current.status;
             s.turns = current.turns;
             if (!s.titleBy) s.title = current.title || s.title;
             s.updatedAt = Math.max(s.updatedAt, current.updatedAt || 0);
@@ -805,7 +811,7 @@ export class Sessions extends EventEmitter {
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
-    return out.filter((s) => parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation)
+    return dedupeNativeConversations(out.filter((s) => parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation))
       .map((s) => s.delegations ? { ...s, delegations: this.#visibleDelegations(s) } : s)
       // The branch each thread's folder is on, for the sidebar's third line.
       .map((s) => (s.cwd ? { ...s, branch: gitBranch(s.cwd) } : s))

@@ -41,6 +41,25 @@ export function claudeLiveStatus(owners) {
   return null;
 }
 
+/** Several native terminals can resume one conversation. Keep its active
+ * terminal in the list while retaining every terminal and its history.
+ */
+export function dedupeNativeConversations(rows) {
+  const chosen = new Map();
+  const key = (s) => s.nativeCli && s.engineSessionId
+    ? JSON.stringify([s.engine, s.profileId, s.engineSessionId]) : null;
+  const rank = (s) => !s.alive ? 0 : s.pending ? 5
+    : s.status === 'blocked' ? 4 : s.status === 'working' ? 3 : 2;
+  for (const s of rows) {
+    const id = key(s);
+    if (!id) continue;
+    const previous = chosen.get(id);
+    if (!previous || rank(s) > rank(previous)
+      || (rank(s) === rank(previous) && (s.createdAt ?? 0) > (previous.createdAt ?? 0))) chosen.set(id, s);
+  }
+  return rows.filter((s) => !key(s) || chosen.get(key(s)) === s);
+}
+
 /** A launcher (npm's node shim, say) runs the real CLI as its child, so the
  * process holding the conversation is a descendant of the one Helm started.
  */
