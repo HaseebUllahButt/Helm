@@ -4337,6 +4337,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const [nativeOptions, setNativeOptions] = useState<ModelList | null>(null);
   const [nativeCommands, setNativeCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
   const [settingBusy, setSettingBusy] = useState(false);
+  const [nativeNotice, setNativeNotice] = useState('');
   useEffect(() => {
     setNativeOptions(null); setNativeCommands([]);
     if (!session.nativeChat) return;
@@ -4364,7 +4365,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     setSettingBusy(true); setError('');
     try {
       await client.rpc(env.id, 'session.input', { id: session.id, data: command }, 70_000);
-      setRaw(true);
+      setNativeNotice(command);
     } catch (e: any) { setError(e.message); }
     finally { setSettingBusy(false); }
   };
@@ -4373,9 +4374,9 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     setSettingBusy(true); setError('');
     try {
       await client.rpc(env.id, `session.${kind}`, { id: session.id, [kind]: value }, 70_000);
-      // The native terminal displays success, rejection, or confirmation.
-      // Keep the reported setting until Claude actually confirms a change.
-      setRaw(true);
+      // Writing a command is not confirmation that Claude applied it.
+      // Keep the reported setting and let the user inspect native output.
+      setNativeNotice(`/${kind} ${value}`);
     } catch (e: any) { setError(e.message); }
     finally { setSettingBusy(false); }
   };
@@ -4449,7 +4450,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     try {
       const result = await client.rpc<{ terminal?: boolean }>(env.id, 'session.input', { id: session.id, data: body + '\n' });
       setDraft(current => current === body ? '' : current);
-      if (session.nativeChat && (result?.terminal || body.trimStart().startsWith('/'))) setRaw(true);
+      if (session.nativeChat && (result?.terminal || body.trimStart().startsWith('/'))) setNativeNotice(body.trim());
       else setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now() }] : m);
       setTimeout(refresh, 600);
     } catch (e: any) { setError(e.message); }
@@ -4576,6 +4577,16 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           </Suspense>
         : <Chat messages={messages} status={status} />}
 
+      {session.nativeChat && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
+      {session.nativeChat && !raw && nativeNotice && (
+        <div className="composer-wrap"><div className="composer-col">
+          <div className="banner native-command" role="status">
+            <span>Sent <code>{nativeNotice}</code> to Claude.</span>
+            <button className="ghost" onClick={() => setRaw(true)}>View in terminal</button>
+            <button className="iconbtn" aria-label="Dismiss command notice" onClick={() => setNativeNotice('')}><Icon name="close" size={14} /></button>
+          </div>
+        </div></div>
+      )}
       {!raw && (
         <Composer
           onTranscribe={onTranscribe}
@@ -4587,7 +4598,6 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
         >
           {nativeControls.sheet}
-          {session.nativeChat && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
           {(error || (!messages && readError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || readError}</div>}
         </Composer>
       )}
@@ -4609,8 +4619,11 @@ function NativeClaudeApprovals({ client, env, sessionId }: { client: Client; env
     catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
   };
-  return <>{pending && <PermissionSheet key={pending.requestId} permission={pending} busy={busy} onAnswer={d => void answer(d)} />}
-    {error && <div className="error" role="alert">{error}</div>}</>;
+  if (!pending && !error) return null;
+  return <div className="composer-wrap"><div className="composer-col">
+    {pending && <PermissionSheet key={pending.requestId} permission={pending} busy={busy} onAnswer={d => void answer(d)} />}
+    {error && <div className="error" role="alert">{error}</div>}
+  </div></div>;
 }
 
 

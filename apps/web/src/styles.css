@@ -624,6 +624,10 @@ button.linkish:hover { color: var(--text); }
   padding: 10px 12px; border-radius: var(--radius); font-size: var(--t-meta); margin-bottom: 12px;
   background: var(--card); border: 1px solid var(--line-2); color: var(--text-dim);
 }
+.native-command { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; }
+.native-command > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.native-command > button { flex: none; width: auto; margin: 0; }
+.native-command .ghost { font-size: var(--t-meta); padding: 5px 8px; }
 .banner.warn {
   background: color-mix(in srgb, var(--amber) 8%, var(--bg)); color: var(--amber-text);
   border-color: color-mix(in srgb, var(--amber) 28%, transparent);

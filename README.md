@@ -295,10 +295,11 @@ terminal code starts a new terminal host for new CLIs; running ones stay in
 the old host until they end.
 
 Shared Claude chats also offer slash-command suggestions and model/thinking
-pickers. Commands go to the same running CLI and open its terminal view for
-results, menus, and confirmations; tap **show the conversation** to return to
-chat. **Claude permissions** and **Claude settings** in the thread menu open
-the native panels. Newly launched sessions report confirmed model changes
+pickers. Commands go to the same running CLI while the conversation stays
+open. **View in terminal** lets you inspect command results and interactive
+panels when needed; switching views keeps approval requests available.
+**Claude permissions** and **Claude settings** in the thread menu send the
+corresponding native commands. Newly launched sessions report confirmed model changes
 through Claude's hooks; existing sessions keep their original hook settings.
 
 These CLI paths retain the provider's native terminal interface.
