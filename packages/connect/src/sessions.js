@@ -37,6 +37,7 @@ import { askPreview } from './notify.js';
 import { claudeChatArgs, startHookServer } from './claude-hooks.js';
 import { gitBranch } from './git-head.js';
 import { AccountLimits } from './account-limits.js';
+import { CLAUDE_NATIVE_COMMANDS } from './commands.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 
@@ -379,8 +380,19 @@ export class Sessions extends EventEmitter {
       return;
     }
     reply(null);
+    if (name === 'PostModelSwitch') {
+      if (typeof event.to_model === 'string' && event.to_model) {
+        s.model = null;
+        s.engineModel = event.to_model;
+        s.engineEffort = null;
+        this.#save();
+        this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id) });
+      }
+      return;
+    }
     if (name === 'SessionStart') {
       s.nativeChat = true;
+      if (typeof event.model === 'string' && event.model) s.engineModel = event.model;
       if (event.session_id) s.engineSessionId = event.session_id;
       if (event.transcript_path) s.transcript = event.transcript_path;
       this.#save();
@@ -522,6 +534,7 @@ export class Sessions extends EventEmitter {
   /** Ask the live CLI what slash commands it accepts in this session. */
   async commands(id) {
     const s = this.get(id);
+    if (s.nativeChat && s.engine === 'claude') return CLAUDE_NATIVE_COMMANDS;
     if (!s.driver) return [];
     // Starting a second Claude/ACP process merely to populate a menu can
     // contend with the external CLI we are monitoring. These two reads are
@@ -2218,6 +2231,11 @@ export class Sessions extends EventEmitter {
 
   async setEffort(id, effort) {
     const s = this.get(id);
+    if (s.nativeChat && s.engine === 'claude') {
+      const level = effort || 'auto';
+      if (!['low', 'medium', 'high', 'xhigh', 'max', 'ultracode', 'auto'].includes(level)) throw new Error('invalid Claude thinking effort');
+      return this.input(id, `/effort ${level}`);
+    }
     if (!s.driver) throw new Error('not a headless session');
     s.effort = effort || null;
     this.#save();
@@ -2261,6 +2279,13 @@ export class Sessions extends EventEmitter {
 
   async setModel(id, model) {
     const s = this.get(id);
+    if (s.nativeChat && s.engine === 'claude') {
+      const value = model || 'default';
+      if (typeof value !== 'string' || value.length > 200 || !/^[a-zA-Z0-9][a-zA-Z0-9._:/+\[\]-]*$/.test(value)) throw new Error('invalid Claude model');
+      // Claude may reject the model or ask for confirmation. Sending bytes
+      // is not acknowledgment, so never persist it as the active setting.
+      return this.input(id, `/model ${value}`);
+    }
     if (!s.driver) throw new Error('not a headless session');
     s.model = model || null;
     this.#save();
@@ -2540,7 +2565,7 @@ export class Sessions extends EventEmitter {
         await new Promise((r) => setTimeout(r, 60));
         await this.nativeTerminals.write(id, '\r');
         s.hasInput = true; s.updatedAt = Date.now(); this.#save();
-        return { ok: true };
+        return { ok: true, terminal: body.startsWith('/') };
       });
       this.#nativeInputs.set(id, send);
       try { return await send; }

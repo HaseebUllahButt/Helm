@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { listCommands, BUILT_IN } from '../packages/connect/src/commands.js';
+import { listCommands, BUILT_IN, CLAUDE_NATIVE_COMMANDS } from '../packages/connect/src/commands.js';
 import { CODEX_COMMANDS } from '../packages/connect/src/drivers/codex.js';
 
 test('the palette is helm\'s own actions plus the commands the owner wrote', () => {
@@ -37,6 +37,18 @@ test('the palette is helm\'s own actions plus the commands the owner wrote', () 
 test('a machine with no commands directory has a palette, not an error', () => {
   const list = listCommands({ engine: 'claude', cwd: '/nowhere-at-all', home: '/nowhere-either' });
   assert.deepEqual(list.map((c) => c.name), BUILT_IN.map((c) => c.name));
+});
+
+test('native Claude offers its own controls alongside account commands', () => {
+  const root = mkdtempSync(join(tmpdir(), 'helm-native-cmds-'));
+  mkdirSync(join(root, 'commands'), { recursive: true });
+  writeFileSync(join(root, 'commands', 'custom.md'), 'An account command');
+  const list = listCommands({ engine: 'claude', cwd: '/nowhere', home: root, native: true, available: CLAUDE_NATIVE_COMMANDS });
+  assert.ok(list.some(command => command.name === 'custom'));
+  for (const name of ['compact', 'model', 'effort', 'permissions', 'config']) {
+    assert.equal(list.find(command => command.name === name)?.source, 'claude');
+  }
+  assert.equal(list.filter(command => command.name === 'compact').length, 1);
 });
 
 test('a project command wins over a personal one of the same name', () => {

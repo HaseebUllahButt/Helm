@@ -1400,6 +1400,14 @@ export class Daemon {
 
       case M.MODEL_LIST: {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
+        const native = p.id ? this.sessions.get(p.id) : null;
+        if (native?.nativeChat && native.engine === 'claude') {
+          const catalog = await listModels('claude', native.nativeHome ?? profile?.env?.CLAUDE_CONFIG_DIR ?? ENGINES.claude.defaultHome);
+          // Account defaults are not evidence of the terminal's live settings.
+          // Claude owns confirmation and persistence of native choices.
+          return { ...catalog, default: null, effort: null, modes: [], defaults: {},
+            favs: pickerPrefs().favs.claude ?? [] };
+        }
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
         const engine = ENGINES[profile.engine];
         const spec = materialize(profile);
@@ -1557,8 +1565,9 @@ export class Daemon {
           commands: listCommands({
             engine: s2.engine,
             cwd: s2.cwd,
-            home: profile?.env?.[engine?.homeEnv] ?? engine?.defaultHome,
+            home: s2.nativeHome ?? profile?.env?.[engine?.homeEnv] ?? engine?.defaultHome,
             available,
+            native: !!s2.nativeChat,
           }),
         };
       }

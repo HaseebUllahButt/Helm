@@ -10,6 +10,7 @@ import { accountsFrom, loadPrefs, savePrefs, rememberFolder, recentFolders, type
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
+import { Controls, type Kind } from './session/Controls';
 import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
 import { ExternalSessionNotice } from './session/ExternalSessionNotice';
@@ -3032,17 +3033,16 @@ function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; m
   const now = useNow();
   const eng = engineOf(s.engine);
   return (
-    // T3's arrangement in Helm's look: where it is and when, then the title,
-    // then the branch with how it is doing and which agent it is.
+    // Branch and age above the title; folder and status below it.
     <button className={`row tall thread-row tri${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
       <span className="tri-top">
-        <Icon name="folder" size={12} />
-        <span className="tri-where">{dirName(s.cwd)} · {machine}</span>
+        {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
         <span className="tri-when">{note ?? (s.updatedAt ? waitingSince(s.updatedAt, now) : '')}</span>
       </span>
       <span className="tri-title">{s.title}</span>
       <span className="tri-bot">
-        {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
+        <Icon name="folder" size={12} />
+        <span className="tri-where">{dirName(s.cwd)} · {machine}</span>
         <span className="tri-end">
           {s.status === 'working' || !!s.team?.working
             ? <StatusChip status="working" at={s.updatedAt} />
@@ -4334,6 +4334,52 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   useDismiss(menu, useCallback(() => setMenu(false), []));
   const eng = engineOf(session.engine);
 
+  const [nativeOptions, setNativeOptions] = useState<ModelList | null>(null);
+  const [nativeCommands, setNativeCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
+  const [settingBusy, setSettingBusy] = useState(false);
+  useEffect(() => {
+    setNativeOptions(null); setNativeCommands([]);
+    if (!session.nativeChat) return;
+    let stale = false;
+    const catalog = followModelRefresh(
+      () => client.rpc<ModelList>(env.id, 'model.list', { id: session.id, profileId: session.profileId }, 30_000),
+      (options) => {
+        if (!stale && Array.isArray(options.models)) setNativeOptions({ ...options, default: null, effort: null, modes: [], speeds: [], speedByModel: {}, defaults: {} });
+      },
+      () => {},
+    );
+    const loadCommands = () => client.rpc<{ commands: typeof nativeCommands }>(env.id, 'session.commands', { id: session.id }, 20_000)
+      .then((result) => { if (!stale) setNativeCommands(result.commands ?? []); }).catch(() => {});
+    void loadCommands();
+    const off = client.on((machine, kind, payload) => {
+      if ((kind === 'connection' && payload?.online) || (machine === env.id && kind === 'presence' && payload?.online)) {
+        void catalog.refresh(); void loadCommands();
+      }
+    });
+    return () => { stale = true; catalog.stop(); off(); };
+  }, [client, env.id, session.id, session.profileId, session.nativeChat, session.engineModel]);
+
+  const nativeCommand = async (command: string) => {
+    if (settingBusy || sending) return;
+    setSettingBusy(true); setError('');
+    try {
+      await client.rpc(env.id, 'session.input', { id: session.id, data: command }, 70_000);
+      setRaw(true);
+    } catch (e: any) { setError(e.message); }
+    finally { setSettingBusy(false); }
+  };
+  const pickNative = async (kind: Kind, value: string) => {
+    if (settingBusy || sending || (kind !== 'model' && kind !== 'effort')) return;
+    setSettingBusy(true); setError('');
+    try {
+      await client.rpc(env.id, `session.${kind}`, { id: session.id, [kind]: value }, 70_000);
+      // The native terminal displays success, rejection, or confirmation.
+      // Keep the reported setting until Claude actually confirms a change.
+      setRaw(true);
+    } catch (e: any) { setError(e.message); }
+    finally { setSettingBusy(false); }
+  };
+
   // Read back from the CLI's own transcript, so this chat costs a round trip
   // to say anything at all. Paint the copy on the device first: what you read
   // last time is a better opening than a blank screen, and the refresh behind
@@ -4398,12 +4444,13 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const [sending, setSending] = useState(false);
   const send = async () => {
     const body = draft;
-    if (!body.trim() || sending) return;
+    if (!body.trim() || sending || settingBusy) return;
     setSending(true); setError('');
     try {
-      await client.rpc(env.id, 'session.input', { id: session.id, data: body + '\n' });
+      const result = await client.rpc<{ terminal?: boolean }>(env.id, 'session.input', { id: session.id, data: body + '\n' });
       setDraft(current => current === body ? '' : current);
-      setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now() }] : m);
+      if (session.nativeChat && (result?.terminal || body.trimStart().startsWith('/'))) setRaw(true);
+      else setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now() }] : m);
       setTimeout(refresh, 600);
     } catch (e: any) { setError(e.message); }
     finally { setSending(false); }
@@ -4444,6 +4491,8 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     } catch (e: any) { setError(e.message); }
   };
 
+  const nativeControls = Controls({ options: nativeOptions, session,
+    busy: settingBusy || sending || status === 'blocked' || !env.online, onPick: pickNative });
   return (
     <>
       <div className="bar">
@@ -4477,6 +4526,10 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
         ) : (
           <div className="menu" onClick={() => setMenu(false)}>
             <button onClick={() => setNaming(true)}>Rename thread</button>
+            {session.nativeChat && <>
+              <button disabled={settingBusy || sending || status === 'blocked' || !env.online} onClick={() => void nativeCommand('/permissions')}>Claude permissions</button>
+              <button disabled={settingBusy || sending || status === 'blocked' || !env.online} onClick={() => void nativeCommand('/config')}>Claude settings</button>
+            </>}
             {!isExternal && onSendTask && <button disabled={!env.online} onClick={onSendTask}>Send task to another machine</button>}
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
             <button className="destructive" onClick={() => setKilling(true)}>{session.nativeCli ? 'End session' : 'Delete thread'}</button>
@@ -4528,9 +4581,12 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           onTranscribe={onTranscribe}
           draft={draft} setDraft={setDraft} onSend={send} onKey={key}
           keys={!session.nativeChat} preparing={sending}
+          commands={session.nativeChat ? nativeCommands : undefined}
+          foot={session.nativeChat ? nativeControls.chips : undefined}
           waiting={status === 'blocked'} engine={eng.label}
           history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
         >
+          {nativeControls.sheet}
           {session.nativeChat && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
           {(error || (!messages && readError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || readError}</div>}
         </Composer>

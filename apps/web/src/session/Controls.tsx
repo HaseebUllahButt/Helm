@@ -151,7 +151,9 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       kind: 'effort',
       title: 'thinking',
       glyph: 'effort',
-      note: 'How long it reasons before answering. More is slower and costs more.',
+      note: session.nativeChat
+        ? "How long it reasons before answering. Claude also saves this as the model's default for future chats."
+        : 'How long it reasons before answering. More is slower and costs more.',
       choices: efforts.map((e) => ({ id: e, label: e })),
       current: effort,
       currentLabel: effort || 'think',

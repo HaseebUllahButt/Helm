@@ -37,7 +37,7 @@ test('closing the hook server releases a waiting permission and its socket', asy
 
 test('the settings add Helm to each hook Claude has, waiting long only for a question', () => {
   const { hooks } = JSON.parse(hookSettings('/usr/bin/node', "/opt/it's/hook.js"));
-  assert.deepEqual(Object.keys(hooks).sort(), ['Notification', 'PermissionRequest', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit']);
+  assert.deepEqual(Object.keys(hooks).sort(), ['Notification', 'PermissionRequest', 'PostModelSwitch', 'PostToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit']);
   assert.equal(hooks.PermissionRequest[0].matcher, '*');
   assert.ok(hooks.PermissionRequest[0].hooks[0].timeout >= 3600);
   assert.equal(hooks.Stop[0].hooks[0].timeout, undefined);

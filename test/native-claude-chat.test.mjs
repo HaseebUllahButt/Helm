@@ -84,3 +84,77 @@ test('a restart clears an orphaned native approval card', async () => {
     assert.equal(second.events.pending('native-test').length, 0);
   } finally { await second.stop(); }
 });
+
+test('native controls and slash commands share the live terminal without claiming settings were accepted', async () => {
+  const host = new Host(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    const original = { model: sessions.get('native-test').model, effort: sessions.get('native-test').effort };
+    const results = await Promise.all([
+      sessions.setModel('native-test', 'claude-opus-5-5[1m]'),
+      sessions.setEffort('native-test', 'high'),
+      sessions.input('native-test', '/permissions'),
+    ]);
+    assert.ok(results.every(result => result.terminal === true));
+    assert.deepEqual(host.writes, [
+      '\x1b[200~/model claude-opus-5-5[1m]\x1b[201~', '\r',
+      '\x1b[200~/effort high\x1b[201~', '\r',
+      '\x1b[200~/permissions\x1b[201~', '\r',
+    ]);
+    assert.deepEqual({ model: sessions.get('native-test').model, effort: sessions.get('native-test').effort }, original);
+    assert.ok((await sessions.commands('native-test')).some(command => command.name === 'model'));
+    assert.equal(sessions.get('native-test').driver, undefined);
+  } finally { await sessions.stop(); }
+});
+
+test('invalid native controls and slash commands with images never write to the terminal', async () => {
+  const host = new Host(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    for (const model of ['opus\n/clear', 'opus\x1b[201~', {}, ' opus']) {
+      await assert.rejects(sessions.setModel('native-test', model), /invalid Claude model/);
+    }
+    await assert.rejects(sessions.setEffort('native-test', 'high\n/clear'), /invalid Claude thinking effort/);
+    await assert.rejects(sessions.input('native-test', '/model', { attachments: [{ mime: 'image/png', data: 'iVBORw0KGgo=' }] }), /without images|Pictures cannot/);
+    assert.deepEqual(host.writes, []);
+  } finally { await sessions.stop(); }
+});
+
+test('a pending native approval blocks settings as well as ordinary messages', async () => {
+  const host = new Host(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    const waiting = sendHook('native-test', { hook_event_name: 'PermissionRequest', tool_name: 'Write', tool_input: {} });
+    await until(() => sessions.events.pending('native-test').length === 1);
+    await assert.rejects(sessions.setModel('native-test', 'opus'), /question first/);
+    await assert.rejects(sessions.setEffort('native-test', 'low'), /question first/);
+    assert.deepEqual(host.writes, []);
+    host.emit('exit', { id: 'native-test', code: 0 });
+    await waiting;
+  } finally { await sessions.stop(); }
+});
+
+test('native commands fail when the original process is gone', async () => {
+  const host = new Host(); host.has = () => false;
+  const sessions = create(host);
+  try {
+    await sessions.hooks;
+    await assert.rejects(sessions.setModel('native-test', 'opus'), /no longer running/);
+    assert.deepEqual(host.writes, []);
+  } finally { await sessions.stop(); }
+});
+
+test('Claude model hooks update the reported setting only after the provider switches', async () => {
+  const sessions = create();
+  try {
+    await sessions.hooks;
+    await sendHook('native-test', { hook_event_name: 'SessionStart', model: 'claude-opus-5-5' });
+    assert.equal(sessions.get('native-test').engineModel, 'claude-opus-5-5');
+    await sessions.setModel('native-test', 'sonnet');
+    assert.equal(sessions.get('native-test').engineModel, 'claude-opus-5-5');
+    await sendHook('native-test', { hook_event_name: 'PostModelSwitch', to_model: 'claude-sonnet-5', source: 'command' });
+    assert.equal(sessions.get('native-test').engineModel, 'claude-sonnet-5');
+    assert.equal(sessions.get('native-test').model, null);
+    assert.equal(sessions.get('native-test').status, 'idle');
+  } finally { await sessions.stop(); }
+});

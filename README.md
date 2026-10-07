@@ -294,7 +294,14 @@ size, so looking from a phone never shrinks the laptop's. An update to Helm's
 terminal code starts a new terminal host for new CLIs; running ones stay in
 the old host until they end.
 
-These CLI paths use a native terminal, rather than Helm's structured chat forms.
+Shared Claude chats also offer slash-command suggestions and model/thinking
+pickers. Commands go to the same running CLI and open its terminal view for
+results, menus, and confirmations; tap **show the conversation** to return to
+chat. **Claude permissions** and **Claude settings** in the thread menu open
+the native panels. Newly launched sessions report confirmed model changes
+through Claude's hooks; existing sessions keep their original hook settings.
+
+These CLI paths retain the provider's native terminal interface.
 Claude Desktop, cloud sessions, `claude --bg`, and CLIs called
 by an explicit binary path outside the integrated command are not covered.
 Noninteractive scripts, login/update commands, and Helm's own headless drivers

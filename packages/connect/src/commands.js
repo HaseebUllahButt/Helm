@@ -25,6 +25,16 @@ export const BUILT_IN = [
   { name: 'compact', description: 'Summarise the conversation into a fresh context', source: 'helm' },
 ];
 
+/** Common native Claude commands; the terminal remains the full live menu. */
+export const CLAUDE_NATIVE_COMMANDS = [
+  ['model', 'Choose a model'], ['effort', 'Adjust thinking effort'],
+  ['permissions', 'Manage tool permissions'], ['config', 'Change Claude settings'],
+  ['compact', 'Summarise the conversation'], ['context', 'Show context usage'],
+  ['status', 'Show session status'], ['usage', 'Show account usage'],
+  ['cost', 'Show session cost'], ['mcp', 'Manage MCP connections'],
+  ['memory', 'Manage project memory'], ['help', 'Show all available commands'],
+].map(([name, description]) => ({ name, description, source: 'claude' }));
+
 const DEVIN_BUILT_IN = [
   { name: 'usage', description: 'Show account quota and usage', source: 'devin' },
 ];
@@ -152,7 +162,7 @@ function readSkills(dir, source) {
  * CLI sees them either way, and a palette entry that lies about where the
  * text goes would be the worst of both.
  */
-export function listCommands({ engine, cwd, home, available = [] }) {
+export function listCommands({ engine, cwd, home, available = [], native = false }) {
   const seen = new Map();
   const out = [];
   const take = (list) => {
@@ -169,7 +179,8 @@ export function listCommands({ engine, cwd, home, available = [] }) {
       out.push(c);
     }
   };
-  take(BUILT_IN);
+  if (native) take(available);
+  else take(BUILT_IN);
   if (engine === 'devin') take(DEVIN_BUILT_IN);
   // Codex built-ins are implemented by Helm because app-server does not
   // advertise or expand the TUI's slash commands. They must keep precedence
