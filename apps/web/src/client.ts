@@ -116,7 +116,7 @@ export interface Session {
   adopted?: boolean;
   /** Archived threads stay on the machine but are hidden from active groups. */
   archived?: boolean;
-  /** The network's own agent: one per machine, opened from the sidebar. */
+  /** The network's single agent, hosted on its VM. */
   brain?: boolean;
   /** What the whole thread has cost and how many turns it took, so far. */
   costUsd?: number;
@@ -1275,8 +1275,13 @@ export class Client {
     // when available. An apparently open peer can stop answering after a
     // phone changes networks, leaving a default save waiting until timeout.
     const settingsWrite = ['profile.defaults', 'model.prefs', 'picker.prefs'].includes(method);
+    // Image uploads can fill the data channel's send buffer while its
+    // synchronous chunk loop is still running. Use the hub for these writes
+    // when connected, choosing the route before sending any prompt bytes.
+    const imageUpload = ['session.input', 'session.queue-edit'].includes(method)
+      && params.attachments?.some((image: { data?: string }) => (image.data?.length ?? 0) > DC_CHUNK_AT);
     const direct = peer?.ready && peer.channel.readyState === 'open'
-      && !(settingsWrite && this.connected);
+      && !((settingsWrite || imageUpload) && this.connected);
     if (!direct && !this.connected) {
       return HTTP_READ_METHODS.has(method)
         ? this.readHttp<T>(env, method, params, timeout)

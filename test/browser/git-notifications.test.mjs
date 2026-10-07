@@ -13,6 +13,7 @@ before(async () => {
     import React from 'react';
     import { createRoot } from 'react-dom/client';
     import { ChangesPanel } from './apps/web/src/session/Changes';
+    import { ThreadDetails } from './apps/web/src/session/ThreadDetails';
     import { graphRows } from './apps/web/src/session/GitGraph';
     import { NotificationToast } from './apps/web/src/NotificationToast';
     const root = createRoot(document.getElementById('root'));
@@ -46,7 +47,19 @@ before(async () => {
           if(window.graphFails > 0){window.graphFails--;throw new Error('git is busy');}
           return data;
         }
-        if(method === 'git.pr') return {pr:{number:42,title:'Calmer Git screen',url:'https://example.test/pull/42',state:'OPEN',draft:false,review:null}};
+        if(method === 'git.monitor') {
+          if(window.monitorFails > 0){window.monitorFails--;throw new Error('GitHub is unreachable');}
+          return {supported:true,repository:'owner/project',sha:'merge',deploymentSha:'merge',watching:!!window.pipelineWatching,
+            checkedAt:Date.now(),errors:window.monitorErrors || [],checksState:'failure',
+            pr:{number:42,title:'Calmer Git screen',url:'https://example.test/pull/42',state:'OPEN',draft:false,review:'APPROVED',mergeable:'MERGEABLE',mergeState:'CLEAN',headSha:'merge'},
+            checks:[{id:'tests',name:'Unit tests',state:'failure',summary:'Test failed',url:'https://example.test/checks'}],
+            runs:[{id:91,name:'Build and deploy',state:'failure',attempt:window.monitorAttempt || 1,event:'push',sha:'merge',url:'https://example.test/actions/91'}],
+            deployments:[{id:12,environment:'production',state:'success',sha:'merge',description:'Published',url:'https://example.test/deploy',environmentUrl:'https://app.example.test'}]};
+        }
+        if(method === 'git.accounts') return {selected:window.githubAccount || 'auto',accounts:[{login:'personal',active:true,valid:true},{login:'work',active:false,valid:true}]};
+        if(method === 'git.account') {window.githubAccount=params.login;return {selected:params.login};}
+        if(method === 'git.watch') {window.pipelineWatching=params.on;return {watching:params.on};}
+        if(method === 'git.jobs') return {jobs:[{id:7,name:'Build',state:'failure',url:'https://example.test/job/7',steps:[{number:2,name:'Compile application',state:'failure'}]}]};
         if(method === 'session.list') return {sessions:agents};
         if(method === 'git.diff') {
           if(window.diffFails > 0){window.diffFails--;throw new Error('diff failed');}
@@ -63,9 +76,14 @@ before(async () => {
       files:[{path:'App.tsx',status:'M',add:1,del:1},{path:'apps/web/src/session/GitGraph.tsx',status:'A',add:40,del:0}]};
     const clean = {repo:true,branch:'main',upstream:'origin/main',head:{commit:'merge',subject:'Merge the graph improvements'},files:[]};
     window.graphRows = graphRows;
-    window.showGit = (which) => root.render(<ChangesPanel key={Math.random()} client={client} env={{id:'local',name:'Laptop',online:true}} cwd='/project'
+    window.showGit = (which) => root.render(<ChangesPanel key={Math.random()} client={client} env={{id:'local',name:'Laptop',online:true}} cwd='/project' sessionId='main'
       status={which === 'clean' ? clean : changed}
       reload={()=>{window.refreshed = true}} onClose={()=>root.render(null)} onOpen={(s)=>{window.opened = s.id}} />);
+    window.showGitDialog = () => root.render(<ThreadDetails client={client} env={{id:'local',name:'Laptop',online:true}}
+      session={{...agents[0],cwd:'/home/me/dev/a-very-long-project-name'}} tab='changes' onTab={()=>{}} git={{...changed,
+        branch:'feature/an-extremely-long-branch-name-that-should-stay-on-screen',ahead:128,behind:73,
+        files:[{path:'packages/connect/src/one-very-long-file-name-with-a-useful-description.js',status:'M',add:12000,del:34567}]}}
+      reloadGit={()=>{window.refreshed=true}} onClose={()=>root.render(null)} />);
     window.showToast = () => toast.render(<NotificationToast session={{...agents[0],title:'Review mobile notifications https://private.test /home/me/project'}}
       onOpen={()=>{window.toastOpened=true;toast.render(null)}} onDismiss={()=>{window.dismissed=true;toast.render(null)}} />);
     window.notifyChange = () => listeners.forEach((fn)=>fn('local','session.update',{}));
@@ -75,6 +93,23 @@ before(async () => {
   await page.setContent('<div class="main showing" style="height:100vh;width:100%"><div id="root"></div></div><div id="toast"></div>');
   await page.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
   await page.addScriptTag({content:bundle.outputFiles[0].text});
+});
+
+test('a workflow rerun discards cached jobs from the previous attempt', async () => {
+  await page.evaluate(()=>{window.monitorAttempt=1;window.showGit()});
+  await page.getByRole('tab',{name:'CI / CD',exact:true}).click();
+  const workflow = page.getByRole('button',{name:/Build and deploy/});
+  await workflow.click();
+  await page.getByText('Failed step: Compile application',{exact:true}).waitFor();
+  const before = await page.evaluate(()=>window.calls.filter(c=>c.method==='git.jobs').length);
+  await page.evaluate(()=>{window.monitorAttempt=2});
+  await page.getByRole('button',{name:'Refresh CI / CD',exact:true}).click();
+  await page.getByText('push · attempt 2',{exact:true}).waitFor();
+  assert.equal(await workflow.getAttribute('aria-expanded'),'false');
+  await workflow.click();
+  await page.waitForFunction(n=>window.calls.filter(c=>c.method==='git.jobs').length>n,before);
+  await page.getByText('Failed step: Compile application',{exact:true}).waitFor();
+  await page.evaluate(()=>{window.monitorAttempt=1});
 });
 after(async () => {await browser?.close()});
 
@@ -119,12 +154,14 @@ test('graph shows merges and live agents on their checkouts, and opens the selec
 
 test('Git tabs remain keyboard accessible and preserve the file diff view', async () => {
   await page.getByRole('tab',{name:'Graph',exact:true}).focus();
-  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowRight');
   assert.equal(await page.getByRole('tab',{name:'Changes 2'}).getAttribute('aria-selected'),'true');
   assert.equal(await page.evaluate(()=>document.activeElement?.id),'git-changes-tab');
   await page.keyboard.press('Home');
   assert.equal(await page.getByRole('tab',{name:'Graph',exact:true}).getAttribute('aria-selected'),'true');
   await page.keyboard.press('End');
+  assert.equal(await page.getByRole('tab',{name:'CI / CD',exact:true}).getAttribute('aria-selected'),'true');
+  await page.keyboard.press('ArrowLeft');
   assert.equal(await page.getByRole('tab',{name:'Changes 2'}).getAttribute('aria-selected'),'true');
   await page.locator('.filemain').first().click();
   await page.getByText('+after',{exact:true}).waitFor();
@@ -256,4 +293,66 @@ test('on a phone the Git screen keeps to the width and its controls stay easy to
   await page.evaluate(()=>document.documentElement.dataset.theme = 'light');
   await shot('git-mobile-changes-light.png');
   await page.evaluate(()=>delete document.documentElement.dataset.theme);
+});
+
+
+test('CI / CD shows PR readiness, failing steps, deployment boundaries, refresh and persistent-watch controls', async () => {
+  await page.setViewportSize({width:1280,height:900});
+  await page.evaluate(()=>window.showGit());
+  await page.getByRole('tab',{name:'CI / CD',exact:true}).click();
+  await page.getByText('GitHub reports ready to merge',{exact:true}).waitFor();
+  await page.getByText('Reviews approved',{exact:true}).waitFor();
+  await page.getByText('Unit tests',{exact:true}).waitFor();
+  await page.getByRole('button',{name:/Build and deploy/}).click();
+  await page.getByText('Failed step: Compile application',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('link',{name:'Build · logs'}).getAttribute('href'),'https://example.test/job/7');
+  await page.getByText('Deployment results come from GitHub. App health is not verified here.').waitFor();
+  const toggle = page.getByRole('switch',{name:'Notify this thread about CI / CD'});
+  await toggle.click(); await page.waitForFunction(()=>window.pipelineWatching === true);
+  assert.equal(await toggle.getAttribute('aria-checked'),'true');
+  const before = await page.evaluate(()=>window.calls.filter(c=>c.method==='git.monitor').length);
+  await page.getByRole('button',{name:'Refresh CI / CD',exact:true}).click();
+  await page.waitForFunction(n=>window.calls.filter(c=>c.method==='git.monitor').length>n,before);
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='git.monitor').at(-1).params.force),true);
+  await page.evaluate(()=>{window.monitorFails=1});
+  await page.getByRole('button',{name:'Refresh CI / CD',exact:true}).click();
+  await page.getByText('GitHub is unreachable',{exact:false}).waitFor();
+  assert.equal(await page.getByText('Unit tests',{exact:true}).count(),1,'a failed refresh preserves the previous display');
+  await page.getByRole('button',{name:'Try again',exact:true}).click();
+  await page.getByText('GitHub is unreachable',{exact:false}).waitFor({state:'detached'});
+  await page.getByLabel('GitHub account',{exact:true}).selectOption('work');
+  await page.waitForFunction(()=>window.githubAccount==='work');
+  await page.getByText('Unit tests',{exact:true}).waitFor();
+  assert.equal(await page.getByLabel('GitHub account',{exact:true}).inputValue(),'work');
+  await shot('pipeline-desktop.png');
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true);
+  await shot('pipeline-mobile.png');
+  await page.evaluate(()=>document.documentElement.dataset.theme='light');
+  await shot('pipeline-mobile-light.png');
+  await page.evaluate(()=>delete document.documentElement.dataset.theme);
+});
+
+for (const width of [320, 390, 768]) test(`the actual Git dialog fills a ${width}px phone with one header and one scroll area`, async () => {
+  await page.setViewportSize({width,height:844});
+  await page.evaluate(()=>window.showGitDialog());
+  const dialog = page.getByRole('dialog',{name:'Git',exact:true});
+  await dialog.waitFor();
+  const box = await dialog.boundingBox();
+  assert.ok(box.x >= 0 && box.width === width && box.height === 844);
+  assert.equal(await dialog.locator('.details-heading,.details-tabs,.details-content,.details-refresh').count(),0,'Git has no duplicate outer header, tabs or scroll container');
+  assert.equal(await dialog.getByRole('tablist').count(),1);
+  assert.equal(await dialog.getByRole('heading',{name:'Git',exact:true}).count(),1);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true);
+  await dialog.locator('.filemain').click();
+  await dialog.getByText('+after',{exact:true}).waitFor();
+  const wrap = dialog.getByRole('button',{name:'Wrap diff lines'});
+  assert.equal(await wrap.getAttribute('aria-pressed'),width < 600 ? 'true' : 'false');
+  await wrap.click();
+  assert.equal(await wrap.getAttribute('aria-pressed'),width < 600 ? 'false' : 'true');
+  await shot(`git-dialog-${width}.png`);
+  await dialog.getByRole('button',{name:'Refresh Git',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.refreshed),true);
+  await dialog.getByRole('button',{name:'Back to the conversation'}).click();
+  await dialog.waitFor({state:'detached'});
 });

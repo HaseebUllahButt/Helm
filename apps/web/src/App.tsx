@@ -11,6 +11,7 @@ import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { Controls, type Kind } from './session/Controls';
+import { MAX_ATTACHMENTS, prepareImage, type PreparedImage } from './session/image';
 import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
 import { ExternalSessionNotice } from './session/ExternalSessionNotice';
@@ -26,6 +27,7 @@ import { Route } from './Route';
 import { QrCode } from './QrCode';
 import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } from './store';
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
+import { brainHost } from '@helm/protocol/brain-host';
 import {
   Client, login, validMachineName, MACHINE_NAME_RULE, LOOPBACK_HOST, isCleartext, CLEARTEXT_NOTE,
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
@@ -1004,22 +1006,16 @@ function Shell({ client, conn, onSignOut }: {
     };
   };
 
-  /**
-   * The brains: one per machine, and none until you start one.
-   *
-   * The live lists are the truth and the remembered records are signposts:
-   * without them, the seconds before a machine has answered `session.list`
-   * make "does this machine have a brain?" answer no, and tapping its row
-   * lands on the screen that offers to start one - which reads as helm having
-   * forgotten the brain you chose. A list that has arrived and holds no brain
-   * is an answer, though, so it clears the signpost. See `brainStore`.
-   */
+  // The brain always belongs to the VM, even while it is asleep. Saved
+  // sessions are signposts until that machine's live list arrives.
+  const brainEnv = brainHost(envs);
   const [remembered, setRemembered] = useState<RememberedBrain[]>(loadBrains);
+  const [brainOpening, setBrainOpening] = useState(false);
   useEffect(() => {
     let next = remembered;
-    for (const e of envs) {
+    for (const e of brainEnv ? [brainEnv] : []) {
       const list = sessions[e.id];
-      if (!list) continue; // that machine has not answered yet
+      if (!list || !e.online) continue; // no fresh answer from the brain host
       const s = list.find((x) => x.brain) ?? null;
       const had = next.find((b) => b.envId === e.id);
       if (s) {
@@ -1033,7 +1029,7 @@ function Shell({ client, conn, onSignOut }: {
       }
     }
     if (next !== remembered) setRemembered(next);
-  }, [envs, sessions, remembered]);
+  }, [brainEnv, sessions, remembered]);
 
   /** This machine's brain, live record if there is one and signpost if not. */
   const brainOn = (envId: string): Session | null =>
@@ -1041,11 +1037,19 @@ function Shell({ client, conn, onSignOut }: {
     ?? remembered.find((b) => b.envId === envId)?.session
     ?? null;
 
-  /** Straight into the conversation. The picker is for a machine with none. */
-  const openBrain = (envId: string) => {
-    const s = brainOn(envId);
-    if (s) navigate([{ kind: 'session', session: s }], envId);
-    else navigate([{ kind: 'brain' }], envId);
+  const openBrain = async () => {
+    if (!brainEnv || brainOpening) return;
+    const s = brainOn(brainEnv.id);
+    if (!s) { navigate([{ kind: 'brain' }], brainEnv.id); return; }
+    if (!brainEnv.online) { navigate([{ kind: 'session', session: s }], brainEnv.id); return; }
+    setBrainOpening(true);
+    try {
+      const r = await client.rpc<{ session: Session }>(brainEnv.id, 'brain.open', {}, 60_000);
+      rememberBrain(brainEnv.id, r.session);
+      loadSessions(brainEnv.id);
+      navigate([{ kind: 'session', session: r.session }], brainEnv.id);
+    } catch (e: any) { setError(`Could not open the Helm brain: ${e.message}`); }
+    finally { setBrainOpening(false); }
   };
   const rememberBrain = (envId: string, s: Session) => {
     saveBrain(envId, s);
@@ -1143,6 +1147,25 @@ function Shell({ client, conn, onSignOut }: {
               <span className="grow">New chat</span>
             </button>
 
+            <div className="rows plain brain-entry">
+                {brainEnv ? (() => {
+                  const s = brainOn(brainEnv.id);
+                  return <button className="row tall" disabled={brainOpening} onClick={() => void openBrain()}>
+                    <EngineMark engine={s ? engineOf(s.engine).cls : undefined} />
+                    <span className="grow">
+                      <span className="rt"><span className="rt-text">Helm brain</span>{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
+                      <span className="rm">
+                        {brainEnv.name} · {s ? engineOf(s.engine).label : 'Choose an account'}{!brainEnv.online ? ' · offline' : ''}
+                      </span>
+                    </span>
+                    {brainOpening ? <span className="chip working"><i />opening</span> : <span className="chev"><Icon name="forward" size={15} /></span>}
+                  </button>;
+                })() : <button className="row tall" disabled>
+                  <EngineMark />
+                  <span className="grow"><span className="rt">Helm brain</span><span className="rm">Add a VM to start</span></span>
+                </button>}
+            </div>
+
             {blocked.map(({ env: e, s }) => (
               <NeedCard
                 key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)}
@@ -1216,35 +1239,6 @@ function Shell({ client, conn, onSignOut }: {
                     <div className="note">Run <code>helm add pc</code> on a machine that is already in your network.</div>
                   </div>
                 )}
-              </div>
-            </Fold>
-
-            {/* One brain per machine: a thread that is not tied to a
-                folder, on the machine it can act from. They are listed apart
-                from the machines above because you come here for the brain,
-                not for the machine - and a machine with none says so, which
-                is the only way to start one. */}
-            <Fold title="brains" count={envs.length} remember="sidebar:brains" showEmpty>
-              <div className="rows plain">
-                {envs.map((e) => {
-                  const s = brainOn(e.id);
-                  return (
-                    <button key={e.id} className="row tall" onClick={() => openBrain(e.id)}>
-                      {/* An empty slot rather than no slot: the rows line up
-                          with each other, and with the machines above. */}
-                      <EngineMark engine={s ? engineOf(s.engine).cls : undefined} />
-                      <span className="grow">
-                        <span className="rt"><span className="rt-text">{e.name}</span>{s?.status === 'blocked' && <span className="tag">needs you</span>}</span>
-                        <span className="rm">
-                          {s
-                            ? `${engineOf(s.engine).label}${s.model ? ` · ${s.model}` : ''}`
-                            : e.online ? 'no brain here yet' : 'no brain here yet · offline'}
-                        </span>
-                      </span>
-                      <span className="chev"><Icon name="forward" size={15} /></span>
-                    </button>
-                  );
-                })}
               </div>
             </Fold>
 
@@ -1326,7 +1320,7 @@ function Shell({ client, conn, onSignOut }: {
             key={env.id}
             client={client} env={env} brain={brainOn(env.id)} onBack={back}
             // Replaces this screen rather than stacking on it: choosing a
-            // machine's brain happens once, and going back to a form offering
+            // network brain happens once, and going back to a form offering
             // to start the thing you just started is nonsense.
             onStarted={(s) => {
               rememberBrain(env.id, s);
@@ -3136,7 +3130,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
     finally { setBusy(''); }
   };
 
-  const title = picking ? 'Brain' : 'The brain';
+  const title = 'Helm brain';
   const sub = picking ? `on ${env.name}` : `${engineOf(brain!.engine).label} on ${env.name}`;
 
   return (
@@ -3149,21 +3143,18 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
         {picking ? (
           <>
             <p className="note">
-              A brain sees every machine and every running session, and acts
-              on them through the <code>helm</code> command - so it can answer
-              "what is waiting on me", read a thread on another machine, or
-              start one. This one runs on {env.name}; anything it does
-              elsewhere it does by talking to that machine. Each machine can
-              have one, and the one on the machine that is always up is the
-              one that is there when your laptop is not.
+              One conversation for your whole network, living on {env.name}.
+              It knows where your projects and sessions are. Tell it
+              “go to why, open this folder, do this” and it works on that machine.
+              Your laptop can sleep; the brain stays here.
             </p>
             {replacing && (
               <div className="banner warn">
-                Starting a different brain on {env.name} ends the current one
-                and everything it has learned about your network.
+                Starting a different brain on {env.name} ends this conversation.
+                Its saved network map and knowledge notes stay on the VM.
               </div>
             )}
-            <div className="section">its brain</div>
+            <div className="section">Choose its account</div>
             {!accounts && !error && env.online && <div className="empty quiet">asking {env.name}…</div>}
             <div className="rows">
               {(accounts ?? []).map((a) => (
@@ -3225,7 +3216,7 @@ function BrainView({ client, env, brain, onBack, onStarted, onReplaced }: {
               <button className="row destructive" onClick={() => setReplacing(true)}>
                 <span className="grow">
                   <span className="rt">Start a different brain</span>
-                  <span className="rm">ends this one and everything it has learned</span>
+                  <span className="rm">starts a new conversation; keeps saved knowledge</span>
                 </span>
                 <span className="chev"><Icon name="forward" size={15} /></span>
               </button>
@@ -4443,15 +4434,40 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   useLiveInterval(status === 'exited' ? null : 15_000, refresh, [status, refresh]);
 
   const [sending, setSending] = useState(false);
+  const [images, setImages] = useState<PreparedImage[]>([]);
+  const [preparingImages, setPreparingImages] = useState(false);
+  const imageBusy = useRef(false);
+  const attachImages = async (files: FileList | File[]) => {
+    if (imageBusy.current || sending) return 0;
+    const picked = Array.from(files).slice(0, Math.max(0, MAX_ATTACHMENTS - images.length));
+    if (!picked.length) { setError(`${MAX_ATTACHMENTS} images is the limit for one message.`); return 0; }
+    imageBusy.current = true; setPreparingImages(true); setError('');
+    const ready: PreparedImage[] = [];
+    const failures: string[] = [];
+    if (picked.length < files.length) failures.push(`${MAX_ATTACHMENTS} images is the limit for one message`);
+    try {
+      for (const file of picked) {
+        try { ready.push(await prepareImage(file)); }
+        catch (e: any) { failures.push(`${file.name}: ${e.message}`); }
+      }
+      setImages(current => [...current, ...ready]);
+      if (failures.length) setError(`Image not added — ${failures.join('; ')}`);
+      return ready.length;
+    } finally { imageBusy.current = false; setPreparingImages(false); }
+  };
   const send = async () => {
     const body = draft;
-    if (!body.trim() || sending || settingBusy) return;
+    const attachments = images;
+    if ((!body.trim() && !attachments.length) || sending || settingBusy || imageBusy.current) return;
     setSending(true); setError('');
     try {
-      const result = await client.rpc<{ terminal?: boolean }>(env.id, 'session.input', { id: session.id, data: body + '\n' });
+      const result = await client.rpc<{ terminal?: boolean }>(env.id, 'session.input', { id: session.id, data: body + '\n',
+        ...(attachments.length ? { attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) } : {}) }, 70_000);
       setDraft(current => current === body ? '' : current);
+      setImages(current => current.filter(image => !attachments.includes(image)));
       if (session.nativeChat && (result?.terminal || body.trimStart().startsWith('/'))) setNativeNotice(body.trim());
-      else setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now() }] : m);
+      else setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now(),
+        attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) }] : m);
       setTimeout(refresh, 600);
     } catch (e: any) { setError(e.message); }
     finally { setSending(false); }
@@ -4494,6 +4510,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
 
   const nativeControls = Controls({ options: nativeOptions, session,
     busy: settingBusy || sending || status === 'blocked' || !env.online, onPick: pickNative });
+
   return (
     <>
       <div className="bar">
@@ -4591,9 +4608,13 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
         <Composer
           onTranscribe={onTranscribe}
           draft={draft} setDraft={setDraft} onSend={send} onKey={key}
-          keys={!session.nativeChat} preparing={sending}
+          keys={!session.nativeChat} preparing={sending || preparingImages}
           commands={session.nativeChat ? nativeCommands : undefined}
           foot={session.nativeChat ? nativeControls.chips : undefined}
+          onAttach={session.nativeChat ? attachImages : undefined} attachments={images}
+          onRemoveAttachment={index => setImages(current => current.filter((_, i) => i !== index))}
+          canAttach={!!session.nativeChat}
+          onAttachUnsupported={() => setError('This terminal cannot receive images through chat. Open a Claude or Codex chat to attach images.')}
           waiting={status === 'blocked'} engine={eng.label}
           history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
         >

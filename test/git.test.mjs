@@ -221,3 +221,26 @@ test('the graph names the remotes, so a remote branch is told from a local one',
   git(dir, 'remote', 'add', 'upstream', 'https://example.invalid/x.git');
   assert.deepEqual((await graph(dir)).remotes, ['upstream']);
 });
+
+test('GitHub monitoring reads checkout identity without fetching and scopes fork PRs to their owner', async () => {
+  const { githubContext } = await import('../packages/connect/src/git.js');
+  const dir = repo();
+  git(dir, 'remote', 'add', 'origin', 'git@github.com:contributor/project.git');
+  git(dir, 'remote', 'add', 'upstream', 'https://github.com/team/project.git');
+  const value = await githubContext(dir);
+  assert.equal(value.repository, 'team/project'); assert.equal(value.headRepository, 'contributor/project');
+  assert.equal(value.branch, 'main'); assert.equal(value.sha, git(dir, 'rev-parse', 'HEAD'));
+  git(dir, 'checkout', '--detach', '-q'); assert.equal((await githubContext(dir)).branch, null);
+  git(dir, 'remote', 'set-url', 'upstream', 'https://gitlab.com/team/project.git');
+  assert.equal(await githubContext(dir), null, 'an unverified non-GitHub host receives no credential');
+  git(dir, 'config', 'remote.upstream.gh-resolved', 'base');
+  assert.equal((await githubContext(dir)).host, 'gitlab.com', 'custom hosts require explicit gh repository selection');
+});
+
+test('SSH GitHub account aliases resolve through SSH configuration, without opening a connection', async () => {
+  const { githubContext } = await import('../packages/connect/src/git.js');
+  const dir = repo(); git(dir, 'remote', 'add', 'origin', 'git@github-personal:owner/project.git');
+  const hosts = [];
+  const value = await githubContext(dir, { resolveHost: async host => { hosts.push(host); return 'github.com'; } });
+  assert.deepEqual(hosts, ['github-personal']); assert.equal(value.host, 'github.com'); assert.equal(value.repository, 'owner/project');
+});

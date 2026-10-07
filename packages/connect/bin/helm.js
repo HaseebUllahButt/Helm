@@ -12,6 +12,7 @@ import {
 } from '@helm/protocol/network';
 import { HELM_DIR, expand } from '../src/paths.js';
 import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
+import { brainHost } from '@helm/protocol/brain-host';
 import { hubRpc, hubBroadcastRpc, mergeQueueReceipts } from '../src/hub-client.js';
 import {
   render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot,
@@ -81,7 +82,7 @@ const usage = () => {
   helm agents [--json] [--refresh]  CLI accounts, sign-in status and model IDs
   helm antigravity [install|login|status|remove]   the managed Google ACP agent
 
-  helm brain [--on <machine>]       open a machine's own agent (prints how to reach it)
+  helm brain                       open the network's brain on the VM
   helm digest [--json]              every machine, folder and running session
   helm thread <id> [-n 40]          the recent conversation of one session
   helm say <id> <text...>           send a prompt into an existing session
@@ -800,13 +801,13 @@ function machineId(who) {
   return hit.id;
 }
 
-/** The home machine: where a brain lives unless told otherwise. */
+/** The same home from every terminal, including on the VM itself. */
 function brainHome() {
   const net = requireNetwork();
-  // `kind` is the field the roster actually carries; `role` was looked for
-  // here once and is only ever written locally, so it never found anything.
-  const vm = Object.values(net.machines ?? {}).find((m) => m.kind === 'vm' && m.id !== net.self);
-  return flagOf('on') ? machineId(flagOf('on')) : (vm?.id ?? net.self);
+  const vm = brainHost(net.machines);
+  if (!vm) die('the Helm brain needs a VM in the network; designate one with `helm redesignate <machine> vm`');
+  if (flagOf('on') && machineId(flagOf('on')) !== vm.id) die(`the Helm brain lives on ${vm.name}; use \`helm spawn\` for work on another machine`);
+  return vm.id;
 }
 
 /** Ask every machine for its digest and write the snapshot down. */
@@ -816,7 +817,7 @@ async function gather() {
   await Promise.all(Object.keys(net.machines ?? {}).map(async (id) => {
     try {
       const r = await hubRpc(net, id, M.BRAIN_DIGEST, {}, { timeout: 8000 });
-      fresh[id] = { name: r.name ?? net.machines[id]?.name ?? id, sessions: r.sessions ?? [] };
+      fresh[id] = { name: r.name ?? net.machines[id]?.name ?? id, sessions: r.sessions ?? [], projects: r.projects ?? [] };
     } catch { /* offline: the snapshot keeps what it had, dated */ }
   }));
   const snap = writeSnapshot(mergeSnapshot(readSnapshot(), fresh));
@@ -1382,7 +1383,7 @@ async function openBrain() {
       profileId: account, model: flagOf('model'), mode: flagOf('mode'),
     }, 60_000);
     console.log(`${created ? 'started' : 'resumed'} the brain on ${name}: ${shortId(session.id)} (${session.engine}${session.model ? `, ${session.model}` : ''})`);
-    console.log('open it in the app under "brains", or talk to it here:');
+    console.log('open "Helm brain" in the app, or talk to it here:');
     console.log(`  helm say ${shortId(session.id)} "what is waiting on me?"`);
   } catch (err) {
     if (!/needs a profileId/.test(err.message)) throw err;

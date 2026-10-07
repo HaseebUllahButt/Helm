@@ -11,6 +11,7 @@ before(async () => {
   bundle = await build({ stdin: { contents: `
     import React, { useState } from 'react';
     import { createRoot } from 'react-dom/client';
+    import { LimitsLine } from './apps/web/src/session/LimitsLine';
     import { Composer } from './apps/web/src/session/Composer';
     import { ThreadDetails } from './apps/web/src/session/ThreadDetails';
     import { TeamSummary } from './apps/web/src/session/TeamSummary';
@@ -48,6 +49,14 @@ before(async () => {
         attachments={attachments} onRemoveAttachment={i=>setAttachments(a=>a.filter((_,j)=>j!==i))}
         onAttach={async files=>{ const next=[...files].map((f,i)=>({name:f.name,mime:'image/png',data:'',url:px(i+f.name.charCodeAt(0))})); setAttachments(a=>[...a,...next]); return next.length; }} />;
     }
+    function ComposeLimits() {
+      const [draft,setDraft] = useState('Test message');
+      return <Composer draft={draft} setDraft={setDraft} engine="Claude" keys={false} working onStop={()=>window.stopped=true}
+        onSend={()=>window.limitSent=true} onAttach={()=>{}} onTranscribe={async ()=>''}
+        foot={<div className="chips">{['Model','Thinking','Permissions','Speed'].map(name=><button key={name} className="chip-pick" aria-label={name} onClick={()=>window.limitControl=name}><span className="cg">●</span><span className="chip-label">{name}</span></button>)}</div>}
+        statusLine={<LimitsLine windows={[{label:'5h',used:87},{label:'7d',used:96}]}/>}/>;
+    }
+    window.showLimits=()=>root.render(<ComposeLimits/>);
     window.showComposer=()=>root.render(<Compose/>);
     window.showImages=()=>root.render(<ComposeImages/>);
     window.showDetails=()=>root.render(<Details/>);
@@ -152,4 +161,29 @@ test('team summary surfaces blocked descendants and keeps completed results comp
   const icon = await page.locator('.team-task .mark').first().boundingBox();
   assert.ok(icon.width < 40, 'the provider icon must not stretch across the task row');
   await capture(page, 'orchestration-team-phone.png');
+});
+
+
+test('account limits occupy their own row without covering mobile composer controls', async context => {
+  const page = await pageFor(context, 390);
+  for (const width of [320,390,600,1280]) {
+    await page.setViewportSize({width,height:850});
+    await page.evaluate(()=>window.showLimits());
+    await page.getByText('Account limits',{exact:true}).waitFor();
+    assert.equal(await page.locator('.limits-line .lw').count(),2,'both windows stay visible');
+    const bounds = await page.locator('.slab-status').boundingBox();
+    const buttons = await page.locator('.slab-foot button').all();
+    for (const button of buttons) {
+      const b = await button.boundingBox();
+      assert.ok(b.x>=0 && b.x+b.width<=width, 'every control stays on screen');
+      assert.ok(b.y+b.height<=bounds.y+1, 'usage never overlaps a control');
+    }
+    await page.getByRole('button',{name:'Permissions',exact:true}).scrollIntoViewIfNeeded();
+    await page.getByRole('button',{name:'Permissions',exact:true}).click();
+    assert.equal(await page.evaluate(()=>window.limitControl),'Permissions');
+    await page.getByRole('button',{name:'send',exact:true}).click();
+    assert.equal(await page.evaluate(()=>window.limitSent),true);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    if(width===390) await capture(page,'composer-limits-mobile.png');
+  }
 });

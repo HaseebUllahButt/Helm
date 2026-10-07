@@ -129,3 +129,23 @@ test('real browser keeps pending writes on the old socket during a slow hub upgr
   assert.equal(await page.evaluate(() => window.result), 'accepted once');
   await page.evaluate(() => window.client.close());
 });
+
+test('large image writes choose the hub before sending on a direct channel', async context => {
+  const home = await hub(context);
+  const page = await pageFor(context, home);
+  await page.evaluate(() => {
+    window.directSends = 0;
+    window.client.peers.set('laptop', { ready: true, channel: { readyState: 'open', send: () => { window.directSends++; throw Error('send buffer full'); }, close() {} }, pc: { close() {} } });
+    window.imageResult = window.client.rpc('laptop', 'session.input', { id: 'native', data: 'look', attachments: [{ filename: 'screen.jpg', mime: 'image/jpeg', data: 'aGVs'.repeat(200000) }] });
+  });
+  await page.waitForFunction(() => window.client.pending.size === 1);
+  const end = Date.now() + 2000;
+  while (!home.calls.length && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(home.calls.length, 1);
+  assert.equal(await page.evaluate(() => window.directSends), 0);
+  const {socket,frame} = home.calls[0];
+  assert.equal(frame.params.attachments[0].data.length, 800000);
+  socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: {ok:true} }));
+  assert.deepEqual(await page.evaluate(() => window.imageResult), {ok:true});
+  await page.evaluate(() => window.client.close());
+});

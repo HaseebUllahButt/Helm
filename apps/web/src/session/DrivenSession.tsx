@@ -26,7 +26,8 @@ import { QueueEdit } from './QueueEdit';
 import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
 import { TaskReturn } from './TaskReturn';
-import { current, limitWindows, rememberLimits, rememberedLimits, resetPhrase, type LimitWindow } from './limits';
+import { LimitsLine } from './LimitsLine';
+import { current, limitWindows, rememberLimits, rememberedLimits } from './limits';
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
@@ -186,7 +187,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
    * nothing explained why - and files past the limit were dropped without a
    * word.
    */
-  const onAttach = async (files: FileList) => {
+  const onAttach = async (files: FileList | File[]) => {
     const chosen = Array.from(files);
     if (!chosen.length) return 0;
     const failures: string[] = [];
@@ -565,7 +566,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onTranscribe={onTranscribe}
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
         engine={engine} keys={false} waiting={!!pending} danger={mode?.danger}
-        foot={<>{controls.chips}{limits.length > 0 && <LimitsLine windows={limits} />}</>} canAttach={canAttach} preparing={preparingImages > 0}
+        foot={controls.chips} statusLine={limits.length > 0 ? <LimitsLine windows={limits} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
         commands={commands}
@@ -649,20 +650,5 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         />
       )}
     </>
-  );
-}
-
-/** "5h 9% · 7d 40%" - how much of the account's limits is gone. */
-function LimitsLine({ windows }: { windows: LimitWindow[] }) {
-  const level = (used: number) => (used >= 95 ? ' bad' : used >= 80 ? ' warn' : '');
-  const title = windows.map((w) => `${w.label} limit: ${w.used}% used${w.resetsAt ? `, ${resetPhrase(w.resetsAt)}` : ''}`).join('\n');
-  return (
-    <span className="limits-line" title={title} aria-label={title}>
-      {windows.map((w, i) => (
-        <span key={w.label} className={`lw${level(w.used)}${i < windows.length - 1 ? ' short' : ''}`}>
-          {i > 0 && <span className="sep"> · </span>}{w.label} {w.used}%
-        </span>
-      ))}
-    </span>
   );
 }

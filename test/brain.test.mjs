@@ -187,3 +187,17 @@ test('the brief names the machine and the verbs it is given', () => {
     assert.ok(b.includes(verb), `the brief has to mention ${verb}`);
   }
 });
+
+test('the rough folder map survives archived chats and sleeping machines', () => {
+  const initial = mergeSnapshot({ machines: {} }, {
+    why: { name: 'why', sessions: [{ cwd: '/work/helm', engine: 'codex' }], projects: [{ path: '/work/quiet', title: 'Quiet project' }] },
+  }, 1000);
+  const archived = mergeSnapshot(initial, { why: { name: 'why', sessions: [], projects: [] } }, 2000);
+  assert.deepEqual(archived.machines.why.folders.map(f => f.path), ['/work/helm', '/work/quiet']);
+  assert.equal(archived.machines.why.folders[0].at, 1000, 'folder observations keep their real age');
+  const asleep = mergeSnapshot(archived, { vm: { name: 'VM', sessions: [] } }, 3000);
+  assert.equal(asleep.machines.why.at, 2000);
+  const text = render(asleep, { roster: { why: { name: 'why', online: false } }, now: 3000 });
+  assert.match(text, /Known folders \(last observed; verify before using\)/);
+  assert.match(text, /\/work\/quiet · Quiet project/);
+});

@@ -14,6 +14,11 @@ export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit
 }) {
   const ref = useDialog(onClose);
   const tabs: { id: DetailsTab; label: string }[] = [{ id: 'changes', label: 'Git' }, { id: 'agents', label: 'Agents' }, { id: 'schedules', label: 'Schedules' }];
+  if (tab === 'changes' && git?.repo) return <div className="thread-details-back" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="thread-details git-details" ref={ref} role="dialog" aria-modal="true" aria-label="Git" tabIndex={-1}>
+      <ChangesPanel client={client} env={env} cwd={session.cwd} sessionId={session.id} status={git} reload={reloadGit} onClose={onClose} onOpen={onOpen} />
+    </div>
+  </div>;
   return <div className="thread-details-back" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="thread-details" ref={ref} role="dialog" aria-modal="true" aria-label="Thread details" tabIndex={-1}>
       <div className="details-heading"><div><h2>Thread details</h2><p>{session.title}</p></div><button className="iconbtn" aria-label="Close thread details" onClick={onClose}><Icon name="close" size={18} /></button></div>
@@ -27,7 +32,7 @@ export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit
       </div>
       <div className="details-content" role="tabpanel" id="details-content" aria-labelledby={`details-${tab}`}>
         {tab === 'agents' && <Subagents embedded client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} />}
-        {tab === 'changes' && (git?.repo ? <><button className="details-refresh" onClick={reloadGit}>Refresh changes</button><ChangesPanel client={client} env={env} cwd={session.cwd} status={git} reload={reloadGit} onClose={onClose} onOpen={onOpen} /></> : <p className="note">No Git repository available for this thread.</p>)}
+        {tab === 'changes' && <p className="note">No Git repository available for this thread.</p>}
         {tab === 'schedules' && <Schedules client={client} env={env} session={session} />}
       </div>
     </div>

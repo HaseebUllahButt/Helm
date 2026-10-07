@@ -2,12 +2,9 @@
 
 /* ===========================================================================
    helm
-   Graphite, taken from the app's own icon: a slate hull, silver structure, and
-   the indigo of the wheel's hub kept for "you are here" - selection, focus,
-   links. Three surfaces a visible step apart (page, panel, floating), so a
-   list sits on something instead of floating in black. Colour still means
-   one thing each: amber "act now", sky "in motion" (the only thing that
-   pulses), emerald done, red broken. Idle draws no colour at all.
+   Midnight water, deep teal decks, and sea-glass highlights. Amber means
+   attention, coral means failure, mint means passed. Existing surface levels,
+   typography and layout stay intact; colour gives Helm its own identity.
    =========================================================================== */
 
 /* One display face, for names of places - machines, screen titles, the
@@ -35,46 +32,46 @@
      Plate anything that floats (composer, menus, sheets, dialogs). Each is a
      step you can see on a phone in daylight; the old ladder was 1-3% apart
      and read as one black. */
-  --bg:        #14161b;
-  --card:      #1b1e24;
-  --sidebar:   #1b1e24;
-  --raised:    #242831;
-  --code-bg:   #0f1115;
-  /* Fills and lines carry the slate's own cool tint rather than white. */
-  --muted:     rgb(190 200 225 / 4%);
-  --accent:    rgb(190 200 225 / 7%);
-  --hover:     rgb(190 200 225 / 8%);
-  --select:    rgb(133 144 255 / 13%);
-  --line:      rgb(190 200 225 / 9%);
-  --line-2:    rgb(190 200 225 / 15%);
-  --input:     rgb(190 200 225 / 14%);
+  --bg:        #081b26;
+  --card:      #102c38;
+  --sidebar:   #102c38;
+  --raised:    #193e4b;
+  --code-bg:   #06141d;
+  /* Fills and lines carry the sea-glass tint. */
+  --muted:     rgb(134 214 219 / 4%);
+  --accent:    rgb(134 214 219 / 7%);
+  --hover:     rgb(134 214 219 / 8%);
+  --select:    rgb(85 215 194 / 16%);
+  --line:      rgb(134 214 219 / 9%);
+  --line-2:    rgb(134 214 219 / 15%);
+  --input:     rgb(134 214 219 / 14%);
 
   /* Text: four steps, and the main tool for hierarchy. Every one of them is
      at least 4.5:1 on every surface it can sit on, Plate included. */
-  --text:      #e8eaef;
-  --text-80:   rgb(232 234 239 / 86%);
-  --text-dim:  #b9bfcb;
-  --mutedfg:   #9ba2b1;
+  --text:      #edf8f7;
+  --text-80:   rgb(237 248 247 / 86%);
+  --text-dim:  #b8d8dc;
+  --mutedfg:   #a0c4cb;
   /* Glyphs only - never words. 4.6:1 on Plate. */
-  --icon:      #8a91a0;
+  --icon:      #90b9c3;
 
   /* The hub. The fill is for the few filled controls (a switch that is on,
      a checkbox); the quiet one is for text, focus rings and the mark on a
      selected row. */
-  --primary:   oklch(0.585 0.17 270);
-  --primary-t: oklch(0.65 0.15 272);
-  --primary-h: oklch(0.645 0.17 270);
-  --primary-q: #8590ff;
-  --amber:     #e8b23f;
+  --primary:   #117c78;
+  --primary-t: #4acbbb;
+  --primary-h: #168d86;
+  --primary-q: #65dfcb;
+  --amber:     #f2bd66;
   /* Amber as text, which in the light theme has to be darker than amber as a
      fill to be read at all. */
-  --amber-text: #e8b23f;
+  --amber-text: #f2bd66;
   --on-amber:  #1a1305;
-  --sky:       #8ec6e8;
+  --sky:       #8bd5f1;
   /* Muted on purpose: "online" is the state a machine is almost always in,
      and three neon dots on the first screen would be decoration. */
-  --emerald:   oklch(0.76 0.075 165);
-  --red:       #e88a8a;
+  --emerald:   #91ddae;
+  --red:       #f19b89;
 
   /* Each engine's own colour, at about two thirds the chroma it ships with.
      Recognisable at 26px, and a list of nine of them is a list, not a bag of
@@ -117,17 +114,17 @@
   --ease: cubic-bezier(0.2, 0, 0, 1);
   /* Colours that used to be written out where they were used. Named so a
      second theme can answer them. */
-  --scroll:    rgb(190 200 225 / 10%);
-  --scroll-h:  rgb(190 200 225 / 16%);
-  --dot-off:   rgb(190 200 225 / 22%);
+  --scroll:    rgb(134 214 219 / 10%);
+  --scroll-h:  rgb(134 214 219 / 16%);
+  --dot-off:   rgb(134 214 219 / 22%);
   --pill-bg:   var(--text);
-  --pill-fg:   #14161b;
+  --pill-fg:   #081b26;
   --toast-bg:  var(--raised);
   --shadow:    0 1px 0 rgb(255 255 255 / 4%) inset, 0 18px 48px -18px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 25%);
   --need-bg:   color-mix(in srgb, var(--amber) 7%, var(--raised));
   --need-bg-on: color-mix(in srgb, var(--amber) 12%, var(--raised));
   --need-m:    #c9b894;
-  --link:      #8fb4ff;
+  --link:      #88e3d8;
   --diff-add:  var(--emerald);
   --diff-del:  var(--red);
   --diff-add-fg: #a7f3d0;
@@ -1189,15 +1186,19 @@ pre.snippet {
   .chip-pick .chip-label { display: none; }
   .chip-pick .cg svg { width: 17px; height: 17px; }
 }
-/* How much of the account's limits is used, at the end of the control row. */
-.limits-line {
-  flex: none; align-self: center; padding: 0 4px 0 8px; white-space: nowrap;
-  font: var(--t-micro) var(--mono); color: var(--mutedfg); font-variant-numeric: tabular-nums;
-}
-.limits-line .lw.warn { color: var(--amber-text); }
-.limits-line .lw.bad { color: var(--red); }
-/* A phone keeps the longest window: the weekly one is the one that ends a week. */
-@media (max-width: 599px) { .limits-line .lw.short { display: none; } .limits-line .lw:not(.short) .sep { display: none; } }
+/* Account usage has its own row beneath the controls, at every width. */
+.slab-status { margin: 0 10px; padding: 7px 0 9px; border-top: 1px solid var(--line); min-width: 0; }
+.limits-line { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; color: var(--mutedfg); font-size: var(--t-micro); }
+.limits-caption { flex: none; }
+.limits-windows { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; min-width: 0; }
+.limits-line .lw { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.limits-line .lw b { color: var(--text-dim); font-weight: 550; }
+.limits-meter { width: 28px; height: 3px; background: var(--line-2); border-radius: 3px; overflow: hidden; }
+.limits-meter i { display: block; height: 100%; background: var(--primary-q); }
+.limits-line .lw.warn, .limits-line .lw.warn b { color: var(--amber-text); }
+.limits-line .lw.bad, .limits-line .lw.bad b { color: var(--red); }
+.lw.warn .limits-meter i { background: var(--amber); } .lw.bad .limits-meter i { background: var(--red); }
+@media (max-width: 359px) { .limits-caption { width: 100%; } }
 .slab.danger::after { border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .modesheet-note { padding: 0 8px 8px; font-size: var(--t-meta); color: var(--mutedfg); }
 
@@ -1809,29 +1810,29 @@ button.sheet-editlink:hover { color: var(--text); }
    =========================================================================== */
 
 :root[data-theme="light"] {
-  /* The same slate, by day: a cool paper page, white panels, a sidebar one
+  /* Sea glass by day: a pale mint page, white panels, a sidebar one
      step down. Every text step is at least 4.5:1 on every one of them. */
-  --bg:        #f3f4f7;
+  --bg:        #eff8f5;
   --card:      #ffffff;
-  --sidebar:   #e9ebf0;
+  --sidebar:   #dfeeea;
   --raised:    #ffffff;
-  --code-bg:   #eef0f4;
-  --muted:     rgb(26 29 36 / 3%);
-  --accent:    rgb(26 29 36 / 6%);
-  --hover:     rgb(26 29 36 / 6%);
-  --select:    rgb(68 80 200 / 10%);
-  --line:      rgb(26 29 36 / 10%);
-  --line-2:    rgb(26 29 36 / 16%);
-  --input:     rgb(26 29 36 / 18%);
-  --text:      #1a1d24;
-  --text-80:   rgb(26 29 36 / 86%);
-  --text-dim:  #3d4350;
-  --mutedfg:   #5a6170;
-  --icon:      #6b7280;
-  --primary:   oklch(0.52 0.18 270);
-  --primary-t: oklch(0.52 0.17 272);
-  --primary-h: oklch(0.56 0.18 270);
-  --primary-q: #4450c8;
+  --code-bg:   #e4f1ed;
+  --muted:     rgb(12 53 61 / 3%);
+  --accent:    rgb(12 53 61 / 6%);
+  --hover:     rgb(12 53 61 / 6%);
+  --select:    rgb(16 126 119 / 12%);
+  --line:      rgb(12 53 61 / 10%);
+  --line-2:    rgb(12 53 61 / 16%);
+  --input:     rgb(12 53 61 / 18%);
+  --text:      #0d3540;
+  --text-80:   rgb(12 53 61 / 86%);
+  --text-dim:  #315861;
+  --mutedfg:   #476c72;
+  --icon:      #52747a;
+  --primary:   #08756e;
+  --primary-t: #08756e;
+  --primary-h: #09665f;
+  --primary-q: #08756e;
   /* Amber as a fill keeps its colour; amber as words is darkened until it
      can be read in sunlight. Text on an amber fill is dark in both themes. */
   --amber:     #c98a1a;
@@ -1841,17 +1842,17 @@ button.sheet-editlink:hover { color: var(--text); }
   --emerald:   #1f7356;
   --red:       #b8322a;
 
-  --scroll:    rgb(26 29 36 / 16%);
-  --scroll-h:  rgb(26 29 36 / 26%);
-  --dot-off:   rgb(26 29 36 / 30%);
-  --pill-bg:   #1a1d24;
+  --scroll:    rgb(12 53 61 / 16%);
+  --scroll-h:  rgb(12 53 61 / 26%);
+  --dot-off:   rgb(12 53 61 / 30%);
+  --pill-bg:   #0d3540;
   --pill-fg:   #ffffff;
   --toast-bg:  #ffffff;
-  --shadow:    0 18px 48px -20px rgb(26 29 36 / 30%), 0 2px 8px rgb(26 29 36 / 8%);
+  --shadow:    0 18px 48px -20px rgb(12 53 61 / 30%), 0 2px 8px rgb(12 53 61 / 8%);
   --need-bg:   color-mix(in srgb, var(--amber) 9%, #ffffff);
   --need-bg-on: color-mix(in srgb, var(--amber) 15%, #ffffff);
   --need-m:    #6e5520;
-  --link:      #2a55c4;
+  --link:      #08756e;
   --diff-add-fg: #166534;
   --diff-del-fg: #991b1b;
   --hl-comment: #5f6673; --hl-keyword: #6d28d9; --hl-string: #15803d; --hl-number: #a3480b;
@@ -1935,7 +1936,7 @@ button.sheet-editlink:hover { color: var(--text); }
 .git-pr svg { flex: none; color: var(--icon); }
 .git-pr-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-pr-title b { color: var(--text); font-weight: 600; }
-.git-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; flex: 0 0 248px; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+.git-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; flex: 0 1 324px; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
 .git-tabs button {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 12px;
   border-radius: var(--radius-md); color: var(--mutedfg); font-size: var(--t-meta); font-weight: 550;
@@ -2103,7 +2104,7 @@ button.sheet-editlink:hover { color: var(--text); }
 .pr-state.merged { color: var(--opencode); }
 .pr-state.closed { color: var(--red); }
 
-.changes-sum { display: flex; align-items: center; gap: 10px; padding: 0 4px 10px; font-size: var(--t-meta); color: var(--text-dim); }
+.changes-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 0 4px 10px; font-size: var(--t-meta); color: var(--text-dim); }
 .changes-sum .grow { flex: 1; }
 .changes-count { color: var(--text); font-weight: 550; }
 .changes-seen { display: inline-flex; align-items: center; gap: 8px; flex: none; color: var(--mutedfg); font-size: var(--t-micro); font-variant-numeric: tabular-nums; }
@@ -2487,6 +2488,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .team-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
 .team-actions button { min-height: 36px; font-size: var(--t-meta); padding: 6px 10px; }
 .thread-details-launch { position: relative; }
+.brain-entry { margin-block: 10px 16px; }
 .thread-details-back { position: fixed; inset: 0; z-index: 60; background: #0005; display: flex; justify-content: flex-end; }
 .thread-details { width: min(680px, 52vw); height: 100%; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); box-shadow: -12px 0 40px #0002; }
 .details-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 18px 20px 12px; }
@@ -2505,7 +2507,33 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .thread-details .delegation-body { padding: 0; overflow: visible; }
 .thread-details .changes { position: relative; inset: auto; min-height: 65vh; z-index: auto; animation: none; }
 .thread-details .changes > .bar { display: none; }
-.details-refresh { float: right; margin: 0 0 10px; }
+.thread-details.git-details { position: relative; }
+.thread-details.git-details .changes { position: absolute; inset: 0; min-height: 0; }
+.thread-details.git-details .changes > .bar { display: flex; }
+.git-details .changes > .scroll { min-height: 0; overflow-x: hidden; overscroll-behavior: contain; }
+.changes .filediff .diff { max-height: none; }
+.changes.wrap-diffs .diff span { white-space: pre-wrap; overflow-wrap: anywhere; }
+.git-wrap { flex: none; min-height: 40px; padding: 0 8px; font-size: var(--t-micro); color: var(--mutedfg); }
+.git-wrap[aria-pressed="true"] { background: var(--select); color: var(--text); }
+@media (max-width: 899px) {
+  .thread-details.git-details { width: 100%; height: 100dvh; border: 0; border-radius: 0; }
+}
+@media (max-width: 599px) {
+  .git-context { flex-wrap: wrap; gap: 6px 10px; }
+  .git-branch { max-width: 100%; }
+  .git-pr { max-width: 100%; }
+  .changes-sum .grow { display: none; }
+  .changes-seen { margin-left: auto; }
+  .changes-meter { width: 32px; }
+  .fileRow .filemain { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 4px 8px; padding-left: 8px; }
+  .fileRow .filemain .gst { grid-row: 1 / 3; align-self: start; margin-top: 2px; }
+  .fileRow .filemain > .grow { grid-column: 2; }
+  .fileRow .filemain > .gcount { grid-column: 2; font-size: var(--t-micro); }
+  .fileRow .filemain .rt-text { white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .fileRow .row.tall { gap: 0; }
+  .git-file-row { align-items: flex-start; }
+  .git-file-path { white-space: normal; overflow-wrap: anywhere; }
+}
 /* A note pinned under the header (an outside CLI conversation): one quiet
    line, its button on the right. */
 .thread-recovery {
@@ -2653,3 +2681,43 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   .usage-account-name small { flex: none; }
   .usage-limits > .usage-spend-head { flex-wrap: wrap; gap: 4px; }
 }
+
+/* GitHub pipeline: the same quiet rows as Git, with explicit outcome labels. */
+.pipeline { min-width: 0; }
+.pipeline-heading, .pipeline-section-head, .pipeline-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pipeline-heading h2 { margin: 0; font-size: var(--t-h2); font-weight: 600; }
+.pipeline-heading p, .pipeline-watch p { margin: 3px 0 0; color: var(--mutedfg); font-size: var(--t-meta); }
+.pipeline-watch { display: flex; align-items: center; gap: 16px; margin: 18px 0; padding: 14px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
+.pipeline-watch > div { flex: 1; min-width: 0; }
+.pipeline-watch b { font-weight: 550; }
+.pipeline-section { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+.pipeline-section h3 { margin: 0 0 9px; font-size: var(--t-body); font-weight: 600; }
+.pipeline-section-head h3 { margin: 0; }
+.pipeline-row { min-height: 46px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.pipeline-row > :first-child { min-width: 0; flex: 1; }
+.pipeline a { color: var(--link); display: inline-flex; align-items: center; gap: 5px; overflow-wrap: anywhere; text-decoration: none; }
+.pipeline a:hover { text-decoration: underline; }
+.pipeline a svg { flex: none; }
+.pipeline a:focus-visible, .pipeline button:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 3px; }
+.pipeline-row p, .pipeline-deployment p { margin: 4px 0; color: var(--mutedfg); font-size: var(--t-meta); overflow-wrap: anywhere; }
+.pipeline-state { font-size: var(--t-micro); font-weight: 600; padding: 3px 8px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); color: var(--text-dim); flex: none; }
+.pipeline-state.success { color: var(--emerald); background: color-mix(in srgb, var(--emerald) 9%, transparent); }
+.pipeline-state.failure { color: var(--red); background: color-mix(in srgb, var(--red) 9%, transparent); }
+.pipeline-state.pending { color: var(--amber-text); background: color-mix(in srgb, var(--amber) 9%, transparent); }
+.pipeline-notice { margin: 12px 0; border-left: 2px solid var(--amber); background: var(--muted); padding: 10px 12px; font-size: var(--t-meta); overflow-wrap: anywhere; }
+.pipeline-notice.failure { border-color: var(--red); }
+.pipeline-notice .linkish { margin-left: 8px; }
+.pipeline-pr-meta { display: flex; flex-wrap: wrap; gap: 5px 18px; padding-top: 9px; font-size: var(--t-meta); color: var(--text-dim); }
+.pipeline-run-toggle { display: flex; align-items: center; gap: 9px; text-align: left; min-height: 44px; }
+.pipeline-run-toggle small { display: block; color: var(--mutedfg); font-size: var(--t-micro); margin-top: 2px; }
+.pipeline-jobs { padding: 12px; background: var(--card); border-radius: var(--radius); font-size: var(--t-meta); }
+.pipeline-failed-step { color: var(--red); margin: 6px 0; overflow-wrap: anywhere; }
+.pipeline-footnote { color: var(--mutedfg); font-size: var(--t-micro); margin: 14px 0; }
+.pipeline-dot { width: 6px; height: 6px; border-radius: 50%; margin-left: 6px; background: var(--amber); }
+.pipeline-dot.failure { background: var(--red); }
+@media (max-width: 599px) { .pipeline-watch { padding: 12px; } .pipeline-row { gap: 8px; } }
+
+.pipeline-account { margin-top: 14px; }
+.pipeline-account label { display: block; color: var(--text-dim); font-size: var(--t-meta); margin-bottom: 6px; }
+.pipeline-account select { width: 100%; min-height: 42px; background: var(--card); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 8px 10px; }
+.pipeline-account p { font-size: var(--t-micro); color: var(--mutedfg); margin: 7px 0; }

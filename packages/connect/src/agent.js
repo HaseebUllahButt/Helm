@@ -3,6 +3,8 @@ import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { hostname, platform, arch, release } from 'node:os';
 import { connect as tcpConnect } from 'node:net';
 import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
+import { brainHost } from '@helm/protocol/brain-host';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import {
   loadNetwork, mergeRoster, allEndpoints, describeSelf, hubCredential,
   roster as rosterOf, rosterHash, machineName, NAME_RULE, machineKind,
@@ -28,7 +30,7 @@ import { lanAddresses } from './net-addr.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, publicShare } from './shares.js';
 import { publicHosts } from '@helm/protocol/share';
-import { brief, render, summaryLine, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
+import { brief, render, summaryLine, readThread, readSnapshot, writeSnapshot, mergeSnapshot } from './brain.js';
 import { forWire } from './events.js';
 import { hubRpc } from './hub-client.js';
 import { HubMesh } from './hub-mesh.js';
@@ -40,6 +42,7 @@ import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted } from './update.js';
 import * as gitq from './git.js';
+import { createGithubMonitor } from './github.js';
 import { agentCatalog, helmBrief } from './delegation.js';
 import { Schedules } from './schedules.js';
 
@@ -261,6 +264,7 @@ export class Daemon {
   #offlineSince = null;
   #tunnels = new Map();
   #brainTimer = null;
+  #brainOpening = null;
   #stopped = false;
   #reconcile = null;
   #stopWatch = null;
@@ -314,6 +318,14 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    if (brainHost((loadNetwork() ?? this.net).machines)?.id !== this.id) this.sessions.retireBrains();
+    this.github = createGithubMonitor({
+      context: gitq.githubContext, watchFile: join(HELM_DIR, 'github-watches.json'),
+      accountFile: join(HELM_DIR, 'github-accounts.json'),
+      session: id => { try { return { ...this.sessions.get(id), envId: this.id }; } catch { return null; } },
+      notify: payload => this.broadcastFrame(T.NOTIFY, { payload }),
+      emit: payload => this.#emit(E.GIT_MONITOR, payload),
+    });
     try { this.schedules = new Schedules({ sessions: this.sessions }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     this.sessions.delegationBrief = () => helmBrief(loadNetwork() ?? this.net);
@@ -497,9 +509,9 @@ export class Daemon {
     await Promise.all(ids.map(async (id) => {
       try {
         const r = id === this.id
-          ? { name: this.name, ...(await this.sessions.digest()) }
+          ? { name: this.name, projects: listProjects(), ...(await this.sessions.digest()) }
           : await hubRpc(net, id, M.BRAIN_DIGEST, {}, { timeout: 8000 });
-        fresh[id] = { name: r.name ?? net.machines[id]?.name ?? id, sessions: r.sessions ?? [] };
+        fresh[id] = { name: r.name ?? net.machines[id]?.name ?? id, sessions: r.sessions ?? [], projects: r.projects ?? [] };
       } catch { /* offline, or too old to know the method: keep what we had */ }
     }));
     return writeSnapshot(mergeSnapshot(readSnapshot(), fresh));
@@ -529,6 +541,7 @@ export class Daemon {
     clearInterval(this.#wake);
     this.taskTransfers?.stop();
     this.schedules?.stop();
+    this.github?.stop();
     this.#stopWatch?.();
     for (const link of this.#links.values()) link.stop();
     this.mesh?.stop();
@@ -1222,6 +1235,58 @@ export class Daemon {
 
   // --------------------------------------------------------------- dispatch
 
+  async openNetworkBrain(p) {
+    let session = this.sessions.brainSession();
+    const created = !session;
+    let recovered = '';
+    let renewed = false;
+    const renew = async error => {
+      if (renewed || !/thread not found:|no conversation found with session id/i.test(error.message)) throw error;
+      recovered = readThread(this.sessions.events.tail(session.id, 200), { limit: 60 }).join('\n');
+      await this.sessions.resetBrainProvider(session.id);
+      await this.sessions.connect(session.id);
+      renewed = true;
+    };
+    if (!session) {
+      if (!p.profileId) throw new Error('brain.open needs a profileId the first time');
+      const cwd = join(HELM_DIR, 'brain');
+      mkdirSync(cwd, { recursive: true, mode: 0o700 });
+      session = await this.sessions.start({
+        cwd, profileId: p.profileId, model: p.model, mode: p.mode,
+        title: 'Helm brain', brain: true,
+      });
+    } else {
+      try { await this.sessions.connect(session.id); }
+      catch (error) {
+        // Authentication, permissions and network failures are never a reason
+        // to replace a conversation. Only the provider's explicit missing-id
+        // response allows renewal; Helm's session id and event log stay put.
+        await renew(error);
+      }
+      if (p.model && p.model !== session.model) await this.sessions.setModel(session.id, p.model);
+      if (p.mode && p.mode !== session.mode) await this.sessions.setMode(session.id, p.mode);
+    }
+    if (session.brainVersion !== 2) {
+      // Existing VM conversations learn the new role without losing history.
+      const knowledge = join(HELM_DIR, 'brain', 'KNOWLEDGE.md');
+      mkdirSync(join(HELM_DIR, 'brain'), { recursive: true, mode: 0o700 });
+      if (!existsSync(knowledge)) writeFileSync(knowledge,
+        '# Helm brain knowledge\n\nKeep owner-confirmed machine and project locations, preferences, and task destinations here.\nThe last-observed network map is in ../snapshot.json; verify paths before using them.\n', { mode: 0o600 });
+      const snap = await this.refreshSnapshot();
+      const prompt = () => brief(this.name, [render(snap, { roster: this.rosterState(snap), limit: 2 }),
+        recovered ? `Previous conversation retained by Helm (its provider thread was missing):\n${recovered}` : ''].filter(Boolean).join('\n\n'));
+      try { await this.sessions.input(session.id, prompt(), { raw: true }); }
+      catch (error) {
+        // An adopted Codex server can only discover a missing idle thread
+        // when turn/start tries to address it, after connect already passed.
+        await renew(error);
+        await this.sessions.input(session.id, prompt(), { raw: true });
+      }
+      this.sessions.setBrainVersion(session.id, 2);
+    }
+    return { session: wire(this.sessions.get(session.id)), created, envId: this.id };
+  }
+
   async dispatch(method, p, caller) {
     switch (method) {
       case M.ENV_INFO:
@@ -1232,7 +1297,12 @@ export class Daemon {
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
       case M.GIT_COMMIT: return gitq.commit(p.cwd, p.hash, p.path);
       case M.GIT_WORKTREE: return gitq.addWorktree(p.cwd, p.name);
-      case M.GIT_PR: return { pr: await gitq.pullRequest(p.cwd) };
+      case M.GIT_PR: return { pr: (await this.github.get(p.cwd)).pr || null };
+      case M.GIT_MONITOR: return { ...(await this.github.get(p.cwd, { force: p.force === true })), watching: this.github.watching(p.sessionId) };
+      case M.GIT_JOBS: return this.github.jobs(p.cwd, p.runId);
+      case M.GIT_WATCH: return this.github.watch(p.sessionId, p.on === true);
+      case M.GIT_ACCOUNTS: return this.github.accounts(p.cwd);
+      case M.GIT_ACCOUNT: return this.github.selectAccount(p.cwd, p.login);
 
       case M.ENV_BUNDLE: return makeBundle({ have: Array.isArray(p.have) ? p.have : [] });
 
@@ -1473,6 +1543,7 @@ export class Daemon {
       case M.SESSION_DELEGATION_RESULT: return this.sessions.delegationResult(p.id);
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
       case M.SESSION_START: {
+        if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
         const { originHandoffId: _originHandoffId, delegation: _delegation, ...start } = p;
         return { session: await this.sessions.start(start) };
       }
@@ -1573,7 +1644,7 @@ export class Daemon {
       }
 
       // ----------------------------------------------------------- brain
-      case M.BRAIN_DIGEST:    return { name: this.name, ...(await this.sessions.digest()) };
+      case M.BRAIN_DIGEST:    return { name: this.name, projects: listProjects(), ...(await this.sessions.digest()) };
 
       case M.BRAIN_SNAPSHOT: {
         // `cached` serves the picture this machine already had - the app uses
@@ -1584,24 +1655,19 @@ export class Daemon {
       }
 
       case M.BRAIN_OPEN: {
-        const existing = this.sessions.brainSession();
-        if (existing) {
-          // Changing the brain is changing the model, not starting a second
-          // one: the thread, and everything it has learned, is the point.
-          if (p.model && p.model !== existing.model) await this.sessions.setModel(existing.id, p.model);
-          if (p.mode && p.mode !== existing.mode) await this.sessions.setMode(existing.id, p.mode);
-          return { session: wire(this.sessions.get(existing.id)), created: false };
+        const net = loadNetwork() ?? this.net;
+        const home = brainHost(net.machines);
+        if (!home) throw new Error('The Helm brain needs a VM in the network. Designate one with `helm redesignate <machine> vm`.');
+        if (home.id !== this.id) {
+          const result = await hubRpc(net, home.id, M.BRAIN_OPEN, p, { timeout: 60_000 });
+          return { ...result, envId: home.id };
         }
-        if (!p.profileId) throw new Error('brain.open needs a profileId the first time');
-        const session = await this.sessions.start({
-          cwd: '~', profileId: p.profileId, model: p.model, mode: p.mode,
-          title: 'Brain', brain: true,
-        });
-        // The brief goes in as the first message rather than a system prompt:
-        // helm drives four CLIs and not all of them take one, and a message
-        // survives `--resume`, so a restarted brain still knows what it is.
-        await this.sessions.input(session.id, brief(this.name), { raw: true });
-        return { session: wire(this.sessions.get(session.id)), created: true };
+        // Two devices can tap Start at once. Both join one creation.
+        if (this.#brainOpening) await this.#brainOpening;
+        const opening = this.openNetworkBrain(p);
+        this.#brainOpening = opening;
+        try { return await opening; }
+        finally { if (this.#brainOpening === opening) this.#brainOpening = null; }
       }
 
       // Picking up a conversation the CLI recorded on its own. The protocol

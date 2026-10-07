@@ -122,6 +122,11 @@ export const M = {
   GIT_COMMIT: 'git.commit',        // { cwd, hash } -> { hash, subject, body, author, date, parents[], files[] }
   GIT_WORKTREE: 'git.worktree',    // { cwd, name? } -> { path, branch, base }  a sibling checkout on a new branch
   GIT_PR: 'git.pr',                // { cwd } -> the branch's pull request, or null
+  GIT_MONITOR: 'git.monitor',      // { cwd, force?, sessionId? } -> GitHub checks, PR, workflows, deployments
+  GIT_JOBS: 'git.jobs',            // { cwd, runId } -> jobs and failed steps (read-only)
+  GIT_WATCH: 'git.watch',          // { sessionId, on } -> { watching } persists background notifications
+  GIT_ACCOUNTS: 'git.accounts',    // { cwd } -> safe gh account names, never tokens
+  GIT_ACCOUNT: 'git.account',      // { cwd, login } -> select gh login for this repository, without gh auth switch
   FS_LIST: 'fs.list',              // { path } -> { path, parent, entries[] }
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }
@@ -256,6 +261,7 @@ export const M = {
 // -------------------------------------------------------------- event kinds
 
 export const E = {
+  GIT_MONITOR: 'git.monitor',      // { id, snapshot, watching } background GitHub watch update
   // Terminal output, pushed while a viewer is attached.
   //
   // From a pty helm owns this is the raw byte stream, appended as it arrives.

@@ -464,3 +464,41 @@ test('The palette searches remembered threads of offline machines, deduped and f
   await palette.waitFor({ state: 'hidden' });
   await page.locator('.main.showing .session-bar').filter({ hasText: 'Snapshot only' }).waitFor();
 });
+
+for (const width of [1280, 390]) test(`one VM brain stays the entry point while offline at ${width}px`, async t => {
+  const { page, boot } = await pageFor(t, {width,height:900});
+  await boot();
+  await page.evaluate(()=>{
+    const vmBrain = {id:'vm-brain',title:'Brain',brain:true,engine:'codex',profileId:'codex',driver:'codex',cwd:'/home/ubuntu',status:'idle'};
+    localStorage.setItem('helm.brains',JSON.stringify([{envId:'vm',session:vmBrain}]));
+    window.mount(window.makeClient([
+      {id:'laptop',name:'Laptop',online:true,info:{}},
+      {id:'why',name:'why',kind:'pc',online:true,info:{}},
+      {id:'vm',name:'VM',online:false,info:{}},
+    ],{laptop:[{...vmBrain,id:'former-laptop-brain'}],why:[]}));
+  });
+  const entry = page.locator('.sidebar').getByRole('button',{name:/Helm brain/});
+  await entry.waitFor();
+  assert.equal(await entry.count(),1);
+  assert.match(await entry.innerText(),/VM.*offline/s);
+  await entry.click();
+  await page.getByRole('heading',{name:'Brain',exact:true}).waitFor();
+  assert.equal(await page.getByText('Choose its account',{exact:true}).count(),0,'a cold offline open retains the VM conversation');
+  assert.match(await page.locator('.main .bar .sub').innerText(),/VM/);
+});
+
+test('opening the online brain validates the VM provider before entering the conversation', async t => {
+  const {page,boot}=await pageFor(t,{width:390,height:900});
+  await boot();
+  await page.evaluate(()=>{
+    const brain={id:'vm-brain',title:'Helm brain',brain:true,engine:'codex',profileId:'codex',driver:'codex',cwd:'/home/ubuntu',status:'idle'};
+    const client=window.makeClient([{id:'laptop',name:'Laptop',online:true,info:{}},{id:'vm',name:'VM',online:true,info:{}}],{vm:[brain],laptop:[]});
+    const rpc=client.rpc;
+    window.brainCalls=[];
+    client.rpc=(env,method,params)=>{window.brainCalls.push({env,method,params});return method==='brain.open' ? Promise.resolve({session:brain,envId:'vm',created:false}) : rpc(env,method,params)};
+    window.mount(client);
+  });
+  await page.locator('.sidebar').getByRole('button',{name:/Helm brain/}).click();
+  await page.getByRole('heading',{name:'Helm brain',exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.brainCalls.filter(c=>c.method==='brain.open').map(c=>c.env)),['vm']);
+});

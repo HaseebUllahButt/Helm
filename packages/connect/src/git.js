@@ -276,12 +276,41 @@ export function worktreeBase(cwd) {
   } catch { return null; }
 }
 
-/** The pull request for this branch, if `gh` is here and there is one. Never throws. */
-export async function pullRequest(cwd) {
-  try {
-    const dir = await folder(cwd);
-    const { stdout } = await exec('gh', ['pr', 'view', '--json', 'number,title,url,state,isDraft,reviewDecision'], { cwd: dir, timeout: 8000, maxBuffer: 1024 * 1024 });
-    const p = JSON.parse(stdout);
-    return { number: p.number, title: p.title, url: p.url, state: p.state, draft: !!p.isDraft, review: p.reviewDecision || null };
-  } catch { return null; }
+/** Local identity only: never fetch, and never infer CI for an unpublished commit. */
+export async function githubContext(cwd, { resolveHost = async host => {
+  const { stdout } = await exec('ssh', ['-G', host], { timeout: 5000, maxBuffer: 1024 * 1024 });
+  return /^hostname\s+(\S+)$/m.exec(stdout)?.[1] || host;
+} } = {}) {
+  const dir = await folder(cwd);
+  const [sha, branch, remotes, resolved] = await Promise.all([
+    git(dir, ['rev-parse', 'HEAD']).then(s => s.trim()),
+    git(dir, ['symbolic-ref', '--quiet', '--short', 'HEAD']).then(s => s.trim()).catch(() => null),
+    git(dir, ['remote', '-v']),
+    git(dir, ['config', '--get-regexp', '^remote\\..*\\.gh-resolved$']).catch(() => ''),
+  ]);
+  const parse = value => {
+    const match = /^(?:https:\/\/|ssh:\/\/git@|git@)([^/:]+)[:/]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(value);
+    if (!match || /[?@#]/.test(match[2] + match[3])) return null;
+    const [, host, owner, name] = match;
+    // Enterprise hosts are supported only when gh has explicitly selected them.
+    return { host: host.toLowerCase(), repository: `${owner}/${name}`, owner };
+  };
+  const refs = new Map();
+  for (const line of remotes.trim().split('\n')) {
+    const m = /^(\S+)\s+(\S+)\s+\(fetch\)$/.exec(line);
+    if (m) {
+      const r = parse(m[2]);
+      if (r && r.host !== 'github.com' && /^(?:git@|ssh:\/\/)/.test(m[2])) {
+        r.host = (await resolveHost(r.host).catch(() => r.host)).toLowerCase();
+      }
+      if (r) refs.set(m[1], r);
+    }
+  }
+  const mark = resolved.trim().split('\n').map(line => /^remote\.(.+)\.gh-resolved\s+base$/.exec(line)).find(Boolean);
+  const base = (mark && refs.get(mark[1])) || refs.get('upstream') || refs.get('github') || refs.get('origin') || (refs.size === 1 ? [...refs.values()][0] : null);
+  if (!base || (base.host !== 'github.com' && !mark)) return null;
+  const tracking = branch ? await git(dir, ['config', '--get', `branch.${branch}.remote`]).then(s => s.trim()).catch(() => '') : '';
+  const head = refs.get(tracking) || refs.get('origin') || base;
+  return { host: base.host, repository: base.repository, headRepository: head.host === base.host ? head.repository : base.repository,
+    headOwner: head.host === base.host ? head.owner : base.owner, branch, sha };
 }

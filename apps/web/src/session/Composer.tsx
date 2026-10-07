@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IMAGE_ACCEPT, looksLikeImage } from './image';
+import { IMAGE_ACCEPT, looksLikeImage, clipboardImages } from './image';
 import { useDictation } from './voice';
 import type { Turn } from './types';
 import { isBigPaste, stashPaste } from './pasteStore';
@@ -22,14 +22,14 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
-  foot?: React.ReactNode; danger?: boolean;
+  foot?: React.ReactNode; statusLine?: React.ReactNode; danger?: boolean;
   children?: React.ReactNode;
   /** Resolves to how many images were added, so each gets its "[Image #N]". */
-  onAttach?: (files: FileList) => void | Promise<number | void>;
+  onAttach?: (files: FileList | File[]) => void | Promise<number | void>;
   attachments?: { name: string; url: string }[];
   onRemoveAttachment?: (i: number) => void;
   /** False when the running model cannot see images: no clip, no paste. */
@@ -127,7 +127,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
    * write it, so "compare [Image #1] with [Image #2]" says which is which.
    * The driver puts the same label before each picture it sends.
    */
-  const attach = async (files: FileList) => {
+  const attach = async (files: FileList | File[]) => {
     if (!onAttach) return;
     const el = ref.current;
     const at = el && document.activeElement === el ? el.selectionStart : draftNow.current.length;
@@ -249,9 +249,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
     const images = Array.from(list ?? []).filter(looksLikeImage);
     if (!images.length) return false;
     if (!canAttach || !onAttach) { onAttachUnsupported?.(); return true; }
-    const dt = new DataTransfer();
-    images.forEach((f) => dt.items.add(f));
-    void attach(dt.files);
+    void attach(images);
     return true;
   };
 
@@ -351,7 +349,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
             onChange={(e) => { historyAt.current = null; setDraft(e.target.value); }}
             onPaste={(e) => {
-              if (take(e.clipboardData?.files)) { e.preventDefault(); return; }
+              if (take(clipboardImages(e.clipboardData))) { e.preventDefault(); return; }
               // A wall of text goes in as a token, not into the box.
               const text = e.clipboardData?.getData('text/plain') ?? '';
               if (text && isBigPaste(text)) {
@@ -453,6 +451,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </div>
+          {statusLine && <div className="slab-status">{statusLine}</div>}
           {keys && withKeys && onKey && (
             <div className="keys">
               {QUICK.map((q) => <button key={q.key} onClick={() => onKey(q.key)}>{q.label}</button>)}

@@ -2014,9 +2014,43 @@ export class Sessions extends EventEmitter {
     return { sessions: localDigest(await this.list(), this.events) };
   }
 
-  /** The brain's thread on this machine, if it has one. */
+  /** Preserve former machine brains as ordinary conversations. */
+  retireBrains() {
+    let changed = false;
+    for (const s of this.#index.values()) {
+      if (!s.brain) continue;
+      delete s.brain;
+      changed = true;
+    }
+    if (changed) this.#save();
+  }
+
+  setBrainVersion(id, version) {
+    this.get(id).brainVersion = version;
+    this.#save();
+  }
+
+  /** A missing provider thread can be renewed without deleting Helm history. */
+  async resetBrainProvider(id) {
+    const s = this.get(id);
+    if (!s.brain || s.external || s.nativeSocket || ['working', 'blocked'].includes(s.status)) {
+      throw new Error('Only an idle Helm brain with a missing provider conversation can be renewed.');
+    }
+    const d = this.#drivers.get(id);
+    this.#drivers.delete(id);
+    d?.removeAllListeners?.();
+    await d?.kill?.();
+    s.brainPreviousThread = s.engineSessionId;
+    s.engineSessionId = null;
+    delete s.brainVersion;
+    delete s.unsent;
+    s.status = 'idle';
+    this.#save();
+  }
+
+  /** The network brain's thread, only on its home VM. */
   brainSession() {
-    for (const s of this.#index.values()) if (s.brain) return s;
+    for (const s of this.#index.values()) if (s.brain && !s.archived && s.status !== 'exited') return s;
     return null;
   }
 
@@ -2365,6 +2399,16 @@ export class Sessions extends EventEmitter {
     // Asking for messages is how a chat view says it is watching.
     this.#watchTranscript(id, s.transcript);
     const messages = await readMessages({ engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, limit });
+    if (s.nativeChat) {
+      const images = new Map(this.events.tail(id, 0).filter(event => event.type === 'native.images')
+        .map(event => [event.prompt, event]));
+      for (const message of messages) {
+        const saved = message.role === 'user' && images.get(message.text);
+        if (!saved) continue;
+        message.text = saved.text;
+        message.attachments = saved.attachments.map(image => ({ ...image, data: this.events.attachment(id, image.ref) }));
+      }
+    }
     return {
       messages,
       status: s.status,
@@ -2552,18 +2596,37 @@ export class Sessions extends EventEmitter {
     }
     if (references.length && (raw || !s.driver || text.trimStart().startsWith('/'))) throw new Error('thread context needs an ordinary agent message');
     if (s.nativeChat && !raw) {
-      if (attachments.length) throw new Error('Pictures cannot be sent to a terminal Claude from Helm yet.');
+      const images = acceptImages(attachments);
+      const extensions = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+      if (images.some((image) => !extensions[image.mime])) throw new Error('Claude needs JPEG, PNG, WebP or GIF images.');
       // Typed into the terminal, as the person at the keyboard would: pasted
       // whole (so new lines stay in the message), then Enter. Claude queues
       // it if it is busy, exactly as it does for typing.
       const body = text.replace(/\r\n?/g, '\n').trim();
-      if (!body) return { ok: true };
+      if (body.startsWith('/') && images.length) throw new Error('Send Claude commands without images.');
+      if (!body && !images.length) return { ok: true };
       const send = (this.#nativeInputs.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
         if (!this.nativeTerminals.has(id)) throw new Error('Claude is no longer running in that terminal.');
         if ([...this.#hookAsks.values()].some((a) => a.id === id)) throw new Error('Answer Claude\'s question first.');
-        await this.nativeTerminals.write(id, `\x1b[200~${body}\x1b[201~`);
+        // The browser's clipboard may live on another machine. Save the
+        // images on Claude's host and reference them in the native prompt.
+        // Retain these files for queued prompts and transcript reads.
+        let prompt = body;
+        if (images.length) {
+          const dir = join(HELM_DIR, 'native-images', randomBytes(12).toString('hex'));
+          mkdirSync(dir, { recursive: true, mode: 0o700 });
+          const refs = images.map((image, index) => {
+            const path = join(dir, `image-${index + 1}.${extensions[image.mime]}`);
+            writeFileSync(path, Buffer.from(image.data, 'base64'), { mode: 0o600 });
+            return `[Image #${index + 1}]: ${JSON.stringify(path)}`;
+          });
+          prompt = `${body}${body ? '\n\n' : ''}Read the attached image files before answering:\n${refs.join('\n')}`;
+        }
+        await this.nativeTerminals.write(id, `\x1b[200~${prompt}\x1b[201~`);
         await new Promise((r) => setTimeout(r, 60));
         await this.nativeTerminals.write(id, '\r');
+        if (images.length) this.events.append(id, { type: 'native.images', prompt, text: body,
+          attachments: images.map(image => this.events.putAttachment(id, image)) });
         s.hasInput = true; s.updatedAt = Date.now(); this.#save();
         return { ok: true, terminal: body.startsWith('/') };
       });

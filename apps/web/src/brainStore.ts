@@ -1,23 +1,12 @@
 import type { Session } from './client';
 
 /**
- * Where the brains are, remembered on this device.
- *
- * There is one brain per machine and choosing it happens once per machine, so
- * opening one should land in the conversation - not in the screen that offers
- * to create it. But the app only knows a machine has a brain after that
- * machine has answered `session.list`, and on a cold open that is a second or
- * two during which the honest answer to "is there a brain here?" is "not yet".
- * Tapping a brain in that window used to show the account picker, which reads
- * as helm having forgotten the brain you already chose.
- *
- * So the device writes them down, keyed by machine. A remembered record is
- * only a signpost: it carries enough of the session for the header to draw,
- * and the real record replaces it as soon as the machine's list arrives - or
- * removes it, if that list has no brain in it any more.
+ * A signpost to the VM conversation while its session list is loading.
+ * Keep old per-machine records readable for paired devices; the shell only
+ * uses the chosen VM's record. Other machines' chats are preserved.
  */
 const KEY = 'helm.brains';
-/** The one-brain-per-network key this replaced. Read once, then folded in. */
+/** An older paired device may still use this key. */
 const LEGACY = 'helm.brain';
 
 export interface RememberedBrain {

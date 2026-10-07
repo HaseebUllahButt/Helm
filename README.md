@@ -33,6 +33,35 @@ computer → directory → session
 Sessions show which computer, directory, CLI, and account they use. A blocked
 session moves to the top.
 
+## GitHub checks and deployments
+
+Open a thread's **Git → CI / CD** tab for its PR reviews and merge status,
+commit checks, GitHub Actions workflows, failed steps with links to job logs,
+and deployments reported to GitHub. Checks belong to the checkout's exact
+commit. For a merged PR whose head is still checked out, post-merge workflows
+and deployments follow the merge commit, labelled separately. A successful
+workflow is not treated as proof of deployment or app health.
+
+Helm uses the project's machine's GitHub CLI sign-ins. Run `gh auth login`
+there for each account you want to use; choose **GitHub account** in the
+CI / CD tab. The choice is saved per repository and never changes the active
+CLI account. The default also accepts that machine's `GH_TOKEN` or
+`GITHUB_TOKEN`. Tokens stay on the machine and are never sent to the app or
+saved by Helm. SSH GitHub aliases are resolved through local SSH configuration.
+
+Enable **Notify this thread** to keep monitoring with the app closed. Existing
+results establish a baseline; subsequent check failures, review changes,
+merges, and deployment success/failure reach the same push and desktop
+notification paths as thread notifications. Watches survive daemon restarts
+and stop when disabled or the thread is archived. The machine must stay online,
+and notifications must be enabled for the receiving device.
+
+Requests share an account-scoped cache and in-flight reads on each machine.
+REST reads revalidate with ETags; PR lookups use GraphQL with a REST fallback.
+Polling pauses when GitHub throttles it, reserves quota for other actions, and
+slows for unchanged watches. Results unavailable because of permissions,
+pagination limits, or network failures remain visibly incomplete or stale.
+
 ## How it connects
 
 Your VM is the **Helm home**. It has one stable HTTPS address and stays online.
@@ -501,25 +530,29 @@ as threads resume, age out, or sync from another machine. In the model picker,
 stars only favorite choices. **Set default** separately controls new chats;
 neither action changes the model of the current conversation.
 
-## Brains (optional)
+## Helm brain
 
-Sessions are the main way to use helm: open a machine, pick a folder, start an
-agent and drive it. A brain is an extra thread beside that, for the questions
-that are not about one folder.
+One persistent conversation for the whole network, hosted on the always-on VM.
+Open **Helm brain** in the app or start it from any joined machine:
 
 ```bash
-helm brain --account claudea            # here, or --on <machine>
+helm brain --account claudea
 ```
 
-Each machine can have one, and the app lists them under **brains** - a row per
-machine, so a machine without one says so and one tap starts it. A brain sees
-every machine and every running session, and acts on them through the `helm`
-command in its own shell - so it can answer "what is waiting on me", read a
-thread on another machine, or start one. It runs on its own machine, which is
-why the one on the always-on machine is the one still there when your laptop
-is not. It is an ordinary session, so the model picker in the composer is how
-you change which model it thinks with, and the permission mode is how much it
-may do without asking.
+The app and CLI choose the same VM, including older networks whose VM is named
+`VM` but has no kind yet. An offline VM stays the brain's home; Helm never
+creates a replacement on a laptop. Without a VM, designate one with
+`helm redesignate <machine> vm`. Older brains on other machines become ordinary
+conversations, retaining their history.
+
+Tell it “go to why, then this folder, do this.” It checks that destination and
+works there over SSH or through a Helm session. Its initial context includes
+the network map; `helm digest` refreshes machines, known folders and sessions,
+with last-observed state retained for sleeping machines. Project paths remain
+in the map after chats are archived, but are verified before use. The VM keeps
+this map in `~/.helm/snapshot.json` and owner-confirmed notes in
+`~/.helm/brain/KNOWLEDGE.md`. The conversation keeps the usual model and
+permission controls.
 
 The same verbs work from any terminal in the network:
 

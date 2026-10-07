@@ -34,6 +34,16 @@ export function looksLikeImage(file: File): boolean {
   return !type && IMAGE_EXTENSIONS.test(file.name || '');
 }
 
+/** Some clipboard sources expose file items without populating files. */
+export function clipboardImages(clipboard: DataTransfer | null): File[] {
+  const files = Array.from(clipboard?.files ?? []).filter(looksLikeImage);
+  if (files.length) return files;
+  return Array.from(clipboard?.items ?? [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => !!file && looksLikeImage(file));
+}
+
 export interface PreparedImage {
   name: string;
   mime: typeof MIME;

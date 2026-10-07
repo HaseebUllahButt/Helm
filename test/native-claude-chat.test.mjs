@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -85,6 +85,47 @@ test('a restart clears an orphaned native approval card', async () => {
   } finally { await second.stop(); }
 });
 
+
+test('native images are stored on the thread host and referenced in the same serialized prompt', async () => {
+  const host = new Host(), sessions = create(host);
+  const data = 'iVBORw0KGgo=';
+  try {
+    await sessions.hooks;
+    await Promise.all([
+      sessions.input('native-test', 'look at [Image #1]', { attachments: [{ filename: '../../remote.png', mime: 'image/png', data }] }),
+      sessions.input('native-test', '' , { attachments: [{ filename: 'second.jpg', mime: 'image/jpeg', data }] }),
+    ]);
+    assert.equal(host.writes.length, 4);
+    for (const index of [0, 2]) {
+      const path = JSON.parse(host.writes[index].match(/\[Image #1\]: ("[^\n]+")/)[1]);
+      assert.ok(path.startsWith(join(process.env.HELM_DIR, 'native-images')));
+      assert.deepEqual(readFileSync(path), Buffer.from(data, 'base64'));
+      assert.equal(statSync(path).mode & 0o777, 0o600);
+      assert.equal(host.writes[index + 1], '\r');
+    }
+    assert.match(host.writes[0], /look at \[Image #1\]/);
+    assert.match(host.writes[2], /Read the attached image files/);
+    const transcript = join(root, 'native-images.jsonl');
+    const prompt = host.writes[0].slice('\x1b[200~'.length, -'\x1b[201~'.length);
+    writeFileSync(transcript, JSON.stringify({type:'user',message:{role:'user',content:prompt},timestamp:new Date().toISOString()})+'\n');
+    sessions.get('native-test').transcript = transcript;
+    const history = await sessions.messages('native-test');
+    assert.equal(history.messages[0].text, 'look at [Image #1]');
+    assert.equal(history.messages[0].attachments[0].data, data);
+
+  } finally { await sessions.stop(); }
+});
+
+test('invalid native images fail before any terminal input', async () => {
+  const host = new Host(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    await assert.rejects(sessions.input('native-test', 'look', { attachments: [{ mime: 'image/png', data: 'bad!' }] }), /valid base64/);
+    await assert.rejects(sessions.input('native-test', 'look', { attachments: [{ mime: 'image/svg+xml', data: 'aGk=' }] }), /JPEG, PNG/);
+    assert.deepEqual(host.writes, []);
+  } finally { await sessions.stop(); }
+});
+
 test('native controls and slash commands share the live terminal without claiming settings were accepted', async () => {
   const host = new Host(), sessions = create(host);
   try {
@@ -115,7 +156,7 @@ test('invalid native controls and slash commands with images never write to the 
       await assert.rejects(sessions.setModel('native-test', model), /invalid Claude model/);
     }
     await assert.rejects(sessions.setEffort('native-test', 'high\n/clear'), /invalid Claude thinking effort/);
-    await assert.rejects(sessions.input('native-test', '/model', { attachments: [{ mime: 'image/png', data: 'iVBORw0KGgo=' }] }), /without images|Pictures cannot/);
+    await assert.rejects(sessions.input('native-test', '/model', { attachments: [{ mime: 'image/png', data: 'iVBORw0KGgo=' }] }), /without images/);
     assert.deepEqual(host.writes, []);
   } finally { await sessions.stop(); }
 });

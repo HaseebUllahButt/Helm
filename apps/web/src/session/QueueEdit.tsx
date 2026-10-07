@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { Sheet } from '../Modal';
 import { Icon } from '../Icon';
-import { IMAGE_ACCEPT, MAX_ATTACHMENTS, looksLikeImage, prepareImage } from './image';
+import { IMAGE_ACCEPT, MAX_ATTACHMENTS, looksLikeImage, prepareImage, clipboardImages } from './image';
 import type { Turn } from './types';
 
 type Image = { filename: string; mime: string; data: string };
@@ -68,7 +68,7 @@ export function QueueEdit({ turn, busy, onCancel, onSave }: {
         <textarea ref={box} className="modal-input" aria-label="Edit queued message" value={text} rows={5} maxLength={32000}
           onChange={(event) => setText(event.target.value)}
           onPaste={(event) => {
-            const files = Array.from(event.clipboardData?.files ?? []).filter(looksLikeImage);
+            const files = clipboardImages(event.clipboardData);
             if (files.length) { event.preventDefault(); void add(files); }
           }} />
         {error && <div className="error">{error}</div>}

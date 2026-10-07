@@ -7,7 +7,7 @@ import { HELM_DIR } from './paths.js';
  * What a brain knows.
  *
  * A brain is one agent for a whole network rather than one per folder - one
- * per machine, living on the machine it acts from - so the first question it
+ * for the network, living on the VM - so the first question it
  * raises is the one nobody has a good answer to: how do
  * you give an agent "everything that is going on" without handing it every
  * transcript on every machine? A busy laptop here holds 182 threads. Pasting
@@ -221,6 +221,7 @@ export function localDigest(sessions, events) {
         cwd: s.cwd,
         engine: s.engine,
         model: s.model ?? null,
+        brain: !!s.brain,
         status: s.status,
         adopted: !!s.adopted,
         costUsd: s.costUsd ?? null,
@@ -258,7 +259,17 @@ export function writeSnapshot(snap, file = SNAPSHOT) {
 export function mergeSnapshot(previous, fresh, now = Date.now()) {
   const machines = { ...(previous?.machines ?? {}) };
   for (const [id, entry] of Object.entries(fresh)) {
-    machines[id] = { ...entry, at: now };
+    // Keep places we have seen even after their last chat was archived.
+    const folders = new Map((machines[id]?.folders ?? []).map(f => [f.path, f]));
+    for (const f of entry.projects ?? []) {
+      if (f.path) folders.set(f.path, { path: f.path, title: f.title, at: now });
+    }
+    for (const s of entry.sessions ?? []) {
+      if (s.cwd && !s.brain && s.engine !== 'shell') {
+        folders.set(s.cwd, { ...folders.get(s.cwd), path: s.cwd, at: now });
+      }
+    }
+    machines[id] = { ...entry, folders: [...folders.values()].sort((a, b) => a.path.localeCompare(b.path)), at: now };
   }
   return { at: now, machines };
 }
@@ -287,6 +298,10 @@ export function render(snap, { roster = {}, now = Date.now(), limit = 12 } = {})
     const sessions = entry?.sessions ?? [];
     const when = online ? '' : ` · last seen ${ago(entry?.at, now)}`;
     out.push(`${name} (${online ? 'online' : 'offline'}${when})`);
+    if (entry?.folders?.length) {
+      out.push('  Known folders (last observed; verify before using):');
+      for (const f of entry.folders) out.push(`    ${collapse(f.path)}${f.title ? ` · ${oneLine(f.title, 60)}` : ''}`);
+    }
     if (!sessions.length) { out.push('  nothing running'); continue; }
 
     const byFolder = new Map();
@@ -357,8 +372,8 @@ export function summaryLine(snap, { roster = {}, now = Date.now() } = {}) {
  * four different CLIs and only some of them take one - and because a message
  * survives `--resume`, so the brain still knows what it is after a restart.
  */
-export function brief(name) {
-  return `You are a brain of a helm network: an agent with a view of every machine in it, rather than one agent per folder. Each machine in the network can have one of these, and you are ${name}'s.
+export function brief(name, picture = '') {
+  return `You are the single Helm brain for this network. You live on ${name}, the always-on VM, and keep one continuous conversation with the owner across every machine and project.
 
 You are running on ${name}. Your tools for the network are the \`helm\` CLI, through your shell:
 
@@ -371,12 +386,15 @@ You are running on ${name}. Your tools for the network are the \`helm\` CLI, thr
   helm delegate <account> --model <id> --wait --json -- "<task>"   run a CLI subagent in this folder
   helm delegate-result <id> --wait --json   read a child's result or pending approval
   helm machines            the roster
+  ssh <machine> '<command>' run a command on another machine using Helm's configured SSH aliases
 
-Session ids are the short ids \`helm digest\` prints. Ordinary shell commands run on ${name}; to do something on another machine, spawn or talk to a session there.
+Session ids are the short ids \`helm digest\` prints. Ordinary shell commands run on ${name}. When the owner says "go to why, then this folder, do this", use that exact machine and folder: verify the destination with SSH, then run commands there or start/continue a Helm session there. Never edit a same-named local folder by mistake. If the destination is offline, say so and retain the requested target; do not silently switch machines. Discover remote accounts with \`ssh <machine> 'helm agents --json'\` before choosing an account to spawn.
+
+Your durable workspace is ~/.helm/brain on ${name}. Keep useful owner-confirmed project locations and preferences in KNOWLEDGE.md there, and read it when resuming. The daemon maintains ~/.helm/snapshot.json with last-observed machines, folders and sessions, including sleeping machines. This is a rough map, not proof a folder still exists. Inspect the relevant machine when a task depends on it. Do not store secrets in your notes.
 
 Every message from the owner is prefixed with a one-line status. Run \`helm digest\` when that line, or the question, suggests you need the detail - do not guess at what is running.
 
-You act on this network. Prefer doing the thing over describing it, say plainly what you did, and ask before anything destructive.`;
+You act on this network. Prefer doing the thing over describing it, say plainly what you did, and ask before anything destructive.${picture ? `\n\nYour initial network map:\n${picture}` : ''}`;
 }
 
 // ------------------------------------------------------------------ its hands
