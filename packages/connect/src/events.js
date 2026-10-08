@@ -119,7 +119,7 @@ function pendingTickets(events) {
     if (event.type === 'turn.start' && String(event.turnId).startsWith('local-') && event.queued) pending.set(event.turnId, event.text ?? '');
     else if (event.type === 'turn.edit' && pending.has(event.turnId)) pending.set(event.turnId, event.text ?? '');
     else if (['turn.deliver', 'turn.accept', 'turn.done', 'turn.remove'].includes(event.type)) pending.delete(event.turnId);
-    else if (event.type === 'turn.start' && !String(event.turnId).startsWith('local-')) {
+    else if (event.type === 'turn.start' && !event.wake && !String(event.turnId).startsWith('local-')) {
       const echo = (event.text ?? '').trim();
       for (const [turnId, text] of pending) {
         const prefix = text.trim();

@@ -77,10 +77,29 @@ export function delegationMode(engine, parentMode, requested, configured = null,
     || inherited || defaultMode(engine);
 }
 
+/**
+ * A turn the agent began on its own (a background task finishing), not one we
+ * sent. Drivers mark it `wake: true`; the `wake-` id is how the ones that make
+ * up their own ids say so, and how a log written before the flag reads.
+ */
+export const isWakeTurn = (turn) => !!turn && (turn.wake === true || String(turn.turnId ?? '').startsWith('wake-'));
+
+const turnTexts = (turn) => (turn?.items ?? []).filter((i) => i.kind === 'text').map((i) => i.text);
+
+/** One turn as the log folds it, or undefined when the log no longer holds it. */
+export const turnOf = (events, turnId) => fold(events).turns.find((t) => t.turnId === turnId);
+
+/** What the agent wrote in one turn, for a short follow-up after the result went out. */
+export const turnText = (turn) => turnTexts(turn).join('\n\n');
+
 export function delegationOutput(session, events) {
   const { turns, pending } = fold(events);
   const turn = turns.at(-1);
-  const output = (turn?.items ?? []).filter((i) => i.kind === 'text').map((i) => i.text).join('\n\n');
+  // The task's answer is its last real turn plus anything it added on waking
+  // up afterwards, so a late wake-up doesn't replace the report.
+  let from = turns.length - 1;
+  while (from > 0 && isWakeTurn(turns[from])) from--;
+  const output = turns.slice(Math.max(from, 0)).flatMap(turnTexts).join('\n\n');
   // A mid-turn steering message has its own optimistic turn.start but the
   // provider finishes the original turn. That trailing ticket must not make
   // a completed task look busy forever on another device.
@@ -99,7 +118,9 @@ export function delegationOutput(session, events) {
 export function trackDelegationReply(session, event) {
   if (!session.delegation) return;
   if (event.type === 'turn.start') {
-    session.delegationReply = { turnId: event.turnId, textIds: [], output: '', truncated: false };
+    // A wake-up continues the same reply rather than starting a new one.
+    if (event.wake && session.delegationReply) session.delegationReply.turnId = event.turnId;
+    else session.delegationReply = { turnId: event.turnId, textIds: [], output: '', truncated: false };
   }
   const reply = session.delegationReply;
   if (!reply) return;

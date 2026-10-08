@@ -468,3 +468,19 @@ test('acp adopt: an unsent ticket is closed as undelivered, not left running', a
   assert.deepEqual(log.of('turn.done').map((e) => [e.turnId, e.status]), [['local-abc', 'interrupted']]);
   assert.equal(driver.status, 'idle');
 });
+
+test('devin: words the agent says outside a prompt close no turn, however long it stays quiet', async () => {
+  // ACP only ends work with a prompt's answer. Nothing says when work the agent
+  // does on its own is over, so the driver does not guess: it opens no turn
+  // for it and never claims a finish (or idleness) from a quiet stream.
+  const { driver, log } = make('devin', 'background');
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done');
+  await log.until((e) => e.type === 'item.delta' && e.text.includes('all clean'));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(log.of('turn.done').length, 1, 'only the prompt ends a turn');
+  assert.equal(log.of('turn.start').length, 1);
+  assert.ok(!log.of('turn.start').some((e) => e.wake));
+  assert.equal(driver.status, 'idle');
+  await driver.kill();
+});

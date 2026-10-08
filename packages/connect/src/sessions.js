@@ -24,7 +24,7 @@ import { AntigravityDriver } from './drivers/antigravity.js';
 import { PiDriver, OmpDriver } from './drivers/pi.js';
 import { devinUsageReport } from './devin-usage.js';
 import { defaultMode, modeFromAuto } from './modes.js';
-import { delegationMode, delegationOutput, trackDelegationReply } from './delegation.js';
+import { delegationMode, delegationOutput, isWakeTurn, trackDelegationReply, turnOf, turnText } from './delegation.js';
 import { authStatuses } from './auth.js';
 import { TerminalHost, NativeHosts, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory } from './inventory.js';
@@ -277,6 +277,10 @@ export class Sessions extends EventEmitter {
   #settling = new Map();
   /** sessionId -> open command cards (turn.start with local: true). */
   #commandCards = new Map();
+  /** sessionId -> the last turns a driver closed, so a repeat is told apart. */
+  #closedTurns = new Map();
+  /** `<child>:<turn>` whose report to the parent is on its way. */
+  #notifying = new Set();
 
   constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, delegationIdleMs = DELEGATION_IDLE_MS } = {}) {
     super();
@@ -1433,6 +1437,14 @@ export class Sessions extends EventEmitter {
     const card = e.type === 'turn.start' ? e.local === true
       : e.type === 'item.start' ? !!this.#commandCards.get(s.id)?.has(e.turnId)
         : e.type === 'turn.done' && this.#commandCard(s.id, e.turnId);
+    // A driver that closes one turn twice must not count it twice: its cost,
+    // its place in the title count, and the notice to a parent are all
+    // per-turn.
+    if (e.type === 'turn.done' && e.turnId && !card && !this.#closeTurn(s.id, e.turnId)) return;
+    // A success naming no turn, with no turn open, closes nothing: it is a
+    // finish said again. (A failure still counts: it may be the only record
+    // of a message the CLI refused before it echoed it.)
+    if (e.type === 'turn.done' && !e.turnId && e.status === 'ok' && !card && !this.events.activeTurn(s.id)) return;
     if (!card) trackDelegationReply(s, e);
     let forwarded = e;
     const staleClaudeConversation = s.engine === 'claude'
@@ -1501,7 +1513,7 @@ export class Sessions extends EventEmitter {
     }
     if (e.type === 'item.done') this.#steps.get(s.id)?.delete(e.id);
     if (e.type === 'turn.done') this.#steps.delete(s.id);
-    if (e.type === 'turn.start') {
+    if (e.type === 'turn.start' && !e.wake) {
       // Handed over too late for the turn it was typed into, the CLI runs
       // it as the next one instead; the echo is the client's cue.
       const steered = this.#steered.get(s.id);
@@ -1534,26 +1546,35 @@ export class Sessions extends EventEmitter {
     if (e.type === 'turn.done' && s.forkFrom) delete s.forkFrom;
     if (e.type === 'turn.done' && card) this.#commandCards.get(s.id)?.delete(e.turnId);
     if (e.type === 'turn.done' && this.#index.has(s.id) && !card) {
-      if (s.delegation) s.delegation.status = s.stoppedAt ? 'interrupted' : e.status === 'ok' ? 'done' : e.status;
+      // Work the agent began by itself (a background task finishing) after it
+      // had reported: it is not a new run of the task. The task keeps the
+      // outcome it reported, and the wake-up is not a prompt answered.
+      const wake = this.#wakeTurn(s.id, e.turnId);
       if (s.delegation) {
+        const settled = s.stoppedAt ? 'interrupted' : e.status === 'ok' ? 'done' : e.status;
+        s.delegation.status = wake ? s.stoppedAt ? 'interrupted' : s.delegation.settledStatus ?? settled : settled;
+        if (!wake) s.delegation.settledStatus = settled;
         s.delegation.summary = (s.delegationReply?.output || e.error || '').slice(-500);
-        s.delegation.finishedAt = Date.now();
+        if (!wake) s.delegation.finishedAt = Date.now();
         this.#updateTeam(s);
       }
-      if (e.status === 'error' || e.status === 'interrupted') {
+      // A wake-up that was cut short is not the task being stopped.
+      if (e.status === 'error' || (e.status === 'interrupted' && !wake)) {
         const limited = e.status === 'error' && /rate.?limit|usage limit|quota|too many requests|\b429\b/i.test(e.error ?? '');
         s.recovery = { kind: limited ? 'limited' : e.status, message: e.error || 'The task was stopped.', at: Date.now() };
         for (const key of ['errorCode', 'errorKind', 'retryable']) {
           if (Object.hasOwn(e, key)) s.recovery[key] = e[key];
         }
         if (limited) s.queuePaused = true;
-      } else if (!s.stoppedAt) delete s.recovery;
+      } else if (!wake && !s.stoppedAt) delete s.recovery;
       if (e.usage) s.lastUsage = { ...e.usage, at: Date.now(), model: s.model || s.engineModel };
-      s.turns = (s.turns ?? 0) + 1;
-      // A prompt and its first completed reply are two messages. Providers
-      // that never emit a title must not leave this chat named for its folder.
-      const name = s.generatedTitle || promptTitle(s.promptSample);
-      if (name) this.#titled(s, name, s.generatedTitle ? 'agent' : 'auto');
+      if (!wake) {
+        s.turns = (s.turns ?? 0) + 1;
+        // A prompt and its first completed reply are two messages. Providers
+        // that never emit a title must not leave this chat named for its folder.
+        const name = s.generatedTitle || promptTitle(s.promptSample);
+        if (name) this.#titled(s, name, s.generatedTitle ? 'agent' : 'auto');
+      }
       const cost = forwarded.costUsd;
       if (cost > 0) s.costUsd = Math.round(((s.costUsd ?? 0) + cost) * 1e6) / 1e6;
       this.#save();
@@ -1574,6 +1595,25 @@ export class Sessions extends EventEmitter {
         if (s.status === 'idle') this.#pump(s);
       }
     }
+  }
+
+  /** Record a driver's turn.done; false when that turn was already closed. */
+  #closeTurn(id, turnId) {
+    // After a restart the set starts from what the log already shows closed,
+    // so a driver replaying a completion it said before cannot count it again.
+    const closed = this.#closedTurns.get(id)
+      ?? new Set(this.events.tail(id, 0).filter((e) => e.type === 'turn.done' && e.turnId).map((e) => e.turnId));
+    if (closed.has(turnId)) return false;
+    closed.add(turnId);
+    if (closed.size > 200) closed.delete(closed.values().next().value);
+    this.#closedTurns.set(id, closed);
+    return true;
+  }
+
+  /** Whether this turn began by itself (the agent woke), not from a message of ours. */
+  #wakeTurn(id, turnId) {
+    return isWakeTurn({ turnId })
+      || !!turnId && this.events.tail(id, 0).some((e) => e.type === 'turn.start' && e.turnId === turnId && e.wake === true);
   }
 
   /** Whether this turn is a command card: a local answer, not agent work. */
@@ -1610,14 +1650,37 @@ export class Sessions extends EventEmitter {
     const parent = this.#index.get(child.delegation?.parentId);
     if (!parent || parent.archived || parent.stoppedAt || child.archived || child.stoppedAt || child.delegation.notifiedSeq >= event.seq
       || (child.delegation.parentGeneration ?? 0) !== (parent.stopGeneration ?? 0)) return;
-    const turnId = `local-result-${child.id}-${event.seq}`;
-    try {
-      const result = this.delegationResult(child.id);
-      const text = `A delegated task finished. Treat its result as context for the current user request.\nTask: ${child.title}\nStatus: ${result.status}\nResult:\n${(result.output || result.error || 'No written result.').slice(-12000)}`;
-      await this.input(parent.id, text, { turnId, delivery: 'queue', source: 'delegation' });
+    // One report per turn, whatever closes it again: a driver repeating its
+    // turn.done, a stale or empty turn id, or a restart reading the log back.
+    const tail = this.events.tail(child.id, 2000);
+    const turnId = event.turnId || tail.findLast((e) => e.type === 'turn.start' && !String(e.turnId).startsWith('local-'))?.turnId || null;
+    const told = child.delegation.notifiedTurns ?? [];
+    const key = `${child.id}:${turnId}`;
+    if (turnId && (told.includes(turnId) || this.#notifying.has(key))) return;
+    if (turnId) this.#notifying.add(key);
+    const ticket = `local-result-${child.id}-${event.seq}`;
+    const sent = () => {
       child.delegation.notifiedSeq = event.seq;
+      if (turnId) child.delegation.notifiedTurns = [...(child.delegation.notifiedTurns ?? []), turnId].slice(-50);
       this.#save();
+    };
+    try {
+      let text;
+      const turn = turnId ? turnOf(tail, turnId) : null;
+      if (isWakeTurn(turn) && (told.length || child.delegation.notifiedSeq > 0)) {
+        // Woken by its own background work after reporting: the parent has the
+        // result already, so only something new is worth a message.
+        const update = turnText(turn).trim();
+        if (!update) return sent();
+        text = `A delegated task you already have the result of added an update.\nTask: ${child.title}\nUpdate:\n${update.slice(-12000)}`;
+      } else {
+        const result = this.delegationResult(child.id);
+        text = `A delegated task finished. Treat its result as context for the current user request.\nTask: ${child.title}\nStatus: ${result.status}\nResult:\n${(result.output || result.error || 'No written result.').slice(-12000)}`;
+      }
+      await this.input(parent.id, text, { turnId: ticket, delivery: 'queue', source: 'delegation' });
+      sent();
     } catch (error) { this.log(`[${child.id}] could not return task result: ${error.message}`); }
+    finally { this.#notifying.delete(key); }
   }
 
   /**
@@ -3450,6 +3513,7 @@ export class Sessions extends EventEmitter {
       this.#steered.delete(id);
       this.#settled(id);
       this.#commandCards.delete(id);
+      this.#closedTurns.delete(id);
       clearTimeout(this.#reapers.get(id));
       if (d) await d.kill();
       this.#index.delete(id);
@@ -3635,7 +3699,7 @@ export class Sessions extends EventEmitter {
     const accepted = new Set(tail.filter((e) => e.type === 'turn.accept').map((e) => e.turnId));
     const delivered = new Set(tail.filter((e) => e.type === 'turn.deliver').map((e) => e.turnId));
     const echoes = tail.filter((e) => e.type === 'turn.start'
-      && !String(e.turnId).startsWith('local-') && e.queued !== true);
+      && !e.wake && !String(e.turnId).startsWith('local-') && e.queued !== true);
     const open = tail.filter((e) => e.type === 'turn.start'
       && !closed.has(e.turnId) && !removed.has(e.turnId));
     // A hosted process may still be in its current real turn. Queued local

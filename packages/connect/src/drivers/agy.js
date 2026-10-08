@@ -38,8 +38,8 @@ import { modeFor } from '../modes.js';
  */
 
 const AGY_MIN_VERSION = '1.2.0';
-/** A turn this driver opened, as opposed to one of helm's own queue tickets. */
-const isDriverTurn = (turnId) => String(turnId).startsWith('turn-');
+/** A turn this driver opened - a prompt, or work the agent began itself - as opposed to one of helm's own queue tickets. */
+const isDriverTurn = (turnId) => /^(turn|wake)-/.test(String(turnId));
 const MAX_OUTPUT = 32_000;
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
 
@@ -81,6 +81,8 @@ export class AgyDriver extends Driver {
   #initWait = null;
   /** the refusal the CLI gave at start-up, so a stranded turn can say why */
   #initError = null;
+  /** the highest step index seen: a step beyond it, with no prompt behind it, is new work */
+  #lastStep = -1;
 
   constructor(opts) {
     super({ engine: 'agy', ...opts });
@@ -448,7 +450,14 @@ export class AgyDriver extends Driver {
 
     const kind = TEXT_KIND[type]
       ?? (s.subagent_info ? 'subagent' : type === 'tool' || type === 'tool_call' || s.tool_info ? 'tool' : null);
+    const fresh = index > this.#lastStep;
+    this.#lastStep = Math.max(this.#lastStep, index);
     if (!kind) return; // user_input, checkpoint, unknown steps - plumbing
+
+    // A new step while no prompt of ours is running is the agent working on
+    // its own (a background task finished). It is a turn of its own, ended by
+    // the `result` agy sends for it - never by a quiet stream.
+    if (fresh && !this.#turnQueue.length && !this.#outbox.length && this.#pipe && !this.#dead && !this.#initWait) this.#wake();
 
     let open = this.#open.get(index);
     if (!open) {
@@ -479,6 +488,14 @@ export class AgyDriver extends Driver {
         ...(s.error ? { error: String(s.error) } : {}),
       });
     }
+  }
+
+  #wake() {
+    const turnId = `wake-${randomUUID().slice(0, 8)}`;
+    this.#turnQueue.push(turnId);
+    this.#streamed = false;
+    this.push('turn.start', { turnId, text: '', wake: true });
+    this.push('status', { status: 'working' });
   }
 
   #onResult(r) {

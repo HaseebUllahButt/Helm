@@ -65,6 +65,28 @@ test('plain: text streams in as deltas, then the turn completes with its cost', 
   assert.equal(log.of('status').pop().status, 'exited');
 });
 
+test('a wake-up the CLI starts by itself is a turn of its own, not the last one closing again', async () => {
+  // Background tasks finishing make Claude answer with no message from us.
+  // Folded into the last turn, each one closed that turn again.
+  const { driver, log } = make('wake');
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done' && String(e.turnId).startsWith('wake-') && log.of('turn.done').length === 3);
+  const starts = log.of('turn.start');
+  const dones = log.of('turn.done');
+  assert.equal(starts.length, 3);
+  assert.equal(starts[0].text, 'Reply with exactly the words: hello from helm');
+  assert.ok(starts.slice(1).every((e) => e.wake === true && e.text === '' && e.turnId.startsWith('wake-')));
+  // The last result is said twice; the second opens no turn and closes nothing.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(log.of('turn.start').length, 3);
+  assert.equal(log.of('turn.done').length, 3);
+  assert.deepEqual(dones.map((e) => e.turnId), starts.map((e) => e.turnId), 'every turn closes exactly once');
+  const wakeText = log.of('item.start').find((e) => e.kind === 'text' && e.turnId === starts[1].turnId);
+  assert.ok(wakeText, "the wake-up's words belong to the wake-up");
+  assert.equal(log.of('item.delta').filter((e) => e.id === wakeText.id).map((e) => e.text).join(''), 'background check is clean');
+  await driver.kill();
+});
+
 test('delegated Claude tasks cannot enter a plan approval workflow', () => {
   const { driver } = make('plain', { mode: 'bypassPermissions', delegated: true });
   const flag = driver.args.indexOf('--disallowedTools');

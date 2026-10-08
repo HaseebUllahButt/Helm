@@ -574,6 +574,12 @@ export class CodexDriver extends Driver {
   #shownTurns = new Map();
   /** The /review card waiting to learn its Codex turn id. */
   #pendingReview = null;
+  /** Codex turn ids helm can account for: it started them, or it already shows them. */
+  #knownTurns = new Set();
+  /** Visible turns already closed, so a completion that repeats closes nothing twice. */
+  #closedTurns = new Set();
+  /** A compaction helm asked for runs as a turn of Codex's own; until then, not a wake-up. */
+  #compactUntil = 0;
 
   constructor(opts) {
     super({ engine: 'codex', ...opts });
@@ -716,6 +722,8 @@ export class CodexDriver extends Driver {
     const outcome = known ? TURN_OUTCOME[known.status] ?? null : await codexTurnOutcome(this.transcript, saved);
     if (!outcome || outcome === 'running') return saved;
     if (revision !== this.#turnStateRevision) return null;
+    this.#closedTurns.add(saved);
+    this.#closedTurns.add(saved.replace(/^wake-/, ''));
     this.push('turn.done', { turnId: saved, status: outcome,
       ...(outcome === 'error' ? { error: known?.error?.message ?? 'turn failed' } : {}) });
     return null;
@@ -790,6 +798,7 @@ export class CodexDriver extends Driver {
       throw new Error(res.error.message);
     }
     this.#turnId = res.result.turn.id;
+    this.#knownTurns.add(this.#turnId);
     await this.#subscribeNative();
     if (!this.nativeSocket || !this.#nativeTurnStarts.has(this.#turnId)) {
       this.push('turn.start', { turnId: this.#turnId, text });
@@ -808,8 +817,9 @@ export class CodexDriver extends Driver {
   /** Native compaction, rather than sending the string `/compact` as a prompt. */
   async compact() {
     await this.start();
+    this.#compactUntil = Date.now() + 30_000;
     const res = await this.#server.call('thread/compact/start', { threadId: this.threadId });
-    if (res.error) throw new Error(res.error.message);
+    if (res.error) { this.#compactUntil = 0; throw new Error(res.error.message); }
   }
 
   /**
@@ -845,6 +855,7 @@ export class CodexDriver extends Driver {
         throw new Error(res.error.message);
       }
       this.#shownTurns.set(res.result.turn.id, commandTurn);
+      this.#knownTurns.add(res.result.turn.id);
       this.#turnId = res.result.turn.id;
       return;
     }
@@ -1060,6 +1071,7 @@ export class CodexDriver extends Driver {
       throw new Error(res.error.message);
     }
     this.#turnId = res.result.turn.id;
+    this.#knownTurns.add(this.#turnId);
     await this.#subscribeNative();
     if (!this.nativeSocket || !this.#nativeTurnStarts.has(this.#turnId)) {
       this.push('turn.start', { turnId: this.#turnId, text });
@@ -1212,6 +1224,9 @@ export class CodexDriver extends Driver {
       case 'turn/started':
         this.#turnStateRevision++;
         if (this.#pendingReview && p.turn?.id) this.#shownTurns.set(p.turn.id, this.#pendingReview);
+        // A terminal attached to the same server shows its own turns by the
+        // message that opened them; for any other the first item tells.
+        if (!this.nativeSocket) this.#wake(p.turn?.id);
         this.#turnId = p.turn?.id ?? this.#turnId;
         this.push('status', { status: 'working' });
         return;
@@ -1248,12 +1263,20 @@ export class CodexDriver extends Driver {
         this.#interrupting = false;
         const last = this.#usage?.last;
         const finished = t.id ?? this.#turnId;
+        this.#wake(finished);
+        // The same completion can be heard twice (replayed after a restart,
+        // or after the thread was read): the turn is closed once.
+        const shown = this.#shownTurns.get(finished) ?? finished;
+        if (this.#closedTurns.has(shown) || this.#closedTurns.has(finished)) return;
+        if (shown) this.#closedTurns.add(shown);
+        if (finished) this.#closedTurns.add(finished);
+        if (this.#closedTurns.size > 200) this.#closedTurns.delete(this.#closedTurns.values().next().value);
         // A completion can land after the next turn has started (or while it
         // is being started). It closes its own turn; the newer one is still
         // running, so the session is not idle.
         const superseded = this.#opening > 0 || (!!t.id && !!this.#turnId && this.#turnId !== t.id);
         this.push('turn.done', {
-          turnId: this.#shownTurns.get(finished) ?? finished,
+          turnId: shown,
           status,
           usage: last && { input: last.inputTokens, output: last.outputTokens, cacheRead: last.cachedInputTokens, cacheWrite: last.cacheWriteInputTokens, inputIncludesCache: true },
           durationMs: t.durationMs ?? undefined,
@@ -1303,12 +1326,35 @@ export class CodexDriver extends Driver {
     return (changes ?? []).map((c) => ({ path: c.path, kind: c.kind?.type ?? 'update', diff: clip(c.diff, MAX_DIFF) }));
   }
 
+  /**
+   * A Codex turn nobody here asked for - a background command finishing, a
+   * goal carrying on - is a turn of its own, shown as `wake-<id>`. Folded into
+   * the turn before it, each one closed that turn again and a delegated task
+   * reported "finished" once per wake-up.
+   */
+  #wake(codexTurn) {
+    if (!codexTurn || this.#knownTurns.has(codexTurn) || this.#shownTurns.has(codexTurn)
+      || this.#nativeTurnStarts.has(codexTurn) || this.#opening > 0) return;
+    this.#knownTurns.add(codexTurn);
+    if (Date.now() < this.#compactUntil) { this.#compactUntil = 0; return; }
+    // Seen before a restart: the log already shows it, under either id.
+    const shown = `wake-${codexTurn}`;
+    const log = this.resumeEvents?.() ?? [];
+    if (log.some((e) => e.type === 'turn.start' && e.turnId === codexTurn)) return;
+    this.#shownTurns.set(codexTurn, shown);
+    if (log.some((e) => e.type === 'turn.start' && e.turnId === shown)) return;
+    this.push('turn.start', { turnId: shown, text: '', wake: true });
+  }
+
   #onItemStarted(item, turnId, parentId) {
     if (!item) return;
     if (parentId) {
       const step = childStep(item);
       if (step) this.push('item.update', { id: parentId, agent: { lastTool: step } });
     }
+    // Work in a turn nobody here asked for is a wake-up. A terminal's own
+    // message opens its turn below, with that message as its text.
+    if (!parentId && !(this.nativeSocket && item.type === 'userMessage')) this.#wake(turnId ?? this.#turnId);
     const own = turnId ?? this.#turnId;
     const base = { id: item.id, turnId: this.#shownTurns.get(own) ?? own, parentId };
     switch (item.type) {

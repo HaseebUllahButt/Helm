@@ -177,6 +177,16 @@ process.stdin.on('data', (d) => {
     if (m.event !== 'user') continue;
     out({ event: 'step_update', step_update: { step_index: 1, state: 'DONE', step_type: 'agent_response', text_delta: 'ok' } });
     out({ event: 'result', result: { status: 'SUCCESS', conversation_id: 'conv-live' } });
+    if (process.env.FAKE_WAKE === '1') (async () => {
+      // Then work of its own - a background task finished - with a long quiet
+      // gap in the middle, and its result said twice.
+      await sleep(60);
+      out({ event: 'step_update', step_update: { step_index: 2, state: 'DONE', step_type: 'agent_response', text_delta: 'background started' } });
+      await sleep(500);
+      out({ event: 'step_update', step_update: { step_index: 3, state: 'DONE', step_type: 'agent_response', text_delta: 'background finished' } });
+      out({ event: 'result', result: { status: 'SUCCESS', conversation_id: 'conv-live' } });
+      out({ event: 'result', result: { status: 'SUCCESS', conversation_id: 'conv-live' } });
+    })();
   }
 });
 process.stdin.on('end', () => setTimeout(() => process.exit(0), 20));
@@ -268,4 +278,29 @@ test('agy adopt: a turn still open stays working until its result', async (t) =>
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.turnId, 'turn-live');
   assert.equal(driver.status, 'idle');
+});
+
+test('agy: work it starts by itself is its own turn, open through a quiet gap until its result', async (t) => {
+  const { cmd, dir, env } = liveAgy(t, { FAKE_WAKE: '1' });
+  const driver = new AgyDriver({ cmd, args: [], cwd: dir, env });
+  t.after(() => driver.kill());
+  const log = collect(driver);
+  await driver.send('go');
+  await log.until((e) => e.type === 'turn.done');
+  const first = log.of('turn.start')[0];
+  const wake = await log.until((e) => e.type === 'turn.start' && e.wake === true);
+  assert.equal(wake.text, '');
+  assert.match(wake.turnId, /^wake-/);
+  await log.until((e) => e.type === 'item.done' && log.of('item.start').some((s) => s.id === e.id && s.turnId === wake.turnId));
+  // Quiet: nothing for most of half a second. That is not the end of the work.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(log.of('turn.done').length, 1, 'a quiet gap does not close the wake-up');
+  assert.equal(driver.status, 'working');
+  const done = await log.until((e) => e.type === 'turn.done' && e.turnId === wake.turnId);
+  assert.equal(done.status, 'ok');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(log.of('turn.done').map((e) => e.turnId), [first.turnId, wake.turnId], 'each turn closes once, the repeated result closes nothing');
+  assert.equal(driver.status, 'idle');
+  const texts = log.of('item.start').filter((e) => e.kind === 'text').map((e) => e.turnId);
+  assert.deepEqual(texts, [first.turnId, wake.turnId, wake.turnId]);
 });

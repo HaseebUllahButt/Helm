@@ -85,7 +85,7 @@ export function fold(events = []) {
   for (const e of events) {
     switch (e.type) {
       case 'turn.start':
-        turns.push({ turnId: e.turnId, text: e.text ?? '', items: [], status: null, costUsd: null });
+        turns.push({ turnId: e.turnId, text: e.text ?? '', wake: e.wake === true, items: [], status: null, costUsd: null });
         break;
       case 'item.start': {
         const item = { id: e.id, kind: e.kind, name: e.name ?? null, text: '', input: e.input ?? null, status: null };

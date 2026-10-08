@@ -3,6 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { Driver, checkVersion, assertFolder } from './index.js';
 import { modeFor } from '../modes.js';
 
+// Messages that mean the CLI is working: outside a turn, a turn it began itself.
+// A bare `result` is not one: a result with no work before it is the last
+// turn's result said again.
+const WAKE_TYPES = new Set(['user', 'stream_event', 'assistant']);
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -405,6 +410,11 @@ export class ClaudeDriver extends Driver {
   // ------------------------------------------------------------- the stream
 
   #onMessage(m) {
+    // Work the CLI starts by itself - a background task or a Monitor it set
+    // up finishing - arrives with no message from us. It is a turn of its
+    // own: folded into the last one, every wake-up closed that turn again and
+    // a delegated task reported "finished" once per wake-up.
+    if (!this.#inTurn && this.#pipe && WAKE_TYPES.has(m.type) && !(m.type === 'user' && m.isReplay)) this.#wake(m);
     switch (m.type) {
       case 'control_request': return this.#onControlRequest(m);
       case 'control_response': {
@@ -475,6 +485,12 @@ export class ClaudeDriver extends Driver {
         this.push('item.done', { id, status, output: clip(m.summary) });
       }
     }
+  }
+
+  #wake(m) {
+    this.#turnId = `wake-${m.uuid ?? randomUUID()}`;
+    this.#inTurn = true;
+    this.push('turn.start', { turnId: this.#turnId, text: '', wake: true });
   }
 
   #onUser(m) {
@@ -582,13 +598,18 @@ export class ClaudeDriver extends Driver {
   }
 
   #onResult(m) {
+    // A result outside any turn closes nothing that is open. A failure still
+    // says so - the CLI can refuse a message before it echoes it - but with no
+    // turn id, never the last turn's again; a success is that turn's repeated.
+    if (!this.#inTurn && this.#turnId && !m.is_error) return;
+    const turnId = this.#inTurn ? this.#turnId : null;
     this.#inTurn = false;
     const interrupted = this.#interrupting && m.is_error;
     this.#interrupting = false;
     // From here the thread stands on its own; a restart resumes it as usual.
     this.forkFrom = null;
     this.push('turn.done', {
-      turnId: this.#turnId,
+      turnId,
       // Where a branch could be cut so that it holds everything up to and
       // including this turn's answer.
       resumeAt: this.#lastAssistant ?? undefined,

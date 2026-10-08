@@ -238,6 +238,85 @@ test('a child completion wakes its idle parent once with a durable result ticket
   assert.equal(duplicate.duplicate, true);
 });
 
+test('a child that wakes itself after reporting sends only what is new, never the report again', async (context) => {
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const kid = drivers.get(child.id);
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  const tickets = () => sessions.history(parent.id).events.filter((event) => event.type === 'turn.start' && String(event.turnId).startsWith('local-result-'));
+  kid.finish();
+  await tick();
+  assert.equal(tickets().length, 1);
+  drivers.get(parent.id).finish();
+  await tick();
+
+  // The same turn closed again (older drivers did this on every wake-up).
+  kid.push('turn.done', { turnId: kid.engineSessionId, status: 'ok' });
+  await tick();
+  assert.equal(tickets().length, 1, 'one report per turn');
+
+  // A wake-up that says nothing new is not worth a message.
+  kid.push('turn.start', { turnId: 'wake-quiet', text: '', wake: true });
+  kid.push('turn.done', { turnId: 'wake-quiet', status: 'ok' });
+  await tick();
+  assert.equal(tickets().length, 1);
+
+  // One that does is sent alone, without the report it already sent.
+  kid.push('turn.start', { turnId: 'wake-news', text: '', wake: true });
+  kid.push('item.start', { id: 'news', kind: 'text', turnId: 'wake-news' });
+  kid.push('item.delta', { id: 'news', text: 'Type check is clean; committed.' });
+  kid.push('item.done', { id: 'news', status: 'ok' });
+  kid.push('turn.done', { turnId: 'wake-news', status: 'ok' });
+  await tick();
+  assert.equal(tickets().length, 2);
+  const update = drivers.get(parent.id).sent;
+  assert.match(update, /added an update/);
+  assert.match(update, /Type check is clean; committed\./);
+  assert.doesNotMatch(update, /Opus reviewed the task/);
+
+  // Whoever reads the task's result still gets the report and the update.
+  const result = sessions.delegationResult(child.id);
+  assert.match(result.output, /Opus reviewed the task\.[\s\S]*Type check is clean/);
+});
+
+test('a driver that closes one turn again sends one notice, counts it once, and a wake-up leaves the task as it was', async (context) => {
+  const { sessions, drivers } = setup(context);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const kid = drivers.get(child.id);
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  const tickets = () => sessions.history(parent.id).events.filter((event) => event.type === 'turn.start' && String(event.turnId).startsWith('local-result-'));
+  kid.finish();
+  await tick();
+  drivers.get(parent.id).finish();
+  await tick();
+  const turns = () => sessions.get(child.id).turns;
+  const before = { tickets: tickets().length, turns: turns(), cost: sessions.get(child.id).costUsd };
+  assert.equal(before.tickets, 1);
+
+  // The same turn closed again, by its id and with none at all.
+  kid.push('turn.done', { turnId: kid.engineSessionId, status: 'ok', costUsd: 0.5 });
+  kid.push('turn.done', { status: 'ok' });
+  await tick();
+  assert.equal(tickets().length, 1, 'one notice');
+  assert.equal(turns(), before.turns, 'one more reply is not counted');
+  assert.equal(sessions.get(child.id).costUsd, before.cost, 'the repeat costs nothing');
+
+  // A turn the agent began itself under the CLI's own id: flagged, not named, as a wake-up.
+  kid.push('status', { status: 'working' });
+  kid.push('turn.start', { turnId: 'cli-turn-9', text: '', wake: true });
+  assert.equal(sessions.get(child.id).delegation.status, 'working', 'it is working while it works');
+  kid.push('turn.done', { turnId: 'cli-turn-9', status: 'error', error: 'background job failed' });
+  kid.push('status', { status: 'idle' });
+  await tick();
+  const after = sessions.get(child.id);
+  assert.equal(after.delegation.status, 'done', 'the task keeps the outcome it reported');
+  assert.equal(after.turns, before.turns, 'a wake-up is not a reply');
+  assert.equal(tickets().length, 1, 'nothing new to say, nothing sent');
+  assert.equal(sessions.delegationResult(child.id).status, 'done');
+});
+
 test('legacy child results do not wake old threads on completion or daemon restart', async (context) => {
   const { sessions, drivers } = setup(context);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });

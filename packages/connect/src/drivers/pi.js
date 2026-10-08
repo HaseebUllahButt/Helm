@@ -38,8 +38,8 @@ const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.s
 /** Tools that spawn a child agent - their card is the parent. */
 const SUBAGENT_TOOLS = new Set(['task', 'agent', 'subagent', 'spawn_agent', 'dispatch']);
 
-/** A turn this driver opened, as opposed to one of helm's own queue tickets. */
-const isDriverTurn = (turnId) => String(turnId).startsWith('turn-');
+/** A turn this driver opened - a prompt, or a cycle the agent began itself - as opposed to one of helm's own queue tickets. */
+const isDriverTurn = (turnId) => /^(turn|wake)-/.test(String(turnId));
 
 const contentText = (content) =>
   Array.isArray(content) ? content.map((b) => (b?.type === 'text' ? b.text : '')).filter(Boolean).join('\n') : '';
@@ -394,6 +394,14 @@ class PiRpcDriver extends Driver {
     }
   }
 
+  #wake() {
+    const turnId = `wake-${randomUUID().slice(0, 8)}`;
+    this.#turnQueue.push(turnId);
+    this.#turnId = turnId;
+    this.#usage = null;
+    this.push('turn.start', { turnId, text: '', wake: true });
+  }
+
   async #prompt(text, fields) {
     const turnId = `turn-${randomUUID().slice(0, 8)}`;
     const id = `helm-${++this.#seq}`;
@@ -565,6 +573,11 @@ class PiRpcDriver extends Driver {
         this.#commands = this.#palette(m.commands);
         return;
       case 'agent_start':
+        // A cycle with no prompt of ours behind it is the agent working on
+        // its own (a background task or an extension continuing). It is a
+        // turn of its own, ended by the cycle's own agent_settled - never by
+        // a quiet stream.
+        if (!this.#working && !this.#turnQueue.length && !this.#turnId) this.#wake();
         this.#working = true;
         if (!this.pending.size) this.push('status', { status: 'working' });
         return;

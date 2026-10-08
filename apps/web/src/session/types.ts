@@ -216,7 +216,8 @@ export function apply(state: LogState, e: HelmEvent): void {
       // messages stay in the order they were sent.
       const echo = (e.text ?? '').trim();
       let open: Turn | undefined;
-      for (let i = 0; i < state.turns.length; i++) {
+      // A turn the agent began by itself echoes nothing the owner sent.
+      for (let i = 0; !e.wake && i < state.turns.length; i++) {
         const t = state.turns[i];
         if (!t.id.startsWith('local-') || t.items.length || t.done || t.steered) continue;
         // Compared trimmed: helm strips the trailing newline off what it

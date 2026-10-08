@@ -191,6 +191,18 @@ async function onMessage(m) {
   }
   state.streaming = false;
   if (!scenario.startsWith('omp')) out({ type: 'agent_settled' });
+  if (scenario === 'wake') {
+    // Then a cycle of its own - a background task finished - with a long
+    // quiet gap in the middle, and its settle said twice.
+    await sleep(60);
+    out({ type: 'agent_start' });
+    text('background started');
+    await sleep(500);
+    text('background finished');
+    out({ type: 'agent_end', messages: [], willRetry: false });
+    out({ type: 'agent_settled' });
+    out({ type: 'agent_settled' });
+  }
 }
 `;
 
@@ -355,4 +367,26 @@ test('pi adopt: a process still running keeps its turn working', async (t) => {
   await driver.start();
   assert.equal(log.of('turn.done').length, 0);
   assert.equal(driver.status, 'working');
+});
+
+test('pi: a cycle the agent starts by itself is its own turn, open through a quiet gap until it settles', async (t) => {
+  const { driver, log } = livePi(t, 'wake');
+  await driver.send('go');
+  await log.until((e) => e.type === 'turn.done');
+  const first = log.of('turn.start')[0];
+  const wake = await log.until((e) => e.type === 'turn.start' && e.wake === true);
+  assert.equal(wake.text, '');
+  assert.match(wake.turnId, /^wake-/);
+  await log.until((e) => e.type === 'item.done' && e.id.startsWith('m') && log.of('item.start').some((s) => s.id === e.id && s.turnId === wake.turnId));
+  // Quiet: nothing for most of half a second. That is not the end of the work.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(log.of('turn.done').length, 1, 'a quiet gap does not close the wake-up');
+  assert.equal(driver.status, 'working');
+  const done = await log.until((e) => e.type === 'turn.done' && e.turnId === wake.turnId);
+  assert.equal(done.status, 'ok');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(log.of('turn.done').map((e) => e.turnId), [first.turnId, wake.turnId], 'each turn closes once, the repeated settle closes nothing');
+  assert.equal(driver.status, 'idle');
+  const texts = log.of('item.start').filter((e) => e.kind === 'text').map((e) => e.turnId);
+  assert.deepEqual(texts, [first.turnId, wake.turnId, wake.turnId]);
 });

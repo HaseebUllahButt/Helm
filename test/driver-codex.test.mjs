@@ -185,13 +185,13 @@ test('a late completion of an older turn does not mark the newer turn idle', asy
   await driver.steer('More for B');
   assert.equal(writes.at(-1).params.expectedTurnId, 'turn-b');
 
-  // The terminal starts C; B's completion arrives after it.
+  // C starts on its own (nobody here asked for it); B's completion arrives after it.
   notify('turn/started', { turn: { id: 'turn-c' } });
   notify('turn/completed', { turn: { id: 'turn-b', status: 'completed' } });
   assert.equal(driver.status, 'working', 'turn C is running');
   notify('turn/completed', { turn: { id: 'turn-c', status: 'completed' } });
   assert.equal(driver.status, 'idle');
-  assert.deepEqual(log.of('turn.done').map((e) => e.turnId), ['turn-a', 'turn-b', 'turn-c']);
+  assert.deepEqual(log.of('turn.done').map((e) => e.turnId), ['turn-a', 'turn-b', 'wake-turn-c']);
 });
 
 test('/review closes the card it opened instead of leaving it running forever', async (t) => {
@@ -511,4 +511,45 @@ test('subagent: spawn_agent is a card; the child thread\'s items nest under it',
 test('resume: an existing thread id resumes instead of starting', () => {
   const d = new CodexDriver({ cmd: 'codex', env: {}, cwd: '/x', mode: 'ask', engineSessionId: 'thread-1' });
   assert.equal(d.threadId, 'thread-1');
+});
+
+test('wake: a turn Codex starts by itself is its own turn, and each turn closes once', async () => {
+  // After the answer: its completion again, then a turn of Codex's own (a
+  // background command finishing) that completes twice.
+  const { driver, log } = make('wake');
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done' && String(e.turnId).startsWith('wake-'));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const starts = log.of('turn.start');
+  const dones = log.of('turn.done');
+  assert.equal(starts.length, 2);
+  assert.equal(starts[0].text, 'Reply with exactly the words: hello from helm');
+  assert.ok(!starts[0].wake);
+  assert.equal(starts[1].wake, true);
+  assert.equal(starts[1].text, '');
+  assert.match(starts[1].turnId, /^wake-/);
+  assert.deepEqual(dones.map((e) => e.turnId), starts.map((e) => e.turnId), 'every turn closes exactly once');
+  const wakeText = log.of('item.start').find((e) => e.kind === 'text' && e.turnId === starts[1].turnId);
+  assert.ok(wakeText, "the wake-up's words belong to the wake-up");
+  assert.equal(log.of('item.delta').filter((e) => e.id === wakeText.id).map((e) => e.text).join(''), 'background check is clean');
+  assert.equal(driver.status, 'idle');
+  await driver.kill();
+});
+
+test('a wake-up the log already shows is not opened again after a restart', async (t) => {
+  const shown = 'wake-w1';
+  const { driver, log, notify } = scriptedCodex(t, {
+    reply(request) {
+      if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+    },
+  });
+  driver.resumeEvents = () => [{ type: 'turn.start', turnId: shown, text: '', wake: true }, { type: 'turn.start', turnId: 'mine', text: 'hi' }];
+  await driver.start();
+  notify('turn/started', { turn: { id: 'w1' } });
+  notify('turn/completed', { turn: { id: 'w1', status: 'completed' } });
+  notify('turn/completed', { turn: { id: 'w1', status: 'completed' } });
+  notify('turn/started', { turn: { id: 'mine' } });
+  notify('turn/completed', { turn: { id: 'mine', status: 'completed' } });
+  assert.equal(log.of('turn.start').length, 0, 'neither is announced again');
+  assert.deepEqual(log.of('turn.done').map((e) => e.turnId), [shown, 'mine']);
 });

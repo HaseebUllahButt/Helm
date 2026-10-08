@@ -479,6 +479,14 @@ the same provider conversation. Cleanup waits for unfinished replies, queued
 messages, approvals and active descendants. Ordinary shared terminal chats stay
 connected. Codex children detach their own thread from the shared account server.
 
+A completed turn reports to its parent once, including after a restart. Work
+the provider starts by itself is recorded separately and sends only new written
+updates, while preserving the task's original result. Claude, Codex, Pi/OMP and
+agy use their own turn or cycle completion events; silence alone is never
+treated as completion. ACP providers without an unsolicited-work completion
+signal keep their existing behavior. Pi and agy history-only wake replays are
+not yet deduplicated across a restart.
+
 ### Machine capacity and remote commands
 
 Agents receive a shared-capacity instruction: parallelize reading and coding,
