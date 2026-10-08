@@ -31,8 +31,19 @@ test('an unknown failure keeps its own words, without ids or the exit prefix', (
 
 test('a limit says when it resets; a restart and a stop say what to do', () => {
   assert.match(plainProblem('limited', 'Claude AI usage limit reached|1791312600').text, /resets at/);
-  assert.equal(plainProblem('restart', 'The agent stopped.').action, 'Resume');
+  assert.equal(plainProblem('restart', 'The agent stopped.').action, 'Continue');
+  assert.equal(plainProblem('restart', 'The agent stopped.').title, 'Response interrupted');
+  assert.doesNotMatch(plainProblem('restart', 'The agent stopped.').text, /Helm restarted|paused/);
   assert.equal(plainProblem('interrupted', 'The task was stopped.').text, 'You stopped this task.');
+});
+
+test('provider internal errors and rejected models explain how to recover', () => {
+  const internal = 'Client error: Protocol error (invalid_argument): an internal error occurred (trace ID: d0ebd00c684f0c6c1cd575844e2e38aa)';
+  const unavailable = JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', message: "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account." } });
+  assert.match(plainProblem('error', internal).text, /AI service.*choose another model/);
+  assert.equal(plainProblem('error', internal).raw, internal);
+  assert.match(plainProblem('error', unavailable).text, /unavailable for this account/);
+  assert.equal(plainProblem('error', unavailable).raw, unavailable);
 });
 
 test('browser keys are caught; editing and finding keys are not', () => {

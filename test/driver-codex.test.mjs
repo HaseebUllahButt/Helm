@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { writeFileSync, readFileSync, chmodSync } from 'node:fs';
+import { writeFileSync, readFileSync, chmodSync, rmSync } from 'node:fs';
 import { fakeCli, collect } from './helpers.mjs';
 import { CodexDriver, CODEX_COMMANDS, formatAccountUsage, formatRateLimits } from '../packages/connect/src/drivers/codex.js';
 
@@ -30,6 +30,113 @@ test('Codex forwards native thread names without adopting another thread title',
   driver.onNotification('thread/name/updated', { threadId: 'title-thread', threadName: null });
   driver.onNotification('thread/name/updated', { threadId: 'title-thread', threadName: '  Repair login  ' });
   assert.deepEqual(log.of('title'), [{ type: 'title', title: 'Repair login' }]);
+});
+
+function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false } = {}) {
+  const fake = fakeCli('codex', 'plain');
+  let receive, exited;
+  const writes = [];
+  const emit = (message) => receive(`${JSON.stringify(message)}\n`);
+  const pipe = {
+    onData: (callback) => { receive = callback; },
+    onExit: (callback) => { exited = callback; },
+    write(data) {
+      const request = JSON.parse(data); writes.push(request);
+      const reply = request.method === 'thread/read'
+        ? unsupportedTurns && request.params.includeTurns
+          ? { error: { message: 'list_turns is not supported yet' } }
+          : error ? { error } : { result: { thread } }
+        : { result: {} };
+      emit({ id: request.id, ...reply });
+      if (request.method === 'thread/read') afterRead?.(emit);
+    },
+    end: () => exited?.({ code: 0 }),
+    kill: () => exited?.({ code: 0 }),
+  };
+  const host = { hasProc: () => true, procPipe: () => pipe,
+    openProc: () => assert.fail('must not start a competing account server') };
+  const driver = new CodexDriver({ cmd: fake.cmd, env: { CODEX_HOME: join(fake.dir, 'home') },
+    cwd: fake.dir, mode: 'ask', engineSessionId: 'recovered-thread',
+    procHost: host, openTurn: () => 'stale-log-turn' });
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
+  return { driver, log: collect(driver), writes };
+}
+
+for (const [name, status, turns, expected] of [
+  ['completed', { type: 'idle' }, [{ id: 'stale-log-turn', status: 'completed' }], 'idle'],
+  ['unloaded with an unfinished rollout', { type: 'notLoaded' }, [{ id: 'stale-log-turn', status: 'inProgress' }], 'idle'],
+  ['running', { type: 'active', activeFlags: [] }, [{ id: 'actual-live-turn', status: 'inProgress' }], 'working'],
+  ['awaiting approval', { type: 'active', activeFlags: ['waitingOnApproval'] }, [{ id: 'actual-live-turn', status: 'inProgress' }], 'blocked'],
+]) test(`adopted Codex reads a ${name} thread rather than trusting saved work`, async (t) => {
+  const { driver, writes } = adoptedCodex(t, { thread: { status, turns } });
+  driver.status = 'working';
+  await driver.start();
+  assert.equal(driver.status, expected);
+  assert.deepEqual(writes, [{ jsonrpc: '2.0', id: 1, method: 'thread/read',
+    params: { threadId: 'recovered-thread', includeTurns: true } }]);
+  if (expected === 'working') {
+    await driver.steer('Check this too');
+    assert.equal(writes.at(-1).params.expectedTurnId, 'actual-live-turn');
+  } else if (expected === 'idle') {
+    await assert.rejects(driver.steer('Do not revive stale work'), /no active turn/);
+  }
+});
+
+test('older ephemeral Codex threads fall back to a live status read without replaying work', async (t) => {
+  const { driver, writes } = adoptedCodex(t, {
+    unsupportedTurns: true, thread: { status: { type: 'idle' } },
+  });
+  driver.status = 'working';
+  await driver.start();
+  assert.equal(driver.status, 'idle');
+  assert.deepEqual(writes.map((request) => [request.method, request.params.includeTurns]),
+    [['thread/read', true], ['thread/read', false]]);
+  await assert.rejects(driver.steer('No stale turn'), /no active turn/);
+});
+
+test('a completion received during a recovery read wins over its older active snapshot', async (t) => {
+  const { driver } = adoptedCodex(t, {
+    thread: { status: { type: 'active' }, turns: [{ id: 'finished-now', status: 'inProgress' }] },
+    afterRead: (emit) => emit({ method: 'turn/completed', params: {
+      threadId: 'recovered-thread', turn: { id: 'finished-now', status: 'completed' },
+    } }),
+  });
+  driver.status = 'working';
+  await driver.start();
+  assert.equal(driver.status, 'idle');
+  await assert.rejects(driver.steer('Do not revive the completed turn'), /no active turn/);
+});
+
+test('a turn starting during a recovery read wins over its older idle snapshot', async (t) => {
+  const { driver, writes } = adoptedCodex(t, {
+    thread: { status: { type: 'idle' }, turns: [] },
+    afterRead: (emit) => emit({ method: 'turn/started', params: {
+      threadId: 'recovered-thread', turn: { id: 'new-live-turn' },
+    } }),
+  });
+  await driver.start();
+  assert.equal(driver.status, 'working');
+  await driver.steer('Use the actual turn');
+  assert.equal(writes.at(-1).params.expectedTurnId, 'new-live-turn');
+});
+
+test('a managed Codex thread accepts live idle notifications without waiting for a turn completion', async (t) => {
+  const { driver } = adoptedCodex(t, {
+    thread: { status: { type: 'active' }, turns: [{ id: 'live-turn', status: 'inProgress' }] },
+  });
+  await driver.start();
+  driver.onNotification('thread/status/changed', { threadId: 'other-thread', status: { type: 'idle' } });
+  assert.equal(driver.status, 'working');
+  driver.onNotification('thread/status/changed', { threadId: 'recovered-thread', status: { type: 'idle' } });
+  assert.equal(driver.status, 'idle');
+  await assert.rejects(driver.steer('The turn ended'), /no active turn/);
+});
+
+test('a failed live thread read cannot claim that saved work is still running', async (t) => {
+  const { driver, writes } = adoptedCodex(t, { error: { message: 'thread unavailable' } });
+  await assert.rejects(driver.start(), /live thread read failed: thread unavailable/);
+  assert.equal(driver.status, 'idle');
+  assert.equal(writes.length, 1, 'a failed read never resumes or replays the old task');
 });
 
 test('/usage views format the account activity API as Markdown', () => {

@@ -25,7 +25,7 @@ writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ vers
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { CodexDriver } = await import('../packages/connect/src/drivers/codex.js');
 class Runtime extends EventEmitter { async listLive() { return new Map(); } }
-class OfflineHost extends EventEmitter { async ensure() { return false; } has() { return false; } nativeSessions() { return []; } detach() {} }
+class OfflineHost extends EventEmitter { async ensure() { return false; } has() { return false; } hasProc() { return false; } nativeSessions() { return []; } detach() {} }
 const createSessions = () => new Sessions(new Runtime(), { terminals: new OfflineHost(), nativeHost: new OfflineHost(), procHost: new OfflineHost() });
 const http = createServer();
 const wsServer = new WebSocketServer({ server: http });
@@ -193,6 +193,39 @@ test('an older idle Helm thread resumed in a terminal joins the daemon with the 
   assert.equal(rows[0].alive,true);
   assert.equal(rows[0].mode,undefined,'the resumed terminal owns its permission settings');
   await sessions.stop();
+});
+
+test('native work survives Helm restart without a false interruption or duplicate writer', async (t) => {
+  nativeId = '01a11111-0000-7000-8000-000000000007';
+  approved = true;
+  activeTurn = 'native-surviving-turn';
+  t.after(() => { activeTurn = null; });
+  const first = createSessions();
+  const s = (await first.list()).find((session) => session.engineSessionId === nativeId);
+  first.events.append(s.id, { type: 'turn.start', turnId: activeTurn, text: 'Live terminal work' });
+  await first.stop();
+  const second = createSessions();
+  t.after(() => second.stop());
+  await second.resume();
+  const live = (await second.list()).find((session) => session.id === s.id);
+  assert.equal(live.status, 'working');
+  assert.equal(live.recovery, undefined);
+  assert.equal(second.history(s.id).events.some((event) => event.type === 'turn.done'
+    && event.turnId === activeTurn), false, 'Helm cannot interrupt a turn owned by the terminal daemon');
+});
+
+test('a persisted native busy row whose thread is unloaded settles even before a driver attaches', async (t) => {
+  loaded = false;
+  t.after(() => { loaded = true; });
+  const saved = JSON.parse(readFileSync(join(process.env.HELM_DIR, 'sessions.json'), 'utf8'));
+  const row = saved.sessions.find((session) => session.engineSessionId === nativeId);
+  row.status = 'working';
+  writeFileSync(join(process.env.HELM_DIR, 'sessions.json'), JSON.stringify(saved));
+  const sessions = createSessions();
+  t.after(() => sessions.stop());
+  await sessions.resume();
+  assert.equal(sessions.get(row.id).status, 'idle');
+  assert.equal(sessions.history(row.id).events.filter((event) => event.type === 'status').at(-1).status, 'idle');
 });
 
 test.after(async () => {

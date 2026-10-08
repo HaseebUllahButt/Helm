@@ -168,6 +168,27 @@ test('completed provider echoes and withdrawn tickets are not active local promp
   assert.equal(log.activeTurn('s'), null);
 });
 
+test('unfinished local commands and named queued tickets never revive completed provider work', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-local-command-recovery-'));
+  const log = new EventLog(dir);
+  log.append('s', { type: 'turn.start', turnId: 'command-old-status', text: '/status', local: true });
+  log.append('s', { type: 'turn.start', turnId: 'real-done', text: 'Work' });
+  log.append('s', { type: 'turn.done', turnId: 'real-done', status: 'ok' });
+  log.append('s', { type: 'turn.start', turnId: 'named-queued-ticket', text: 'Next task', queued: true });
+  assert.equal(log.activeTurn('s'), null);
+  assert.equal(new EventLog(dir).activeTurn('s'), null, 'a cold read must not revive either record');
+  log.append('s', { type: 'turn.start', turnId: 'real-live', text: 'Still working' });
+  log.append('s', { type: 'turn.start', turnId: 'command-new-status', text: '/status', local: true });
+  assert.equal(log.activeTurn('s').turnId, 'real-live', 'local cards cannot displace real work');
+});
+
+test('a legacy optimistic status ticket is retired by its local command echo', () => {
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-legacy-status-')));
+  log.append('s', { type: 'turn.start', turnId: 'local-ticket', text: '/status' });
+  log.append('s', { type: 'turn.start', turnId: 'command-status', text: '/status', local: true });
+  assert.equal(log.activeTurn('s'), null);
+});
+
 test('a short conversation is served whole, from its first event', () => {
   const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-events-')));
   log.append('s', { type: 'turn.start', turnId: 't1', text: 'hi' });

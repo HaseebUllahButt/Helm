@@ -11,6 +11,10 @@ export interface Problem { title: string; text: string; action: string; raw?: st
 type Kind = 'limited' | 'error' | 'interrupted' | 'restart';
 
 const RULES: [RegExp, string][] = [
+  [/model .*not supported|does not offer|model .*not available/i,
+    'This model is unavailable for this account. Choose another model, then try again.'],
+  [/an internal error occurred/i,
+    'The AI service could not complete this response. Try again, or choose another model if it keeps failing.'],
   [/no conversation found|session .*not found|could not resume/i,
     'The saved history for this chat is gone from this machine, so it could not carry on. Sending again starts it fresh.'],
   [/\b401\b|unauthori[sz]ed|not logged in|log ?in again|invalid api key|authentication|oauth token .*expired|credentials/i,
@@ -56,8 +60,8 @@ export function plainError(message: string): string {
 export function plainProblem(kind: Kind, message: string): Problem {
   const raw = message?.trim() || undefined;
   if (kind === 'restart') return {
-    title: 'Task paused', action: 'Resume',
-    text: 'Helm restarted while the agent was working. Resume picks up from the saved conversation.',
+    title: 'Response interrupted', action: 'Continue',
+    text: 'The agent stopped before this response finished. Continue from the saved conversation.',
   };
   if (kind === 'interrupted') return {
     title: 'Task stopped', action: 'Continue',

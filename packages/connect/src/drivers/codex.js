@@ -393,16 +393,18 @@ export class CodexServer {
     this.#child.stdin.write(JSON.stringify(obj) + '\n');
   }
 
-  call(method, params) {
+  call(method, params, timeout = this.nativeSocket ? 5000 : null) {
     const id = ++this.#seq;
     return new Promise((resolve) => {
-      this.#calls.set(id, resolve);
-      if (this.nativeSocket) setTimeout(() => {
+      let timer;
+      this.#calls.set(id, (message) => { clearTimeout(timer); resolve(message); });
+      if (timeout != null) timer = setTimeout(() => {
         if (!this.#calls.delete(id)) return;
-        resolve({ error: { message: `Codex native ${method} timed out` } });
-      }, 5000).unref?.();
+        resolve({ error: { message: `Codex ${this.nativeSocket ? 'native ' : ''}${method} timed out` } });
+      }, timeout);
+      timer?.unref?.();
       try { this.write({ jsonrpc: '2.0', id, method, params }); }
-      catch (e) { this.#calls.delete(id); resolve({ error: { message: e.message } }); }
+      catch (e) { clearTimeout(timer); this.#calls.delete(id); resolve({ error: { message: e.message } }); }
     });
   }
 
@@ -509,6 +511,7 @@ export class CodexDriver extends Driver {
   #serverAdopted = false;
   #started = false;
   #turnId = null;
+  #turnStateRevision = 0;
   #usage = null;
   #rateLimits = null;
   #rolloutState = null;
@@ -557,11 +560,18 @@ export class CodexDriver extends Driver {
     if (this.#started && (!this.nativeSocket || this.#nativeSubscribed)) return;
     const server = await this.#connectOnly();
     if (this.#serverAdopted && this.threadId) {
-      // The app-server itself survived on helm-procs. Its thread state and
-      // any in-flight turn are already live; sending thread/resume here would
-      // race the old turn instead of simply reconnecting to it.
-      const savedTurn = this.openTurn?.();
-      this.#turnId = savedTurn && !savedTurn.startsWith('local-') ? savedTurn : null;
+      // The account server being alive does not prove this thread is busy.
+      // Read its actual turn instead of reviving an unfinished log record.
+      // This is read-only: resuming the thread could race a surviving turn.
+      const revision = this.#turnStateRevision;
+      let state = await server.call('thread/read', { threadId: this.threadId, includeTurns: true }, 10_000);
+      // Older ephemeral threads expose their live status but cannot list
+      // persisted turns. A status-only read still proves whether they work.
+      if (state.error && /list_turns is not supported/i.test(state.error.message)) {
+        state = await server.call('thread/read', { threadId: this.threadId, includeTurns: false }, 10_000);
+      }
+      if (state.error) throw new Error(`codex live thread read failed: ${state.error.message}`);
+      const thread = state.result.thread;
       this.#rolloutState = await codexSessionState(this.transcript);
       this.#usage = this.#rolloutState.usage ?? this.#usage;
       this.info = {
@@ -572,7 +582,15 @@ export class CodexDriver extends Driver {
         cliVersion: this.#rolloutState.cliVersion,
       };
       this.#started = true;
-      this.push('status', { status: this.pending.size ? 'blocked' : this.#turnId ? 'working' : 'idle' });
+      // Notifications delivered during the read are newer than its snapshot.
+      if (revision === this.#turnStateRevision) {
+        const liveTurn = thread.turns?.findLast((turn) => turn.status === 'inProgress')?.id;
+        const active = thread.status ? thread.status.type === 'active' : !!liveTurn;
+        this.#turnId = active ? liveTurn ?? this.openTurn?.() ?? null : null;
+        const blocked = thread.status?.activeFlags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
+        this.push('status', { status: this.pending.size || blocked ? 'blocked'
+          : active ? 'working' : 'idle' });
+      }
       this.emit('init', this.info);
       return;
     }
@@ -1104,12 +1122,15 @@ export class CodexDriver extends Driver {
         }
         return;
       case 'turn/started':
+        this.#turnStateRevision++;
         this.#turnId = p.turn?.id ?? this.#turnId;
         this.push('status', { status: 'working' });
         return;
       case 'thread/status/changed': {
-        if (!this.nativeSocket) return;
         const status = p.status;
+        if (!status?.type) return;
+        this.#turnStateRevision++;
+        if (status?.type !== 'active') this.#turnId = null;
         const blocked = status?.activeFlags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
         this.push('status', { status: blocked ? 'blocked' : status?.type === 'active' ? 'working' : 'idle' });
         return;
@@ -1129,6 +1150,7 @@ export class CodexDriver extends Driver {
         this.#usage = p.tokenUsage;
         return;
       case 'turn/completed': {
+        this.#turnStateRevision++;
         const t = p.turn ?? {};
         const status = t.status === 'interrupted' ? 'interrupted' : t.status === 'failed' ? 'error' : 'ok';
         this.#interrupting = false;
@@ -1140,6 +1162,7 @@ export class CodexDriver extends Driver {
           durationMs: t.durationMs ?? undefined,
           error: status === 'error' ? (t.error?.message ?? 'turn failed') : undefined,
         });
+        this.#turnId = null;
         this.push('status', { status: 'idle' });
         return;
       }

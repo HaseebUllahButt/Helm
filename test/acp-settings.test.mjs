@@ -175,7 +175,7 @@ const adoptPipe = ({ response, buffered = [] } = {}) => {
     write(data) {
       const message = JSON.parse(data);
       writes.push(message);
-      if (message.method === 'session/set_config_option') {
+      if (message.method === 'session/set_config_option' || message.method === 'session/prompt') {
         queueMicrotask(() => emit({ jsonrpc: '2.0', id: message.id, ...response(message) }));
       }
     },
@@ -201,6 +201,31 @@ const pendingPermission = {
   requestId: 'permission-1', acpId: 42,
   acpOptions: [{ optionId: 'allow_once', kind: 'allow_once', name: 'Allow' }],
 };
+
+test('devin: internal prompt errors retain retryability and their provider code', async (t) => {
+  const fake = fakeCli('devin', 'plain');
+  const failure = { code: -32013, message: 'an internal error occurred', data: {
+    'cognition.ai/errorKind': 'internal', 'cognition.ai/retryable': true,
+  } };
+  const pipe = adoptPipe({ response: (request) => request.method === 'session/prompt'
+    ? { error: failure } : { result: {} } });
+  const driver = new DevinDriver({
+    cmd: fake.cmd, env: {}, args: [], cwd: fake.dir,
+    engineSessionId: 'retryable-session', procHost: hosted(pipe), procId: 'adopted',
+  });
+  t.after(() => driver.kill());
+  const events = collect(driver);
+  await driver.send('Continue');
+  const done = await events.until((event) => event.type === 'turn.done');
+  assert.equal(done.status, 'error');
+  for (const event of [done, events.of('error').at(-1)]) {
+    assert.equal(event.errorCode, -32013);
+    assert.equal(event.errorKind, 'internal');
+    assert.equal(event.retryable, true);
+  }
+  assert.equal(driver.status, 'idle');
+  assert.equal(pipe.writes.filter((request) => request.method === 'session/prompt').length, 1);
+});
 
 test('devin: hosted adoption hydrates the catalog with a same-value effort setter', async (t) => {
   const fake = fakeCli('devin', 'plain');

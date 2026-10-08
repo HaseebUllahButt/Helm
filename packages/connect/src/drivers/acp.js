@@ -725,8 +725,14 @@ export class AcpDriver extends Driver {
     if (this.#turnId !== turnId) return;
     this.#closeStream();
     if (res.error) {
-      this.push('error', { message: res.error.message, kind: 'turn' });
-      this.push('turn.done', { turnId, status: 'error', error: res.error.message });
+      const data = res.error.data;
+      const details = {
+        ...(typeof res.error.code === 'number' ? { errorCode: res.error.code } : {}),
+        ...(typeof data?.['cognition.ai/errorKind'] === 'string' ? { errorKind: data['cognition.ai/errorKind'] } : {}),
+        ...(typeof data?.['cognition.ai/retryable'] === 'boolean' ? { retryable: data['cognition.ai/retryable'] } : {}),
+      };
+      this.push('error', { message: res.error.message, kind: 'turn', ...details });
+      this.push('turn.done', { turnId, status: 'error', error: res.error.message, ...details });
       this.push('status', { status: 'idle' });
       return;
     }

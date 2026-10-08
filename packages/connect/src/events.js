@@ -547,14 +547,14 @@ export class EventLog {
   }
 }
 
-/** Optimistic local prompts cease being active when their provider echo arrives. */
+/** Local command replies and queued tickets never own a provider's active turn. */
 export function activeTurnFromEvents(events) {
   const closed = new Set(events.filter((e) => ['turn.done', 'turn.remove', 'turn.accept'].includes(e.type)).map((e) => e.turnId));
   const real = events.filter((e) => e.type === 'turn.start' && !String(e.turnId).startsWith('local-'));
-  const active = [...real].reverse().find((e) => !closed.has(e.turnId));
+  const active = [...real].reverse().find((e) => !e.local && e.queued !== true && !closed.has(e.turnId));
   if (active) return active;
   return [...events].reverse().find((e) => {
-    if (e.type !== 'turn.start' || closed.has(e.turnId) || e.queued === true) return false;
+    if (e.type !== 'turn.start' || e.local || closed.has(e.turnId) || e.queued === true) return false;
     const text = (e.text ?? '').trim();
     return !real.some((echo) => echo.seq > e.seq && (
       (echo.text ?? '').trim() === text || (text && (echo.text ?? '').trim().startsWith(text + '\n'))

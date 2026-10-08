@@ -14,6 +14,7 @@ import { Controls, type Kind } from './session/Controls';
 import { MAX_ATTACHMENTS, prepareImage, type PreparedImage } from './session/image';
 import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
+import { plainProblem } from './session/problem';
 import { ExternalSessionNotice } from './session/ExternalSessionNotice';
 import { useSessionLog } from './session/useSessionLog';
 import { PermissionSheet } from './session/PermissionSheet';
@@ -2981,11 +2982,12 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
   const eng = engineOf(s.engine);
   const n = s.pending ?? 0;
   const ask = s.status === 'blocked' ? s.ask : null;
+  const problem = s.status !== 'blocked' && s.recovery ? plainProblem(s.recovery.kind, s.recovery.message) : null;
   return (
     <div className={`need${s.recovery && s.status !== 'blocked' ? ' need-recovery' : ''}`}>
-      <button className="need-main" onClick={onOpen}>
+      <button className="need-main" onClick={onOpen} title={problem?.text}>
         <span className="need-k">
-          <i />{s.recovery && s.status !== 'blocked' ? 'Task paused' : 'Needs you'}{s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
+          <i />{s.status === 'blocked' || s.team?.blocked ? 'Needs you' : problem?.title ?? (s.team?.failed ? 'Child task failed' : 'Needs you')}{s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
           {n > 1 && <span className="need-n">{n}</span>}
         </span>
         <span className="need-t">

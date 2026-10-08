@@ -454,10 +454,15 @@ export class Sessions extends EventEmitter {
         if (result.value) for (const session of this.#index.values()) {
           if (!session.nativeSocket || session.profileId !== accountProfiles[accountIndex].id || loaded.has(session.engineSessionId)) continue;
           const driver = this.#drivers.get(session.id);
-          if (!driver) continue;
-          await driver.suspend();
+          await driver?.suspend();
           this.#drivers.delete(session.id);
+          if (session.status !== 'idle') {
+            const event = this.events.append(session.id, { type: 'status', status: 'idle' });
+            session.lastSeq = event.seq;
+            this.emit('event', { id: session.id, event });
+          }
           session.status = 'idle';
+          this.#save();
           this.emit('session', { ...wire(session), alive: false });
         }
         if (!result.value) continue;
@@ -1403,6 +1408,9 @@ export class Sessions extends EventEmitter {
       if (e.status === 'error' || e.status === 'interrupted') {
         const limited = e.status === 'error' && /rate.?limit|usage limit|quota|too many requests|\b429\b/i.test(e.error ?? '');
         s.recovery = { kind: limited ? 'limited' : e.status, message: e.error || 'The task was stopped.', at: Date.now() };
+        for (const key of ['errorCode', 'errorKind', 'retryable']) {
+          if (Object.hasOwn(e, key)) s.recovery[key] = e[key];
+        }
         if (limited) s.queuePaused = true;
       } else if (!s.stoppedAt) delete s.recovery;
       if (e.usage) s.lastUsage = { ...e.usage, at: Date.now(), model: s.model || s.engineModel };
@@ -3439,6 +3447,10 @@ export class Sessions extends EventEmitter {
     };
 
     for (const e of open) {
+      // A local status card is not work held by the surviving CLI. Older
+      // logs can contain an unfinished card; settle it without manufacturing
+      // either an active provider turn or a restart recovery warning.
+      if (e.local === true) { settle(e.turnId, 'ok'); continue; }
       const local = String(e.turnId).startsWith('local-');
       const mine = (e.text ?? '').trim();
       const echoIndex = local ? echoes.findIndex((x) => x.seq > e.seq && (
@@ -3508,6 +3520,9 @@ export class Sessions extends EventEmitter {
   async resume() {
     const reattaching = [];
     const profiles = loadProfiles()?.profiles ?? [];
+    // Native Codex belongs to its terminal daemon, not Helm's proc host.
+    // Discover its real loaded threads before deciding which turns survived.
+    if (this.nativeDiscovery) await this.#discoverNativeCodex(profiles);
     for (const s of this.#index.values()) {
       // A terminal lives in the host process, which outlives us - so its
       // record stays until `adoptTerminals()` has asked what really survived.
@@ -3519,7 +3534,8 @@ export class Sessions extends EventEmitter {
       // unmatched queued tickets are rebuilt from the log for when it settles.
       const profile = profiles.find((p) => p.id === s.profileId);
       const procId = hostedProcId(s, s.driver === 'codex' && profile ? materialize(profile) : null);
-      if (procId && this.procs.hasProc(procId)) {
+      const nativeAlive = s.nativeSocket && this.#drivers.get(s.id)?.nativeConnected;
+      if (nativeAlive || !s.nativeSocket && procId && this.procs.hasProc(procId)) {
         if (s.recovery?.kind === 'restart') delete s.recovery;
         const tail = this.events.tail(s.id, 0);
         this.#restoreOpenTurns(s, tail, true);
@@ -3532,8 +3548,27 @@ export class Sessions extends EventEmitter {
           // persisted state so an adopted idle process corrects a stale busy row.
           d.status = s.status;
           await d.start();
+          if (s.recovery?.kind === 'error' && s.recovery.message?.startsWith('Could not reconnect to the agent:')) {
+            delete s.recovery;
+            s.queuePaused = false;
+            this.#save();
+            this.emit('session', s);
+          }
           this.#pump(s);
-        }).catch((err) => this.log(`[${s.id}] could not reattach surviving agent: ${err.message}`)));
+        }).catch((err) => {
+          this.log(`[${s.id}] could not reattach surviving agent: ${err.message}`);
+          // An account process may be alive while this thread cannot be
+          // checked. Surface that failure and hold its queue; a remembered
+          // busy label must not hide it or cause automatic prompt replay.
+          s.status = 'idle';
+          s.queuePaused = true;
+          s.recovery = { kind: 'error', message: `Could not reconnect to the agent: ${err.message}`, at: Date.now() };
+          const event = this.events.append(s.id, { type: 'status', status: 'idle' });
+          s.lastSeq = event.seq;
+          this.#save();
+          this.emit('event', { id: s.id, event });
+          this.emit('session', s);
+        }));
         continue;
       }
       // The process that asked died with the previous daemon; a prompt it

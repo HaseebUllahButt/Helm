@@ -27,7 +27,21 @@ if (process.argv.includes('--version')) {
 
 const lines = readFileSync(process.env.FAKE_FIXTURE, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 const stdinLog = process.env.FAKE_STDIN;
-const out = (m) => process.stdout.write(JSON.stringify(m) + '\n');
+const liveThreads = new Map();
+const out = (m) => {
+  if (kind === 'codex') {
+    const id = m.params?.threadId ?? m.result?.thread?.id;
+    if (id) {
+      const thread = liveThreads.get(id) ?? { id, status: { type: 'idle' }, turns: [] };
+      if (m.params?.status) thread.status = m.params.status;
+      if (m.params?.turn) {
+        thread.turns = thread.turns.filter((turn) => turn.id !== m.params.turn.id).concat(m.params.turn);
+      }
+      liveThreads.set(id, thread);
+    }
+  }
+  process.stdout.write(JSON.stringify(m) + '\n');
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const inbox = [];
@@ -42,6 +56,13 @@ process.stdin.on('data', (d) => {
     if (!line.trim()) continue;
     if (stdinLog) appendFileSync(stdinLog, line + '\n');
     const msg = JSON.parse(line);
+    // Recovery reads live state without consuming the next recorded command
+    // response or resuming the hosted writer.
+    if (kind === 'codex' && msg.method === 'thread/read') {
+      out({ id: msg.id, result: { thread: liveThreads.get(msg.params.threadId)
+        ?? { id: msg.params.threadId, status: { type: 'idle' }, turns: [] } } });
+      continue;
+    }
     if (process.env.FAKE_DEBUG) process.stderr.write(`fake: in ${msg.type ?? msg.method ?? msg.id} waiters=${waiters.length}\n`);
     const w = waiters.findIndex((x) => x.pred(msg));
     if (w >= 0) waiters.splice(w, 1)[0].resolve(msg);

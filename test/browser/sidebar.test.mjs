@@ -59,7 +59,7 @@ for (const width of [1280, 390]) test(`a resumed task clears stale recovery and 
     window.mount(client);
   });
   const card = page.locator('.sidebar .need-recovery');
-  await card.getByText('Task paused', { exact: false }).waitFor();
+  await card.getByText('Response interrupted', { exact: false }).waitFor();
   await page.screenshot({ path: `/tmp/helm-recovery-sidebar-${width}.png` });
   assert.ok((await card.boundingBox()).height < 165, `recovery uses a compact thread card: ${JSON.stringify(await card.boundingBox())}`);
   const action = card.locator('.need-go');
@@ -84,6 +84,29 @@ async function pageFor(testContext, viewport, options = {}) {
   testContext.after(() => assert.deepEqual(errors, []));
   return { page, boot };
 }
+
+test('attention cards distinguish failures, limits, and actual questions on mobile', async t => {
+  const { page, boot } = await pageFor(t, { width: 390, height: 1000 });
+  await boot();
+  await page.evaluate(() => {
+    const base = { cwd: '/project/helm', engine: 'devin', driver: 'devin', alive: true, status: 'idle', updatedAt: Date.now() };
+    const sessions = [
+      { ...base, id: 'failed', title: 'Provider failure', recovery: { kind: 'error', message: 'an internal error occurred', at: Date.now() } },
+      { ...base, id: 'limited', title: 'Account limit', recovery: { kind: 'limited', message: 'Usage limit reached', at: Date.now() } },
+      { ...base, id: 'child', title: 'Parent still working', status: 'working', team: { working: 0, blocked: 0, failed: 1 } },
+      { ...base, id: 'question', title: 'Permission needed', status: 'blocked', pending: 1, ask: { kind: 'question', text: 'Proceed?' } },
+    ];
+    window.mount(window.makeClient([{ id: 'vm', name: 'VM', online: true, info: {} }], { vm: sessions }));
+  });
+  const sidebar = page.locator('.sidebar');
+  for (const title of ['Task failed', 'Usage limit reached', 'Child task failed', 'Needs you']) {
+    await sidebar.locator('.need-k').filter({ hasText: new RegExp(`^${title}`) }).waitFor();
+  }
+  assert.equal(await sidebar.locator('.need-k').filter({ hasText: /Task paused|Helm restarted/ }).count(), 0);
+  assert.match(await sidebar.locator('.need-main').filter({ hasText: 'Provider failure' }).getAttribute('title'), /AI service/);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: '/tmp/helm-recovery-states-mobile.png' });
+});
 
 for (const width of [1280, 390]) test(`a normal native CLI opens with keyboard control on ${width}px`, async context => {
   const touch = width < 500;

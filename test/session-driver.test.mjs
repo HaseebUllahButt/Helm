@@ -138,6 +138,28 @@ test('rate limits pause queued work and recovery resumes it once', async () => {
   await sessions.stop();
 });
 
+test('provider error metadata survives in the recovery record without replaying work', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-provider-error')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  t.after(() => sessions.stop());
+  const session = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const driver = FakeDriver.made.at(-1);
+  await sessions.input(session.id, 'Work');
+  driver.push('turn.done', { turnId: 't1', status: 'error', error: 'an internal error occurred',
+    errorCode: -32013, errorKind: 'internal', retryable: true });
+  driver.push('status', { status: 'idle' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(session.recovery.kind, 'error');
+  assert.equal(session.recovery.errorCode, -32013);
+  assert.equal(session.recovery.errorKind, 'internal');
+  assert.equal(session.recovery.retryable, true);
+  assert.equal(driver.sent.length, 1);
+});
+
 test('queue order, edited text and reference snapshots survive a daemon restart', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
@@ -642,6 +664,44 @@ for (const profileId of ['claudea', 'codex']) test(`a surviving ${profileId} pro
   await original.kill(s.id);
 });
 
+test('a failed hosted reattachment surfaces recovery and holds queued work instead of staying busy', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-failed-reattach');
+  const host = Object.assign(new EventEmitter(), { hasProc: () => true });
+  const original = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }), procHost: host,
+  });
+  t.after(() => original.kill(s.id));
+  const s = await original.start({ cwd: '/tmp', profileId: 'codex' });
+  await original.input(s.id, 'Live task');
+  await original.input(s.id, 'Unsent next task');
+  class UnreachableDriver extends FakeDriver {
+    async start() { throw new Error('live thread read timed out'); }
+  }
+  const restarted = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver: (engine, opts) => new UnreachableDriver({ engine, ...opts }), procHost: host,
+  });
+  t.after(() => restarted.kill(s.id));
+  await restarted.resume();
+  const session = restarted.get(s.id);
+  assert.equal(session.status, 'idle');
+  assert.equal(session.queuePaused, true);
+  assert.equal(session.recovery.kind, 'error');
+  assert.match(session.recovery.message, /live thread read timed out/);
+  assert.equal(FakeDriver.made.at(-1).sent, undefined, 'a failed read cannot replay either task');
+  assert.ok(restarted.history(s.id).events.some((e) => e.queued && e.text === 'Unsent next task'));
+  const reconnected = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }), procHost: host,
+  });
+  t.after(() => reconnected.kill(s.id));
+  await reconnected.resume();
+  assert.equal(reconnected.get(s.id).status, 'working', 'a successful recheck finds the original live task');
+  assert.equal(reconnected.get(s.id).recovery, undefined, 'the old reconnect failure no longer needs attention');
+  assert.equal(reconnected.get(s.id).queuePaused, false);
+  assert.equal(FakeDriver.made.at(-1).sent, undefined, 'reconnecting cannot replay the original task');
+});
+
 for (const profileId of ['claudea', 'codex']) test(`a slash command can race rebind for a surviving ${profileId} process`, async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
@@ -681,14 +741,15 @@ for (const profileId of ['claudea', 'codex']) test(`a slash command can race reb
   await original.kill(s.id);
 });
 
-test('a hosted completed turn is not revived by its optimistic local prompt', async () => {
+for (const profileId of ['claudea', 'codex']) test(`a hosted completed ${profileId} turn is not revived by its optimistic prompt or old local command`, async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');
-  const dir = join(process.env.HELM_DIR, 'events-completed-hosted-restart');
+  const dir = join(process.env.HELM_DIR, `events-completed-hosted-restart-${profileId}`);
   const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
   const procHost = Object.assign(new EventEmitter(), { hasProc: () => true });
   const original = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, procHost });
-  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  const s = await original.start({ cwd: '/tmp', profileId });
+  original.events.append(s.id, { type: 'turn.start', turnId: 'command-old-status', text: '/status', local: true });
   await original.input(s.id, 'finished turn');
   const d = FakeDriver.made.at(-1);
   d.push('turn.done', { turnId: 't1', status: 'ok' });
@@ -698,6 +759,9 @@ test('a hosted completed turn is not revived by its optimistic local prompt', as
   await restarted.resume();
   assert.equal(FakeDriver.made.at(-1).openTurn(), null);
   assert.equal(restarted.get(s.id).status, 'idle');
+  assert.equal(restarted.get(s.id).recovery, undefined, 'a leftover status card is not a stopped response');
+  assert.ok(restarted.history(s.id).events.some((e) => e.type === 'turn.done'
+    && e.turnId === 'command-old-status' && e.status === 'ok'));
   await restarted.kill(s.id);
   await original.kill(s.id);
 });
