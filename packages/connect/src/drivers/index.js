@@ -10,6 +10,9 @@ import { execFile } from 'node:child_process';
  *   turn.start          { turnId, text, local? }  local: helm answered the
  *                                                 turn itself - it is
  *                                                 complete on arrival
+ *                       wake: true, text '' - work the agent began by
+ *                       itself (a background task finishing); its own turn,
+ *                       closed once, never folded into the last one
  *   item.start          { id, kind, turnId, parentId?, ... }   kind: text | thinking | tool | command | edit | subagent
  *   item.delta          { id, text }                appended to the item's text / output / input JSON
  *   item.update         { id, ...fields }           e.g. { agent: { status, lastTool, toolUses } }
