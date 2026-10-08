@@ -38,6 +38,8 @@ import { modeFor } from '../modes.js';
  */
 
 const AGY_MIN_VERSION = '1.2.0';
+/** A turn this driver opened, as opposed to one of helm's own queue tickets. */
+const isDriverTurn = (turnId) => String(turnId).startsWith('turn-');
 const MAX_OUTPUT = 32_000;
 const clip = (s, n = MAX_OUTPUT) => (typeof s === 'string' && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more characters)` : s);
 
@@ -103,8 +105,11 @@ export class AgyDriver extends Driver {
   }
 
   async start() {
-    if (this.#pipe && !this.#dead) return;
+    // The spawn binds the pipe before agy has said hello; a second caller
+    // in that window waits for the same start instead of writing to a
+    // process whose conversation id is not known yet.
     if (this.#spawning) return this.#spawning;
+    if (this.#pipe && !this.#dead) return;
     this.#spawning = this.#spawn().finally(() => { this.#spawning = null; });
     return this.#spawning;
   }
@@ -242,9 +247,20 @@ export class AgyDriver extends Driver {
     this.#hosted = true;
     this.#dead = false;
     this.#bindPipe(pipe);
-    const turnId = this.openTurn?.() ?? null;
-    if (turnId) this.#turnQueue = [turnId];
+    const open = this.openTurn?.() ?? null;
+    if (open && !isDriverTurn(open)) {
+      // helm's own ticket, never echoed: send() echoes before the prompt is
+      // queued for writing, so this one never reached agy. Close it as
+      // undelivered rather than adopt a turn agy knows nothing about.
+      this.push('turn.done', { turnId: open, status: 'interrupted', error: 'helm restarted before this message reached the agent' });
+    }
+    if (open && isDriverTurn(open)) this.#turnQueue = [open];
     this.emit('init', this.info ?? { model: this.model, effort: this.effort });
+    // agy has no state to ask for; what the log holds open is the state.
+    // A turn still open is running - its result is replayed or still to
+    // come - and with none, agy is waiting for input whatever the record
+    // remembered.
+    this.push('status', { status: this.#turnQueue.length ? 'working' : 'idle' });
   }
 
   #write(obj) {
@@ -283,7 +299,15 @@ export class AgyDriver extends Driver {
   // ----------------------------------------------------------------- verbs
 
   async send(text) {
-    await this.start();
+    // Starting agy is part of answering: working from the spawn on, and
+    // back to idle if it never comes up.
+    if (this.#dead || this.#spawning) this.push('status', { status: 'working' });
+    try {
+      await this.start();
+    } catch (err) {
+      if (!this.#turnQueue.length && !this.#outbox.length && !this.pending.size) this.push('status', { status: 'idle' });
+      throw err;
+    }
     // A settings restart may still be swapping the process underneath - the
     // prompt belongs on the fresh one, not the one being torn down.
     if (this.#restartJob) await this.#restartJob;

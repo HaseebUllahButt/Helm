@@ -182,6 +182,20 @@ test('unfinished local commands and named queued tickets never revive completed 
   assert.equal(log.activeTurn('s').turnId, 'real-live', 'local cards cannot displace real work');
 });
 
+test('a provider turn that a later turn superseded is not still running', () => {
+  // Claude echoes each message handed over mid-run as a turn of its own and
+  // closes only the last one. Once that closes, nothing is running.
+  const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-superseded-')));
+  log.append('s', { type: 'turn.start', turnId: 'local-a', text: 'Prefixed by returned context' });
+  log.append('s', { type: 'turn.start', turnId: 'echo-a', text: 'Returned context, then the request' });
+  log.append('s', { type: 'turn.start', turnId: 'echo-b', text: 'Also check the docs' });
+  assert.equal(log.activeTurn('s').turnId, 'echo-b');
+  log.append('s', { type: 'turn.done', turnId: 'echo-b', status: 'ok' });
+  assert.equal(log.activeTurn('s'), null, 'neither the older echo nor its unmatched ticket is live');
+  log.append('s', { type: 'turn.start', turnId: 'local-next', text: 'Next', queued: false });
+  assert.equal(log.activeTurn('s').turnId, 'local-next', 'a newer unechoed send is still the live one');
+});
+
 test('a legacy optimistic status ticket is retired by its local command echo', () => {
   const log = new EventLog(mkdtempSync(join(tmpdir(), 'helm-legacy-status-')));
   log.append('s', { type: 'turn.start', turnId: 'local-ticket', text: '/status' });

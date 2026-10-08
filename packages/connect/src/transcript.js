@@ -366,6 +366,27 @@ export async function codexSessionState(path) {
   return state;
 }
 
+/** Read Devin lifecycle markers without blocking chat/terminal RPCs on its large store. */
+export function devinActivity(path, sessionId) {
+  let phase = null;
+  const conn = new DatabaseSync(path, { readOnly: true });
+  try {
+    // Read raw lifecycle fields: rendered messages intentionally omit
+    // tools' result records and the assistant's final-answer phase.
+    const rows = conn.prepare('SELECT chat_message FROM message_nodes WHERE session_id = ? ORDER BY node_id DESC LIMIT 100').all(sessionId);
+    for (const row of rows) {
+      const msg = json(row.chat_message);
+      if (msg?.metadata?.telemetry?.source === 'cache_keepalive') continue;
+      if (['user', 'tool'].includes(msg?.role)) { return 'working'; }
+      if (msg?.role !== 'assistant') continue;
+      phase = msg.tool_calls?.length || msg.phase === 'commentary' ? 'working'
+        : msg.phase === 'final_answer' || ['stop', 'end_turn'].includes(msg.metadata?.finish_reason) ? 'done' : 'working';
+      break;
+    }
+  } finally { conn.close(); }
+  return phase;
+}
+
 // A writer lock says who owns a conversation, not whether a turn is running.
 // Read a bounded tail and cache by file revision so list refreshes stay cheap.
 const activityCache = new Map();
@@ -399,7 +420,8 @@ export async function sessionActivity({ engine, path, sessionId, active = false,
               else if (reason === 'tool_use' || reason === 'toolUse') phase = 'working';
               else if (Array.isArray(msg?.content)) {
                 if (msg.content.some((b) => ['tool_use', 'toolCall'].includes(b.type))) phase = 'working';
-                else if (msg.content.some((b) => b.type === 'text' && b.text?.trim())) phase = 'done';
+                // Text alone can be a streamed/intermediate response. The
+                // provider's end marker, not content, settles the turn.
               }
             }
           }
@@ -416,26 +438,27 @@ export async function sessionActivity({ engine, path, sessionId, active = false,
           : 'SELECT type, data FROM session_message WHERE session_id = ? ORDER BY seq DESC LIMIT 1').get(sessionId);
         const msg = json(row?.data);
         const role = modern ? msg?.role : row?.type;
-        if (role === 'user') phase = 'working';
+        if (role === 'idle') phase = 'done';
+        else if (role === 'user') phase = 'working';
         else if (role === 'assistant') {
           const finish = msg?.finish ?? msg?.finishReason ?? msg?.finish_reason;
           if (['tool-calls', 'tool_use', 'toolUse'].includes(finish)) phase = 'working';
           else if (msg?.time?.completed || finish) phase = 'done';
-          else if (!modern) {
-            const content = msg?.content ?? [];
-            const last = content.at(-1);
-            phase = msg?.text || last?.type === 'text' ? 'done' : 'working';
-          } else phase = 'working';
+          else phase = 'working';
         }
       } finally { conn.close(); }
+    } else if (path && engine === 'devin') {
+      phase = await offThread(import.meta.url, 'devinActivity', [path, sessionId]);
     } else if (path) {
       const last = (await messages({ engine, path, sessionId, limit: 1 })).at(-1);
       if (last?.role === 'user') phase = 'working';
-      else if (last?.role === 'assistant' && last.text?.trim()) phase = 'done';
+      else if (last?.role === 'assistant' && last.tools?.length) phase = 'working';
+      // Rendered assistant text/thinking is history, not a completion or
+      // liveness signal. Unsupported stores keep their state unknown.
     }
   } catch { /* older schemas and partial writes use the activity fallback */ }
   // Process existence and a recent file write do not prove active work.
-  const status = liveStatus ?? (phase === 'done' ? 'idle' : phase) ?? 'idle';
+  const status = liveStatus ?? (phase === 'done' ? 'idle' : phase) ?? 'unknown';
   return { status, turns: phase === 'done' || status === 'done' ? 1 : 0, updatedAt };
 }
 

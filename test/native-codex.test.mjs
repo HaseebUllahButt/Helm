@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
 import { WebSocketServer } from 'ws';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -37,8 +37,12 @@ let emptyThread = false;
 let loaded = true;
 let approveFirstTurn = false;
 let activeTurn = null;
+let failResumes = 0;
+let extraTurns = [];
+let listFails = false;
+let readFails = false;
 const status = () => approved ? { type: 'idle' } : { type: 'active', activeFlags: ['waitingOnApproval'] };
-const thread = () => ({ id: nativeId, path: emptyThread ? join(home, 'not-created-yet.jsonl') : path, cwd: root, name: 'Native terminal task', canAcceptDirectInput: true, createdAt: 1, updatedAt: 2, status: activeTurn ? {type:'active',activeFlags:[]} : status(), turns: activeTurn ? [{id:activeTurn,status:'inProgress',items:[]}] : [] });
+const thread = () => ({ id: nativeId, path: emptyThread ? join(home, 'not-created-yet.jsonl') : path, cwd: root, name: 'Native terminal task', canAcceptDirectInput: true, createdAt: 1, updatedAt: 2, status: activeTurn ? {type:'active',activeFlags:[]} : status(), turns: [...extraTurns, ...(activeTurn ? [{id:activeTurn,status:'inProgress',items:[]}] : [])] });
 const broadcast = (method, params) => { for (const c of wsServer.clients) c.send(JSON.stringify({ method, params })); };
 wsServer.on('connection', (ws) => ws.on('message', (raw) => {
   const m = JSON.parse(String(raw)); seen.push(m);
@@ -51,10 +55,16 @@ wsServer.on('connection', (ws) => ws.on('message', (raw) => {
   if (m.id == null) return;
   let result = {};
   switch (m.method) {
-    case 'thread/loaded/list': result = { data: loaded ? [nativeId] : [] }; break;
-    case 'thread/read': result = { thread: thread() }; break;
+    case 'thread/loaded/list':
+      if (listFails) { ws.send(JSON.stringify({ id: m.id, error: { message: 'daemon busy' } })); return; }
+      result = { data: loaded ? [nativeId] : [] }; break;
+    case 'thread/read':
+      if (readFails && m.params.threadId === nativeId) { ws.send(JSON.stringify({ id: m.id, error: { message: 'read timed out' } })); return; }
+      result = { thread: thread() }; break;
     case 'thread/start': result = { thread: thread(), model: m.params.model, approvalPolicy: m.params.approvalPolicy, sandbox: m.params.sandbox }; break;
-    case 'thread/resume': result = { thread: thread(), model: 'native-model', approvalPolicy: 'on-request', sandbox: { type: 'workspaceWrite' } }; break;
+    case 'thread/resume':
+      if (failResumes > 0 && m.params.threadId === nativeId) { failResumes -= 1; ws.send(JSON.stringify({ id: m.id, error: { message: 'thread busy, try again' } })); return; }
+      result = { thread: thread(), model: 'native-model', approvalPolicy: 'on-request', sandbox: { type: 'workspaceWrite' } }; break;
     case 'turn/start':
       emptyThread = false;
       if (approveFirstTurn) approved = false;
@@ -226,6 +236,182 @@ test('a persisted native busy row whose thread is unloaded settles even before a
   await sessions.resume();
   assert.equal(sessions.get(row.id).status, 'idle');
   assert.equal(sessions.history(row.id).events.filter((event) => event.type === 'status').at(-1).status, 'idle');
+});
+
+test('the periodic native check never overwrites what the live thread just reported', async (t) => {
+  nativeId = '01a11111-0000-7000-8000-000000000008';
+  approved = true; activeTurn = null;
+  const sessions = createSessions();
+  t.after(() => sessions.stop());
+  const s = (await sessions.list()).find((row) => row.engineSessionId === nativeId);
+  assert.equal(s.status, 'idle');
+  const changes = [];
+  sessions.on('session', (row) => { if (row.id === s.id) changes.push(row.status); });
+  // The terminal starts a turn; the daemon's thread read lags behind it.
+  broadcast('turn/started', { threadId: nativeId, turn: { id: 'terminal-turn' } });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sessions.get(s.id).status, 'working');
+  assert.equal((await sessions.list()).find((row) => row.id === s.id).status, 'working', 'a stale snapshot does not mark live work idle');
+  broadcast('thread/status/changed', { threadId: nativeId, status: { type: 'idle' } });
+  broadcast('turn/completed', { threadId: nativeId, turn: { id: 'terminal-turn', status: 'completed' } });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sessions.get(s.id).status, 'idle');
+  assert.deepEqual([...new Set(changes)], ['working', 'idle'], 'every real change reaches the app');
+});
+
+test('a native thread closed in its terminal drops questions nobody can answer, once', async (t) => {
+  nativeId = '01a11111-0000-7000-8000-000000000009';
+  approved = false; activeTurn = null;
+  t.after(() => { approved = true; loaded = true; });
+  const sessions = createSessions();
+  t.after(() => sessions.stop());
+  const s = (await sessions.list()).find((row) => row.engineSessionId === nativeId);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(sessions.history(s.id).pending.length, 1);
+  loaded = false;
+  const row = (await sessions.list()).find((r) => r.id === s.id);
+  assert.equal(row.alive, false);
+  assert.equal(row.status, 'idle');
+  assert.deepEqual(sessions.history(s.id).pending, [], 'the closed terminal cannot answer its old question');
+  const repeats = [];
+  sessions.on('session', (r) => { if (r.id === s.id) repeats.push(r); });
+  await sessions.list(); await sessions.list();
+  assert.equal(repeats.length, 0, 'an unchanged offline thread is not re-announced on every check');
+});
+
+test('a live native thread that fails one reconnect after restart is not treated as stopped', async (t) => {
+  nativeId = '01a11111-0000-7000-8000-000000000010';
+  approved = true; activeTurn = 'terminal-busy-turn';
+  t.after(() => { activeTurn = null; failResumes = 0; });
+  const first = createSessions();
+  const s = (await first.list()).find((row) => row.engineSessionId === nativeId);
+  first.events.append(s.id, { type: 'turn.start', turnId: activeTurn, text: 'Terminal work' });
+  await first.input(s.id, 'After that, update the docs', { delivery: 'queue' });
+  await first.stop();
+  failResumes = 1;
+  const before = seen.length;
+  const second = createSessions();
+  t.after(() => second.stop());
+  t.after(() => second.kill(s.id));
+  await second.resume();
+  await new Promise((r) => setTimeout(r, 30));
+  const events = second.history(s.id).events;
+  assert.equal(events.some((e) => e.type === 'turn.done' && e.turnId === activeTurn), false, 'the terminal turn is not marked stopped');
+  assert.notEqual(second.get(s.id).recovery?.kind, 'restart');
+  assert.equal(seen.slice(before).some((m) => m.method === 'turn/start'), false, 'no second writer joins the busy thread');
+  assert.equal(second.get(s.id).status, 'working');
+});
+
+test('a native thread that could not be reattached at restart recovers on the next check', async (t) => {
+  nativeId = '01a11111-0000-7000-8000-000000000011';
+  approved = true; activeTurn = null;
+  t.after(() => { failResumes = 0; });
+  const first = createSessions();
+  const s = (await first.list()).find((row) => row.engineSessionId === nativeId);
+  await first.input(s.id, 'Queued while the terminal works', { delivery: 'queue' });
+  await first.stop();
+  failResumes = 2; // the restart's own check and its reattach both fail
+  const second = createSessions();
+  t.after(() => second.stop());
+  t.after(() => second.kill(s.id));
+  await second.resume();
+  assert.equal(second.get(s.id).recovery?.kind, 'error');
+  assert.equal(second.get(s.id).queuePaused, true, 'nothing is replayed while the thread cannot be checked');
+  await second.list();
+  assert.equal(second.get(s.id).recovery, undefined, 'the warning clears once the thread is reachable');
+  assert.equal(second.get(s.id).queuePaused, false);
+});
+
+test('a native turn that finished while Helm was down closes from the thread, with no restart warning', async (t) => {
+  nativeId = '01a11111-0000-7000-8000-000000000012';
+  approved = true; activeTurn = null;
+  t.after(() => { extraTurns = []; });
+  const first = createSessions();
+  const s = (await first.list()).find((row) => row.engineSessionId === nativeId);
+  first.events.append(s.id, { type: 'turn.start', turnId: 'finished-while-away', text: 'Terminal work' });
+  await first.stop();
+  extraTurns = [{ id: 'finished-while-away', status: 'completed', items: [] }];
+  const second = createSessions();
+  t.after(() => second.stop());
+  t.after(() => second.kill(s.id));
+  await second.resume();
+  const done = second.history(s.id).events.filter((e) => e.type === 'turn.done' && e.turnId === 'finished-while-away');
+  assert.deepEqual(done.map((e) => [e.status, e.error]), [['ok', undefined]]);
+  assert.equal(second.get(s.id).status, 'idle');
+  assert.equal(second.get(s.id).recovery, undefined);
+});
+
+test('a native thread closed in its terminal while Helm was down settles from its rollout, then sends what was queued', async (t) => {
+  nativeId = '01a11111-0000-7000-8000-000000000013';
+  approved = true; activeTurn = 'closed-while-away';
+  t.after(() => { activeTurn = null; loaded = true; });
+  const first = createSessions();
+  const s = (await first.list()).find((row) => row.engineSessionId === nativeId);
+  first.events.append(s.id, { type: 'turn.start', turnId: activeTurn, text: 'Terminal work' });
+  await first.input(s.id, 'Afterwards, summarise', { delivery: 'queue' });
+  await first.stop();
+  appendFileSync(path, [
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: activeTurn } },
+    { type: 'event_msg', payload: { type: 'turn_aborted', turn_id: activeTurn, reason: 'interrupted' } },
+  ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+  activeTurn = null; loaded = false;
+  const before = seen.length;
+  const second = createSessions();
+  t.after(() => second.stop());
+  t.after(() => second.kill(s.id));
+  await second.resume();
+  await new Promise((r) => setTimeout(r, 50));
+  const done = second.history(s.id).events.filter((e) => e.type === 'turn.done' && e.turnId === 'closed-while-away');
+  assert.deepEqual(done.map((e) => [e.status, e.error]), [['interrupted', undefined]], 'closed as Codex recorded it');
+  assert.equal(second.get(s.id).recovery, undefined, 'no "Helm restarted" warning for a terminal-owned turn');
+  assert.ok(seen.slice(before).some((m) => m.method === 'turn/start' && m.params.input[0].text === 'Afterwards, summarise'));
+});
+
+test('a native daemon that does not answer leaves its threads unknown and holds their queue', async (t) => {
+  nativeId = '01a11111-0000-7000-8000-000000000014';
+  approved = true; activeTurn = 'maybe-still-running';
+  t.after(() => { activeTurn = null; listFails = false; });
+  const first = createSessions();
+  const s = (await first.list()).find((row) => row.engineSessionId === nativeId);
+  first.events.append(s.id, { type: 'turn.start', turnId: activeTurn, text: 'Terminal work' });
+  await first.input(s.id, 'Then the docs', { delivery: 'queue' });
+  await first.stop();
+  listFails = true;
+  const before = seen.length;
+  const second = createSessions();
+  t.after(() => second.stop());
+  t.after(() => second.kill(s.id));
+  await second.resume();
+  const session = second.get(s.id);
+  assert.equal(session.status, 'working', 'liveness is not guessed');
+  assert.equal(session.queuePaused, true);
+  assert.equal(session.recovery?.kind, 'error');
+  assert.equal(second.history(s.id).events.some((e) => e.type === 'turn.done' && e.turnId === activeTurn), false);
+  assert.equal(seen.slice(before).some((m) => m.method === 'turn/start' || m.method === 'thread/resume'), false, 'no competing writer');
+  listFails = false;
+  await second.list();
+  assert.equal(second.get(s.id).recovery, undefined, 'the daemon answering clears the hold');
+  assert.equal(second.get(s.id).queuePaused, false);
+  assert.equal(second.get(s.id).status, 'working', 'the turn really is still running');
+  assert.equal(seen.slice(before).some((m) => m.method === 'turn/start'), false, 'the queue still waits for it');
+});
+
+test('a native thread that cannot be read is unknown, not closed: its turn and question stay', async (t) => {
+  nativeId = '01a11111-0000-7000-8000-000000000015';
+  approved = false; activeTurn = null;
+  t.after(() => { approved = true; readFails = false; });
+  const sessions = createSessions();
+  t.after(() => sessions.stop());
+  t.after(() => sessions.kill(s.id));
+  const s = (await sessions.list()).find((row) => row.engineSessionId === nativeId);
+  await new Promise((r) => setTimeout(r, 30));
+  sessions.events.append(s.id, { type: 'turn.start', turnId: 'asking-turn', text: 'Terminal work' });
+  assert.equal(sessions.history(s.id).pending.length, 1);
+  readFails = true;
+  await sessions.list();
+  assert.equal(sessions.history(s.id).pending.length, 1, 'the question is still answerable');
+  assert.equal(sessions.history(s.id).events.some((e) => e.type === 'turn.done' && e.turnId === 'asking-turn'), false);
+  assert.equal(sessions.get(s.id).status, 'blocked');
 });
 
 test.after(async () => {

@@ -800,6 +800,7 @@ test('a caller-chosen turn id makes a retried input a no-op', async () => {
   // refuses to dedupe so the caller can step to the next one instead of
   // believing the prompt landed. (The session is idle again, so this send
   // goes straight at the driver rather than taking a queue ticket.)
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
   d.push('status', { status: 'idle' });
   d.failSend = true;
   await assert.rejects(() => sessions.input(s.id, 'broken', { turnId: 'handoff-bad' }), /send refused/);
@@ -1471,4 +1472,274 @@ test('stop drops a message handed over but not yet used', async () => {
   const id = sessions.history(s.id).events.find((e) => e.text === 'never mind').turnId;
   await sessions.interrupt(s.id);
   assert.ok(sessions.history(s.id).events.some((e) => e.type === 'turn.remove' && e.turnId === id));
+});
+
+/** Codex's real order: the thread reports idle a few ms before its turn completes. */
+class IdleFirstDriver extends FakeDriver {
+  push(type, payload) {
+    // The real base driver drops a repeated status.
+    if (type === 'status' && payload.status === this.status) return;
+    super.push(type, payload);
+  }
+  async send(text) {
+    this.sent = [...(this.sent ?? []), text];
+    this.turnNumber = (this.turnNumber ?? 0) + 1;
+    this.turn = `codex-${this.turnNumber}`;
+    this.push('status', { status: 'working' });
+    this.push('turn.start', { turnId: this.turn, text });
+  }
+  async finish({ done = true } = {}) {
+    const turnId = this.turn;
+    this.push('status', { status: 'idle' });
+    await new Promise((r) => setTimeout(r, 5));
+    if (!done) return;
+    this.push('turn.done', { turnId, status: 'ok' });
+    this.turn = null;
+    this.push('status', { status: 'idle' });
+  }
+}
+
+test('a turn that reports idle before it finishes does not let the next message in early', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-idle-first')),
+    makeDriver: (engine, opts) => new IdleFirstDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  t.after(() => sessions.kill(s.id));
+  const d = FakeDriver.made.at(-1);
+  const tick = () => new Promise((r) => setTimeout(r, 10));
+  const log = () => sessions.history(s.id).events;
+  const seqOf = (type, turnId) => log().find((e) => e.type === type && e.turnId === turnId)?.seq;
+
+  await sessions.input(s.id, 'first');
+  await sessions.input(s.id, 'second', { delivery: 'queue' });
+  await sessions.input(s.id, 'third', { delivery: 'queue' });
+  await d.finish();
+  await tick();
+  assert.deepEqual(d.sent, ['first', 'second'], 'one message per finished turn');
+  assert.ok(seqOf('turn.start', 'codex-2') > seqOf('turn.done', 'codex-1'), 'the next turn starts after the last one is done');
+  assert.equal(sessions.get(s.id).status, 'working', 'the new turn keeps the chat running');
+
+  // Typed in the gap between "idle" and "done": it waits too.
+  const idle = d.finish();
+  await new Promise((r) => setTimeout(r, 1));
+  await sessions.input(s.id, 'typed in the gap');
+  assert.equal(log().findLast((e) => e.type === 'turn.start').queued, true);
+  await idle; await tick();
+  assert.deepEqual(d.sent, ['first', 'second', 'third']);
+  assert.equal(sessions.get(s.id).status, 'working');
+});
+
+test('a provider that goes idle without finishing its turn still lets the queue move', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-idle-no-done')),
+    makeDriver: (engine, opts) => new IdleFirstDriver({ engine, ...opts }),
+    turnSettleMs: 30,
+  });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  t.after(() => sessions.kill(s.id));
+  const d = FakeDriver.made.at(-1);
+  await sessions.input(s.id, 'first');
+  await sessions.input(s.id, 'second', { delivery: 'queue' });
+  await d.finish({ done: false });
+  assert.deepEqual(d.sent, ['first'], 'held while the turn may still be closing');
+  await new Promise((r) => setTimeout(r, 60));
+  assert.deepEqual(d.sent, ['first', 'second'], 'the idle agent gets the queued message');
+  assert.equal(sessions.get(s.id).status, 'working');
+});
+
+test('older turns a provider never closed do not read as live or stopped after a restart', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-superseded-restart');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const original = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+  });
+  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  t.after(() => original.kill(s.id));
+  // Claude echoes a message handed over mid-run as its own turn and closes
+  // only the last turn of the run when its result arrives.
+  for (const e of [
+    { type: 'turn.start', turnId: 'echo-1', text: 'Fix the bug' },
+    { type: 'turn.start', turnId: 'echo-2', text: 'Also run the tests' },
+    { type: 'turn.done', turnId: 'echo-2', status: 'ok' },
+    { type: 'status', status: 'idle' },
+  ]) original.events.append(s.id, e);
+
+  // The hosted process survived and is idle.
+  const alive = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: Object.assign(new EventEmitter(), { hasProc: () => true }),
+  });
+  await alive.resume();
+  assert.equal(FakeDriver.made.findLast((d) => d.procId === s.id).openTurn(), null, 'the rebound process is not handed a finished run');
+  assert.equal(alive.get(s.id).status, 'idle');
+  await alive.stop();
+
+  // The process is gone: the finished run is not a stopped one.
+  original.events.append(s.id, { type: 'turn.start', turnId: 'echo-3', text: 'Old' });
+  original.events.append(s.id, { type: 'turn.start', turnId: 'echo-4', text: 'Newest' });
+  original.events.append(s.id, { type: 'turn.done', turnId: 'echo-4', status: 'ok' });
+  const dead = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+  });
+  await dead.resume();
+  assert.equal(dead.get(s.id).recovery, undefined, 'no false "the agent stopped" warning');
+  const settled = dead.history(s.id).events.filter((e) => e.type === 'turn.done' && ['echo-1', 'echo-3'].includes(e.turnId));
+  assert.deepEqual(settled.map((e) => e.status), ['ok', 'ok']);
+  assert.equal(settled.some((e) => e.error), false);
+});
+
+test('an agent process that dies before rebind stops its turn but keeps queued messages queued', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-proc-gone-queue');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const original = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+  });
+  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  t.after(() => original.kill(s.id));
+  await original.input(s.id, 'active turn');
+  await original.input(s.id, 'next task');
+  const ticket = original.history(s.id).events.find((e) => e.type === 'turn.start' && e.queued).turnId;
+
+  let alive = true;
+  const procHost = Object.assign(new EventEmitter(), { hasProc: () => alive });
+  const restarted = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, procHost });
+  t.after(() => restarted.stop());
+  const resuming = restarted.resume();
+  // The process exits while the new daemon is still binding to it.
+  alive = false;
+  procHost.emit('proc.exit', { id: s.id });
+  await resuming;
+  await new Promise((r) => setTimeout(r, 10));
+  const events = restarted.history(s.id).events;
+  assert.equal(events.find((e) => e.type === 'turn.done' && e.turnId === 't1')?.status, 'interrupted', 'the running turn did stop');
+  assert.equal(events.some((e) => e.type === 'turn.done' && e.turnId === ticket && e.status === 'interrupted'), false,
+    'the waiting message is not shown as stopped');
+  assert.deepEqual(FakeDriver.made.findLast((d) => d.procId === s.id).sent, ['next task'], 'and it is sent once the agent is free');
+});
+
+test('a message sent while a restart is still rebinding shares the one connection', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-rebind-single-driver');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const original = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+  });
+  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  t.after(() => original.kill(s.id));
+  await original.input(s.id, 'hello');
+  const d = FakeDriver.made.at(-1);
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+
+  const restarted = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver, procHost: Object.assign(new EventEmitter(), { hasProc: () => true }),
+  });
+  t.after(() => restarted.stop());
+  const before = FakeDriver.made.length;
+  const resuming = restarted.resume();
+  await restarted.input(s.id, 'typed right after the restart');
+  await resuming;
+  const mine = FakeDriver.made.slice(before).filter((driver) => driver.procId === s.id);
+  assert.equal(mine.length, 1, 'one driver for the one surviving process');
+  assert.deepEqual(mine[0].sent, ['typed right after the restart']);
+});
+
+test('a queued message under a caller-chosen id is sent after a restart, not marked stopped', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-named-ticket-restart');
+  const makeDriver = (engine, opts) => new FakeDriver({ engine, ...opts });
+  const procHost = Object.assign(new EventEmitter(), { hasProc: () => false });
+  const original = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, procHost });
+  const s = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  t.after(() => original.kill(s.id));
+  await original.input(s.id, 'active turn');
+  await original.input(s.id, 'Continue the handed-off work', { turnId: 'handoff-queued-1' });
+  assert.equal(original.history(s.id).events.at(-1).queued, true);
+
+  const restarted = new Sessions(new StubRuntime(), { events: new EventLog(dir), makeDriver, procHost });
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(restarted.turnState(s.id, 'handoff-queued-1'), 'open', 'still waiting, not stopped');
+  assert.deepEqual(FakeDriver.made.findLast((d) => d.procId === s.id).sent, ['Continue the handed-off work']);
+});
+
+test('a delegated task stays working when a restart tidies an old card beside its live turn', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const dir = join(process.env.HELM_DIR, 'events-delegation-restart');
+  const original = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+  });
+  const parent = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  const child = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  t.after(() => original.kill(child.id));
+  t.after(() => original.kill(parent.id));
+  original.get(child.id).delegation = { parentId: parent.id, status: 'working', notifyParent: false, depth: 1, task: 'Review' };
+  original.rename(child.id, 'Review');
+  await original.input(child.id, 'Review');
+  // Claude echoes a message handed over mid-run as a newer turn; the first
+  // card stays open beside it.
+  FakeDriver.made.findLast((d) => d.procId === child.id).push('turn.start', { turnId: 'echo-latest', text: 'Also check the tests' });
+
+  // The real driver drops a repeated status, so the rebind's "working"
+  // cannot repair a delegation the restore wrongly finished.
+  const restarted = new Sessions(new StubRuntime(), {
+    events: new EventLog(dir), makeDriver: (engine, opts) => new IdleFirstDriver({ engine, ...opts }),
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => true }),
+  });
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  const log = restarted.history(child.id).events;
+  assert.equal(log.find((e) => e.type === 'turn.done' && e.turnId === 't1')?.status, 'ok', 'the old card is tidied');
+  assert.equal(log.some((e) => e.type === 'turn.done' && e.turnId === 'echo-latest'), false, 'the live turn is kept');
+  assert.equal(restarted.get(child.id).status, 'working');
+  assert.equal(restarted.get(child.id).delegation.status, 'working', 'the task is not finished');
+  assert.equal(restarted.get(parent.id).team?.working, 1, 'the parent still shows it working');
+});
+
+test('a command card mid-task neither finishes a delegated task nor reports to its parent', async (t) => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-command-card-delegation')),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const parent = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const child = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  t.after(() => sessions.kill(child.id));
+  t.after(() => sessions.kill(parent.id));
+  sessions.get(child.id).delegation = { parentId: parent.id, parentGeneration: 0, status: 'working', notifyParent: true, depth: 1, task: 'Review' };
+  const parentDriver = FakeDriver.made.findLast((d) => d.procId === parent.id);
+  await sessions.input(child.id, 'Review');
+  const d = FakeDriver.made.findLast((driver) => driver.procId === child.id);
+  // Devin's /usage (ACP) or Codex's /status: a local card beside the work.
+  d.push('turn.start', { turnId: 'command-usage', text: '/usage', local: true });
+  d.push('item.start', { id: 'usage-text', kind: 'text', turnId: 'command-usage' });
+  d.push('item.delta', { id: 'usage-text', text: 'Quota: 40% used' });
+  d.push('item.done', { id: 'usage-text', status: 'ok' });
+  d.push('turn.done', { turnId: 'command-usage', status: 'ok' });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sessions.get(child.id).delegation.status, 'working', 'the task is still running');
+  assert.equal(sessions.get(parent.id).team?.working ?? 1, 1);
+  assert.equal(parentDriver.sent, undefined, 'the parent is not told the task finished');
+
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sessions.get(child.id).delegation.status, 'done');
+  assert.equal(parentDriver.sent?.length, 1, 'the real end is reported once');
+  assert.match(parentDriver.sent[0], /hello/, 'with the task reply');
+  assert.doesNotMatch(parentDriver.sent[0], /Quota/, 'not the command card');
 });

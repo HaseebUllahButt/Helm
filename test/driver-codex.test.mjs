@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { writeFileSync, readFileSync, chmodSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync, chmodSync, rmSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
 import { CodexDriver, CODEX_COMMANDS, formatAccountUsage, formatRateLimits } from '../packages/connect/src/drivers/codex.js';
 
@@ -137,6 +138,114 @@ test('a failed live thread read cannot claim that saved work is still running', 
   await assert.rejects(driver.start(), /live thread read failed: thread unavailable/);
   assert.equal(driver.status, 'idle');
   assert.equal(writes.length, 1, 'a failed read never resumes or replays the old task');
+});
+
+/** An adopted Codex whose replies, and what it says around them, a test scripts. */
+function scriptedCodex(t, { openTurn = null, transcript, reply }) {
+  const fake = fakeCli('codex', 'plain');
+  let receive;
+  const writes = [];
+  const emit = (message) => receive(`${JSON.stringify(message)}\n`);
+  const notify = (method, params) => emit({ method, params: { threadId: 'scripted-thread', ...params } });
+  const pipe = {
+    onData: (callback) => { receive = callback; },
+    onExit: () => {},
+    write(data) {
+      const request = JSON.parse(data); writes.push(request);
+      emit({ id: request.id, ...(reply(request, notify) ?? { result: {} }) });
+    },
+    end() {}, kill() {},
+  };
+  const host = { hasProc: () => true, procPipe: () => pipe, openProc: () => assert.fail('no second server') };
+  const driver = new CodexDriver({ cmd: fake.cmd, env: { CODEX_HOME: join(fake.dir, 'scripted-home') },
+    cwd: fake.dir, mode: 'ask', engineSessionId: 'scripted-thread', transcript,
+    procHost: host, openTurn: () => openTurn });
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
+  return { driver, log: collect(driver), writes, notify };
+}
+
+test('a late completion of an older turn does not mark the newer turn idle', async (t) => {
+  const { driver, log, notify, writes } = scriptedCodex(t, {
+    openTurn: 'turn-a',
+    reply(request, say) {
+      if (request.method === 'thread/read') return { result: { thread: { status: { type: 'active', activeFlags: [] }, turns: [{ id: 'turn-a', status: 'inProgress' }] } } };
+      if (request.method === 'turn/start') {
+        // Reports about turn A that were in flight while B was being started.
+        say('thread/status/changed', { status: { type: 'idle' } });
+        say('turn/completed', { turn: { id: 'turn-a', status: 'completed' } });
+        return { result: { turn: { id: 'turn-b' } } };
+      }
+    },
+  });
+  await driver.start();
+  assert.equal(driver.status, 'working');
+  await driver.send('Next task');
+  assert.deepEqual(log.of('turn.done').map((e) => e.turnId), ['turn-a']);
+  assert.equal(driver.status, 'working', 'turn B is running');
+  await driver.steer('More for B');
+  assert.equal(writes.at(-1).params.expectedTurnId, 'turn-b');
+
+  // The terminal starts C; B's completion arrives after it.
+  notify('turn/started', { turn: { id: 'turn-c' } });
+  notify('turn/completed', { turn: { id: 'turn-b', status: 'completed' } });
+  assert.equal(driver.status, 'working', 'turn C is running');
+  notify('turn/completed', { turn: { id: 'turn-c', status: 'completed' } });
+  assert.equal(driver.status, 'idle');
+  assert.deepEqual(log.of('turn.done').map((e) => e.turnId), ['turn-a', 'turn-b', 'turn-c']);
+});
+
+test('/review closes the card it opened instead of leaving it running forever', async (t) => {
+  const { driver, log, notify } = scriptedCodex(t, {
+    reply(request, say) {
+      if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+      if (request.method === 'review/start') {
+        say('turn/started', { turn: { id: 'review-turn' } });
+        say('item/started', { turnId: 'review-turn', item: { id: 'early-text', type: 'agentMessage' } });
+        return { result: { turn: { id: 'review-turn' } } };
+      }
+    },
+  });
+  await driver.start();
+  await driver.send('/review');
+  const card = log.of('turn.start')[0].turnId;
+  assert.match(card, /^command-/);
+  notify('item/started', { turnId: 'review-turn', item: { id: 'late-text', type: 'agentMessage' } });
+  notify('turn/completed', { turn: { id: 'review-turn', status: 'completed' } });
+  assert.deepEqual(log.of('item.start').map((e) => e.turnId), [card, card], 'the review output sits on its card');
+  assert.deepEqual(log.of('turn.done').map((e) => [e.turnId, e.status]), [[card, 'ok']]);
+  assert.equal(driver.status, 'idle');
+});
+
+for (const [name, turns, rollout, expected] of [
+  ['the thread lists it finished', [{ id: 'away-turn', status: 'failed', error: { message: 'quota' } }], null, ['error', 'quota']],
+  ['only the rollout records it', [], ['task_started', 'turn_aborted'], ['interrupted', undefined]],
+  ['the rollout says it completed', [], ['task_started', 'task_complete'], ['ok', undefined]],
+  ['nothing records it', [], ['task_started'], null],
+]) test(`a saved turn that ended while Helm was away closes from Codex's record: ${name}`, async (t) => {
+  let transcript;
+  if (rollout) {
+    transcript = join(mkdtempSync(join(tmpdir(), 'helm-rollout-')), 'rollout.jsonl');
+    writeFileSync(transcript, [
+      { type: 'session_meta', payload: { id: 'scripted-thread' } },
+      ...rollout.map((type) => ({ type: 'event_msg', payload: { type, turn_id: 'away-turn' } })),
+      { type: 'event_msg', payload: { type: 'task_complete', turn_id: 'some-other-turn' } },
+    ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+  }
+  const { driver, log } = scriptedCodex(t, {
+    openTurn: 'away-turn', transcript,
+    reply: (request) => request.method === 'thread/read'
+      ? { result: { thread: { status: { type: 'idle' }, turns } } } : undefined,
+  });
+  driver.status = 'working';
+  await driver.start();
+  assert.equal(driver.status, 'idle');
+  const done = log.of('turn.done');
+  if (!expected) assert.equal(done.length, 0, 'an unknown ending is not invented');
+  else {
+    assert.deepEqual(done.map((e) => [e.turnId, e.status, e.error]), [['away-turn', ...expected]]);
+    assert.ok(log.events.indexOf(done[0]) < log.events.findIndex((e) => e.type === 'status' && e.status === 'idle'),
+      'the card closes before the chat reads idle, so queued work does not wait');
+  }
 });
 
 test('/usage views format the account activity API as Markdown', () => {

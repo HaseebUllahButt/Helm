@@ -181,13 +181,21 @@ test('desktop and phone headers open unified details with accessible Git navigat
       await capture(bar, `session-header-${phone ? 'phone' : 'desktop'}-${width}.png`);
       assert.equal(await view.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await details.click();
-      const dialog = view.getByRole('dialog', {name:'Thread details',exact:true});
-      await dialog.getByRole('tab', {name:'Git',exact:true}).click();
+      // Git opens straight onto its own screen (4b09f8d), not a details tab.
+      const dialog = view.getByRole('dialog', {name:'Git',exact:true});
+      await dialog.getByRole('tab', {name:/^Changes/}).waitFor();
       await dialog.getByRole('tab', {name:'Graph',exact:true}).click();
       await dialog.getByRole('tabpanel', {name:'Graph',exact:true}).waitFor();
+      assert.deepEqual(await dialog.getByRole('tab').evaluateAll(tabs => tabs.map(tab => [tab.textContent.trim(), tab.getAttribute('aria-selected'),
+        !tab.hasAttribute('aria-controls') || !!document.getElementById(tab.getAttribute('aria-controls'))])),
+        [['Graph', 'true', true], ['Changes 2', 'false', true], ['CI / CD', 'false', true]], 'every tab points only at a panel that exists');
+      await dialog.getByRole('tab', {name:'Graph',exact:true}).press('ArrowRight');
+      await dialog.getByRole('tabpanel', {name:/^Changes/}).waitFor();
       assert.equal(await view.getByRole('dialog').count(), 1);
+      await view.screenshot({ path:`/tmp/helm-git-dialog-${phone ? 'phone' : 'desktop'}-${width}.png` });
       await capture(view, `thread-details-${width}.png`);
-      await dialog.getByRole('button', {name:'Close thread details'}).click();
+      await dialog.getByRole('button', {name:'Back to the conversation'}).click();
+      await dialog.waitFor({ state:'detached' });
       assert.equal(await bar.getByRole('button', {name:'Prompt cache',exact:true}).count(), 0);
     } finally { await view.close(); }
   }

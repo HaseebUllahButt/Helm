@@ -525,3 +525,197 @@ test('opening the online brain validates the VM provider before entering the con
   await page.getByRole('heading',{name:'Helm brain',exact:true}).waitFor();
   assert.deepEqual(await page.evaluate(()=>window.brainCalls.filter(c=>c.method==='brain.open').map(c=>c.env)),['vm']);
 });
+
+const PROVIDERS = ['devin', 'opencode', 'opencode2', 'agy', 'antigravity', 'pi', 'omp', 'cursor', 'grok', 'codex', 'claude',
+  'rovo', 'gemini', 'kimi', 'muse'];
+
+for (const width of [1280, 390]) test(`every provider stays Running until idle and only idle reaches Done at ${width}px`, async testContext => {
+  const { page, boot } = await pageFor(testContext, { width, height: 900 });
+  await boot();
+  await page.evaluate((providers) => {
+    const now = Date.now();
+    const listeners = new Set();
+    const sessions = providers.flatMap((engine) => {
+      const session = (state, more) => ({ id: `${engine}-${state}`, title: `${engine} ${state}`, cwd: '/project/helm', engine,
+        profileId: engine, driver: engine, turns: 1, status: 'idle', alive: true, updatedAt: now, ...more });
+      return [
+        session('starting', { status: 'starting', recovery: { kind: 'restart', message: 'old', at: now - 1000 } }),
+        session('working', { status: 'working' }),
+        session('children', { team: { working: 1, blocked: 0, failed: 0 } }),
+        session('approval', { status: 'blocked', pending: 1, ask: { kind: 'command', text: 'npm test' } }),
+        session('idle', {}),
+        session('exited', { status: 'exited', alive: false }),
+        session('unknown', { status: 'unknown' }),
+      ];
+    });
+    window.sessions = sessions;
+    const client = window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: sessions });
+    client.on = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+    window.push = (id, more) => {
+      const s = sessions.find((x) => x.id === id);
+      Object.assign(s, more);
+      for (const listener of listeners) listener('laptop', 'session.update', { session: { ...s } });
+    };
+    window.mount(client);
+  }, PROVIDERS);
+  const sidebar = page.locator('.sidebar');
+  const running = sidebar.locator('div.section', { hasText: /^running$/ }).locator('xpath=following-sibling::div[1]');
+  const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^done$/ }) });
+  await running.locator('.tri-title').first().waitFor();
+  const n = PROVIDERS.length;
+  assert.equal(await running.locator('.thread-row').count(), n * 3, 'starting, working and child work are all running');
+  assert.equal(await sidebar.locator('.need').count(), n, 'each blocked approval is a Needs you card');
+  await done.getByRole('button', { name: `done ${n}`, exact: true }).click();
+  const doneTitles = await done.locator('.tri-title').allTextContents();
+  assert.deepEqual(doneTitles.sort(), PROVIDERS.map((engine) => `${engine} idle`).sort(), 'only idle threads are done');
+  for (const engine of PROVIDERS) {
+    for (const state of ['starting', 'working', 'children']) {
+      assert.equal(await running.getByText(`${engine} ${state}`, { exact: true }).count(), 1, `${engine} ${state} is running`);
+    }
+    assert.equal(await sidebar.locator('.need').getByText(`${engine} approval`, { exact: true }).count(), 1);
+    for (const state of ['exited', 'unknown']) {
+      assert.equal(await sidebar.getByText(`${engine} ${state}`, { exact: true }).count(), 0, `${engine} ${state} is not shown as finished`);
+    }
+  }
+  const starting = running.locator('.thread-row').filter({ hasText: 'claude starting' });
+  assert.equal(await starting.locator('.chip').textContent(), 'starting');
+  assert.equal(await running.locator('.thread-row').filter({ hasText: 'claude children' }).locator('.chip.working').count(), 1);
+  const laptop = sidebar.locator('.row.machine').filter({ hasText: 'Laptop' });
+  assert.equal(await laptop.locator('.rm').textContent(), `${n * 3} running · ${n} status unavailable`,
+    'threads the machine cannot read are counted, not called idle');
+  assert.equal(await laptop.locator('.badge').textContent(), String(n));
+
+  // A turn that finishes moves to Done; a new turn moves it back at once.
+  await page.evaluate(() => window.push('grok-working', { status: 'idle' }));
+  await done.getByText('grok working', { exact: true }).waitFor();
+  assert.equal(await running.getByText('grok working', { exact: true }).count(), 0);
+  await page.evaluate(() => window.push('grok-working', { status: 'working' }));
+  await running.getByText('grok working', { exact: true }).waitFor();
+  assert.equal(await done.getByText('grok working', { exact: true }).count(), 0);
+  // An approval that is answered goes back to Running, not Done.
+  await page.evaluate(() => window.push('pi-approval', { status: 'working', pending: 0 }));
+  await running.getByText('pi approval', { exact: true }).waitFor();
+  assert.equal(await done.getByText('pi approval', { exact: true }).count(), 0);
+  // A thread that is closed while the list is catching up never flashes into Done.
+  await page.evaluate(() => window.push('cursor-idle', { status: 'exited', alive: false }));
+  await done.getByText('cursor idle', { exact: true }).waitFor({ state: 'detached' });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll');
+  await page.screenshot({ path: `/tmp/helm-running-done-${width}.png` });
+
+  // The machine screen sorts the same threads the same way.
+  await laptop.click();
+  const main = page.locator('.main');
+  const working = main.locator('div.section', { hasText: /^working$/ }).locator('xpath=following-sibling::div[1]');
+  await working.locator('.rowx').first().waitFor();
+  assert.equal(await working.locator('.rowx').count(), n * 3 + 1, 'machine screen counts the same running threads as the sidebar');
+  assert.equal(await working.locator('.rowx').filter({ hasText: 'claude children' }).locator('.chip').textContent(), 'working');
+  assert.equal(await working.locator('.rowx').filter({ hasText: 'claude starting' }).locator('.chip').textContent(), 'starting');
+  // Searching opens every fold, so the rows below "recent" are on screen.
+  await main.getByPlaceholder('search Laptop').fill('unknown');
+  for (const engine of PROVIDERS) {
+    const unknown = main.locator('.rowx').filter({ hasText: `${engine} unknown` });
+    await unknown.waitFor();
+    assert.equal(await unknown.locator('.chip').textContent(), 'status unavailable', `${engine} unknown says so on the machine screen`);
+  }
+  await page.screenshot({ path: `/tmp/helm-machine-unknown-${width}.png` });
+  await main.getByPlaceholder('search Laptop').fill('exited');
+  await main.locator('.rowx').filter({ hasText: 'claude exited' }).waitFor();
+  assert.equal(await main.locator('.rowx .chip.done').count(), 0, 'a closed agent is never shown as done');
+});
+
+test('a list read before a live update cannot undo it', async testContext => {
+  const { page, boot } = await pageFor(testContext, { width: 390, height: 844 });
+  await boot();
+  await page.evaluate(() => {
+    const listeners = new Set();
+    const thread = { id: 'race', title: 'Racing thread', cwd: '/project', engine: 'opencode', profileId: 'opencode', driver: 'opencode',
+      turns: 1, status: 'idle', alive: true, updatedAt: Date.now() };
+    const client = window.makeClient([{ id: 'vm', name: 'VM', online: true, info: {} }], {});
+    client.on = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+    window.lists = [];
+    window.hold = false;
+    client.rpc = (env, method) => {
+      if (method !== 'session.list') return new Promise(() => {});
+      // What the machine says, read at the moment the list was asked for.
+      const snapshot = [{ ...thread }];
+      if (!window.hold) return Promise.resolve({ sessions: snapshot });
+      return new Promise((resolve) => window.lists.push(() => resolve({ sessions: snapshot })));
+    };
+    window.push = (more) => {
+      Object.assign(thread, more);
+      for (const listener of listeners) listener('vm', 'session.update', { session: { ...thread } });
+    };
+    window.mount(client);
+  });
+  const sidebar = page.locator('.sidebar');
+  const running = sidebar.locator('div.section', { hasText: /^running$/ }).locator('xpath=following-sibling::div[1]');
+  const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^done$/ }) });
+  await done.getByRole('button', { name: 'done 1', exact: true }).waitFor();
+  // A list goes out while the thread is idle and takes a while to come back.
+  await page.evaluate(() => { window.hold = true; window.push({ title: 'Racing thread' }); });
+  await page.waitForFunction(() => window.lists.length === 1);
+  // The thread starts a turn before that old list arrives.
+  await page.evaluate(() => window.push({ status: 'working' }));
+  await running.getByText('Racing thread', { exact: true }).waitFor();
+  await page.waitForTimeout(600);
+  await page.evaluate(() => window.lists.shift()());
+  await page.waitForTimeout(100);
+  assert.equal(await running.getByText('Racing thread', { exact: true }).count(), 1, 'the old idle list does not move it to Done');
+  assert.equal(await done.count(), 0);
+  // And it asks again rather than waiting for the half-minute check.
+  await page.waitForFunction(() => window.lists.length === 1);
+  await page.evaluate(() => window.lists.shift()());
+  await page.waitForTimeout(100);
+  assert.equal(await running.getByText('Racing thread', { exact: true }).count(), 1);
+  // The same holds the other way: a finished turn is not put back in Running.
+  await page.evaluate(() => window.push({ title: 'Racing thread' }));
+  await page.waitForFunction(() => window.lists.length === 1);
+  await page.evaluate(() => window.push({ status: 'idle' }));
+  await done.getByRole('button', { name: 'done 1', exact: true }).waitFor();
+  await page.waitForTimeout(600);
+  await page.evaluate(() => { window.lists.shift()(); });
+  await page.waitForTimeout(100);
+  assert.equal(await sidebar.locator('div.section', { hasText: /^running$/ }).count(), 0, 'the old working list does not bring it back');
+});
+
+for (const width of [1280, 390]) test(`an offline machine's last known work is not shown as working at ${width}px`, async testContext => {
+  const { page, boot } = await pageFor(testContext, { width, height: 844 });
+  await boot();
+  await page.evaluate(() => {
+    const now = Date.now();
+    const stale = { id: 'stale', title: 'Was busy', cwd: '/project', engine: 'antigravity', profileId: 'antigravity', driver: 'antigravity',
+      turns: 1, status: 'working', updatedAt: now - 3600000 };
+    const machine = { id: 'pc', name: 'HomePC', online: false, lastSeen: now - 3600000, info: {} };
+    window.workspace.saveWorkspace(window.scope, { environments: [machine], sessions: { pc: [stale] } });
+    const client = window.makeClient([machine], {});
+    // A machine that is not connected cannot answer at all.
+    client.rpc = () => Promise.reject(new Error('not connected'));
+    window.mount(client);
+  });
+  const sidebar = page.locator('.sidebar');
+  const machine = sidebar.locator('.row.machine').filter({ hasText: 'HomePC' });
+  await machine.waitFor();
+  assert.equal(await sidebar.locator('div.section', { hasText: /^running$/ }).count(), 0);
+  assert.equal(await sidebar.getByText('Was busy', { exact: true }).count(), 0);
+  await machine.click();
+  const main = page.locator('.main');
+  const row = main.locator('.rowx').filter({ hasText: 'Was busy' });
+  await row.waitFor();
+  assert.equal(await main.locator('div.section', { hasText: /^working$/ }).count(), 0, 'no working section on a machine that cannot answer');
+  assert.equal(await row.locator('.chip').textContent(), 'was working');
+  await page.screenshot({ path: `/tmp/helm-offline-machine-${width}.png` });
+});
+
+test('a working brain says so in the sidebar, where its machine count already includes it', async testContext => {
+  const { page, boot } = await pageFor(testContext, { width: 390, height: 844 });
+  await boot();
+  await page.evaluate(() => {
+    const brain = { id: 'brain', title: 'Helm brain', cwd: '/home/helm', engine: 'claude', profileId: 'claude', driver: 'claude',
+      turns: 1, status: 'working', alive: true, brain: true, updatedAt: Date.now() };
+    window.mount(window.makeClient([{ id: 'vm', name: 'VM', online: true, info: {} }], { vm: [brain] }));
+  });
+  const sidebar = page.locator('.sidebar');
+  await sidebar.locator('.brain-entry .chip.working').waitFor();
+  assert.equal(await sidebar.locator('.row.machine').filter({ hasText: 'VM' }).locator('.rm').textContent(), '1 running');
+  assert.equal(await sidebar.locator('.thread-row').count(), 0, 'the brain keeps its own place, not a second row');
+});

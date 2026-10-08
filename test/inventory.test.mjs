@@ -4,6 +4,8 @@ import { mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 
 // Inventory reads real stores under HELM_DIR/XDG_DATA_HOME; point both at
 // scratch before the modules that resolve them load.
@@ -172,7 +174,7 @@ test('pi inventory trusts each log\'s own session header, not its folder name', 
   assert.equal(found.active, false);
 });
 
-test('agy inventory reads conversation_summaries.db under the gemini home', async () => {
+test('agy inventory reads conversation_summaries.db under the gemini home', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'helm-agy-home-'));
   const root = join(home, 'antigravity-cli');
   mkdirSync(join(root, 'conversations'), { recursive: true });
@@ -203,6 +205,27 @@ test('agy inventory reads conversation_summaries.db under the gemini home', asyn
   assert.equal(found.active, false, 'no live writer means not active');
   const bare = rows.find((r) => r.id === 'conv-agy-2');
   assert.equal(bare.title, 'tmp', 'falls back to the folder name');
+
+  // A real session-specific writer establishes ownership independently of
+  // cwd matching. The DB busy flag then distinguishes work from an idle TUI.
+  const script = join(home, 'agy');
+  writeFileSync(script, 'require("node:fs").openSync(process.argv[2], "r+"); process.stdout.write("ready"); setInterval(() => {}, 1000);');
+  const writer = spawn(process.execPath, [script, found.transcript], { cwd: home, stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => writer.kill());
+  await once(writer.stdout, 'data');
+  const edit = new DatabaseSync(join(root, 'conversation_summaries.db'));
+  t.after(() => edit.close());
+  const lookup = async () => (await inventory([{ id: 'agy', engine: 'agy', env: { GEMINI_CLI_HOME: home } }])).find((r) => r.id === found.id);
+  edit.prepare('UPDATE conversation_summaries SET not_fully_idle = 1 WHERE conversation_id = ?').run(found.id);
+  const busy = await lookup();
+  assert.equal(busy.writerPid, writer.pid, 'unique database writer is found even with a different process cwd');
+  assert.equal(busy.status, 'working');
+  edit.prepare('UPDATE conversation_summaries SET not_fully_idle = 0 WHERE conversation_id = ?').run(found.id);
+  assert.equal((await lookup()).status, 'idle');
+  edit.prepare('UPDATE conversation_summaries SET not_fully_idle = NULL WHERE conversation_id = ?').run(found.id);
+  assert.equal((await lookup()).status, 'unknown', 'an absent flag does not prove idle');
+  edit.prepare('UPDATE conversation_summaries SET not_fully_idle = 1, killed = 1 WHERE conversation_id = ?').run(found.id);
+  assert.equal((await lookup()).status, 'done', 'killed conversations do not run from a stale busy flag');
 });
 
 test('grok inventory reads summary.json; no live writer means not active', async () => {

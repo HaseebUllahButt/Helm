@@ -34,7 +34,7 @@ import {
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
   type InventorySession, type Device, type Project, type MediaRoot, type MediaEntry,
 } from './client';
-import { money, bytes } from './format';
+import { money, bytes, busyWord, needsAttention, runningThread, settledThread, unknownThread } from './format';
 import { loadModels, saveModels } from './modelCache';
 import { followModelRefresh } from './modelRefresh';
 import { loadMessages, saveMessages } from './session/logCache';
@@ -193,11 +193,8 @@ const ownTerminal = (s: Session) => s.engine === 'shell' && !s.archived && s.ali
  * app cannot make.
  */
 const WEEK = 7 * 24 * 60 * 60_000;
-const needsAttention = (session: Session) => session.status === 'blocked' || !!session.team?.blocked || !!session.team?.failed || (session.status !== 'working' && ['error', 'limited', 'restart'].includes(session.recovery?.kind ?? ''));
-// Running describes work in progress, not a process waiting for input.
-const runningThread = (s: Session) => s.status === 'working' || !!s.team?.working;
 const thisWeek = (s: Session) =>
-  s.alive === true || needsAttention(s) || s.status === 'working' ||
+  s.alive === true || needsAttention(s) || runningThread(s) ||
   (s.updatedAt ?? 0) >= Date.now() - WEEK;
 
 /** `~/x` on the machine and `/home/u/x` on the wire are the same folder. */
@@ -590,19 +587,37 @@ function Shell({ client, conn, onSignOut }: {
 
   /** One trailing session.list per machine per burst of updates. */
   const relist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  /**
+   * Updates that landed while a list was on its way. The list can have been
+   * read before them - on the VPN a round trip is over half a second - so
+   * laying it down as-is put a thread that had just started back under Done,
+   * or kept one that had just finished under Running. They are laid back
+   * over the list, and one more list is asked for to settle it.
+   */
+  const pushedDuringList = useRef<Record<string, Map<string, Session>>>({});
+  const listAgain = useRef(new Set<string>());
   const loadSessions = useCallback((envId: string) => {
     if (!active.current) return;
-    if (sessionRequests.current.has(envId)) return;
+    if (sessionRequests.current.has(envId)) { listAgain.current.add(envId); return; }
     sessionRequests.current.add(envId);
+    const pushed = new Map<string, Session>();
+    pushedDuringList.current[envId] = pushed;
     client.rpc<{ sessions: Session[] }>(envId, 'session.list', { includeDetected: true }, 15_000)
       .then((r) => {
         if (!active.current) return;
         liveListsSeen.current.add(envId);
-        setSessions((s) => ({ ...s, [envId]: r.sessions }));
-        saveWorkspace(scope, { sessions: { [envId]: r.sessions } });
+        const list = pushed.size
+          ? r.sessions.map((x) => { const up = pushed.get(x.id); return up ? { ...x, ...up, recovery: up.recovery } : x; })
+          : r.sessions;
+        setSessions((s) => ({ ...s, [envId]: list }));
+        saveWorkspace(scope, { sessions: { [envId]: list } });
       })
       .catch(() => {})
-      .finally(() => { sessionRequests.current.delete(envId); });
+      .finally(() => {
+        sessionRequests.current.delete(envId);
+        if (pushedDuringList.current[envId] === pushed) delete pushedDuringList.current[envId];
+        if (listAgain.current.delete(envId) && active.current) loadSessions(envId);
+      });
   }, [client, scope]);
 
   useEffect(() => {
@@ -631,6 +646,8 @@ function Shell({ client, conn, onSignOut }: {
           if (top?.kind === 'session' && top.session.id === up.id) openSession(e, up.movedTo);
         }
         if (up?.id) {
+          const during = pushedDuringList.current[e];
+          if (during) during.set(up.id, { ...during.get(up.id), ...up, recovery: up.recovery });
           setSessions((all) => {
             const list = all[e];
             if (!list?.some((x) => x.id === up.id)) return all;
@@ -743,7 +760,7 @@ function Shell({ client, conn, onSignOut }: {
       for (const s of [...liveThreads, ...snapshotThreads]) {
         items.push({
           id: `t:${e.id}:${s.id}`, group: 'thread', title: s.title, engine: s.engine, at: s.updatedAt,
-          sub: `${dirName(s.cwd)} · ${e.name}${s.status === 'blocked' ? ' · needs you' : s.status === 'working' ? ' · working' : ''}${!e.online ? ' · offline' : ''}`,
+          sub: `${dirName(s.cwd)} · ${e.name}${needsAttention(s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
           keywords: `${s.cwd} ${engineOf(s.engine).label}`,
           run: () => openSession(e.id, s),
         });
@@ -954,6 +971,12 @@ function Shell({ client, conn, onSignOut }: {
   const workingThreadsOn = (machine: Environment) =>
     machine.online ? agentsOf(machine.id).filter((thread) => !needsAttention(thread) && runningThread(thread)) : [];
   const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(needsAttention).length;
+  /** "3 running · 1 status unavailable": a thread the machine cannot read is not idle. */
+  const activityOn = (machine: Environment, nothing: string) => {
+    const working = workingThreadsOn(machine).length;
+    const unknown = agentsOf(machine.id).filter(unknownThread).length;
+    return [working ? `${working} running` : '', unknown ? `${unknown} status unavailable` : ''].filter(Boolean).join(' · ') || nothing;
+  };
 
   /**
    * Turning a recording into words, on whichever machine can.
@@ -1074,7 +1097,7 @@ function Shell({ client, conn, onSignOut }: {
   // vanishing from the sidebar. Keep the latest three days in date order;
   // older work stays available on its machine and through search.
   const doneNow = everyone.filter(({ s }) => ((s.driver || s.adopted) && (s.turns ?? 0) > 0 || s.nativeCli && s.alive)
-    && !runningThread(s) && !needsAttention(s)
+    && settledThread(s)
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
   const doneIsSaved = doneNow.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));
   const snoozeThread = (envId: string, s: Session, until: number) => {
@@ -1159,7 +1182,10 @@ function Shell({ client, conn, onSignOut }: {
                         {brainEnv.name} · {s ? engineOf(s.engine).label : 'Choose an account'}{!brainEnv.online ? ' · offline' : ''}
                       </span>
                     </span>
-                    {brainOpening ? <span className="chip working"><i />opening</span> : <span className="chev"><Icon name="forward" size={15} /></span>}
+                    {brainOpening ? <span className="chip working"><i />opening</span>
+                      // The brain is counted in its machine's "running", so it says so here.
+                      : s && brainEnv.online && !needsAttention(s) && runningThread(s) ? <StatusChip status={busyWord(s.status)} at={s.updatedAt} />
+                      : <span className="chev"><Icon name="forward" size={15} /></span>}
                   </button>;
                 })() : <button className="row tall" disabled>
                   <EngineMark />
@@ -1211,7 +1237,6 @@ function Shell({ client, conn, onSignOut }: {
             <Fold title="machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
               <div className="rows plain">
                 {envs.map((e) => {
-                  const working = workingThreadsOn(e).length;
                   const waiting = waitingCountOn(e);
                   return (
                     <button
@@ -1225,7 +1250,7 @@ function Shell({ client, conn, onSignOut }: {
                         <span className="rt"><span className="rt-text">{e.name}</span></span>
                         <span className="rm">
                           {e.online
-                            ? (working ? `${working} running` : 'idle')
+                            ? activityOn(e, 'idle')
                             : e.lastSeen ? `seen ${ago(e.lastSeen)}` : 'never connected'}
                         </span>
                       </span>
@@ -1290,7 +1315,6 @@ function Shell({ client, conn, onSignOut }: {
             {envs.length > 0 ? (
               <div className="rows plain">
                 {envs.map((e) => {
-                  const working = workingThreadsOn(e).length;
                   const waiting = waitingCountOn(e);
                   return (
                     <button key={e.id} className={`row tall machine${e.online ? '' : ' offline'}`} onClick={() => openEnv(e.id)}>
@@ -1299,7 +1323,7 @@ function Shell({ client, conn, onSignOut }: {
                         <span className="rt"><span className="rt-text">{e.name}</span></span>
                         <span className="rm">
                           {e.online
-                            ? (working ? `${working} running` : 'Nothing running')
+                            ? activityOn(e, 'Nothing running')
                             : e.lastSeen ? `Offline · seen ${ago(e.lastSeen)}` : 'Never connected'}
                         </span>
                       </span>
@@ -2328,9 +2352,12 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const live = (s: Session) => s.engine !== 'shell' && !s.archived && hit(s);
   const mine = rows.filter(live);
   const blocked = mine.filter(needsAttention).sort(byRecent);
-  const working = mine.filter((s) => !needsAttention(s) && (s.status === 'working' || !!s.team?.working)).sort(byRecent);
-
-  const rest = mine.filter((s) => !needsAttention(s) && s.status !== 'working' && !s.team?.working);
+  // An offline machine cannot say what is running now. Its last word stays
+  // in the lists below, marked as old, never under "working": the sidebar
+  // keeps it out of Running for the same reason.
+  const working = env.online ? mine.filter((s) => !needsAttention(s) && runningThread(s)).sort(byRecent) : [];
+  const workingIds = new Set(working.map((s) => s.id));
+  const rest = mine.filter((s) => !needsAttention(s) && !workingIds.has(s.id));
   const recent = rest.filter((s) => !botThread(s)).sort(byRecent).slice(0, 3);
   const recentIds = new Set(recent.map((s) => s.id));
 
@@ -2456,7 +2483,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
 
   const row = (s: Session) => s.id.startsWith('found:') ? (
     <SessionRow
-      key={s.id} s={s} busy={resuming === s.id}
+      key={s.id} s={s} busy={resuming === s.id} offline={!env.online}
       selecting={selecting} marked={marked.has(s.id)} onToggle={() => toggle(s.id)}
       onOpen={env.online && !selecting ? () => onResume(s) : undefined}
       onArchive={() => setArchived(s, !s.archived)}
@@ -2464,7 +2491,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
     />
   ) : (
     <SessionRow
-      key={s.id} s={s} onOpen={() => onOpen(s)}
+      key={s.id} s={s} onOpen={() => onOpen(s)} offline={!env.online}
       selecting={selecting} marked={marked.has(s.id)} onToggle={() => toggle(s.id)}
       onRename={(t) => setTitle(s, t)}
       onArchive={() => setArchived(s, !s.archived)}
@@ -2678,7 +2705,9 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
                         {s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
                       </span>
                     </span>
-                    <StatusChip status={s.status} at={s.updatedAt} />
+                    {runningThread(s) && !needsAttention(s)
+                      ? <span className="chip exited">was {busyWord(s.status)}</span>
+                      : <StatusChip status={s.status} at={s.updatedAt} />}
                   </div>
                 </button>
               ))}
@@ -2843,8 +2872,10 @@ function ProjectActions({ title, online, onStart, onSend, onCheck, onRename, onR
  * only from inside it. An agent helm did not start is left alone - helm
  * does not own that process and has no business ending it.
  */
-function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting = false, marked = false, onToggle }: {
+function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting = false, marked = false, onToggle, offline = false }: {
   s: Session; onOpen?: () => void; onRename?: (title: string) => void;
+  /** The machine is not answering: a busy status is its last word, not now. */
+  offline?: boolean;
   onArchive?: () => void; onDelete?: () => void;
   /** Resuming a past conversation starts a CLI, which takes a moment. */
   busy?: boolean;
@@ -2886,7 +2917,8 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
           </span>
           {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
           {busy ? <span className="chip working"><i />opening</span>
-            : <StatusChip status={s.status} at={s.updatedAt} />}
+            : offline && runningThread(s) && !needsAttention(s) ? <span className="chip exited">was {busyWord(s.status)}</span>
+            : <StatusChip status={runningThread(s) && !needsAttention(s) ? busyWord(s.status) : s.status} at={s.updatedAt} />}
         </Main>
         {!selecting && managed && (
           <>
@@ -3040,8 +3072,11 @@ function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; m
         <Icon name="folder" size={12} />
         <span className="tri-where">{dirName(s.cwd)} · {machine}</span>
         <span className="tri-end">
-          {s.status === 'working' || !!s.team?.working
-            ? <StatusChip status="working" at={s.updatedAt} />
+          {runningThread(s)
+            ? <StatusChip status={busyWord(s.status)} at={s.updatedAt} />
+            // Stopped by the owner part-way: finished with, but not finished.
+            : s.recovery?.kind === 'interrupted' ? <span className="chip exited">stopped</span>
+            : unknownThread(s) ? <StatusChip status="unknown" />
             : s.externalActive || (s.shared && s.alive) ? <span className="chip">idle</span> : null}
           <EngineMark engine={eng.cls} className="tri-mark" />
         </span>
@@ -3060,8 +3095,10 @@ function StatusChip({ status, at }: { status: string; at?: number }) {
   const age = ago && ago !== 'just now' ? ` ${ago}` : '';
   if (status === 'blocked') return <span className="chip blocked"><i />waiting{age}</span>;
   if (status === 'working') return <span className="chip working"><i />working{age}</span>;
+  if (status === 'starting') return <span className="chip working"><i />starting</span>;
   if (status === 'done') return <span className="chip done"><i />done</span>;
   if (status === 'exited') return <span className="chip exited">ended</span>;
+  if (status === 'unknown') return <span className="chip exited" title="The machine could not tell whether this agent is working">status unavailable</span>;
   return null;
 }
 

@@ -547,14 +547,22 @@ export class EventLog {
   }
 }
 
-/** Local command replies and queued tickets never own a provider's active turn. */
+/**
+ * Local command replies and queued tickets never own a provider's active turn.
+ *
+ * A provider runs one turn at a time, so only its newest turn can still be
+ * running. Older ones it never closed were superseded: Claude echoes each
+ * message handed over mid-run as a turn of its own and closes only the last,
+ * and reviving one of those after a restart showed a finished chat as busy.
+ */
 export function activeTurnFromEvents(events) {
   const closed = new Set(events.filter((e) => ['turn.done', 'turn.remove', 'turn.accept'].includes(e.type)).map((e) => e.turnId));
   const real = events.filter((e) => e.type === 'turn.start' && !String(e.turnId).startsWith('local-'));
-  const active = [...real].reverse().find((e) => !e.local && e.queued !== true && !closed.has(e.turnId));
-  if (active) return active;
+  const latest = real.findLast((e) => !e.local && e.queued !== true);
+  if (latest && !closed.has(latest.turnId)) return latest;
   return [...events].reverse().find((e) => {
     if (e.type !== 'turn.start' || e.local || closed.has(e.turnId) || e.queued === true) return false;
+    if (latest && latest.seq > e.seq) return false;
     const text = (e.text ?? '').trim();
     return !real.some((echo) => echo.seq > e.seq && (
       (echo.text ?? '').trim() === text || (text && (echo.text ?? '').trim().startsWith(text + '\n'))

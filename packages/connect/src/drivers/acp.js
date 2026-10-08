@@ -60,6 +60,9 @@ const KIND = { execute: 'command', edit: 'edit', delete: 'edit', move: 'edit' };
 // under the spawn card, they are not cards themselves.
 const SUBAGENT_TOOL = /subagent|spawn.?agent|^task$/i;
 
+/** A turn this driver opened, as opposed to one of helm's own queue tickets. */
+const isDriverTurn = (turnId) => String(turnId).startsWith('turn-');
+
 export class AcpDriver extends Driver {
   /**
    * The agent's stdio, whether the process is our own child or one the
@@ -68,6 +71,8 @@ export class AcpDriver extends Driver {
    * difference, and it is invisible to the protocol.
    */
   #pipe = null;
+  /** The start in flight, so concurrent callers share it. */
+  #starting = null;
   /** True when the process lives on the host rather than under this daemon. */
   #hosted = false;
   #exited = null;
@@ -87,6 +92,13 @@ export class AcpDriver extends Driver {
   #stream = null;
   #itemSeq = 0;
   #turnId = null;
+  /**
+   * The request id of the open turn's session/prompt. A daemon that adopts
+   * the process mid-turn did not make that call, so its response - result
+   * or error - is recognised by this id, read back from the turn.start
+   * event that carried it.
+   */
+  #promptId = null;
   #interrupting = false;
   /** session/load replays the transcript as updates; the log already has it. */
   #loading = false;
@@ -151,8 +163,20 @@ export class AcpDriver extends Driver {
     return this.spec.spawnEnv ? this.spec.spawnEnv(this, merged) : merged;
   }
 
+  /**
+   * One start at a time. The pipe is bound before the handshake finishes,
+   * so a second caller - the palette asking for commands while the first
+   * message is starting the agent - must wait for the same start rather
+   * than see a pipe and prompt a session that does not exist yet.
+   */
   async start() {
+    if (this.#starting) return this.#starting;
     if (this.#pipe) return;
+    this.#starting = this.#start().finally(() => { this.#starting = null; });
+    return this.#starting;
+  }
+
+  async #start() {
     assertFolder(this);
     if (this.spec.min) await checkVersion(this.engine, this.cmd, this.env, this.spec.min, this.log);
     await this.spec.prepare?.(this);
@@ -298,8 +322,13 @@ export class AcpDriver extends Driver {
       message: `${this.spec.label ?? this.engine} needs a sign-in before it can start a session.`,
       kind: 'auth',
     });
+    // A message waiting on this start is waiting on the owner now, not on
+    // the agent: say "needs you" until the sign-in lands.
+    const waiting = this.status === 'working';
+    if (waiting) this.push('status', { status: 'blocked' });
     const res = await this.#call('authenticate', { methodId });
     this.authPending = false;
+    if (waiting && this.status === 'blocked' && !this.pending.size) this.push('status', { status: 'working' });
     if (res.error) {
       this.push('error', { message: `${this.spec.label ?? this.engine} sign-in failed: ${res.error.message}`, kind: 'auth' });
       return false;
@@ -535,11 +564,15 @@ export class AcpDriver extends Driver {
     this.#exited = new Promise((resolve) => {
       pipe.onExit(({ code, stderr }) => {
         this.#pipe = null;
+        // A turn adopted from a previous daemon has no call here to fail;
+        // the process dying is its end all the same.
+        const adopted = this.#turnId && !(this.#promptId != null && this.#calls.has(this.#promptId)) ? this.#turnId : null;
         for (const resolve of this.#calls.values()) resolve({ error: { message: `${this.engine} exited` } });
         this.#calls.clear();
         for (const requestId of [...this.pending.keys()]) {
           this.push('permission.resolved', { requestId, decision: 'cancelled' });
         }
+        if (adopted) this.#turnDone(adopted, { error: { message: `${this.engine} exited` } });
         if (code && code !== 0 && !this.killed) {
           this.push('error', { message: `${this.engine} exited with code ${code}${stderr ? `: ${stderr}` : ''}`, kind: 'exit' });
         }
@@ -574,11 +607,27 @@ export class AcpDriver extends Driver {
     this.#hosted = true;
     this.#live = true;
     this.#bindPipe(pipe);
-    this.#turnId = this.openTurn?.() ?? null;
+    const open = this.openTurn?.() ?? null;
+    if (open && !isDriverTurn(open)) {
+      // The log's open turn is helm's own ticket, never echoed by a driver.
+      // The echo goes out before session/prompt is written, so this message
+      // never reached the agent: close it as undelivered rather than keep
+      // a turn "running" that the agent knows nothing about.
+      this.push('turn.done', { turnId: open, status: 'interrupted', error: 'helm restarted before this message reached the agent' });
+    }
+    this.#turnId = open && isDriverTurn(open) ? open : null;
+    this.#promptId = this.#turnId
+      ? (this.resumeEvents?.() ?? []).findLast((e) => e.type === 'turn.start' && e.turnId === this.#turnId)?.acpPromptId ?? null
+      : null;
     for (const e of this.pendingEvents?.() ?? []) {
       this.#requests.set(e.requestId, { id: e.acpId ?? e.requestId, options: e.acpOptions ?? [] });
       this.pending.set(e.requestId, e);
     }
+    // What the log holds open is the state: a question still waiting is
+    // "needs you", a turn still running is working, and with neither the
+    // agent is between prompts - ACP agents only work inside one. The
+    // record's remembered status may be stale either way.
+    this.push('status', { status: this.pending.size ? 'blocked' : this.#turnId ? 'working' : 'idle' });
 
     const choice = this.spec.adoptOption?.(this) ?? null;
     if (choice && this.engineSessionId) {
@@ -610,8 +659,7 @@ export class AcpDriver extends Driver {
 
   #nextId() { return `helm-${this.#tag}-${++this.#seq}`; }
 
-  #call(method, params) {
-    const id = this.#nextId();
+  #call(method, params, id = this.#nextId()) {
     return new Promise((resolve) => {
       this.#calls.set(id, resolve);
       try { this.#write({ jsonrpc: '2.0', id, method, params }); }
@@ -632,25 +680,54 @@ export class AcpDriver extends Driver {
   async send(text) {
     const local = this.spec.localCommand?.(this, text);
     if (local) return this.#localCommand(text, local);
-    await this.start();
-    if (!this.engineSessionId || !this.#pipe) {
-      this.push('error', { message: `${this.engine} has no session; it never finished starting`, kind: 'init' });
-      return;
-    }
-    const turnId = `turn-${randomUUID().slice(0, 8)}`;
-    this.#turnId = turnId;
-    this.push('turn.start', { turnId, text });
-    if (!this.pending.size) this.push('status', { status: 'working' });
+    if (!(await this.#ready())) return;
     // A spec alias rewrites only the wire text - devin's /usage goes out as
     // /session-stats - while the turn keeps the spelling the owner typed,
     // so the bubble and the optimistic echo match what was sent for them.
     const promptText = this.spec.mapPrompt?.(text) ?? text;
+    this.#prompt(text, [{ type: 'text', text: promptText }]);
+  }
+
+  /**
+   * Bring the agent up for a prompt. Starting is part of answering - the
+   * spawn, the handshake, a session/load replaying a long history - so the
+   * session reads as working from here, not from when the prompt goes out.
+   * False (and settled back to idle) when there is no session to prompt.
+   */
+  async #ready() {
+    if ((!this.#pipe || this.#starting) && !this.pending.size) this.push('status', { status: 'working' });
+    try {
+      await this.start();
+    } catch (err) {
+      this.#settleIdle();
+      throw err;
+    }
+    if (!this.engineSessionId || !this.#pipe) {
+      this.push('error', { message: `${this.engine} has no session; it never finished starting`, kind: 'init' });
+      this.#settleIdle();
+      return false;
+    }
+    return true;
+  }
+
+  /** Idle, unless something is still open - a question or a live turn. */
+  #settleIdle() {
+    if (this.status === 'exited' || this.pending.size || this.#turnId) return;
+    this.push('status', { status: 'idle' });
+  }
+
+  /** Open a turn and send its prompt; the response is the turn's end. */
+  #prompt(text, prompt) {
+    const turnId = `turn-${randomUUID().slice(0, 8)}`;
+    const promptId = this.#nextId();
+    this.#turnId = turnId;
+    this.#promptId = promptId;
+    this.push('turn.start', { turnId, text, acpPromptId: promptId });
+    if (!this.pending.size) this.push('status', { status: 'working' });
     // The response only arrives when the turn ends - which may be a
     // permission answer away - so it cannot be awaited here.
-    this.#call('session/prompt', {
-      sessionId: this.engineSessionId,
-      prompt: [{ type: 'text', text: promptText }],
-    }).then((res) => this.#turnDone(turnId, res));
+    this.#call('session/prompt', { sessionId: this.engineSessionId, prompt }, promptId)
+      .then((res) => this.#turnDone(turnId, res));
   }
 
   /**
@@ -696,11 +773,7 @@ export class AcpDriver extends Driver {
   async sendWithAttachments(text, attachments) {
     const local = this.spec.localCommand?.(this, text);
     if (local) return this.#localCommand(text, local);
-    await this.start();
-    if (!this.engineSessionId || !this.#pipe) {
-      this.push('error', { message: `${this.engine} has no session; it never finished starting`, kind: 'init' });
-      return;
-    }
+    if (!(await this.#ready())) return;
     const prompt = text ? [{ type: 'text', text }] : [];
     // Labelled in order, so "[Image #2]" in the message names this one.
     let n = 0;
@@ -710,20 +783,23 @@ export class AcpDriver extends Driver {
       prompt.push({ type: 'image', mimeType: a.mime, data: a.data });
     }
     if (!prompt.length) return this.send('(empty message)');
-    const turnId = `turn-${randomUUID().slice(0, 8)}`;
-    this.#turnId = turnId;
-    this.push('turn.start', { turnId, text });
-    if (!this.pending.size) this.push('status', { status: 'working' });
-    this.#call('session/prompt', {
-      sessionId: this.engineSessionId,
-      prompt,
-    }).then((res) => this.#turnDone(turnId, res));
+    this.#prompt(text, prompt);
   }
 
   /** The prompt response: the turn is over, one way or another. */
   #turnDone(turnId, res) {
     if (this.#turnId !== turnId) return;
     this.#closeStream();
+    this.#turnId = null;
+    this.#promptId = null;
+    this.#interrupting = false;
+    // A permission request lives inside its prompt. Once the prompt has
+    // answered, nothing on the agent side is waiting on a card still shown -
+    // close it rather than leave an idle session saying "needs you".
+    for (const requestId of [...this.pending.keys()]) {
+      this.#requests.delete(requestId);
+      this.push('permission.resolved', { requestId, decision: 'cancelled' });
+    }
     if (res.error) {
       const data = res.error.data;
       const details = {
@@ -746,7 +822,6 @@ export class AcpDriver extends Driver {
       usage: u && { input: u.inputTokens, output: u.outputTokens, cacheRead: u.cachedReadTokens },
       costUsd: u?.cost?.amount ?? u?._meta?.['cognition.ai/totalCreditCost'] ?? undefined,
     });
-    this.#interrupting = false;
     this.push('status', { status: 'idle' });
   }
 
@@ -766,13 +841,26 @@ export class AcpDriver extends Driver {
     this.#respond(raw.id, { outcome });
     this.#requests.delete(requestId);
     this.push('permission.resolved', { requestId, decision: decision.option });
-    this.push('status', { status: 'working' });
+    // Parallel tool calls - a subagent's beside its parent's - can each be
+    // waiting on a card. Answering one leaves the turn waiting on the rest.
+    this.push('status', { status: this.pending.size ? 'blocked' : 'working' });
   }
 
   async interrupt() {
     if (!this.#pipe || !this.engineSessionId) return;
     this.#interrupting = true;
     this.#notify('session/cancel', { sessionId: this.engineSessionId });
+    // ACP: on cancel the client must answer every permission request still
+    // open with `cancelled`. An agent parked on one never returns from the
+    // prompt otherwise, and the card would sit there with nobody to answer.
+    // The turn is not over until the prompt answers - it stays working.
+    for (const [requestId, raw] of [...this.#requests]) {
+      if (!this.pending.has(requestId)) continue;
+      this.#respond(raw.id, { outcome: { outcome: 'cancelled' } });
+      this.#requests.delete(requestId);
+      this.push('permission.resolved', { requestId, decision: 'cancelled' });
+    }
+    if (this.status === 'blocked' && !this.pending.size) this.push('status', { status: 'working' });
   }
 
   async setModel(model) {
@@ -829,9 +917,18 @@ export class AcpDriver extends Driver {
     if (m.id !== undefined) {
       const resolve = this.#calls.get(m.id);
       if (resolve) { this.#calls.delete(m.id); resolve(m); return; }
-      // A response to a call a previous daemon made - the turn's prompt,
-      // most likely. Its stopReason still ends whichever turn is open.
-      if (m.result?.stopReason !== undefined && this.#turnId) this.#turnDone(this.#turnId, m);
+      // A response to a call a previous daemon made. The open turn's prompt
+      // is known by id - an error ends it as surely as a stopReason does.
+      // An older log without that id still has the stopReason to go on.
+      if (this.#turnId && this.#promptId != null) {
+        if (m.id === this.#promptId) this.#turnDone(this.#turnId, m);
+        return;
+      }
+      if (m.result?.stopReason !== undefined) {
+        if (this.#turnId) return this.#turnDone(this.#turnId, m);
+        // A prompt nobody here had open has ended: whatever was running is not.
+        this.#settleIdle();
+      }
       return;
     }
     if (m.method === 'session/update') return this.#onUpdate(m.params);

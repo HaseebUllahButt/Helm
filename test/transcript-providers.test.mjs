@@ -216,11 +216,13 @@ test('omp locate reads past a leading title record to the session header', async
 
 test('external activity reads native completion fields while writers remain open', async () => {
   const path = join(root, 'activity-claude.jsonl');
-  const write = (content) => writeFileSync(path, [
+  const write = (content, stop_reason = null) => writeFileSync(path, [
     { type: 'user', message: { role: 'user', content: 'Fix it' } },
-    { type: 'assistant', message: { role: 'assistant', stop_reason: null, content } },
+    { type: 'assistant', message: { role: 'assistant', stop_reason, content } },
   ].map(JSON.stringify).join('\n') + '\n');
   write([{ type: 'text', text: 'Fixed it' }]);
+  assert.equal((await sessionActivity({ engine: 'claude', path, active: true })).status, 'working', 'intermediate text does not complete a turn');
+  write([{ type: 'text', text: 'Fixed it' }], 'end_turn');
   assert.equal((await sessionActivity({ engine: 'claude', path, active: true })).status, 'idle');
   write([{ type: 'tool_use', name: 'Bash', id: 'tool', input: {} }]);
   assert.equal((await sessionActivity({ engine: 'claude', path, active: true })).status, 'working');
@@ -234,8 +236,47 @@ test('external activity reads native completion fields while writers remain open
     put('user', { content: [{ type: 'text', text: 'Do it' }] }, 1);
     assert.equal((await read()).status, 'working');
     put('assistant', { content: [{ type: 'text', text: 'Done' }] }, 2);
+    assert.equal((await read()).status, 'working', 'streamed text stays running');
+    put('assistant', { finish: 'stop', content: [{ type: 'text', text: 'Done' }] }, 3);
     assert.equal((await read()).status, 'idle');
-    put('assistant', { finishReason: 'tool-calls', content: [{ type: 'tool', name: 'shell' }] }, 3);
+    put('assistant', { finishReason: 'tool-calls', time: { completed: Date.now() }, content: [{ type: 'tool', name: 'shell' }] }, 4);
     assert.equal((await read()).status, 'working');
+    put('idle', { outcome: 'succeeded' }, 5);
+    assert.equal((await read()).status, 'idle');
   } finally { db.close(); }
+});
+
+test('Devin activity follows final-answer phase rather than intermediate text or tool results', async () => {
+  const path = join(root, 'devin-activity.db');
+  const db = new DatabaseSync(path);
+  db.exec('CREATE TABLE message_nodes (session_id TEXT, node_id INTEGER, chat_message TEXT)');
+  const put = (node, msg) => db.prepare('INSERT INTO message_nodes VALUES (?, ?, ?)').run('devin-live', node, JSON.stringify(msg));
+  const read = () => sessionActivity({ engine: 'devin', path, sessionId: 'devin-live', active: true });
+  try {
+    put(1, { role: 'user', content: 'Investigate' });
+    assert.equal((await read()).status, 'working');
+    put(2, { role: 'assistant', phase: 'commentary', content: 'Checking it' });
+    assert.equal((await read()).status, 'working');
+    put(3, { role: 'assistant', content: 'Running a check', tool_calls: [{ name: 'shell' }] });
+    assert.equal((await read()).status, 'working');
+    put(4, { role: 'tool', content: 'Check complete' });
+    assert.equal((await read()).status, 'working');
+    put(5, { role: 'assistant', phase: 'final_answer', content: 'Finished' });
+    assert.equal((await read()).status, 'idle');
+    put(6, { role: 'user', metadata: { telemetry: { source: 'cache_keepalive' } } });
+    assert.equal((await read()).status, 'idle', 'cache messages do not reopen a completed turn');
+    assert.equal((await sessionActivity({ engine: 'devin', path, sessionId: 'devin-live', active: false })).status, 'done');
+  } finally { db.close(); }
+});
+
+test('external activity never labels an unreadable live conversation idle', async () => {
+  const path = join(root, 'protobuf-conversation.db');
+  writeFileSync(path, 'not a text transcript');
+  assert.equal((await sessionActivity({ engine: 'agy', path, active: true })).status, 'unknown');
+  assert.equal((await sessionActivity({ engine: 'agy', path, active: true, liveStatus: 'working' })).status, 'working');
+  assert.equal((await sessionActivity({ engine: 'agy', path, active: true, liveStatus: 'idle' })).status, 'idle');
+  assert.equal((await sessionActivity({ engine: 'agy', path, active: false, liveStatus: 'working' })).status, 'done', 'stale busy flags cannot revive dead sessions');
+  const grok = join(root, 'grok-activity.jsonl');
+  writeFileSync(grok, JSON.stringify({ role: 'assistant', content: 'Intermediate answer', reasoning: 'Thinking from this message' }) + '\n');
+  assert.equal((await sessionActivity({ engine: 'grok', path: grok, active: true })).status, 'unknown', 'rendered text and historical thinking cannot prove completion or current work');
 });

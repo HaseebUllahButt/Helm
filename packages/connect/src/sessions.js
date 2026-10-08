@@ -13,7 +13,7 @@ import { optionArgs } from './models.js';
 import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
 import { EventLog, activeTurnFromEvents, EVENT_KEEP } from './events.js';
 import { ClaudeDriver, permissionCard } from './drivers/claude.js';
-import { CodexDriver, canInspectExternalCodex, nativeCodexThreads, nativeCodexSocket } from './drivers/codex.js';
+import { CodexDriver, canInspectExternalCodex, codexTurnOutcome, nativeCodexThreads, nativeCodexSocket } from './drivers/codex.js';
 import { OpencodeDriver, Opencode2Driver } from './drivers/opencode.js';
 import { DevinDriver } from './drivers/devin.js';
 import { GrokDriver } from './drivers/grok.js';
@@ -40,6 +40,8 @@ import { AccountLimits } from './account-limits.js';
 import { CLAUDE_NATIVE_COMMANDS } from './commands.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
+/** How a recovery note says the agent's state could not be checked. */
+const RECONNECT_FAILED = 'Could not reconnect to the agent:';
 
 // A pane read costs the runtime ~90ms, so this is close to as fast as the
 // screen can be sampled without the reads piling up on each other.
@@ -261,10 +263,22 @@ export class Sessions extends EventEmitter {
   #steered = new Map();
   /** session object -> in-flight full-rollout reconciliation */
   #imports = new WeakMap();
+  /**
+   * sessionId -> timer, while an agent says it is idle but its newest turn
+   * has not finished. Codex reports the thread idle a few milliseconds
+   * before the turn's completion; a queued message sent into that gap
+   * started its turn before the last one was done, and the late completion
+   * then showed the new turn as idle. The queue waits for the completion,
+   * or for this long if it never comes.
+   */
+  #settling = new Map();
+  /** sessionId -> open command cards (turn.start with local: true). */
+  #commandCards = new Map();
 
-  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE } = {}) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500 } = {}) {
     super();
     this.runtime = runtime;
+    this.turnSettleMs = turnSettleMs;
     this.events = events;
     this.limits = new AccountLimits();
     this.log = log;
@@ -437,6 +451,12 @@ export class Sessions extends EventEmitter {
 
   #nativeDiscovery = null;
   #nativeDiscovered = false;
+  /** Native sessions already announced offline since their thread unloaded. */
+  #nativeOffline = new Set();
+  /** Native threads the last check found open in their terminal daemon. */
+  #nativeLoaded = new Set();
+  /** Accounts whose native daemon is there but did not answer the last check. */
+  #nativeUnknown = new Set();
   async #discoverNativeCodex(profiles) {
     if (!this.nativeDiscovery) return;
     if (this.#nativeDiscovery) return this.#nativeDiscovery;
@@ -449,24 +469,66 @@ export class Sessions extends EventEmitter {
       const results = await Promise.allSettled([...accounts.values()].map((p) => nativeCodexThreads(p, this.log)));
       const accountProfiles = [...accounts.values()];
       for (const [accountIndex, result] of results.entries()) {
-        if (result.status !== 'fulfilled') continue;
-        const loaded = new Set((result.value || []).map(thread => thread.id));
-        if (result.value) for (const session of this.#index.values()) {
-          if (!session.nativeSocket || session.profileId !== accountProfiles[accountIndex].id || loaded.has(session.engineSessionId)) continue;
+        const account = accountProfiles[accountIndex].id;
+        // A daemon that is there but did not answer says nothing about its
+        // threads: leave them as they are rather than call them stopped.
+        if (result.status !== 'fulfilled') { this.#nativeUnknown.add(account); continue; }
+        this.#nativeUnknown.delete(account);
+        // No daemon at all (null) means none of its threads is open.
+        const loaded = new Set(result.value?.loaded ?? []);
+        for (const session of this.#index.values()) {
+          if (session.nativeSocket && session.profileId === account) this.#nativeLoaded.delete(session.engineSessionId);
+        }
+        for (const id of loaded) this.#nativeLoaded.add(id);
+        for (const session of this.#index.values()) {
+          if (!session.nativeSocket || session.profileId !== account || loaded.has(session.engineSessionId)) continue;
           const driver = this.#drivers.get(session.id);
+          const pending = this.events.pending(session.id);
+          const open = this.events.activeTurn(session.id);
+          const turn = open && !String(open.turnId).startsWith('local-') ? open : null;
+          const unreachable = this.#unreachable(session);
+          // Checked every few seconds: an offline thread already settled
+          // here is not saved and announced to every device again.
+          if (!driver && session.status === 'idle' && !pending.length && !turn && !unreachable && this.#nativeOffline.has(session.id)) continue;
+          this.#nativeOffline.add(session.id);
           await driver?.suspend();
           this.#drivers.delete(session.id);
+          this.#settled(session.id);
+          // The terminal that held the thread is gone, and with it any
+          // question it asked: nobody can answer that card any more.
+          for (const p of pending) {
+            const event = this.events.append(session.id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
+            session.lastSeq = event.seq;
+            this.emit('event', { id: session.id, event });
+          }
+          // No daemon holds the thread, so its turn is not running. Close
+          // the card the way Codex's own record says it ended.
+          if (turn) {
+            const outcome = await codexTurnOutcome(session.transcript, turn.turnId);
+            const status = outcome === 'ok' ? 'ok' : 'interrupted';
+            const error = outcome === 'ok' || outcome === 'interrupted' ? null
+              : outcome === 'running' ? 'Codex closed this thread before the turn finished.'
+                : 'Codex is no longer running this thread.';
+            if (session.delegation && !['done', 'error', 'interrupted'].includes(session.delegation.status)) session.delegation.status = status === 'ok' ? 'done' : status;
+            const event = this.events.append(session.id, { type: 'turn.done', turnId: turn.turnId, status, ...(error ? { error } : {}) });
+            session.lastSeq = event.seq;
+            this.emit('event', { id: session.id, event });
+          }
           if (session.status !== 'idle') {
             const event = this.events.append(session.id, { type: 'status', status: 'idle' });
             session.lastSeq = event.seq;
             this.emit('event', { id: session.id, event });
           }
           session.status = 'idle';
+          if (session.delegation) this.#updateTeam(session);
+          this.#reconnected(session);
           this.#save();
-          this.emit('session', { ...wire(session), alive: false });
+          this.emit('session', { ...wire(session), alive: false, pending: 0, ask: null });
+          // With a daemon to reopen it, what was queued behind the turn goes.
+          if (result.value) this.#pump(session);
         }
         if (!result.value) continue;
-        for (const thread of result.value) {
+        for (const thread of result.value.threads) {
           const removed = `found:codex:${thread.id}`;
           if (this.#marks.get(removed) === 'removed') {
             // Removing hides it; using it again in the terminal undoes that.
@@ -481,6 +543,7 @@ export class Sessions extends EventEmitter {
           if (existing?.driver && !existing.external && !existing.nativeSocket
             && (['working', 'blocked', 'starting'].includes(existing.status) || this.hasActiveDelegations(existing.id))) continue;
           const s = existing ?? { id: randomBytes(6).toString('hex'), createdAt: thread.createdAt * 1000 };
+          this.#nativeOffline.delete(s.id);
           const first = !s.nativeSocket;
           const gainedTranscript = !s.transcript && !!thread.path;
           if (first) {
@@ -494,8 +557,13 @@ export class Sessions extends EventEmitter {
             shared: true, external: false, externalActive: false, externalSource: true, adopted: false,
             updatedAt: thread.updatedAt * 1000 });
           if (!s.titleBy) s.title = thread.name || thread.preview?.slice(0, 80) || basename(thread.cwd);
+          // The snapshot names a newly found thread's state. After that the
+          // live thread is the authority: this read can be older than the
+          // notification that just arrived, and writing it here silently
+          // either hid live work as idle or left a finished turn running.
           const blocked = thread.status?.activeFlags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
-          s.status = blocked ? 'blocked' : thread.status?.type === 'active' ? 'working' : 'idle';
+          const reported = blocked ? 'blocked' : thread.status?.type === 'active' ? 'working' : 'idle';
+          if (first) s.status = reported;
           this.#index.set(s.id, s);
           if (first) {
             this.#save();
@@ -503,8 +571,30 @@ export class Sessions extends EventEmitter {
           }
           if (first || gainedTranscript) await this.#importExternalTranscript(s);
           {
-            try { const d = await this.#driver(s); d.transcript = s.transcript; await d.start(); }
-            catch (err) { this.#drivers.delete(s.id); this.log(`codex native attach: ${err.message}`); }
+            try {
+              const d = await this.#driver(s);
+              d.transcript = s.transcript;
+              // A driver that (re)connects reads the thread and reports it;
+              // starting from the recorded state makes any change a real one.
+              if (!d.nativeConnected) d.status = s.status;
+              await d.start();
+              if (s.recovery?.kind === 'error') { this.#reconnected(s); this.#pump(s); }
+            } catch (err) {
+              this.#drivers.delete(s.id);
+              this.log(`codex native attach: ${err.message}`);
+              // Without a live stream the daemon's own report is the best
+              // there is; record it as a real change rather than keep a
+              // remembered label.
+              if (s.status !== reported) {
+                s.status = reported;
+                s.updatedAt = Date.now();
+                const event = this.events.append(s.id, { type: 'status', status: reported });
+                s.lastSeq = event.seq;
+                this.#save();
+                this.emit('event', { id: s.id, event });
+                this.emit('session', { ...wire(s), alive: false });
+              }
+            }
           }
         }
       }
@@ -1044,7 +1134,10 @@ export class Sessions extends EventEmitter {
   delegationResult(id) {
     const session = this.get(id);
     if (!session.delegation) throw new Error('that session is not a delegated CLI task');
-    const events = this.events.tail(id, 2000);
+    // Command cards answered beside the task are not its result.
+    const all = this.events.tail(id, 2000);
+    const cards = new Set(all.filter((e) => e.type === 'turn.start' && e.local === true).map((e) => e.turnId));
+    const events = cards.size ? all.filter((e) => !cards.has(e.turnId)) : all;
     const result = delegationOutput(wire(session), events);
     const reply = session.delegationReply;
     const start = events.findLast((e) => e.type === 'turn.start');
@@ -1213,10 +1306,31 @@ export class Sessions extends EventEmitter {
     }
   }
 
-  /** The live driver for a session, starting (or resuming) one if needed. */
-  async #driver(s) {
-    let d = this.#drivers.get(s.id);
-    if (d) return d;
+  /** sessionId -> a driver being created, so concurrent callers share it. */
+  #driverStarts = new Map();
+
+  /**
+   * The live driver for a session, starting (or resuming) one if needed.
+   *
+   * One at a time per session: a message sent while a restart is still
+   * rebinding the surviving process otherwise built a second driver on the
+   * same process - two readers of one pipe, and two writers into one thread.
+   */
+  #driver(s) {
+    const live = this.#drivers.get(s.id);
+    if (live) return Promise.resolve(live);
+    let pending = this.#driverStarts.get(s.id);
+    if (!pending) {
+      pending = this.#createDriver(s);
+      this.#driverStarts.set(s.id, pending);
+      const done = () => { if (this.#driverStarts.get(s.id) === pending) this.#driverStarts.delete(s.id); };
+      pending.then(done, done);
+    }
+    return pending;
+  }
+
+  async #createDriver(s) {
+    let d;
     // A thread opened from local history can outlive the provider's
     // transcript. If a previous attempt already proved its id is missing,
     // resend as a fresh conversation instead of retrying the same dead id.
@@ -1303,7 +1417,16 @@ export class Sessions extends EventEmitter {
 
   #onDriverEvent(s, d, e) {
     if (this.#drivers.get(s.id) !== d && e.type !== 'status') return;
-    trackDelegationReply(s, e);
+    // A command card (/status, /usage) answers beside the task. It is not
+    // the task's reply, and its end is not the task's end.
+    if (e.type === 'turn.start' && e.local === true) {
+      const cards = this.#commandCards.get(s.id) ?? new Set();
+      this.#commandCards.set(s.id, cards.add(e.turnId));
+    }
+    const card = e.type === 'turn.start' ? e.local === true
+      : e.type === 'item.start' ? !!this.#commandCards.get(s.id)?.has(e.turnId)
+        : e.type === 'turn.done' && this.#commandCard(s.id, e.turnId);
+    if (!card) trackDelegationReply(s, e);
     let forwarded = e;
     const staleClaudeConversation = s.engine === 'claude'
       && e.type === 'turn.done'
@@ -1353,7 +1476,11 @@ export class Sessions extends EventEmitter {
       // which is how a queue survives the process dying mid-turn. The pump
       // reads s.status to know the agent is free, so it runs after it lands.
       if (status === 'idle' || e.status === 'exited') this.#steps.delete(s.id);
-      if (status === 'idle') this.#pump(s);
+      if (e.status === 'idle' && this.#finishing(s)) this.#awaitTurnDone(s);
+      else {
+        this.#settled(s.id);
+        if (status === 'idle') this.#pump(s);
+      }
       if (e.status === 'exited') return;
     }
     // The CLI used a message handed to it mid-turn: from here it is part of
@@ -1398,7 +1525,8 @@ export class Sessions extends EventEmitter {
       forwarded = { ...forwarded, costUsd: Math.round(turn * 1e6) / 1e6 };
     }
     if (e.type === 'turn.done' && s.forkFrom) delete s.forkFrom;
-    if (e.type === 'turn.done' && this.#index.has(s.id)) {
+    if (e.type === 'turn.done' && card) this.#commandCards.get(s.id)?.delete(e.turnId);
+    if (e.type === 'turn.done' && this.#index.has(s.id) && !card) {
       if (s.delegation) s.delegation.status = s.stoppedAt ? 'interrupted' : e.status === 'ok' ? 'done' : e.status;
       if (s.delegation) {
         s.delegation.summary = (s.delegationReply?.output || e.error || '').slice(-500);
@@ -1433,8 +1561,41 @@ export class Sessions extends EventEmitter {
     this.emit('event', { id: s.id, event });
     if (e.type === 'turn.done') {
       this.emit('session', s);
-      if (s.delegation) void this.#notifyParent(s, event);
+      if (s.delegation && !card) void this.#notifyParent(s, event);
+      if (this.#settling.has(s.id) && !this.#finishing(s)) {
+        this.#settled(s.id);
+        if (s.status === 'idle') this.#pump(s);
+      }
     }
+  }
+
+  /** Whether this turn is a command card: a local answer, not agent work. */
+  #commandCard(id, turnId) {
+    if (this.#commandCards.get(id)?.has(turnId)) return true;
+    return !!turnId && this.events.tail(id, 0).some((e) => e.type === 'turn.start' && e.turnId === turnId && e.local === true);
+  }
+
+  /** Whether the agent's newest turn is still open in the log. */
+  #finishing(s) {
+    const turn = this.events.activeTurn(s.id);
+    return !!turn && !String(turn.turnId).startsWith('local-');
+  }
+
+  #awaitTurnDone(s) {
+    if (this.#settling.has(s.id)) return;
+    const timer = setTimeout(() => {
+      if (this.#settling.get(s.id) !== timer) return;
+      this.#settling.delete(s.id);
+      this.log(`[${s.id}] idle without finishing its turn; sending what is queued`);
+      if (s.status === 'idle') this.#pump(s);
+    }, this.turnSettleMs);
+    timer.unref?.();
+    this.#settling.set(s.id, timer);
+  }
+
+  #settled(id) {
+    clearTimeout(this.#settling.get(id));
+    this.#settling.delete(id);
   }
 
   async #notifyParent(child, event) {
@@ -2791,7 +2952,7 @@ export class Sessions extends EventEmitter {
       // cannot, since the first send into an idle session is briefly local
       // too without ever having waited.
       let sideband = delivery !== 'queue' && !raw && compact == null && !images.length && d?.canRunWhileBusy?.(clean);
-      let busy = !sideband && (this.#sending.has(s.id) || s.status === 'working' || s.status === 'blocked');
+      let busy = !sideband && (this.#sending.has(s.id) || this.#settling.has(s.id) || s.status === 'working' || s.status === 'blocked');
       const commandText = compact != null ? `/compact${compact ? ` ${compact}` : ''}` : clean;
       if (s.stoppedAt || stopGeneration !== (s.stopGeneration ?? 0) || !this.#index.has(id)) throw new Error('message cancelled because the thread was stopped');
       const item = { turnId, text: commandText, images, compact, delivery, references, referenceContext, stopGeneration };
@@ -2981,7 +3142,7 @@ export class Sessions extends EventEmitter {
    * the order the messages were typed.
    */
   #pump(s) {
-    if (this.#sending.has(s.id) || s.queuePaused || s.stoppedAt) return;
+    if (this.#sending.has(s.id) || this.#settling.has(s.id) || s.queuePaused || s.stoppedAt) return;
     const q = this.#outbox.get(s.id);
     if (!q?.length) return;
     if (s.status === 'working' || s.status === 'blocked') return;
@@ -2994,7 +3155,7 @@ export class Sessions extends EventEmitter {
           // A killed session drops what it was holding: its event log is
           // gone, so there is no turn to close the message against anyway.
           if (!this.#index.has(s.id)) { this.#outbox.delete(s.id); break; }
-          if (s.status === 'working' || s.status === 'blocked' || s.queuePaused || s.stoppedAt) break;
+          if (s.status === 'working' || s.status === 'blocked' || this.#settling.has(s.id) || s.queuePaused || s.stoppedAt) break;
           // Once delivery starts the ticket is no longer withdrawable or
           // interruptible as queued work; those actions apply to later items.
           this.#outbox.get(s.id)?.shift();
@@ -3266,6 +3427,8 @@ export class Sessions extends EventEmitter {
       this.#outbox.delete(id);
       this.#steps.delete(id);
       this.#steered.delete(id);
+      this.#settled(id);
+      this.#commandCards.delete(id);
       clearTimeout(this.#reapers.get(id));
       if (d) await d.kill();
       this.#index.delete(id);
@@ -3400,23 +3563,43 @@ export class Sessions extends EventEmitter {
     const s = this.#index.get(id);
     if (!s?.driver || this.#drivers.has(id)) return;
     const tail = this.events.tail(id, 0);
-    const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
+    const closed = new Set(tail.filter((e) => ['turn.done', 'turn.remove'].includes(e.type)).map((e) => e.turnId));
+    // A message still waiting in the queue never reached the dead process:
+    // it stays queued, and goes to the next one.
+    const waiting = new Set((this.#outbox.get(id) ?? []).map((item) => item.turnId));
     for (const e of tail) {
-      if (e.type !== 'turn.start' || closed.has(e.turnId)) continue;
+      if (e.type !== 'turn.start' || closed.has(e.turnId) || waiting.has(e.turnId)) continue;
       closed.add(e.turnId);
       this.events.append(id, { type: 'turn.done', turnId: e.turnId, status: 'interrupted', error: 'agent exited' });
     }
     for (const p of this.events.pending(id)) {
       this.events.append(id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
     }
-    if (s.status === 'idle') return;
-    s.status = 'idle';
-    s.updatedAt = Date.now();
-    const event = this.events.append(id, { type: 'status', status: 'idle' });
-    s.lastSeq = event.seq;
-    this.emit('event', { id, event });
-    this.emit('session', s);
+    this.#settled(id);
+    if (s.status !== 'idle') {
+      s.status = 'idle';
+      s.updatedAt = Date.now();
+      const event = this.events.append(id, { type: 'status', status: 'idle' });
+      s.lastSeq = event.seq;
+      this.emit('event', { id, event });
+      this.emit('session', s);
+      this.#save();
+    }
+    this.#pump(s);
+  }
+
+  /** Whether the record is holding work because its agent could not be checked. */
+  #unreachable(s) {
+    return s.recovery?.kind === 'error' && !!s.recovery.message?.startsWith(RECONNECT_FAILED);
+  }
+
+  /** A failed reattach that has since succeeded no longer needs attention. */
+  #reconnected(s) {
+    if (!this.#unreachable(s)) return;
+    delete s.recovery;
+    s.queuePaused = false;
     this.#save();
+    this.emit('session', s);
   }
 
   /** Rebuild unsent tickets from the log and settle turns that cannot resume. */
@@ -3431,16 +3614,23 @@ export class Sessions extends EventEmitter {
     const accepted = new Set(tail.filter((e) => e.type === 'turn.accept').map((e) => e.turnId));
     const delivered = new Set(tail.filter((e) => e.type === 'turn.deliver').map((e) => e.turnId));
     const echoes = tail.filter((e) => e.type === 'turn.start'
-      && !String(e.turnId).startsWith('local-'));
+      && !String(e.turnId).startsWith('local-') && e.queued !== true);
     const open = tail.filter((e) => e.type === 'turn.start'
       && !closed.has(e.turnId) && !removed.has(e.turnId));
     // A hosted process may still be in its current real turn. Queued local
     // turns can follow it in the log, so use the last real turn, not simply
     // the last open turn, as the one to leave running.
     const active = processAlive ? activeTurnFromEvents(tail) : null;
+    // The provider moved past any of its turns older than its newest one;
+    // those finished with the run that followed, whatever became of it.
+    const latest = echoes.findLast((e) => !e.local);
     const revive = [];
-    const settle = (turnId, status, error) => {
-      if (s.delegation && !['done', 'error', 'interrupted'].includes(s.delegation.status)) s.delegation.status = status === 'ok' ? 'done' : status;
+    // A delegated task finishes with its newest work, not with whichever
+    // old card happens to be tidied first - and not at all while its live
+    // turn is being kept.
+    let finished = null;
+    const settle = (turnId, status, error, { ends = true } = {}) => {
+      if (ends) finished = status;
       const event = this.events.append(s.id, { type: 'turn.done', turnId, status, ...(error ? { error } : {}) });
       s.lastSeq = event.seq;
       this.emit('event', { id: s.id, event });
@@ -3450,8 +3640,9 @@ export class Sessions extends EventEmitter {
       // A local status card is not work held by the surviving CLI. Older
       // logs can contain an unfinished card; settle it without manufacturing
       // either an active provider turn or a restart recovery warning.
-      if (e.local === true) { settle(e.turnId, 'ok'); continue; }
-      const local = String(e.turnId).startsWith('local-');
+      if (e.local === true) { settle(e.turnId, 'ok', null, { ends: false }); continue; }
+      // A queued ticket under a caller-chosen id is still a ticket.
+      const local = String(e.turnId).startsWith('local-') || e.queued === true;
       const mine = (e.text ?? '').trim();
       const echoIndex = local ? echoes.findIndex((x) => x.seq > e.seq && (
         (x.text ?? '').trim() === mine || (mine && (x.text ?? '').trim().startsWith(mine + '\n'))
@@ -3468,7 +3659,7 @@ export class Sessions extends EventEmitter {
           s.lastSeq = event.seq;
           this.emit('event', { id: s.id, event });
         }
-        settle(e.turnId, 'ok');
+        settle(e.turnId, 'ok', null, { ends: false });
         continue;
       }
       if (local && e.queued === true && !echoed) {
@@ -3489,7 +3680,7 @@ export class Sessions extends EventEmitter {
           }))
           .filter((a) => a.data);
         if (!text && !images.length) {
-          settle(e.turnId, 'interrupted', 'queued message could not be restored after restart');
+          settle(e.turnId, 'interrupted', 'queued message could not be restored after restart', { ends: false });
           continue;
         }
         revive.push({
@@ -3505,8 +3696,15 @@ export class Sessions extends EventEmitter {
         continue;
       }
       if (processAlive && active?.turnId === e.turnId) continue;
-      settle(e.turnId, echoed ? 'ok' : 'interrupted', echoed ? null : 'helm restarted');
-      if (!echoed && !processAlive) s.recovery = { kind: 'restart', message: 'The agent stopped. Resume from the saved conversation.', at: Date.now() };
+      if (latest && latest.seq > e.seq) { settle(e.turnId, 'ok', null, { ends: false }); continue; }
+      // Helm never owned a native thread's process, so its restart did not
+      // stop it; the daemon check settles those turns from Codex's record.
+      // An echoed ticket is a leftover; the echo is the turn that counts.
+      settle(e.turnId, echoed ? 'ok' : 'interrupted', echoed ? null : s.nativeSocket ? 'Codex is no longer running this turn.' : 'helm restarted', { ends: !echoed });
+      if (!echoed && !processAlive && !s.nativeSocket) s.recovery = { kind: 'restart', message: 'The agent stopped. Resume from the saved conversation.', at: Date.now() };
+    }
+    if (finished && !(processAlive && active) && s.delegation && !['done', 'error', 'interrupted'].includes(s.delegation.status)) {
+      s.delegation.status = finished === 'ok' ? 'done' : finished;
     }
 
     if (revive.length) {
@@ -3534,7 +3732,23 @@ export class Sessions extends EventEmitter {
       // unmatched queued tickets are rebuilt from the log for when it settles.
       const profile = profiles.find((p) => p.id === s.profileId);
       const procId = hostedProcId(s, s.driver === 'codex' && profile ? materialize(profile) : null);
-      const nativeAlive = s.nativeSocket && this.#drivers.get(s.id)?.nativeConnected;
+      // A thread its terminal still has open is alive even when attaching
+      // to it just failed: settling its turn or replaying its queue would
+      // put a second writer on work that is still running.
+      const nativeAlive = s.nativeSocket && (this.#drivers.get(s.id)?.nativeConnected || this.#nativeLoaded.has(s.engineSessionId));
+      if (s.nativeSocket && !nativeAlive && this.#nativeUnknown.has(s.profileId)) {
+        // Its daemon is there but did not answer, so whether the thread is
+        // still working is unknown. Keep its turn, question and status as
+        // they were; hold the queue so nothing is sent into work that may
+        // still be running. The next answer from the daemon settles it.
+        if (s.recovery?.kind === 'restart') delete s.recovery;
+        this.#restoreOpenTurns(s, this.events.tail(s.id, 0), true);
+        s.queuePaused = true;
+        s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} Codex did not answer, so this thread could not be checked.`, at: Date.now() };
+        s.lastSeq = this.events.last(s.id);
+        this.emit('session', s);
+        continue;
+      }
       if (nativeAlive || !s.nativeSocket && procId && this.procs.hasProc(procId)) {
         if (s.recovery?.kind === 'restart') delete s.recovery;
         const tail = this.events.tail(s.id, 0);
@@ -3548,12 +3762,7 @@ export class Sessions extends EventEmitter {
           // persisted state so an adopted idle process corrects a stale busy row.
           d.status = s.status;
           await d.start();
-          if (s.recovery?.kind === 'error' && s.recovery.message?.startsWith('Could not reconnect to the agent:')) {
-            delete s.recovery;
-            s.queuePaused = false;
-            this.#save();
-            this.emit('session', s);
-          }
+          this.#reconnected(s);
           this.#pump(s);
         }).catch((err) => {
           this.log(`[${s.id}] could not reattach surviving agent: ${err.message}`);
@@ -3562,7 +3771,7 @@ export class Sessions extends EventEmitter {
           // busy label must not hide it or cause automatic prompt replay.
           s.status = 'idle';
           s.queuePaused = true;
-          s.recovery = { kind: 'error', message: `Could not reconnect to the agent: ${err.message}`, at: Date.now() };
+          s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} ${err.message}`, at: Date.now() };
           const event = this.events.append(s.id, { type: 'status', status: 'idle' });
           s.lastSeq = event.seq;
           this.#save();
@@ -3601,7 +3810,9 @@ export class Sessions extends EventEmitter {
     for (const child of this.#index.values()) {
       if (!child.delegation) continue;
       this.#updateTeam(child);
-      const completed = this.events.tail(child.id, 500).findLast((event) => event.type === 'turn.done' && !String(event.turnId).startsWith('local-'));
+      const tail = this.events.tail(child.id, 500);
+      const cards = new Set(tail.filter((event) => event.type === 'turn.start' && event.local === true).map((event) => event.turnId));
+      const completed = tail.findLast((event) => event.type === 'turn.done' && !String(event.turnId).startsWith('local-') && !cards.has(event.turnId));
       if (completed && !this.hasActiveDelegations(child.id) && !['working', 'blocked', 'starting'].includes(child.status)) {
         void this.#notifyParent(child, completed);
       }
@@ -3611,6 +3822,7 @@ export class Sessions extends EventEmitter {
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
     clearInterval(this.nativePoll);
+    for (const id of [...this.#settling.keys()]) this.#settled(id);
     await (await this.hooks?.catch(() => null))?.close();
     this.nativeDiscovery = false;
     await this.#nativeDiscovery?.catch(() => {});

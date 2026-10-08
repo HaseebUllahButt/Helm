@@ -14,7 +14,7 @@ import { expandPastes } from './pasteStore';
 import { Confirm, TextPrompt } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
-import { money } from '../format';
+import { money, busyStatus } from '../format';
 import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
@@ -104,7 +104,9 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const [commands, setCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
   const engine = ENGINE_LABEL[session.engine] ?? session.engine;
   const status = log.loaded ? log.status : session.status;
-  const working = status === 'working';
+  // Starting is work in progress too: Stop is the useful button, and a
+  // stale problem card from the last run is not.
+  const working = busyStatus(status);
   const pending = log.pending[0];
   // Queued messages are the daemon's outbox rendered in the composer, not
   // transcript turns: they only become a bubble once the agent echoes them.
@@ -396,12 +398,18 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   // which also moves when a permission is answered.
   const now = useNow();
   const openTurn = transcriptTurns.filter((t) => !t.done).at(-1);
-  const since = status === 'working' && openTurn ? openTurn.at : session.updatedAt;
+  const since = working && openTurn ? openTurn.at : session.updatedAt;
   const age = since ? waitingSince(since, now) : '';
   const chip = (s: string) => {
     const ago = age && age !== 'just now' ? ` ${age}` : '';
     return s === 'blocked' ? <span className="chip blocked"><i />waiting{ago}</span>
-      : s === 'working' ? <span className="chip working"><i />working{ago}</span> : null;
+      : s === 'starting' ? <span className="chip working"><i />starting</span>
+      : s === 'working' ? <span className="chip working"><i />working{ago}</span>
+      // Its own turn is over, but child tasks are not: the sidebar calls
+      // this working, so the open chat must not look finished.
+      : session.team?.working ? <span className="chip working" title="Child tasks are still working"><i />working</span>
+      : s === 'unknown' ? <span className="chip exited" title="The machine could not tell whether this agent is working">status unavailable</span>
+      : null;
   };
 
   // Favorites and new-chat defaults live on the machine, so a phone and a laptop
@@ -472,7 +480,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   });
   // What the folder looks like to git. Asked again whenever a turn ends,
   // which is when something has usually just changed.
-  const git = useGitStatus(client, env, session.cwd, status === 'working' ? 'working' : `rest:${session.updatedAt ?? 0}`);
+  const git = useGitStatus(client, env, session.cwd, working ? 'working' : `rest:${session.updatedAt ?? 0}`);
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
 
   // The clip is only offered when the running model can see images;

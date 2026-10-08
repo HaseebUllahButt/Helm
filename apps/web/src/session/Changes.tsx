@@ -148,7 +148,9 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
           {TABS.map((name) => (
             <button key={name} id={`git-${name}-tab`} role="tab" tabIndex={tab === name ? 0 : -1} aria-selected={tab === name}
               aria-label={name === 'pipeline' ? 'CI / CD' : undefined}
-              aria-controls={`git-${name}-panel`} onClick={() => pick(name)}>
+              // Only the open view's panel is drawn; pointing at the others
+              // sent screen readers to an element that does not exist.
+              aria-controls={tab === name ? `git-${name}-panel` : undefined} onClick={() => pick(name)}>
               {name === 'graph' ? 'Graph' : name === 'changes' ? 'Changes' : 'CI / CD'}
               {name === 'changes' && total > 0 && <>{' '}<span className="git-count">{total}</span></>}
               {name === 'pipeline' && monitor.snapshot?.checksState && ['failure', 'pending'].includes(monitor.snapshot.checksState) && <span className={`pipeline-dot ${monitor.snapshot.checksState}`} aria-label={monitor.snapshot.checksState === 'failure' ? 'checks failed' : 'checks running'} />}

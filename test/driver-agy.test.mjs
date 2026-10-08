@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
 import { AgyDriver } from '../packages/connect/src/drivers/agy.js';
 
@@ -150,4 +154,118 @@ test('agy: model/effort/mode/session land on argv; a settings change respawns on
   const users = fake.stdinLines().filter((l) => l.event === 'user');
   assert.deepEqual(users.map((u) => u.message.content), ['first prompt', 'second prompt']);
   await driver.kill();
+});
+
+// ------------------------------------------------- lifecycle status (live)
+//
+// A small live agy: says hello after FAKE_INIT_MS, answers each user line
+// with one step and a result. Enough to pace a start and to be the process
+// a restart finds still running.
+const LIVE_AGY = `
+if (process.argv.includes('--version')) { console.log('agy 1.2.12'); process.exit(0); }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const out = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
+let buf = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    if (!line.trim()) continue;
+    const m = JSON.parse(line);
+    if (m.event !== 'user') continue;
+    out({ event: 'step_update', step_update: { step_index: 1, state: 'DONE', step_type: 'agent_response', text_delta: 'ok' } });
+    out({ event: 'result', result: { status: 'SUCCESS', conversation_id: 'conv-live' } });
+  }
+});
+process.stdin.on('end', () => setTimeout(() => process.exit(0), 20));
+if (process.env.FAKE_HELLO !== '0') {
+  await sleep(Number(process.env.FAKE_INIT_MS ?? 0));
+  out({ event: 'init', conversation_id: 'conv-live', init: { cwd: process.cwd() } });
+}
+`;
+
+const liveAgy = (t, env = {}) => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-agy-live-'));
+  const script = join(dir, 'agent.mjs');
+  writeFileSync(script, LIVE_AGY);
+  const cmd = join(dir, 'agy');
+  writeFileSync(cmd, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)} "$@"\n`);
+  chmodSync(cmd, 0o755);
+  return { cmd, dir, env };
+};
+
+const heldBy = (child) => ({
+  hasProc: () => true,
+  procPipe: () => ({
+    write: (d) => child.stdin.write(d),
+    end: () => child.stdin.end(),
+    kill: (s) => child.kill(s),
+    onData: (cb) => child.stdout.on('data', (c) => cb(c.toString('utf8'))),
+    onExit: (cb) => child.on('exit', (code) => cb({ code })),
+    detach: () => {},
+  }),
+});
+
+test('agy: a second start during the handshake waits for the same start', async (t) => {
+  const { cmd, dir, env } = liveAgy(t, { FAKE_INIT_MS: '300' });
+  const driver = new AgyDriver({ cmd, args: [], cwd: dir, env });
+  t.after(() => driver.kill());
+  const log = collect(driver);
+  const first = driver.start();
+  // The pipe is bound and init emitted before agy has said hello.
+  await new Promise((resolve) => driver.once('init', resolve));
+  const sending = driver.send('hello');
+  await log.until((e) => e.type === 'status');
+  assert.equal(driver.status, 'working', 'starting is part of answering');
+  await sending;
+  assert.equal(driver.engineSessionId, 'conv-live', 'the second caller saw the finished start');
+  await first;
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.status, 'ok');
+  assert.equal(driver.status, 'idle');
+});
+
+for (const [name, open, closed] of [
+  ['no open turn', null, null],
+  ['only an unsent ticket', 'local-ticket', 'interrupted'],
+]) {
+  test(`agy adopt: ${name} corrects a saved busy status to idle`, async (t) => {
+    const { cmd, dir, env } = liveAgy(t, { FAKE_HELLO: '0' });
+    const child = spawn(cmd, [], { cwd: dir, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+    t.after(() => child.kill());
+    const driver = new AgyDriver({
+      cmd, args: [], cwd: dir, env,
+      procHost: heldBy(child), procId: 'a1', openTurn: () => open,
+    });
+    driver.status = 'working'; // what the record remembered
+    const log = collect(driver);
+    await driver.start();
+    assert.equal(driver.status, 'idle');
+    assert.deepEqual(log.of('turn.done').map((e) => [e.turnId, e.status]), closed ? [[open, closed]] : []);
+    // The adopted process takes the next prompt as its own turn.
+    await driver.send('next');
+    const done = await log.until((e) => e.type === 'turn.done' && e.turnId !== open);
+    assert.equal(done.status, 'ok');
+    assert.equal(driver.status, 'idle');
+  });
+}
+
+test('agy adopt: a turn still open stays working until its result', async (t) => {
+  const { cmd, dir, env } = liveAgy(t, { FAKE_HELLO: '0' });
+  const child = spawn(cmd, [], { cwd: dir, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  const driver = new AgyDriver({
+    cmd, args: [], cwd: dir, env,
+    procHost: heldBy(child), procId: 'a2', openTurn: () => 'turn-live',
+  });
+  const log = collect(driver);
+  await driver.start();
+  assert.equal(driver.status, 'working');
+  // Its result arrives (here: answered to a nudge) and settles that turn.
+  child.stdin.write(JSON.stringify({ event: 'user', message: { content: 'x' } }) + '\n');
+  const done = await log.until((e) => e.type === 'turn.done');
+  assert.equal(done.turnId, 'turn-live');
+  assert.equal(driver.status, 'idle');
 });

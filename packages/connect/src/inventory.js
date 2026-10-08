@@ -66,7 +66,7 @@ function procs() {
   const candidates = process.platform === 'linux' ? list.map((p) => p.pid)
     : list.filter(({ argv }) => names.test(argv.slice(0, 3).join(' '))).map((p) => p.pid);
   const files = new Map();
-  for (const f of openFiles(candidates, (path) => path.endsWith('.jsonl'))) {
+  for (const f of openFiles(candidates, (path) => /\.(jsonl|db)$/.test(path))) {
     if (f.write && !files.has(f.path)) files.set(f.path, f.pid);
   }
   procSnap = { at: Date.now(), files, list };
@@ -622,9 +622,11 @@ async function agy(home, account) {
         cwd: collapse(cwd),
         updatedAt,
         transcript: existsSync(conv) ? conv : null,
-        // not_fully_idle hints a live writer, but the row still only counts
-        // as active when a process can be pinned to it.
+        // The flag describes activity, but is trusted only while a process
+        // owns this conversation. A stale database flag cannot revive it.
         active: !!pid && !r.killed,
+        liveStatus: r.not_fully_idle == null ? null
+          : Number(r.not_fully_idle) === 1 ? 'working' : Number(r.not_fully_idle) === 0 ? 'idle' : null,
         writerPid: pid,
       });
     }

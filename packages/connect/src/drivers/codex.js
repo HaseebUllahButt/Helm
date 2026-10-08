@@ -1,5 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { mkdirSync, existsSync } from 'node:fs';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
@@ -462,6 +464,13 @@ export function nativeCodexSocket(profile) {
   return existsSync(socket) ? socket : null;
 }
 
+/**
+ * What a native daemon has open: `loaded`, every thread id it holds, and
+ * `threads`, the ones Helm can show and drive. `null` means there is no
+ * daemon - its socket is gone, so nothing is open. A daemon that is there
+ * but does not answer, in full, throws: that is unknown, not "nothing is
+ * running", and must not close a single turn or question.
+ */
 export async function nativeCodexThreads(profile, log = () => {}) {
   const socket = nativeCodexSocket(profile);
   if (!socket) return null;
@@ -469,16 +478,47 @@ export async function nativeCodexThreads(profile, log = () => {}) {
   try {
     await server.ensure();
     const loaded = await server.call('thread/loaded/list', {});
-    if (loaded.error) return null;
-    const threads = await Promise.all((loaded.result.data || []).map(async (id) => {
+    if (loaded.error) throw new Error(loaded.error.message);
+    const ids = loaded.result.data || [];
+    const threads = await Promise.all(ids.map(async (id) => {
       const read = await server.call('thread/read', { threadId: id, includeTurns: false });
       const thread = read.result?.thread;
-      return thread && !thread.parentThreadId && thread.canAcceptDirectInput === true
+      if (read.error || !thread) throw new Error(`thread ${id} could not be read: ${read.error?.message ?? 'no thread'}`);
+      return !thread.parentThreadId && thread.canAcceptDirectInput === true
         ? { ...thread, path: thread.path && existsSync(thread.path) ? thread.path : null, nativeSocket: socket, profileId: profile.id } : null;
     }));
-    return threads.filter(Boolean);
-  } catch (err) { log(`codex native discovery: ${err.message}`); return null; }
+    return { loaded: ids, threads: threads.filter(Boolean) };
+  } catch (err) { log(`codex native discovery: ${err.message}`); throw err; }
   finally { server.releaseNativeDiscovery(); }
+}
+
+const TURN_OUTCOME = { completed: 'ok', interrupted: 'interrupted', failed: 'error', inProgress: 'running' };
+
+/**
+ * What a Codex rollout records about one turn: 'ok', 'interrupted',
+ * 'running' (started, never finished), or null when it does not mention it.
+ * The rollout is Codex's own record, so it can settle a turn that ended
+ * while nothing was listening.
+ */
+export async function codexTurnOutcome(path, turnId) {
+  if (!path || !turnId) return null;
+  // A rollout can be hundreds of megabytes. Streamed, the scan yields
+  // between chunks instead of holding the file and stalling other chats.
+  const input = createReadStream(path, { encoding: 'utf8' });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  let outcome = null;
+  try {
+    for await (const line of lines) {
+      if (!line.includes(turnId)) continue;
+      let p;
+      try { p = JSON.parse(line)?.payload; } catch { continue; }
+      if (p?.turn_id !== turnId) continue;
+      if (['task_complete', 'task_completed', 'turn_complete'].includes(p.type)) outcome = 'ok';
+      else if (p.type === 'turn_aborted') outcome = 'interrupted';
+      else if (['task_started', 'turn_started'].includes(p.type)) outcome ??= 'running';
+    }
+  } catch { return null; } finally { lines.close(); input.destroy(); }
+  return outcome;
 }
 
 // -------------------------------------------------------------- the driver
@@ -528,6 +568,12 @@ export class CodexDriver extends Driver {
   #steers = [];
   #nativeTurnStarts = new Set();
   #nativeSubscribed = false;
+  /** turn/start or review/start calls awaiting their reply. */
+  #opening = 0;
+  /** Codex turn id -> the visible turn it belongs to (a /review's card). */
+  #shownTurns = new Map();
+  /** The /review card waiting to learn its Codex turn id. */
+  #pendingReview = null;
 
   constructor(opts) {
     super({ engine: 'codex', ...opts });
@@ -559,6 +605,7 @@ export class CodexDriver extends Driver {
   async start() {
     if (this.#started && (!this.nativeSocket || this.#nativeSubscribed)) return;
     const server = await this.#connectOnly();
+    const startRevision = this.#turnStateRevision;
     if (this.#serverAdopted && this.threadId) {
       // The account server being alive does not prove this thread is busy.
       // Read its actual turn instead of reviving an unfinished log record.
@@ -583,10 +630,11 @@ export class CodexDriver extends Driver {
       };
       this.#started = true;
       // Notifications delivered during the read are newer than its snapshot.
+      const saved = revision === this.#turnStateRevision ? await this.#reconcileSavedTurn(thread.turns, revision) : null;
       if (revision === this.#turnStateRevision) {
         const liveTurn = thread.turns?.findLast((turn) => turn.status === 'inProgress')?.id;
         const active = thread.status ? thread.status.type === 'active' : !!liveTurn;
-        this.#turnId = active ? liveTurn ?? this.openTurn?.() ?? null : null;
+        this.#turnId = active ? liveTurn ?? saved : null;
         const blocked = thread.status?.activeFlags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
         this.push('status', { status: this.pending.size || blocked ? 'blocked'
           : active ? 'working' : 'idle' });
@@ -633,17 +681,44 @@ export class CodexDriver extends Driver {
     this.#started = true;
     if (this.nativeSocket) this.#nativeSubscribed = !nativeEmpty;
     if (this.nativeSocket) {
-      const savedTurn = this.openTurn?.();
-      this.#turnId = savedTurn && !savedTurn.startsWith('local-') ? savedTurn : null;
+      // The terminal's daemon kept running while Helm was away: a turn the
+      // log still shows open may have finished, and another may be live.
+      // Ask Codex rather than trust the log.
       const status = res.result.thread?.status;
-      if (!this.#turnId && status?.type === 'active') {
-        const active = await server.call('thread/read', { threadId: this.threadId, includeTurns: true });
-        this.#turnId = active.result?.thread?.turns?.findLast((turn) => turn.status === 'inProgress')?.id ?? null;
+      const savedTurn = this.openTurn?.();
+      let turns = null;
+      if ((savedTurn && !savedTurn.startsWith('local-')) || status?.type === 'active') {
+        const read = await server.call('thread/read', { threadId: this.threadId, includeTurns: true });
+        turns = read.result?.thread?.turns ?? null;
       }
-      const blocked = status?.activeFlags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
-      this.push('status', { status: blocked ? 'blocked' : status?.type === 'active' ? 'working' : 'idle' });
+      const saved = await this.#reconcileSavedTurn(turns, startRevision);
+      // A notification since the snapshot already said what is newer.
+      if (startRevision === this.#turnStateRevision) {
+        const liveTurn = turns?.findLast((turn) => turn.status === 'inProgress')?.id ?? null;
+        this.#turnId = status?.type === 'active' ? liveTurn ?? saved : null;
+        const blocked = status?.activeFlags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
+        this.push('status', { status: blocked ? 'blocked' : status?.type === 'active' ? 'working' : 'idle' });
+      }
     }
     this.emit('init', this.info);
+  }
+
+  /**
+   * Close the log's open turn if it ended while no daemon was listening,
+   * from Codex's own record: the thread's turns, else the rollout. Returns
+   * the turn id when it may still be running, null once it is settled.
+   * Nothing is closed on a guess - an unknown turn stays open.
+   */
+  async #reconcileSavedTurn(turns, revision) {
+    const saved = this.openTurn?.();
+    if (!saved || saved.startsWith('local-')) return null;
+    const known = turns?.find((turn) => turn.id === saved);
+    const outcome = known ? TURN_OUTCOME[known.status] ?? null : await codexTurnOutcome(this.transcript, saved);
+    if (!outcome || outcome === 'running') return saved;
+    if (revision !== this.#turnStateRevision) return null;
+    this.push('turn.done', { turnId: saved, status: outcome,
+      ...(outcome === 'error' ? { error: known?.error?.message ?? 'turn failed' } : {}) });
+    return null;
   }
 
   /** Initialize app-server for account reads without resuming the thread. */
@@ -701,7 +776,9 @@ export class CodexDriver extends Driver {
     };
     const wasWorking = this.status === 'working';
     if (!this.pending.size) this.push('status', { status: 'working' });
-    const res = await this.#server.call('turn/start', params);
+    this.#opening++;
+    let res;
+    try { res = await this.#server.call('turn/start', params); } finally { this.#opening--; }
     if (res.error) {
       this.push('error', { message: res.error.message, kind: 'turn' });
       // Only unwind the status this call set: when a turn was already
@@ -753,12 +830,21 @@ export class CodexDriver extends Driver {
 
     if (name === 'review') {
       const target = args ? { type: 'custom', instructions: args } : { type: 'uncommittedChanges' };
-      const res = await this.#server.call('review/start', { threadId: this.threadId, target });
+      // The review runs as a Codex turn with its own id. Its items and its
+      // completion belong to this card; otherwise the card never closes and
+      // the chat reads as busy for good.
+      this.#pendingReview = commandTurn;
+      if (this.nativeSocket) this.#nativeTurnStarts.add(commandTurn);
+      this.#opening++;
+      let res;
+      try { res = await this.#server.call('review/start', { threadId: this.threadId, target }); }
+      finally { this.#opening--; this.#pendingReview = null; }
       if (res.error) {
         this.push('turn.done', { turnId: commandTurn, status: 'error', error: res.error.message });
         this.push('status', { status: 'idle' });
         throw new Error(res.error.message);
       }
+      this.#shownTurns.set(res.result.turn.id, commandTurn);
       this.#turnId = res.result.turn.id;
       return;
     }
@@ -965,7 +1051,9 @@ export class CodexDriver extends Driver {
     };
     const wasWorking = this.status === 'working';
     if (!this.pending.size) this.push('status', { status: 'working' });
-    const res = await this.#server.call('turn/start', params);
+    this.#opening++;
+    let res;
+    try { res = await this.#server.call('turn/start', params); } finally { this.#opening--; }
     if (res.error) {
       this.push('error', { message: res.error.message, kind: 'turn' });
       if (!wasWorking) this.push('status', { status: 'idle' });
@@ -1123,6 +1211,7 @@ export class CodexDriver extends Driver {
         return;
       case 'turn/started':
         this.#turnStateRevision++;
+        if (this.#pendingReview && p.turn?.id) this.#shownTurns.set(p.turn.id, this.#pendingReview);
         this.#turnId = p.turn?.id ?? this.#turnId;
         this.push('status', { status: 'working' });
         return;
@@ -1130,6 +1219,9 @@ export class CodexDriver extends Driver {
         const status = p.status;
         if (!status?.type) return;
         this.#turnStateRevision++;
+        // An idle report that was in flight while the next turn was being
+        // started describes the turn before it.
+        if (status.type !== 'active' && this.#opening) return;
         if (status?.type !== 'active') this.#turnId = null;
         const blocked = status?.activeFlags?.some((flag) => flag === 'waitingOnApproval' || flag === 'waitingOnUserInput');
         this.push('status', { status: blocked ? 'blocked' : status?.type === 'active' ? 'working' : 'idle' });
@@ -1155,13 +1247,20 @@ export class CodexDriver extends Driver {
         const status = t.status === 'interrupted' ? 'interrupted' : t.status === 'failed' ? 'error' : 'ok';
         this.#interrupting = false;
         const last = this.#usage?.last;
+        const finished = t.id ?? this.#turnId;
+        // A completion can land after the next turn has started (or while it
+        // is being started). It closes its own turn; the newer one is still
+        // running, so the session is not idle.
+        const superseded = this.#opening > 0 || (!!t.id && !!this.#turnId && this.#turnId !== t.id);
         this.push('turn.done', {
-          turnId: t.id ?? this.#turnId,
+          turnId: this.#shownTurns.get(finished) ?? finished,
           status,
           usage: last && { input: last.inputTokens, output: last.outputTokens, cacheRead: last.cachedInputTokens, cacheWrite: last.cacheWriteInputTokens, inputIncludesCache: true },
           durationMs: t.durationMs ?? undefined,
           error: status === 'error' ? (t.error?.message ?? 'turn failed') : undefined,
         });
+        this.#shownTurns.delete(finished);
+        if (superseded) return;
         this.#turnId = null;
         this.push('status', { status: 'idle' });
         return;
@@ -1210,7 +1309,8 @@ export class CodexDriver extends Driver {
       const step = childStep(item);
       if (step) this.push('item.update', { id: parentId, agent: { lastTool: step } });
     }
-    const base = { id: item.id, turnId: turnId ?? this.#turnId, parentId };
+    const own = turnId ?? this.#turnId;
+    const base = { id: item.id, turnId: this.#shownTurns.get(own) ?? own, parentId };
     switch (item.type) {
       // Codex records a steered message when it uses it: after the step in
       // flight, before the next. That is where it joins the conversation.

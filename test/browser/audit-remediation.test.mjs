@@ -117,8 +117,10 @@ for (const width of [1280, 390]) test(`recovery notice is compact and hidden for
     window.mountDriven();
   });
   const notice = page.locator('.recovery');
-  await notice.getByText('Task paused', { exact: true }).waitFor();
-  await notice.getByRole('button', { name: 'Resume', exact: true }).waitFor();
+  // Renamed in 1046434: the old words blamed a Helm restart that may not have happened.
+  await notice.getByText('Response interrupted', { exact: true }).waitFor();
+  await notice.getByRole('button', { name: 'Continue', exact: true }).waitFor();
+  assert.equal(await page.getByText(/Task paused|Helm restarted/).count(), 0);
   const box = await notice.boundingBox();
   assert.ok(box.height < (width > 500 ? 130 : 170), `height ${box.height}`);
   assert.ok(box.x >= 0 && box.x + box.width <= width);
@@ -132,6 +134,41 @@ for (const width of [1280, 390]) test(`recovery notice is compact and hidden for
     window.mountDriven();
   });
   await notice.waitFor({ state: 'detached' });
+});
+
+for (const width of [1280, 390]) test(`the open chat label matches Running and never shows a guess as finished at ${width}px`, async t => {
+  const page = await pageFor(t);
+  await page.setViewportSize({ width, height: 844 });
+  await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
+  const show = (status, more = {}) => page.evaluate(([status, more]) => {
+    // A fresh chat each time: the log of the last one is cached by id.
+    window.step = (window.step ?? 0) + 1;
+    Object.assign(window.sessionFixture, { team: undefined, recovery: undefined }, more, { status, id: `label-${window.step}` });
+    const answers = { 'session.events': { events: [], pending: [], last: 0, session: { status } }, 'session.watch': { last: 0 },
+      'session.commands': { commands: [] }, 'model.list': { models: [], default: null }, 'git.status': { repo: false } };
+    window.customRpc = (_env, method) => Promise.resolve(answers[method] ?? {});
+    window.unmount();
+    window.mountDriven();
+  }, [status, more]);
+  const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+  t.after(() => assert.deepEqual(errors, []));
+  const label = page.locator('.session-bar .chip');
+  // Starting is running: Stop is offered and an old problem card stays away.
+  await show('starting', { recovery: { kind: 'restart', message: 'old', at: Date.now() - 60000 } });
+  await page.locator('.session-bar').waitFor();
+  await page.waitForFunction(() => document.querySelector('.session-bar .chip')?.textContent === 'starting');
+  assert.equal(await page.locator('.recovery').count(), 0, 'a starting agent hides the last run’s problem');
+  // Its own turn is over but child tasks are still going: not finished.
+  await show('idle', { team: { working: 2, blocked: 0, failed: 0 } });
+  await page.waitForFunction(() => document.querySelector('.session-bar .chip')?.textContent === 'working');
+  assert.equal(await label.getAttribute('title'), 'Child tasks are still working');
+  // The machine could not tell: say so instead of looking idle.
+  await show('unknown');
+  await page.waitForFunction(() => document.querySelector('.session-bar .chip')?.textContent === 'status unavailable');
+  // Truly idle: no busy label at all.
+  await show('idle');
+  await page.waitForFunction(() => !document.querySelector('.session-bar .chip'));
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 });
 
 test('durable auth restoration yields to a re-pairing during the IDB read', async (t) => {
