@@ -1782,6 +1782,10 @@ async function leave() {
 try {
   switch (cmd) {
     case 'run':
+      if (!rest.includes('--') && rest.some(arg => ['--help', '-h'].includes(arg))) {
+        usage();
+        break;
+      }
       if (rest.includes('--') || rest.some(arg => ['--heavy', '--cwd', '--timeout', '--env'].includes(arg))) {
         const { runLocalWork } = await import('../src/execution-cli.js');
         process.exitCode = await runLocalWork(rest);
