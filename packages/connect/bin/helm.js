@@ -80,6 +80,12 @@ const usage = () => {
   helm status                       membership, links and runtime
   helm profiles [--refresh]         the agent profiles found here
   helm agents [--json] [--refresh]  CLI accounts, sign-in status and model IDs
+  helm run --heavy -- <command> [args]  share this machine's test/build slot
+  helm exec <machine> [--cwd <path>] [--heavy] -- <command> [args]
+                                    execute through Helm's managed connection
+    --env NAME=value               explicit remote environment (repeatable)
+    --timeout <milliseconds>       command + capacity wait limit (default 15 minutes)
+  helm exec-result <machine> <id>   read a command after a connection loss
   helm antigravity [install|login|status|remove]   the managed Google ACP agent
 
   helm brain                       open the network's brain on the VM
@@ -1775,10 +1781,16 @@ async function leave() {
 
 try {
   switch (cmd) {
+    case 'run':
+      if (rest.includes('--') || rest.some(arg => ['--heavy', '--cwd', '--timeout', '--env'].includes(arg))) {
+        const { runLocalWork } = await import('../src/execution-cli.js');
+        process.exitCode = await runLocalWork(rest);
+        break;
+      }
+      // Keep the original no-command alias for installations using helm run.
     case undefined:
     case 'up':
     case 'serve':
-    case 'run':
       // A daemon started from inside an agent's shell (a self-update, a
       // sandbox) inherits that agent's identity. Left in place, every
       // terminal and app-server it spawns would claim to be that session.
@@ -2042,6 +2054,17 @@ try {
     // Claude Code, Codex, opencode and Devin without a line of driver code -
     // and why the permission card the owner already answers on their phone
     // is the brain's guardrail too.
+    case 'exec': {
+      const { runRemoteWork } = await import('../src/execution-cli.js');
+      process.exitCode = await runRemoteWork(rest, { net: requireNetwork(), machineId });
+      break;
+    }
+    case 'exec-result': {
+      if (rest.length !== 2) throw new Error('helm exec-result <machine> <id>');
+      const { readRemoteWork } = await import('../src/execution-cli.js');
+      process.exitCode = await readRemoteWork(rest[0], rest[1], { net: requireNetwork(), machineId });
+      break;
+    }
     case 'agents':
     case 'delegate':
     case 'delegate-result': {

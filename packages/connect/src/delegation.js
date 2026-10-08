@@ -31,15 +31,14 @@ export async function agentCatalog(profiles, statuses, { models = true, credenti
 }
 
 export function delegationNote() {
-  return '[Helm: Delegate only with helm delegate <account> --model <model> --wait --json -- "<task>", never native subagents. Discover accounts/models with helm agents --json only when needed.]';
+  return '[Helm: Delegate only with helm delegate <account> --model <model> --wait --json -- "<task>", never native subagents. Discover accounts/models with helm agents --json only when needed. Machine capacity is shared by all sessions. Parallelize reading and coding; children run scoped checks, and the parent owns broad validation after integration. Run expensive tests, builds and type-checks with helm run --heavy -- <command> so they share one machine-wide slot and bounded test workers. Inspect package scripts before assuming file arguments restrict a suite. Rerun checks only for changed code, failures or unresolved concerns; report what passed and what remains untested. Finished children release their runtime after 30 seconds idle and resume the same conversation on follow-up.]';
 }
 
 /**
  * What every agent Helm starts is told about where it is: which of the
  * owner's machines it runs on, the others, and how to act on them. "Go to
  * the VM and restart nginx" should not need the owner to explain how to get
- * there - Helm already put an `ssh <name>` route to every machine in
- * ~/.ssh/config, and the `helm` commands reach the rest.
+ * there. Commands use Helm's authenticated machine connection directly.
  *
  * Kept to a few lines: it rides along in every session.
  */
@@ -52,7 +51,7 @@ export function helmBrief(net) {
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
   if (!self?.name || !others.length) return delegationNote();
   return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}.
-- Run something on another machine: ssh -o ConnectTimeout=15 <name> '<command>' (Helm set up these logins; no password).
+- Run something on another machine: helm exec <machine> --cwd <absolute-path> -- <command> [args]. This uses Helm's managed connection; prefer it to SSH. For pipelines use -- sh -lc '<script>'. Add --heavy for tests/builds; pass environment explicitly with --env NAME=value.
 - Copy a folder there: helm copy <machine> <folder> --target-folder <absolute-path>.
 - Which machines are on and what is running where: helm digest. Read a session: helm thread <id>. Message it: helm say <id> <text>.
 - Start an agent on another machine: helm spawn <machine> <folder> <account> <task>.]

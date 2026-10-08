@@ -408,11 +408,15 @@ const heldBy = (child) => ({
 const survivor = (t, scenario, env = {}) => {
   const { cmd, dir, env: base } = live(t, scenario, env);
   const child = spawn(cmd, ['acp'], { cwd: dir, env: { ...process.env, ...base }, stdio: ['pipe', 'pipe', 'pipe'] });
-  t.after(() => child.kill());
+  const drivers = [];
+  t.after(async () => {
+    for (const driver of drivers) await driver.kill();
+    child.kill();
+  });
   const write = (m) => child.stdin.write(JSON.stringify(m) + '\n');
   const adopt = (opts) => {
     const driver = new DevinDriver({ cmd, args: [], cwd: dir, env: base, mode: 'ask', procHost: heldBy(child), procId: 's', ...opts });
-    t.after(() => driver.kill());
+    drivers.push(driver);
     return { driver, log: collect(driver) };
   };
   return { child, write, adopt };

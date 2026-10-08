@@ -27,7 +27,8 @@ const run = (name) => execFileSync('/bin/sh', ['-c', `${name} hello`], {
   encoding: 'utf8', env: { ...process.env, PATH: `${LAUNCHER_DIR}:${bin}:/usr/bin:/bin` },
 });
 const savedPath = process.env.PATH;
-process.env.PATH = `${bin}:/usr/bin:/bin`;
+// Isolate discovery from providers installed in /usr/bin on the test host.
+process.env.PATH = bin;
 test.after(() => { process.env.PATH = savedPath; });
 
 test('the command runs from Helm\'s own folder, finds the real CLI each time, and survives its self-update', () => {

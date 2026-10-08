@@ -25,9 +25,9 @@ const { runAgentCommand } = await import('../packages/connect/src/agent-cli.js')
 const { M } = await import('@helm/protocol');
 
 class FakeDriver extends EventEmitter {
-  constructor(opts) { super(); Object.assign(this, opts); this.engineSessionId = randomUUID(); }
+  constructor(opts) { super(); Object.assign(this, opts); this.engineSessionId = opts.engineSessionId ?? randomUUID(); this.status = 'idle'; }
   async start() {}
-  push(type, extra = {}) { this.emit('event', { type, ...extra }); }
+  push(type, extra = {}) { if (type === 'status') this.status = extra.status; this.emit('event', { type, ...extra }); }
   async send(text) {
     this.sent = text;
     this.push('status', { status: 'working' });
@@ -44,11 +44,11 @@ class FakeDriver extends EventEmitter {
   async interrupt() { this.finish('interrupted'); }
 }
 
-function setup(t, make = (opts) => new FakeDriver(opts)) {
+function setup(t, make = (opts) => new FakeDriver(opts), options = {}) {
   const drivers = new Map();
   const runtime = new EventEmitter();
   runtime.listLive = async () => new Map();
-  const sessions = new Sessions(runtime, { makeDriver: (_engine, opts) => {
+  const sessions = new Sessions(runtime, { ...options, makeDriver: (_engine, opts) => {
     const d = make(opts); drivers.set(opts.env.HELM_SESSION_ID, d); return d;
   } });
   t.after(async () => { for (const id of drivers.keys()) await sessions.kill(id).catch(() => {}); });
@@ -115,6 +115,79 @@ test('native CLI callers can delegate without a Helm parent session', async (t) 
   const { session } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Check this folder' });
   assert.equal(session.delegation.parentId, null);
   assert.equal(session.cwd, process.env.HELM_DIR);
+});
+
+test('finished children release promptly, retain their reply and resume the same provider conversation', async t => {
+  const { sessions, drivers } = setup(t, opts => new FakeDriver(opts), { delegationIdleMs: 10 });
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Inspect' });
+  const original = drivers.get(child.id); const providerId = child.engineSessionId;
+  original.finish();
+  await new Promise(resolve => setTimeout(resolve, 35));
+  assert.equal(original.status, 'exited');
+  assert.equal(sessions.get(child.id).status, 'idle');
+  assert.equal(sessions.get(child.id).engineSessionId, providerId);
+  assert.equal(sessions.delegationResult(child.id).output, 'Opus reviewed the task.');
+  assert.equal(sessions.delegationResult(child.id).status, 'done');
+  assert.equal((await sessions.list({ includeDelegations: true })).find(s => s.id === child.id).alive, false);
+  assert.notEqual(drivers.get(parent.id).status, 'exited');
+  await sessions.messageDelegation(parent.id, child.id, 'Follow up');
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const resumed = drivers.get(child.id);
+  assert.notEqual(resumed, original); assert.equal(resumed.engineSessionId, providerId);
+  assert.equal(resumed.sent, 'Follow up');
+});
+
+test('a child sharing a Codex account releases its own driver without closing another thread', async t => {
+  const { sessions, drivers } = setup(t, opts => new FakeDriver(opts), { delegationIdleMs: 10 });
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'codex-main', task: 'Inspect' });
+  sessions.get(child.id).shared = true;
+  const original = drivers.get(child.id); original.finish();
+  await new Promise(resolve => setTimeout(resolve, 35));
+  assert.equal(original.status, 'exited');
+  assert.notEqual(drivers.get(parent.id).status, 'exited');
+  assert.equal(sessions.delegationResult(child.id).complete, true);
+});
+
+test('idle child cleanup waits for nested work and unfinished replies', async t => {
+  const { sessions, drivers } = setup(t, opts => new FakeDriver(opts), { delegationIdleMs: 10 });
+  const { session: child } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Coordinate' });
+  const { session: nested } = await sessions.delegate({ id: child.id, profileId: 'claude-main', task: 'Inspect' });
+  const original = drivers.get(child.id); original.finish();
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(original.status, 'idle');
+  drivers.get(nested.id).finish();
+  await new Promise(resolve => setTimeout(resolve, 5));
+  if (original.status === 'working') original.finish();
+  await new Promise(resolve => setTimeout(resolve, 35));
+  assert.equal(original.status, 'exited');
+  const { session: unfinished } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Unfinished' });
+  const pending = drivers.get(unfinished.id); pending.push('status', {status:'idle'});
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.notEqual(pending.status, 'exited');
+});
+
+test('a follow-up arriving during child release waits for the old process to exit', async t => {
+  let release;
+  const { sessions, drivers } = setup(t, opts => {
+    const driver = new FakeDriver(opts);
+    driver.kill = async () => { await new Promise(resolve => { release = resolve; }); driver.push('status', {status:'exited'}); };
+    return driver;
+  }, { delegationIdleMs: 10 });
+  const { session: child } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Inspect' });
+  const original = drivers.get(child.id); original.finish();
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(typeof release, 'function');
+  const follow = sessions.input(child.id, 'Follow up');
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(drivers.get(child.id), original);
+  release(); await follow;
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const resumed = drivers.get(child.id); assert.notEqual(resumed, original);
+  assert.equal(resumed.engineSessionId, original.engineSessionId);
+  assert.equal(resumed.sent, 'Follow up');
+  resumed.kill = async () => resumed.push('status', {status:'exited'});
 });
 
 test('team attention updates after archive, restore and deletion', async (context) => {
@@ -304,12 +377,15 @@ test('nesting is bounded and empty tasks fail before starting a CLI', async (t) 
 
 test('delegation instructions stay compact and independent of the account roster', () => {
   const note = delegationNote();
-  assert.ok(note.length < 200);
+  assert.ok(note.length < 1000);
   assert.equal(delegationNote(profiles), note);
   assert.equal(delegationNote([]), note);
   assert.match(note, /never native subagents/);
   assert.match(note, /helm agents --json only when needed/);
   assert.match(note, /helm delegate <account> --model <model> --wait --json/);
+  assert.match(note, /helm run --heavy/);
+  assert.match(note, /parent owns broad validation/);
+  assert.match(note, /Inspect package scripts/);
 });
 
 test('agents get the tool instructions as standing instructions, not in the owner\'s message', async (t) => {
@@ -458,7 +534,8 @@ test('agents are told which machine they are on and how to reach the others', as
   const brief = helmBrief(net);
   assert.match(brief, /running on Laptop/);
   assert.match(brief, /The others: VM \(vm\), twin\./, 'each name once; ssh can only reach one of them');
-  assert.match(brief, /ssh -o ConnectTimeout=15 <name>/);
+  assert.match(brief, /helm exec <machine>/);
+  assert.match(brief, /managed connection; prefer it to SSH/);
   assert.ok(brief.endsWith(delegationNote()));
   assert.equal(helmBrief({ self: 'a', machines: { a: net.machines.a } }), delegationNote(), 'alone: nothing to reach');
 });

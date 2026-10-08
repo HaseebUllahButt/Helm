@@ -45,6 +45,7 @@ import * as gitq from './git.js';
 import { createGithubMonitor } from './github.js';
 import { agentCatalog, helmBrief } from './delegation.js';
 import { Schedules } from './schedules.js';
+import { ExecutionJobs } from './execution.js';
 
 const RECONNECT_MIN = 250;
 const RECONNECT_MAX = 5000;
@@ -301,6 +302,7 @@ export class Daemon {
     // service unit that still carries the `--name` it was installed with
     // would otherwise undo that rename on every restart.
     this.name = net.machines[net.self]?.name || name || hostname();
+    this.executions = new ExecutionJobs();
   }
 
   async start() {
@@ -536,6 +538,7 @@ export class Daemon {
   async stop() {
     if (this.#stopped) return;
     this.#stopped = true;
+    await this.executions.stop();
     clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
     clearInterval(this.#wake);
@@ -1289,6 +1292,13 @@ export class Daemon {
 
   async dispatch(method, p, caller) {
     switch (method) {
+      case M.EXEC_START:
+        if (p.sessionId && ['plan', 'readonly', 'read'].includes(this.sessions.get(p.sessionId).mode)) {
+          throw new Error('a read-only session cannot start managed commands');
+        }
+        return this.executions.start(p, caller ?? this.id);
+      case M.EXEC_READ: return this.executions.read(p, caller ?? this.id);
+      case M.EXEC_CANCEL: return this.executions.cancel(p, caller ?? this.id);
       case M.ENV_INFO:
         return { ...(await this.describe()), name: this.name };
 

@@ -180,6 +180,9 @@ export const M = {
   SESSION_EFFORT: 'session.effort',    // { id, effort } -> { session }
   SESSION_SPEED: 'session.speed',      // { id, speed } -> { session }  codex service tier
   SESSION_INVENTORY: 'session.inventory', // {} -> { live[], recent[] }
+  EXEC_START: 'exec.start',       // { id, argv[], cwd?, heavy?, timeout?, env? } -> { id, status }
+  EXEC_READ: 'exec.read',         // { id, since?, wait? } -> { status, chunks[], last, more, exitCode }
+  EXEC_CANCEL: 'exec.cancel',     // { id } -> { id, status }
   // The brain: one agent for the whole network rather than one per folder.
   BRAIN_DIGEST: 'brain.digest',    // {} -> { name, sessions[] }  this machine's line in the digest
   BRAIN_OPEN: 'brain.open',        // { profileId?, model?, mode? } -> { session }  start or resume it

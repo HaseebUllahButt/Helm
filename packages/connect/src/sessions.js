@@ -52,6 +52,7 @@ const WATCH_TTL_MS = 60_000;
 // A headless agent that has been idle this long is closed; the next message
 // resumes the same conversation, so nothing is lost but the warm process.
 const IDLE_REAP_MS = 30 * 60_000;
+const DELEGATION_IDLE_MS = 30_000;
 
 /** engine id -> its headless driver class; ENGINES[id].driver names one. */
 export const DRIVERS = {
@@ -231,6 +232,8 @@ export class Sessions extends EventEmitter {
   #connections = new Map();
   /** sessionId -> reap timer */
   #reapers = new Map();
+  /** A resumed task waits for its previous process to finish releasing. */
+  #retiring = new Map();
   /** sessionId -> (view identity -> expiry), independent leases per device/tab */
   #watching = new Map();
   /** external id -> 'archived' | 'removed', for rows helm does not own */
@@ -275,10 +278,11 @@ export class Sessions extends EventEmitter {
   /** sessionId -> open command cards (turn.start with local: true). */
   #commandCards = new Map();
 
-  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500 } = {}) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, delegationIdleMs = DELEGATION_IDLE_MS } = {}) {
     super();
     this.runtime = runtime;
     this.turnSettleMs = turnSettleMs;
+    this.delegationIdleMs = delegationIdleMs;
     this.events = events;
     this.limits = new AccountLimits();
     this.log = log;
@@ -1317,6 +1321,8 @@ export class Sessions extends EventEmitter {
    * same process - two readers of one pipe, and two writers into one thread.
    */
   #driver(s) {
+    const retiring = this.#retiring.get(s.id);
+    if (retiring) return retiring.then(() => this.#driver(s));
     const live = this.#drivers.get(s.id);
     if (live) return Promise.resolve(live);
     let pending = this.#driverStarts.get(s.id);
@@ -1416,7 +1422,8 @@ export class Sessions extends EventEmitter {
   }
 
   #onDriverEvent(s, d, e) {
-    if (this.#drivers.get(s.id) !== d && e.type !== 'status') return;
+    const current = this.#drivers.get(s.id);
+    if (current !== d && (current || e.type !== 'status')) return;
     // A command card (/status, /usage) answers beside the task. It is not
     // the task's reply, and its end is not the task's end.
     if (e.type === 'turn.start' && e.local === true) {
@@ -1667,15 +1674,28 @@ export class Sessions extends EventEmitter {
     this.emit('session', s);
   }
 
-  /** Close a driver that has been idle for a long while; keep the session. */
+  /** Finished children release their runtime quickly; their conversation stays resumable. */
   #reap(s, status) {
     clearTimeout(this.#reapers.get(s.id));
     this.#reapers.delete(s.id);
-    if (status !== 'idle' || s.shared) return;
+    if (status !== 'idle' || (s.shared && !s.delegation) || !this.#drivers.has(s.id)) return;
     const t = setTimeout(() => {
+      this.#reapers.delete(s.id);
       const d = this.#drivers.get(s.id);
-      if (d && d.status === 'idle') d.kill().catch(() => {});
-    }, IDLE_REAP_MS);
+      if (!d || d.status !== 'idle' || s.status !== 'idle' || this.#retiring.has(s.id)) return;
+      if (this.#sending.has(s.id) || this.#outbox.get(s.id)?.length || d.pending?.size
+        || this.events.pending(s.id).length || this.events.activeTurn(s.id) || this.hasActiveDelegations(s.id)) {
+        this.#reap(s, 'idle'); return;
+      }
+      const retiring = Promise.resolve().then(() => d.kill()).then(() => {
+        if (this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
+        if (this.#index.has(s.id)) this.emit('session', { ...wire(s), alive: false });
+      }, error => this.log(`[${s.id}] could not release idle provider: ${error.message}`)).finally(() => {
+        if (this.#retiring.get(s.id) === retiring) this.#retiring.delete(s.id);
+        if (this.#drivers.get(s.id) === d && this.#index.has(s.id)) this.#reap(s, s.status);
+      });
+      this.#retiring.set(s.id, retiring);
+    }, s.delegation ? this.delegationIdleMs : IDLE_REAP_MS);
     t.unref?.();
     this.#reapers.set(s.id, t);
   }
@@ -3069,6 +3089,7 @@ export class Sessions extends EventEmitter {
    * but it says so out loud rather than dropping them silently.
    */
   async #deliver(s, item, d = null) {
+    if (this.#retiring.has(s.id)) d = null;
     try {
       d ??= await this.#driver(s);
       if (s.stoppedAt || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0))) {
@@ -3764,6 +3785,7 @@ export class Sessions extends EventEmitter {
           await d.start();
           this.#reconnected(s);
           this.#pump(s);
+          this.#reap(s, d.status);
         }).catch((err) => {
           this.log(`[${s.id}] could not reattach surviving agent: ${err.message}`);
           // An account process may be alive while this thread cannot be
@@ -3822,6 +3844,9 @@ export class Sessions extends EventEmitter {
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
     clearInterval(this.nativePoll);
+    for (const timer of this.#reapers.values()) clearTimeout(timer);
+    this.#reapers.clear();
+    await Promise.allSettled(this.#retiring.values());
     for (const id of [...this.#settling.keys()]) this.#settled(id);
     await (await this.hooks?.catch(() => null))?.close();
     this.nativeDiscovery = false;

@@ -473,6 +473,57 @@ approval. Up to four children
 can run at once, with at most three levels of nesting.
 CLIs without a permission picker use their own configured permission policy.
 
+Completed children release their provider runtime after 30 seconds idle. Their
+conversation, reply, permissions and lineage remain saved; a follow-up resumes
+the same provider conversation. Cleanup waits for unfinished replies, queued
+messages, approvals and active descendants. Ordinary shared terminal chats stay
+connected. Codex children detach their own thread from the shared account server.
+
+### Machine capacity and remote commands
+
+Agents receive a shared-capacity instruction: parallelize reading and coding,
+use focused checks in children, and run broad validation once in the parent after
+integration. Inspect package scripts before assuming file arguments restrict a
+suite, and repeat validation only when changed code or a failure calls for it.
+
+```sh
+helm run --heavy -- npm run test:client -- path/to/changed.test.tsx
+helm run --heavy -- env RPC_TEST_DATABASE_NAME=isolated_test npm run test:integration -- path/to/changed.test.ts
+helm exec Laptop --cwd /home/haseeb/dev/project --heavy -- npm run check
+helm exec VM -- sh -lc 'uptime; free -h'
+helm exec VM --env SERVICE_NAME=example -- printenv SERVICE_NAME
+```
+
+Heavy commands share one machine-wide slot across all sessions and Helm versions.
+Linux also waits for available memory to exceed the larger of 1 GiB or 15% of
+physical RAM. SQLite holds the permit in the command supervisor, so cancellation
+and process exit release it without a stale lease. Known Node, Vitest, Jest and
+Playwright invocations are capped at two workers; a lower explicit limit is kept.
+Node test scripts invoked through npm must set concurrency in their script;
+Helm's own test scripts set it to two, since npm appends flags after file names.
+Simple npm scripts receive the matching runner flag. Arbitrary shell/compound
+scripts require explicit worker flags; a compound npm script with file arguments
+is rejected because an earlier suite may still run unfiltered. These controls
+apply to wrapped commands; the standing instruction routes agent checks through
+the wrapper. Unwrapped commands retain their own execution behavior.
+
+`helm exec` runs through Helm's authenticated machine connection, using one
+connection for output, status and cancellation. It starts no agent, terminal,
+login shell or SSH connection. Arguments stay separate; use `sh -lc` explicitly
+for pipelines. Remote commands inherit the target daemon's environment; local
+shell environment is never copied there. Pass required overrides with repeatable
+`--env NAME=value`; `--cwd` uses an absolute target path (default: target home).
+`helm run` preserves the local shell's working folder and environment.
+
+`--timeout <milliseconds>` bounds capacity waiting and execution together
+(default: 15 minutes). Ctrl+C cancels the command. Output retains a bounded
+256 KiB tail for ten minutes; truncation is reported. If the connection drops,
+the CLI resumes reading the same job, without restarting it. An unacknowledged
+start is not automatically replayed; inspect it with
+`helm exec-result <machine> <command-id>`. Daemon shutdown cancels managed commands;
+after a restart, a missing command is reported instead of silently running it
+again. `helm run` without a command remains the legacy alias for `helm up`.
+
 `--wait` returns the reply when finished, or returns immediately when the
 child needs approval. Read it again after answering in Helm. The default
 wait limit is five minutes; `--timeout <milliseconds>` changes it. Timing
