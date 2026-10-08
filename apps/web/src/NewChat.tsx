@@ -40,13 +40,16 @@ const matches = (row: Row, q: string) => {
 
 const leaf = (p: string) => p.replace(/\/$/, '').split('/').pop() || p;
 
-export function NewChat({ client, envs, envId, near, onClose, onStarted, engineOf }: {
+export function NewChat({ client, envs, envId, initialFolder, near, onFolder, onClose, onStarted, engineOf }: {
   client: Client;
   envs: Environment[];
   /** Start on this machine's folder step instead of asking which machine. */
   envId?: string | null;
+  /** A known directory skips the folder step and asks which agent to start. */
+  initialFolder?: string;
   /** The machine on screen: asked about first, with the cursor already on it. */
   near?: string | null;
+  onFolder?: (envId: string, folder: string) => void;
   onClose: () => void;
   onStarted: (envId: string, s: Session) => void;
   engineOf: (id?: string) => { label: string; cls: string };
@@ -56,9 +59,9 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const startEnv = envId ? envs.find((e) => e.id === envId && e.online) : undefined;
-  const [step, setStep] = useState<Step>(startEnv ? 'folder' : 'machine');
+  const [step, setStep] = useState<Step>(startEnv ? initialFolder ? 'cli' : 'folder' : 'machine');
   const [machine, setMachine] = useState<Environment | null>(startEnv ?? null);
-  const [folder, setFolder] = useState('');
+  const [folder, setFolder] = useState(startEnv ? initialFolder ?? '' : '');
   const [q, setQ] = useState('');
   const [at, setAt] = useState(0);
   const [error, setError] = useState('');
@@ -127,7 +130,11 @@ export function NewChat({ client, envs, envId, near, onClose, onStarted, engineO
 
   // Stepping back from the CLIs lands on the same folder in the same list.
   const folderSpot = useRef({ q: '', id: '' });
-  const pickFolder = (path: string, id: string) => { folderSpot.current = { q, id }; setFolder(path); go('cli'); };
+  const pickFolder = (path: string, id: string) => {
+    folderSpot.current = { q, id }; setFolder(path);
+    if (machine) onFolder?.(machine.id, path);
+    go('cli');
+  };
 
   const start = async (a: Account) => {
     if (!machine || busy) return;

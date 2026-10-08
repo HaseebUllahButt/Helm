@@ -129,6 +129,7 @@ const SHORTCUTS: [string, string][] = [
   ['Ctrl/⌘ K', 'Command palette'],
   ['/', 'Search threads'],
   ['Ctrl/⌘ N', 'New chat'],
+  ['Ctrl/⌘ Shift N', 'New chat in current or last folder'],
   ['Ctrl/⌘ Shift O', 'New chat, in a browser tab'],
   ['Ctrl/⌘ [', 'Back'],
   ['Ctrl/⌘ ]', 'Forward'],

@@ -389,8 +389,19 @@ function Shell({ client, conn, onSignOut }: {
   /** "thread X needs you" while a different session is on screen. */
   const [toast, setToast] = useState<Toast | null>(null);
   const [palette, setPalette] = useState(false);
-  /** The keyboard new-chat box; `envId` skips straight to that machine's folders. */
-  const [newChat, setNewChat] = useState<{ envId?: string } | null>(null);
+  /** The keyboard new-chat box; a folder skips straight to the agent picker. */
+  const [newChat, setNewChat] = useState<{ envId?: string; folder?: string } | null>(null);
+  const [lastFolder, setLastFolder] = useState<{ envId: string; folder: string } | null>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(`helm.last-folder:${scope}`) || 'null');
+      return typeof saved?.envId === 'string' && typeof saved?.folder === 'string' && saved.folder
+        ? saved : null;
+    } catch { return null; }
+  });
+  const rememberChatFolder = useCallback((envId: string, folder: string) => {
+    setLastFolder(current => current?.envId === envId && current.folder === folder ? current : { envId, folder });
+    try { localStorage.setItem(`helm.last-folder:${scope}`, JSON.stringify({ envId, folder })); } catch { /* full */ }
+  }, [scope]);
   /**
    * Threads put off until later, on this device. A thread waiting on you that
    * you cannot get to yet should stop being the loudest thing on Home and stop
@@ -796,6 +807,31 @@ function Shell({ client, conn, onSignOut }: {
 
   const env = envs.find((e) => e.id === selected) ?? null;
   const view = stack[stack.length - 1];
+  const currentFolder = view.kind === 'session'
+    ? ((sessions[selected ?? ''] ?? []).find(s => s.id === view.session.id) ?? view.session).cwd
+    : view.kind === 'start' || view.kind === 'transfer' ? view.cwd
+    : view.kind === 'verify' ? view.path
+    : view.kind === 'new' || view.kind === 'browse' || view.kind === 'transfer-browse' ? view.path ?? '~'
+    : undefined;
+
+  useEffect(() => {
+    if (selected && currentFolder) rememberChatFolder(selected, currentFolder);
+  }, [selected, currentFolder, rememberChatFolder]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey || e.isComposing || e.key.toLowerCase() !== 'n') return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      const target = selected && currentFolder ? { envId: selected, folder: currentFolder } : lastFolder;
+      setPalette(false);
+      setNewChat(target ?? {});
+    };
+    // Capture before a focused terminal handles the key as terminal input.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [selected, currentFolder, lastFolder]);
 
   /**
    * Which session this window is looking at, told to the service worker so
@@ -1165,7 +1201,7 @@ function Shell({ client, conn, onSignOut }: {
             <button
               type="button" className="home-search" onClick={() => setNewChat({})}
               disabled={!envs.some((e) => e.online)}
-              aria-label="New chat" aria-keyshortcuts="Control+N Meta+N Control+Shift+O Meta+Shift+O" title="New chat (Ctrl+N)"
+              aria-label="New chat" aria-keyshortcuts="Control+N Meta+N Control+Shift+N Meta+Shift+N Control+Shift+O Meta+Shift+O" title="New chat (Ctrl+N); in current folder (Ctrl+Shift+N)"
             >
               <Icon name="plus" size={15} />
               <span className="grow">New chat</span>
@@ -1495,7 +1531,9 @@ function Shell({ client, conn, onSignOut }: {
       {palette && <Palette items={paletteItems()} onClose={() => setPalette(false)} engineOf={engineOf} />}
       {newChat && (
         <NewChat
-          client={client} envs={envs} envId={newChat.envId} near={selected} engineOf={engineOf}
+          key={`${newChat.envId ?? ''}:${newChat.folder ?? ''}`}
+          client={client} envs={envs} envId={newChat.envId} initialFolder={newChat.folder} near={selected} engineOf={engineOf}
+          onFolder={rememberChatFolder}
           onClose={() => setNewChat(null)}
           onStarted={(envId, s) => { loadSessions(envId); navigate([{ kind: 'env' }, { kind: 'session', session: s }], envId); }}
         />
