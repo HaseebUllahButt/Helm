@@ -113,10 +113,12 @@ const usage = () => {
     --include-env                   carry .env files too, written owner-only there
     --dry-run                       report what a send would carry - no grant needed
     --allow-skipped                 send even though some files stay behind
-  helm copy <machine> <folder> --target-folder <absolute-path>
-                                  resumable full folder copy over SSH; needs rsync on both ends
+  helm copy <machine> <file-or-folder> --target-folder <absolute-path>
+                                  resumable copy over Helm; needs rsync 3.2.3+ on both ends
     --exclude <pattern>             omit caches or dependencies (repeatable)
     --dry-run                       preview the copy, including hidden files
+    --direct | --relay | --ssh      choose a route (default: automatic Helm routing)
+    --retries <0-5>                 connection-drop retries (default: 2)
   helm verify <folder> [-- cmd...]  inspect what a received folder still needs
 
   helm dictate [--to <id>]          speak: once to start, again to stop and transcribe
@@ -2123,6 +2125,10 @@ try {
 
     case 'copy':
       await (await import('../src/copy.js')).copyFolder(rest);
+      break;
+
+    case 'copy-proxy':
+      process.exitCode = await (await import('../src/copy-proxy.js')).copyProxy(rest);
       break;
 
     case 'send':

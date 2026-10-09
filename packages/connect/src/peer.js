@@ -60,28 +60,38 @@ function sendFrame(channel, frame) {
 }
 
 async function sendBuffered(channel, frame) {
-  if (!channel || channel.readyState !== 'open') return;
-  const pieces = fragment(frame, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+  if (!channel) return false;
   const deadline = Date.now() + 120_000;
+  while (channel.readyState === 'connecting' && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  if (channel.readyState !== 'open') return false;
+  const pieces = fragment(frame, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
   for (const piece of pieces) {
     while (channel.readyState === 'open' && channel.bufferedAmount > 512 * 1024 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    if (channel.readyState !== 'open' || Date.now() >= deadline) return;
+    if (channel.readyState !== 'open' || Date.now() >= deadline) return false;
     channel.send(piece);
   }
+  return true;
 }
+
+const TUNNEL_TYPES = new Set(['tunnel.open', 'tunnel.ack', 'tunnel.data', 'tunnel.close']);
 
 export class PeerHub {
   #peers = new Map();
+  #transportSeq = 0;
 
   /**
    * @param {(peer: string, payload: object, link?: object) => void} sendSignal  post a signalling blob back
    * @param {(method: string, params: object, caller?: string) => Promise<any>} dispatch  the daemon's RPC handler
    */
-  constructor(sendSignal, dispatch) {
+  constructor(sendSignal, dispatch, { onTunnel = null, onTunnelClose = null } = {}) {
     this.sendSignal = sendSignal;
     this.dispatch = dispatch;
+    this.onTunnel = onTunnel;
+    this.onTunnelClose = onTunnelClose;
   }
 
   /**
@@ -137,7 +147,11 @@ export class PeerHub {
 
   #create(peerId, link = null) {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    const peer = { pc, channel: null, link, remoteReady: false, candidates: [] };
+    const peer = { id: peerId, pc, channel: null, link, remoteReady: false, candidates: [] };
+    peer.transport = {
+      id: `dc-${peerId}-${++this.#transportSeq}`,
+      send: (t, extra = {}) => this.#sendTunnel(peerId, peer, t, extra),
+    };
     this.#peers.set(peerId, peer);
     peer.deadline = setTimeout(() => this.drop(peerId, peer), 20_000);
     peer.deadline.unref?.();
@@ -208,6 +222,16 @@ export class PeerHub {
   async #onMessage(peer, raw) {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+    if (TUNNEL_TYPES.has(msg.t)) {
+      if (!this.onTunnel) {
+        if (msg.t === 'tunnel.open') {
+          this.#sendTunnel(peer.id, peer, 'tunnel.close', { sid: msg.sid, reason: 'unsupported tunnel' });
+        }
+        return;
+      }
+      try { this.onTunnel(peer.transport, msg, peer.device); } catch {}
+      return;
+    }
     if (msg.t !== 'rpc') return;
 
     const reply = (body) => {
@@ -239,6 +263,22 @@ export class PeerHub {
     clearTimeout(peer.deadline);
     peer.fragments?.clear();
     try { peer.channel?.close(); peer.pc.close(); } catch { /* already torn down */ }
+    const transport = peer.transport;
+    peer.transport = null;
+    if (transport) {
+      try { this.onTunnelClose?.(transport); } catch {}
+    }
+  }
+
+  #sendTunnel(peerId, peer, t, extra) {
+    const run = (peer.sendChain ?? Promise.resolve()).then(async () => {
+      let ok = false;
+      try { ok = await sendBuffered(peer.channel, JSON.stringify({ t, ...extra })); } catch {}
+      if (!ok) this.drop(peerId, peer);
+      return ok;
+    });
+    peer.sendChain = run.catch(() => {});
+    return run;
   }
 
   /**

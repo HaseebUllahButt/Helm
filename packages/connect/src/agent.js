@@ -44,6 +44,7 @@ import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommit
 import * as gitq from './git.js';
 import { createGithubMonitor } from './github.js';
 import { agentCatalog, helmBrief } from './delegation.js';
+import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
 
@@ -302,6 +303,7 @@ export class Daemon {
     // service unit that still carries the `--name` it was installed with
     // would otherwise undo that rename on every restart.
     this.name = net.machines[net.self]?.name || name || hostname();
+    this.copyReceiver = new CopyReceiver({ network: () => loadNetwork() ?? this.net });
     this.executions = new ExecutionJobs();
   }
 
@@ -316,7 +318,11 @@ export class Daemon {
     this.peers = new PeerHub(
       (peer, payload, link) =>
         (link ?? { send: (t, e) => this.broadcastFrame(t, e) }).send(T.SIGNAL, { peer, payload }),
-      (method, params, caller) => this.dispatch(method, params, caller)
+      (method, params, caller) => this.dispatch(method, params, caller),
+      {
+        onTunnel: (link, frame, caller) => this.#directTunnel(link, frame, caller),
+        onTunnelClose: (link) => this.copyReceiver?.dropLink(link),
+      }
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
@@ -449,6 +455,7 @@ export class Daemon {
       for (const link of this.#links.values()) link.offered = false;
       this.broadcastFrame(T.ROSTER, { hash: rosterHash(net) });
       this.peers?.dropRevoked(net.revoked);
+      this.copyReceiver?.dropRevoked(net.revoked);
     });
     this.#reconcile = setInterval(
       () => this.#tick().catch((err) =>
@@ -486,6 +493,7 @@ export class Daemon {
   linkDown(link) {
     this.mesh?.down(link);
     this.#noteRemote(false);
+    this.copyReceiver?.dropLink(link);
     for (const [key, tunnel] of this.#tunnels) {
       if (tunnel.link !== link) continue;
       tunnel.release?.();
@@ -560,6 +568,7 @@ export class Daemon {
     this.#tunnels.clear();
     this.#media?.server.close();
     this.#media = null;
+    await this.copyReceiver?.stop();
     this.peers?.stop();
     this.runtime?.stop();
     this.usage?.stop();
@@ -616,6 +625,7 @@ export class Daemon {
       // introduction. Revocation has to reach it too, or a removed phone
       // keeps a working side door to this machine.
       this.peers?.dropRevoked(net.revoked);
+      this.copyReceiver?.dropRevoked(net.revoked);
     }
 
     this.#reconcileLinks();
@@ -1128,12 +1138,18 @@ export class Daemon {
       }
 
       case T.TUNNEL_OPEN:
+        if (msg.copy !== undefined) {
+          this.copyReceiver?.handle(link, msg, msg.caller);
+          return;
+        }
         return this.#openTunnel(link, msg);
 
       case T.TUNNEL_ACK:
+        if (this.copyReceiver?.handle(link, msg, msg.caller)) return;
         this.#tunnels.get(this.#key(link, msg.sid))?.sender?.ack(msg.bytes);
         return;
       case T.TUNNEL_DATA: {
+        if (this.copyReceiver?.handle(link, msg, msg.caller)) return;
         const tunnel = this.#tunnels.get(this.#key(link, msg.sid));
         if (tunnel?.receiver) tunnel.receiver.write(msg.data);
         else tunnel?.sock.write(Buffer.from(msg.data, 'base64'));
@@ -1141,6 +1157,7 @@ export class Daemon {
       }
 
       case T.TUNNEL_CLOSE: {
+        if (this.copyReceiver?.handle(link, msg, msg.caller)) return;
         const key = this.#key(link, msg.sid);
         const tunnel = this.#tunnels.get(key);
         this.#tunnels.delete(key);
@@ -1193,6 +1210,14 @@ export class Daemon {
       ...listShares().map((share) => share.port),
       ...(Array.isArray(extra) ? extra.map(Number) : []),
     ].filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
+  }
+
+  #directTunnel(link, frame, caller) {
+    if (frame?.t === T.TUNNEL_OPEN && frame.copy === undefined) {
+      link.send(T.TUNNEL_CLOSE, { sid: frame.sid, reason: 'direct tunnels carry signed copy requests only' });
+      return;
+    }
+    this.copyReceiver?.handle(link, frame, caller);
   }
 
   /**

@@ -808,10 +808,11 @@ These checks use isolated fixtures and do not connect to your Helm network.
 
 ### Large folder copies
 
-`helm copy` streams a complete directory over SSH, using a reachable direct
-address once the machine's SSH host key has been pinned. Otherwise it uses the
-Helm hub. Both computers need `rsync` and an accessible SSH server; this command
-does not install or enable system services.
+`helm copy` streams a file or complete directory through Helm's managed
+connection, with signed requests and encrypted data. Both computers need
+`rsync` 3.2.3 or newer. It tries direct and relay routes automatically;
+`--direct` or `--relay` selects one, and `--ssh` uses the older SSH transport
+when an SSH server is available. This command does not install system services.
 
 ```sh
 helm copy why ./my-project --target-folder /home/haseeb/dev/my-project --dry-run
@@ -825,6 +826,21 @@ here. Rerun the same command after interruption: completed files are skipped and
 partial files are reused. Compression streams in memory, without writing an
 archive on either disk. Filesystem permissions, symlinks and timestamps are
 preserved; source files are retained.
+
+### Claude account compaction policy
+
+Apply the owner's Claude 5.5 thresholds separately on each machine:
+
+```sh
+node scripts/configure-claude-compaction.mjs ~/.claude-personal
+```
+
+The script keeps existing settings and writes a backup before any change.
+It enables auto-compaction at 350k tokens for Opus 5.5, 250k for Sonnet 5.5,
+and 99k for Haiku 5.5. The saved windows include Claude Code's 33k output and
+summary reserve, verified with version 2.1.295. The account's native settings
+apply to both Helm and CLI sessions; credentials are never copied. Accounts
+that share this config directory share the compaction policy too.
 
 Updated SSH tunnels negotiate a 512 KiB window per direction. The receiver
 acknowledges data after writing it, so a fast sender cannot grow an unlimited

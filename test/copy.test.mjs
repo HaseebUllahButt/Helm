@@ -35,7 +35,7 @@ test('streamed full copy preserves hidden files, symlinks and modes; repeat copi
   writeFileSync(join(dest, 'keep'), 'unrelated');
   const shell = join(root, 'local-remote');
   writeFileSync(shell, '#!/bin/sh\nwhile [ "$1" != rsync ]; do shift; done\nexec "$@"\n', { mode: 0o700 });
-  const options = { machine: 'target', folder: source, targetFolder: dest, excludes: ['.cache'], dryRun: true };
+  const options = { machine: 'target', folder: source, targetFolder: dest, excludes: ['.cache'], dryRun: true, mode: 'ssh' };
   const run = () => {
     const spec = copySpec(options, net);
     spec.args[spec.args.indexOf('-e') + 1] = shell;

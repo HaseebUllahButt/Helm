@@ -23,7 +23,7 @@ export function AppearanceSettings() {
   );
   return (
     <>
-      {seg('theme', 'Theme', [['system', 'Auto'], ['dark', 'Dark'], ['light', 'Light']])}
+      {seg('theme', 'Theme', [['system', 'Auto'], ['dark', 'Dark'], ['light', 'Light'], ['navy', 'Navy']])}
       {seg('diff', 'Diff colours', [['green', 'Green/red'], ['blue', 'Blue/orange']])}
       {seg('width', 'Chat width', [['comfortable', 'Normal'], ['wide', 'Wide']], 'wide-only')}
       {seg('density', 'Lists', [['comfortable', 'Roomy'], ['compact', 'Compact']])}

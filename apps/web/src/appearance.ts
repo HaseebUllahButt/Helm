@@ -7,7 +7,7 @@
  * on. `system` follows the OS and keeps following it.
  */
 
-export type Theme = 'system' | 'dark' | 'light';
+export type Theme = 'system' | 'dark' | 'light' | 'navy';
 export interface Appearance {
   theme: Theme;
   /** `blue` swaps the green/red of a diff for blue/orange, for red-green colour blindness. */
@@ -23,7 +23,7 @@ export function loadAppearance(): Appearance {
   try {
     const v = JSON.parse(localStorage.getItem(KEY) || '{}');
     return {
-      theme: ['system', 'dark', 'light'].includes(v.theme) ? v.theme : DEFAULTS.theme,
+      theme: ['system', 'dark', 'light', 'navy'].includes(v.theme) ? v.theme : DEFAULTS.theme,
       diff: v.diff === 'blue' ? 'blue' : 'green',
       width: v.width === 'wide' ? 'wide' : 'comfortable',
       density: v.density === 'compact' ? 'compact' : 'comfortable',
@@ -44,7 +44,7 @@ export function applyAppearance(a: Appearance = loadAppearance()) {
   root.dataset.density = a.density;
   // The browser bar and the installed app's status area take the page's colour.
   document.querySelector('meta[name="theme-color"]')
-    ?.setAttribute('content', theme === 'light' ? '#eff8f5' : '#081b26');
+    ?.setAttribute('content', theme === 'light' ? '#f3f4f7' : theme === 'navy' ? '#081b26' : '#14161b');
 }
 
 export function saveAppearance(a: Appearance) {

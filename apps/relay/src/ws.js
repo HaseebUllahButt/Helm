@@ -653,9 +653,20 @@ export function createWsLayer() {
         const match = Object.values(net?.machines ?? {}).find((m) => m.name === msg.env);
         if (match) envId = match.id;
       }
+      if (msg.copy !== undefined && msg.targetOnly === true && envId !== loadNetwork()?.self) {
+        return send(from, T.TUNNEL_CLOSE, { sid: msg.sid, reason: 'this is not the target machine\u2019s own hub' });
+      }
       const target = online.get(envId);
       if (!target) {
         return send(from, T.TUNNEL_CLOSE, { sid: msg.sid, reason: 'offline' });
+      }
+      if (msg.copy !== undefined) {
+        if (!from.isMachine || typeof from.sub !== 'string') {
+          return send(from, T.TUNNEL_CLOSE, { sid: msg.sid, reason: 'a copy request comes from a machine of this network' });
+        }
+        if (JSON.stringify(msg.copy).length > 8192) {
+          return send(from, T.TUNNEL_CLOSE, { sid: msg.sid, reason: 'invalid copy request' });
+        }
       }
 
       // The stream gets a relay-scoped id so two initiators cannot collide on
@@ -669,7 +680,11 @@ export function createWsLayer() {
       target.tunnelSids ??= new Set();
       from.tunnelSids.add(sid);
       target.tunnelSids.add(sid);
-      return send(target, T.TUNNEL_OPEN, { sid, port: msg.port || 22, ...(msg.flow === 1 ? { flow: 1 } : {}) });
+      return send(target, T.TUNNEL_OPEN, {
+        sid, port: msg.port || 22,
+        ...(msg.flow === 1 ? { flow: 1 } : {}),
+        ...(msg.copy !== undefined ? { copy: msg.copy, caller: from.sub } : {}),
+      });
     }
 
     // Translate whichever direction this frame came from.
