@@ -504,6 +504,11 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           <h1>{session.title}</h1>
           <span className="sub">
             <EngineMark engine={session.engine} />
+            {/* Which account this chat runs on: with several logins per CLI
+                the mark alone does not say whose plan is being spent. */}
+            {session.profileId && !session.brain && session.engine !== 'shell' && (
+              <span className="account" title="account">{session.profileId}<span className="sep"> · </span></span>
+            )}
             <Route machine={env.name} folder={session.brain ? undefined : session.cwd} />
             {session.nativeCodex && <span> · Live CLI</span>}
             {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
