@@ -12,7 +12,8 @@ const bundle = await build({ stdin: { contents: `
   window.usageCache = { loadUsage, saveUsage };
   const total = (n) => ({input:n,output:10,cacheRead:n*3,cacheWrite:0,reasoning:0,total:n*4+10,turns:2,costUsd:n/10,unpriced:false,cacheSavedUsd:1,cacheWritePremiumUsd:0});
   const report = (n, model) => ({ totals:total(n),daily:[{date:'2026-10-01',...total(n/2)},{date:'2026-10-02',...total(n/2)}],
-    groups:model != null ? [{model,...total(n)}] : [{model:'claude-opus-5',...total(n-1)},{model:'small-model',...total(1),costUsd:0,unpriced:true}], accounts:[],scan:{},at:Date.now() });
+    groups:model != null ? [{model,...total(n)}] : [{model:'claude-opus-5',engine:'claude',account:'claude|/home/x/.claude-work',...total(n-1)},{model:'small-model',...total(1),costUsd:0,unpriced:true}],
+    accounts:[{account:'claude|/home/x/.claude-work',engine:'claude',profileId:'cw'}],scan:{},at:Date.now() });
   const envs = [{id:'laptop',name:'Laptop'},{id:'vm',name:'VM'}];
   window.requests = [];
   let oldResolve;
@@ -34,7 +35,9 @@ const bundle = await build({ stdin: { contents: `
         {account:'a',engine:'claude',label:'personal',aliases:['c','cf'],windows:[
           {label:'5h',used:25,resetsAt:Date.now()/1000+3600,at:Date.now()-120000},
           {label:'7d',used:90,resetsAt:Date.now()/1000-10,at:Date.now()-86400000}]},
-        {account:'b',engine:'codex',label:'work',aliases:['cx'],windows:[]}
+        {account:'b',engine:'codex',label:'work',aliases:['cx'],windows:[]},
+        {account:'claude|~/.claude-work|',engine:'claude',label:'work',aliases:['cw'],windows:[
+          {label:'7d',used:60,resetsAt:Date.now()/1000+3.5*86400,at:Date.now()-60000}]}
       ]};
     }
   };
@@ -56,7 +59,14 @@ async function setup(t, width=390, delay=false) {
 test('Usage shows reported allowance, expired and missing reports, and model-specific detail on mobile', async t => {
   const page = await setup(t);
   await page.getByRole('button',{name:'claude-opus-5',exact:true}).waitFor();
-  assert.equal(await page.getByRole('meter').getAttribute('aria-valuenow'),'75');
+  assert.equal(await page.getByRole('meter').first().getAttribute('aria-valuenow'),'75');
+  // Plan value: $9.90 over 7 days against a weekly allowance 60% used halfway
+  // through the week - on pace for 120%, so it runs dry; a full week ≈ $16.50.
+  const plans = page.getByRole('region',{name:'Plan value'});
+  await plans.getByText('runs out before the reset at this pace',{exact:true}).waitFor();
+  assert.equal(await plans.getByText('$16.50',{exact:true}).count(),1);
+  await plans.getByPlaceholder('e.g. 200').fill('200');
+  await plans.getByText('0.2×',{exact:true}).waitFor();
   assert.equal(await page.getByText('Awaiting report',{exact:true}).count(),1);
   assert.equal(await page.getByText('No limit report yet',{exact:true}).count(),1);
   await page.getByText('VM · Limits unavailable',{exact:true}).waitFor();
@@ -66,7 +76,7 @@ test('Usage shows reported allowance, expired and missing reports, and model-spe
   const detail = page.getByRole('dialog');
   await detail.getByText('$1.20',{exact:true}).waitFor();
   assert.equal(await detail.getByText('1 of 2 machines reporting.',{exact:true}).count(),1);
-  assert.equal(await detail.locator('.usage-bar').first().getAttribute('title'),'2026-10-01 · $0.600 · 34 tokens');
+  assert.equal(await detail.locator('.usage-bar').count(), 0, 'the per-day chart is gone');
   assert.equal(await page.evaluate(() => window.requests.filter(r=>r.model==='claude-opus-5').length),2);
   assert.ok((await detail.locator('.modal-title').boundingBox()).height < 80, 'the model title must fit beside Close');
   await page.screenshot({path:'/tmp/helm-usage-model-mobile.png',fullPage:true});

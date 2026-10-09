@@ -1419,20 +1419,8 @@ pre.snippet {
 .usage-cache-note { font-size: var(--t-micro); color: var(--text-dim); line-height: 1.55; }
 .usage-cache-note b { color: var(--text-80); font-weight: 600; }
 
-.usage-spend { padding: 14px 18px 10px; margin-bottom: 10px; }
 .usage-spend-head { display: flex; justify-content: space-between; align-items: baseline; }
-.usage-spend-title { font-size: var(--t-meta); color: var(--text-80); }
 .usage-spend-peak { font-size: var(--t-micro); color: var(--text-dim); }
-/* Bars are capped and never fill their slot - the leftover is air. The 2px gap
-   in the surface colour is what separates neighbours; no stroke is drawn. */
-.usage-bars { display: flex; justify-content: space-between; align-items: flex-end; gap: 2px; height: 96px; margin: 12px 0 6px; }
-.usage-bar {
-  flex: 1 1 0; min-width: 0; max-width: 24px;
-  background: color-mix(in oklab, var(--primary-t) 55%, transparent);
-  border-radius: 4px 4px 0 0;   /* rounded data-end, square at the baseline */
-}
-.usage-bar.peak { background: var(--primary-t); }
-.usage-axis { display: flex; justify-content: space-between; font-size: var(--t-micro); color: var(--mutedfg); }
 
 /* The breakdown ring: six slices at most, and the card is one compact grid -
    ring on the left, legend beside it. On a phone the grid collapses to a
@@ -2659,6 +2647,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .usage-account-name small, .usage-allowance small { display: block; color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.5; }
 .usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .usage-allowance { font-size: var(--t-micro); min-width: 0; }
+.usage-allowance.dry .usage-pace b { color: var(--red); }
+.usage-plan-mult { font-weight: 600; color: var(--text); }
+.usage-plan-price { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: var(--t-micro); color: var(--mutedfg); }
+.usage-plan-price input {
+  width: 76px; padding: 3px 7px; font: inherit; color: var(--text); background: var(--input);
+  border: 1px solid var(--line); border-radius: 6px;
+}
 .usage-allowance > div:first-child { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 8px; }
 .usage-allowance .usage-meter { height: 5px; margin: 6px 0; }
 .usage-allowance.expired b { font-weight: 400; color: var(--text-dim); }
@@ -2680,6 +2675,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   .usage-account-name { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .usage-account-name small { flex: none; }
   .usage-limits > .usage-spend-head { flex-wrap: wrap; gap: 4px; }
+  /* The plan card's name cell holds several lines and an input: stacked. */
+  .usage-plans .usage-account-name { display: block; }
 }
 
 /* GitHub pipeline: the same quiet rows as Git, with explicit outcome labels. */

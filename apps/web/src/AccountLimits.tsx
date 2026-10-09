@@ -3,17 +3,23 @@ import type { Client, Environment } from './client';
 import type { LimitWindow } from './session/limits';
 import { resetPhrase } from './session/limits';
 
-interface LimitsReport {
-  accounts: { account: string; engine: string; label: string; displayLabel?: string; aliases: string[];
-    windows: (LimitWindow & { at: number })[] }[];
-  unsupported: number;
+export interface LimitAccount {
+  account: string; engine: string; label: string; displayLabel?: string; aliases: string[];
+  windows: (LimitWindow & { at: number })[];
+}
+interface LimitsReport { accounts: LimitAccount[]; unsupported: number }
+
+export interface AccountLimitsState {
+  reports: Record<string, LimitsReport>;
+  failed: Record<string, boolean>;
+  now: number;
 }
 
-export function AccountLimits({ client, targets }: { client: Client; targets: Environment[] }) {
+/** What each machine last reported about its accounts' allowances, refreshed every half minute. */
+export function useAccountLimits(client: Client, targets: Environment[]): AccountLimitsState {
   const [reports, setReports] = useState<Record<string, LimitsReport>>({});
   const [failed, setFailed] = useState<Record<string, boolean>>({});
   const [now, setNow] = useState(Date.now());
-  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     let live = true;
     const busy = new Set<string>();
@@ -35,6 +41,12 @@ export function AccountLimits({ client, targets }: { client: Client; targets: En
     const timer = setInterval(refresh, 30_000);
     return () => { live = false; clearInterval(timer); };
   }, [client, targets.map(e => e.id).join(',')]);
+  return { reports, failed, now };
+}
+
+export function AccountLimits({ targets, limits }: { targets: Environment[]; limits: AccountLimitsState }) {
+  const { reports, failed, now } = limits;
+  const [expanded, setExpanded] = useState(false);
   const rows = targets.flatMap(env => (reports[env.id]?.accounts ?? []).map(account => ({ env, account })))
     .sort((a, b) => Number(!!b.account.windows.length) - Number(!!a.account.windows.length));
   const shown = expanded ? rows : rows.slice(0, 4);

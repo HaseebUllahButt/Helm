@@ -3,7 +3,8 @@ import type { Client, Environment, UsageReport, UsageGroup, UsageTotals } from '
 import { hitRate, cacheSaved } from './client';
 import { loadUsage, saveUsage, mergeReports, today, daysAgo } from './usageCache';
 import { BackIcon } from './Icon';
-import { AccountLimits } from './AccountLimits';
+import { AccountLimits, useAccountLimits } from './AccountLimits';
+import type { AccountLimitsState, LimitAccount } from './AccountLimits';
 import { Sheet } from './Modal';
 
 /**
@@ -98,7 +99,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
   const fetchReport = (env: Environment, rebuild: boolean) => {
     const request = generation.current;
     setPending((p) => new Set(p).add(env.id));
-    client.usage(env.id, { since: since || undefined, by: ['engine', 'model', 'provider', 'project'], rebuild })
+    client.usage(env.id, { since: since || undefined, by: ['engine', 'account', 'model', 'provider', 'project'], rebuild })
       .then((report) => {
         if (request !== generation.current) return;
         received.current.add(env.id);
@@ -157,7 +158,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
     }
     return groupBy(merged.groups, facet);
   }, [merged, facet, answered.map((e) => e.id).join(','), Object.values(reports)]);
-  const days = merged.daily;
+  const limits = useAccountLimits(client, targets);
 
   const stale = answered.filter((e) => remembered[e.id]);
   const loading = pending.size > 0 && answered.length === 0;
@@ -179,7 +180,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
           </select>
         </label>
 
-        <AccountLimits client={client} targets={targets} />
+        <AccountLimits targets={targets} limits={limits} />
 
         <div className="filterbar usage-filters">
           {WINDOWS.map((w) => (
@@ -198,8 +199,8 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
         {!loading && answered.length > 0 && (
           <>
             <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />
+            <PlanValue groups={merged.groups} accounts={merged.accounts} targets={targets} limits={limits} win={win} />
             <CacheCard totals={scoped} />
-            <Spend days={days} />
 
             <div className="section">where it went</div>
             <div className="filterbar usage-filters">
@@ -258,7 +259,6 @@ function ModelDetail({ client, targets, model, since, window, onClose }: {
       {answered > 0 && <>
         <Headline totals={t} window={window} />
         {t.unpriced && <p className="usage-limits-note">Cost is incomplete: some usage has no published rate.</p>}
-        <Spend days={merged.daily} />
         <dl className="usage-token-detail">
           {([['Fresh input', t.input], ['Output', t.output], ['Cache read', t.cacheRead], ['Cache write', t.cacheWrite], ['Reasoning', t.reasoning]] as const)
             .map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count.toLocaleString()}</dd></div>)}
@@ -327,43 +327,131 @@ function CacheCard({ totals }: { totals: UsageTotals }) {
 }
 
 /**
- * Spend per day: one series, so one colour and no legend - the heading says
- * what is plotted. Bars are capped and carry a 2px surface gap, and only the
- * peak is labelled; every other value lives in the tooltip.
+ * What the subscription is worth, and whether it is about to run dry.
+ *
+ * A plan is paid in dollars a month and spent in percent of a window, so
+ * neither number alone says if it is a good deal or a tight one. This card
+ * puts the API-equivalent spend beside the account's weekly allowance: how
+ * far through the week the allowance is at this pace, what a whole week's
+ * allowance is worth at API rates, and how many times over the plan price
+ * that is. The plan price is typed in once and kept on this device.
+ *
+ * Usage is counted per login home, so several logins sharing one config
+ * folder read as one spend line with each login's allowance underneath.
  */
-function Spend({ days }: { days: { date: string; costUsd: number; total: number }[] }) {
-  const dated = days.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d.date));
-  if (!dated.length) return null;
-  days = dated;
-  const priced = days.some(d => d.costUsd > 0);
-  const value = (d: typeof days[number]) => priced ? d.costUsd : d.total;
-  const fmt = priced ? money : tokens;
-  const peak = Math.max(...days.map(value), 0);
-  if (peak <= 0) return null;
-  const peakDay = days.find((d) => value(d) === peak);
+const PLAN_KEY = 'helm.plans.v1';
+const readPlans = (): Record<string, number> => {
+  try { return JSON.parse(localStorage.getItem(PLAN_KEY) || '{}') ?? {}; } catch { return {}; }
+};
+const WEEK_MS = 7 * 86_400_000;
+const PLAN_ENGINES = new Set(['claude', 'codex']);
+/** "/home/me/.claude" and "~/.claude" name the same account. */
+const tilde = (p: string) => p.replace(/^\/(home|Users)\/[^/|]+/, '~');
+
+function PlanValue({ groups, accounts, targets, limits, win }: {
+  groups: ChartGroup[]; accounts: UsageReport['accounts']; targets: Environment[];
+  limits: AccountLimitsState; win: WindowId;
+}) {
+  const [plans, setPlans] = useState<Record<string, number>>(readPlans);
+  const setPlan = (key: string, value: string) => {
+    const n = Number(value);
+    const next = { ...plans };
+    if (value.trim() && Number.isFinite(n) && n > 0) next[key] = n; else delete next[key];
+    setPlans(next);
+    try { localStorage.setItem(PLAN_KEY, JSON.stringify(next)); } catch { /* shown, not kept */ }
+  };
+  // Spend per login home, summed across machines that share it.
+  const spend = new Map<string, { engine: string; profileId: string; costUsd: number; unpriced: boolean }>();
+  for (const a of accounts) {
+    if (!PLAN_ENGINES.has(a.engine)) continue;
+    const key = `${a.engine}|${tilde(a.account.split('|')[1] ?? '')}`;
+    if (!spend.has(key)) spend.set(key, { engine: a.engine, profileId: a.profileId, costUsd: 0, unpriced: false });
+  }
+  for (const g of groups) {
+    if (!g.account || !g.engine || !PLAN_ENGINES.has(g.engine)) continue;
+    const key = `${g.engine}|${tilde(g.account.split('|')[1] ?? '')}`;
+    const cur = spend.get(key) ?? { engine: g.engine, profileId: '', costUsd: 0, unpriced: false };
+    cur.costUsd += g.costUsd || 0;
+    if (g.unpriced) cur.unpriced = true;
+    spend.set(key, cur);
+  }
+  const limitRows = targets.flatMap((env) => (limits.reports[env.id]?.accounts ?? []).map((account) => ({ env, account })));
+  const rows = [...spend.entries()]
+    .map(([key, s]) => ({
+      key, ...s,
+      logins: limitRows.filter(({ account }) => account.engine === s.engine
+        && (account.account.startsWith(`${key}|`) || account.aliases.includes(s.profileId))),
+    }))
+    .filter((r) => r.costUsd > 0 || r.logins.length)
+    .sort((a, b) => b.costUsd - a.costUsd);
+  if (!rows.length) return null;
+  // What this window says about a week, so the allowance and the spend speak
+  // the same unit. "All" has no length, so it only shows the raw figure.
+  const perWeek = win === '7d' ? 1 : win === '1d' ? 7 : win === '30d' ? 7 / 30 : null;
   return (
-    <div className="card usage-spend">
-      <div className="usage-spend-head">
-        <span className="usage-spend-title">{priced ? 'Estimated cost per day' : 'Tokens per day'}</span>
-        <span className="usage-spend-peak">peak {fmt(peak)}</span>
-      </div>
-      <div className="usage-bars">
-        {days.map((d) => (
-          <span
-            key={d.date}
-            className={`usage-bar${d === peakDay ? ' peak' : ''}`}
-            style={{ height: `${value(d) > 0 ? Math.max(2, (value(d) / peak) * 100) : 0}%` }}
-            title={`${d.date} · ${money(d.costUsd)} · ${tokens(d.total)} tokens`}
-          />
-        ))}
-      </div>
-      <div className="usage-axis">
-        <span>{days[0].date.slice(5)}</span>
-        <span>{days[days.length - 1].date.slice(5)}</span>
-      </div>
-    </div>
+    <section className="card usage-limits usage-plans" aria-label="Plan value">
+      <div className="usage-spend-head"><b>Plan value</b><span className="usage-spend-peak">API-equivalent against the allowance</span></div>
+      {rows.map((r) => {
+        const weekly = perWeek === null ? null : r.costUsd * perWeek;
+        const price = plans[r.key];
+        const weeklyPrice = price ? (price * 12) / 52 : null;
+        return (
+          <div className="usage-account" key={r.key}>
+            <div className="usage-account-name">
+              <b>{r.engine} <span>{r.logins.map((l) => l.account.displayLabel || l.account.label).filter((v, i, all) => all.indexOf(v) === i).join(', ') || r.profileId || 'default'}</span></b>
+              <small>{money(r.costUsd)} API-worth{r.unpriced ? ' or more' : ''}{weekly !== null && win !== '7d' ? ` · ≈ ${money(weekly)} a week` : ''}</small>
+              <label className="usage-plan-price">
+                <span>plan $/month</span>
+                <input type="number" inputMode="decimal" min="0" step="1" placeholder="e.g. 200"
+                  value={price ?? ''} onChange={(e) => setPlan(r.key, e.target.value)} />
+              </label>
+              {weekly !== null && weeklyPrice && (
+                <small><span className="usage-plan-mult">{(weekly / weeklyPrice).toFixed(1)}×</span> the plan price ({money(weeklyPrice)} a week)</small>
+              )}
+            </div>
+            <div className="usage-account-windows">
+              {!r.logins.length && <span className="usage-limits-note">No allowance report yet</span>}
+              {r.logins.map(({ env, account }) => {
+                const week = account.windows.find((w) => w.label === '7d' && w.resetsAt && w.resetsAt * 1000 > limits.now);
+                if (!week) {
+                  return <div className="usage-allowance" key={`${env.id}:${account.account}`}>
+                    <div><span>{account.displayLabel || account.label} · 7d</span><b>no current reading</b></div>
+                    <small>{env.name}</small>
+                  </div>;
+                }
+                // How far through the window the reading was taken: the pace
+                // is use so far over time so far. A reading from the first
+                // hour is kept from claiming a thousand percent.
+                const elapsed = Math.min(1, Math.max(0.05, 1 - (week.resetsAt! * 1000 - week.at) / WEEK_MS));
+                const pace = week.used / elapsed;
+                const dry = pace > 100;
+                // What the whole week's allowance buys at API rates, from
+                // this week's spend and how much of the allowance it used.
+                const worth = weekly !== null && week.used > 0 && r.logins.length === 1 ? weekly / (week.used / 100) : null;
+                return <div className={`usage-allowance${dry ? ' dry' : ''}`} key={`${env.id}:${account.account}`}>
+                  <div><span>{account.displayLabel || account.label} · 7d</span><b>{Math.round(week.used)}% used</b></div>
+                  <div className="usage-meter" role="meter" aria-label={`${account.engine} ${account.displayLabel || account.label} weekly allowance used`}
+                    aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(week.used)}>
+                    <span style={{ width: `${Math.min(100, week.used)}%` }} />
+                  </div>
+                  <small className="usage-pace">{dry ? <b>runs out before the reset at this pace</b> : `on pace for ${Math.round(pace)}% of the week`}</small>
+                  {worth !== null && <small>a full week's allowance ≈ <b>{money(worth)}</b> at API rates</small>}
+                  <small>{env.name} · reported {ageOf(week.at, limits.now)} ago</small>
+                </div>;
+              })}
+            </div>
+          </div>
+        );
+      })}
+      <p className="usage-limits-note">Pace compares use so far with time so far in the current week. Spend is this window's API-equivalent, scaled to a week.</p>
+    </section>
   );
 }
+
+const ageOf = (at: number, now: number) => {
+  const minutes = Math.max(0, Math.floor((now - at) / 60_000));
+  return minutes < 1 ? 'moments' : minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`;
+};
 
 /**
  * One ring, one dimension. The magnitude is cost; tokens are the fallback
