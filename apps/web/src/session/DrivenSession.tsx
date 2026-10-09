@@ -451,6 +451,10 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const liveLimits = useMemo(() => limitWindows(log.limits), [log.limits]);
   useEffect(() => { rememberLimits(limitAccount, liveLimits); }, [limitAccount, liveLimits]);
   const limits = current(liveLimits.length ? liveLimits : rememberedLimits(limitAccount));
+  // Which account this chat runs on: with several logins per CLI the mark
+  // alone does not say whose plan is being spent. It sits with that plan's
+  // limits under the composer rather than crowding the title.
+  const account = session.profileId && !session.brain && session.engine !== 'shell' ? session.profileId : '';
 
   // Everything this chat runs with - the account, model, thinking, permissions
   // and speed - becomes what a new chat on this machine starts with, for
@@ -504,11 +508,6 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           <h1>{session.title}</h1>
           <span className="sub">
             <EngineMark engine={session.engine} />
-            {/* Which account this chat runs on: with several logins per CLI
-                the mark alone does not say whose plan is being spent. */}
-            {session.profileId && !session.brain && session.engine !== 'shell' && (
-              <span className="account" title="account">{session.profileId}<span className="sep"> · </span></span>
-            )}
             <Route machine={env.name} folder={session.brain ? undefined : session.cwd} />
             {session.nativeCodex && <span> · Live CLI</span>}
             {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
@@ -579,7 +578,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onTranscribe={onTranscribe}
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
         engine={engine} keys={false} waiting={!!pending} danger={mode?.danger}
-        foot={controls.chips} statusLine={limits.length > 0 ? <LimitsLine windows={limits} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0}
+        foot={controls.chips} statusLine={account || limits.length > 0 ? <LimitsLine windows={limits} account={account} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
         commands={commands}

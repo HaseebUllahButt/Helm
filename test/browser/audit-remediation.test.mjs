@@ -214,3 +214,20 @@ test('IME composition Enter is ignored while ordinary Enter still sends', async 
   await area.press('Enter');
   assert.equal(await page.evaluate(() => window.sends || 0), 1);
 });
+
+for (const width of [1280, 390]) test(`a chat names its account once, beside the composer, even with no limit report at ${width}px`, async t => {
+  const page = await pageFor(t);
+  await page.setViewportSize({ width, height: 800 });
+  await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
+  await page.evaluate(() => {
+    Object.assign(window.sessionFixture, { profileId: 'claudes', recovery: { kind: 'interrupted', message: 'Stopped', at: Date.now() } });
+    window.mountDriven();
+  });
+  const status = page.locator('.slab-status');
+  await status.getByText('claudes', { exact: true }).waitFor();
+  assert.equal(await page.locator('.limits-line .lw').count(), 0, 'no quota was reported');
+  assert.equal(await page.locator('.session-bar').getByText('claudes').count(), 0, 'the header does not repeat the account');
+  await page.locator('.session-bar .route-machine').getByText('Laptop', { exact: true }).waitFor();
+  const box = await status.boundingBox();
+  assert.ok(box.x >= 0 && box.x + box.width <= width);
+});

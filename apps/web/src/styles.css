@@ -1225,6 +1225,7 @@ pre.snippet {
 .slab-status { margin: 0 10px; padding: 7px 0 9px; border-top: 1px solid var(--line); min-width: 0; }
 .limits-line { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; color: var(--mutedfg); font-size: var(--t-micro); }
 .limits-caption { flex: none; }
+.limits-caption.account { flex: 0 1 auto; min-width: 0; max-width: 100%; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .limits-windows { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; min-width: 0; }
 .limits-line .lw { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .limits-line .lw b { color: var(--text-dim); font-weight: 550; }
@@ -1403,76 +1404,46 @@ pre.snippet {
    length to compare, so hue separates the slices - but only as a second cue,
    beside a legend row that carries the name, the value and the share in text.
    The palette stays on helm's own muted hues. */
-.usage-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
-/* A filter control of its own: `.chip` in helm means a session's status, and
-   `.chip-pick` belongs to the composer. Borrowing either would make the
-   meaning of a colour depend on which screen you were looking at. */
-.usage-chip {
-  padding: 6px 12px; border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--muted); color: var(--text-dim);
-  font-size: var(--t-meta); line-height: 1; cursor: pointer;
-  /* A filter is a hit target before it is a label. */
-  min-height: 32px;
-}
-.usage-chip:hover { color: var(--text-80); border-color: var(--line-2); }
-.usage-chip.on {
-  background: color-mix(in oklab, var(--primary) 22%, transparent);
-  border-color: color-mix(in oklab, var(--primary) 45%, transparent);
-  color: var(--text);
-}
+/* One row of controls: which machines, which period. Everything below
+   answers to it. */
+.usage-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0 0 26px; }
+.usage-controls select { width: auto; max-width: 220px; font-size: var(--t-meta); padding: 7px 34px 7px 12px; min-height: 38px; }
+.usage-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.usage-tabs::-webkit-scrollbar { display: none; }
+.usage-tabs button { flex: none; }
 
-/* The scope picker is one field, not a form - it stays the width a machine
-   name needs rather than claiming the whole column. */
-.usage-scope { display: block; max-width: 280px; margin: 0 0 14px; }
-.usage-scope > span {
-  display: block; margin-bottom: 5px;
-  font-size: var(--t-micro); font-weight: 650; color: var(--mutedfg);
-  text-transform: uppercase; letter-spacing: 0.07em;
-}
-.usage-scope select { font-size: var(--t-body); padding: 8px 36px 8px 12px; }
-
-.usage-hero { padding: 16px 18px; margin-bottom: 10px; }
 /* The one number the screen leads with. Proportional figures: tabular gives
    every digit the width of a zero, which reads loose at display sizes. */
+.usage-hero { margin: 0 0 30px; padding: 0 2px; }
 .usage-hero-fig { font: 600 46px/1 var(--display); letter-spacing: -0.01em; color: var(--text); }
 .usage-hero-cap { margin-top: 8px; font-size: var(--t-meta); color: var(--text-dim); }
+.usage-cache { margin: 4px 0 0; font-size: var(--t-meta); color: var(--mutedfg); }
+.usage-cache b { color: var(--text-80); font-weight: 600; }
 
-.usage-cache { padding: 14px 18px; margin-bottom: 10px; }
-.usage-cache-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.usage-cache-pct { font-size: 26px; font-weight: 600; color: var(--primary-q); }
-.usage-cache-cap { font-size: var(--t-meta); color: var(--text-dim); }
-.usage-cache-counts { font-size: var(--t-micro); color: var(--mutedfg); font-variant-numeric: tabular-nums; }
+/* A heading for a block of the page: the type does the separating, so the
+   blocks need no cards around them. */
+.usage-h { margin: 0; padding: 0 2px; font: 600 var(--t-body)/1.3 var(--display); color: var(--text); letter-spacing: -0.005em; }
 /* Meter: the track is a lighter step of the fill's own hue, so the state reads
    across the whole bar rather than only where it is filled. */
 .usage-meter {
-  margin: 10px 0 8px; height: 8px; border-radius: 999px;
+  height: 6px; border-radius: 999px;
   background: color-mix(in oklab, var(--primary) 18%, transparent);
   overflow: hidden;
 }
 .usage-meter span { display: block; height: 100%; border-radius: 999px; background: var(--primary-t); }
-.usage-cache-note { font-size: var(--t-micro); color: var(--text-dim); line-height: 1.55; }
-.usage-cache-note b { color: var(--text-80); font-weight: 600; }
-
-.usage-spend-head { display: flex; justify-content: space-between; align-items: baseline; }
-.usage-spend-peak { font-size: var(--t-micro); color: var(--text-dim); }
 
 /* The breakdown ring: six slices at most, and the card is one compact grid -
    ring on the left, legend beside it. On a phone the grid collapses to a
    centred ring over a full-width legend. */
-.usage-donut-card { padding: 16px 18px; margin-bottom: 10px; }
+.usage-where { margin-top: 30px; }
+.usage-where-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; margin-bottom: 16px; }
+.usage-donut-card { padding: 0 2px; }
 .usage-donut-layout {
   display: grid; grid-template-columns: auto minmax(0, 1fr);
   gap: 20px; align-items: center;
 }
 .usage-donut { position: relative; width: 144px; height: 144px; flex: none; }
 .usage-donut-ring { display: block; width: 100%; height: 100%; }
-.usage-donut-center {
-  position: absolute; inset: 0; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 2px; text-align: center;
-}
-.usage-donut-total { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
-.usage-donut-unit { font-size: var(--t-micro); color: var(--text-dim); }
 .usage-legend {
   list-style: none; margin: 0; padding: 0; min-width: 0;
   display: flex; flex-direction: column; gap: 6px;
@@ -1494,17 +1465,9 @@ pre.snippet {
   .usage-legend { width: 100%; }
 }
 
-/* Each note on its own line: as inline spans they ran together ("memorycosts"). */
-.usage-note { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; margin-top: 14px; }
-.usage-donut-total.long { font-size: 19px; }
-.usage-donut-total.xlong { font-size: 16px; }
-/* A phone keeps the facet chips on one line and lets them scroll sideways. */
-@media (max-width: 480px) {
-  .usage-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: -2px; padding-inline: 2px; }
-  .usage-filters::-webkit-scrollbar { display: none; }
-  .usage-chip { flex: none; padding: 6px 11px; }
-  .usage-donut { width: 164px; height: 164px; }
-}
+.usage-note { margin: 18px 0 0; padding: 0 2px; font-size: var(--t-micro); color: var(--mutedfg); }
+.usage-note .linkish { font-size: inherit; }
+@media (max-width: 480px) { .usage-donut { width: 132px; height: 132px; } }
 
 /* ------------------------------------------------------------ new in this pass */
 
@@ -2671,27 +2634,38 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tri-mark.mark { width: 18px; height: 18px; border-radius: 5px; }
 .tri-mark.mark svg { width: 11px; height: 11px; }
 
-/* Account allowance reads like the machine list; each provider window stays
-   distinct, so a weekly cap never masquerades as a second account. */
-.usage-limits { padding: 14px 18px; margin-bottom: 18px; }
-.usage-limits-note { color: var(--text-dim); font-size: var(--t-micro); line-height: 1.55; margin: 6px 0; }
-.usage-account { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(0, 2fr); gap: 16px; padding: 13px 0; border-top: 1px solid var(--line); }
-.usage-account-name { min-width: 0; font-size: var(--t-meta); }
-.usage-account-name b { display: block; overflow-wrap: anywhere; }
+/* One row per account: its name and where it was read, each allowance
+   window on its own line, then what the period was worth. Rules between
+   accounts, no card around them. */
+.usage-accounts { margin: 0; }
+.usage-limits-note { color: var(--text-dim); font-size: var(--t-micro); line-height: 1.55; margin: 6px 0; padding: 0 2px; }
+.usage-account .usage-limits-note { padding: 0; }
+.usage-account { padding: 14px 2px; border-bottom: 1px solid var(--line); }
+.usage-accounts > .usage-h + .usage-account { margin-top: 6px; }
+.usage-account-name { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; font-size: var(--t-body); }
+.usage-account-name b { font-weight: 600; overflow-wrap: anywhere; }
 .usage-account-name b span { font-weight: 400; color: var(--text-dim); }
-.usage-account-name small, .usage-allowance small { display: block; color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.5; }
-.usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.usage-allowance { font-size: var(--t-micro); min-width: 0; }
-.usage-allowance.dry .usage-pace b { color: var(--red); }
-.usage-plan-mult { font-weight: 600; color: var(--text); }
-.usage-plan-price { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: var(--t-micro); color: var(--mutedfg); }
-.usage-plan-price input {
-  width: 76px; padding: 3px 7px; font: inherit; color: var(--text); background: var(--input);
-  border: 1px solid var(--line); border-radius: 6px;
+.usage-account-name small { color: var(--mutedfg); font-size: var(--t-micro); }
+.usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 28px; margin-top: 10px; }
+.usage-allowance {
+  display: grid; grid-template-columns: 2.4em minmax(40px, 1fr) auto; align-items: center; gap: 3px 10px;
+  font-size: var(--t-meta); min-width: 0;
 }
-.usage-allowance > div:first-child { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 3px 8px; }
-.usage-allowance .usage-meter { height: 5px; margin: 6px 0; }
+.usage-window { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.usage-allowance b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-allowance small { grid-column: 2 / -1; color: var(--mutedfg); font-size: var(--t-micro); line-height: 1.45; }
+.usage-allowance small em { font-style: normal; color: var(--red); font-weight: 550; }
 .usage-allowance.expired b { font-weight: 400; color: var(--text-dim); }
+.usage-allowance.dry .usage-meter span { background: var(--red); }
+.usage-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-top: 10px; font-size: var(--t-micro); color: var(--text-dim); }
+.usage-value b { color: var(--text-80); font-weight: 600; }
+.usage-plan-mult { color: var(--text); }
+.usage-plan summary { cursor: pointer; color: var(--mutedfg); list-style: none; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line-2); }
+.usage-plan summary::-webkit-details-marker { display: none; }
+.usage-plan summary:hover { color: var(--text); }
+.usage-plan[open] summary { color: var(--text-dim); }
+.usage-plan-price { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--mutedfg); }
+.usage-plan-price input { width: 90px; padding: 4px 8px; font: inherit; color: var(--text); }
 .usage-legend-name.usage-model-link { text-align: left; min-height: 32px; padding: 4px 0; text-decoration: underline; text-underline-offset: 3px; }
 .usage-more-models { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 12px; font-size: var(--t-meta); }
 .usage-more-models summary { cursor: pointer; color: var(--text-dim); min-height: 32px; }
@@ -2705,15 +2679,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .usage-token-detail > div { display: flex; justify-content: space-between; gap: 12px; margin: 6px 0; }
 .usage-token-detail dt { color: var(--text-dim); }
 .usage-token-detail dd { margin: 0; font-variant-numeric: tabular-nums; }
-@media (max-width: 480px) {
-  .usage-account { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .usage-account-name { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-  .usage-account-name small { flex: none; }
-  /* The plan card's name cell holds several lines and an input: stacked. */
-  .usage-plans .usage-account-name { display: block; }
-  .usage-limits > .usage-spend-head { flex-wrap: wrap; gap: 4px; }
-  /* The plan card's name cell holds several lines and an input: stacked. */
-  .usage-plans .usage-account-name { display: block; }
+@media (max-width: 600px) {
+  .usage-account-windows { grid-template-columns: minmax(0, 1fr); gap: 8px; }
 }
 
 /* GitHub pipeline: the same quiet rows as Git, with explicit outcome labels. */

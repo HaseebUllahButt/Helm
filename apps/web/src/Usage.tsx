@@ -4,7 +4,7 @@ import { hitRate, cacheSaved } from './client';
 import { loadUsage, saveUsage, mergeReports, today, daysAgo } from './usageCache';
 import { BackIcon } from './Icon';
 import { AccountLimits, useAccountLimits } from './AccountLimits';
-import type { AccountLimitsState, LimitAccount } from './AccountLimits';
+import type { PlanSpend } from './AccountLimits';
 import { Sheet } from './Modal';
 
 /**
@@ -171,23 +171,13 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
         {pending.size > 0 && answered.length > 0 && <span className="conn"><i />updating</span>}
       </div>
 
-      <div className="scroll"><div className="pad">
-        <label className="usage-scope">
-          <span>Environment</span>
-          <select value={scope} onChange={(e) => setScope(e.target.value)}>
+      <div className="scroll"><div className="pad usage">
+        <div className="usage-controls">
+          <select aria-label="Environment" value={scope} onChange={(e) => setScope(e.target.value)}>
             <option value="all">All machines</option>
             {envs.map((env) => <option key={env.id} value={env.id}>{env.name}</option>)}
           </select>
-        </label>
-
-        <AccountLimits targets={targets} limits={limits} />
-
-        <div className="filterbar usage-filters">
-          {WINDOWS.map((w) => (
-            <button key={w.id} className={`usage-chip${w.id === win ? ' on' : ''}`} onClick={() => setWin(w.id)}>
-              {w.label}
-            </button>
-          ))}
+          <Tabs label="Period" items={WINDOWS} value={win} onChange={setWin} />
         </div>
 
         {loading && <div className="empty quiet">reading what the CLIs recorded…</div>}
@@ -196,23 +186,19 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
           <p>{targets.length ? 'Usage unavailable. No machine has returned a report.' : 'No machines to report usage.'}</p>
           {!!targets.length && <button className="linkish" onClick={() => targets.forEach(e => fetchReport(e, false))}>Retry usage</button>}
         </div>}
-        {!loading && answered.length > 0 && (
-          <>
-            <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />
-            <PlanValue groups={merged.groups} accounts={merged.accounts} targets={targets} limits={limits} win={win} />
-            <CacheCard totals={scoped} />
+        {!loading && answered.length > 0 && <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />}
 
-            <div className="section">where it went</div>
-            <div className="filterbar usage-filters">
-              {FACETS.map((f) => (
-                <button key={f.id} className={`usage-chip${f.id === facet ? ' on' : ''}`} onClick={() => setFacet(f.id)}>
-                  {f.label}
-                </button>
-              ))}
+        <AccountLimits targets={targets} limits={limits}
+          spend={answered.length ? planSpend(merged.groups, merged.accounts) : undefined} win={answered.length ? win : undefined} />
+
+        {!loading && answered.length > 0 && (
+          <section className="usage-where" aria-label="Where it went">
+            <div className="usage-where-head">
+              <h2 className="usage-h">Where it went</h2>
+              <Tabs label="Group by" items={FACETS} value={facet} onChange={setFacet} />
             </div>
             <DonutBreakdown groups={groups} facet={facet} onModel={setModel} />
-            {Object.keys(failed).length > 0 && <p className="usage-limits-note">Usage unavailable from {targets.filter(e => failed[e.id]).map(e => e.name).join(', ')}. Retry with the rescan button.</p>}
-
+            {Object.keys(failed).length > 0 && <p className="usage-limits-note">Usage unavailable from {targets.filter(e => failed[e.id]).map(e => e.name).join(', ')}. Try Rescan below.</p>}
             <Provenance
               answered={answered.length}
               total={targets.length}
@@ -221,7 +207,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
               rescanning={pending.size > 0}
               onRescan={() => targets.forEach((e) => fetchReport(e, true))}
             />
-          </>
+          </section>
         )}
       </div></div>
       {model !== null && <ModelDetail key={`${scope}:${win}:${model}`} client={client} targets={targets} model={model} since={since}
@@ -264,7 +250,6 @@ function ModelDetail({ client, targets, model, since, window, onClose }: {
             .map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count.toLocaleString()}</dd></div>)}
         </dl>
         <p className="usage-limits-note">Reasoning is included in output where the provider reports it.</p>
-        <CacheCard totals={t} />
       </>}
       {!pending && answered === 0 && <p className="usage-limits-note">Model history unavailable. The machines may be offline or need an update.</p>}
       <p className="usage-limits-note">{answered} of {targets.length} machines reporting{Object.values(reports).some(r => r.stale) ? ' · includes remembered usage' : ''}.</p>
@@ -272,17 +257,28 @@ function ModelDetail({ client, targets, model, since, window, onClose }: {
   </Sheet>;
 }
 
+/** The app's segmented control: one choice of a few, the chosen one lit. */
+function Tabs<T extends string>({ label, items, value, onChange }: {
+  label: string; items: readonly { id: T; label: string }[]; value: T; onChange: (id: T) => void;
+}) {
+  return <div className="segmented usage-tabs" role="group" aria-label={label}>
+    {items.map((item) => <button key={item.id} className={item.id === value ? 'on' : ''} aria-pressed={item.id === value}
+      onClick={() => onChange(item.id)}>{item.label}</button>)}
+  </div>;
+}
+
 /**
- * The one number the screen leads with, and the three that give it scale.
- * Exactly one hero per view; the tiles beside it are not competing heroes.
+ * The one number the screen leads with, what it covers, and what the prompt
+ * cache did to it - one block, no card.
  */
 function Headline({ totals, window }: { totals: UsageTotals; window: string }) {
   return (
-    <div className="card usage-hero">
+    <div className="usage-hero">
       <div className="usage-hero-fig">{money(totals.costUsd)}</div>
-      <div className="usage-hero-cap">
+      <div className="usage-hero-cap" title="Published rates × the tokens the CLIs recorded">
         API-equivalent, {window.toLowerCase()} · {tokens(totals.total)} tokens · {totals.turns.toLocaleString()} turns
       </div>
+      <CacheLine totals={totals} />
     </div>
   );
 }
@@ -297,161 +293,44 @@ const cachePercent = (rate: number) => {
   return `${Math.min(99.9, Math.round(rate * 1000) / 10).toFixed(1)}%`;
 };
 
-/**
- * The prompt cache, as a ratio against its limit: a meter, not a chart. The
- * fill and the track are steps of one hue so the state reads across the bar.
- */
-function CacheCard({ totals }: { totals: UsageTotals }) {
+/** The prompt cache in one sentence; the raw counts are on hover. */
+function CacheLine({ totals }: { totals: UsageTotals }) {
   const rate = hitRate(totals);
   const saved = cacheSaved(totals);
   if (!totals.cacheRead && !totals.input) return null;
   return (
-    <div className="card usage-cache">
-      <div className="usage-cache-top">
-        <span className="usage-cache-pct">{cachePercent(rate)}</span>
-        <span className="usage-cache-cap">of input served from cache</span>
-        <span className="usage-cache-counts">
-          {totals.cacheRead.toLocaleString()} cached · {totals.input.toLocaleString()} fresh
-        </span>
-      </div>
-      <div className="usage-meter" role="img" aria-label={`${cachePercent(rate)} of input tokens served from cache`}>
-        <span style={{ width: `${Math.min(100, rate * 100)}%` }} />
-      </div>
-      <div className="usage-cache-note">
-        {saved > 0
-          ? <>Saved <b>{money(saved)}</b> against the fresh-input rate, after the cache-write premium.</>
-          : <>Not enough priced traffic yet to say what caching saved.</>}
-      </div>
-    </div>
+    <p className="usage-cache" title={`${totals.cacheRead.toLocaleString()} cached · ${totals.input.toLocaleString()} fresh input tokens`}>
+      {cachePercent(rate)} of input came from cache
+      {saved > 0 ? <>, saving <b>{money(saved)}</b> after the cache-write premium.</> : '.'}
+    </p>
   );
 }
 
 /**
- * What the subscription is worth, and whether it is about to run dry.
- *
- * A plan is paid in dollars a month and spent in percent of a window, so
- * neither number alone says if it is a good deal or a tight one. This card
- * puts the API-equivalent spend beside the account's weekly allowance: how
- * far through the week the allowance is at this pace, what a whole week's
- * allowance is worth at API rates, and how many times over the plan price
- * that is. The plan price is typed in once and kept on this device.
- *
- * Usage is counted per login home, so several logins sharing one config
- * folder read as one spend line with each login's allowance underneath.
+ * API-equivalent spend per login home, summed across machines that share it,
+ * for the account rows to set beside each allowance. Usage is counted per
+ * login home, so several logins sharing one config folder are one line here.
  */
-const PLAN_KEY = 'helm.plans.v1';
-const readPlans = (): Record<string, number> => {
-  try { return JSON.parse(localStorage.getItem(PLAN_KEY) || '{}') ?? {}; } catch { return {}; }
-};
-const WEEK_MS = 7 * 86_400_000;
 const PLAN_ENGINES = new Set(['claude', 'codex']);
 /** "/home/me/.claude" and "~/.claude" name the same account. */
 const tilde = (p: string) => p.replace(/^\/(home|Users)\/[^/|]+/, '~');
 
-function PlanValue({ groups, accounts, targets, limits, win }: {
-  groups: ChartGroup[]; accounts: UsageReport['accounts']; targets: Environment[];
-  limits: AccountLimitsState; win: WindowId;
-}) {
-  const [plans, setPlans] = useState<Record<string, number>>(readPlans);
-  const setPlan = (key: string, value: string) => {
-    const n = Number(value);
-    const next = { ...plans };
-    if (value.trim() && Number.isFinite(n) && n > 0) next[key] = n; else delete next[key];
-    setPlans(next);
-    try { localStorage.setItem(PLAN_KEY, JSON.stringify(next)); } catch { /* shown, not kept */ }
+function planSpend(groups: ChartGroup[], accounts: UsageReport['accounts']): PlanSpend[] {
+  const spend = new Map<string, PlanSpend>();
+  const at = (engine: string, account: string, profileId: string) => {
+    const key = `${engine}|${tilde(account.split('|')[1] ?? '')}`;
+    if (!spend.has(key)) spend.set(key, { key, engine, profileId, costUsd: 0, unpriced: false });
+    return spend.get(key)!;
   };
-  // Spend per login home, summed across machines that share it.
-  const spend = new Map<string, { engine: string; profileId: string; costUsd: number; unpriced: boolean }>();
-  for (const a of accounts) {
-    if (!PLAN_ENGINES.has(a.engine)) continue;
-    const key = `${a.engine}|${tilde(a.account.split('|')[1] ?? '')}`;
-    if (!spend.has(key)) spend.set(key, { engine: a.engine, profileId: a.profileId, costUsd: 0, unpriced: false });
-  }
+  for (const a of accounts) if (PLAN_ENGINES.has(a.engine)) at(a.engine, a.account, a.profileId);
   for (const g of groups) {
     if (!g.account || !g.engine || !PLAN_ENGINES.has(g.engine)) continue;
-    const key = `${g.engine}|${tilde(g.account.split('|')[1] ?? '')}`;
-    const cur = spend.get(key) ?? { engine: g.engine, profileId: '', costUsd: 0, unpriced: false };
+    const cur = at(g.engine, g.account, '');
     cur.costUsd += g.costUsd || 0;
     if (g.unpriced) cur.unpriced = true;
-    spend.set(key, cur);
   }
-  const limitRows = targets.flatMap((env) => (limits.reports[env.id]?.accounts ?? []).map((account) => ({ env, account })));
-  const rows = [...spend.entries()]
-    .map(([key, s]) => ({
-      key, ...s,
-      logins: limitRows.filter(({ account }) => account.engine === s.engine
-        && (account.account.startsWith(`${key}|`) || account.aliases.includes(s.profileId))),
-    }))
-    .filter((r) => r.costUsd > 0 || r.logins.length)
-    .sort((a, b) => b.costUsd - a.costUsd);
-  if (!rows.length) return null;
-  // What this window says about a week, so the allowance and the spend speak
-  // the same unit. "All" has no length, so it only shows the raw figure.
-  const perWeek = win === '7d' ? 1 : win === '1d' ? 7 : win === '30d' ? 7 / 30 : null;
-  return (
-    <section className="card usage-limits usage-plans" aria-label="Plan value">
-      <div className="usage-spend-head"><b>Plan value</b><span className="usage-spend-peak">API-equivalent against the allowance</span></div>
-      {rows.map((r) => {
-        const weekly = perWeek === null ? null : r.costUsd * perWeek;
-        const price = plans[r.key];
-        const weeklyPrice = price ? (price * 12) / 52 : null;
-        return (
-          <div className="usage-account" key={r.key}>
-            <div className="usage-account-name">
-              <b>{r.engine} <span>{r.logins.map((l) => l.account.displayLabel || l.account.label).filter((v, i, all) => all.indexOf(v) === i).join(', ') || r.profileId || 'default'}</span></b>
-              <small>{money(r.costUsd)} API-worth{r.unpriced ? ' or more' : ''}{weekly !== null && win !== '7d' ? ` · ≈ ${money(weekly)} a week` : ''}</small>
-              <label className="usage-plan-price">
-                <span>plan $/month</span>
-                <input type="number" inputMode="decimal" min="0" step="1" placeholder="e.g. 200"
-                  value={price ?? ''} onChange={(e) => setPlan(r.key, e.target.value)} />
-              </label>
-              {weekly !== null && weeklyPrice && (
-                <small><span className="usage-plan-mult">{(weekly / weeklyPrice).toFixed(1)}×</span> the plan price ({money(weeklyPrice)} a week)</small>
-              )}
-            </div>
-            <div className="usage-account-windows">
-              {!r.logins.length && <span className="usage-limits-note">No allowance report yet</span>}
-              {r.logins.map(({ env, account }) => {
-                const week = account.windows.find((w) => w.label === '7d' && w.resetsAt && w.resetsAt * 1000 > limits.now);
-                if (!week) {
-                  return <div className="usage-allowance" key={`${env.id}:${account.account}`}>
-                    <div><span>{account.displayLabel || account.label} · 7d</span><b>no current reading</b></div>
-                    <small>{env.name}</small>
-                  </div>;
-                }
-                // How far through the window the reading was taken: the pace
-                // is use so far over time so far. A reading from the first
-                // hour is kept from claiming a thousand percent.
-                const elapsed = Math.min(1, Math.max(0.05, 1 - (week.resetsAt! * 1000 - week.at) / WEEK_MS));
-                const pace = week.used / elapsed;
-                const dry = pace > 100;
-                // What the whole week's allowance buys at API rates, from
-                // this week's spend and how much of the allowance it used.
-                const worth = weekly !== null && week.used > 0 && r.logins.length === 1 ? weekly / (week.used / 100) : null;
-                return <div className={`usage-allowance${dry ? ' dry' : ''}`} key={`${env.id}:${account.account}`}>
-                  <div><span>{account.displayLabel || account.label} · 7d</span><b>{Math.round(week.used)}% used</b></div>
-                  <div className="usage-meter" role="meter" aria-label={`${account.engine} ${account.displayLabel || account.label} weekly allowance used`}
-                    aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(week.used)}>
-                    <span style={{ width: `${Math.min(100, week.used)}%` }} />
-                  </div>
-                  <small className="usage-pace">{dry ? <b>runs out before the reset at this pace</b> : `on pace for ${Math.round(pace)}% of the week`}</small>
-                  {worth !== null && <small>a full week's allowance ≈ <b>{money(worth)}</b> at API rates</small>}
-                  <small>{env.name} · reported {ageOf(week.at, limits.now)} ago</small>
-                </div>;
-              })}
-            </div>
-          </div>
-        );
-      })}
-      <p className="usage-limits-note">Pace compares use so far with time so far in the current week. Spend is this window's API-equivalent, scaled to a week.</p>
-    </section>
-  );
+  return [...spend.values()].sort((a, b) => b.costUsd - a.costUsd);
 }
-
-const ageOf = (at: number, now: number) => {
-  const minutes = Math.max(0, Math.floor((now - at) / 60_000));
-  return minutes < 1 ? 'moments' : minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`;
-};
 
 /**
  * One ring, one dimension. The magnitude is cost; tokens are the fallback
@@ -503,7 +382,7 @@ function DonutBreakdown({ groups, facet, onModel }: { groups: ChartGroup[]; face
 
   let cumulative = 0;
   return (
-    <div className="card usage-donut-card">
+    <div className="usage-donut-card">
       <div className="usage-donut-layout">
         <div className="usage-donut">
           <svg className="usage-donut-ring" viewBox="0 0 42 42" role="img" aria-label={aria}>
@@ -525,11 +404,6 @@ function DonutBreakdown({ groups, facet, onModel }: { groups: ChartGroup[]; face
               })}
             </g>
           </svg>
-          <div className="usage-donut-center">
-            {/* Long totals step down a size so they stay inside the hole. */}
-            <span className={`usage-donut-total${fmt(total).length > 7 ? ' xlong' : fmt(total).length > 5 ? ' long' : ''}`}>{fmt(total)}</span>
-            <span className="usage-donut-unit">{priced ? 'total cost' : 'total tokens'}</span>
-          </div>
         </div>
         <ul className="usage-legend">
           {slices.map((s, i) => (
@@ -554,30 +428,24 @@ function DonutBreakdown({ groups, facet, onModel }: { groups: ChartGroup[]; face
   );
 }
 
-/** What the number on screen is, and is not - plus the way to count it again. */
+/** How many machines the number covers, and the way to count it again. */
 function Provenance({ answered, total, stale, unpriced, rescanning, onRescan }: {
   answered: number; total: number; stale: number; unpriced: boolean;
   rescanning: boolean; onRescan: () => void;
 }) {
   return (
-    <div className="diag usage-note">
-      <span>
-        {answered === total
-          ? `${total} of ${total} machines reporting`
-          : `${answered} of ${total} machines reporting — the rest are not answering`}
-        {stale > 0 ? `, ${stale} from memory` : ''}
-      </span>
-      <span>
-        costs are published rates × real tokens
-        {unpriced ? ' · some models have no published rate and are counted in tokens only' : ''}
-      </span>
+    <p className="usage-note">
+      {answered === total ? `${total} of ${total} machines reporting` : `${answered} of ${total} machines reporting`}
+      {stale > 0 ? `, ${stale} from memory` : ''}
+      {unpriced ? ' · some models have no published rate and count in tokens only' : ''}
+      {' · '}
       {/* The daemon aggregates what it already read; a rescan re-reads the
           transcripts, so it is the answer to "that cannot be right" rather
           than a refresh button. */}
       <button className="linkish" disabled={rescanning} onClick={onRescan}>
-        {rescanning ? 'rescanning…' : 'rescan the transcripts'}
+        {rescanning ? 'Rescanning…' : 'Rescan'}
       </button>
-    </div>
+    </p>
   );
 }
 

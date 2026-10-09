@@ -1165,9 +1165,17 @@ function Shell({ client, conn, onSignOut }: {
             <img src="/favicon.svg" alt="" />
             <b className="wordmark">helm</b>
           </div>
-          <span className={`conn ${status}`} title={conn.error || status}>
-            <i />{status === 'live' ? `${envs.filter((e) => e.online).length}/${envs.length} online` : status}
-          </span>
+          {/* Live with every machine up is just the dot: the machines list
+              below already says who is online. Words appear when something
+              is off. */}
+          {(() => {
+            const online = envs.filter((e) => e.online).length;
+            const quiet = status === 'live' && online === envs.length;
+            return <span className={`conn ${status}`} title={conn.error || (quiet ? `Connected · ${online} of ${envs.length} machines online` : status)}
+              role="status" aria-label={quiet ? `Connected, all ${envs.length} machines online` : undefined}>
+              <i />{quiet ? '' : status === 'live' ? `${online}/${envs.length} online` : status}
+            </span>;
+          })()}
           <span className="side-tools">
             <button
               className="iconbtn settings-toggle" title="Settings" aria-label="Settings"
@@ -3110,8 +3118,9 @@ function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; m
         <Icon name="folder" size={12} />
         <span className="tri-where">{dirName(s.cwd)} · {machine}</span>
         <span className="tri-end">
+          {/* The age is already on the top line; the chip says only what. */}
           {runningThread(s)
-            ? <StatusChip status={busyWord(s.status)} at={s.updatedAt} />
+            ? <StatusChip status={busyWord(s.status)} />
             // Stopped by the owner part-way: finished with, but not finished.
             : s.recovery?.kind === 'interrupted' ? <span className="chip exited">stopped</span>
             : unknownThread(s) ? <StatusChip status="unknown" />
