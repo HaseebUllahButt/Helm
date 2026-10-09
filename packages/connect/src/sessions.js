@@ -1385,7 +1385,6 @@ export class Sessions extends EventEmitter {
       // as standing instructions rather than glued onto the owner's first
       // message, where it read as something they had typed.
       instructions: DRIVERS[s.driver]?.takesInstructions ? (this.delegationBrief?.() || null) : null,
-      helmDelegation: !s.external && !!this.delegationBrief,
       forkFrom: s.forkFrom,
       transcript: s.transcript,
       monitorOnly: !!s.external,

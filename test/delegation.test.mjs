@@ -474,7 +474,6 @@ test('agents get the tool instructions as standing instructions, not in the owne
   // The brief once rode on the first message and showed in the owner's
   // bubble as if they had typed it. Codex and Claude take it out of band.
   assert.equal(drivers.get(parent.id).instructions, '[helm delegation: use helm agents and helm delegate]');
-  assert.equal(drivers.get(parent.id).helmDelegation, true);
   await sessions.input(parent.id, '/status');
   assert.equal(drivers.get(parent.id).sent, '/status');
   drivers.get(parent.id).finish();
@@ -484,7 +483,6 @@ test('agents get the tool instructions as standing instructions, not in the owne
   await sessions.input(parent.id, 'Continue');
   assert.equal(drivers.get(parent.id).sent, 'Continue');
   const child = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
-  assert.equal(drivers.get(child.session.id).helmDelegation, true);
   assert.equal(drivers.get(child.session.id).instructions, drivers.get(parent.id).instructions);
 });
 

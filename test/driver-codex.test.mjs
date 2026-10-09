@@ -367,15 +367,15 @@ test('plain: initialize, thread/start, turn/start; text streams as deltas', asyn
   await driver.kill();
 });
 
-test('Helm-managed Codex threads disable native delegation on start and resume', async (t) => {
+test('Helm-managed Codex threads keep native multi-agent on start and resume', async (t) => {
   for (const engineSessionId of [undefined, '01a09e7a-960e-79e2-b7c8-8fc714c00f2a']) {
-    const { driver, fake } = make('plain', { engineSessionId, helmDelegation: true, instructions: 'Use Helm', mode: 'readonly' });
+    const { driver, fake } = make('plain', { engineSessionId, instructions: 'Use Helm', mode: 'readonly' });
     t.after(() => driver.kill());
     await driver.start();
     const request = fake.stdinLines().find((entry) => entry.method === (engineSessionId ? 'thread/resume' : 'thread/start'));
     assert.equal(request.params.developerInstructions, 'Use Helm');
-    assert.equal(request.params.config['features.multi_agent'], false);
-    assert.equal(request.params.config['features.multi_agent_v2'], false);
+    assert.equal(request.params.config?.['features.multi_agent'], undefined);
+    assert.equal(request.params.config?.['features.multi_agent_v2'], undefined);
     assert.equal(request.params.sandbox, 'read-only');
     assert.ok(!fake.stdinLines().some((entry) => entry.method === 'turn/start'));
   }

@@ -84,7 +84,6 @@ export class ClaudeDriver extends Driver {
     this.engineSessionId ??= randomUUID();
     this.resume = !!opts.engineSessionId && !opts.unsent;
     this.instructions = opts.instructions || null;
-    this.helmDelegation = !!opts.helmDelegation;
     this.delegated = !!opts.delegated;
     // A thread branched from another: begin as that conversation was at `at`.
     // Both ids are checked here as well as by whoever asked - they end up as
@@ -98,7 +97,9 @@ export class ClaudeDriver extends Driver {
     const args = [...this.profileArgs, ...BASE_ARGS, '--permission-mode', mode?.cli ?? 'manual'];
     if (this.model) args.push('--model', this.model);
     if (this.effort) args.push('--effort', this.effort);
-    args.push('--disallowedTools', this.helmDelegation ? 'EnterPlanMode,ExitPlanMode,Agent,Task' : 'EnterPlanMode,ExitPlanMode');
+    // The CLI's own subagents stay on: they show as cards like any other
+    // tool. Helm's delegate is only for reaching another CLI or account.
+    args.push('--disallowedTools', 'EnterPlanMode,ExitPlanMode');
     if (this.instructions) args.push('--append-system-prompt', this.instructions);
     if (this.forkFrom) {
       // Until the branch has said its first word it is not yet a conversation
