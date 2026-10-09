@@ -36,15 +36,22 @@ export function rememberLimits(account: string, windows: LimitWindow[]) {
   try { localStorage.setItem(KEY, JSON.stringify(store)); } catch { /* storage full or off: shown, not kept */ }
 }
 
-/** "resets in 2h 3m", "resets Fri 9:00" - for the tooltip. */
+/**
+ * "resets in 2h 3m, at 3:20 PM", "resets in 1d 16h, Sun 3:00 AM",
+ * "resets Wed 3:00 AM": how long to wait and the clock time, so neither has
+ * to be worked out from the other.
+ */
 export function resetPhrase(resetsAt?: number, now = Date.now()) {
   if (!resetsAt) return '';
-  const left = resetsAt * 1000 - now;
+  const at = resetsAt * 1000;
+  const left = at - now;
   if (left <= 0) return 'resets now';
+  const when = new Date(at);
+  const today = when.toDateString() === new Date(now).toDateString();
+  const clock = when.toLocaleString(undefined, today ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' });
   const minutes = Math.round(left / 60_000);
-  if (minutes < 48 * 60) {
-    const h = Math.floor(minutes / 60), m = minutes % 60;
-    return `resets in ${h ? `${h}h ${m}m` : `${m}m`}`;
-  }
-  return `resets ${new Date(resetsAt * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`;
+  if (minutes >= 48 * 60) return `resets ${clock}`;
+  const d = Math.floor(minutes / 1440), h = Math.floor(minutes / 60) % 24, m = minutes % 60;
+  const wait = d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+  return `resets in ${wait}, ${today ? 'at ' : ''}${clock}`;
 }

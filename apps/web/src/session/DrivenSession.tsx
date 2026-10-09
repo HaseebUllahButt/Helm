@@ -27,7 +27,7 @@ import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
 import { TaskReturn } from './TaskReturn';
 import { LimitsLine } from './LimitsLine';
-import { current, limitWindows, rememberLimits, rememberedLimits } from './limits';
+import { current, limitWindows, rememberLimits, rememberedLimits, type LimitWindow } from './limits';
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
@@ -450,7 +450,23 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const limitAccount = `${env.id}:${session.profileId}`;
   const liveLimits = useMemo(() => limitWindows(log.limits), [log.limits]);
   useEffect(() => { rememberLimits(limitAccount, liveLimits); }, [limitAccount, liveLimits]);
-  const limits = current(liveLimits.length ? liveLimits : rememberedLimits(limitAccount));
+  // Before this chat hears its own, the machine's latest reading for the
+  // account - from any chat on it, on any device - beats what this browser
+  // happens to remember.
+  const [machineLimits, setMachineLimits] = useState<LimitWindow[]>([]);
+  useEffect(() => {
+    if (!session.profileId || session.brain || session.engine === 'shell') return;
+    let live = true;
+    const read = () => client.rpc<{ accounts: { engine: string; aliases: string[]; windows: LimitWindow[] }[] }>(env.id, 'usage.limits', {}, 15_000)
+      .then((r) => {
+        const mine = r.accounts.find((a) => a.engine === session.engine && a.aliases.includes(session.profileId!));
+        if (live) setMachineLimits(mine?.windows.map(({ label, used, resetsAt }) => ({ label, used, resetsAt })) ?? []);
+      }).catch(() => { /* older machine or offline: the remembered reading stands */ });
+    read();
+    const timer = setInterval(read, 120_000);
+    return () => { live = false; clearInterval(timer); };
+  }, [client, env.id, session.profileId, session.engine, session.brain]);
+  const limits = current(liveLimits.length ? liveLimits : machineLimits.length ? machineLimits : rememberedLimits(limitAccount));
   // Which account this chat runs on: with several logins per CLI the mark
   // alone does not say whose plan is being spent. It sits with that plan's
   // limits under the composer rather than crowding the title.
