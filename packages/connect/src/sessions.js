@@ -222,7 +222,6 @@ export function acceptImages(attachments) {
 }
 
 export class Sessions extends EventEmitter {
-  #delegationStarts = 0;
   #index = new Map();
   /** paneId -> what the runtime last told us about a pane we do not own */
   #adopted = new Map();
@@ -1097,46 +1096,40 @@ export class Sessions extends EventEmitter {
       if (++depth > 3) throw new Error('subagents can nest at most three levels');
       ancestor = this.#index.get(ancestor.delegation.parentId);
     }
-    const active = [...this.#index.values()].filter((s) => s.delegation
-      && ['working', 'blocked', 'starting'].includes(s.delegation.status ?? s.status)).length;
-    if (active + this.#delegationStarts >= 4) throw new Error('four subagents are already running; wait for one to finish');
-    this.#delegationStarts++;
-    try {
-      const profile = (await getProfiles()).find((p) => p.id === profileId && !p.disabled);
-      if (!profile || !ENGINES[profile.engine]?.driver) throw new Error('choose a CLI account with a headless driver');
-      if (['plan', 'readonly', 'read'].includes(parent?.mode) && (profile.args ?? []).some((arg) => /^--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo)(?:=|$)/.test(arg))) {
-        throw new Error('that CLI profile bypasses permissions; choose a profile without bypass flags');
-      }
-      const auth = (await authStatuses([profile])).get(profile.id);
-      if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
-      const selectedMode = delegationMode(profile.engine, parent?.mode, mode, startPrefs(profile)?.mode, parent?.engine);
-      const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting' };
-      const child = await this.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
-        title: clip(task.trim().split('\n')[0], 80), delegation });
-      if (parent && (parent.stopGeneration ?? 0) !== parentGeneration) {
-        await this.kill(child.id);
-        throw new Error('the parent stopped before this task could start');
-      }
-      if ((model && child.model !== model) || (selectedMode && child.mode !== selectedMode)) {
-        await this.kill(child.id);
-        throw new Error('the CLI refused the selected subagent model or permissions; no task was sent');
-      }
-      if (parent) {
-        parent.delegations = [...(parent.delegations ?? []), child.id].slice(-100);
-        parent.updatedAt = Date.now();
-      }
-      this.#save();
-      this.emit('session', child);
-      this.#updateTeam(child);
-      if (parent) this.emit('session', parent);
-      // The task is the bounded context. A child never silently copies the
-      // parent's transcript, credentials, or unrelated local conversations.
-      try { await this.input(child.id, task.trim()); }
-      catch (error) {
-        throw new Error(`subagent ${child.id} could not receive its task: ${error.message}; read it with helm delegate-result ${child.id}`);
-      }
-      return { session: wire(child) };
-    } finally { this.#delegationStarts--; }
+    const profile = (await getProfiles()).find((p) => p.id === profileId && !p.disabled);
+    if (!profile || !ENGINES[profile.engine]?.driver) throw new Error('choose a CLI account with a headless driver');
+    if (['plan', 'readonly', 'read'].includes(parent?.mode) && (profile.args ?? []).some((arg) => /^--(?:dangerously-skip-permissions|dangerously-bypass-approvals-and-sandbox|yolo)(?:=|$)/.test(arg))) {
+      throw new Error('that CLI profile bypasses permissions; choose a profile without bypass flags');
+    }
+    const auth = (await authStatuses([profile])).get(profile.id);
+    if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
+    const selectedMode = delegationMode(profile.engine, parent?.mode, mode, startPrefs(profile)?.mode, parent?.engine);
+    const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting' };
+    const child = await this.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
+      title: clip(task.trim().split('\n')[0], 80), delegation });
+    if (parent && (parent.stopGeneration ?? 0) !== parentGeneration) {
+      await this.kill(child.id);
+      throw new Error('the parent stopped before this task could start');
+    }
+    if ((model && child.model !== model) || (selectedMode && child.mode !== selectedMode)) {
+      await this.kill(child.id);
+      throw new Error('the CLI refused the selected subagent model or permissions; no task was sent');
+    }
+    if (parent) {
+      parent.delegations = [...(parent.delegations ?? []), child.id].slice(-100);
+      parent.updatedAt = Date.now();
+    }
+    this.#save();
+    this.emit('session', child);
+    this.#updateTeam(child);
+    if (parent) this.emit('session', parent);
+    // The task is the bounded context. A child never silently copies the
+    // parent's transcript, credentials, or unrelated local conversations.
+    try { await this.input(child.id, task.trim()); }
+    catch (error) {
+      throw new Error(`subagent ${child.id} could not receive its task: ${error.message}; read it with helm delegate-result ${child.id}`);
+    }
+    return { session: wire(child) };
   }
 
   delegationResult(id) {

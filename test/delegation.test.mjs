@@ -407,17 +407,16 @@ test('a read-only parent stays read only across CLIs and cannot request a bypass
   assert.throws(() => delegationMode('pi', 'readonly'), /no verified read-only/);
 });
 
-test('concurrent starts cannot bypass the four-child limit', async (t) => {
+test('there is no machine-wide cap on running children', async (t) => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const { sessions } = setup(t, (opts) => {
     const d = new FakeDriver(opts); d.start = () => gate; return d;
   });
-  const starts = Array.from({ length: 5 }, () => sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Inspect' }));
-  await assert.rejects(starts[4], /four subagents/);
+  const starts = Array.from({ length: 6 }, () => sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Inspect' }));
   release();
-  const children = await Promise.all(starts.slice(0, 4));
-  assert.equal(children.length, 4);
+  const children = await Promise.all(starts);
+  assert.equal(new Set(children.map((c) => c.session.id)).size, 6);
 });
 
 test('task messages remain scoped to their orchestrator and resume a completed child', async (t) => {
