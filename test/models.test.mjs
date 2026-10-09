@@ -106,3 +106,18 @@ test('Devin model detection accepts its JSON catalog format', async () => {
   assert.deepEqual(found.models, ['gpt-6-luna-medium', 'swe-2-high']);
   assert.equal(found.labels['swe-2-high'], 'SWE-2 High');
 });
+
+test('Claude and Gemini lists put the newest published model first and pinned snapshots last', async () => {
+  const { newestFirst, parseModelsDevProvider } = await import('../packages/connect/src/models.js');
+  const published = parseModelsDevProvider({ anthropic: { models: {
+    'claude-haiku-4-5': { name: 'Claude Haiku 4.5', release_date: '2025-10-01' },
+    'claude-haiku-4-5-20251001': { name: 'Claude Haiku 4.5', release_date: '2025-10-01' },
+    'claude-opus-5-5': { name: 'Claude Opus 5.5', release_date: '2026-06-01' },
+    'claude-haiku-5-5': { name: 'Claude Haiku 5.5', release_date: '2026-10-07' },
+  } } }, 'anthropic');
+  assert.equal(published.releasedAt['claude-haiku-5-5'], '2026-10-07');
+  const order = newestFirst(['undated-local', ...published.models], published.releasedAt);
+  assert.deepEqual(order, [
+    'claude-haiku-5-5', 'claude-opus-5-5', 'claude-haiku-4-5', 'undated-local', 'claude-haiku-4-5-20251001',
+  ]);
+});

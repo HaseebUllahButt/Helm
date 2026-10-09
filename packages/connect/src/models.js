@@ -494,8 +494,9 @@ async function codexCatalog(root, environment = {}) {
     : { catalog: null, source: null };
 }
 
+// Only what the picker shows before Models.dev answers; newest first.
 const CLAUDE_FALLBACK_FAMILY = [
-  'claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5',
+  'claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5',
 ];
 
 /**
@@ -516,7 +517,9 @@ async function claudeModels(root) {
       if (typeof p?.model === 'string') seen.add(p.model);
     }
   } catch { /* no config yet */ }
-  const models = [...seen];
+  // Newest first, so a model that shipped this week sits at the top of the
+  // picker instead of behind two years of older ones (Models.dev dates each).
+  const models = newestFirst([...seen], published.releasedAt);
   if (def && !models.includes(def)) models.unshift(def);
   const labels = { 'claude-opus-5-5': 'Claude Opus 5.5', ...published.labels };
   // `claude --effort`; the default depends on the model, so none is claimed.
@@ -534,14 +537,34 @@ export function parseModelsDevProvider(catalog, provider) {
   const models = [];
   const labels = {};
   const imagesByModel = {};
-  if (!rows || typeof rows !== 'object') return { models, labels, imagesByModel };
+  const releasedAt = {};
+  if (!rows || typeof rows !== 'object') return { models, labels, imagesByModel, releasedAt };
   for (const [id, meta] of Object.entries(rows)) {
     if (!id || /review|reserve|deprecated/i.test(id)) continue;
     models.push(id);
     if (typeof meta?.name === 'string' && meta.name.trim()) labels[id] = meta.name.trim();
     if (typeof meta?.attachment === 'boolean') imagesByModel[id] = meta.attachment;
+    if (typeof meta?.release_date === 'string' && meta.release_date.trim()) releasedAt[id] = meta.release_date.trim();
   }
-  return { models, labels, imagesByModel };
+  return { models, labels, imagesByModel, releasedAt };
+}
+
+/** A dated snapshot ("claude-haiku-4-5-20251001") is a pin, not a new choice. */
+const isSnapshot = (id) => /-\d{8}$/.test(id);
+
+/**
+ * Newest release first; ids the catalog does not date keep their order and
+ * sit between the dated ones and the pinned snapshots, which go last. A
+ * stable sort, so two models released the same day stay in catalog order.
+ */
+export function newestFirst(ids, releasedAt = {}) {
+  const rank = (id) => (isSnapshot(id) ? 2 : releasedAt[id] ? 0 : 1);
+  return ids
+    .map((id, i) => ({ id, i }))
+    .sort((a, b) => rank(a.id) - rank(b.id)
+      || (releasedAt[b.id] ?? '').localeCompare(releasedAt[a.id] ?? '')
+      || a.i - b.i)
+    .map((x) => x.id);
 }
 
 /** Return stale public data immediately and refresh it once in the background. */
@@ -817,7 +840,7 @@ async function cursorModels(environment = {}) {
 /** gemini has no listing command; the public catalog is the only honest list. */
 async function geminiModels() {
   const published = await modelsDevProvider('google');
-  const models = published.models.filter((m) => m.startsWith('gemini'));
+  const models = newestFirst(published.models.filter((m) => m.startsWith('gemini')), published.releasedAt);
   return { default: null, models, labels: published.labels, imagesByModel: published.imagesByModel, images: true };
 }
 
