@@ -1132,7 +1132,7 @@ export class Sessions extends EventEmitter {
     return { session: wire(child) };
   }
 
-  delegationResult(id) {
+  delegationResult(id, { consume = false, parentId, callerThreadId } = {}) {
     const session = this.get(id);
     if (!session.delegation) throw new Error('that session is not a delegated CLI task');
     // Command cards answered beside the task are not its result.
@@ -1150,7 +1150,42 @@ export class Sessions extends EventEmitter {
         result.status = status; result.complete = true;
       }
     }
+    // Only the owning orchestrator collecting a final result acknowledges
+    // delivery. UI/history reads and unrelated inherited CLI environments
+    // must not silence the parent's notification.
+    const parent = this.#index.get(parentId);
+    if (consume && result.complete && parent && session.delegation.parentId === parent.id
+      && (session.delegation.parentGeneration ?? 0) === (parent.stopGeneration ?? 0)
+      && (!callerThreadId || parent.engine === 'codex' && parent.engineSessionId === callerThreadId)) {
+      const completed = events.findLast(e => e.type === 'turn.done' && !String(e.turnId).startsWith('local-'));
+      if (completed) {
+        session.delegation.consumedSeq = Math.max(session.delegation.consumedSeq ?? 0, completed.seq);
+        // Persist before removing tickets: a restart in between still knows
+        // not to revive or deliver a result that the parent already read.
+        this.#save();
+        for (const item of [...(this.#outbox.get(parent.id) ?? [])]) {
+          if (this.#consumedResult(parent, item.turnId)) this.dequeue(parent.id, item.turnId);
+        }
+      }
+    }
     return result;
+  }
+
+  #consumedResult(parent, turnId) {
+    const match = /^local-result-([a-f0-9]{12})-(\d+)$/.exec(turnId ?? '');
+    const child = match && this.#index.get(match[1]);
+    return !!child && child.delegation?.parentId === parent.id
+      && (child.delegation.consumedSeq ?? 0) >= Number(match[2]);
+  }
+
+  #discardConsumedResult(parent, turnId) {
+    if (!this.#consumedResult(parent, turnId)) return false;
+    if (this.events.turnState(parent.id, turnId) === 'open') {
+      const event = this.events.append(parent.id, { type: 'turn.remove', turnId });
+      parent.lastSeq = event.seq;
+      this.emit('event', { id: parent.id, event });
+    }
+    return true;
   }
 
   /** Follow-ups remain on the same task; running agents can be steered without opening a chat. */
@@ -1638,7 +1673,8 @@ export class Sessions extends EventEmitter {
   }
 
   async #notifyParent(child, event) {
-    if (child.delegation?.notifyParent !== true || String(event.turnId).startsWith('local-') || this.hasActiveDelegations(child.id)) return;
+    if (child.delegation?.notifyParent !== true || String(event.turnId).startsWith('local-') || this.hasActiveDelegations(child.id)
+      || (child.delegation.consumedSeq ?? 0) >= event.seq) return;
     const parent = this.#index.get(child.delegation?.parentId);
     if (!parent || parent.archived || parent.stoppedAt || child.archived || child.stoppedAt || child.delegation.notifiedSeq >= event.seq
       || (child.delegation.parentGeneration ?? 0) !== (parent.stopGeneration ?? 0)) return;
@@ -1659,7 +1695,7 @@ export class Sessions extends EventEmitter {
     try {
       let text;
       const turn = turnId ? turnOf(tail, turnId) : null;
-      if (isWakeTurn(turn) && (told.length || child.delegation.notifiedSeq > 0)) {
+      if (isWakeTurn(turn) && (told.length || child.delegation.notifiedSeq > 0 || child.delegation.consumedSeq > 0)) {
         // Woken by its own background work after reporting: the parent has the
         // result already, so only something new is worth a message.
         const update = turnText(turn).trim();
@@ -1667,9 +1703,14 @@ export class Sessions extends EventEmitter {
         text = `A delegated task you already have the result of added an update.\nTask: ${child.title}\nUpdate:\n${update.slice(-12000)}`;
       } else {
         const result = this.delegationResult(child.id);
-        text = `A delegated task finished. Treat its result as context for the current user request.\nTask: ${child.title}\nStatus: ${result.status}\nResult:\n${(result.output || result.error || 'No written result.').slice(-12000)}`;
+        // The completion event precedes the driver's idle update. A trailing
+        // steering ticket can still make the general snapshot look working.
+        const outcome = event.status === 'ok' ? 'done' : event.status;
+        text = `A delegated task finished. Treat its result as context for the current user request.\nTask: ${child.title}\nStatus: ${outcome}\nResult:\n${(result.output || result.error || 'No written result.').slice(-12000)}`;
       }
       await this.input(parent.id, text, { turnId: ticket, delivery: 'queue', source: 'delegation' });
+      // Collecting the result can race driver startup inside input().
+      if (this.#consumedResult(parent, ticket)) this.dequeue(parent.id, ticket);
       sent();
     } catch (error) { this.log(`[${child.id}] could not return task result: ${error.message}`); }
     finally { this.#notifying.delete(key); }
@@ -3144,9 +3185,11 @@ export class Sessions extends EventEmitter {
    * but it says so out loud rather than dropping them silently.
    */
   async #deliver(s, item, d = null) {
+    if (this.#discardConsumedResult(s, item.turnId)) return;
     if (this.#retiring.has(s.id)) d = null;
     try {
       d ??= await this.#driver(s);
+      if (this.#discardConsumedResult(s, item.turnId)) return;
       if (s.stoppedAt || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0))) {
         throw new Error('message cancelled because the thread was stopped');
       }
@@ -3740,6 +3783,7 @@ export class Sessions extends EventEmitter {
         continue;
       }
       if (local && e.queued === true && !echoed) {
+        if (this.#discardConsumedResult(s, e.turnId)) continue;
         // The event log is the queue. Recover the text, compact command, and
         // image bytes from it in sequence order; the small attachment refs
         // themselves are deliberately not enough to send to a driver.

@@ -70,7 +70,11 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
   const deadline = Date.now() + timeout;
   let result;
   do {
-    result = await rpc(self, M.SESSION_DELEGATION_RESULT, { id });
+    const owner = options.parent ?? parentId;
+    result = await rpc(self, M.SESSION_DELEGATION_RESULT, { id,
+      ...(owner ? { consume: true, parentId: owner,
+        ...(!options.parent && callerThreadId ? { callerThreadId } : {}) } : {}),
+    });
     // Approval is a result, not an unbounded tool wait. The parent can tell
     // the owner to open the child's card, then fetch the result again.
     if (!options.wait || result.complete || result.status === 'blocked') break;

@@ -238,6 +238,123 @@ test('a child completion wakes its idle parent once with a durable result ticket
   assert.equal(duplicate.duplicate, true);
 });
 
+test('collecting a completed result removes its queued notice and survives restart', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Implement and ship');
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Redesign' });
+  drivers.get(child.id).finish();
+  await new Promise(resolve => setImmediate(resolve));
+  const ticket = sessions.history(parent.id).events.find(e => String(e.turnId).startsWith(`local-result-${child.id}-`));
+  assert.equal(ticket.queued, true);
+  sessions.delegationResult(child.id);
+  sessions.delegationResult(child.id, { consume: true, parentId: parent.id, callerThreadId: 'another-thread' });
+  assert.equal(sessions.turnState(parent.id, ticket.turnId), 'open', 'ordinary and unrelated reads cannot consume a notice');
+  const result = sessions.delegationResult(child.id, { consume: true, parentId: parent.id, callerThreadId: parent.engineSessionId });
+  assert.equal(result.complete, true);
+  assert.equal(sessions.turnState(parent.id, ticket.turnId), 'removed');
+  // Crash after the acknowledgement was saved but before turn.remove was
+  // flushed: the durable marker still prevents queue restoration.
+  writeFileSync(join(process.env.HELM_DIR, 'events', `${parent.id}.jsonl`),
+    sessions.history(parent.id).events.filter(e => !(e.type === 'turn.remove' && e.turnId === ticket.turnId))
+      .map(e => JSON.stringify(e)).join('\n') + '\n');
+  const restarted = new Sessions(new EventEmitter(), { makeDriver: () => assert.fail('collected results must not launch an agent') });
+  t.after(() => restarted.stop());
+  await restarted.resume();
+  assert.ok(restarted.get(child.id).delegation.consumedSeq > 0);
+  assert.equal(restarted.turnState(parent.id, ticket.turnId), 'removed');
+  drivers.get(parent.id).finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(drivers.get(parent.id).sent, 'Implement and ship', 'finishing the parent does not deliver the result again');
+});
+
+test('a completion notice uses its outcome before idle arrives after a steering ticket', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Work');
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  sessions.events.append(child.id, { type: 'turn.start', turnId: 'local-message-steered', queued: true, text: 'Check mobile' });
+  sessions.events.append(child.id, { type: 'turn.accept', turnId: 'local-message-steered' });
+  drivers.get(child.id).push('item.delta', { id: 'reply', text: 'Final review.' });
+  drivers.get(child.id).push('turn.done', { turnId: drivers.get(child.id).engineSessionId, status: 'ok' });
+  await new Promise(resolve => setImmediate(resolve));
+  const ticket = sessions.history(parent.id).events.find(e => String(e.turnId).startsWith(`local-result-${child.id}-`));
+  assert.match(ticket.text, /Status: done\n/);
+  assert.doesNotMatch(ticket.text, /Status: working/);
+});
+
+test('collecting an earlier result leaves a later follow-up notification available', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Work');
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const kid = drivers.get(child.id);
+  kid.finish();
+  await new Promise(resolve => setImmediate(resolve));
+  sessions.delegationResult(child.id, { consume: true, parentId: parent.id });
+  kid.push('status', { status: 'working' });
+  kid.push('turn.start', { turnId: 'followup', text: 'Check the follow-up' });
+  kid.push('item.start', { id: 'followup-reply', kind: 'text', turnId: 'followup' });
+  kid.push('item.delta', { id: 'followup-reply', text: 'Follow-up complete.' });
+  kid.push('turn.done', { turnId: 'followup', status: 'ok' });
+  kid.push('status', { status: 'idle' });
+  await new Promise(resolve => setImmediate(resolve));
+  const tickets = sessions.history(parent.id).events.filter(e => e.type === 'turn.start' && String(e.turnId).startsWith(`local-result-${child.id}-`));
+  assert.equal(tickets.length, 2);
+  assert.equal(sessions.turnState(parent.id, tickets[0].turnId), 'removed');
+  assert.equal(sessions.turnState(parent.id, tickets[1].turnId), 'open');
+  assert.match(tickets[1].text, /Follow-up complete/);
+});
+
+test('collecting a result while its notification is in flight cannot enqueue it later', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Work');
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const input = sessions.input.bind(sessions);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  sessions.input = async (id, text, options) => {
+    if (options?.source === 'delegation') await gate;
+    return input(id, text, options);
+  };
+  drivers.get(child.id).finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sessions.delegationResult(child.id, { consume: true, parentId: parent.id }).complete, true);
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  const tickets = sessions.history(parent.id).events.filter(e => e.type === 'turn.start' && String(e.turnId).startsWith(`local-result-${child.id}-`));
+  assert.equal(tickets.length, 1);
+  assert.equal(sessions.turnState(parent.id, tickets[0].turnId), 'removed');
+  drivers.get(parent.id).finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(drivers.get(parent.id).sent, 'Work');
+});
+
+test('a wake-up after a collected result sends only its new update', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Work');
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const kid = drivers.get(child.id);
+  kid.finish();
+  await new Promise(resolve => setImmediate(resolve));
+  sessions.delegationResult(child.id, { consume: true, parentId: parent.id });
+  // A collected reply counts as delivered even if no push completed.
+  delete sessions.get(child.id).delegation.notifiedSeq;
+  sessions.get(child.id).delegation.notifiedTurns = [];
+  kid.push('status', { status: 'working' });
+  kid.push('turn.start', { turnId: 'wake-update', text: '', wake: true });
+  kid.push('item.start', { id: 'wake-reply', kind: 'text', turnId: 'wake-update' });
+  kid.push('item.delta', { id: 'wake-reply', text: 'New verification.' });
+  kid.push('turn.done', { turnId: 'wake-update', status: 'ok' });
+  kid.push('status', { status: 'idle' });
+  await new Promise(resolve => setImmediate(resolve));
+  const ticket = sessions.history(parent.id).events.findLast(e => e.type === 'turn.start' && String(e.turnId).startsWith(`local-result-${child.id}-`));
+  assert.match(ticket.text, /added an update[\s\S]*New verification/);
+  assert.doesNotMatch(ticket.text, /Opus reviewed the task/);
+});
+
 test('a child that wakes itself after reporting sends only what is new, never the report again', async (context) => {
   const { sessions, drivers } = setup(context);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
@@ -563,6 +680,10 @@ test('CLI waits for the actual reply and reports pending approvals immediately',
   assert.equal(calls[1].params.callerThreadId, 'real-codex-thread');
   assert.equal(calls[1].params.model, 'opus');
   assert.equal(calls[1].params.task, 'Review');
+  assert.deepEqual(calls.filter(c => c.method === M.SESSION_DELEGATION_RESULT).map(c => c.params), [
+    { id: 'child', consume: true, parentId: 'parent', callerThreadId: 'real-codex-thread' },
+    { id: 'child', consume: true, parentId: 'parent', callerThreadId: 'real-codex-thread' },
+  ]);
   assert.equal(JSON.parse(written[0]).output, 'Reviewed.');
   assert.equal(await runAgentCommand('delegate-result', ['child', '--wait', '--json'], {
     rpc: async () => ({ status: 'blocked', complete: false, pending: { title: 'Allow read' } }), self: 'self', write: () => {},

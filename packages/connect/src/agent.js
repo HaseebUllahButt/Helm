@@ -1575,7 +1575,7 @@ export class Daemon {
 
       case M.SESSION_LIST:    return { sessions: await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true }) };
       case M.SESSION_DELEGATE: return this.sessions.delegate(p);
-      case M.SESSION_DELEGATION_RESULT: return this.sessions.delegationResult(p.id);
+      case M.SESSION_DELEGATION_RESULT: return this.sessions.delegationResult(p.id, p);
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
