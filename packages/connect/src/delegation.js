@@ -25,13 +25,36 @@ export async function agentCatalog(profiles, statuses, { models = true, credenti
       const labels = Object.fromEntries((catalog.models ?? []).filter((id) => catalog.labels?.[id])
         .map((id) => [id, catalog.labels[id]]));
       return { ...row, models: catalog.models, labels,
-        defaultModel: modelPrefs(p)?.default ?? catalog.default ?? null };
+        defaultModel: modelPrefs(p)?.default ?? catalog.default ?? null,
+        cheapModel: cheapModel(p.engine, catalog.models), refreshing: !!catalog.refreshing };
     } catch { return { ...row, models: [], defaultModel: null }; }
   }));
 }
 
+/**
+ * The account's cheapest capable model, for mechanical helper work. Lists
+ * come newest first (models.js), so the first match is the current small
+ * model, not a retired one. Null when the catalog has no small tier - the
+ * caller then names a model itself rather than guessing.
+ */
+const CHEAP_TIER = {
+  claude: /haiku/i,
+  gemini: /flash-lite|flash/i,
+  codex: /nano|mini/i,
+};
+export function cheapModel(engine, models = []) {
+  const want = CHEAP_TIER[engine] ?? /haiku|flash|mini|nano|lite|spark/i;
+  return models.find((m) => want.test(m)) ?? null;
+}
+
+/**
+ * Doing the work yourself is the default: a helper costs a fresh context, a
+ * second plan draw, and a result the owner has to read twice. The CLI's own
+ * subagents are the normal way to fan out; Helm's delegate exists for the
+ * one thing they cannot do, which is run on another CLI or account.
+ */
 export function delegationNote() {
-  return '[Helm: Delegate only with helm delegate <account> --model <model> --wait --json -- "<task>", never native subagents. Discover accounts/models with helm agents --json only when needed. Machine capacity is shared by all sessions. Parallelize reading and coding; children run scoped checks, and the parent owns broad validation after integration. Run expensive tests, builds and type-checks with helm run --heavy -- <command> so they share one machine-wide slot and bounded test workers. Inspect package scripts before assuming file arguments restrict a suite. Rerun checks only for changed code, failures or unresolved concerns; report what passed and what remains untested. Finished children release their runtime after 30 seconds idle and resume the same conversation on follow-up.]';
+  return '[Helm: Do the work yourself by default. Use your CLI\'s own subagents when a side task would flood your context or genuinely runs in parallel. Use helm delegate <account> --model <model> --wait --json -- "<task>" only when the owner asks for it or the work needs another CLI or account; --model cheap picks that account\'s small model for mechanical work (searching, reading, summarising, running checks); keep judgment calls yourself. Discover accounts/models with helm agents --json only when needed. Run expensive tests, builds and type-checks with helm run --heavy -- <command> so they share one machine-wide slot and bounded test workers. Inspect package scripts before assuming file arguments restrict a suite. Rerun checks only for changed code, failures or unresolved concerns; report what passed and what remains untested. Finished children release their runtime after 30 seconds idle and resume the same conversation on follow-up.]';
 }
 
 /**

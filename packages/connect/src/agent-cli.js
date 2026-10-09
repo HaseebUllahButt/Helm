@@ -18,7 +18,7 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
     else {
       const { formatCredential } = await import('./credentials.js');
       for (const a of result.agents) {
-        write(`${a.id}  ${a.engine}  ${a.auth}${a.defaultModel ? `  default: ${a.defaultModel}` : ''}`);
+        write(`${a.id}  ${a.engine}  ${a.auth}${a.defaultModel ? `  default: ${a.defaultModel}` : ''}${a.cheapModel ? `  cheap: ${a.cheapModel}` : ''}`);
         if (a.models?.length) write(`  models: ${a.models.join(', ')}`);
         if (a.credentials?.length) write(`  credentials: ${a.credentials.map(formatCredential).join(', ')}`);
       }
@@ -33,9 +33,23 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
   if (command === 'delegate') {
     const [account, ...task] = words;
     if (!account || !task.join(' ').trim()) throw new Error('helm delegate <account> [--model <id>] [--wait] [--json] -- "<task>"');
-    const { agents } = await rpc(self, M.AGENT_LIST, { models: false });
-    const agent = chooseAgent(agents, account);
+    // `cheap` names the account's small model (helm agents shows it), so a
+    // helper never has to guess which id is the inexpensive one.
+    const cheap = options.model === 'cheap';
+    let { agents } = await rpc(self, M.AGENT_LIST, { models: cheap }, cheap ? 60_000 : undefined);
+    let agent = chooseAgent(agents, account);
     if (!agent.available) throw new Error(`${agent.id} is signed out; log in through its CLI first`);
+    // A list still being refreshed from the public catalog may name last
+    // season's small model; give the refresh a few seconds to land.
+    for (let tries = 0; cheap && agent.refreshing && tries < 8; tries++) {
+      await sleep(1000);
+      ({ agents } = await rpc(self, M.AGENT_LIST, { models: true }, 60_000));
+      agent = chooseAgent(agents, account);
+    }
+    if (cheap) {
+      if (!agent.cheapModel) throw new Error(`${agent.id} has no small model; choose one from: ${(agent.models ?? []).join(', ') || 'helm agents'}`);
+      options.model = agent.cheapModel;
+    }
     const { session } = await rpc(self, M.SESSION_DELEGATE, {
       id: options.parent ?? parentId, cwd: options.cwd ?? cwd, profileId: agent.id,
       model: options.model, mode: options.mode, effort: options.effort, task: task.join(' '),

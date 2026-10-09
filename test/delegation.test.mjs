@@ -458,11 +458,13 @@ test('delegation instructions stay compact and independent of the account roster
   assert.ok(note.length < 1000);
   assert.equal(delegationNote(profiles), note);
   assert.equal(delegationNote([]), note);
-  assert.match(note, /never native subagents/);
+  assert.match(note, /Do the work yourself by default/);
+  assert.match(note, /own subagents/);
+  assert.match(note, /only when the owner asks for it or the work needs another CLI or account/);
+  assert.match(note, /--model cheap/);
   assert.match(note, /helm agents --json only when needed/);
   assert.match(note, /helm delegate <account> --model <model> --wait --json/);
   assert.match(note, /helm run --heavy/);
-  assert.match(note, /parent owns broad validation/);
   assert.match(note, /Inspect package scripts/);
 });
 
@@ -517,6 +519,32 @@ test('CLI flags do not leak into the task; literal task flags survive --', () =>
   assert.throws(() => parseAgentArgs(['--model'], { values: ['model'] }), /needs a value/);
   assert.throws(() => parseAgentArgs(['--mystery']), /unknown option/);
   assert.throws(() => chooseAgent([{ id: 'claude-a', engine: 'claude' }, { id: 'claude-b', engine: 'claude' }], 'claude'), /ambiguous/);
+});
+
+test('--model cheap resolves to the account\'s small model, and fails plainly without one', async () => {
+  const { cheapModel } = await import('../packages/connect/src/delegation.js');
+  assert.equal(cheapModel('claude', ['claude-haiku-5-5', 'claude-opus-5-5', 'claude-haiku-4-5']), 'claude-haiku-5-5');
+  assert.equal(cheapModel('gemini', ['gemini-3.8-pro', 'gemini-3.8-flash']), 'gemini-3.8-flash');
+  assert.equal(cheapModel('codex', ['gpt-6.1-sol', 'gpt-6-astra']), null);
+  const calls = [];
+  const rpc = async (_self, method, params) => {
+    calls.push({ method, params });
+    if (method === M.AGENT_LIST) return { agents: [
+      { id: 'claude-main', engine: 'claude', available: true, cheapModel: 'claude-haiku-5-5', models: ['claude-haiku-5-5'] },
+      { id: 'codex-main', engine: 'codex', available: true, cheapModel: null, models: ['gpt-6.1-sol'] },
+    ] };
+    if (method === M.SESSION_DELEGATE) return { session: { id: 'child', engine: 'claude', model: params.model } };
+    return { status: 'done', complete: true, output: 'ok' };
+  };
+  const written = [];
+  assert.equal(await runAgentCommand('delegate', ['claude-main', '--model', 'cheap', '--json', '--', 'Grep'], {
+    rpc, self: 'self', write: (s) => written.push(s), sleep: async () => {},
+  }), 0);
+  assert.equal(calls[0].params.models, true);
+  assert.equal(calls[1].params.model, 'claude-haiku-5-5');
+  await assert.rejects(() => runAgentCommand('delegate', ['codex-main', '--model', 'cheap', '--', 'Grep'], {
+    rpc, self: 'self', write: () => {}, sleep: async () => {},
+  }), /no small model; choose one from: gpt-6.1-sol/);
 });
 
 test('CLI waits for the actual reply and reports pending approvals immediately', async () => {
