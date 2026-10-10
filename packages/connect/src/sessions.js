@@ -343,6 +343,7 @@ export class Sessions extends EventEmitter {
       for (const s of this.#index.values()) if (s.nativeChat && ['working', 'blocked'].includes(s.status)) {
         this.nativeTerminals.renew(s.id).catch(() => {});
       }
+      this.#syncNativeClaude();
       if (!this.nativeDiscovery) return;
       try {
         await this.nativeTerminals.ensure({ spawn: false });
@@ -366,6 +367,8 @@ export class Sessions extends EventEmitter {
 
   /** requestId -> { id, reply, raw }: a terminal Claude's question, waiting in its hook. */
   #hookAsks = new Map();
+  /** When a hook last said what a terminal Claude is doing. */
+  #nativeStatusAt = new Map();
   /** Keep each pasted message and its Enter together across app clients. */
   #nativeInputs = new Map();
 
@@ -384,6 +387,7 @@ export class Sessions extends EventEmitter {
     if (!s?.nativeCli) return reply(null);
     const name = event.hook_event_name;
     const setStatus = (status) => {
+      this.#nativeStatusAt.set(s.id, Date.now());
       if (s.status === status) return;
       s.status = status; s.updatedAt = Date.now(); this.#save();
       this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id), ...pendingSummary(this.events.pending(s.id)) });
@@ -428,6 +432,33 @@ export class Sessions extends EventEmitter {
     else if (name === 'Stop' || (name === 'Notification' && event.notification_type === 'idle_prompt')) setStatus('idle');
   }
 
+  /**
+   * A terminal Claude keeps its own busy/idle word in its session file.
+   * Hooks miss two moments: Stop does not run when a turn is interrupted, so
+   * a stopped chat kept reading "working"; and nothing marks a turn Claude
+   * starts by itself (a background task finishing) until its first tool
+   * ends, so a busy chat read "done". Only a change Claude wrote after Helm's
+   * own last status counts, so a fresh hook is never undone by an older file.
+   * Questions stay with the hooks, which can answer them.
+   */
+  #syncNativeClaude() {
+    const homes = new Map();
+    for (const s of this.#index.values()) {
+      if (!s.nativeChat || s.engine !== 'claude' || !s.engineSessionId || !s.nativeHome) continue;
+      if (s.status !== 'working' && s.status !== 'idle') continue;
+      if ([...this.#hookAsks.values()].some((a) => a.id === s.id)) continue;
+      if (!homes.has(s.nativeHome)) homes.set(s.nativeHome, claudeLiveSessions(s.nativeHome));
+      // Only this terminal's Claude: another may have resumed the same chat.
+      const owners = (homes.get(s.nativeHome).get(s.engineSessionId) ?? [])
+        .filter((o) => !!s.nativePid && descendsFrom(o.pid, s.nativePid));
+      const live = claudeLiveStatus(owners);
+      if ((live !== 'working' && live !== 'idle') || live === s.status) continue;
+      if (!owners.some((o) => o.statusAt > (this.#nativeStatusAt.get(s.id) ?? 0))) continue;
+      s.status = live; s.updatedAt = Date.now(); this.#save();
+      this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id), ...pendingSummary(this.events.pending(s.id)) });
+    }
+  }
+
   #closeHookAsk(requestId, decision) {
     const ask = this.#hookAsks.get(requestId);
     if (!ask) return;
@@ -436,7 +467,7 @@ export class Sessions extends EventEmitter {
     this.emit('event', { id: ask.id, event });
     const s = this.#index.get(ask.id);
     if (s && s.status === 'blocked' && ![...this.#hookAsks.values()].some((a) => a.id === s.id)) {
-      s.status = 'working'; s.updatedAt = Date.now(); this.#save();
+      s.status = 'working'; s.updatedAt = Date.now(); this.#nativeStatusAt.set(s.id, Date.now()); this.#save();
       this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id), ...pendingSummary(this.events.pending(s.id)) });
     }
   }
@@ -3539,13 +3570,36 @@ export class Sessions extends EventEmitter {
   /** The CLI used a handed-over message: its bubble joins the transcript here. */
   #consumed(s, text) {
     const steered = this.#steered.get(s.id);
-    if (!steered?.length) return;
+    if (!steered?.length) return this.#absorbed(s, text);
     const want = String(text ?? '').trim();
     let i = steered.findIndex((x) => x.text.trim() === want);
     if (i < 0) i = 0;
     const [{ turnId }] = steered.splice(i, 1);
     if (!steered.length) this.#steered.delete(s.id);
     const event = this.events.append(s.id, { type: 'turn.accept', turnId });
+    s.lastSeq = event.seq;
+    this.emit('event', { id: s.id, event });
+  }
+
+  /**
+   * A message sent as a normal turn that the CLI read inside a turn it was
+   * already running (one it started by itself). It echoes no turn of its
+   * own, so nothing would ever close its bubble: accept it into that turn.
+   */
+  #absorbed(s, text) {
+    const want = String(text ?? '').trim();
+    if (!want) return;
+    const tail = this.events.tail(s.id, 0);
+    const settled = new Set(tail.filter((e) => ['turn.done', 'turn.remove', 'turn.accept'].includes(e.type)).map((e) => e.turnId));
+    const waiting = new Set((this.#outbox.get(s.id) ?? []).map((item) => item.turnId));
+    const said = (e) => String(e.text ?? '').trim();
+    // An echo after it means the CLI ran it as a turn of its own.
+    const echoed = (e) => tail.some((x) => x.type === 'turn.start' && x.seq > e.seq
+      && !String(x.turnId).startsWith('local-') && said(x) === said(e));
+    const sent = tail.find((e) => e.type === 'turn.start' && String(e.turnId).startsWith('local-') && !e.local
+      && said(e) === want && !settled.has(e.turnId) && !waiting.has(e.turnId) && !echoed(e));
+    if (!sent) return;
+    const event = this.events.append(s.id, { type: 'turn.accept', turnId: sent.turnId });
     s.lastSeq = event.seq;
     this.emit('event', { id: s.id, event });
   }

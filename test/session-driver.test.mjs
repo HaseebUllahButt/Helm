@@ -1481,6 +1481,32 @@ test('a message typed mid-turn is held until a step runs, then handed over like 
   assert.deepEqual(d.sent, ['first', '/review']);
 });
 
+test('a message sent while the agent looked idle but was mid-turn joins that turn', async () => {
+  // Claude can start a turn by itself (a background task finishing). A
+  // message sent then goes out as a normal send, and Claude reads it inside
+  // the turn it is already running - echoing no turn of its own. Without an
+  // accept, the bubble stayed an open turn forever, under the work it joined.
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-absorbed'));
+  const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const d = FakeDriver.made.at(-1);
+  d.send = async (text) => { d.sent = [...(d.sent ?? []), text]; };
+  const log = () => sessions.history(s.id).events;
+
+  await sessions.input(s.id, 'what is taking so long?');
+  await tick(); await tick();
+  assert.deepEqual(d.sent, ['what is taking so long?']);
+  const id = log().find((e) => e.type === 'turn.start' && e.text === 'what is taking so long?').turnId;
+  d.push('input.consumed', { text: 'what is taking so long?' });
+  assert.ok(log().some((e) => e.type === 'turn.accept' && e.turnId === id), 'the bubble joins the running turn');
+  // Said again, it accepts nothing twice.
+  d.push('input.consumed', { text: 'what is taking so long?' });
+  assert.equal(log().filter((e) => e.type === 'turn.accept').length, 1);
+});
+
 test('stop drops a message handed over but not yet used', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');

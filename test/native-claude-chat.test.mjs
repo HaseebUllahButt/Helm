@@ -199,3 +199,33 @@ test('Claude model hooks update the reported setting only after the provider swi
     assert.equal(sessions.get('native-test').status, 'idle');
   } finally { await sessions.stop(); }
 });
+
+test("a terminal Claude's own busy/idle word fixes what hooks miss, never a newer hook", async (t) => {
+  // Stop does not run when a turn is interrupted, and nothing marks a turn
+  // Claude starts by itself. Claude's session file says both.
+  const { spawn } = await import('node:child_process');
+  const home = join(root, 'claude-home');
+  mkdirSync(join(home, 'sessions'), { recursive: true });
+  const fake = spawn('bash', ['-c', 'exec -a claude sleep 30'], { cwd: root, stdio: 'ignore' });
+  t.after(() => fake.kill());
+  await until(() => { try { return readFileSync(`/proc/${fake.pid}/cmdline`, 'utf8').startsWith('claude\0'); } catch { return false; } });
+  const say = (status, statusUpdatedAt) => writeFileSync(join(home, 'sessions', `${fake.pid}.json`), JSON.stringify({
+    pid: fake.pid, sessionId: 'conv-live', cwd: root, kind: 'interactive', status, statusUpdatedAt }));
+  const host = new Host(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    Object.assign(sessions.get('native-test'), { nativeHome: home, nativePid: process.pid, engineSessionId: 'conv-live' });
+    // An older file never undoes a fresh hook.
+    say('idle', Date.now() - 60_000);
+    await sendHook('native-test', { hook_event_name: 'UserPromptSubmit' });
+    assert.equal(sessions.get('native-test').status, 'working');
+    await new Promise((r) => setTimeout(r, 2700));
+    assert.equal(sessions.get('native-test').status, 'working');
+    // Interrupted at the keyboard: no Stop hook, but Claude writes idle.
+    say('idle', Date.now() + 1);
+    await until(() => sessions.get('native-test').status === 'idle');
+    // A turn Claude starts by itself.
+    say('busy', Date.now() + 1);
+    await until(() => sessions.get('native-test').status === 'working');
+  } finally { await sessions.stop(); }
+});

@@ -113,3 +113,20 @@ test('a recorded Codex subagent names what its child is doing', async () => {
   assert.ok(spawnCard, 'the spawn became a subagent card');
   assert.equal(spawnCard.agent.lastTool, 'ls', "the child's command reached the parent card");
 });
+
+test('a stopped or exited agent process leaves no subagent card still running', () => {
+  for (const end of [
+    { type: 'turn.done', turnId: 't1', status: 'interrupted', at: 5, seq: 5 },
+    { type: 'status', status: 'exited', at: 5, seq: 5 },
+  ]) {
+    const log = emptyLog();
+    spawn(log, 'a3');
+    apply(log, { type: 'item.update', id: 'a3', at: 3, seq: 3, agent: { id: 'task-3', status: 'running', description: 'Checking' } });
+    apply(log, { type: 'turn.done', turnId: 't1', status: 'ok', at: 4, seq: 4 });
+    // A background agent outlives its turn: the card is still live, rightly.
+    assert.equal(card(log, 'a3').agent.status, 'running');
+    apply(log, end);
+    // Its process is gone, so the card must stop looking like it streams.
+    assert.equal(card(log, 'a3').agent.status, 'stopped', `${end.type} ${end.status}`);
+  }
+});

@@ -26,7 +26,9 @@ export function claudeLiveSessions(home) {
       // terminated automatically based on a PID that may have been reused.
       if (rec.procStart != null && String(rec.procStart) !== start) continue;
       const owners = live.get(rec.sessionId) ?? [];
-      owners.push({ pid: rec.pid, status: rec.status, procStart: rec.procStart == null ? null : start });
+      owners.push({ pid: rec.pid, status: rec.status, procStart: rec.procStart == null ? null : start,
+        // When Claude last changed that status, so a newer word from Helm wins.
+        statusAt: Number(rec.statusUpdatedAt ?? rec.updatedAt) || 0 });
       live.set(rec.sessionId, owners);
     } catch { /* stale, partial, or another user's registry entry */ }
   }

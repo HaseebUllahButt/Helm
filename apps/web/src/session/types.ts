@@ -43,6 +43,15 @@ export function foldAgent(prev: AgentInfo | undefined, next: AgentInfo): AgentIn
   return { ...prev, ...next };
 }
 
+/** A background helper still marked running after its agent stopped would shimmer forever. */
+function stopAgents(turns: Turn[], seq: number) {
+  for (const turn of turns) for (const it of turn.items) {
+    if (it.kind !== 'subagent' || !['running', 'pendingInit', 'working'].includes(it.agent?.status ?? '')) continue;
+    it.agent = foldAgent(it.agent, { status: 'stopped' });
+    turn.revision = seq;
+  }
+}
+
 export interface Item {
   id: string;
   kind: ItemKind;
@@ -368,6 +377,8 @@ export function apply(state: LogState, e: HelmEvent): void {
       }
       // Anything still streaming in this turn is over too.
       for (const it of turn?.items ?? []) if (it.status === 'streaming') { it.status = e.status === 'interrupted' ? 'ok' : it.status === 'streaming' ? 'ok' : it.status; it.doneAt ??= e.at; }
+      // A stop ends the agent's background helpers with it.
+      if (e.status === 'interrupted') stopAgents(state.turns, e.seq);
       return;
     }
     case 'turn.remove':
@@ -375,6 +386,8 @@ export function apply(state: LogState, e: HelmEvent): void {
       return;
     case 'status':
       state.status = e.status;
+      // The process is gone, and every helper it was running went with it.
+      if (e.status === 'exited') stopAgents(state.turns, e.seq);
       return;
     case 'limits':
       state.limits = { ...(state.limits ?? {}), ...e };

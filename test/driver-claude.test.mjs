@@ -203,6 +203,23 @@ test('a wake-up the CLI starts by itself is a turn of its own, not the last one 
   await driver.kill();
 });
 
+test('a wake-up turn reads as working until it finishes, not done', async (t) => {
+  // A background subagent finishing makes Claude start a turn by itself.
+  // The last turn just said idle; without a status of its own the chat
+  // read "done" for the whole wake-up while Claude ran tools.
+  const { driver, log } = make('wake');
+  t.after(() => driver.kill());
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done' && log.of('turn.done').length === 3);
+  const seq = log.events.filter((e) => e.type === 'status' || e.type === 'turn.start' || e.type === 'turn.done')
+    .map((e) => e.type === 'status' ? e.status : e.type);
+  assert.deepEqual(seq, [
+    'working', 'turn.start', 'turn.done', 'idle',
+    'turn.start', 'working', 'turn.done', 'idle',
+    'turn.start', 'working', 'turn.done', 'idle',
+  ]);
+});
+
 test('delegated Claude tasks cannot enter a plan approval workflow', () => {
   const { driver } = make('plain', { mode: 'bypassPermissions', delegated: true });
   const flag = driver.args.indexOf('--disallowedTools');

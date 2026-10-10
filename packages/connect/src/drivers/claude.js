@@ -527,6 +527,9 @@ export class ClaudeDriver extends Driver {
     this.#turnId = `wake-${m.uuid ?? randomUUID()}`;
     this.#inTurn = true;
     this.push('turn.start', { turnId: this.#turnId, text: '', wake: true });
+    // The last turn said idle. Without this the chat reads "done" for the
+    // whole wake-up while Claude runs tools.
+    if (!this.pending.size) this.push('status', { status: 'working' });
   }
 
   #onUser(m) {
