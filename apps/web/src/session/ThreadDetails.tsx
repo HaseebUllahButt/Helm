@@ -7,10 +7,10 @@ import { Schedules } from './Schedules';
 
 export type DetailsTab = 'agents' | 'changes' | 'schedules';
 
-export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit, onClose, onOpen, reviewAttention = false }: {
+export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit, onClose, onOpen, reviewAttention = false, onNativeAttention }: {
   client: Client; env: Environment; session: Session; tab: DetailsTab; onTab: (tab: DetailsTab) => void;
   git: GitStatus | null; reloadGit: () => void; onClose: () => void;
-  onOpen?: (session: Session) => void; reviewAttention?: boolean;
+  onOpen?: (session: Session) => void; reviewAttention?: boolean; onNativeAttention?: () => void;
 }) {
   const ref = useDialog(onClose);
   const tabs: { id: DetailsTab; label: string }[] = [{ id: 'changes', label: 'Git' }, { id: 'agents', label: 'Agents' }, { id: 'schedules', label: 'Schedules' }];
@@ -31,7 +31,7 @@ export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit
           }}>{item.label}</button>)}
       </div>
       <div className="details-content" role="tabpanel" id="details-content" aria-labelledby={`details-${tab}`}>
-        {tab === 'agents' && <Subagents embedded reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} />}
+        {tab === 'agents' && <Subagents embedded onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} />}
         {tab === 'changes' && <p className="note">No Git repository available for this thread.</p>}
         {tab === 'schedules' && <Schedules client={client} env={env} session={session} />}
       </div>

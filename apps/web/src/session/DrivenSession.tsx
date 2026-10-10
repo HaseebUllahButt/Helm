@@ -84,6 +84,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [details, setDetails] = useState<DetailsTab | null>(reviewChildren ? 'agents' : null);
   useEffect(() => { if (reviewChildren) setDetails('agents'); }, [reviewChildren]);
+  const [reviewNative, setReviewNative] = useState(false);
+  const [focusItem, setFocusItem] = useState<{ id: string; visit: number }>();
   const [editingQueue, setEditingQueue] = useState<Turn | null>(null);
   const [references, setReferencesRaw] = useState<{ id: string; title: string }[]>([]);
   const setReferences = useCallback((next: SetStateAction<{ id: string; title: string }[]>) => {
@@ -121,6 +123,24 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     permissionBox.current?.querySelector<HTMLElement>('button:not(:disabled), input, textarea')?.focus({ preventScroll: true });
   }, [reviewingRequest, pending?.requestId]);
   const childrenWaiting = team.filter(({ session: child }) => (child.delegation?.status ?? child.status) === 'blocked' || !!child.pending);
+  useEffect(() => {
+    if (!reviewNative) return;
+    if (logError) { setError(logError); setReviewNative(false); return; }
+    if (!log.loaded) return;
+    const request = log.pending.find(request => request.parentId);
+    const item = [...log.turns.flatMap(turn => turn.items)].reverse().find(item =>
+      request ? item.id === request.parentId
+        : ['failed', 'error'].includes(item.agent?.status ?? '') || item.kind === 'subagent' && item.status === 'error');
+    if (item) {
+      setFocusItem({ id: item.id, visit: reviewChildren ?? 0 });
+      if (request) reviewRequest(request.requestId);
+      setReviewNative(false);
+    } else if (earlier && !loadingEarlier) void loadEarlier();
+    else if (!earlier && !loadingEarlier) {
+      setError('The child task details are no longer available in this conversation.');
+      setReviewNative(false);
+    }
+  }, [reviewNative, log, logError, earlier, loadingEarlier, loadEarlier, reviewChildren, reviewRequest]);
   // Queued messages are the daemon's outbox rendered in the composer, not
   // transcript turns: they only become a bubble once the agent echoes them.
   const queueOrder = new Map((session.queueOrder ?? []).map((id, index) => [id, index]));
@@ -594,7 +614,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
-        pending={log.pending} onReviewRequest={reviewRequest}
+        pending={log.pending} onReviewRequest={reviewRequest} focusItem={focusItem}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
         onResend={resend} onWithdraw={withdraw}
         onBranch={session.engine === 'claude' && onOpenSession ? setBranching : undefined}
@@ -646,7 +666,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         </div>}
       </Composer>
 
-      {details && <ThreadDetails reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} onTab={setDetails} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
+      {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} onTab={setDetails} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined} />}
       {editingQueue && <QueueEdit turn={editingQueue} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSave={async (text, attachments) => {
         if (await queueAction(editingQueue, 'session.queue-edit', { text, attachments })) setEditingQueue(null);

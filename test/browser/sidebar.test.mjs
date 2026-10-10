@@ -811,3 +811,40 @@ for (const status of ['working', 'idle']) test(`snoozing a child's alert restore
   await card.waitFor();
   assert.equal(await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).count(), 0);
 });
+
+for (const width of [1280, 390]) test(`native child failure opens its older transcript output at ${width}px`, async t => {
+  const { page, boot } = await pageFor(t, { width, height: 900 });
+  await boot();
+  await page.evaluate(() => {
+    const parent = { id: 'native-parent', title: 'Native helpers', cwd: '/project', engine: 'claude', driver: 'claude', profileId: 'claude', status: 'working', alive: true, turns: 2, updatedAt: Date.now(), team: { failed: 1 } };
+    const event = (seq, type, more) => ({ seq, type, at: Date.now() - 10000, ...more });
+    const failed = [
+      event(1, 'turn.start', { turnId: 'older-turn', text: 'Fetch helper output' }),
+      event(2, 'item.start', { turnId: 'older-turn', id: 'native-helper', kind: 'tool', name: 'Bash' }),
+      event(3, 'item.update', { id: 'native-helper', agent: { id: 'background-command', status: 'failed' } }),
+      event(4, 'item.done', { id: 'native-helper', status: 'error', output: 'Connection timed out during banner exchange' }),
+      event(5, 'turn.done', { turnId: 'older-turn', status: 'ok' }),
+    ];
+    const recent = [event(100, 'turn.start', { turnId: 'current-turn', text: 'Continue the work' })];
+    window.nativeHistoryReads = [];
+    const client = window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [parent] });
+    const rpc = client.rpc;
+    client.rpc = (env, method, params = {}) => {
+      if (method === 'session.events') {
+        window.nativeHistoryReads.push(params);
+        return Promise.resolve({ events: params.before ? failed : params.since ? [] : recent, firstSeq: params.before ? 1 : 100, logFirst: 1, hasMore: false, last: 100, pending: [], session: parent });
+      }
+      if (method === 'agent.list') return Promise.resolve({ agents: [] });
+      if (method === 'model.list') return Promise.resolve({ models: [], modes: [] });
+      return rpc(env, method, params);
+    };
+    window.mount(client);
+  });
+  await page.locator('.sidebar .need-main').click();
+  const native = page.locator('[data-item-id="native-helper"]');
+  await native.getByText('Connection timed out during banner exchange', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('dialog', { name: 'Thread details', exact: true }).count(), 0);
+  assert.equal(await native.locator('details').evaluate(element => element.open), true);
+  assert.ok(await page.evaluate(() => window.nativeHistoryReads.some(params => params.before === 100)));
+  await native.waitFor({ state: 'visible' });
+});

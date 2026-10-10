@@ -7,7 +7,7 @@ import { Icon, toolKind } from '../Icon';
 import { userMessage } from './userMessage';
 import { plainError } from './problem';
 
-const Requests = createContext<{ pending: Permission[]; review?: (id: string) => void }>({ pending: [] });
+const Requests = createContext<{ pending: Permission[]; review?: (id: string) => void; focusItem?: { id: string; visit: number } }>({ pending: [] });
 
 /**
  * The conversation, live.
@@ -178,6 +178,7 @@ function ActivityGroup({ items, byParent, live: turnLive }: { items: Item[]; byP
   const ids = new Set(items.map(item => item.id));
   const collect = (id: string) => { for (const child of byParent.get(id) ?? []) if (!ids.has(child.id)) { ids.add(child.id); collect(child.id); } };
   items.forEach(item => collect(item.id));
+  useEffect(() => { if (requests.focusItem && ids.has(requests.focusItem.id)) setOpen(true); }, [requests.focusItem]);
   const asking = requests.pending.filter(request => request.parentId && ids.has(request.parentId));
   const steps = items.filter((i) => i.kind !== 'thinking');
   const failed = steps.filter((i) => i.status === 'error' || (i.kind === 'command' && i.exitCode != null && i.exitCode !== 0)).length;
@@ -366,6 +367,23 @@ function ErrorLine({ text }: { text: string }) {
 }
 
 function ItemView({ item, byParent, commandOutput }: { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const { focusItem } = useContext(Requests);
+  useEffect(() => {
+    if (!focusItem || focusItem.id !== item.id || !ref.current) return;
+    const element = ref.current;
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+    }
+    const details = element.querySelector('details');
+    if (details) details.open = true;
+    element.scrollIntoView({ block: 'center' });
+    element.focus({ preventScroll: true });
+  }, [focusItem]);
+  return <div ref={ref} data-item-id={item.id} tabIndex={-1}><ItemContent item={item} byParent={byParent} commandOutput={commandOutput} /></div>;
+}
+
+function ItemContent({ item, byParent, commandOutput }: { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean }) {
   switch (item.kind) {
     case 'text': return <TextItem item={item} commandOutput={commandOutput} />;
     case 'thinking': return <ThinkingItem item={item} />;
@@ -538,7 +556,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   );
 });
 
-export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, pending = [], onReviewRequest }: {
+export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, pending = [], onReviewRequest, focusItem }: {
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
   pending?: Permission[]; onReviewRequest?: (requestId: string) => void;
   /** The machine holds more of this conversation than is on screen. */
@@ -549,11 +567,12 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   onWithdraw?: (turn: Turn) => void;
   /** Offered on every message but the first: branch the conversation from before it. */
   onBranch?: (turn: Turn) => void;
+  focusItem?: { id: string; visit: number };
 }) {
   const requestKey = pending.map(request => request.requestId).join('\0');
   // Text deltas clone the pending array too. Only changed requests should
   // invalidate every activity group in a long transcript.
-  const requests = useMemo(() => ({ pending, review: onReviewRequest }), [requestKey, onReviewRequest]);
+  const requests = useMemo(() => ({ pending, review: onReviewRequest, focusItem }), [requestKey, onReviewRequest, focusItem]);
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
