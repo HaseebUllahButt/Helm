@@ -72,6 +72,25 @@ test('a current checkout is a no-op', async () => {
   assert.match(r.reason, /already at/);
 });
 
+test('an updater that died releases its lock immediately instead of blocking reconnect for 30 minutes', async () => {
+  const { installed } = make();
+  const lock = join(process.env.HELM_DIR, 'update.lock');
+  writeFileSync(lock, JSON.stringify({ pid: 2147483647, start: null }));
+  const result = await update(installed);
+  assert.match(result.reason, /already at/);
+  assert.equal(existsSync(lock), false);
+});
+
+test('a living updater owns its lock until it finishes', async () => {
+  const { installed } = make();
+  const lock = join(process.env.HELM_DIR, 'update.lock');
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, start: null }));
+  const result = await update(installed);
+  assert.equal(result.reason, 'an update is already running');
+  const { rmSync } = await import('node:fs');
+  rmSync(lock);
+});
+
 test('a new commit lands as a hard reset to it', async () => {
   const { remote, installed } = make();
   commit(remote, 'two');

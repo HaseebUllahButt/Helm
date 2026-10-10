@@ -122,12 +122,36 @@ async function locked(work) {
   const lock = join(HELM_DIR, 'update.lock');
   try {
     mkdirSync(HELM_DIR, { recursive: true });
-    if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) rmSync(lock, { force: true });
-    closeSync(openSync(lock, 'wx'));
+    if (existsSync(lock) && abandonedLock(lock)) rmSync(lock, { force: true });
+    const fd = openSync(lock, 'wx');
+    try { writeFileSync(fd, JSON.stringify({ pid: process.pid, start: processStart(process.pid) })); }
+    finally { closeSync(fd); }
   } catch {
     return { updated: false, reason: 'an update is already running' };
   }
   try { return await work(); } finally { rmSync(lock, { force: true }); }
+}
+
+function processStart(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+  } catch { return null; }
+}
+
+function abandonedLock(file) {
+  try {
+    const owner = JSON.parse(readFileSync(file, 'utf8'));
+    if (Number.isInteger(owner.pid) && owner.pid > 0) {
+      try { process.kill(owner.pid, 0); }
+      catch (error) { return error.code === 'ESRCH'; }
+      const start = processStart(owner.pid);
+      // A restarted daemon must not wait 30 minutes on its dead predecessor,
+      // and a recycled PID must not count as that predecessor still running.
+      return !!owner.start && !!start && owner.start !== start;
+    }
+  } catch { /* older versions wrote an empty lock, so retain their timeout */ }
+  return Date.now() - statSync(file).mtimeMs > LOCK_STALE_MS;
 }
 
 const gitIn = (dir) => (args, opts) => exec('git', ['-C', dir, ...args], opts).then((r) => r.stdout.trim());
