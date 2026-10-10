@@ -181,3 +181,27 @@ test('one credential read on two machines is one row that keeps both report time
   // Pace is measured from the newer reading: 30% at half the week is 60%.
   await accounts.getByText(/on pace for 60% of the week/).waitFor();
 });
+
+test('the same account on two machines is one row showing the newest reading of each allowance', async t => {
+  const page = await setup(t, 390, false, () => {
+    const now = Date.now() / 1000;
+    // Different home folders, different report times, different numbers -
+    // but the same account, as both machines' fingerprints say.
+    window.limitsFixture = env => ({unsupported:0,accounts: env === 'vm'
+      ? [{account:'claude|/home/ubuntu/.claude|TOKEN_A',engine:'claude',label:'default',aliases:['claude'],identity:'f1',
+          windows:[{label:'5h',used:70,resetsAt:now+3600,at:Date.now()-60000},{label:'7d',used:40,resetsAt:now+3*86400,at:Date.now()-5*3600000}]}]
+      : [{account:'claude|~/.claude-personal|TOKEN_A',engine:'claude',label:'personal',aliases:['claudea'],identity:'f1',
+          windows:[{label:'5h',used:20,resetsAt:now+600,at:Date.now()-4*3600000},{label:'7d',used:55,resetsAt:now+3*86400,at:Date.now()-120000}]},
+        {account:'claude|~/.claude-personal|TOKEN_S',engine:'claude',label:'personal',aliases:['claudes'],identity:'f2',
+          windows:[{label:'7d',used:10,resetsAt:now+86400,at:Date.now()-60000}]}]});
+  });
+  const accounts = page.getByRole('region',{name:'Accounts'});
+  await accounts.getByRole('meter').first().waitFor();
+  assert.equal(await accounts.locator('.usage-account').filter({has:page.getByRole('meter')}).count(), 2, 'one row per account, not per machine');
+  const row = accounts.locator('.usage-account').first();
+  assert.match(await row.locator('.usage-account-name small').innerText(), /Laptop .* · VM /);
+  // 5h from the VM (newer), the week from the laptop (newer).
+  assert.equal(await row.getByRole('meter',{name:/5h remaining/}).getAttribute('aria-valuenow'), '30');
+  assert.equal(await row.getByRole('meter',{name:/7d remaining/}).getAttribute('aria-valuenow'), '45');
+  await page.screenshot({path:'/tmp/helm-usage-same-account.png',fullPage:true});
+});

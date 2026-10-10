@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AccountLimits } from '../packages/connect/src/account-limits.js';
@@ -44,4 +44,32 @@ test('history migration uses event timestamps and cannot overwrite a newer live 
   ].map(e => JSON.stringify(e)).join('\n') + '\n{"type":"limits"');
   await store.seed([{ id: 'old', profileId: profile.id, engine: 'codex' }], [profile], dir);
   assert.deepEqual(store.report([profile]).accounts[0].windows.map(w => [w.used, w.at]), [[20, 3000], [60, 1000]]);
+});
+
+test('one account gets the same fingerprint on every machine, whatever its home folder is called', async t => {
+  const { accountIdentity } = await import('../packages/connect/src/account-limits.js');
+  const dir = mkdtempSync(join(tmpdir(), 'helm-identity-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const token = 'HELM_SECRET_' + 'a'.repeat(64);
+  // A saved token: named by a hash of its value, so the same token is the
+  // same account here and on the VM, even under another home folder.
+  const laptop = { id: 'claudea', engine: 'claude', env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' }, envFrom: ['CLAUDE_CODE_OAUTH_TOKEN'], secretRefs: { CLAUDE_CODE_OAUTH_TOKEN: token } };
+  const vm = { ...laptop, id: 'claude', env: { CLAUDE_CONFIG_DIR: '/home/ubuntu/.claude' } };
+  assert.ok(accountIdentity(laptop));
+  assert.equal(accountIdentity(laptop), accountIdentity(vm));
+  assert.notEqual(accountIdentity(laptop), accountIdentity({ ...laptop, secretRefs: { CLAUDE_CODE_OAUTH_TOKEN: 'HELM_SECRET_' + 'b'.repeat(64) } }));
+  // A browser login: the provider's own account id, never shipped raw.
+  const a = join(dir, 'a'), b = join(dir, 'b'), codex = join(dir, 'codex');
+  for (const d of [a, b, codex]) mkdirSync(d);
+  writeFileSync(join(a, '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'acct-1', emailAddress: 'me@example.com' } }));
+  writeFileSync(join(b, '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'acct-1' } }));
+  const viaA = accountIdentity({ id: 'p', engine: 'claude', env: { CLAUDE_CONFIG_DIR: a } });
+  assert.equal(viaA, accountIdentity({ id: 'q', engine: 'claude', env: { CLAUDE_CONFIG_DIR: b } }));
+  assert.ok(!viaA.includes('acct-1') && !viaA.includes('example'));
+  writeFileSync(join(codex, 'auth.json'), JSON.stringify({ tokens: { account_id: 'chatgpt-9' } }));
+  assert.ok(accountIdentity({ id: 'c', engine: 'codex', env: { CODEX_HOME: codex } }));
+  // Nothing local names the account: no fingerprint, the row stays per machine.
+  assert.equal(accountIdentity({ id: 'n', engine: 'codex', env: { CODEX_HOME: join(dir, 'missing') } }), null);
+  const report = new AccountLimits({ file: join(dir, 'limits.json') }).report([laptop]);
+  assert.equal(report.accounts[0].identity, accountIdentity(laptop));
 });

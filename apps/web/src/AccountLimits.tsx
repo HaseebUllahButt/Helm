@@ -6,6 +6,8 @@ import { EngineMark } from './EngineMark';
 
 export interface LimitAccount {
   account: string; engine: string; label: string; displayLabel?: string; aliases: string[];
+  /** Who the provider bills, fingerprinted the same on every machine. Absent from older daemons. */
+  identity?: string;
   windows: (LimitWindow & { at: number })[];
 }
 interface LimitsReport { accounts: LimitAccount[]; unsupported: number }
@@ -49,7 +51,12 @@ export function useAccountLimits(client: Client, targets: Environment[]): Accoun
 export interface PlanSpend { key: string; engine: string; profileId: string; costUsd: number; unpriced: boolean }
 
 type Reading = LimitAccount['windows'][number];
-interface Row { key: string; account: LimitAccount; machines: { env: Environment; at: number }[]; windows: Reading[]; spends: (PlanSpend & { alone?: boolean })[]; shared?: string[] }
+interface Row {
+  key: string; account: LimitAccount;
+  /** Every machine's report this row stands for: one account, read in several places. */
+  members: LimitAccount[];
+  machines: { env: Environment; at: number }[]; windows: Reading[]; spends: (PlanSpend & { alone?: boolean })[]; shared?: string[];
+}
 
 const PLAN_KEY = 'helm.plans.v1';
 const readPlans = (): Record<string, number> => {
@@ -62,6 +69,8 @@ const money = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : n >= 1 ?
 const nameOf = (a: LimitAccount) => a.displayLabel || a.label;
 /** "/home/me/.claude" and "~/.claude" name the same login home. */
 const tilde = (p: string) => p.replace(/^\/(home|Users)\/[^/|]+/, '~');
+/** The short window first, then the week, then anything model-specific. */
+const windowOrder = (label: string) => label === '5h' ? 0 : label === '7d' ? 1 : 2;
 const newest = (windows: Reading[]) => windows.length ? Math.max(...windows.map(w => w.at)) : 0;
 const sameReadings = (a: Reading[], b: Reading[]) => a.length === b.length
   && a.every(w => b.some(v => v.label === w.label && v.used === w.used && v.resetsAt === w.resetsAt));
@@ -95,16 +104,25 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
 
   const rows: Row[] = [];
   for (const env of targets) for (const account of reports[env.id]?.accounts ?? []) {
+    // The same account, wherever it was read: one row, and each allowance
+    // shows its newest reading from any machine. A machine that names who
+    // the provider bills says so outright; without that (an older daemon),
+    // only the same credential reading exactly the same numbers is safe to
+    // merge - two logins sharing a home folder never are.
+    const identity = account.identity ? `${account.engine}|${account.identity}` : '';
     const credential = account.account.split('|')[2];
-    const twin = credential ? rows.find(r => r.account.account === account.account && sameReadings(r.windows, account.windows)) : undefined;
+    const twin = identity ? rows.find(r => r.members.some(m => m.identity && `${m.engine}|${m.identity}` === identity))
+      : credential ? rows.find(r => r.account.account === account.account && sameReadings(r.windows, account.windows)) : undefined;
     if (twin) {
-      // Same numbers, read at different times: the later reading is the one
-      // pace is measured from, and each machine keeps its own time.
-      twin.machines.push({ env, at: newest(account.windows) });
-      twin.windows = twin.windows.map(w => { const v = account.windows.find(x => x.label === w.label)!; return v.at > w.at ? v : w; });
+      twin.members.push(account);
+      if (!twin.machines.some(m => m.env.id === env.id)) twin.machines.push({ env, at: newest(account.windows) });
+      else twin.machines = twin.machines.map(m => m.env.id === env.id ? { env, at: Math.max(m.at, newest(account.windows)) } : m);
+      const merged = new Map(twin.windows.map(w => [w.label, w]));
+      for (const w of account.windows) if ((merged.get(w.label)?.at ?? -1) < w.at) merged.set(w.label, w);
+      twin.windows = [...merged.values()].sort((a, b) => windowOrder(a.label) - windowOrder(b.label));
       continue;
     }
-    rows.push({ key: `${env.id}:${account.account}`, account, machines: [{ env, at: newest(account.windows) }], windows: account.windows, spends: [] });
+    rows.push({ key: `${env.id}:${account.account}`, account, members: [account], machines: [{ env, at: newest(account.windows) }], windows: account.windows, spends: [] });
   }
   rows.sort((a, b) => Number(!!b.windows.length) - Number(!!a.windows.length));
 
@@ -112,12 +130,19 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
   // exactly one account uses that home; a shared home gets a line of its own.
   const loose: Row[] = [];
   for (const s of spend) {
-    const owners = rows.filter(({ account: a }) => a.engine === s.engine
-      && (tilde(a.account).startsWith(`${s.key}|`) || a.aliases.includes(s.profileId)));
+    const owners = rows.filter(({ members }) => members.some(a => a.engine === s.engine
+      && (tilde(a.account).startsWith(`${s.key}|`) || a.aliases.includes(s.profileId))));
     // The same account read on several machines is still one account.
-    if (owners.length && owners.every(o => o.account.account === owners[0].account.account)) owners[0].spends.push({ ...s, alone: owners.length === 1 });
+    if (owners.length && owners.every(o => o.account.account === owners[0].account.account)) {
+      const row = owners[0];
+      // One account used from homes with different names (~/.claude-personal
+      // here, ~/.claude there) is still one bill: add the homes together.
+      const same = row.spends[0];
+      if (same) row.spends[0] = { ...same, costUsd: same.costUsd + s.costUsd, unpriced: same.unpriced || s.unpriced, alone: same.alone && owners.length === 1 };
+      else row.spends.push({ ...s, alone: owners.length === 1 });
+    }
     else if (s.costUsd > 0) loose.push({ key: `spend:${s.key}`, spends: [s], windows: [], machines: [],
-      shared: owners.map(o => nameOf(o.account)),
+      members: [], shared: owners.map(o => nameOf(o.account)),
       account: { account: s.key, engine: s.engine, label: (owners.length ? s.key.split('|')[1] : s.profileId) || 'default', aliases: [], windows: [] } });
   }
   const all = [...rows, ...loose];

@@ -1,9 +1,47 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { limitWindows } from '@helm/protocol/limits';
 import { HELM_DIR } from './paths.js';
 import { accountKey } from './settings.js';
+
+const expand = (p) => p.replace(/^~(?=\/|$)/, homedir());
+const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
+const fingerprint = (engine, id) => createHash('sha256').update(`${engine}\0${id}`).digest('hex').slice(0, 16);
+
+/**
+ * Who the provider bills, the same on every machine - so one account used
+ * from the laptop and the VM is one row with the newest reading, not two.
+ * The local account key cannot say this: it names a home folder, and the
+ * same login lives in ~/.claude-personal here and ~/.claude there.
+ *
+ * - A saved token is already named by a hash of its value (`HELM_SECRET_…`),
+ *   identical wherever the same token was added.
+ * - A browser login carries the provider's account id: Claude's
+ *   `.claude.json` oauthAccount, Codex's auth.json account_id.
+ *
+ * Only a one-way fingerprint leaves the machine. Null when nothing local
+ * names the account; those rows stay per machine.
+ */
+export function accountIdentity(profile) {
+  if (profile.wraps) return null;
+  const token = Object.values(profile.secretRefs ?? {}).find((ref) => /^HELM_SECRET_[0-9a-f]{16,}$/.test(ref));
+  if (token) return fingerprint(profile.engine, `token:${token}`);
+  if ((profile.envFrom ?? []).length) return null;
+  if (profile.engine === 'claude') {
+    const dir = profile.env?.CLAUDE_CONFIG_DIR;
+    const id = readJson(dir ? join(expand(dir), '.claude.json') : join(homedir(), '.claude.json'))?.oauthAccount?.accountUuid;
+    return typeof id === 'string' && id ? fingerprint('claude', `account:${id}`) : null;
+  }
+  if (profile.engine === 'codex') {
+    const auth = readJson(join(expand(profile.env?.CODEX_HOME ?? '~/.codex'), 'auth.json'));
+    const id = auth?.tokens?.account_id;
+    return typeof id === 'string' && id ? fingerprint('codex', `account:${id}`) : null;
+  }
+  return null;
+}
 
 /** Keep only quota readings, never the provider's credentials or raw payload. */
 export class AccountLimits {
@@ -68,8 +106,10 @@ export class AccountLimits {
       if (accounts.has(key)) { accounts.get(key).aliases.push(p.id); continue; }
       const home = Object.values(p.env ?? {}).find(v => /^[~/]/.test(v));
       const suffix = (home?.split('/').pop() ?? '').replace(/^\.?(claude|codex)-?/, '');
+      const identity = ['claude', 'codex'].includes(p.engine) ? accountIdentity(p) : null;
       accounts.set(key, { account: key, engine: p.engine,
         label: suffix || (p.wraps ? p.id : 'default'), aliases: [p.id],
+        ...(identity ? { identity } : {}),
         windows: this.rows.get(key) ?? [] });
     }
     const supported = [...accounts.values()].filter(a => {
