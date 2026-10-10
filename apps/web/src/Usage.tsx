@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Client, Environment, UsageReport, UsageGroup, UsageTotals } from './client';
 import { hitRate, cacheSaved } from './client';
 import { loadUsage, saveUsage, mergeReports, today, daysAgo } from './usageCache';
-import { BackIcon } from './Icon';
+import { BackIcon, Icon } from './Icon';
+import { EngineMark } from './EngineMark';
 import { AccountLimits, useAccountLimits } from './AccountLimits';
 import type { PlanSpend } from './AccountLimits';
 import { Sheet } from './Modal';
@@ -188,27 +189,28 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
         </div>}
         {!loading && answered.length > 0 && <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />}
 
-        <AccountLimits targets={targets} limits={limits}
-          spend={answered.length ? planSpend(merged.groups, merged.accounts) : undefined} win={answered.length ? win : undefined} />
-
         {!loading && answered.length > 0 && (
           <section className="usage-where" aria-label="Where it went">
             <div className="usage-where-head">
-              <h2 className="usage-h">Where it went</h2>
+              <h2 className="section">Where it went</h2>
               <Tabs label="Group by" items={FACETS} value={facet} onChange={setFacet} />
             </div>
-            <DonutBreakdown groups={groups} facet={facet} onModel={setModel} />
-            {Object.keys(failed).length > 0 && <p className="usage-limits-note">Usage unavailable from {targets.filter(e => failed[e.id]).map(e => e.name).join(', ')}. Try Rescan below.</p>}
-            <Provenance
-              answered={answered.length}
-              total={targets.length}
-              stale={stale.length}
-              unpriced={scoped.unpriced}
-              rescanning={pending.size > 0}
-              onRescan={() => targets.forEach((e) => fetchReport(e, true))}
-            />
+            <Breakdown key={facet} groups={groups} facet={facet} onModel={setModel} />
           </section>
         )}
+
+        <AccountLimits targets={targets} limits={limits}
+          spend={answered.length ? planSpend(merged.groups, merged.accounts) : undefined} win={answered.length ? win : undefined} />
+
+        {!loading && answered.length > 0 && <Provenance
+          answered={answered.length}
+          total={targets.length}
+          stale={stale.length}
+          failed={targets.filter((e) => failed[e.id]).map((e) => e.name)}
+          unpriced={scoped.unpriced}
+          rescanning={pending.size > 0}
+          onRescan={() => targets.forEach((e) => fetchReport(e, true))}
+        />}
       </div></div>
       {model !== null && <ModelDetail key={`${scope}:${win}:${model}`} client={client} targets={targets} model={model} since={since}
         window={WINDOWS.find(w => w.id === win)!.label} onClose={() => setModel(null)} />}
@@ -240,13 +242,13 @@ function ModelDetail({ client, targets, model, since, window, onClose }: {
   return <Sheet label={`${model || 'Unknown model'} usage`} onClose={onClose}>
     <div className="usage-model-detail">
       <div className="modal-head"><div className="modal-title">{model || 'Unknown model'}</div><button className="ghost" onClick={onClose}>Close</button></div>
-      <p className="usage-limits-note">{window} · {targets.map(e => e.name).join(', ')}</p>
+      <p className="usage-limits-note">{targets.map(e => e.name).join(', ')}</p>
       {pending && <p role="status" className="usage-limits-note">Reading model history…</p>}
       {answered > 0 && <>
-        <Headline totals={t} window={window} />
+        <Headline totals={t} window={window} tiles={false} />
         {t.unpriced && <p className="usage-limits-note">Cost is incomplete: some usage has no published rate.</p>}
         <dl className="usage-token-detail">
-          {([['Fresh input', t.input], ['Output', t.output], ['Cache read', t.cacheRead], ['Cache write', t.cacheWrite], ['Reasoning', t.reasoning]] as const)
+          {([['Turns', t.turns], ['Fresh input', t.input], ['Output', t.output], ['Cache read', t.cacheRead], ['Cache write', t.cacheWrite], ['Reasoning', t.reasoning]] as const)
             .map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count.toLocaleString()}</dd></div>)}
         </dl>
         <p className="usage-limits-note">Reasoning is included in output where the provider reports it.</p>
@@ -267,18 +269,35 @@ function Tabs<T extends string>({ label, items, value, onChange }: {
   </div>;
 }
 
+/** "7 days" as the end of a sentence: "last 7 days". */
+const spanPhrase = (window: string) =>
+  window === 'Today' ? 'today' : window === 'All' ? 'all time' : `last ${window}`;
+
 /**
- * The one number the screen leads with, what it covers, and what the prompt
- * cache did to it - one block, no card.
+ * The one number the screen leads with, what it covers, and the three
+ * figures behind it as small tiles: how much was read and written, how many
+ * turns, and what the prompt cache took off.
  */
-function Headline({ totals, window }: { totals: UsageTotals; window: string }) {
+function Headline({ totals, window, tiles = true }: { totals: UsageTotals; window: string; tiles?: boolean }) {
+  const rate = hitRate(totals);
+  const saved = cacheSaved(totals);
   return (
     <div className="usage-hero">
       <div className="usage-hero-fig">{money(totals.costUsd)}</div>
       <div className="usage-hero-cap" title="Published rates × the tokens the CLIs recorded">
-        API-equivalent, {window.toLowerCase()} · {tokens(totals.total)} tokens · {totals.turns.toLocaleString()} turns
+        At API prices · {spanPhrase(window)}
       </div>
-      <CacheLine totals={totals} />
+      {tiles && <dl className="usage-stats">
+        <div><dt>Tokens</dt><dd>{tokens(totals.total)}</dd></div>
+        <div><dt>Turns</dt><dd>{totals.turns.toLocaleString()}</dd></div>
+        {(totals.cacheRead > 0 || totals.input > 0) && (
+          <div className="usage-cache" title={`${totals.cacheRead.toLocaleString()} cached · ${totals.input.toLocaleString()} fresh input tokens`}>
+            <dt>Saved by cache</dt>
+            <dd>{saved > 0 ? money(saved) : '$0'}</dd>
+            <small>{cachePercent(rate)} cached</small>
+          </div>
+        )}
+      </dl>}
     </div>
   );
 }
@@ -292,19 +311,6 @@ const cachePercent = (rate: number) => {
   if (rate >= 1) return '100%';
   return `${Math.min(99.9, Math.round(rate * 1000) / 10).toFixed(1)}%`;
 };
-
-/** The prompt cache in one sentence; the raw counts are on hover. */
-function CacheLine({ totals }: { totals: UsageTotals }) {
-  const rate = hitRate(totals);
-  const saved = cacheSaved(totals);
-  if (!totals.cacheRead && !totals.input) return null;
-  return (
-    <p className="usage-cache" title={`${totals.cacheRead.toLocaleString()} cached · ${totals.input.toLocaleString()} fresh input tokens`}>
-      {cachePercent(rate)} of input came from cache
-      {saved > 0 ? <>, saving <b>{money(saved)}</b> after the cache-write premium.</> : '.'}
-    </p>
-  );
-}
 
 /**
  * API-equivalent spend per login home, summed across machines that share it,
@@ -333,110 +339,80 @@ function planSpend(groups: ChartGroup[], accounts: UsageReport['accounts']): Pla
 }
 
 /**
- * One ring, one dimension. The magnitude is cost; tokens are the fallback
- * when nothing in the window carried a published rate, because an all-zero
- * ring would pretend nothing happened. Five named slices at most - past that
- * a slice is sliver, so the tail folds into Other. Colour only tells slices
- * apart: every legend row still carries a name, a value and a share, and the
- * palette stays on helm's own muted hues (the sixth, grey, always lands on
- * Other because Other is always the sixth slice).
+ * One bar per slice, longest first. Bars, not a ring: lengths on a shared
+ * start compare at a glance where ring slices do not. One hue, because the
+ * row's name already says what it is; the engine's own mark sits beside a
+ * model or CLI so Claude and Codex rows tell apart without reading. The
+ * magnitude is cost; tokens are the fallback when nothing in the window
+ * carried a published rate, because all-zero bars would pretend nothing
+ * happened. Six rows, the rest one tap away.
  */
-const SLICE_COLORS = [
-  'var(--primary-t)', 'var(--sky)', 'var(--devin)',
-  'var(--amber)', 'var(--opencode)', 'var(--mutedfg)',
-];
+const SHOWN = 6;
 
-function DonutBreakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: FacetId; onModel: (model: string) => void }) {
-  if (!groups.length) return <div className="empty quiet">nothing recorded yet</div>;
+function Breakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: FacetId; onModel: (model: string) => void }) {
+  const [all, setAll] = useState(false);
   const priced = groups.some((g) => g.costUsd > 0);
   const value = (g: ChartGroup) => (priced ? g.costUsd : g.total);
+  const sorted = [...groups].sort((a, b) => value(b) - value(a)).filter((g) => value(g) > 0 || g.total > 0);
+  const whole = sorted.reduce((s, g) => s + value(g), 0);
+  if (!sorted.length) return <div className="empty quiet">nothing recorded yet</div>;
+
+  const top = value(sorted[0]) || 1;
   const name = (g: ChartGroup) =>
     facet === 'project' ? shortFolder(g.project || '')
       : facet === 'machine' ? g.machine || 'unknown'
         : String((g as any)[facet] || 'unknown');
-
-  const sorted = [...groups].sort((a, b) => value(b) - value(a));
-  const whole = sorted.reduce((s, g) => s + value(g), 0);
-  // The few that matter get a row each; anything under 1% of the total is
-  // folded into one "Other", which is left out when it comes to nothing.
-  const big = sorted.filter((g, i) => i < 5 && whole > 0 && value(g) / whole >= 0.01);
-  const slices = big.map((g, i) => ({
-    // Two folders can shorten to the same display name, so the key falls
-    // back to position, not text.
-    key: g.key ?? `${i}`,
-    name: name(g),
-    value: value(g),
-  }));
-  const restValue = sorted.slice(big.length).reduce((s, g) => s + value(g), 0);
-  if (restValue > 0 && (priced ? restValue >= 0.005 : restValue / whole >= 0.001)) {
-    slices.push({ key: 'other', name: 'Other', value: restValue });
-  }
-  const total = slices.reduce((s, x) => s + x.value, 0);
-  if (total <= 0) return <div className="empty quiet">nothing recorded yet</div>;
-
-  const fmt = priced ? money : tokens;
-  const share = (v: number) => (v / total) * 100;
+  // A model with no published rate still used tokens; say how many rather
+  // than showing it as free.
+  const amount = (g: ChartGroup) => (priced ? (g.unpriced && !g.costUsd ? `${tokens(g.total)} tokens` : money(g.costUsd)) : tokens(g.total));
+  const share = (g: ChartGroup) => {
+    const pct = whole > 0 ? (value(g) / whole) * 100 : 0;
+    if (!pct) return '–';
+    return pct >= 10 ? `${Math.round(pct)}%` : pct >= 0.1 ? `${pct.toFixed(1)}%` : '<0.1%';
+  };
+  const marked = facet === 'model' || facet === 'engine';
+  const shown = all ? sorted : sorted.slice(0, SHOWN);
   const facetLabel = FACETS.find((f) => f.id === facet)!.label;
-  const aria = `${facetLabel} share of ${priced ? 'cost' : 'tokens'}: `
-    + slices.map((s) => `${s.name} ${share(s.value).toFixed(1)}%`).join(', ');
 
-  let cumulative = 0;
   return (
-    <div className="usage-donut-card">
-      <div className="usage-donut-layout">
-        <div className="usage-donut">
-          <svg className="usage-donut-ring" viewBox="0 0 42 42" role="img" aria-label={aria}>
-            <g transform="rotate(-90 21 21)">
-              {slices.map((s, i) => {
-                const pct = share(s.value);
-                const offset = cumulative;
-                cumulative += pct;
-                // pathLength=100 makes dasharray speak in percent; the 0.8
-                // shaved off each slice is the gap between neighbours.
-                return (
-                  <circle
-                    key={s.key} cx="21" cy="21" r="15.9155" fill="none"
-                    stroke={SLICE_COLORS[i]} strokeWidth="5" pathLength={100}
-                    strokeDasharray={`${Math.max(0, pct - 0.8)} ${100 - Math.max(0, pct - 0.8)}`}
-                    strokeDashoffset={-offset}
-                  />
-                );
-              })}
-            </g>
-          </svg>
-        </div>
-        <ul className="usage-legend">
-          {slices.map((s, i) => (
-            <li className="usage-legend-row" key={s.key}>
-              <span className="usage-legend-dot" style={{ background: SLICE_COLORS[i] }} />
-              {facet === 'model' && s.key !== 'other'
-                ? <button className="linkish usage-legend-name usage-model-link" onClick={() => onModel(big[i].model ?? '')}>{s.name}</button>
-                : <span className="usage-legend-name">{s.name}</span>}
-              <span className="usage-legend-value">{fmt(s.value)}</span>
-              <span className="usage-legend-share">{share(s.value).toFixed(1)}%</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-      {facet === 'model' && sorted.length > big.length && <details className="usage-more-models">
-        <summary>More models ({sorted.length - big.length})</summary>
-        {sorted.slice(big.length).map(g => <button key={g.model ?? ''} className="linkish usage-model-extra" onClick={() => onModel(g.model ?? '')}>
-          <span>{g.model || 'unknown'}</span><span>{g.unpriced && !g.costUsd ? `${tokens(g.total)} tokens` : fmt(value(g))}</span>
-        </button>)}
-      </details>}
-    </div>
+    <>
+      <ul className="usage-shares" aria-label={`${facetLabel} share of ${priced ? 'cost' : 'tokens'}`}>
+        {shown.map((g, i) => {
+          const body = <>
+            {marked && <EngineMark engine={g.engine} className="usage-share-mark" />}
+            <span className="usage-share-name">{name(g)}</span>
+            <span className="usage-share-value">{amount(g)}</span>
+            <span className="usage-share-pct">{share(g)}</span>
+            {facet === 'model' && <Icon name="forward" size={14} className="usage-share-go" />}
+            <span className="usage-share-track" aria-hidden><span style={{ width: `${Math.max(0.6, (value(g) / top) * 100)}%` }} /></span>
+          </>;
+          // Two folders can shorten to the same display name, so the key
+          // falls back to position, not text.
+          const key = g.key ?? `${i}:${name(g)}`;
+          return <li key={key} className={marked ? 'marked' : ''}>
+            {facet === 'model'
+              ? <button className="usage-share" aria-label={`${name(g)}, ${amount(g)}, ${share(g)}`} onClick={() => onModel(g.model ?? '')}>{body}</button>
+              : <div className="usage-share">{body}</div>}
+          </li>;
+        })}
+      </ul>
+      {sorted.length > SHOWN && <button className="linkish usage-more" aria-expanded={all} onClick={() => setAll(!all)}>
+        {all ? 'Show fewer' : `Show ${sorted.length - SHOWN} more`}
+      </button>}
+    </>
   );
 }
 
 /** How many machines the number covers, and the way to count it again. */
-function Provenance({ answered, total, stale, unpriced, rescanning, onRescan }: {
-  answered: number; total: number; stale: number; unpriced: boolean;
+function Provenance({ answered, total, stale, failed, unpriced, rescanning, onRescan }: {
+  answered: number; total: number; stale: number; failed: string[]; unpriced: boolean;
   rescanning: boolean; onRescan: () => void;
 }) {
   return (
     <p className="usage-note">
-      {answered === total ? `${total} of ${total} machines reporting` : `${answered} of ${total} machines reporting`}
+      {`${answered} of ${total} machines reporting`}
       {stale > 0 ? `, ${stale} from memory` : ''}
+      {failed.length > 0 ? ` · no answer from ${failed.join(', ')}` : ''}
       {unpriced ? ' · some models have no published rate and count in tokens only' : ''}
       {' · '}
       {/* The daemon aggregates what it already read; a rescan re-reads the

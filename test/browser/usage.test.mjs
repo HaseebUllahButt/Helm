@@ -61,7 +61,7 @@ async function setup(t, width=390, delay=false, fixture) {
 
 test('Usage shows reported allowance, expired and missing reports, and model-specific detail on mobile', async t => {
   const page = await setup(t);
-  await page.getByRole('button',{name:'claude-opus-5',exact:true}).waitFor();
+  await page.getByRole('button',{name:/^claude-opus-5,/}).waitFor();
   assert.equal(await page.getByRole('meter').first().getAttribute('aria-valuenow'),'75');
   // Plan value: $9.90 over 7 days against a weekly allowance 60% used halfway
   // through the week - on pace for 120%, so it runs dry; a full week ≈ $16.50.
@@ -81,7 +81,7 @@ test('Usage shows reported allowance, expired and missing reports, and model-spe
   await page.getByText('VM · Limits unavailable',{exact:true}).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({path:'/tmp/helm-usage-mobile.png',fullPage:true});
-  await page.getByRole('button',{name:'claude-opus-5',exact:true}).click();
+  await page.getByRole('button',{name:/^claude-opus-5,/}).click();
   const detail = page.getByRole('dialog');
   await detail.getByText('$1.20',{exact:true}).waitFor();
   assert.equal(await detail.getByText('1 of 2 machines reporting.',{exact:true}).count(),1);
@@ -91,8 +91,9 @@ test('Usage shows reported allowance, expired and missing reports, and model-spe
   await page.screenshot({path:'/tmp/helm-usage-model-mobile.png',fullPage:true});
   await page.keyboard.press('Escape');
   assert.equal(await detail.count(),0);
-  assert.equal(await page.evaluate(() => document.activeElement.textContent),'claude-opus-5');
-  await page.getByText('More models (1)',{exact:true}).click();
+  assert.match(await page.evaluate(() => document.activeElement.getAttribute('aria-label')),/^claude-opus-5,/);
+  // A model with no published rate is still a row, counted in tokens.
+  await page.getByRole('button',{name:/^small-model, \d+ tokens,/}).waitFor();
   await page.getByRole('button',{name:/small-model/}).click();
   await page.getByRole('dialog').getByText('$1.20',{exact:true}).waitFor();
 });
@@ -114,7 +115,7 @@ test('Usage ignores a late response from the previous date range', async t => {
 test('model detail refuses an unfiltered answer from an older daemon', async t => {
   const page = await setup(t);
   await page.evaluate(() => window.oldDaemon=true);
-  await page.getByRole('button',{name:'claude-opus-5',exact:true}).click();
+  await page.getByRole('button',{name:/^claude-opus-5,/}).click();
   const detail = page.getByRole('dialog');
   await detail.getByText('Model history unavailable. The machines may be offline or need an update.',{exact:true}).waitFor();
   assert.equal(await detail.locator('.usage-hero').count(),0);
@@ -170,7 +171,7 @@ test('one credential read on two machines is one row that keeps both report time
     const now = Date.now() / 1000;
     const row = at => ({account:'claude|~/.claude|TOKEN_A',engine:'claude',label:'personal',aliases:['claudea'],
       windows:[{label:'7d',used:30,resetsAt:now+3.5*86400,at}]});
-    window.limitsFixture = env => ({unsupported:0,accounts:[row(env === 'vm' ? Date.now()-3*3600000 : Date.now()-120000)]});
+    window.limitsFixture = env => ({unsupported:0,accounts:[row(env === 'vm' ? Date.now()-3.2*3600000 : Date.now()-150000)]});
   });
   const accounts = page.getByRole('region',{name:'Accounts'});
   const row = accounts.locator('.usage-account').filter({hasText:'claude personal'});

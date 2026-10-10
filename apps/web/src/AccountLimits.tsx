@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Client, Environment } from './client';
 import type { LimitWindow } from './session/limits';
 import { resetPhrase } from './session/limits';
+import { EngineMark } from './EngineMark';
 
 export interface LimitAccount {
   account: string; engine: string; label: string; displayLabel?: string; aliases: string[];
@@ -55,6 +56,8 @@ const readPlans = (): Record<string, number> => {
   try { return JSON.parse(localStorage.getItem(PLAN_KEY) || '{}') ?? {}; } catch { return {}; }
 };
 const WEEK_MS = 7 * 86_400_000;
+/** The allowance windows as a person says them. */
+const WINDOW_NAMES: Record<string, string> = { '5h': '5 hours', '7d': 'Week' };
 const money = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`;
 const nameOf = (a: LimitAccount) => a.displayLabel || a.label;
 /** "/home/me/.claude" and "~/.claude" name the same login home. */
@@ -125,11 +128,12 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
   const perWeek = win === '7d' ? 1 : win === '1d' ? 7 : win === '30d' ? 7 / 30 : null;
 
   return <section className="usage-accounts" aria-label="Accounts">
-    <h2 className="usage-h">Accounts</h2>
-    {shown.map(row => {
+    <h2 className="section">Accounts</h2>
+    {shown.length > 0 && <div className="usage-panel">{shown.map(row => {
       const a = row.account;
       return <div className="usage-account" key={row.key}>
         <div className="usage-account-name">
+          <EngineMark engine={a.engine} className="usage-share-mark" />
           <b>{a.engine} <span>{nameOf(a)}</span></b>
           <small title={a.aliases.join(', ')}>
             {row.shared ? (row.shared.length ? `Shared by ${row.shared.join(', ')}` : 'No account report')
@@ -150,7 +154,7 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
               ? Math.min(1, Math.max(0.05, 1 - (w.resetsAt * 1000 - w.at) / WEEK_MS)) : 0;
             const pace = elapsed ? w.used / elapsed : 0;
             return <div className={`usage-allowance${expired ? ' expired' : ''}${pace > 100 ? ' dry' : ''}`} key={w.label}>
-              <span className="usage-window">{w.label}</span>
+              <span className="usage-window">{WINDOW_NAMES[w.label] ?? w.label}</span>
               {expired ? <span className="usage-window-meter" /> : <div className="usage-meter" role="meter" aria-label={`${a.engine} ${nameOf(a)} ${w.label} remaining`}
                 aria-valuemin={0} aria-valuemax={100} aria-valuenow={left}><span style={{ width: `${left}%` }} /></div>}
               <b>{expired ? 'Awaiting report' : `${left}% left`}</b>
@@ -170,7 +174,7 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
           const price = plans[s.key];
           const weeklyPrice = price ? (price * 12) / 52 : null;
           return <div className="usage-value" key={s.key}>
-            <span>{money(s.costUsd)} API-worth{s.unpriced ? ' or more' : ''}{weekly !== null && win !== '7d' ? ` · ≈ ${money(weekly)} a week` : ''}</span>
+            <span><b>{money(s.costUsd)}{s.unpriced ? '+' : ''}</b> at API prices{weekly !== null && win !== '7d' ? ` · ≈ ${money(weekly)} a week` : ''}</span>
             {worth !== null && <span>a full week ≈ <b>{money(worth)}</b></span>}
             {weekly !== null && weeklyPrice && <span><b className="usage-plan-mult">{(weekly / weeklyPrice).toFixed(1)}×</b> the plan price</span>}
             <details className="usage-plan">
@@ -184,7 +188,7 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
           </div>;
         })}
       </div>;
-    })}
+    })}</div>}
     {all.length > 5 && <button className="linkish" onClick={() => setExpanded(!expanded)}>{expanded ? 'Show fewer accounts' : `Show all ${all.length} accounts`}</button>}
     {targets.filter(e => !reports[e.id]).map(e => <p className="usage-limits-note" key={e.id}>{e.name} · {failed[e.id] ? 'Limits unavailable' : 'Reading limit reports…'}</p>)}
     {!all.length && targets.every(e => reports[e.id]) && <p className="usage-limits-note">No Claude or Codex accounts configured.</p>}
