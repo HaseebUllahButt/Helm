@@ -13,6 +13,54 @@ const make = (name, opts = {}) => {
   return { fake, driver, log: collect(driver) };
 };
 
+async function modelControl(t) {
+  let receive, exited;
+  const writes = [];
+  const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; },
+    write(raw) { writes.push(JSON.parse(raw)); }, end() { exited({ code: 0 }); },
+    detach() {}, kill() { exited({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: 'unused', cwd: '/tmp', model: 'opus',
+    engineSessionId: 'existing-conversation', procId: 'hosted', procHost: {
+      hasProc: () => false, openProc: async () => {}, procPipe: () => pipe } });
+  await driver.start();
+  t.after(() => driver.kill());
+  return { driver, writes, reply: response => receive(JSON.stringify({ type: 'control_response',
+    response: { ...response, request_id: writes.at(-1).request_id } }) + '\n') };
+}
+
+test('Claude model changes keep the conversation and wait for the provider acknowledgment', async t => {
+  const { driver, writes, reply } = await modelControl(t);
+  const pending = driver.setModel('sonnet');
+  assert.equal(driver.model, 'opus');
+  assert.deepEqual(writes[0].request, { subtype: 'set_model', model: 'sonnet' });
+  reply({ subtype: 'success' });
+  await pending;
+  assert.equal(driver.model, 'sonnet');
+  assert.equal(driver.engineSessionId, 'existing-conversation');
+  assert.equal(writes.length, 1, 'changing model neither resends the conversation nor restarts it');
+});
+
+test('a rejected Claude model leaves the previous model and conversation usable', async t => {
+  const { driver, reply } = await modelControl(t);
+  const pending = driver.setModel('unavailable-model');
+  reply({ subtype: 'error', error: 'This model is not available on your account.' });
+  await assert.rejects(pending, /not available/);
+  assert.equal(driver.model, 'opus');
+  const retry = driver.setModel('sonnet');
+  reply({ subtype: 'success' });
+  await retry;
+  assert.equal(driver.model, 'sonnet');
+});
+
+test('a missing Claude model acknowledgment is a failure and never a selected model', async t => {
+  const { driver } = await modelControl(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = driver.setModel('sonnet');
+  t.mock.timers.tick(15_001);
+  await assert.rejects(pending, /did not confirm/);
+  assert.equal(driver.model, 'opus');
+});
+
 test('argv: headless flags, the account home, and a session id to resume later', () => {
   const d = new ClaudeDriver({ cmd: 'claude', env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' }, args: ['--model', 'claude-fable-5-1'], cwd: '/x', model: 'opus', effort: 'high', mode: 'acceptEdits' });
   const a = d.args;

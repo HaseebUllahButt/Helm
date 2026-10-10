@@ -2620,10 +2620,11 @@ export class Sessions extends EventEmitter {
       return this.input(id, `/model ${value}`);
     }
     if (!s.driver) throw new Error('not a headless session');
-    s.model = model || null;
-    this.#save();
+    const value = model || null;
     const d = this.#drivers.get(id);
-    if (d) await d.setModel(s.model);
+    if (d) await d.setModel(value);
+    s.model = value;
+    this.#save();
     this.emit('session', s);
     return { ok: true, session: s };
   }

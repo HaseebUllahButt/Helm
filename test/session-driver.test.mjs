@@ -1009,6 +1009,22 @@ test('model and effort switch mid-session on the live driver', async () => {
   await sessions.kill(s.id);
 });
 
+test('a refused model is not saved on the session and the same chat can continue', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new StubRuntime(), {
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea', model: 'opus' });
+  await sessions.input(s.id, 'hi');
+  const driver = FakeDriver.made.at(-1);
+  driver.setModel = async () => { throw new Error('Claude rejected that model'); };
+  await assert.rejects(sessions.setModel(s.id, 'unavailable'), /rejected/);
+  assert.equal(sessions.get(s.id).model, 'opus');
+  await sessions.input(s.id, 'continue this conversation');
+  assert.equal(FakeDriver.made.at(-1), driver);
+  await sessions.kill(s.id);
+});
+
 
 test('/compact delegates to the driver', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');

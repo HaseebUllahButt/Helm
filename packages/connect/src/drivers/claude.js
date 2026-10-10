@@ -348,8 +348,13 @@ export class ClaudeDriver extends Driver {
   }
 
   async setModel(model) {
+    if (this.#pipe) {
+      const response = await this.#control({ subtype: 'set_model', model: model || null });
+      if (response?.subtype !== 'success') {
+        throw new Error(response?.error || 'Claude did not confirm the model change. The previous model is still selected; try again.');
+      }
+    }
     this.model = model || null;
-    if (this.#pipe) await this.#control({ subtype: 'set_model', model: model || null });
   }
 
   async setMode(id) {
