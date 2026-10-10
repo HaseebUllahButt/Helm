@@ -83,6 +83,18 @@ for (const [name, status, turns, expected] of [
   }
 });
 
+test('reattaching Codex does not replay old helper failures and checks a surviving child live', async t => {
+  const thread = { status: { type: 'idle' }, turns: [{ id: 'stale-log-turn', status: 'completed', items: [
+    { type: 'collabAgentToolCall', id: 'old-failure', tool: 'spawn_agent', agentsStates: { 'old-child': { status: 'errored' } } },
+    { type: 'collabAgentToolCall', id: 'active-card', tool: 'spawn_agent', agentsStates: { 'active-child': { status: 'running' } } },
+  ] }] };
+  const { driver, log, writes } = adoptedCodex(t, { thread });
+  await driver.start();
+  assert.equal(log.of('subagent.status').some(e => e.status === 'error'), false);
+  assert.ok(writes.some(request => request.method === 'thread/read' && request.params.threadId === 'active-child'));
+  assert.deepEqual(log.of('subagent.status').map(e => [e.id,e.status]), [['active-card','working'],['active-card','idle']]);
+});
+
 test('older ephemeral Codex threads fall back to a live status read without replaying work', async (t) => {
   const { driver, writes } = adoptedCodex(t, {
     unsupportedTurns: true, thread: { status: { type: 'idle' } },
@@ -473,6 +485,22 @@ test('interrupt: turn/interrupt with the live turn id; the turn ends interrupted
   await driver.kill();
 });
 
+test('simultaneous native Codex helpers keep separate request targets and settle separately', () => {
+  const driver = new CodexDriver({ cmd: 'unused', cwd: '/tmp', engineSessionId: 'parent' });
+  const log = collect(driver);
+  for (const id of ['a', 'b']) {
+    const item = { type: 'collabAgentToolCall', id: 'spawn-' + id, tool: 'spawn_agent', status: 'completed',
+      agentsStates: { ['thread-' + id]: { status: 'running' } } };
+    driver.onNotification('item/started', { threadId: 'parent', turnId: 'turn', item });
+    driver.onNotification('item/completed', { threadId: 'parent', turnId: 'turn', item });
+  }
+  driver.onServerRequest({ id: 42, method: 'item/tool/requestUserInput', params: { threadId: 'thread-a', itemId: 'question', questions: [] } });
+  assert.equal(log.of('permission.request').at(-1).parentId, 'spawn-a');
+  driver.onNotification('turn/completed', { threadId: 'thread-b', turn: { status: 'completed' } });
+  assert.deepEqual(log.of('subagent.status').at(-1), { type: 'subagent.status', id: 'spawn-b', status: 'idle' });
+  assert.equal(log.of('turn.done').length, 0, 'a child completion never closes the parent turn');
+});
+
 test('subagent: spawn_agent is a card; the child thread\'s items nest under it', async () => {
   const { driver, log } = make('subagent');
   await driver.send('spawn a subagent');
@@ -484,6 +512,9 @@ test('subagent: spawn_agent is a card; the child thread\'s items nest under it',
   assert.equal(card.name, 'spawn_agent');
   assert.equal(card.input.prompt, 'Draft a one-line plan for the refactor');
   assert.equal(card.agent.status, 'running');
+  assert.ok(log.of('subagent.status').some(e => e.id === card.id && e.status === 'working'));
+  assert.equal(log.of('subagent.status').at(-1).status, 'idle');
+  assert.ok(log.of('subagent.status').every(e => e.id === card.id), 'wait calls update the actual spawned child, not a second helper');
 
   // The child thread's items arrive on its own threadId and nest under the card.
   const childCmd = log.of('item.start').find((e) => e.kind === 'command');

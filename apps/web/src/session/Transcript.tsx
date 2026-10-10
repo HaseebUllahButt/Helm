@@ -1,11 +1,13 @@
 import { useCopySelection } from '../useCopySelection';
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Markdown } from '../Markdown';
-import type { Change, Item, Turn } from './types';
+import type { Change, Item, Turn, Permission } from './types';
 import { money, seconds } from '../format';
 import { Icon, toolKind } from '../Icon';
 import { userMessage } from './userMessage';
 import { plainError } from './problem';
+
+const Requests = createContext<{ pending: Permission[]; review?: (id: string) => void }>({ pending: [] });
 
 /**
  * The conversation, live.
@@ -169,8 +171,14 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
  * works, the line says what it is doing now; nothing it prints lands in the
  * conversation unless you ask for it.
  */
-function ActivityGroup({ items, byParent, live }: { items: Item[]; byParent: Map<string, Item[]>; live: boolean }) {
+function ActivityGroup({ items, byParent, live: turnLive }: { items: Item[]; byParent: Map<string, Item[]>; live: boolean }) {
   const [open, setOpen] = useState(false);
+  const requests = useContext(Requests);
+  const live = turnLive || items.some(item => item.kind === 'subagent' && ['running', 'pendingInit', 'working'].includes(item.agent?.status ?? ''));
+  const ids = new Set(items.map(item => item.id));
+  const collect = (id: string) => { for (const child of byParent.get(id) ?? []) if (!ids.has(child.id)) { ids.add(child.id); collect(child.id); } };
+  items.forEach(item => collect(item.id));
+  const asking = requests.pending.filter(request => request.parentId && ids.has(request.parentId));
   const steps = items.filter((i) => i.kind !== 'thinking');
   const failed = steps.filter((i) => i.status === 'error' || (i.kind === 'command' && i.exitCode != null && i.exitCode !== 0)).length;
   const current = live ? [...items].reverse().find((i) => i.status === 'streaming') ?? items.at(-1) : undefined;
@@ -193,6 +201,10 @@ function ActivityGroup({ items, byParent, live }: { items: Item[]; byParent: Map
         {!live && span && <span className="ameta">{span}</span>}
         <span className={`achev${open ? ' open' : ''}`}><Icon name="forward" size={13} /></span>
       </button>
+      {!open && requests.review && asking.map(request => <button key={request.requestId} className="subagent-request"
+        onClick={() => requests.review?.(request.requestId)}>
+        {request.kind === 'question' ? 'Answer question' : 'Review request'} · {request.title}<Icon name="forward" size={13} />
+      </button>)}
       {open && <div className="steps-body">{items.map((it) => <ItemView key={it.id} item={it} byParent={byParent} />)}</div>}
     </div>
   );
@@ -292,7 +304,9 @@ const tokens = (n?: number) => (
  * held the numbers. A folded card now carries them.
  */
 function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
-  const live = item.status === 'streaming';
+  const live = item.agent?.status ? ['running', 'pendingInit', 'working'].includes(item.agent.status) : item.status === 'streaming';
+  const requests = useContext(Requests);
+  const request = requests.pending.find(p => p.parentId === item.id);
   const input = item.input ?? tryParse(item.inputJson);
   const who = input?.subagent_type ?? item.name ?? 'subagent';
   const task = input?.description ?? input?.prompt ?? item.agent?.description ?? '';
@@ -317,6 +331,9 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
       {live && item.elapsed != null && item.elapsed > 2 && <span className="ameta">{Math.round(item.elapsed)}s</span>}
       {item.status === 'error' && <span className="ameta bad">failed</span>}
       {item.status === 'declined' && <span className="ameta">stopped</span>}
+      {request && requests.review && <button className="subagent-request" onClick={event => {
+        event.preventDefault(); event.stopPropagation(); requests.review?.(request.requestId);
+      }}>{request.kind === 'question' ? 'Answer question' : 'Review request'}<Icon name="forward" size={13} /></button>}
     </>
   );
   if (!kids.length && !out) return <div className="act">{head}</div>;
@@ -521,8 +538,9 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   );
 });
 
-export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch }: {
+export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, pending = [], onReviewRequest }: {
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
+  pending?: Permission[]; onReviewRequest?: (requestId: string) => void;
   /** The machine holds more of this conversation than is on screen. */
   earlier?: boolean; loadingEarlier?: boolean; onEarlier?: () => void;
   /** Offered on a turn that ended in an error: send its prompt again. */
@@ -532,6 +550,10 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   /** Offered on every message but the first: branch the conversation from before it. */
   onBranch?: (turn: Turn) => void;
 }) {
+  const requestKey = pending.map(request => request.requestId).join('\0');
+  // Text deltas clone the pending array too. Only changed requests should
+  // invalidate every activity group in a long transcript.
+  const requests = useMemo(() => ({ pending, review: onReviewRequest }), [requestKey, onReviewRequest]);
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
@@ -636,6 +658,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   }
 
   return (
+    <Requests.Provider value={requests}>
     <div className="chat-wrap">
       <div className="chat" ref={box} onScroll={onScroll}>
         <div className="timeline" onClick={(e) => {
@@ -663,5 +686,6 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
       )}
       {zoom && <Lightbox src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}
     </div>
+    </Requests.Provider>
   );
 }

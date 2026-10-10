@@ -406,7 +406,7 @@ export class Daemon {
         // in-app notice and the Needs-you card can show the question.
         let session = null;
         try { session = this.sessions.get(id); } catch { /* gone already */ }
-        if (session) this.#emit(E.SESSION_UPDATE, { session: { ...wire(session), ask: askPreview(event) }, asked: true });
+        if (session) this.#emit(E.SESSION_UPDATE, { session: { ...wire(session), ask: { ...askPreview(event), requestId: event.requestId } }, asked: true });
       }
       // The matching "needs you" is stale the moment anyone answers - on
       // this device, another, or the CLI itself. Hubs pass `resolve` through

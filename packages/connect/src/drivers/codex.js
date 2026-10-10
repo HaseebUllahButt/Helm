@@ -624,6 +624,7 @@ export class CodexDriver extends Driver {
       }
       if (state.error) throw new Error(`codex live thread read failed: ${state.error.message}`);
       const thread = state.result.thread;
+      await this.#restoreAgents(thread.turns);
       this.#rolloutState = await codexSessionState(this.transcript);
       this.#usage = this.#rolloutState.usage ?? this.#usage;
       this.info = {
@@ -701,6 +702,7 @@ export class CodexDriver extends Driver {
         this.push('status', { status: blocked ? 'blocked' : status?.type === 'active' ? 'working' : 'idle' });
       }
     }
+    await this.#restoreAgents(res.result.thread?.turns);
     this.emit('init', this.info);
   }
 
@@ -1199,6 +1201,23 @@ export class CodexDriver extends Driver {
       const parentId = this.#subagentThreads.get(p.threadId);
       if (!parentId) return;
       switch (method) {
+        case 'turn/started':
+          this.push('subagent.status', { id: parentId, status: 'working' });
+          this.push('item.update', { id: parentId, agent: { status: 'running' } });
+          return;
+        case 'turn/completed':
+          this.push('subagent.status', { id: parentId, status: p.turn?.status === 'failed' ? 'error' : 'idle' });
+          this.push('item.update', { id: parentId, agent: { status: p.turn?.status === 'failed' ? 'errored' : 'completed' } });
+          return;
+        case 'thread/status/changed': {
+          const flags = p.status?.activeFlags ?? [];
+          const blocked = flags.includes('waitingOnApproval') || flags.includes('waitingOnUserInput');
+          if (blocked || p.status?.type === 'active' || p.status?.type === 'idle') {
+            this.push('subagent.status', { id: parentId, status: blocked ? 'blocked' : p.status.type === 'active' ? 'working' : 'idle' });
+            this.push('item.update', { id: parentId, agent: { status: blocked ? 'blocked' : p.status.type === 'active' ? 'running' : 'completed' } });
+          }
+          return;
+        }
         case 'item/started': return this.#onItemStarted(p.item, this.#turnId, parentId);
         case 'item/completed': return this.#onItemCompleted(p.item);
         case 'item/agentMessage/delta':
@@ -1376,6 +1395,7 @@ export class CodexDriver extends Driver {
       case 'collabAgentToolCall':
       case 'collabToolCall':
       case 'subAgentActivity': {
+        this.#trackAgents(item);
         // Live traffic: spawnAgent carries no receiverThreadIds - the child
         // thread id shows up on the `wait` call that follows it. Parent the
         // child to the spawn card, not the wait that happened to name it.
@@ -1441,9 +1461,10 @@ export class CodexDriver extends Driver {
       case 'collabAgentToolCall':
       case 'collabToolCall':
       case 'subAgentActivity': {
+        this.#trackAgents(item);
         const states = Object.values(item.agentsStates ?? {});
         const summary = states.map((s) => s?.message).filter(Boolean).join('\n');
-        this.push('item.update', { id: item.id, agent: { status: item.status ?? 'completed', summary: summary || undefined } });
+        this.push('item.update', { id: item.id, agent: { status: states.some(s => ['running', 'pendingInit'].includes(s?.status)) ? 'running' : item.status ?? 'completed', summary: summary || undefined } });
         this.push('item.done', { id: item.id, status, output: clip(summary) || undefined });
         break;
       }
@@ -1451,6 +1472,59 @@ export class CodexDriver extends Driver {
         this.push('item.done', { id: item.id, status: 'ok' });
     }
     this.#items.delete(item.id);
+  }
+
+  #trackAgents(item) {
+    const spawn = /spawn/i.test(item.tool ?? '');
+    for (const [threadId, state] of Object.entries(item.agentsStates ?? {})) {
+      const card = this.#subagentThreads.get(threadId) ?? (spawn ? item.id : this.#lastSpawn);
+      if (!card) continue;
+      this.#subagentThreads.set(threadId, card);
+      this.#server?.alias(threadId, this);
+      const status = ['pendingInit', 'running'].includes(state?.status) ? 'working'
+        : ['completed', 'shutdown', 'notFound'].includes(state?.status) ? 'idle'
+          : state?.status === 'errored' ? 'error' : null;
+      if (!status) continue;
+      this.push('subagent.status', { id: card, status });
+      this.push('item.update', { id: card, agent: { id: threadId, status: state.status, summary: state.message ?? undefined } });
+    }
+  }
+
+  async #restoreAgents(turns) {
+    const active = new Map();
+    const savedActive = new Set();
+    for (const e of this.resumeEvents?.() ?? []) {
+      if (e.type === 'subagent.status') {
+        if (['working', 'blocked'].includes(e.status)) savedActive.add(e.id);
+        else savedActive.delete(e.id);
+      }
+      if (e.type === 'item.update' && e.agent) {
+        if (e.agent.id) {
+          this.#subagentThreads.set(e.agent.id, e.id);
+          this.#server?.alias(e.agent.id, this);
+        }
+        const id = e.agent.id ?? [...this.#subagentThreads].find(([, card]) => card === e.id)?.[0];
+        if (id && e.agent.status) active.set(id, ['running', 'pendingInit', 'blocked'].includes(e.agent.status));
+      }
+    }
+    for (const turn of turns ?? []) for (const item of turn.items ?? []) {
+      if (!['collabAgentToolCall', 'collabToolCall', 'subAgentActivity'].includes(item.type)) continue;
+      for (const [id, state] of Object.entries(item.agentsStates ?? {})) {
+        const card = this.#subagentThreads.get(id) ?? (/spawn/i.test(item.tool ?? '') ? item.id : null);
+        if (!card) continue;
+        this.#subagentThreads.set(id, card);
+        this.#server?.alias(id, this);
+        active.set(id, ['running', 'pendingInit'].includes(state?.status));
+      }
+    }
+    // Restore current work together, never replay historical transitions that
+    // could make an old failed helper need attention or return a result early.
+    for (const [id, running] of active) if (running) this.push('subagent.status', { id: this.#subagentThreads.get(id), status: 'working' });
+    for (const [id, running] of active) if (!running && savedActive.has(this.#subagentThreads.get(id))) this.push('subagent.status', { id: this.#subagentThreads.get(id), status: 'idle' });
+    await Promise.all([...active].filter(([, running]) => running).map(async ([id]) => {
+      const read = await this.#server.call('thread/read', { threadId: id, includeTurns: false }, 3000).catch(() => null);
+      if (read?.result?.thread?.status) this.onNotification('thread/status/changed', { threadId: id, status: read.result.thread.status });
+    }));
   }
 
   onServerRequest(m) {

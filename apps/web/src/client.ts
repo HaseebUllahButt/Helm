@@ -112,7 +112,7 @@ export interface Session {
   /** Prompts waiting on a person, for the list view. */
   pending?: number;
   /** What the newest of those prompts is about - the question's first line. */
-  ask?: { kind: 'question' | 'command' | 'edit' | 'plan' | 'tool'; text: string; more: number } | null;
+  ask?: { kind: 'question' | 'command' | 'edit' | 'plan' | 'tool'; text: string; more: number; requestId?: string } | null;
   adopted?: boolean;
   /** Archived threads stay on the machine but are hidden from active groups. */
   archived?: boolean;

@@ -55,6 +55,41 @@ function setup(t, make = (opts) => new FakeDriver(opts), options = {}) {
   return { sessions, drivers };
 }
 
+test('native children keep an idle parent active, expose questions, and settle independently', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Review with a helper');
+  const driver = drivers.get(parent.id);
+  driver.push('subagent.status', { id: 'native-helper', status: 'working' });
+  driver.finish();
+  assert.equal(parent.status, 'idle', 'provider status stays separate from team activity');
+  assert.deepEqual(parent.team, { working: 1, blocked: 0, failed: 0 });
+  assert.equal(sessions.hasActiveDelegations(parent.id), true);
+  driver.push('permission.request', { requestId: 'native-question', parentId: 'native-helper', kind: 'question', title: 'Which file?' });
+  assert.deepEqual(parent.team, { working: 0, blocked: 1, failed: 0 });
+  driver.push('subagent.status', { id: 'native-helper', status: 'working' });
+  assert.equal(parent.team.blocked, 1, 'progress does not dismiss an unanswered question');
+  driver.push('permission.resolved', { requestId: 'native-question', decision: 'allow' });
+  assert.deepEqual(parent.team, { working: 1, blocked: 0, failed: 0 });
+  driver.push('subagent.status', { id: 'native-helper', status: 'idle' });
+  assert.deepEqual(parent.team, { working: 0, blocked: 0, failed: 0 });
+  assert.equal(sessions.hasActiveDelegations(parent.id), false);
+});
+
+test('native child activity reaches a delegated ancestor and clears when its process exits', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const driver = drivers.get(child.id);
+  driver.push('subagent.status', { id: 'grandchild', status: 'working' });
+  driver.finish();
+  assert.equal(parent.team.working, 1);
+  assert.equal(sessions.hasActiveDelegations(parent.id), true);
+  driver.push('status', { status: 'exited' });
+  assert.equal(parent.team.working, 0);
+  assert.equal(sessions.hasActiveDelegations(parent.id), false);
+});
+
 test('agent capabilities show sign-in state without exposing launcher or credentials', async () => {
   const agents = await agentCatalog([...profiles, { ...profiles[1], id: 'wrapped', wraps: 'claude' }], new Map([['codex-main', 'authenticated'], ['claude-main', 'unauthenticated']]), { models: false });
   assert.equal(agents[0].available, true);

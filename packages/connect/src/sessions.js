@@ -125,9 +125,10 @@ const EXTERNAL = /^(pane:|found:)/;
  * note kept for naming a thread never rides along to every paired device.
  */
 /** How many prompts wait, and what the newest one is about. */
-const pendingSummary = (pending) => ({ pending: pending.length, ask: pending.length ? askPreview(pending[pending.length - 1]) : null });
+const pendingSummary = (pending) => ({ pending: pending.length,
+  ask: pending.length ? { ...askPreview(pending[pending.length - 1]), requestId: pending[pending.length - 1].requestId } : null });
 
-export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, ...s }) =>
+export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, ...s }) =>
   typeof s.title === 'string' && /\[(?:Image|Pasted text) #/.test(s.title) ? { ...s, title: bareTitle(s.title) || s.title } : s;
 
 const EXTERNAL_INFO_COMMANDS = [
@@ -957,14 +958,20 @@ export class Sessions extends EventEmitter {
   #updateTeam(child) {
     const parent = this.#index.get(child.delegation?.parentId);
     if (!parent) return;
+    this.#refreshTeam(parent);
+  }
+
+  #refreshTeam(parent) {
     const children = [...this.#index.values()].filter((session) => session.delegation?.parentId === parent.id && !session.archived);
+    const native = Object.values(parent.nativeAgents ?? {});
     parent.team = children.reduce((team, session) => {
       const state = session.delegation.status ?? session.status;
       team.working += Number(['working', 'starting'].includes(state)) + (session.team?.working ?? 0);
       team.blocked += Number(state === 'blocked') + (session.team?.blocked ?? 0);
       team.failed += Number(state === 'error') + (session.team?.failed ?? 0);
       return team;
-    }, { working: 0, blocked: 0, failed: 0 });
+    }, { working: native.filter(state => state === 'working').length,
+      blocked: native.filter(state => state === 'blocked').length, failed: native.filter(state => state === 'error').length });
     this.emit('session', parent);
     if (parent.delegation) this.#updateTeam(parent);
   }
@@ -975,6 +982,7 @@ export class Sessions extends EventEmitter {
   }
 
   hasActiveDelegations(id) {
+    if (Object.values(this.#index.get(id)?.nativeAgents ?? {}).some(state => ['working', 'blocked'].includes(state))) return true;
     return [...this.#index.values()].some((s) => s.delegation?.parentId === id
       && (['starting', 'working', 'blocked'].includes(s.delegation.status ?? s.status) || this.hasActiveDelegations(s.id)));
   }
@@ -1488,6 +1496,30 @@ export class Sessions extends EventEmitter {
     if (e.type === 'turn.done' && !e.turnId && e.status === 'ok' && !card && !this.events.activeTurn(s.id)) return;
     if (!card) trackDelegationReply(s, e);
     let forwarded = e;
+    if (e.type === 'subagent.status' || (e.type === 'permission.request' && e.parentId)) {
+      const id = e.type === 'subagent.status' ? e.id : e.parentId;
+      let status = e.type === 'subagent.status' ? e.status : 'blocked';
+      if (status === 'working' && this.events.pending(s.id).some(p => p.parentId === id)) status = 'blocked';
+      s.nativeAgents ??= {};
+      if (s.nativeAgents[id] !== status) {
+        if (status === 'idle') delete s.nativeAgents[id];
+        else s.nativeAgents[id] = status;
+        this.#refreshTeam(s);
+        this.#save();
+      }
+    }
+    if (e.type === 'permission.resolved') {
+      const ask = this.events.pending(s.id).find(p => p.requestId === e.requestId);
+      if (ask?.parentId && s.nativeAgents?.[ask.parentId] === 'blocked'
+        && !this.events.pending(s.id).some(p => p.requestId !== e.requestId && p.parentId === ask.parentId)) {
+        s.nativeAgents[ask.parentId] = 'working';
+        this.#refreshTeam(s);
+        this.#save();
+      }
+    }
+    if ((e.type === 'turn.done' && e.status === 'interrupted') || (e.type === 'status' && e.status === 'exited')) {
+      if (s.nativeAgents) { delete s.nativeAgents; this.#refreshTeam(s); this.#save(); }
+    }
     const staleClaudeConversation = s.engine === 'claude'
       && e.type === 'turn.done'
       && e.status === 'error'
@@ -1628,6 +1660,11 @@ export class Sessions extends EventEmitter {
     const event = this.events.append(s.id, forwarded);
     s.lastSeq = event.seq;
     this.emit('event', { id: s.id, event });
+    if (e.type === 'subagent.status' && e.status === 'idle' && s.delegation && !this.hasActiveDelegations(s.id)
+      && !['working', 'blocked', 'starting'].includes(s.status)) {
+      const done = this.events.tail(s.id, 500).findLast(entry => entry.type === 'turn.done');
+      if (done) void this.#notifyParent(s, done);
+    }
     if (e.type === 'turn.done') {
       this.emit('session', s);
       if (s.delegation && !card) void this.#notifyParent(s, event);
@@ -3940,6 +3977,7 @@ export class Sessions extends EventEmitter {
         this.emit('session', s);
       }
       s.lastSeq = this.events.last(s.id);
+      if (s.nativeAgents) { delete s.nativeAgents; this.#refreshTeam(s); }
       this.#pump(s);
     }
     this.#save();

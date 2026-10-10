@@ -273,7 +273,7 @@ export function localDigest(sessions, events, now = Date.now()) {
         engine: s.engine,
         model: s.model ?? null,
         brain: !!s.brain,
-        status: s.status,
+        status: s.status === 'blocked' || s.team?.blocked ? 'blocked' : s.team?.working ? 'working' : s.status,
         adopted: !!s.adopted,
         costUsd: s.costUsd ?? null,
         updatedAt: s.updatedAt ?? null,

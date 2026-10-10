@@ -193,7 +193,10 @@ export class ClaudeDriver extends Driver {
       for (const e of this.pendingEvents?.() ?? []) this.pending.set(e.requestId, e);
       // A restart can land between a block's start and its next delta. Recover
       // those stream ids so the remaining text still appends to the same item.
+      const agents = new Map();
       for (const e of this.resumeEvents?.() ?? []) {
+        if (e.type === 'item.update' && e.agent?.id) this.#tasks.set(e.agent.id, e.id);
+        if (e.type === 'item.update' && e.agent?.status) agents.set(e.id, e.agent.status);
         if (e.type !== 'item.start' || e.turnId !== this.#turnId || !['text', 'thinking'].includes(e.kind)) continue;
         const match = /^(.*)#(\d+)$/.exec(e.id);
         if (!match) continue;
@@ -201,6 +204,9 @@ export class ClaudeDriver extends Driver {
         if (scope.messageId !== match[1]) scope.blocks.clear();
         scope.messageId = match[1];
         scope.blocks.set(Number(match[2]), e.id);
+      }
+      for (const [id, status] of agents) if (status === 'running') {
+        this.push('subagent.status', { id, status: [...this.pending.values()].some(p => p.parentId === id) ? 'blocked' : 'working' });
       }
       this.push('status', { status: this.pending.size ? 'blocked' : this.#turnId ? 'working' : 'idle' });
       markReady();
@@ -468,6 +474,7 @@ export class ClaudeDriver extends Driver {
     if (m.subtype === 'task_started') {
       if (m.task_id && m.tool_use_id) this.#tasks.set(m.task_id, m.tool_use_id);
       if (m.tool_use_id) {
+        this.push('subagent.status', { id: m.tool_use_id, status: 'working' });
         this.push('item.update', { id: m.tool_use_id, agent: { id: m.task_id, status: 'running', description: m.description } });
       }
       return;
@@ -475,6 +482,7 @@ export class ClaudeDriver extends Driver {
     if (m.subtype === 'task_progress' || m.subtype === 'task_updated') {
       const id = this.#tasks.get(m.task_id) ?? m.tool_use_id;
       if (id) {
+        this.push('subagent.status', { id, status: 'working' });
         this.push('item.update', {
           id,
           agent: {
@@ -493,6 +501,7 @@ export class ClaudeDriver extends Driver {
       // Terminal: the card is done. A foreground Task's tool_result lands
       // too and overwrites this with the agent's own report.
       if (['completed', 'failed', 'stopped'].includes(m.status)) {
+        this.push('subagent.status', { id, status: m.status === 'failed' ? 'error' : 'idle' });
         this.push('item.done', { id, status, output: clip(m.summary) });
       }
     }

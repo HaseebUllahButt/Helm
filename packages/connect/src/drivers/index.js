@@ -14,6 +14,7 @@ import { execFile } from 'node:child_process';
  *                       itself (a background task finishing); its own turn,
  *                       closed once, never folded into the last one
  *   item.start          { id, kind, turnId, parentId?, ... }   kind: text | thinking | tool | command | edit | subagent
+ *   subagent.status     { id, status } native child lifecycle, independent of its parent's turn
  *   item.delta          { id, text }                appended to the item's text / output / input JSON
  *   item.update         { id, ...fields }           e.g. { agent: { status, lastTool, toolUses } }
  *   item.done           { id, status, output?, exitCode?, error? }   status: ok | error | declined

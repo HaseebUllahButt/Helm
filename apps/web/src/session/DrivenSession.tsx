@@ -105,8 +105,19 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const status = log.loaded ? log.status : session.status;
   // Starting is work in progress too: Stop is the useful button, and a
   // stale problem card from the last run is not.
-  const working = busyStatus(status);
-  const pending = log.pending[0];
+  const childrenWorking = !!session.team?.working || team.some(({ session: child }) => ['working', 'starting'].includes(child.delegation?.status ?? child.status));
+  const working = busyStatus(status) || childrenWorking;
+  const [reviewingRequest, setReviewingRequest] = useState(() => session.ask?.requestId ?? '');
+  useEffect(() => { setReviewingRequest(session.ask?.requestId ?? ''); }, [session.id]);
+  const pending = log.pending.find(request => request.requestId === reviewingRequest) ?? log.pending[0];
+  const permissionBox = useRef<HTMLDivElement>(null);
+  const reviewRequest = useCallback((requestId: string) => setReviewingRequest(requestId), []);
+  useEffect(() => {
+    if (!reviewingRequest || pending?.requestId !== reviewingRequest) return;
+    permissionBox.current?.scrollIntoView({ block: 'nearest' });
+    permissionBox.current?.querySelector<HTMLElement>('button:not(:disabled), input, textarea')?.focus({ preventScroll: true });
+  }, [reviewingRequest, pending?.requestId]);
+  const childrenWaiting = team.filter(({ session: child }) => (child.delegation?.status ?? child.status) === 'blocked' || !!child.pending);
   // Queued messages are the daemon's outbox rendered in the composer, not
   // transcript turns: they only become a bubble once the agent echoes them.
   const queueOrder = new Map((session.queueOrder ?? []).map((id, index) => [id, index]));
@@ -403,7 +414,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       : s === 'working' ? <span className="chip working"><i />working{ago}</span>
       // Its own turn is over, but child tasks are not: the sidebar calls
       // this working, so the open chat must not look finished.
-      : session.team?.working ? <span className="chip working" title="Child tasks are still working"><i />working</span>
+      : childrenWorking ? <span className="chip working" title="Child tasks are still working"><i />working</span>
       : s === 'unknown' ? <span className="chip exited" title="The machine could not tell whether this agent is working">status unavailable</span>
       : null;
   };
@@ -580,6 +591,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
+        pending={log.pending} onReviewRequest={reviewRequest}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
         onResend={resend} onWithdraw={withdraw}
         onBranch={session.engine === 'claude' && onOpenSession ? setBranching : undefined}
@@ -618,8 +630,17 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         {session.recovery && !working && !pending && (
           <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} />
         )}
-        {pending && <PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} />}
-        {log.pending.length > 1 && <div className="note more-pending">{log.pending.length - 1} more waiting</div>}
+        {childrenWaiting.length > 0 && <div className="child-requests" role="group" aria-label="Subagents waiting for you">
+          {childrenWaiting.map(({ session: child }) => <button key={child.id} disabled={!onOpenSession} onClick={() => onOpenSession?.(child)}>
+            <Icon name="subagents" size={15} /><span><b>{child.title}</b><small>{child.ask?.kind === 'question' ? 'Answer question' : 'Review request'}{child.ask?.text ? ` · ${child.ask.text}` : ''}</small></span><Icon name="forward" size={14} />
+          </button>)}
+        </div>}
+        {pending && <div ref={permissionBox}><PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} /></div>}
+        {log.pending.length > 1 && <div className="child-requests" role="group" aria-label="Other requests waiting for you">
+          {log.pending.filter(request => request.requestId !== pending?.requestId).map(request => <button key={request.requestId} onClick={() => reviewRequest(request.requestId)}>
+            <Icon name="forward" size={14} /><span>{request.title}</span>
+          </button>)}
+        </div>}
       </Composer>
 
       {details && <ThreadDetails client={client} env={env} session={session} tab={details} onTab={setDetails} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}

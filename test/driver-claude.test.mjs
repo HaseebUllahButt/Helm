@@ -219,6 +219,18 @@ test('a Claude question remains answerable after the daemon is replaced', async 
   await driver.suspend();
 });
 
+test('reattaching Claude restores a background task and routes its completion without a repeated tool id', async () => {
+  let receive;
+  const pipe = { onData: cb => { receive = cb; }, onExit: () => {}, detach: () => {} };
+  const { driver, log } = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => null, resumeEvents: () => [{ type: 'item.update', id: 'spawn-card', agent: { id: 'background-task', status: 'running' } }] });
+  await driver.start();
+  assert.equal(log.of('subagent.status').at(-1).status, 'working');
+  receive(JSON.stringify({ type: 'system', subtype: 'task_notification', task_id: 'background-task', status: 'completed', summary: 'Ready' }) + '\n');
+  assert.deepEqual(log.of('subagent.status').map(e => [e.id, e.status]), [['spawn-card', 'working'], ['spawn-card', 'idle']]);
+  await driver.suspend();
+});
+
 test('tool: a Bash call becomes a tool item with streamed input and its output; a Write asks permission', async () => {
   const { driver, log, fake } = make('tool');
   await driver.send('Use the Bash tool…');
@@ -400,6 +412,8 @@ test('subagent: a Task call is a subagent card; the child\'s stream nests under 
   const progress = log.of('item.update').find((e) => e.id === task.id && e.agent?.lastTool === 'Glob');
   assert.ok(progress, 'task_progress landed on the card');
   assert.ok(log.of('item.update').some((e) => e.id === task.id && e.agent?.status === 'completed'));
+  assert.deepEqual(log.of('subagent.status').map(e => [e.id, e.status]),
+    [['toolu_task01', 'working'], ['toolu_task01', 'working'], ['toolu_task01', 'idle']]);
 
   // The tool_result is the agent's report; it lands after the notification.
   const taskDone = log.of('item.done').filter((e) => e.id === task.id).pop();

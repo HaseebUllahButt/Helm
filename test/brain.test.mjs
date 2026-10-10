@@ -165,6 +165,14 @@ test('a pane helm did not start contributes no event line', () => {
   assert.equal(asked, 0, 'helm has no event log for a pane it does not own');
 });
 
+test('the digest reports team activity while the parent provider is idle', () => {
+  const rows = localDigest([
+    { id: 'parent', engine: 'claude', status: 'idle', team: { working: 1, blocked: 0 } },
+    { id: 'waiting', engine: 'codex', status: 'idle', team: { working: 1, blocked: 1 } },
+  ], { tail: () => [] });
+  assert.deepEqual(rows.map(row => row.status), ['working', 'blocked']);
+});
+
 // An offline machine that simply vanishes is the failure that matters here:
 // the brain would report "nothing is running there", which is a wrong answer
 // rather than a missing one.
