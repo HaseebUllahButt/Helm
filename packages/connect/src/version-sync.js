@@ -14,6 +14,9 @@ export async function synchronizeVersion({ running, currentVersion, rebuildIfCom
   try {
     const result = await selfUpdate();
     if (result.updated) return result;
+    // Another updater owns a live lock. It will finish the rollout; racing
+    // it via a peer or presenting normal progress as a failure is misleading.
+    if (result.reason === 'an update is already running') return { note: null };
     if (!result.reason?.startsWith('already at')) note = { reason: result.reason };
   } catch {
     // No GitHub route/credentials: a reachable machine can supply the release.

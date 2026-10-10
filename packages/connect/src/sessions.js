@@ -2607,10 +2607,12 @@ export class Sessions extends EventEmitter {
       return this.input(id, `/effort ${level}`);
     }
     if (!s.driver) throw new Error('not a headless session');
-    s.effort = effort || null;
-    this.#save();
+    const value = effort === 'auto' ? null : effort || null;
     const d = this.#drivers.get(id);
-    if (d) await d.setEffort(s.effort);
+    if (d) await d.setEffort(value);
+    s.effort = value;
+    if (d && s.engine === 'claude') s.engineEffort = value;
+    this.#save();
     this.emit('session', s);
     return { ok: true, session: s };
   }

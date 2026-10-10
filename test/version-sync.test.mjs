@@ -29,6 +29,13 @@ test('GitHub unavailable still catches up from a peer, ignoring offline machines
   assert.equal((await synchronizeVersion(opts)).updated, true);
   assert.deepEqual(calls, ['saved-version']);
 });
+test('a live concurrent update is normal progress and never an attention warning or peer race', async () => {
+  const { opts, calls } = fixture({ selfUpdate: async () => {
+    calls.push('github'); return { updated: false, reason: 'an update is already running' };
+  }, rpc: async () => { throw new Error('must not race a live updater'); } });
+  assert.deepEqual(await synchronizeVersion(opts), { note: null });
+  assert.deepEqual(calls, ['github']);
+});
 test('dirty installs report the reason without fetching or overwriting edits', async () => {
   const { opts, calls } = fixture({ currentVersion: async () => ({ full: 'old', dirty: true }) });
   const result = await synchronizeVersion(opts);

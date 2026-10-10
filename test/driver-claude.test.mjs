@@ -110,18 +110,53 @@ test('hosted Claude receives the project directory and interactive history entry
   assert.ok(opened.args.includes('-p'), 'preserve the streaming chat protocol');
 });
 
-test('a new effort before the first message starts the same id again, not --resume', async () => {
-  // The CLI has written nothing until it has a message, so resuming the id
-  // after an early restart failed with "No conversation found".
-  const { driver, log } = make('plain');
-  await driver.start();
-  await driver.setEffort('high');
-  assert.ok(driver.args.includes(`--session-id=${driver.engineSessionId}`));
-  assert.ok(!driver.args.some((a) => a.startsWith('--resume')));
-  await driver.send('Reply with exactly the words: hello from helm');
-  await log.until((e) => e.type === 'turn.done');
-  assert.ok(driver.args.includes(`--resume=${driver.engineSessionId}`), 'once it has a message, a restart resumes');
+test('effort switches on the live Claude pipe without restarting or replaying the conversation', async t => {
+  const { driver, writes, reply } = await modelControl(t);
+  driver.effort = 'high';
+  const pending = driver.setEffort('medium');
+  assert.equal(driver.effort, 'high');
+  assert.deepEqual(writes.at(-1).request, { subtype: 'apply_flag_settings', settings: { effortLevel: 'medium' } });
+  reply({ subtype: 'success' });
+  await pending;
+  assert.equal(driver.effort, 'medium');
+  assert.equal(driver.engineSessionId, 'existing-conversation');
+  await driver.send('continue');
+  assert.equal(writes.length, 2, 'the same pipe receives the next message');
+  assert.equal(writes[1].type, 'user');
+});
+
+test('a rejected or unacknowledged effort keeps the live Claude conversation and old effort', async t => {
+  const { driver, reply } = await modelControl(t);
+  driver.effort = 'high';
+  const rejected = driver.setEffort('max');
+  reply({ subtype: 'error', error: 'Effort is not available on this model.' });
+  await assert.rejects(rejected, /not available/);
+  assert.equal(driver.effort, 'high');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = driver.setEffort('low');
+  t.mock.timers.tick(15_001);
+  await assert.rejects(pending, /did not confirm/);
+  assert.equal(driver.effort, 'high');
+});
+
+test('default effort clears the live override and invalid effort never reaches Claude', async t => {
+  const { driver, writes, reply } = await modelControl(t);
+  const pending = driver.setEffort('auto');
+  assert.deepEqual(writes.at(-1).request.settings, { effortLevel: null });
+  reply({ subtype: 'success' });
+  await pending;
+  assert.equal(driver.effort, null);
+  await assert.rejects(driver.setEffort('invalid'), /invalid/);
+  assert.equal(writes.length, 1);
+});
+
+test('a Claude exit rejects a pending setting change immediately', async t => {
+  const { driver } = await modelControl(t);
+  const pending = driver.setEffort('medium');
+  const rejected = assert.rejects(pending, /exited before confirming/);
   await driver.kill();
+  await rejected;
+  assert.equal(driver.effort, null);
 });
 
 test('plain: text streams in as deltas, then the turn completes with its cost', async () => {

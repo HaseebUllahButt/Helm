@@ -218,6 +218,10 @@ export class ClaudeDriver extends Driver {
       pipe.onExit(({ code, signal, stderr }) => {
         this.#pipe = null;
         this.#inTurn = false;
+        for (const resolve of this.#controls.values()) {
+          resolve({ subtype: 'error', error: 'Claude exited before confirming the setting change.' });
+        }
+        this.#controls.clear();
         markReady();
         // A prompt the CLI was holding open dies with it; say so.
         for (const requestId of [...this.pending.keys()]) {
@@ -384,18 +388,20 @@ export class ClaudeDriver extends Driver {
     }
   }
 
-  /**
-   * Effort is `--effort` on the command line, not something the control
-   * channel can change, so the running process has to come back. Ending it
-   * is enough: the conversation is on disk, and the next message respawns
-   * with `--resume` and the new flag. Nothing is lost but the process.
-   */
+  /** Claude's live /effort setting, with the same acknowledgment as /model. */
   async setEffort(effort) {
-    this.effort = effort || null;
-    if (!this.#pipe) return;
-    await this.kill();
-    // `kill()` is for good; this one is coming back.
-    this.killed = false;
+    const value = effort === 'auto' ? null : effort || null;
+    if (value && !['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'].includes(value)) {
+      throw new Error('invalid Claude thinking effort');
+    }
+    if (this.#pipe) {
+      const response = await this.#control({ subtype: 'apply_flag_settings', settings: { effortLevel: value } });
+      if (response?.subtype !== 'success') {
+        throw new Error(response?.error || 'Claude did not confirm the effort change. The previous effort is still selected; try again.');
+      }
+    }
+    this.effort = value;
+    if (this.info) this.info = { ...this.info, effort: value };
   }
 
   async kill() {

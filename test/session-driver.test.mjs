@@ -1006,10 +1006,13 @@ test('model and effort switch mid-session on the live driver', async () => {
   assert.equal(d.effort, 'max');
   assert.equal(sessions.get(s.id).model, 'claude-sonnet-5');
   assert.equal(sessions.get(s.id).effort, 'max');
+  await sessions.setEffort(s.id, 'auto');
+  assert.equal(sessions.get(s.id).effort, null);
+  assert.equal(sessions.get(s.id).engineEffort, null, 'default does not display the previous reported effort');
   await sessions.kill(s.id);
 });
 
-test('a refused model is not saved on the session and the same chat can continue', async () => {
+test('refused model and effort changes are not saved and the same chat can continue', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const sessions = new Sessions(new StubRuntime(), {
     makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
@@ -1020,6 +1023,10 @@ test('a refused model is not saved on the session and the same chat can continue
   driver.setModel = async () => { throw new Error('Claude rejected that model'); };
   await assert.rejects(sessions.setModel(s.id, 'unavailable'), /rejected/);
   assert.equal(sessions.get(s.id).model, 'opus');
+  await sessions.setEffort(s.id, 'high');
+  driver.setEffort = async () => { throw new Error('Claude rejected that effort'); };
+  await assert.rejects(sessions.setEffort(s.id, 'max'), /rejected/);
+  assert.equal(sessions.get(s.id).effort, 'high');
   await sessions.input(s.id, 'continue this conversation');
   assert.equal(FakeDriver.made.at(-1), driver);
   await sessions.kill(s.id);

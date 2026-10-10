@@ -6,6 +6,8 @@ checkout, installed checkout, running daemon version and served web build separa
 Preserve existing local changes; reconcile them or keep the old installed tree as a
 backup before installing a clean release. Do not leave finished fixes only as dirty
 edits in installed checkouts, because that blocks automatic updates.
+Develop in the source checkout or a separate worktree. Keep temporary scripts and
+machine-local helpers under ~/.helm, outside installed release checkouts.
 
 Use `helm digest` to check reachability and active sessions. Prefer `helm exec` for
 remote commands. Run expensive checks and builds through `helm run --heavy` (or

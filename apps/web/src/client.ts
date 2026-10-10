@@ -1280,7 +1280,8 @@ export class Client {
     // Tiny persistent settings writes should use the acknowledged hub route
     // when available. An apparently open peer can stop answering after a
     // phone changes networks, leaving a default save waiting until timeout.
-    const settingsWrite = ['profile.defaults', 'model.prefs', 'picker.prefs'].includes(method);
+    const settingsWrite = ['profile.defaults', 'model.prefs', 'picker.prefs',
+      'session.model', 'session.effort', 'session.mode', 'session.speed'].includes(method);
     // Image uploads can fill the data channel's send buffer while its
     // synchronous chunk loop is still running. Use the hub for these writes
     // when connected, choosing the route before sending any prompt bytes.

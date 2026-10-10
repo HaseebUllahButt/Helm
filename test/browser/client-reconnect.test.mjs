@@ -149,3 +149,27 @@ test('large image writes choose the hub before sending on a direct channel', asy
   assert.deepEqual(await page.evaluate(() => window.imageResult), {ok:true});
   await page.evaluate(() => window.client.close());
 });
+
+test('model and effort changes avoid a silent direct peer and are delivered once over the connected hub', async context => {
+  const home = await hub(context);
+  const page = await pageFor(context, home);
+  await page.evaluate(() => {
+    window.directSends = 0;
+    window.client.peers.set('laptop', { ready: true, channel: { readyState: 'open',
+      send: () => { window.directSends++; }, close() {} }, pc: { close() {} } });
+    window.settingsResult = Promise.all([
+      window.client.rpc('laptop', 'session.model', { id: 'chat', model: 'sonnet' }),
+      window.client.rpc('laptop', 'session.effort', { id: 'chat', effort: 'medium' }),
+    ]);
+  });
+  const end = Date.now() + 2000;
+  while (home.calls.length < 2 && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(home.calls.length, 2);
+  assert.equal(await page.evaluate(() => window.directSends), 0);
+  assert.deepEqual(home.calls.map(call => call.frame.method), ['session.model', 'session.effort']);
+  for (const { socket, frame } of home.calls) {
+    socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: { ok: true } }));
+  }
+  assert.deepEqual(await page.evaluate(() => window.settingsResult), [{ ok: true }, { ok: true }]);
+  await page.evaluate(() => window.client.close());
+});

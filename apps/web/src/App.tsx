@@ -3941,12 +3941,14 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
   const q = query.trim();
   useEffect(() => {
     if (!q) { setHits(null); return; }
+    setHits(null);
+    let stale = false;
     const t = setTimeout(() => {
       client.rpc(env.id, 'fs.search', { query: q }, 20_000)
-        .then((r: any) => { setHits(r.results ?? []); setIndexed(r.indexed ?? 0); })
-        .catch((e) => { setHits([]); setError(e.message); });
+        .then((r: any) => { if (!stale) { setHits(r.results ?? []); setIndexed(r.indexed ?? 0); } })
+        .catch((e) => { if (!stale) { setHits([]); setError(e.message); } });
     }, 250);
-    return () => clearTimeout(t);
+    return () => { stale = true; clearTimeout(t); };
   }, [q, client, env.id]);
 
   const makeFolder = async () => {
@@ -3991,7 +3993,7 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
               </button>
             ))}
             {hits === null
-              ? <div className="empty quiet">{indexed ? 'searching…' : 'indexing folders…'}</div>
+              ? <div className="empty quiet">searching…</div>
               : !hits.length && <div className="empty quiet">nothing matches{indexed ? ` · ${indexed} folders indexed` : ''}</div>}
           </div>
         ) : (
