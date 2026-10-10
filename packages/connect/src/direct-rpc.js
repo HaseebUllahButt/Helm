@@ -117,8 +117,9 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000 }
   };
 }
 
-export function directRpc({ signal, frame, timeout = 240_000, connectTimeout = 3000 }) {
+export function directRpc({ signal, frame, timeout = 240_000, connectTimeout = 3000, makePeer = directPeer }) {
   let settled = false;
+  let generation = 0, dispatched = false;
   let resolveResult, rejectResult;
   const result = new Promise((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
   let peer = null;
@@ -130,19 +131,42 @@ export function directRpc({ signal, frame, timeout = 240_000, connectTimeout = 3
     if (error) rejectResult(error); else resolveResult(value);
   };
   const timer = setTimeout(() => finish(new Error('direct RPC timed out')), timeout);
-  peer = directPeer({
-    signal,
-    connectTimeout,
-    onMessage: (message) => {
-      if (message?.t !== 'rpcResult' || message.id !== frame.id) return;
-      if (message.ok) finish(null, message.result);
-      else finish(Object.assign(new Error(message.error?.message || 'direct RPC failed'), { rpc: true, code: message.error?.code }));
-    },
-    onClose: (error) => finish(error ?? new Error('direct channel closed')),
-  });
-  peer.ready
-    .then(() => peer.send(frame))
-    .catch((error) => finish(error));
+  const connect = (attempt) => {
+    const failed = (error) => {
+      if (settled || attempt !== generation) return;
+      // libdatachannel can reject an early answer before its ICE transport
+      // exists. One fresh offer recovers that startup race. Once sending has
+      // begun, delivery is uncertain and retrying could execute a write twice.
+      if (!dispatched && attempt === 1 && /without ICE transport/i.test(error?.message ?? '')) {
+        generation++;
+        try { peer?.close(); } catch {}
+        connect(generation);
+      } else finish(error ?? new Error('direct channel closed'));
+    };
+    try {
+      const candidate = makePeer({
+        signal, connectTimeout,
+        onMessage: (message) => {
+          if (settled || attempt !== generation || message?.t !== 'rpcResult' || message.id !== frame.id) return;
+          if (message.ok) finish(null, message.result);
+          else finish(Object.assign(new Error(message.error?.message || 'direct RPC failed'), { rpc: true, code: message.error?.code }));
+        },
+        onClose: failed,
+      });
+      if (settled || attempt !== generation) {
+        candidate.ready.catch(() => {});
+        try { candidate.close(); } catch {}
+        return;
+      }
+      peer = candidate;
+      candidate.ready.then(() => {
+        if (settled || attempt !== generation) return;
+        dispatched = true;
+        return candidate.send(frame);
+      }).catch(failed);
+    } catch (error) { failed(error); }
+  };
+  connect(++generation);
   return {
     result,
     close: () => finish(new Error('direct RPC closed')),

@@ -76,3 +76,56 @@ test('a failed direct negotiation terminates so the caller can use the hub', asy
   await assert.rejects(request.result, /timed out/);
   request.close();
 });
+
+test('an early native ICE failure retries a fresh negotiation and delivers the command exactly once', async () => {
+  const peers = [], sent = [];
+  const request = directRpc({ signal() {}, frame: { id: 'write', method: 'session.input' },
+    makePeer(options) {
+      const peer = { options, ready: peers.length === 0
+        ? Promise.reject(new Error('Got a remote candidate without ICE transport')) : Promise.resolve(),
+        close() { options.onClose(new Error('closed')); }, receive() {},
+        async send(frame) { sent.push(frame); options.onMessage({ t: 'rpcResult', id: frame.id, ok: true, result: 'once' }); } };
+      peers.push(peer); return peer;
+    } });
+  assert.equal(await request.result, 'once');
+  assert.equal(peers.length, 2);
+  assert.deepEqual(sent, [{ id: 'write', method: 'session.input' }]);
+});
+
+test('a peer failure after sending never retries a potentially delivered command', async () => {
+  let attempts = 0, writes = 0;
+  const request = directRpc({ signal() {}, frame: { id: 'write', method: 'session.input' },
+    makePeer() {
+      attempts++;
+      return { ready: Promise.resolve(), close() {}, receive() {},
+        async send() { writes++; throw new Error('Got a remote candidate without ICE transport'); } };
+    } });
+  await assert.rejects(request.result, /without ICE transport/);
+  assert.equal(attempts, 1);
+  assert.equal(writes, 1);
+});
+
+test('a synchronous early failure cannot replace the fresh peer with the abandoned one', async () => {
+  let attempts = 0;
+  const request = directRpc({ signal() {}, frame: { id: 'read' }, makePeer(options) {
+    const first = ++attempts === 1;
+    const error = new Error('Got a remote candidate without ICE transport');
+    const peer = { ready: first ? Promise.reject(error) : Promise.resolve(), close() {},
+      receive() {}, async send(frame) { options.onMessage({ t: 'rpcResult', id: frame.id, ok: true, result: 'recovered' }); } };
+    if (first) options.onClose(error);
+    return peer;
+  } });
+  assert.equal(await request.result, 'recovered');
+  assert.equal(attempts, 2);
+});
+
+test('native negotiation recovery is bounded and other failures go directly to the hub fallback', async () => {
+  for (const [error, expected] of [['Got a remote candidate without ICE transport', 2], ['direct connection timed out', 1]]) {
+    let attempts = 0;
+    const request = directRpc({ signal() {}, frame: { id: 'read' }, makePeer() {
+      attempts++; return { ready: Promise.reject(new Error(error)), close() {}, receive() {}, send() {} };
+    } });
+    await assert.rejects(request.result, new RegExp(error));
+    assert.equal(attempts, expected);
+  }
+});
