@@ -20,6 +20,8 @@ writeFileSync(join(root, 'profiles.json'), JSON.stringify({profiles:[{
 }]}));
 
 test('native model catalog uses the actual account home even without a profile and never claims account defaults are live settings', async () => {
+  // The permission picker is offered (a taken-over chat has the whole tray),
+  // but no default mode stands in for what Claude reports.
   const home = join(root, 'native-account');
   primeModels('claude', home, null, {default:'native-default', models:['native-model'], effort:'high', efforts:['low','high']});
   primeModels('claude', join(root,'other-account'), null, {default:'wrong-account', models:['wrong-model']});
@@ -29,7 +31,10 @@ test('native model catalog uses the actual account home even without a profile a
     const result = await daemon.dispatch(M.MODEL_LIST, {id:'native-test', profileId});
     assert.deepEqual(result.models, ['native-model']);
     assert.equal(result.default, null); assert.equal(result.effort, null);
-    assert.deepEqual(result.modes, []);
+    assert.deepEqual(result.modes.map((mode) => mode.id), ['default', 'acceptEdits', 'auto', 'bypassPermissions']);
+    assert.equal(result.defaultMode, null);
+    // Another account's favorites and defaults are not this terminal's.
+    assert.equal(result.profileId, undefined);
   }
 });
 

@@ -229,3 +229,95 @@ test("a terminal Claude's own busy/idle word fixes what hooks miss, never a newe
     await until(() => sessions.get('native-test').status === 'working');
   } finally { await sessions.stop(); }
 });
+
+/** Claude's own shift+tab ring, drawing its footer the way 2.1.295 does. */
+class CycleHost extends Host {
+  ring = ['auto mode', 'manual mode', 'accept edits', 'plan mode'];
+  at = 0;
+  views = 0;
+  async view() { this.views++; return ''; }
+  unview() { this.views--; }
+  async write(id, text) {
+    this.writes.push(text);
+    if (text !== '\x1b[Z') return;
+    this.at = (this.at + 1) % this.ring.length;
+    setTimeout(() => this.emit('data', { id, text: `\x1b[38;2;1;2;3m\x1b[2K ⏵⏵ ${this.ring[this.at]} on\x1b[39m (shift+tab to cycle)` }), 20);
+  }
+}
+
+test('a terminal Claude reports its permission mode, and the chip changes it the way the keyboard does', async () => {
+  const host = new CycleHost(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    await sendHook('native-test', { hook_event_name: 'SessionStart', permission_mode: 'auto', session_id: 'conv-mode' });
+    assert.equal(sessions.get('native-test').mode, 'auto');
+    const result = await sessions.setMode('native-test', 'acceptEdits');
+    assert.equal(result.session.mode, 'acceptEdits');
+    assert.equal(sessions.get('native-test').mode, 'acceptEdits');
+    assert.deepEqual(host.writes, ['\x1b[Z', '\x1b[Z'], 'two presses: auto → manual → accept edits');
+    assert.equal(host.ring[host.at], 'accept edits');
+    assert.equal(host.views, 0, 'it stops watching the screen afterwards');
+    // Back to the default: "manual mode" is what this build calls it.
+    host.writes = [];
+    await sessions.setMode('native-test', 'default');
+    assert.equal(sessions.get('native-test').mode, 'default');
+    assert.equal(host.ring[host.at], 'manual mode');
+  } finally { await sessions.stop(); }
+});
+
+test('a permission mode the terminal Claude does not offer fails and leaves the mode where it was', async () => {
+  const host = new CycleHost(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    await sendHook('native-test', { hook_event_name: 'UserPromptSubmit', permission_mode: 'auto' });
+    await assert.rejects(sessions.setMode('native-test', 'bypassPermissions'), /allow-dangerously-skip-permissions/);
+    assert.equal(host.ring[host.at], 'auto mode', 'back where it started');
+    assert.equal(sessions.get('native-test').mode, 'auto');
+    // A question on screen: shift+tab there would pick an answer.
+    const waiting = sendHook('native-test', { hook_event_name: 'PermissionRequest', tool_name: 'Write', tool_input: { file_path: '/tmp/x' } });
+    await until(() => sessions.events.pending('native-test').length === 1);
+    host.writes = [];
+    await assert.rejects(sessions.setMode('native-test', 'acceptEdits'), /question first/);
+    assert.deepEqual(host.writes, []);
+    host.emit('exit', { id: 'native-test', code: 0 });
+    await waiting;
+  } finally { await sessions.stop(); }
+});
+
+
+test('concurrent native permission changes apply in order against the current mode', async () => {
+  const host = new CycleHost(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    await sendHook('native-test', {hook_event_name:'UserPromptSubmit',permission_mode:'auto'});
+    await Promise.all([sessions.setMode('native-test','acceptEdits'), sessions.setMode('native-test','auto')]);
+    assert.equal(sessions.get('native-test').mode,'auto');
+    assert.equal(host.ring[host.at],'auto mode');
+    assert.equal(host.views,0);
+  } finally { await sessions.stop(); }
+});
+
+test('native permission changes with no reported mode reject before sending keys', async () => {
+  const host = new CycleHost(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    delete sessions.get('native-test').mode;
+    await assert.rejects(sessions.setMode('native-test','acceptEdits'), /not reported/);
+    assert.deepEqual(host.writes,[]);
+    assert.equal(host.views,0);
+  } finally { await sessions.stop(); }
+});
+
+
+test('native mode changes preserve an existing terminal viewer', async () => {
+  const host = new CycleHost(), sessions = create(host);
+  try {
+    await sessions.hooks;
+    await sendHook('native-test', {hook_event_name:'UserPromptSubmit',permission_mode:'auto'});
+    sessions.watch('native-test','terminal-view');
+    await sessions.setMode('native-test','acceptEdits');
+    assert.equal(host.views,1,'the shared viewer stays attached');
+    sessions.detach('native-test','terminal-view');
+    assert.equal(host.views,0);
+  } finally { await sessions.stop(); }
+});

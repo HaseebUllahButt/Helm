@@ -8,7 +8,7 @@ let browser, script, css;
 before(async () => {
   const bundle = await build({
     stdin: { contents: `
-      import React from 'react'; import { createRoot } from 'react-dom/client';
+      import React, { useState } from 'react'; import { createRoot } from 'react-dom/client';
       import { SessionView } from './apps/web/src/App';
       window.calls = []; window.fail = false;
       const listeners = new Set();
@@ -19,24 +19,36 @@ before(async () => {
         if (method === 'session.watch') return {last:0};
         if (method === 'session.pending') return { pending: [] };
         if (method === 'model.list') return { default: 'unrelated-account-default',
-          models: ['opus', 'sonnet'], efforts: ['low', 'high'], modes: [{id:'bypassPermissions', label:'Bypass'}] };
+          models: ['opus', 'sonnet'], efforts: ['low', 'high'],
+          modes: [{id:'default',label:'Ask before acting',short:'ask'}, {id:'acceptEdits',label:'Edit freely',short:'edit'},
+            {id:'bypassPermissions',label:'Bypass all checks',short:'yolo',danger:true}],
+          defaultMode:'bypassPermissions', profileId:'claude-personal', prefs:{default:'sonnet',approved:['opus','sonnet']},
+          defaults:{effort:'low',mode:'default'}, favs:['opus'], effortFavs:[] };
         if (method === 'session.commands') return { commands: [
           {name:'model',description:'Choose a model',source:'claude'},
           {name:'permissions',description:'Manage permissions',source:'claude'},
           {name:'custom',description:'Project command',source:'project'} ] };
         if (method === 'session.attach') return { text: 'Claude terminal', pty: true };
-        if (['session.model', 'session.effort', 'session.input'].includes(method)) {
+        if (['session.model', 'session.effort', 'session.mode', 'session.input', 'model.prefs', 'profile.defaults', 'picker.prefs'].includes(method)) {
           window.calls.push({env, method, params});
           if (window.fail) throw Error('Claude is no longer running in that terminal.');
+          if (method === 'model.prefs') return {prefs:{default:params.default,approved:params.approved}};
+          if (method === 'profile.defaults') return {defaults:params};
+          if (method === 'session.mode') return {session:{...window.currentSession,mode:params.mode}};
           return {ok:true, terminal: method !== 'session.input' || params.data.trim().startsWith('/')};
         }
         return {ok:true};
       } };
-      createRoot(document.getElementById('root')).render(<SessionView client={client}
+      function NativeChat() {
+        const [session,setSession] = useState({id:'native-test',engine:'claude',nativeChat:true,nativeCli:true,pty:true,
+          engineModel:'opus',status:window.sessionStatus || 'idle',cwd:'/project',title:'Native Claude',mode:window.initialMode});
+        window.currentSession = session; window.updateSession = patch => setSession(s => ({...s,...patch}));
+        return <SessionView client={client}
         env={{id:'laptop',name:'Laptop',online:true}}
-        session={{id:'native-test',engine:'claude',nativeChat:true,nativeCli:true,pty:true,
-          engineModel:'opus',status:window.sessionStatus || 'idle',cwd:'/project',title:'Native Claude'}}
-        onBack={()=>{}} onClosed={()=>{}} onArchived={()=>{}} onSession={()=>{}} />);
+        session={session}
+        onBack={()=>{}} onClosed={()=>{}} onArchived={()=>{}} onSession={setSession} />;
+      }
+      createRoot(document.getElementById('root')).render(<NativeChat />);
     `, resolveDir: process.cwd(), loader: 'tsx' },
     bundle: true, write: false, format: 'iife', jsx: 'automatic',
     plugins: [{ name: 'test-session-view', setup(b) {
@@ -149,4 +161,56 @@ test('a slash command during a reply keeps chat and approvals available in both 
   await page.screenshot({path:'/tmp/helm-native-controls-repaired-390.png'});
   // Inspecting output and returning to chat never injects keys or answers.
   assert.deepEqual(await page.evaluate(() => window.calls.map(c => c.method)), ['session.input']);
+});
+
+
+test('native tray shares account favorites and defaults without changing the running CLI', async t => {
+  const page = await pageFor(t);
+  await page.getByRole('button', {name:'model: opus',exact:true}).click();
+  await page.getByRole('checkbox', {name:'Favorite sonnet',exact:true}).check();
+  await page.getByRole('button', {name:'Use opus by default for new chats',exact:true}).click();
+  await page.getByRole('button', {name:'opus is the default for new chats',exact:true}).waitFor();
+  await page.getByRole('button', {name:'thinking: think',exact:true}).click();
+  await page.getByRole('checkbox', {name:'Favorite high',exact:true}).check();
+  await page.getByRole('button', {name:'Use high by default for new chats',exact:true}).click();
+  await page.getByRole('button', {name:'high is the default for new chats',exact:true}).waitFor();
+  const calls = await page.evaluate(() => window.calls);
+  assert.deepEqual(calls.map(c => c.method), ['picker.prefs','model.prefs','picker.prefs','profile.defaults']);
+  assert.equal(calls[1].params.profileId, 'claude-personal');
+  assert.equal(calls[3].params.profileId, 'claude-personal');
+  assert.deepEqual(calls[2].params.favs['claude-effort'], [JSON.stringify(['opus','high'])]);
+  await page.getByRole('button', {name:'model: opus',exact:true}).waitFor();
+  await page.getByRole('button', {name:'thinking: think',exact:true}).waitFor();
+});
+
+test('native permissions show only confirmed state and require two taps for bypass', async t => {
+  const page = await pageFor(t);
+  await page.getByRole('button', {name:'permissions: mode',exact:true}).click();
+  assert.equal(await page.getByRole('option', {selected:true}).count(), 0);
+  await page.getByRole('option', {name:'Edit freely',exact:true}).click();
+  await page.getByRole('button', {name:'permissions: edit',exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.calls[0]), {
+    env:'laptop', method:'session.mode',params:{id:'native-test',mode:'acceptEdits'},
+  });
+  await page.getByRole('button', {name:'permissions: edit',exact:true}).click();
+  await page.getByRole('option', {name:/Bypass all checks/}).click();
+  assert.equal(await page.evaluate(() => window.calls.length), 1);
+  await page.getByRole('option', {name:/Bypass all checks/}).click();
+  await page.getByRole('button', {name:'permissions: yolo',exact:true}).waitFor();
+  assert.equal(await page.locator('textarea').count(), 1);
+});
+
+test('native Shift Tab cycles safe permissions and blocked approvals prevent changes', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.updateSession({mode:'default'}));
+  await page.getByRole('button', {name:'permissions: ask',exact:true}).waitFor();
+  await page.locator('textarea').focus(); await page.keyboard.press('Shift+Tab');
+  await page.getByRole('button', {name:'permissions: edit',exact:true}).waitFor();
+  await page.locator('textarea').focus(); await page.keyboard.press('Shift+Tab');
+  await page.getByRole('button', {name:'permissions: ask',exact:true}).waitFor();
+  await page.evaluate(() => { window.sessionStatus = 'blocked'; window.emit('session.update', {session:{...window.currentSession,status:'blocked'}}); });
+  await page.getByRole('button', {name:'permissions: ask',exact:true}).click();
+  assert.equal(await page.getByRole('option', {name:'Edit freely',exact:true}).isDisabled(), true);
+  await page.locator('textarea').focus(); await page.keyboard.press('Shift+Tab');
+  assert.deepEqual(await page.evaluate(() => window.calls.map(c => c.params.mode)), ['acceptEdits','default']);
 });

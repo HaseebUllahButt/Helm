@@ -15,6 +15,8 @@ import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
 import { listModels, mergeLiveModelCatalog } from './models.js';
+import { nativeClaudeAccount } from './native-account.js';
+import { readProcess } from './takeover.js';
 import { usableProfiles, authStatuses } from './auth.js';
 import { listCommands } from './commands.js';
 import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
@@ -1495,11 +1497,21 @@ export class Daemon {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
         const native = p.id ? this.sessions.get(p.id) : null;
         if (native?.nativeChat && native.engine === 'claude') {
-          const catalog = await listModels('claude', native.nativeHome ?? profile?.env?.CLAUDE_CONFIG_DIR ?? ENGINES.claude.defaultHome);
-          // Account defaults are not evidence of the terminal's live settings.
-          // Claude owns confirmation and persistence of native choices.
-          return { ...catalog, default: null, effort: null, modes: [], defaults: {},
-            favs: pickerPrefs().favs.claude ?? [] };
+          const home = native.nativeHome ?? profile?.env?.CLAUDE_CONFIG_DIR ?? ENGINES.claude.defaultHome;
+          const catalog = await listModels('claude', home);
+          // The account this terminal runs as, for its favorites and the
+          // defaults new chats start with - the same tray a Helm chat has.
+          let nativeEnv = null;
+          if (native.nativePid) try { nativeEnv = readProcess(native.nativePid).env; } catch { /* exited or unreadable */ }
+          const account = nativeClaudeAccount({ ...native, nativeHome: home }, await getProfiles(), { env: nativeEnv });
+          const prefs = account ? modelPrefs(account) : null;
+          const filtered = applyModelPrefs(catalog, prefs, { all: !!p.all });
+          // Account defaults are not evidence of the terminal's live settings:
+          // the chips show what Claude reports, and `default`/`effort` stay
+          // empty so they never stand in for it.
+          return { ...filtered, default: null, effort: null, modes: modesFor('claude'), defaultMode: null,
+            favs: pickerPrefs().favs.claude ?? [], effortFavs: pickerPrefs().favs['claude-effort'] ?? [],
+            ...(account ? { prefs, defaults: startPrefs(account), account: accountKey(account), profileId: account.id } : { defaults: {} }) };
         }
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
         const engine = ENGINES[profile.engine];

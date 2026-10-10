@@ -23,7 +23,8 @@ import { AgyDriver } from './drivers/agy.js';
 import { AntigravityDriver } from './drivers/antigravity.js';
 import { PiDriver, OmpDriver } from './drivers/pi.js';
 import { devinUsageReport } from './devin-usage.js';
-import { defaultMode, modeFromAuto } from './modes.js';
+import { MODES, defaultMode, modeFromAuto } from './modes.js';
+import { ModeFooter, MODE_LABELS, MODE_FROM_LABEL } from './native-mode.js';
 import { delegationMode, delegationOutput, isWakeTurn, trackDelegationReply, turnOf, turnText } from './delegation.js';
 import { authStatuses } from './auth.js';
 import { TerminalHost, NativeHosts, PROC_SOCKET_PATH } from './terminals.js';
@@ -371,6 +372,8 @@ export class Sessions extends EventEmitter {
   #nativeStatusAt = new Map();
   /** Keep each pasted message and its Enter together across app clients. */
   #nativeInputs = new Map();
+  /** Footer reads waiting for a native Claude to finish drawing its first screen. */
+  #modeReads = new Set();
 
   /**
    * What a terminal Claude's hooks say it is doing (claude-hooks.js). The
@@ -386,6 +389,11 @@ export class Sessions extends EventEmitter {
     const s = this.#index.get(native);
     if (!s?.nativeCli) return reply(null);
     const name = event.hook_event_name;
+    if (typeof event.permission_mode === 'string' && event.permission_mode && s.mode !== event.permission_mode) {
+      s.mode = event.permission_mode;
+      this.#save();
+      this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id), ...pendingSummary(this.events.pending(s.id)) });
+    }
     const setStatus = (status) => {
       this.#nativeStatusAt.set(s.id, Date.now());
       if (s.status === status) return;
@@ -422,6 +430,9 @@ export class Sessions extends EventEmitter {
       this.#save();
       if (s.transcript) this.#watchTranscript(s.id, s.transcript);
       this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id) });
+      const read = setTimeout(() => { this.#modeReads.delete(read); void this.#readNativeMode(s.id); }, 1500);
+      read.unref?.();
+      this.#modeReads.add(read);
       return;
     }
     // Anything that only happens after the question was settled settles it.
@@ -2642,6 +2653,7 @@ export class Sessions extends EventEmitter {
   async setMode(id, mode) {
     if (mode === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
     const s = this.get(id);
+    if (s.nativeChat && s.engine === 'claude') return this.#nativeMode(s, mode);
     if (!s.driver) throw new Error('not a headless session');
     s.mode = mode;
     this.#save();
@@ -2649,6 +2661,96 @@ export class Sessions extends EventEmitter {
     if (d) await d.setMode(mode);
     this.emit('session', s);
     return { ok: true, session: s };
+  }
+
+  /** The permission mode a terminal Claude's footer shows, until a hook says it. */
+  async #readNativeMode(id) {
+    const s = this.#index.get(id);
+    if (!s?.nativeChat || s.mode || !this.nativeTerminals.has(id)) return;
+    const footer = new ModeFooter();
+    try { footer.feed(await this.nativeTerminals.view(id)); }
+    catch { return; }
+    finally { if (!this.watching(id)) this.nativeTerminals.unview(id); }
+    const mode = MODE_FROM_LABEL[footer.label()];
+    if (!mode || s.mode || this.#index.get(id) !== s) return;
+    s.mode = mode;
+    this.#save();
+    this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(id), ...pendingSummary(this.events.pending(id)) });
+  }
+
+  /**
+   * A terminal Claude has no command that sets its permission mode; the
+   * person at the keyboard presses shift+tab until the footer names the one
+   * they want. Do exactly that, reading the footer after each press, so the
+   * chip only changes once Claude shows the new mode. A mode this Claude
+   * does not offer (bypass needs it started with
+   * --allow-dangerously-skip-permissions) comes back round to where it
+   * started, and says so.
+   */
+  async #nativeMode(s, mode) {
+    const want = MODE_LABELS[mode];
+    if (!want || !MODES.claude.some((m) => m.id === mode)) throw new Error('invalid Claude permission mode');
+    const id = s.id;
+    const work = (this.#nativeInputs.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      if (!this.nativeTerminals.has(id)) throw new Error('Claude is no longer running in that terminal.');
+      if ([...this.#hookAsks.values()].some((a) => a.id === id)) throw new Error('Answer Claude\'s question first.');
+      const host = this.nativeTerminals;
+      const footer = new ModeFooter();
+      const onData = (d) => { if (d.id === id) footer.feed(d.text); };
+      host.on('data', onData);
+      // One press, then the mode the footer settles on.
+      const press = async () => {
+        footer.mark();
+        if ([...this.#hookAsks.values()].some(ask => ask.id === id)) throw new Error('Answer Claude\'s question first.');
+        await host.write(id, '\x1b[Z');
+        const end = Date.now() + 1500;
+        let found = null, at = Date.now();
+        while (Date.now() < end) {
+          await new Promise((r) => setTimeout(r, 50));
+          const label = footer.label();
+          if (label !== found) { found = label; at = Date.now(); }
+          if (found && Date.now() - at > 250) break;
+        }
+        // Older builds draw nothing for the default mode.
+        return found ?? 'unlabelled';
+      };
+      try {
+        // Everything drawn so far, so a redraw that skips unchanged
+        // characters still reads whole.
+        footer.feed(await host.view(id).catch(() => ''));
+        const initial = footer.label();
+        const before = initial ?? MODE_LABELS[s.mode];
+        if (!before) throw new Error('Claude has not reported its permission mode. Open the terminal to check it.');
+        if (before === want) {
+          s.mode = mode; this.#save();
+          return { ok: true, session: wire(s) };
+        }
+        let start = null;
+        for (let n = 0; n < 8; n++) {
+          const label = await press();
+          if (label === want) {
+            s.mode = mode; s.updatedAt = Date.now(); this.#save();
+            this.emit('session', { ...wire(s), alive: host.has(id), ...pendingSummary(this.events.pending(id)) });
+            return { ok: true, session: wire(s) };
+          }
+          if (start === null) start = label;
+          else if (label === start) break;
+        }
+        if (start === null || start === 'unlabelled') throw new Error('Claude did not show its permission mode after shift+tab. Open the terminal to check it.');
+        // Round once more to the mode it was in, rather than leave it moved.
+        for (let n = 0; before && n < 8; n++) if (await press() === before) break;
+        const name = MODES.claude.find((m) => m.id === mode)?.label ?? mode;
+        throw new Error(mode === 'bypassPermissions'
+          ? `${name} is not offered by this Claude. Start it with --allow-dangerously-skip-permissions to use it.`
+          : `${name} is not offered by this Claude.`);
+      } finally {
+        host.off('data', onData);
+        if (!this.watching(id)) host.unview(id);
+      }
+    });
+    this.#nativeInputs.set(id, work);
+    try { return await work; }
+    finally { if (this.#nativeInputs.get(id) === work) this.#nativeInputs.delete(id); }
   }
 
   async setEffort(id, effort) {
@@ -4073,6 +4175,8 @@ export class Sessions extends EventEmitter {
 
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
+    for (const timer of this.#modeReads) clearTimeout(timer);
+    this.#modeReads.clear();
     clearInterval(this.nativePoll);
     for (const timer of this.#reapers.values()) clearTimeout(timer);
     this.#reapers.clear();

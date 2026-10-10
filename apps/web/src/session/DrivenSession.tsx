@@ -7,7 +7,7 @@ import { looksLikeImage, prepareImage } from './image';
 import { EngineMark } from '../EngineMark';
 import { PermissionSheet } from './PermissionSheet';
 import { RecoveryCard } from './RecoveryCard';
-import { Controls, type Kind } from './Controls';
+import { Controls, trayPrefs, type Kind } from './Controls';
 import { Transcript, splitNote } from './Transcript';
 import { useGitStatus } from './Changes';
 import { expandPastes } from './pasteStore';
@@ -442,39 +442,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       : null;
   };
 
-  // Favorites and new-chat defaults live on the machine, so a phone and a laptop
-  // open the same picker. Older machines answer without `favs`, and the
-  // sheet falls back to this browser's own favorites.
-  const saveFavs = (next: string[]) => {
-    setOptions((now) => now && { ...now, favs: next });
-    client.rpc(env.id, 'picker.prefs', { favs: { [session.engine]: next } }, 15_000).catch((e) => setError(e.message));
-  };
-  const saveEffortFavs = (model: string, next: string[]) => {
-    const others = (options?.effortFavs ?? []).filter((entry) => {
-      try { return JSON.parse(entry)[0] !== model; } catch { return false; }
-    });
-    const effortFavs = [...others, ...next.map((effort) => JSON.stringify([model, effort]))];
-    setOptions((now) => now && { ...now, effortFavs });
-    client.rpc(env.id, 'picker.prefs', { favs: { [`${session.engine}-effort`]: effortFavs } }, 15_000).catch((e) => setError(e.message));
-  };
-  const saveDefault = async (kind: Kind, value: string) => {
-    if (!options) return;
-    setError('');
-    try {
-      if (kind === 'model') {
-        const r: any = await client.rpc(env.id, 'model.prefs', {
-          profileId: session.profileId, default: value, approved: options.prefs?.approved ?? [],
-        }, 15_000);
-        setOptions((now) => now && { ...now, prefs: r.prefs });
-      } else {
-        const r: any = await client.rpc(env.id, 'profile.defaults', {
-          profileId: session.profileId, ...(options.defaults ?? {}), [kind]: value,
-        }, 15_000);
-        setOptions((now) => now && { ...now, defaults: r.defaults });
-      }
-    } catch (e: any) { setError(e.message); throw e; }
-  };
-  const controls = Controls({ options, session, busy, onPick: pick, onFavs: saveFavs, onEffortFavs: saveEffortFavs, onDefault: saveDefault });
+  const prefs = trayPrefs({ client, env: env.id, engine: session.engine, profileId: session.profileId, options, setOptions, setError });
+  const controls = Controls({ options, session, busy, onPick: pick, ...prefs });
   // The account's limits, as this chat last heard them or any chat on the
   // same account did before it.
   const limitAccount = `${env.id}:${session.profileId}`;

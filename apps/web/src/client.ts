@@ -202,6 +202,8 @@ export interface ModelList {
   defaults?: { effort?: string; mode?: string; speed?: string } | null;
   /** The account key the machine files this account's defaults under. */
   account?: string;
+  /** The account a terminal chat runs as, when the chat itself does not name one. */
+  profileId?: string;
 }
 
 /**

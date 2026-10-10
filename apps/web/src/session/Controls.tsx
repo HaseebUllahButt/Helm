@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Mode, ModelList, Session } from '../client';
+import type { Client, Mode, ModelList, Session } from '../client';
 import { Icon, type IconName } from '../Icon';
 
 /** One thing you can change while the agent is running. */
@@ -82,6 +82,50 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
 
 export type Kind = 'model' | 'effort' | 'mode' | 'speed';
 
+/**
+ * Favorites and new-chat defaults live on the machine, so a phone and a
+ * laptop open the same picker - and every chat's tray, Helm's own or one
+ * taken over from a terminal, saves them the same way. Older machines answer
+ * without `favs`, and the sheet falls back to this browser's own favorites.
+ */
+export function trayPrefs({ client, env, engine, profileId, options, setOptions, setError }: {
+  client: Client; env: string; engine: string; profileId?: string | null;
+  options: ModelList | null;
+  setOptions: (update: (now: ModelList | null) => ModelList | null) => void;
+  setError: (message: string) => void;
+}) {
+  const onFavs = (next: string[]) => {
+    setOptions((now) => now && { ...now, favs: next });
+    client.rpc(env, 'picker.prefs', { favs: { [engine]: next } }, 15_000).catch((e) => setError(e.message));
+  };
+  const onEffortFavs = (model: string, next: string[]) => {
+    const others = (options?.effortFavs ?? []).filter((entry) => {
+      try { return JSON.parse(entry)[0] !== model; } catch { return false; }
+    });
+    const effortFavs = [...others, ...next.map((effort) => JSON.stringify([model, effort]))];
+    setOptions((now) => now && { ...now, effortFavs });
+    client.rpc(env, 'picker.prefs', { favs: { [`${engine}-effort`]: effortFavs } }, 15_000).catch((e) => setError(e.message));
+  };
+  const onDefault = profileId ? async (kind: Kind, value: string) => {
+    if (!options) return;
+    setError('');
+    try {
+      if (kind === 'model') {
+        const r: any = await client.rpc(env, 'model.prefs', {
+          profileId, default: value, approved: options.prefs?.approved ?? [],
+        }, 15_000);
+        setOptions((now) => now && { ...now, prefs: r.prefs });
+      } else {
+        const r: any = await client.rpc(env, 'profile.defaults', {
+          profileId, ...(options.defaults ?? {}), [kind]: value,
+        }, 15_000);
+        setOptions((now) => now && { ...now, defaults: r.defaults });
+      }
+    } catch (e: any) { setError(e.message); throw e; }
+  } : undefined;
+  return { onFavs, onEffortFavs, onDefault };
+}
+
 interface Group {
   kind: Kind;
   title: string;
@@ -163,9 +207,12 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
 
   const modes = (options.modes ?? []).filter((m) => m.id !== 'plan');
   if (modes.length) {
+    // A terminal Claude's mode is whatever it last said; until it says,
+    // the chip does not guess.
     const current = modes.find((m: Mode) => m.id === session.mode)
-      ?? modes.find((m) => m.id === options.defaultMode)
-      ?? modes.find((m) => m.short === 'yolo') ?? modes[0];
+      ?? (session.nativeChat ? undefined
+        : modes.find((m) => m.id === options.defaultMode)
+          ?? modes.find((m) => m.short === 'yolo') ?? modes[0]);
     out.push({
       kind: 'mode',
       title: 'permissions',

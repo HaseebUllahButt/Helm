@@ -10,7 +10,7 @@ import { accountsFrom, loadPrefs, savePrefs, rememberFolder, recentFolders, type
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
-import { Controls, type Kind } from './session/Controls';
+import { Controls, trayPrefs, type Kind } from './session/Controls';
 import { prepareImage, type PreparedImage } from './session/image';
 import { useDraftImages } from './session/useDraftImages';
 import { loadDraft, saveDraft } from './draftStore';
@@ -4472,7 +4472,9 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     const catalog = followModelRefresh(
       () => client.rpc<ModelList>(env.id, 'model.list', { id: session.id, profileId: session.profileId }, 30_000),
       (options) => {
-        if (!stale && Array.isArray(options.models)) setNativeOptions({ ...options, default: null, effort: null, modes: [], speeds: [], speedByModel: {}, defaults: {} });
+        // The same tray a Helm chat has. `default` and `effort` stay empty:
+        // the chips show what Claude itself reports, never an account guess.
+        if (!stale && Array.isArray(options.models)) setNativeOptions({ ...options, default: null, effort: null, speeds: [], speedByModel: {} });
       },
       () => {},
     );
@@ -4497,13 +4499,16 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     finally { setSettingBusy(false); }
   };
   const pickNative = async (kind: Kind, value: string) => {
-    if (settingBusy || sending || (kind !== 'model' && kind !== 'effort')) return;
+    if (settingBusy || sending || kind === 'speed' || status === 'blocked' || !env.online) return;
     setSettingBusy(true); setError('');
     try {
-      await client.rpc(env.id, `session.${kind}`, { id: session.id, [kind]: value }, 70_000);
+      const r = await client.rpc<{ session?: Session }>(env.id, `session.${kind}`, { id: session.id, [kind]: value }, 70_000);
+      // The machine reads Claude's footer after each shift+tab, so a mode
+      // that comes back is one Claude is showing.
+      if (kind === 'mode') { if (r?.session) onSession(r.session); }
       // Writing a command is not confirmation that Claude applied it.
       // Keep the reported setting and let the user inspect native output.
-      setNativeNotice(`/${kind} ${value}`);
+      else setNativeNotice(`/${kind} ${value}`);
     } catch (e: any) { setError(e.message); }
     finally { setSettingBusy(false); }
   };
@@ -4643,8 +4648,27 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     } catch (e: any) { setError(e.message); }
   };
 
+  const nativePrefs = trayPrefs({ client, env: env.id, engine: session.engine, profileId: session.profileId || nativeOptions?.profileId,
+    options: nativeOptions, setOptions: setNativeOptions, setError });
   const nativeControls = Controls({ options: nativeOptions, session,
-    busy: settingBusy || sending || status === 'blocked' || !env.online, onPick: pickNative });
+    busy: settingBusy || sending || status === 'blocked' || !env.online, onPick: pickNative, ...nativePrefs });
+
+  useEffect(() => {
+    if (!session.nativeChat || raw) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
+        || settingBusy || sending || status === 'blocked' || !env.online
+        || document.querySelector('[aria-modal="true"]')) return;
+      const ring = (nativeOptions?.modes ?? []).filter(mode => !mode.danger && mode.id !== 'plan');
+      if (ring.length < 2) return;
+      event.preventDefault();
+      const at = ring.findIndex(mode => mode.id === session.mode);
+      void pickNative('mode', ring[(at + 1) % ring.length].id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [session.nativeChat, session.mode, raw, nativeOptions, settingBusy, sending, status, env.online]);
+
 
   return (
     <>
