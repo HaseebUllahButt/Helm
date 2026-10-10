@@ -19,6 +19,7 @@ before(async () => {
     const token = 'helm1.' + btoa(JSON.stringify({net:'network',sub:'device'})) + '.test';
     const scope = workspace.workspaceScope(token);
     const listeners = new Set();
+    window.emit = (kind, payload) => listeners.forEach(fn => fn('machine', kind, payload));
     const client = {token,relay:'http://helm-test',
       environments:()=>window.envs?window.envs():new Promise(()=>{}),
       on:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},subscribe:()=>{},
@@ -42,7 +43,7 @@ before(async () => {
       await txn('kv','readonly',s=>s.get('helm.workspace:'+scope));
     };
     function Probe(){const state=useSessionLog(client,'machine','Cached chat');window.state=state;return <pre>{JSON.stringify(state.log)}</pre>}
-    window.mount = () => root.render(<Shell client={client} conn={{online:false,reachable:false}} onSignOut={()=>{}}/>);
+    window.mount = (online=false) => root.render(<Shell client={client} conn={{online,reachable:online}} onSignOut={()=>{}}/>);
     window.unmount = () => root.render(null);
     window.probe = () => root.render(<Probe/>);
     Object.assign(window,{cache,workspace,txn,idb,scope,events,session,apply,emptyLog});
@@ -74,6 +75,77 @@ async function openFromSearch(page, title) {
   await palette.getByRole('option', { name: new RegExp(`^${title}.*offline`) }).click();
   await palette.waitFor({ state: 'hidden' });
 }
+
+test('chosen chat settings survive an immediate refresh and an older list response', async t => {
+  const { page, boot } = await pageFor(t);
+  await page.evaluate(async () => {
+    await window.seed();
+    window.current = { ...window.session('Cached chat'), engine:'claude', driver:'claude', status:'idle',
+      model:'opus', effort:'high', mode:'bypassPermissions', speed:'' };
+    window.workspace.saveWorkspace(window.scope, {sessions:{machine:[window.current]}});
+    window.envs = async () => ({environments:[{id:'machine',name:'Laptop',online:true,info:{}}]});
+    window.reads = async (_env, method, params) => {
+      if (method === 'model.list') return {models:['opus','sonnet'],default:'opus',efforts:['low','high'],effort:'high'};
+      if (method === 'session.events') return {events:[],last:0,pending:[]};
+      if (method === 'session.list') {
+        const snapshot = {...window.current};
+        if (window.holdList) await new Promise(resolve => {window.releaseList = resolve});
+        return {sessions:[snapshot]};
+      }
+      if (method === 'session.model' || method === 'session.effort') {
+        window.current = {...window.current, [method.split('.')[1]]:params[method.split('.')[1]]};
+        return {ok:true,session:window.current}; // acknowledgment without a push
+      }
+      return {ok:true,commands:[],projects:[],recent:[]};
+    };
+    window.mount(true);
+  });
+  await page.getByRole('button',{name:'model: opus',exact:true}).waitFor();
+  await page.evaluate(() => {
+    window.holdList=true;
+    window.emit('session.update',{session:window.current});
+  });
+  await page.waitForFunction(() => typeof window.releaseList === 'function');
+  await page.getByRole('button',{name:'model: opus',exact:true}).click();
+  await page.getByRole('option',{name:'sonnet',exact:true}).click();
+  await page.getByRole('button',{name:'model: sonnet',exact:true}).waitFor();
+  await page.getByRole('button',{name:'thinking: high',exact:true}).click();
+  await page.getByRole('option',{name:'low',exact:true}).click();
+  await page.getByRole('button',{name:'thinking: low',exact:true}).waitFor();
+  await page.evaluate(() => {window.holdList=false;window.releaseList()});
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('helm.workspace:'+window.scope)).view.session.model === 'sonnet');
+  await page.reload(); await boot();
+  await page.evaluate(() => {
+    window.reads = async (_env, method) => {
+      if (method === 'model.list') return {models:['opus','sonnet'],default:'opus',efforts:['low','high'],effort:'high'};
+      return new Promise(()=>{}); // saved settings paint before the server responds
+    };
+    window.mount();
+  });
+  await page.getByRole('button',{name:'model: sonnet',exact:true}).waitFor();
+  await page.getByRole('button',{name:'thinking: low',exact:true}).waitFor();
+});
+
+test('CLI-confirmed settings stay in both cached headers across refresh', async t => {
+  const { page, boot } = await pageFor(t);
+  await page.evaluate(async () => {
+    await window.seed();
+    const session={...window.session('Cached chat'),engine:'claude',driver:undefined,nativeChat:true,nativeCli:true,
+      pty:true,status:'idle',model:null,effort:null,engineModel:'sonnet',engineEffort:'low'};
+    window.workspace.saveWorkspace(window.scope,{sessions:{machine:[session]}});
+  });
+  await page.reload(); await boot();
+  await page.evaluate(() => {
+    window.reads=async (_env,method) => method === 'model.list'
+      ? {models:['opus','sonnet'],default:'opus',efforts:['low','high'],effort:'high'} : new Promise(()=>{});
+    window.mount();
+  });
+  await page.getByRole('button',{name:'model: sonnet',exact:true}).waitFor();
+  await page.getByRole('button',{name:'thinking: low',exact:true}).waitFor();
+  const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('helm.workspace:'+window.scope)));
+  assert.equal(saved.sessions.machine[0].engineModel,'sonnet');
+  assert.equal(saved.view.session.engineEffort,'low');
+});
 
 test('saved imported chats retain their Done count and resume account before live lists arrive', async context => {
   const { page } = await pageFor(context);

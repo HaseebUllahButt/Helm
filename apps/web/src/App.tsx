@@ -41,7 +41,7 @@ import { money, bytes, busyWord, needsAttention, runningThread, settledThread, u
 import { loadModels, saveModels } from './modelCache';
 import { followModelRefresh } from './modelRefresh';
 import { loadMessages, saveMessages } from './session/logCache';
-import { loadWorkspace, loadWorkspaceDurable, saveWorkspace, forgetWorkspace, workspaceScope } from './workspaceCache';
+import { loadWorkspace, loadWorkspaceDurable, saveWorkspace, updateWorkspaceSession, forgetWorkspace, workspaceScope } from './workspaceCache';
 
 type Auth = StoredAuth;
 type PairingTarget = { endpoint: string; password: string };
@@ -610,6 +610,16 @@ function Shell({ client, conn, onSignOut }: {
    */
   const pushedDuringList = useRef<Record<string, Map<string, Session>>>({});
   const listAgain = useRef(new Set<string>());
+  const recordSession = useCallback((envId: string, up: Session) => {
+    const during = pushedDuringList.current[envId];
+    if (during) during.set(up.id, { ...during.get(up.id), ...up, recovery: up.recovery });
+    setSessions((all) => {
+      const list = all[envId];
+      if (!list?.some(x => x.id === up.id)) return all;
+      return { ...all, [envId]: list.map(x => x.id === up.id ? { ...x, ...up, recovery: up.recovery } : x) };
+    });
+    updateWorkspaceSession(scope, envId, up);
+  }, [scope]);
   const loadSessions = useCallback((envId: string) => {
     if (!active.current) return;
     if (sessionRequests.current.has(envId)) { listAgain.current.add(envId); return; }
@@ -660,13 +670,7 @@ function Shell({ client, conn, onSignOut }: {
           if (top?.kind === 'session' && top.session.id === up.id) openSession(e, up.movedTo);
         }
         if (up?.id) {
-          const during = pushedDuringList.current[e];
-          if (during) during.set(up.id, { ...during.get(up.id), ...up, recovery: up.recovery });
-          setSessions((all) => {
-            const list = all[e];
-            if (!list?.some((x) => x.id === up.id)) return all;
-            return { ...all, [e]: list.map((x) => (x.id === up.id ? { ...x, ...up, recovery: up.recovery } : x)) };
-          });
+          recordSession(e, up);
         }
         clearTimeout(relist.current[e]);
         relist.current[e] = setTimeout(() => loadSessions(e), 400);
@@ -693,7 +697,7 @@ function Shell({ client, conn, onSignOut }: {
         }
       }
     });
-  }, [loadEnvs, loadSessions, client]);
+  }, [loadEnvs, loadSessions, recordSession, client]);
 
   useEffect(() => {
     const catchUp = () => { if (!document.hidden) loadEnvs(); };
@@ -992,6 +996,7 @@ function Shell({ client, conn, onSignOut }: {
   // fold the new record into the stack, so the title in the bar and the title
   // in the history entry behind it do not disagree.
   const onSessionChanged = (envId: string) => (s: Session) => {
+    recordSession(envId, s);
     loadSessions(envId);
     restate(nav.current.stack.map((v) => (
       v.kind === 'session' && v.session.id === s.id ? { kind: 'session', session: { ...v.session, ...s, recovery: s.recovery } } : v)));

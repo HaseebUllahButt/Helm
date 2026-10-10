@@ -34,10 +34,10 @@ function valid(value: any): value is WorkspaceSnapshot {
 
 /** Small headers, never transcript bodies, keys or provider settings. */
 function header(s: Session): Session {
-  const { id, title, cwd, engine, profileId, status, driver, pty, model, mode, effort,
+  const { id, title, cwd, engine, profileId, status, driver, pty, model, engineModel, mode, effort, engineEffort,
     speed, alive, createdAt, updatedAt, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared } = s;
   return { id, title: title?.slice(0, 300), cwd, engine, profileId, status, driver, pty,
-    model, mode, effort, speed, alive, createdAt, updatedAt, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared };
+    model, engineModel, mode, effort, engineEffort, speed, alive, createdAt, updatedAt, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared };
 }
 
 export function loadWorkspace(scope: string): WorkspaceSnapshot {
@@ -81,6 +81,12 @@ export function saveWorkspace(scope: string, patch: Partial<WorkspaceSnapshot>):
   touched.set(scope, fields);
   const previous = loadWorkspace(scope);
   const value = { ...previous, ...patch, sessions: { ...previous.sessions, ...patch.sessions } };
+  // The open view is another copy of the same header. Keep it current when
+  // a live list arrives, so reload never boots with its older settings.
+  if (value.view && patch.sessions?.[value.view.envId]) {
+    const current = patch.sessions[value.view.envId].find(s => s.id === value.view!.session.id);
+    if (current) value.view = { ...value.view, session: current };
+  }
   if (patch.environments) {
     const ids = new Set(patch.environments.map(e => e.id));
     value.sessions = Object.fromEntries(Object.entries(value.sessions).filter(([id]) => ids.has(id)));
@@ -94,6 +100,18 @@ export function saveWorkspace(scope: string, patch: Partial<WorkspaceSnapshot>):
   hot.set(scope, value);
   try { localStorage.setItem(key(scope), JSON.stringify(value)); } catch { /* quota or private mode */ }
   void txn('kv', 'readwrite', s => s.put(value, key(scope))).catch(() => {});
+}
+
+/** Save acknowledged changes immediately, including CLI-reported settings. */
+export function updateWorkspaceSession(scope: string, envId: string, session: Session): void {
+  const saved = loadWorkspace(scope);
+  const list = saved.sessions[envId];
+  const view = saved.view?.envId === envId && saved.view.session.id === session.id
+    ? { ...saved.view, session: { ...saved.view.session, ...session } } : saved.view;
+  saveWorkspace(scope, {
+    ...(list ? { sessions: { [envId]: list.map(s => s.id === session.id ? { ...s, ...session } : s) } } : {}),
+    view,
+  });
 }
 
 export function forgetWorkspace(scope: string): void {
