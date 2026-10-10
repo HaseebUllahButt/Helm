@@ -230,22 +230,42 @@ export function readThread(events = [], { limit = 40 } = {}) {
  * derived line for each driven session. Archived threads are left out - the
  * owner filed them away, and the brain should not bring them back up.
  */
-export function localDigest(sessions, events) {
+export function localDigest(sessions, events, now = Date.now()) {
+  // `since` returns the events themselves, not a wrapper around them. This
+  // read used to be wrong and wrapped in a catch that said nothing, so every
+  // digest line was silently blank - which looked exactly like "nothing has
+  // happened in that session" and is why the test uses a real EventLog. The
+  // tail is read raw: hydrating every attachment in a long thread, on every
+  // digest, for every session, bought nothing.
+  const lineOf = (s) => {
+    if (String(s.id).startsWith('pane:') || String(s.id).startsWith('found:')) return null;
+    try { return lastLine(events.tail?.(s.id, 400) ?? events.since(s.id, 0) ?? []); } catch { return null; }
+  };
+  // A thread's helpers ride along under it, nested, so a team started on a
+  // machine nobody is watching still shows who is working on what. Finished
+  // helpers drop out after a day.
+  const kids = new Map();
+  for (const s of sessions) {
+    const parentId = s.delegation?.parentId;
+    if (!parentId || s.unhomed || s.archived) continue;
+    const state = s.delegation.status ?? s.status;
+    if (['done', 'error', 'interrupted'].includes(state)
+      && now - (s.delegation.finishedAt ?? s.updatedAt ?? 0) > DIGEST_HELPER_MS) continue;
+    if (!kids.has(parentId)) kids.set(parentId, []);
+    kids.get(parentId).push(s);
+  }
+  const helpersOf = (id, depth = 1, seen = new Set([id])) => (kids.get(id) ?? []).flatMap((c) => {
+    if (seen.has(c.id)) return [];
+    seen.add(c.id);
+    return [{
+      id: c.id, title: c.title, engine: c.engine, model: c.model ?? null, depth,
+      status: c.delegation.status ?? c.status, updatedAt: c.updatedAt ?? null, last: lineOf(c),
+    }, ...helpersOf(c.id, depth + 1, seen)];
+  });
   return sessions
-    .filter((s) => !s.delegation && !s.archived && s.status !== 'exited')
+    .filter((s) => (!s.delegation || s.unhomed) && !s.archived && s.status !== 'exited')
     .map((s) => {
-      let last = null;
-      // `since` returns the events themselves, not a wrapper around them.
-      // This read used to be wrong and wrapped in a catch that said nothing,
-      // so every digest line was silently blank - which looked exactly like
-      // "nothing has happened in that session" and is why the test below
-      // uses a real EventLog rather than a stand-in that agrees with me.
-      if (!String(s.id).startsWith('pane:') && !String(s.id).startsWith('found:')) {
-        // The tail, raw: `lastLine` reads the last few hundred events and
-        // nothing else, so hydrating every attachment in a long thread - on
-        // every digest, for every session - bought nothing.
-        try { last = lastLine(events.tail?.(s.id, 400) ?? events.since(s.id, 0) ?? []); } catch { last = null; }
-      }
+      const last = lineOf(s);
       return {
         id: s.id,
         title: s.title,
@@ -262,6 +282,8 @@ export function localDigest(sessions, events) {
         children: Array.isArray(s.children) ? s.children : [],
         delegation: s.delegation ?? null,
         delegations: s.delegations ?? [],
+        unhomed: !!s.unhomed,
+        helpers: helpersOf(s.id),
         last,
       };
     });
@@ -307,7 +329,8 @@ export function mergeSnapshot(previous, fresh, now = Date.now()) {
 
 // -------------------------------------------------------------------- render
 
-const STATUS = { blocked: 'NEEDS YOU', working: 'working', idle: 'idle', shell: 'terminal', unknown: 'idle' };
+const STATUS = { blocked: 'NEEDS YOU', working: 'working', idle: 'idle', shell: 'terminal', unknown: 'idle', starting: 'starting', error: 'failed', interrupted: 'stopped' };
+const DIGEST_HELPER_MS = 24 * 60 * 60_000;
 const money = (n) => (typeof n === 'number' && n > 0 ? `$${n.toFixed(2)}` : '');
 const collapse = (p) => String(p ?? '').replace(/^\/home\/[^/]+/, '~');
 
@@ -354,9 +377,18 @@ export function render(snap, { roster = {}, now = Date.now(), limit = 12 } = {})
           money(s.costUsd),
           ago(s.updatedAt, now),
           s.adopted ? '[not started by helm]' : '',
+          s.unhomed ? '[helper]' : '',
         ].filter(Boolean);
         out.push(`    ${bits.join(' ')}`);
         if (s.last) out.push(`           ${s.last}`);
+        for (const h of s.helpers ?? []) {
+          if (h.status === 'blocked') blocked += 1;
+          const pad = '  '.repeat(h.depth);
+          out.push(`    ${pad}└ ${[shortId(h.id).padEnd(6), (STATUS[h.status] ?? h.status).padEnd(9), h.engine,
+            h.model ? `(${h.model})` : '', JSON.stringify(oneLine(h.title, 56 - 2 * h.depth)), ago(h.updatedAt, now)]
+            .filter(Boolean).join(' ')}`);
+          if (h.last) out.push(`    ${pad}         ${oneLine(h.last, 90)}`);
+        }
       }
       if (list.length > limit) out.push(`    … ${list.length - limit} more in this folder`);
     }

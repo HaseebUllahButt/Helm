@@ -8,6 +8,7 @@ import {
 import {
   inspectTransferReadiness, readHandoffSkipped, transferPreflight,
 } from './transfer-check.js';
+import { bulkPlan, discardPlan } from './bulk-transfer.js';
 
 const TRANSFER_ID = /^[a-f0-9]{24}$/;
 const MACHINE_ID = /^[a-f0-9]{1,64}$/;
@@ -109,7 +110,11 @@ export class Transfers {
     const net = this.#controller(caller, 'a transfer preview');
     const folder = line(params?.folder);
     if (!folder) throw new Error('a transfer preview needs a folder');
-    const snapshot = createCodeSnapshot(folder, { includeEnv: params?.includeEnv === true });
+    let snapshot;
+    try { snapshot = createCodeSnapshot(folder, { includeEnv: params?.includeEnv === true }); } catch (error) {
+      if (!/exceeds \d+ (files|MB)|too large for a code handoff/.test(error.message)) throw error;
+      return bulkPreview(net, folder, params?.includeEnv === true, error.message);
+    }
     return {
       sourceMachineId: net.self,
       rootName: snapshot.rootName,
@@ -338,4 +343,27 @@ export class Transfers {
       throw err;
     }
   }
+}
+
+/**
+ * A project over the sealed-snapshot cap. Sending it as a task copies it
+ * with rsync instead (bulk-transfer.js); a plain folder send still cannot.
+ */
+function bulkPreview(net, folder, includeEnv, reason) {
+  const plan = bulkPlan(folder, { includeEnv });
+  discardPlan(plan);
+  return {
+    sourceMachineId: net.self,
+    rootName: plan.rootName,
+    digest: null,
+    git: plan.git,
+    bulk: { files: plan.files, bytes: plan.bytes, reason },
+    preflight: {
+      files: plan.files ?? 0, bytes: plan.bytes, envFiles: plan.envFiles, skipped: 0, skippedEntries: [],
+      omittedEntries: 0, requiresAcknowledgement: false,
+      warnings: [{ code: 'bulk-copy', message: plan.git
+        ? 'Big project: it is copied with its full git history, and the copy resumes if the connection drops. Files git ignores (build output, caches) stay here.'
+        : 'Big project: it is copied whole except dependency and cache folders, and the copy resumes if the connection drops.' }],
+    },
+  };
 }

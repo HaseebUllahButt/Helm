@@ -135,6 +135,8 @@ export interface Session {
   taskTransfer?: TaskReturnState & { handoffId: string; role: 'source' | 'destination'; machineId: string; machineName: string };
   parent?: { machineId: string; sessionId: string };
   delegations?: string[];
+  /** A helper with no thread to sit under (started from a shell, or orphaned), listed on its own. */
+  unhomed?: boolean;
 }
 
 export interface CliAgent {
@@ -282,6 +284,8 @@ export interface TransferPreview {
   digest: string;
   git?: { commit?: string; branch?: string; remote?: string } | null;
   preflight: TransferPreflight;
+  /** Over the sealed-send cap: only a task send can carry it, by resumable copy. */
+  bulk?: { files: number | null; bytes: number; reason: string };
 }
 export interface ReadinessCheck {
   code: string;
@@ -316,7 +320,9 @@ export interface TransferResult {
 export interface TaskTransferResult {
   sent: boolean;
   requiresAcknowledgement?: boolean;
-  status?: 'running' | 'queued';
+  status?: 'running' | 'queued' | 'copying';
+  /** A big project copying ahead of its task: how far it got. */
+  progress?: { phase: 'pausing' | 'copying' | 'starting'; folder: string; bytes: number; total: number; percent: number; rate?: string | null };
   handoffId?: string;
   targetMachineId?: string;
   targetName?: string;

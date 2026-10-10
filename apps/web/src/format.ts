@@ -35,6 +35,9 @@ export interface ThreadState {
   recovery?: { kind?: string } | null;
 }
 
+/** Listed as a thread: not a helper, or a helper with no parent thread to sit under. */
+export const listedThread = (s: { delegation?: unknown; unhomed?: boolean }) => !s.delegation || !!s.unhomed;
+
 /** The agent itself is busy: starting, or inside a turn. */
 export const busyStatus = (status?: string) => status === 'working' || status === 'starting';
 

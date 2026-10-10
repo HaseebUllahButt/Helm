@@ -53,6 +53,7 @@ const WATCH_TTL_MS = 60_000;
 // resumes the same conversation, so nothing is lost but the warm process.
 const IDLE_REAP_MS = 30 * 60_000;
 const DELEGATION_IDLE_MS = 30_000;
+const UNHOMED_DELEGATION_MS = 24 * 60 * 60_000;
 
 /** engine id -> its headless driver class; ENGINES[id].driver names one. */
 export const DRIVERS = {
@@ -922,11 +923,28 @@ export class Sessions extends EventEmitter {
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
-    return dedupeNativeConversations(out.filter((s) => parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation))
+    return dedupeNativeConversations(out.filter((s) => parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation || this.#unhomedDelegation(s)))
       .map((s) => s.delegations ? { ...s, delegations: this.#visibleDelegations(s) } : s)
+      .map((s) => (s.delegation && this.#unhomedDelegation(s) ? { ...s, unhomed: true } : s))
       // The branch each thread's folder is on, for the sidebar's third line.
       .map((s) => (s.cwd ? { ...s, branch: gitBranch(s.cwd) } : s))
       .sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  }
+
+  /**
+   * A task with no thread to sit under - started from a plain shell, or whose
+   * parent is gone - lists on its own. Hiding it left a whole VM team
+   * (`helm delegate` run over ssh, then its own children) invisible
+   * everywhere. Finished ones drop out after a day; `helm thread` still
+   * reaches them.
+   */
+  #unhomedDelegation(s) {
+    const parentId = s.delegation?.parentId;
+    const parent = parentId ? this.#index.get(parentId) : null;
+    if (parent && !parent.archived) return false;
+    const state = s.delegation.status ?? s.status;
+    if (!['done', 'error', 'interrupted'].includes(state)) return true;
+    return Date.now() - (s.delegation.finishedAt ?? s.updatedAt ?? 0) < UNHOMED_DELEGATION_MS;
   }
 
   #visibleDelegations(parent) {
@@ -2292,7 +2310,7 @@ export class Sessions extends EventEmitter {
    * schedule for people who are not asking for it.
    */
   async digest() {
-    return { sessions: localDigest(await this.list(), this.events) };
+    return { sessions: localDigest(await this.list({ includeDelegations: true }), this.events) };
   }
 
   /** Preserve former machine brains as ordinary conversations. */

@@ -53,8 +53,9 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
   const [includeEnv, setIncludeEnv] = useState(!!session);
   const [task, setTask] = useState(!!session);
   const [prompt, setPrompt] = useState('');
-  const [agents, setAgents] = useState<{ id: string; label: string; available: boolean }[]>([]);
+  const [agents, setAgents] = useState<{ id: string; label: string; available: boolean; models?: string[]; defaultModel?: string | null }[]>([]);
   const [profileId, setProfileId] = useState('');
+  const [model, setModel] = useState('');
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [taskResult, setTaskResult] = useState<TaskTransferResult | null>(null);
   const [returnState, setReturnState] = useState<TaskReturnState>({ status: 'waiting' });
@@ -90,11 +91,12 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
     if (!task || !targetId || locked) return;
     let live = true;
     setAgents([]); setProfileId(''); setAgentsLoading(true);
-    client.rpc<{ agents: { id: string; label: string; available: boolean }[] }>(targetId, 'agent.list', { models: false })
+    client.rpc<{ agents: { id: string; label: string; available: boolean; models?: string[]; defaultModel?: string | null }[] }>(targetId, 'agent.list', { models: true }, 60_000)
       .then(({ agents: found }) => {
         if (!live) return;
         const available = found.filter((agent) => agent.available);
         setAgents(available);
+        setModel('');
         setProfileId(available.find((agent) => agent.id === session?.profileId)?.id ?? available[0]?.id ?? '');
       })
       .catch((err) => { if (live) setError(err.message); })
@@ -127,7 +129,9 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
   const needsAck = !task && !!preflight?.requiresAcknowledgement;
   const envCanChoose = !!preflight && !previewing
     && (preflight.skipped > 0 || preflight.envFiles.length > 0 || includeEnv);
-  const canSend = !!preview && !!target && !busy && !previewing && (!needsAck || ack)
+  const bulk = preview?.bulk ?? null;
+  const account = agents.find((agent) => agent.id === profileId);
+  const canSend = !!preview && !!target && !busy && !previewing && (!needsAck || ack) && (task || !bulk)
     && (!task || (!!profileId && !agentsLoading && (!!session || !!prompt.trim())));
 
   const send = async () => {
@@ -137,11 +141,22 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
       if (task) {
         setLocked(true);
         setStep(session ? `pausing this task and sending it to ${target.name}` : `sending the task to ${target.name}`);
-        const sent = await client.rpc<TaskTransferResult>(source.id, 'task.send', {
+        const request = {
           handoffId, folder, sessionId: session?.id, targetMachineId: target.id,
-          targetFolder: targetFolder.trim() || undefined, profileId,
+          targetFolder: targetFolder.trim() || undefined, profileId, model: model || undefined,
           prompt, includeEnv: true, allowSkipped: true,
-        }, 360_000);
+        };
+        let sent = await client.rpc<TaskTransferResult>(source.id, 'task.send', request, 360_000);
+        // A big project copies in the background; the same request, asked
+        // again, says how far it got and finally returns the running task.
+        while (sent.status === 'copying') {
+          const p = sent.progress;
+          setStep(p?.phase === 'pausing' ? 'pausing this task'
+            : p?.phase === 'starting' ? `starting the agent on ${target.name}`
+            : `copying to ${target.name}: ${p?.percent ?? 0}%${p?.total ? ` of ${bytes(p.total)}` : ''}${p?.rate ? ` · ${p.rate}` : ''}`);
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          sent = await client.rpc<TaskTransferResult>(source.id, 'task.send', request, 360_000);
+        }
         if (!sent.sent && sent.requiresAcknowledgement) {
           setLocked(false);
           setPreview((now) => now ? { ...now, preflight: sent.preflight } : now);
@@ -239,10 +254,10 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
                   : 'Another machine’s hub has stored the task for delivery when the destination reconnects.'}</span>
               </span>
             </div>
-            {taskResult.receipt && <p className="note">{taskResult.receipt.files} files · {bytes(taskResult.receipt.bytes)} · {taskResult.route === 'direct' ? 'Direct WebRTC' : 'Via hub'}<br />{taskResult.receipt.folder}</p>}
+            {taskResult.receipt && <p className="note">{bulk ? `${bulk.files ?? ''} files and history · ${bytes(bulk.bytes)}` : `${taskResult.receipt.files} files · ${bytes(taskResult.receipt.bytes)}`} · {taskResult.route === 'direct' ? 'Direct WebRTC' : 'Via hub'}<br />{taskResult.receipt.folder}</p>}
             <p className="note">The destination agent checks project setup and recreates dependencies before continuing. Its progress and any questions appear in the destination thread.</p>
-            <TaskReturn client={client} envId={source.id} transfer={{ ...returnState, handoffId, role: 'source',
-              machineId: taskResult.targetMachineId!, machineName: taskResult.targetName! }} />
+            {!bulk && <TaskReturn client={client} envId={source.id} transfer={{ ...returnState, handoffId, role: 'source',
+              machineId: taskResult.targetMachineId!, machineName: taskResult.targetName! }} />}
             {taskResult.warning && <div className="banner">{taskResult.warning}</div>}
             {error && <div className="error">{error}</div>}
             <div className="transfer-actions">
@@ -375,6 +390,13 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
                 {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.label || agent.id}</option>)}
               </select>
             </label></div>}
+            {task && !!account?.models?.length && <div className="field"><label className="field-label">Model
+              <select className="custom" value={model} disabled={busy || locked}
+                onChange={(event) => setModel(event.target.value)}>
+                <option value="">{account.defaultModel ? `Account default (${account.defaultModel})` : 'Account default'}</option>
+                {account.models.map((id) => <option key={id} value={id}>{id}</option>)}
+              </select>
+            </label></div>}
 
             {!task && <label className={`check-row${envCanChoose ? '' : ' disabled'}`}>
               <input
@@ -398,7 +420,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
                 Folder on the target <span className="quiet">optional</span>
                 <input
                   className="custom" value={targetFolder} disabled={busy || locked}
-                  placeholder={`~/.helm/transfers/${preview?.rootName ?? leaf(folder)}`}
+                  placeholder={bulk && task ? `~/${preview?.rootName ?? leaf(folder)}` : `~/.helm/transfers/${preview?.rootName ?? leaf(folder)}`}
                   autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
                   onChange={(e) => setTargetFolder(e.target.value)}
                 />
@@ -406,7 +428,9 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
             </div>
 
             </details>
-            {task && <p className="note">Project files and .env are included automatically, encrypted end to end. Finished changes return here when this machine is online; conflicting local edits are kept for review.</p>}
+            {task && !bulk && <p className="note">Project files and .env are included automatically, encrypted end to end. Finished changes return here when this machine is online; conflicting local edits are kept for review.</p>}
+            {task && bulk && <p className="note">This project is big, so it is copied with its git history, encrypted, and the copy picks up where it left off if the connection drops. The work stays on the destination, in git; pull it back when you want it.</p>}
+            {!task && bulk && <div className="banner">This project is too big to send on its own. Turn on “Send a task with this project” to copy it with its history and start an agent there.</div>}
 
             {warnings.length > 0 && (
               <>

@@ -171,6 +171,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     try { await fn(); } catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
   };
+  // An orphaned helper is listed on its own; its parent is gone, so there is no thread to go back to.
+  const parentThread = !!session.delegation?.parentId && !session.unhomed;
   const openParent = () => {
     const parentId = session.delegation?.parentId;
     if (!parentId || !onOpenSession) return;
@@ -512,8 +514,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   return (
     <>
       <div className="bar session-bar">
-        <button className="iconbtn back" aria-label={session.delegation?.parentId && onOpenSession ? 'Back to parent thread' : 'Back'}
-          onClick={session.delegation?.parentId && onOpenSession ? openParent : onBack}><BackIcon /></button>
+        <button className="iconbtn back" aria-label={parentThread && onOpenSession ? 'Back to parent thread' : 'Back'}
+          onClick={parentThread && onOpenSession ? openParent : onBack}><BackIcon /></button>
         <div className="titles">
           <h1>{session.title}</h1>
           <span className="sub">
@@ -565,7 +567,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             <button aria-pressed={!!session.notifyDone} onClick={toggleNotify}>
               {session.notifyDone ? 'Turn completion alerts off' : 'Turn completion alerts on'}
             </button>
-            {session.delegation?.parentId && onOpenSession && <button onClick={openParent}>Open parent thread</button>}
+            {parentThread && onOpenSession && <button onClick={openParent}>Open parent thread</button>}
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
             <button className="destructive" onClick={kill}>{session.nativeCodex ? 'Remove from Helm' : 'Delete thread'}</button>
           </div>

@@ -18,7 +18,7 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { HELM_DIR } from './paths.js';
 import { materializeCode, restoreGitMetadata, verifyHandoffSignature, openTaskPrompt,
   createCodeSnapshot, sealCodeSnapshot, signHandoffDigest, canonicalSnapshot, openCodeSnapshot } from './code-transfer.js';
@@ -28,6 +28,7 @@ import { taskReturnDigest } from './task-return.js';
 import { getProfiles } from './profiles.js';
 import { defaultMode } from './modes.js';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
+import { markerDigest } from './bulk-transfer.js';
 
 const HANDOFFS_FILE = join(HELM_DIR, 'handoffs.json');
 const HANDOFF_ID = /^[a-f0-9]{24}$/;
@@ -70,6 +71,7 @@ export const handoffRequestDigest = (p) => sha256(JSON.stringify({
   parent: p.parent ?? null,
   prompt: p.prompt,
   ...(p.restoreGit !== undefined ? { restoreGit: p.restoreGit } : {}),
+  ...(p.precopied !== undefined ? { precopied: p.precopied } : {}),
   ...(p.promptEnvelope !== undefined ? { promptEnvelope: p.promptEnvelope } : {}),
   ...(p.returnToSource !== undefined ? { returnToSource: p.returnToSource, includeEnv: p.includeEnv } : {}),
 }));
@@ -172,12 +174,18 @@ export class Handoffs {
       requestDigest: DIGEST.test(p.requestDigest ?? '') ? p.requestDigest : null,
       sourceSignature: SOURCE_SIG.test(p.sourceSignature ?? '') ? p.sourceSignature : null,
       restoreGit: p.restoreGit,
+      precopied: p.precopied,
       promptEnvelope: p.promptEnvelope,
       returnToSource: p.returnToSource,
       includeEnv: p.includeEnv,
     };
     if (p.returnToSource !== undefined && (typeof p.returnToSource !== 'boolean' || typeof p.includeEnv !== 'boolean')) throw new Error('invalid task return options');
     if (p.restoreGit !== undefined && typeof p.restoreGit !== 'boolean') throw new Error('invalid restoreGit option');
+    if (p.precopied !== undefined && p.precopied !== true) throw new Error('invalid precopied option');
+    // A copied-ahead project names an absolute folder and cannot ride back.
+    if (p.precopied && (typeof p.folder !== 'string' || !p.folder.startsWith('/') || p.returnToSource === true)) {
+      throw new Error('a copied-ahead handoff needs an absolute folder and no return');
+    }
     if (p.promptEnvelope !== undefined && (!p.promptEnvelope || typeof p.promptEnvelope !== 'object')) throw new Error('invalid encrypted task prompt');
     if (p.folder !== undefined && out.folder === null) throw new Error('invalid handoff folder');
     if (!out.snapshotDigest) throw new Error('invalid handoff snapshot digest');
@@ -264,6 +272,18 @@ export class Handoffs {
     };
     if (!existing) this.#put(record);
     try {
+      if (!record.folder && p.precopied) {
+        // The source copied the project with rsync and left a marker whose
+        // digest it signed into this request: start only in that folder.
+        const found = markerDigest(p.folder, p.handoffId);
+        if (!found) throw new Error(`the copied project is not at ${p.folder} on this machine; send it again`);
+        if (found !== p.snapshotDigest) throw new Error('the copied project does not match this handoff');
+        record.folder = resolve(p.folder);
+        record.digest = p.snapshotDigest;
+        record.precopied = true;
+        record.status = 'materialized';
+        this.#put(record);
+      }
       if (!record.folder) {
         // A retried request may carry a freshly sealed envelope over the
         // same snapshot - the digest check is what ties the ciphertext we

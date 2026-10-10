@@ -12,16 +12,23 @@ import { handoffRequestDigest } from './handoffs.js';
 import { transferPreflight } from './transfer-check.js';
 import { readThread } from './brain.js';
 import { delegationMode } from './delegation.js';
+import { bulkPlan, discardPlan, bulkMarker, writeMarkerDir, progressFrom } from './bulk-transfer.js';
+import { runCopy } from './copy.js';
+import { rmSync as removeTree } from 'node:fs';
 
 const ID = /^[a-f0-9]{24}$/;
+const tooBig = (error) => /exceeds \d+ (files|MB)|too large for a code handoff/.test(error.message);
 const networkFailure = (error) => /offline|not connected|reach|ECONN|socket|timed out|timeout|closed/i.test(error.message);
 const line = (value, max) => typeof value === 'string' && value.length > 0
   && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 
 export class TaskTransfers {
-  constructor({ network, sessions, rpc, enqueue, directory = join(HELM_DIR, 'outgoing-tasks') }) {
-    Object.assign(this, { network, sessions, rpc, enqueue, directory });
+  constructor({ network, sessions, rpc, enqueue, directory = join(HELM_DIR, 'outgoing-tasks'), copy = runCopy }) {
+    Object.assign(this, { network, sessions, rpc, enqueue, directory, copy });
     this.inflight = new Map();
+    // Big projects copy in the background; asking again with the same
+    // handoff id reads how far the copy got instead of waiting on it.
+    this.copying = new Map();
     this.returning = new Map();
   }
 
@@ -50,6 +57,13 @@ export class TaskTransfers {
     }
     if (typeof intent.prompt !== 'string' || intent.prompt.length > 32_000 || (!intent.prompt.trim() && !intent.sessionId)) throw new Error('a new task needs a prompt of at most 32000 characters');
     const fingerprint = createHash('sha256').update(JSON.stringify(intent)).digest('hex');
+    const copying = this.copying.get(params.handoffId);
+    if (copying) {
+      if (copying.fingerprint !== fingerprint) throw new Error('task retry does not match its original request');
+      if (copying.error) { this.copying.delete(params.handoffId); throw copying.error; }
+      return { sent: true, status: 'copying', handoffId: params.handoffId, targetMachineId: target.id,
+        targetName: target.name, progress: { ...copying.progress }, preflight: copying.preflight };
+    }
     const running = this.inflight.get(params.handoffId);
     if (running) {
       if (running.fingerprint !== fingerprint) throw new Error('task retry does not match its original request');
@@ -80,7 +94,8 @@ export class TaskTransfers {
         throw new Error('task retry does not match its original request');
       }
     }
-    if (record?.result?.status === 'running') return record.result;
+    if (record?.result?.status === 'running' || record?.result?.status === 'queued') return record.result;
+    if (record?.bulk && !record.request) return this.#startBulk(net, target, params, intent, fingerprint, record);
     if (!record) {
       if (!target.codePubkey) throw new Error('the target needs a code-transfer key; restart Helm there');
       const { agents } = await this.rpc(target.id, M.AGENT_LIST, { models: false });
@@ -92,7 +107,11 @@ export class TaskTransfers {
       }
       const mode = delegationMode(account.engine, source?.mode, intent.mode,
         account.defaultMode, source?.engine ?? account.engine);
-      let snapshot = createCodeSnapshot(intent.folder, { includeEnv: intent.includeEnv });
+      let snapshot;
+      try { snapshot = createCodeSnapshot(intent.folder, { includeEnv: intent.includeEnv }); } catch (error) {
+        if (!tooBig(error)) throw error;
+        return this.#startBulk(net, target, params, intent, fingerprint, null, { account, source, mode });
+      }
       let preflight = transferPreflight(snapshot);
       if (preflight.requiresAcknowledgement && params.allowSkipped !== true) {
         return { sent: false, requiresAcknowledgement: true, preflight };
@@ -145,6 +164,10 @@ export class TaskTransfers {
         baselineEnvelope: intent.returnToSource ? sealCodeSnapshot(snapshot, codeKeyInfo().codePubkey, params.handoffId) : null };
       this.#save(params.handoffId, record);
     }
+    return this.#deliver(target, params, record);
+  }
+
+  async #deliver(target, params, record) {
     const sourceSession = record.request.parent?.sessionId;
     if (sourceSession && record.request.returnToSource) this.sessions.setTaskTransfer?.(sourceSession, {
       handoffId: params.handoffId, role: 'source', status: 'running', machineId: target.id, machineName: target.name,
@@ -176,6 +199,141 @@ export class TaskTransfers {
     record.result = result;
     this.#save(params.handoffId, record);
     return result;
+  }
+
+  /**
+   * A project over the sealed-snapshot cap: copy it with rsync over the
+   * signed copy tunnel, in the background, then hand off the task alone.
+   * Returns at once with status 'copying'; the caller asks again with the
+   * same handoff id to follow progress, and gets the running task's receipt
+   * once it has started. A failed copy keeps its record, and asking again
+   * resumes it from rsync's partial state.
+   */
+  async #startBulk(net, target, params, intent, fingerprint, record, found = {}) {
+    let { account, source, mode } = found;
+    if (!record) {
+      const info = await this.rpc(target.id, M.ENV_INFO, {}, { timeout: 20_000 });
+      if (!info?.home || info.precopiedHandoff !== true) {
+        throw new Error(`${target.name ?? 'the target'} runs an older Helm that cannot take a project this big; update Helm there first`);
+      }
+      const plan = bulkPlan(intent.folder, { includeEnv: intent.includeEnv });
+      discardPlan(plan);
+      const wanted = intent.targetFolder?.trim();
+      let folder;
+      if (wanted) {
+        folder = wanted === '~' ? info.home : wanted.startsWith('~/') ? `${info.home}/${wanted.slice(2)}` : wanted;
+        if (!folder.startsWith('/')) throw new Error('the destination folder must start with / or ~/');
+        if (await this.#occupied(target.id, folder)) throw new Error(`${folder} already has files on ${target.name}; choose an empty or new folder`);
+      } else {
+        folder = `${info.home}/${plan.rootName}`;
+        if (await this.#occupied(target.id, folder)) folder = `${folder}-${params.handoffId.slice(0, 8)}`;
+      }
+      const history = source ? await this.sessions.history(source.id, { tail: 500, limit: 500 }) : null;
+      record = {
+        fingerprint,
+        bulk: { folder, phase: 'copying', files: plan.files, bytes: plan.bytes, git: plan.git,
+          account: { engine: account.engine }, mode, sourceId: source?.id ?? null, rootName: plan.rootName },
+        context: history ? readThread(history.events, { limit: 80 }).join('\n').slice(-24_000) : '',
+        preflight: { files: plan.files ?? 0, bytes: plan.bytes, envFiles: plan.envFiles, skipped: 0,
+          skippedEntries: [], omittedEntries: 0, requiresAcknowledgement: false,
+          warnings: [{ code: 'bulk-copy', message: plan.git
+            ? 'Big project: the folder is copied with its full git history. Files git ignores (build output, caches) stay here.'
+            : 'Big project: the folder is copied whole, except dependency and cache folders.' }] },
+      };
+      this.#save(params.handoffId, record);
+    }
+    const job = { fingerprint, preflight: record.preflight, error: null,
+      progress: { phase: 'copying', folder: record.bulk.folder, bytes: 0, total: record.bulk.bytes, percent: 0 } };
+    this.copying.set(params.handoffId, job);
+    const endActivity = beginTransferActivity();
+    this.#bulk(net, target, params, intent, record, job)
+      .then(() => { this.copying.delete(params.handoffId); })
+      .catch((error) => { job.error = error; record.bulk.error = String(error.message).slice(0, 500); this.#save(params.handoffId, record); })
+      .finally(endActivity);
+    return { sent: true, status: 'copying', handoffId: params.handoffId, targetMachineId: target.id,
+      targetName: target.name, progress: { ...job.progress }, preflight: record.preflight };
+  }
+
+  async #occupied(machineId, folder) {
+    try {
+      const listing = await this.rpc(machineId, M.FS_LIST, { path: folder }, { timeout: 20_000 });
+      return (listing?.entries ?? listing?.items ?? []).length > 0;
+    } catch { return false; }
+  }
+
+  async #bulk(net, target, params, intent, record, job) {
+    const { bulk } = record;
+    const source = bulk.sourceId ? this.sessions.get(bulk.sourceId) : null;
+    if (source && bulk.phase === 'copying') {
+      // The files must be final before they travel: pause the task here.
+      job.progress.phase = 'pausing';
+      await this.sessions.interrupt(source.id);
+      const deadline = Date.now() + 30_000;
+      while (['starting', 'working', 'blocked'].includes(this.sessions.get(source.id).status)) {
+        if (Date.now() >= deadline) throw new Error('the source task has not stopped yet; wait and retry the handoff');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+    const quiet = { write() { return true; } };
+    const progress = { write(chunk) {
+      const p = progressFrom(chunk);
+      if (p) Object.assign(job.progress, { bytes: p.bytes, percent: p.percent, rate: p.rate });
+      return true;
+    } };
+    const plan = bulkPlan(intent.folder, { includeEnv: intent.includeEnv });
+    let markerDir;
+    try {
+      if (bulk.phase === 'copying') {
+        job.progress.phase = 'copying';
+        await this.copy({ machine: target.id, source: plan.root, targetFolder: bulk.folder,
+          filesFrom: plan.listFile, excludes: plan.excludes, retries: 5 },
+        { network: net, stdout: progress, stderr: quiet });
+        const marker = bulkMarker({ handoffId: params.handoffId, sourceMachineId: net.self, plan });
+        markerDir = writeMarkerDir(params.handoffId, marker);
+        await this.copy({ machine: target.id, source: markerDir, targetFolder: `${bulk.folder}/${marker.parent}`, retries: 5 },
+          { network: net, stdout: quiet, stderr: quiet });
+        Object.assign(bulk, { phase: 'copied', markerDigest: marker.digest, copiedAt: Date.now(), error: null });
+        this.#save(params.handoffId, record);
+      }
+    } finally {
+      discardPlan(plan);
+      if (markerDir) removeTree(markerDir, { recursive: true, force: true });
+    }
+    job.progress = { ...job.progress, phase: 'starting', percent: 100 };
+    const from = net.machines[net.self]?.name ?? net.self;
+    const request = {
+      handoffId: params.handoffId, sourceMachineId: net.self, targetMachineId: target.id,
+      folder: bulk.folder, snapshotDigest: bulk.markerDigest,
+      envelope: sealCodeSnapshot({ type: 'precopied', handoffId: params.handoffId }, target.codePubkey, params.handoffId),
+      profileId: intent.profileId, model: intent.model || undefined, mode: bulk.mode,
+      restoreGit: false, precopied: true,
+      // A baseline of hundreds of megabytes cannot ride back the way small
+      // tasks do; the work stays on the target, in git, for the owner to pull.
+      returnToSource: false, includeEnv: intent.includeEnv,
+      title: (source?.title || intent.prompt.trim().split('\n')[0] || bulk.rootName).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 120),
+      prompt: [
+        `Continue this task on ${target.name ?? target.id} in the current working directory (${bulk.folder}).`,
+        intent.prompt.trim() || 'Continue the existing task using the conversation context below.',
+        bulk.git
+          ? `The project was copied from ${from} with its whole git folder: every branch, the history, and uncommitted and untracked work${bulk.git.branch ? ` (checked out: ${bulk.git.branch})` : ''}. Files git ignores (build output, caches, imported assets) were not copied - rebuild or regenerate them here.`
+          : `The project folder was copied from ${from}, without dependency and cache folders.`,
+        `Project .env files were ${intent.includeEnv ? 'included where present' : 'excluded'}. Use this machine's agent login. Machine-wide environment variables, credentials, running processes and installed tools were not copied.`,
+        `Source runtime: ${process.platform}/${process.arch}, Node ${process.version}. Inspect project instructions and manifests; install what this machine is missing before continuing. Report missing credentials or runtimes instead of inventing them. Never print secret values.`,
+        'You may start helpers on this machine with `helm delegate <account> --model <id> --wait --json -- "<task>"` (see `helm agents --json` for accounts and models); they show under this thread in Helm. Give each helper its folder explicitly.',
+        record.context ? `Conversation context (a bounded transcript, not a live process):\n${record.context}` : '',
+      ].filter(Boolean).join('\n\n'),
+    };
+    if (source) request.parent = {
+      handoffId: params.handoffId, machineId: net.self, sessionId: source.id,
+      sourceFolder: intent.folder, digest: bulk.markerDigest,
+    };
+    request.promptEnvelope = sealCodeSnapshot({ type: 'task-prompt', prompt: request.prompt }, target.codePubkey, params.handoffId);
+    request.prompt = 'Continue the encrypted task using its transferred project.';
+    request.requestDigest = handoffRequestDigest(request);
+    request.sourceSignature = signHandoffDigest(request.requestDigest);
+    record.request = request;
+    this.#save(params.handoffId, record);
+    return this.#deliver(target, params, record);
   }
 
   start() {

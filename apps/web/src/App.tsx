@@ -37,7 +37,7 @@ import {
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
   type InventorySession, type Device, type Project, type MediaRoot, type MediaEntry,
 } from './client';
-import { money, bytes, busyWord, needsAttention, runningThread, settledThread, unknownThread } from './format';
+import { money, bytes, busyWord, needsAttention, runningThread, settledThread, unknownThread, listedThread } from './format';
 import { loadModels, saveModels } from './modelCache';
 import { followModelRefresh } from './modelRefresh';
 import { loadMessages, saveMessages } from './session/logCache';
@@ -571,7 +571,7 @@ function Shell({ client, conn, onSignOut }: {
     wanted.current = null;
     const orchestrator = found.delegation?.parentId
       ? (sessions[want.envId] ?? []).find((s) => s.id === found.delegation?.parentId) : null;
-    if (found.delegation && !orchestrator) return;
+    if (found.delegation && !orchestrator && !found.unhomed) return;
     navigate([{ kind: 'env' }, { kind: 'session', session: orchestrator ?? found }], want.envId);
   }, [sessions]);
 
@@ -679,7 +679,7 @@ function Shell({ client, conn, onSignOut }: {
         // later with `asked`; that fills in the notice already showing, or
         // raises one for a second prompt in a thread that was already waiting.
         const s = payload?.session;
-        if ((payload?.transition?.to === 'blocked' || payload?.asked) && s && !s.delegation) {
+        if ((payload?.transition?.to === 'blocked' || payload?.asked) && s && listedThread(s)) {
           const top = nav.current.stack[nav.current.stack.length - 1];
           const looking = top?.kind === 'session' && top.session.id === s.id;
           const asleep = (snoozedRef.current[`${e}:${s.id}`] ?? 0) > Date.now();
@@ -792,7 +792,7 @@ function Shell({ client, conn, onSignOut }: {
       });
       const liveThreads = agentsOf(e.id);
       const snapshotThreads = !e.online
-        ? (snap?.machines?.[e.id]?.sessions ?? []).filter((thread) => !thread.delegation && thread.engine !== 'shell'
+        ? (snap?.machines?.[e.id]?.sessions ?? []).filter((thread) => listedThread(thread) && thread.engine !== 'shell'
           && !thread.archived && !liveThreads.some((liveThread) => liveThread.id === thread.id))
         : [];
       for (const s of [...liveThreads, ...snapshotThreads]) {
@@ -938,7 +938,7 @@ function Shell({ client, conn, onSignOut }: {
    * session's name matters outside the app itself.
    */
   const blockedCount = envs.reduce((n, e) =>
-    n + (sessions[e.id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived && needsAttention(s)).length, 0);
+    n + (sessions[e.id] ?? []).filter((s) => listedThread(s) && s.engine !== 'shell' && !s.archived && needsAttention(s)).length, 0);
   useEffect(() => {
     const parts: string[] = [];
     if (view?.kind === 'session') parts.push(view.session.title);
@@ -1030,7 +1030,7 @@ function Shell({ client, conn, onSignOut }: {
     navigate([{ kind: 'env' }, { kind: 'session', session }], envId);
   };
 
-  const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => !s.delegation && s.engine !== 'shell' && !s.archived);
+  const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => listedThread(s) && s.engine !== 'shell' && !s.archived);
   const workingThreadsOn = (machine: Environment) =>
     machine.online ? agentsOf(machine.id).filter((thread) => !needsAttention(thread) && runningThread(thread)) : [];
   const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(needsAttention).length;
@@ -1448,8 +1448,8 @@ function Shell({ client, conn, onSignOut }: {
           <EnvView
             key={env.id}
             client={client} env={env} wide={wide} onBack={back}
-            sessions={(sessions[env.id] ?? []).filter((s) => !s.delegation)} reload={reloadEnv}
-            remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions.filter((s) => !s.delegation
+            sessions={(sessions[env.id] ?? []).filter(listedThread)} reload={reloadEnv}
+            remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions.filter((s) => listedThread(s)
               && !(sessions[env.id] ?? []).some(known => known.id === s.id))}
             rememberedAt={env.online ? undefined : snap?.machines?.[env.id]?.at}
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}

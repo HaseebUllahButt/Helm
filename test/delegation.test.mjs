@@ -764,3 +764,33 @@ test('agents are told which machine they are on and how to reach the others', as
   assert.ok(brief.endsWith(delegationNote()));
   assert.equal(helmBrief({ self: 'a', machines: { a: net.machines.a } }), delegationNote(), 'alone: nothing to reach');
 });
+
+test('a helper with no thread to sit under lists on its own, and its team nests under it', async (t) => {
+  const { sessions, drivers } = setup(t);
+  // `helm delegate` from a plain shell: no parent. Its own children have it as parent.
+  const { session: lead } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'codex-main', task: 'Lead the night' });
+  const { session: helper } = await sessions.delegate({ id: lead.id, profileId: 'codex-main', task: 'Fix the mountains' });
+  const top = await sessions.list();
+  assert.equal(top.find((s) => s.id === lead.id)?.unhomed, true, 'a standalone lead must be listed');
+  assert.equal(top.some((s) => s.id === helper.id), false, 'its helper sits under it, not beside it');
+  assert.deepEqual((await sessions.list({ parentId: lead.id })).map((s) => s.id), [helper.id]);
+
+  const { sessions: digest } = await sessions.digest();
+  const line = digest.find((s) => s.id === lead.id);
+  assert.ok(line, 'the digest shows the lead');
+  assert.deepEqual(line.helpers.map((h) => [h.id, h.depth]), [[helper.id, 1]]);
+  assert.equal(digest.some((s) => s.id === helper.id), false);
+
+  // Archiving the lead orphans the helper, which then lists on its own.
+  sessions.archive(lead.id);
+  assert.equal((await sessions.list()).find((s) => s.id === helper.id)?.unhomed, true);
+
+  // A finished orphan from more than a day ago drops out; `helm thread` still reaches it.
+  drivers.get(helper.id).finish();
+  await new Promise((r) => setImmediate(r));
+  const record = sessions.get(helper.id);
+  record.delegation.status = 'done';
+  record.delegation.finishedAt = Date.now() - 25 * 60 * 60_000;
+  assert.equal((await sessions.list()).some((s) => s.id === helper.id), false);
+  assert.equal((await sessions.list({ includeDelegations: true })).some((s) => s.id === helper.id), true);
+});

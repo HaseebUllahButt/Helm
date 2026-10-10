@@ -1164,13 +1164,27 @@ async function sendTask() {
   const net = requireNetwork();
   const handoffId = options['handoff-id'] || randomBytes(12).toString('hex');
   console.error(`helm: task ${handoffId}; retry with the same arguments and --handoff-id ${handoffId}`);
-  const result = await brainRpc(net.self, M.TASK_SEND, {
+  const request = {
     handoffId, targetMachineId: machineId(who), profileId: options.account,
     folder: resolve(expand(options['source-folder'] || process.env.HELM_CWD || process.cwd())),
     targetFolder: options['target-folder'], sessionId: options.session || process.env.HELM_SESSION_ID,
     model: options.model, mode: options.mode, prompt: words.join(' '),
     includeEnv: !options['no-env'], allowSkipped: !!options['allow-skipped'],
-  }, 360_000);
+  };
+  let result = await brainRpc(net.self, M.TASK_SEND, request, 360_000);
+  // A big project copies first, in the background; asking again with the
+  // same request follows it until the task is running.
+  let shown = '';
+  while (result.status === 'copying') {
+    const p = result.progress ?? {};
+    const line = p.phase === 'copying'
+      ? `copying to ${result.targetName}:${p.folder} - ${p.percent ?? 0}% of ${Math.round((p.total ?? 0) / 1e6)} MB${p.rate ? ` (${p.rate})` : ''}`
+      : p.phase === 'pausing' ? 'pausing the source task' : `starting the agent on ${result.targetName}`;
+    if (!options.json && line !== shown) console.error(`helm: ${line}`);
+    shown = line;
+    await new Promise((r) => setTimeout(r, 2000));
+    result = await brainRpc(net.self, M.TASK_SEND, request, 360_000);
+  }
   if (options.json) console.log(JSON.stringify(result));
   if (!result.sent) {
     if (!options.json) for (const warning of result.preflight.warnings) console.error(`  ${warning.path || ''}: ${warning.message}`);

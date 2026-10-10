@@ -255,3 +255,16 @@ test('the rough folder map survives archived chats and sleeping machines', () =>
   assert.match(text, /Known folders \(last observed; verify before using\)/);
   assert.match(text, /\/work\/quiet · Quiet project/);
 });
+
+test('the digest prints a standalone lead with its helpers nested beneath it', () => {
+  const now = Date.now();
+  const snap = { machines: { vm: { name: 'VM', at: now, sessions: [{
+    id: '7159e75cb90b', title: 'Lead', cwd: '/home/u/masair', engine: 'devin', model: 'swe-2-high', status: 'working',
+    updatedAt: now, unhomed: true,
+    helpers: [{ id: 'f5383e2abde5', title: 'Mountains', engine: 'devin', status: 'working', depth: 1, updatedAt: now, last: 'measuring ridge colour' }],
+  }] } } };
+  const out = render(snap, { roster: { vm: { name: 'VM', online: true } }, now });
+  assert.match(out, /7159e7 +working +devin \(swe-2-high\) "Lead" .*\[helper\]/);
+  assert.match(out, /└ f5383e working +devin "Mountains"/);
+  assert.match(out, /measuring ridge colour/);
+});

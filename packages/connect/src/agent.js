@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
-import { hostname, platform, arch, release } from 'node:os';
+import { hostname, platform, arch, release, homedir } from 'node:os';
 import { connect as tcpConnect } from 'node:net';
 import { T, M, E, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
@@ -979,6 +979,10 @@ export class Daemon {
     return {
       version,
       host: hostname(),
+      // Where a big project sent here lands by default, and a sign that this
+      // machine accepts one copied ahead of its handoff (bulk-transfer.js).
+      home: homedir(),
+      precopiedHandoff: true,
       platform: platform(),
       arch: arch(),
       release: release(),

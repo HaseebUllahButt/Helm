@@ -1,5 +1,6 @@
 import type { Environment, Session } from './client';
 import { txn } from './idb';
+import { listedThread } from './format';
 
 export interface WorkspaceSnapshot {
   environments: Environment[];
@@ -86,7 +87,7 @@ export function saveWorkspace(scope: string, patch: Partial<WorkspaceSnapshot>):
     if (value.view && !ids.has(value.view.envId)) value.view = undefined;
   }
   for (const [id, sessions] of Object.entries(value.sessions)) {
-    value.sessions[id] = sessions.filter(s => !s.delegation && s.engine !== 'shell')
+    value.sessions[id] = sessions.filter(s => listedThread(s) && s.engine !== 'shell')
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, 200).map(header);
   }
   if (value.view) value.view = { ...value.view, session: header(value.view.session) };

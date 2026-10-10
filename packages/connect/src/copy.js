@@ -88,6 +88,12 @@ export function copySpec(options, net = requireNetwork()) {
     '--compress', '--compress-level=1', '--partial-dir=.helm-transfer-partial',
     '--info=progress2', '--stats', '--timeout=120'];
   const excludes = options.excludes.flatMap((pattern) => ['--exclude', pattern]);
+  // A send-to-machine of a big project names its files (git's view of the
+  // tree plus .git); -r makes the listed .git folder travel whole.
+  if (options.filesFrom) {
+    if (!stat.isDirectory()) throw new Error('helm copy: a file list needs a source folder');
+    excludes.unshift(`--files-from=${options.filesFrom}`, '--from0', '-r');
+  }
   const dryRun = options.dryRun ? ['-n'] : [];
   if (options.mode === 'ssh') {
     if (!NAME.test(peer.name ?? '')) throw new Error(`helm copy: ${peer.id} has no usable SSH name`);
@@ -143,7 +149,12 @@ const runOnce = (spec, spawnProcess, stdout, stderr) => new Promise((resolveRun,
 
 /** Streaming compression and rsync's delta resume; no temporary ZIP or whole-tree buffer. */
 export async function copyFolder(args, deps = {}) {
-  const options = parseCopyArgs(args);
+  return runCopy(parseCopyArgs(args), deps);
+}
+
+/** The copy itself, for callers that build options rather than argv. */
+export async function runCopy(options, deps = {}) {
+  options = { excludes: [], dryRun: false, mode: null, retries: 2, ...options };
   const net = deps.network ? (typeof deps.network === 'function' ? deps.network() : deps.network) : requireNetwork();
   const spec = copySpec(options, net);
   const stdout = deps.stdout ?? process.stdout;

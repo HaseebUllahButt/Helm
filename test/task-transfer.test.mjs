@@ -296,3 +296,107 @@ test('a task from a Git project starts from files without restoring or fetching 
   assert.equal(existsSync(join(result.receipt.folder, '.git')), false);
   assert.ok(existsSync(join(result.receipt.folder, 'app.js')));
 });
+
+test('a project over the sealed cap copies with its git history first, then starts the task in that folder', async () => {
+  const folder = join(work, 'big-project');
+  mkdirSync(folder, { recursive: true });
+  const sh = (...args) => execFileSync('git', ['-C', folder, ...args], { encoding: 'utf8' }).trim();
+  sh('init', '-q', '-b', 'main');
+  writeFileSync(join(folder, '.gitignore'), 'build/\n');
+  writeFileSync(join(folder, 'game.gd'), 'v1');
+  writeFileSync(join(folder, 'big.bin'), randomBytes(20 * 1024 * 1024));
+  sh('add', '-A');
+  sh('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'first');
+  sh('checkout', '-qb', 'feature');
+  writeFileSync(join(folder, 'game.gd'), 'v2 uncommitted');
+  writeFileSync(join(folder, 'new.gd'), 'untracked');
+  writeFileSync(join(folder, '.env'), 'TOKEN=x');
+  mkdirSync(join(folder, 'build'));
+  writeFileSync(join(folder, 'build', 'out.pck'), 'ignored output');
+
+  const home = join(work, 'vm-home');
+  mkdirSync(home, { recursive: true });
+  const handoffId = randomBytes(12).toString('hex');
+  const starts = [], inputs = [], copies = [];
+  const handoffs = new Handoffs({
+    network: () => ({ ...net, self: targetId }), file: join(root, 'bulk-receipts.json'),
+    profiles: async () => [{ id: 'devin', engine: 'devin' }],
+    sessions: { start: async (p) => { starts.push(p); return { id: 'vm-lead' }; }, input: async (...a) => { inputs.push(a); } },
+  });
+  const rpc = async (target, method, params) => {
+    assert.equal(target, targetId);
+    if (method === M.AGENT_LIST) return { agents: [{ id: 'devin', engine: 'devin', available: true, defaultMode: 'yolo' }] };
+    if (method === M.ENV_INFO) return { home, precopiedHandoff: true };
+    if (method === M.FS_LIST) throw new Error('no such folder');
+    assert.equal(method, M.HANDOFF_ACCEPT);
+    assert.equal(params.precopied, true);
+    assert.equal(params.returnToSource, false);
+    return handoffs.accept(params, sourceId);
+  };
+  // rsync between two local folders stands in for the copy tunnel.
+  const copy = async (o) => {
+    copies.push(o);
+    mkdirSync(o.targetFolder, { recursive: true });
+    execFileSync('rsync', ['-a', ...(o.filesFrom ? [`--files-from=${o.filesFrom}`, '--from0', '-r'] : []),
+      ...(o.excludes ?? []).flatMap((e) => ['--exclude', e]), `${o.source}/`, `${o.targetFolder}/`]);
+  };
+  const sender = new TaskTransfers({ network: () => net, sessions: { get: () => null }, rpc, copy,
+    enqueue: async () => {}, directory: join(root, 'outgoing-bulk') });
+  const params = { handoffId, folder, targetMachineId: targetId, profileId: 'devin', model: 'swe-2-high',
+    prompt: 'Keep fixing the mountains', includeEnv: true };
+
+  let result = await sender.send(params, 'phone');
+  assert.equal(result.status, 'copying');
+  assert.equal(result.progress.folder, join(home, 'big-project'));
+  for (let i = 0; i < 500 && result.status === 'copying'; i++) {
+    await new Promise((r) => setTimeout(r, 20));
+    result = await sender.send(params, 'phone');
+  }
+  assert.equal(result.status, 'running');
+  const there = join(home, 'big-project');
+  assert.equal(result.receipt.folder, there);
+  const theirs = (...args) => execFileSync('git', ['-C', there, ...args], { encoding: 'utf8' }).trim();
+  assert.equal(theirs('rev-parse', 'HEAD'), sh('rev-parse', 'HEAD'));
+  assert.equal(theirs('branch', '--show-current'), 'feature');
+  assert.equal(theirs('status', '--porcelain'), sh('status', '--porcelain'));
+  assert.deepEqual(readFileSync(join(there, 'big.bin')), readFileSync(join(folder, 'big.bin')));
+  assert.equal(readFileSync(join(there, '.env'), 'utf8'), 'TOKEN=x');
+  assert.equal(existsSync(join(there, 'build')), false, 'ignored build output stays behind');
+  assert.equal(existsSync(join(there, '.git', 'helm-handoff', `${handoffId}.json`)), true);
+  assert.equal(starts[0].cwd, there);
+  assert.equal(starts[0].model, 'swe-2-high');
+  assert.match(inputs[0][1], /Keep fixing the mountains/);
+  assert.match(inputs[0][1], /whole git folder/);
+  assert.match(inputs[0][1], /helm delegate/);
+  // Asking again returns the same running task without copying or starting twice.
+  assert.deepEqual(await sender.send(params, 'phone'), result);
+  assert.equal(copies.length, 2);
+  assert.equal(starts.length, 1);
+});
+
+test('a copied-ahead handoff starts only beside the marker the source signed', async () => {
+  const handoffs = new Handoffs({
+    network: () => ({ ...net, self: targetId }), file: join(root, 'marker-receipts.json'),
+    profiles: async () => [{ id: 'devin', engine: 'devin' }],
+    sessions: { start: async () => { throw new Error('must not start'); }, input: async () => {} },
+  });
+  const { handoffRequestDigest } = await import('../packages/connect/src/handoffs.js');
+  const { sealCodeSnapshot, signHandoffDigest } = await import('../packages/connect/src/code-transfer.js');
+  const handoffId = randomBytes(12).toString('hex');
+  const empty = join(work, 'no-copy-here');
+  mkdirSync(empty, { recursive: true });
+  const request = { handoffId, sourceMachineId: sourceId, targetMachineId: targetId, folder: empty,
+    snapshotDigest: 'a'.repeat(64), envelope: sealCodeSnapshot({ type: 'precopied', handoffId }, codeKeyInfo().codePubkey, handoffId),
+    profileId: 'devin', mode: 'yolo', restoreGit: false, precopied: true, returnToSource: false, includeEnv: true,
+    title: 't', prompt: 'p' };
+  request.requestDigest = handoffRequestDigest(request);
+  request.sourceSignature = signHandoffDigest(request.requestDigest);
+  await assert.rejects(() => handoffs.accept(request, sourceId), /not at .* on this machine/);
+  mkdirSync(join(empty, '.helm', 'handoff'), { recursive: true });
+  writeFileSync(join(empty, '.helm', 'handoff', `${handoffId}.json`), 'someone else');
+  await assert.rejects(() => handoffs.accept(request, sourceId), /does not match this handoff/);
+  const back = { ...request, returnToSource: true };
+  back.requestDigest = handoffRequestDigest(back);
+  back.sourceSignature = signHandoffDigest(back.requestDigest);
+  await assert.rejects(() => handoffs.accept(back, sourceId), /no return/);
+});
