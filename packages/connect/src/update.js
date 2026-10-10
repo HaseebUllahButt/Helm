@@ -315,13 +315,13 @@ async function updateLocked(dir, { rebuild = true, restart = true, replace = fal
     await git(['branch', backup, 'HEAD']);
   } else {
     const on = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
-    if (on !== BRANCH) return { updated: false, reason: `checkout is on ${on}, not ${BRANCH}` };
+    if (on !== BRANCH && on !== 'HEAD') return { updated: false, reason: `checkout is on ${on}, not ${BRANCH}` };
   }
   // Recovery can have restored a previous commit, so re-check the clean
   // branch before fetching and deciding what remains to do.
   if (await git(['status', '--porcelain'])) return { updated: false, reason: 'uncommitted changes' };
 
-  await git(['fetch', '--quiet', 'origin', BRANCH]);
+  await exec('git', ['-C', dir, 'fetch', '--quiet', 'origin', BRANCH], { timeout: 30_000 });
   const [head, tip] = await Promise.all([git(['rev-parse', 'HEAD']), git(['rev-parse', `origin/${BRANCH}`])]);
   if (head === tip) {
     if (!resumed || resumed.targetHead !== head) {

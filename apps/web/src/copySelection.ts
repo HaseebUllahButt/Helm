@@ -1,4 +1,4 @@
-/** Keep the selected markup, including list ancestors omitted by cloneContents. */
+/** Keep selected markup without turning text inside an item into a list. */
 export function selectionClipboard(selection: Selection, root: HTMLElement) {
   const range = selection.getRangeAt(0);
   const fragment = range.cloneContents();
@@ -7,6 +7,9 @@ export function selectionClipboard(selection: Selection, root: HTMLElement) {
   let ancestor = range.commonAncestorContainer instanceof Element
     ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
   while (ancestor && ancestor !== root) {
+    // Selecting words within an item selects prose, not its list marker.
+    // A selection spanning items already contains LI nodes and retains its list.
+    if (ancestor.tagName === 'LI') break;
     const wrapper = ancestor.cloneNode(false) as Element;
     wrapper.append(...Array.from(container.childNodes));
     container.append(wrapper);
@@ -15,8 +18,10 @@ export function selectionClipboard(selection: Selection, root: HTMLElement) {
   }
 
   // Browser selections omit CSS list markers. Retain each original ordinal,
-  // even when the selection starts halfway through a list or a single item.
-  const originalItems = Array.from(root.querySelectorAll('li')).filter(li => range.intersectsNode(li));
+  // even when the selection starts halfway through a list. Ancestor items
+  // aren't cloned when only their contents are selected.
+  const originalItems = Array.from(root.querySelectorAll('li')).filter(li =>
+    range.intersectsNode(li) && !li.contains(range.commonAncestorContainer));
   const copiedItems = Array.from(container.querySelectorAll('li'));
   originalItems.forEach((li, index) => {
     const list = li.parentElement;

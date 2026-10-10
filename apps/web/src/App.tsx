@@ -11,7 +11,9 @@ import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { Controls, type Kind } from './session/Controls';
-import { MAX_ATTACHMENTS, prepareImage, type PreparedImage } from './session/image';
+import { prepareImage, type PreparedImage } from './session/image';
+import { useDraftImages } from './session/useDraftImages';
+import { loadDraft, saveDraft } from './draftStore';
 import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
 import { plainProblem } from './session/problem';
@@ -21,6 +23,7 @@ import { PermissionSheet } from './session/PermissionSheet';
 import type { Decision } from './session/types';
 import { EngineMark } from './EngineMark';
 import { NotificationToast } from './NotificationToast';
+import { MachineUpdateNotice } from './MachineUpdateNotice';
 import { PublicLinks } from './PublicLinks';
 import { DictationKey } from './DictationKey';
 import { BackIcon, Icon, toolKind } from './Icon';
@@ -707,6 +710,30 @@ function Shell({ client, conn, onSignOut }: {
   }, [loadEnvs]);
 
   const liveIds = envs.filter((e) => e.online).map((e) => e.id).join(',');
+  useEffect(() => {
+    let stopped = false, checking = false;
+    const check = async () => {
+      if (checking || document.hidden || !conn.online) return;
+      checking = true;
+      try {
+        await Promise.all((liveIds ? liveIds.split(',') : []).map(async (id) => {
+          try {
+            const info = await client.rpc<Environment['info']>(id, 'env.info', {}, 8000);
+            if (!stopped && info.version) setEnvs((list) => list.map((e) => e.id === id ? { ...e, info: { ...e.info, ...info } } : e));
+          } catch { /* keep the last known version through a reconnect */ }
+        }));
+      } finally { checking = false; }
+    };
+    void check();
+    const timer = setInterval(() => { void check(); }, 60_000);
+    window.addEventListener('online', check);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      stopped = true; clearInterval(timer);
+      window.removeEventListener('online', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [client, liveIds, conn.online]);
   // `conn.online` is a dependency because of what it costs to leave out. The
   // machine list arrives over HTTP and the session lists go over the socket,
   // so on a cold open this runs first and every `session.list` in it is
@@ -1128,6 +1155,24 @@ function Shell({ client, conn, onSignOut }: {
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
   const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !needsAttention(thread) && runningThread(thread)).sort(byNewest);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !event.ctrlKey || event.metaKey || event.altKey || event.isComposing
+          || document.querySelector('[aria-modal="true"]') || !runningNow.length) return;
+      // Capture before a composer completes a suggestion or xterm sends input.
+      event.preventDefault();
+      event.stopPropagation();
+      const current = nav.current.stack.at(-1);
+      const index = runningNow.findIndex(({ env, s }) => env.id === nav.current.selected
+        && current?.kind === 'session' && s.id === current.session.id);
+      const next = index < 0 ? (event.shiftKey ? runningNow.length - 1 : 0)
+        : (index + (event.shiftKey ? -1 : 1) + runningNow.length) % runningNow.length;
+      const { env, s } = runningNow[next];
+      if (index !== next) openSession(env.id, s);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [runningNow, openSession]);
   const runningCount = envs.reduce((total, machine) => total + workingThreadsOn(machine).length, 0);
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
@@ -1322,6 +1367,7 @@ function Shell({ client, conn, onSignOut }: {
       </aside>
 
       <section className={`main${showMain ? ' showing' : ''}`}>
+        <MachineUpdateNotice envs={envs} onOpen={() => push({ kind: 'updates' })} />
         {view.kind === 'app-settings' ? (
           <SettingsView
             client={client} envs={envs} onBack={back}
@@ -4405,7 +4451,8 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const [status, setStatus] = useState(session.status);
   // When it entered the status it is in, for "working 14m" beside the word.
   const [statusAt, setStatusAt] = useState(session.updatedAt);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(() => loadDraft(env.id, session.id));
+  useEffect(() => saveDraft(env.id, session.id, draft), [env.id, session.id, draft]);
   const [error, setError] = useState('');
   const [menu, setMenu] = useState(false);
   useDismiss(menu, useCallback(() => setMenu(false), []));
@@ -4520,23 +4567,22 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   useLiveInterval(status === 'exited' ? null : 15_000, refresh, [status, refresh]);
 
   const [sending, setSending] = useState(false);
-  const [images, setImages] = useState<PreparedImage[]>([]);
+  const { images, setImages, loading: loadingImages, saving: savingImages } = useDraftImages<PreparedImage>(env.id, session.id, setError);
   const [preparingImages, setPreparingImages] = useState(false);
   const imageBusy = useRef(false);
   const attachImages = async (files: FileList | File[]) => {
-    if (imageBusy.current || sending) return 0;
-    const picked = Array.from(files).slice(0, Math.max(0, MAX_ATTACHMENTS - images.length));
-    if (!picked.length) { setError(`${MAX_ATTACHMENTS} images is the limit for one message.`); return 0; }
+    if (imageBusy.current || sending || loadingImages || savingImages) return 0;
+    const picked = Array.from(files);
+    if (!picked.length) return 0;
     imageBusy.current = true; setPreparingImages(true); setError('');
     const ready: PreparedImage[] = [];
     const failures: string[] = [];
-    if (picked.length < files.length) failures.push(`${MAX_ATTACHMENTS} images is the limit for one message`);
     try {
       for (const file of picked) {
         try { ready.push(await prepareImage(file)); }
         catch (e: any) { failures.push(`${file.name}: ${e.message}`); }
       }
-      setImages(current => [...current, ...ready]);
+      await setImages(current => [...current, ...ready]);
       if (failures.length) setError(`Image not added — ${failures.join('; ')}`);
       return ready.length;
     } finally { imageBusy.current = false; setPreparingImages(false); }
@@ -4544,13 +4590,13 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const send = async () => {
     const body = draft;
     const attachments = images;
-    if ((!body.trim() && !attachments.length) || sending || settingBusy || imageBusy.current) return;
+    if ((!body.trim() && !attachments.length) || sending || settingBusy || imageBusy.current || loadingImages || savingImages) return;
     setSending(true); setError('');
     try {
       const result = await client.rpc<{ terminal?: boolean }>(env.id, 'session.input', { id: session.id, data: body + '\n',
         ...(attachments.length ? { attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) } : {}) }, 70_000);
       setDraft(current => current === body ? '' : current);
-      setImages(current => current.filter(image => !attachments.includes(image)));
+      await setImages(current => current.filter(image => !attachments.includes(image)));
       if (session.nativeChat && (result?.terminal || body.trimStart().startsWith('/'))) setNativeNotice(body.trim());
       else setMessages((m) => m ? [...m, { role: 'user', text: body, tools: [], at: Date.now(),
         attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) }] : m);
@@ -4694,7 +4740,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
         <Composer
           onTranscribe={onTranscribe}
           draft={draft} setDraft={setDraft} onSend={send} onKey={key}
-          keys={!session.nativeChat} preparing={sending || preparingImages}
+          keys={!session.nativeChat} preparing={sending || preparingImages || loadingImages || savingImages}
           commands={session.nativeChat ? nativeCommands : undefined}
           foot={session.nativeChat ? nativeControls.chips : undefined}
           onAttach={session.nativeChat ? attachImages : undefined} attachments={images}

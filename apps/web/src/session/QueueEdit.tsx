@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { Sheet } from '../Modal';
 import { Icon } from '../Icon';
-import { IMAGE_ACCEPT, MAX_ATTACHMENTS, looksLikeImage, prepareImage, clipboardImages } from './image';
+import { IMAGE_ACCEPT, looksLikeImage, prepareImage, clipboardImages } from './image';
 import type { Turn } from './types';
 
 type Image = { filename: string; mime: string; data: string };
@@ -23,8 +23,8 @@ export function QueueEdit({ turn, busy, onCancel, onSave }: {
   const file = useRef<HTMLInputElement>(null);
 
   const add = async (files: File[]) => {
-    const picked = files.filter(looksLikeImage).slice(0, Math.max(0, MAX_ATTACHMENTS - images.length));
-    if (!picked.length) { if (files.length) setError(`${MAX_ATTACHMENTS} images is the limit for one message.`); return; }
+    const picked = files.filter(looksLikeImage);
+    if (!picked.length) return;
     setError('');
     const at = box.current?.selectionStart ?? text.length;
     const ready: Image[] = [];
@@ -73,7 +73,7 @@ export function QueueEdit({ turn, busy, onCancel, onSave }: {
           }} />
         {error && <div className="error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="ghost queue-edit-add" disabled={busy || images.length >= MAX_ATTACHMENTS} onClick={() => file.current?.click()}>
+          <button type="button" className="ghost queue-edit-add" disabled={busy} onClick={() => file.current?.click()}>
             <Icon name="image" size={14} /> Add image
           </button>
           <input ref={file} type="file" accept={IMAGE_ACCEPT} multiple hidden onChange={(e) => { if (e.target.files?.length) void add(Array.from(e.target.files)); e.target.value = ''; }} />

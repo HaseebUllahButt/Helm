@@ -379,17 +379,21 @@ processes; the normal-command integration keeps the live terminal instead.
 
 ## Updates
 
-Helm is yours to change: tell your agent to change it, and it does. Helm never
-pulls from GitHub by itself. Every couple of minutes each machine checks:
+Helm is yours to change: tell your agent to change it, and it does. Development
+finishes by committing, pushing, and updating every reachable installed machine.
+Offline machines catch up when they reconnect. At startup, on reconnect, and every
+couple of minutes each service-managed machine checks:
 
 - a new version **saved** (committed) in its own Helm checkout is built and
   started;
+- a new release pushed to GitHub is built and started, including on clean
+  detached release checkouts;
 - a newer saved version on another of your machines is copied over your own
   Helm network and started.
 
 Unsaved edits never spread, and a machine only ever moves forward from what it
 has: if two machines both have their own changes, neither is overwritten, and
-**Settings → Updates** says so. Open apps reload by themselves at a quiet
+an update notice links to **Settings → Updates** with the reason. Open apps reload by themselves at a quiet
 moment when a new version lands.
 
 GitHub's version is a choice in **Settings → Updates**:
@@ -401,6 +405,12 @@ GitHub's version is a choice in **Settings → Updates**:
   They are kept on a `helm-backup-…` branch (and a stash, if unsaved).
 
 `helm update --replace` is the same replacement from a terminal.
+
+Folder search keeps a private directory index in `~/.helm/folder-index.json`,
+loads it after restart, and refreshes it in the background every ten minutes
+when searched. New folders made in Helm are added immediately. Old cached
+results stay available while the walk refreshes; hidden and dependency trees
+remain excluded.
 
 ## CLI subagents
 

@@ -4,9 +4,6 @@ const MAX_BYTES = 4 * 1024 * 1024;
 const QUALITIES = [0.82, 0.72, 0.62, 0.52, 0.42];
 const MIME = 'image/jpeg';
 
-/** How many images may ride on one message. */
-export const MAX_ATTACHMENTS = 4;
-
 /**
  * What the file picker offers. Deliberately `image/*` rather than a list of
  * types: a phone's camera roll is full of HEIC, and naming four MIME types

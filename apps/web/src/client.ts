@@ -36,7 +36,7 @@ export interface Environment {
     /** Which helm this machine runs; null where it is not a git checkout. */
     version?: { commit: string; full?: string; time?: number; dirty?: boolean; dir?: string; branch: string; subject: string; updatable: boolean } | null;
     /** This machine and another both have their own saved changes. */
-    sync?: { diverged: boolean; with: string } | null;
+    sync?: { diverged?: boolean; with?: string; reason?: string } | null;
     /** Whether normal `claude`/`codex` commands typed here show up in Helm. */
     cliLink?: { on: boolean; commands: string[] };
   };

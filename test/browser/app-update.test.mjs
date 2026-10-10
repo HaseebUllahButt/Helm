@@ -5,6 +5,35 @@ import { build } from 'esbuild';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 
+test('blocked machine updates show a notice and open the update review', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { MachineUpdateNotice } from './apps/web/src/MachineUpdateNotice';
+    const root = createRoot(document.getElementById('root'));
+    window.opened = 0;
+    window.mount = (blocked) => root.render(<MachineUpdateNotice envs={[
+      {id:'why',name:'why',online:true,info:{version:{dirty:blocked}}},
+      {id:'offline',name:'HomePC',online:false,info:{version:{dirty:true}}}
+    ]} onOpen={() => window.opened++} />);
+  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
+  const browser = await chromium.launch({ headless: true,
+    ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: bundle.outputFiles[0].text });
+    await page.evaluate(() => window.mount(true));
+    await page.getByRole('status').waitFor();
+    assert.match(await page.getByRole('status').innerText(), /why.*Local changes are blocking/);
+    assert.doesNotMatch(await page.getByRole('status').innerText(), /HomePC/);
+    await page.getByRole('button', { name: 'Review updates' }).click();
+    assert.equal(await page.evaluate(() => window.opened), 1);
+    await page.evaluate(() => window.mount(false));
+    await page.getByRole('status').waitFor({ state: 'detached' });
+  } finally { await browser.close(); }
+});
+
 test('an arriving update waits while someone is typing, then reloads by itself', async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';

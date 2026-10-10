@@ -103,8 +103,8 @@ test('partial list selections keep their original numbering and nested bullets',
     const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
     return window.selectionClipboard(selection, document.getElementById('root'));
   });
-  assert.equal(single.text, '3. hir');
-  assert.match(single.html, /<ol start="3">/);
+  assert.equal(single.text, 'hir');
+  assert.doesNotMatch(single.html, /<(ol|ul|li)\b/);
 });
 
 test('automatic selection writes HTML and text, explicit copy uses both MIME types', async t => {
@@ -122,8 +122,9 @@ test('automatic selection writes HTML and text, explicit copy uses both MIME typ
   });
   await page.waitForFunction(() => window.richCopies.length === 1);
   const rich = Object.fromEntries(await page.evaluate(() => window.richCopies[0]));
-  assert.equal(rich['text/plain'], '1. Bold');
+  assert.equal(rich['text/plain'], 'Bold');
   assert.match(rich['text/html'], /<strong>Bold<\/strong>/);
+  assert.doesNotMatch(rich['text/html'], /<(ol|ul|li)\b/);
   const explicit = await page.evaluate(() => {
     const clipboardData = new DataTransfer();
     const event = new ClipboardEvent('copy', { clipboardData, bubbles: true, cancelable: true });
@@ -131,8 +132,26 @@ test('automatic selection writes HTML and text, explicit copy uses both MIME typ
     return { prevented: event.defaultPrevented, text: clipboardData.getData('text/plain'), html: clipboardData.getData('text/html') };
   });
   assert.equal(explicit.prevented, true);
-  assert.equal(explicit.text, '1. Bold');
+  assert.equal(explicit.text, 'Bold');
   assert.match(explicit.html, /<strong>Bold<\/strong>/);
+  assert.doesNotMatch(explicit.html, /<(ol|ul|li)\b/);
+});
+
+test('prose in nested list items has no marker; selected child lists keep their own numbering', async t => {
+  const page = await fixture(t, '<div class="md"><ol start="7"><li><p>Ordinary <em>words</em></p><ol start="3"><li>Child one</li><li>Child two</li></ol></li></ol></div>');
+  const data = await page.evaluate(() => {
+    const range = document.createRange(); range.selectNodeContents(document.querySelector('.md p'));
+    const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    const prose = window.selectionClipboard(selection, document.getElementById('root'));
+    const items = document.querySelectorAll('.md li li');
+    range.setStart(items[0].firstChild, 0); range.setEnd(items[1].firstChild, 9);
+    selection.removeAllRanges(); selection.addRange(range);
+    return { prose, list: window.selectionClipboard(selection, document.getElementById('root')) };
+  });
+  assert.equal(data.prose.text, 'Ordinary words');
+  assert.match(data.prose.html, /<em>words<\/em>/);
+  assert.doesNotMatch(data.prose.html, /<(ol|ul|li)\b/);
+  assert.equal(data.list.text, '3. Child one\n4. Child two');
 });
 
 test('code copy keeps blank lines and excludes the copy toolbar', async t => {

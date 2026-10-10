@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { rmSync } from 'node:fs';
 import { fakeCli, collect } from './helpers.mjs';
 import { ClaudeDriver } from '../packages/connect/src/drivers/claude.js';
 
@@ -27,6 +28,38 @@ test('argv: headless flags, the account home, and a session id to resume later',
   const r = new ClaudeDriver({ cmd: 'claude', env: {}, cwd: '/x', mode: 'default', engineSessionId: 'abc' });
   assert.equal(r.args[r.args.length - 1], '--resume=abc');
   assert.ok(r.args.includes('manual')); // the CLI's name for the default mode
+});
+
+test('user chats use an interactive client entrypoint while delegated tasks stay hidden SDK sessions', () => {
+  for (const engineSessionId of [null, 'existing-conversation']) {
+    const env = { CLAUDE_CONFIG_DIR: '/account', CLAUDE_CODE_ENTRYPOINT: 'sdk-py' };
+    const user = new ClaudeDriver({ cmd: 'claude', env, cwd: '/project', engineSessionId });
+    const child = new ClaudeDriver({ cmd: 'claude', env, cwd: '/project', engineSessionId, delegated: true });
+    assert.equal(user.env.CLAUDE_CODE_ENTRYPOINT, 'claude-vscode');
+    assert.equal(child.env.CLAUDE_CODE_ENTRYPOINT, 'sdk-cli');
+    assert.equal(user.env.CLAUDE_CONFIG_DIR, '/account');
+    assert.equal(user.cwd, '/project');
+    assert.equal(env.CLAUDE_CODE_ENTRYPOINT, 'sdk-py', 'do not change the shared account environment');
+  }
+});
+
+test('hosted Claude receives the project directory and interactive history entrypoint', async t => {
+  const fake = fakeCli('claude', 'plain');
+  let opened, exited;
+  const pipe = { onData() {}, onExit(callback) { exited = callback; }, write() {},
+    end() { exited?.({ code: 0 }); }, kill() { exited?.({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: fake.cmd, env: { CLAUDE_CONFIG_DIR: '/account' },
+    cwd: fake.dir, procId: 'new-chat', procHost: {
+      hasProc: () => false,
+      openProc: async (id, spec) => { opened = spec; },
+      procPipe: () => pipe,
+    } });
+  t.after(async () => { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); });
+  await driver.start();
+  assert.equal(opened.cwd, fake.dir);
+  assert.equal(opened.env.CLAUDE_CONFIG_DIR, '/account');
+  assert.equal(opened.env.CLAUDE_CODE_ENTRYPOINT, 'claude-vscode');
+  assert.ok(opened.args.includes('-p'), 'preserve the streaming chat protocol');
 });
 
 test('a new effort before the first message starts the same id again, not --resume', async () => {

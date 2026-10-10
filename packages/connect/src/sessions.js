@@ -169,14 +169,13 @@ const agentName = (profileId) =>
 /**
  * What a client may attach to one message.
  *
- * The browser already compresses and caps what it sends, but that cap is a
+ * Image count is left to the CLI. The browser compresses image bytes, but that is a
  * courtesy, not a guarantee: `session.input` is reachable by anything
  * holding a device token, and whatever arrives is written to the event log
  * and piped into a CLI's stdin. So the limits are enforced here too, and an
  * attachment that breaks them fails the send loudly instead of being
  * quietly dropped on the way to the model.
  */
-const MAX_IMAGES = 8;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_ATTACHED_BYTES = 24 * 1024 * 1024;
 
@@ -195,9 +194,6 @@ export function driverTakesImages(d) {
 export function acceptImages(attachments) {
   const list = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
   if (!list.length) return [];
-  if (list.length > MAX_IMAGES) {
-    throw new Error(`too many attachments: ${list.length}, the limit is ${MAX_IMAGES}`);
-  }
   let total = 0;
   const out = [];
   for (const a of list) {

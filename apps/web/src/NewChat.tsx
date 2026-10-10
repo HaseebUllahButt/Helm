@@ -120,12 +120,13 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
   useEffect(() => {
     if (!searching || !machine) { setHits(null); return; }
     setHits(null);
+    let stale = false;
     const t = setTimeout(() => {
       client.rpc<any>(machine.id, 'fs.search', { query }, 20_000)
-        .then((r) => setHits(r.results ?? []))
-        .catch((e) => { setHits([]); setError(e.message); });
+        .then((r) => { if (!stale) setHits(r.results ?? []); })
+        .catch((e) => { if (!stale) { setHits([]); setError(e.message); } });
     }, 200);
-    return () => clearTimeout(t);
+    return () => { stale = true; clearTimeout(t); };
   }, [searching, query, client, machine]);
 
   // Stepping back from the CLIs lands on the same folder in the same list.

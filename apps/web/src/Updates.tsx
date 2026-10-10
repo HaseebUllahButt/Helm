@@ -83,13 +83,16 @@ export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: 
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
           <h1>Updates</h1>
-          <span className="sub">{versions.size > 1 ? 'catching up' : 'every machine on your newest version'}</span>
+          <span className="sub">{online.some((e) => e.info.version?.dirty || e.info.sync?.reason || e.info.sync?.diverged)
+            ? 'updates need attention' : versions.size > 1 ? 'catching up'
+              : sorted.some((e) => !e.online) ? 'offline machines catch up when they reconnect'
+                : 'every machine on your newest version'}</span>
         </div>
       </div>
       <div className="scroll"><div className="pad column">
         <p className="note">
-          Your machines keep each other on the newest version of Helm you saved - including changes
-          your agent makes to it. Nothing comes from GitHub unless you ask below.
+          Your machines check GitHub and each other for new versions automatically, including after
+          restarting or reconnecting. Local edits are preserved and shown here when they block an update.
         </p>
 
         <div className="section">machines</div>
@@ -100,6 +103,7 @@ export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: 
             const note = !env.online ? 'offline'
               : !v ? 'version unknown - an older Helm'
               : env.info.sync?.diverged ? `has its own changes, and so does ${env.info.sync.with} - ask your agent to combine them`
+              : env.info.sync?.reason ? env.info.sync.reason
               : v.dirty ? 'unsaved changes here - shared once saved'
               : newest && v.commit !== newest.info.version?.commit ? `catching up with ${newest.name}`
               : null;

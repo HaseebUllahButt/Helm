@@ -96,11 +96,13 @@ export class HubConnection extends EventEmitter {
   }
 }
 
-export async function hubRpc(net, env, method, params = {}, { timeout = 20_000, direct = false, onRoute } = {}) {
+export async function hubRpc(net, env, method, params = {}, { timeout = 20_000, budget = Infinity, direct = false, onRoute } = {}) {
   const failures = [];
+  const deadline = Date.now() + budget;
   for (const hub of hubUrls(net)) {
+    if (Date.now() >= deadline) break;
     try {
-      return await rpcVia(hub, net, env, method, params, timeout, { direct, onRoute });
+      return await rpcVia(hub, net, env, method, params, timeout, { direct, onRoute, deadline });
     } catch (err) {
       failures.push(`${hub}: ${err.message}`);
       // "offline" is the hub telling us the machine is not attached there;
@@ -108,7 +110,7 @@ export async function hubRpc(net, env, method, params = {}, { timeout = 20_000, 
       if (err.rpc && !['offline', 'timeout'].includes(err.code)) throw err;
       if (!['offline', 'timeout'].includes(err.code)
           && !['AbortError', 'TimeoutError'].includes(err.name)
-          && !/offline|not connected|reach|ECONN|socket|timed out|401/i.test(err.message)) throw err;
+          && !/offline|not connected|reach|ECONN|socket|timed out|fetch failed|401/i.test(err.message)) throw err;
     }
   }
   throw new Error(`could not reach that machine through any hub\n  ${failures.join('\n  ')}`);
@@ -157,7 +159,7 @@ export function mergeQueueReceipts(rows) {
     .sort((a, b) => (rank[b.status] ?? 0) - (rank[a.status] ?? 0))[0] ?? null;
 }
 
-function rpcVia(hub, net, env, method, params, timeout, { direct = false, onRoute } = {}) {
+function rpcVia(hub, net, env, method, params, timeout, { direct = false, onRoute, deadline = Infinity } = {}) {
   // helm's protocol lives at /helm/ws now; a hub from before the move still
   // answers at /ws, so a transport failure there is worth one retry.
   const base = hub.replace(/^http/, 'ws');
@@ -166,16 +168,19 @@ function rpcVia(hub, net, env, method, params, timeout, { direct = false, onRout
 
   // One handshake per socket: the credential it yields is spent on use.
   async function attempt(url) {
-    const token = await hubCredential(net, hub);
+    if (Date.now() >= deadline) throw new Error('timed out');
+    const token = await hubCredential(net, hub, { timeout: Math.min(15_000, deadline - Date.now()) });
+    if (Date.now() >= deadline) throw new Error('timed out');
+    const remaining = Math.min(timeout, deadline - Date.now());
     const useDirect = direct && ['transfer.accept', 'handoff.accept', 'task.collect'].includes(method);
     const directModule = useDirect ? await import('./direct-rpc.js').catch(() => null) : null;
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url, {
         headers: { authorization: `Bearer ${token}` },
-        handshakeTimeout: 15_000,
+        handshakeTimeout: Math.min(15_000, remaining),
       });
       const id = `c${Date.now().toString(36)}`;
-      const timer = setTimeout(() => { done(new Error('timed out')); }, timeout);
+      const timer = setTimeout(() => { done(new Error('timed out')); }, remaining);
       let settled = false;
       let peer;
       const done = (err, value, rpc = false) => {

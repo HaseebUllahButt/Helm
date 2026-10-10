@@ -15,7 +15,7 @@ import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
 import { hubRpc, hubBroadcastRpc, mergeQueueReceipts } from '../src/hub-client.js';
 import {
-  render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot,
+  render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot, findNetworkSession,
 } from '../src/brain.js';
 
 // Unix pipelines routinely close their read end early (`helm machines |
@@ -853,22 +853,12 @@ async function printDigest() {
  * never a guess, because guessing here sends a prompt to the wrong agent.
  */
 async function findSession(id) {
-  if (!id) die('which session? `helm digest` lists them');
-  const { snap } = await gather();
-  const hits = [];
-  for (const [env, entry] of Object.entries(snap.machines ?? {})) {
-    for (const s of entry.sessions ?? []) {
-      if (s.id === id || shortId(s.id) === id || s.id.startsWith(id)) {
-        hits.push({ env, machine: entry.name, session: s });
-      }
-    }
-  }
-  if (!hits.length) die(`no session "${id}" - \`helm digest\` lists them`);
-  if (hits.length > 1) {
-    die(`"${id}" matches ${hits.length} sessions:\n` +
-        hits.map((h) => `  ${h.machine}  ${h.session.id}  ${h.session.title}`).join('\n'));
-  }
-  return hits[0];
+  const net = requireNetwork();
+  return findNetworkSession(id, {
+    machines: net.machines,
+    snapshot: readSnapshot(),
+    rpc: (env, method, params) => hubRpc(net, env, method, params, { timeout: 8000, budget: 8000 }),
+  });
 }
 
 async function printThread() {

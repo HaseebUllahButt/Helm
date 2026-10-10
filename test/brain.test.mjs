@@ -7,8 +7,62 @@ import { join } from 'node:path';
 const { EventLog } = await import('../packages/connect/src/events.js');
 const {
   lastLine, readThread, localDigest, render, summaryLine, mergeSnapshot,
-  readSnapshot, writeSnapshot, shortId, ago, brief,
+  readSnapshot, writeSnapshot, shortId, ago, brief, findNetworkSession,
 } = await import('../packages/connect/src/brain.js');
+const { M } = await import('@helm/protocol');
+
+test('CLI lookup finds standalone leads and child helpers omitted from the digest', async () => {
+  const machines = { laptop: { name: 'Laptop' }, vm: { name: 'VM' } };
+  const lead = { id: '7159e75cb90b', title: 'Lead', delegation: { parentId: null } };
+  const child = { id: 'f5383e2abde5', title: 'Mountains', delegation: { parentId: lead.id } };
+  const snapshot = { machines: { vm: { name: 'VM', sessions: [] } } };
+  const saved = JSON.stringify(snapshot);
+  const calls = [];
+  const rpc = async (env, method, params) => {
+    calls.push({ env, method, params });
+    return { sessions: env === 'vm' ? [lead, child] : [] };
+  };
+  for (const [id, session] of [[lead.id, lead], ['7159e7', lead], ['f5383e', child]]) {
+    assert.deepEqual(await findNetworkSession(id, { machines, snapshot, rpc }), { env: 'vm', machine: 'VM', session });
+  }
+  assert.ok(calls.every(c => c.method === M.SESSION_LIST && c.params.includeDelegations === true));
+  assert.equal(JSON.stringify(snapshot), saved, 'helper lookup must not change the digest snapshot');
+});
+
+test('CLI lookup rejects prefixes shared by a regular session and a hidden helper', async () => {
+  const rpc = async env => ({ sessions: [{
+    id: env === 'laptop' ? 'abcdef111111' : 'abcdef222222', title: env,
+    ...(env === 'vm' ? { delegation: { parentId: 'lead' } } : {}),
+  }] });
+  const options = { machines: { laptop: { name: 'Laptop' }, vm: { name: 'VM' } }, snapshot: {}, rpc };
+  await assert.rejects(findNetworkSession('abcdef', options), /matches 2 sessions:\n  Laptop  abcdef111111.*\n  VM  abcdef222222/s);
+  assert.equal((await findNetworkSession('abcdef222222', options)).env, 'vm');
+});
+
+test('CLI lookup retains offline candidates and rejects live/offline prefix collisions', async () => {
+  const offline = { id: 'abcdef222222', title: 'Offline work' };
+  const options = {
+    machines: { laptop: { name: 'Laptop' }, vm: { name: 'VM' } },
+    snapshot: { machines: { vm: { name: 'VM', sessions: [offline] }, removed: { sessions: [{ id: 'gone' }] } } },
+    rpc: async env => {
+      if (env === 'vm') throw new Error('offline');
+      return { sessions: [{ id: 'abcdef111111', title: 'Live work' }] };
+    },
+  };
+  assert.deepEqual(await findNetworkSession(offline.id, options), { env: 'vm', machine: 'VM', session: offline });
+  await assert.rejects(findNetworkSession('abcdef', options), /matches 2 sessions/);
+  await assert.rejects(findNetworkSession('gone', options), /no session/);
+});
+
+test('CLI lookup uses a live empty inventory instead of a stale cached match', async () => {
+  const options = {
+    machines: { vm: { name: 'VM' } },
+    snapshot: { machines: { vm: { sessions: [{ id: 'removed', title: 'Old' }] } } },
+    rpc: async () => ({ sessions: [] }),
+  };
+  await assert.rejects(findNetworkSession('removed', options), /no session "removed"/);
+  await assert.rejects(findNetworkSession('', options), /which session/);
+});
 
 // The digest is the brain's whole picture of the network, so what it says
 // has to be true before anything built on it can be.

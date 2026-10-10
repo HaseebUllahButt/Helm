@@ -41,6 +41,7 @@ import { TaskTransfers } from './task-transfer.js';
 import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted } from './update.js';
+import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
 import { createGithubMonitor } from './github.js';
 import { agentCatalog, helmBrief } from './delegation.js';
@@ -66,8 +67,6 @@ const WAKE_TICK_MS = 60_000;
 /** How often machines compare saved versions. */
 const SYNC_EVERY_MS = 2 * 60_000;
 const WAKE_GAP_MS = 5 * 60_000;
-/** Disconnected from every other hub this long, then back: check for an update. */
-const BACK_ONLINE_MS = 10 * 60_000;
 
 /**
  * One connection to one hub.
@@ -241,24 +240,12 @@ export class Daemon {
     if (!process.env.INVOCATION_ID && process.env.XPC_SERVICE_NAME !== 'dev.helm.serve') return;
     this.#syncing = true;
     try {
-      const mine = await currentVersion();
       const running = (await this.#versionP)?.full;
-      if (!mine || mine.dirty) return;
-      if (running && mine.full !== running) {
-        const r = await rebuildIfCommitted(running);
-        if (r.updated) { console.log('[helm] built the version saved here - restarting'); return; }
-      }
       const net = loadNetwork() ?? this.net;
-      const peers = await Promise.all(Object.keys(net.machines ?? {}).filter((id) => id !== this.id).map((id) =>
-        hubRpc(net, id, M.ENV_INFO, {}, { timeout: 8000 }).then((info) => ({ id, name: info.name, v: info.version }), () => null)));
-      const newer = peers.filter((p) => p?.v?.full && p.v.full !== mine.full && p.v.time > mine.time)
-        .sort((a, b) => b.v.time - a.v.time)[0];
-      if (!newer) { this.syncNote = null; return; }
-      const { bundle } = await hubRpc(net, newer.id, M.ENV_BUNDLE, { have: [mine.full] }, { timeout: 120_000 });
-      if (!bundle) return;
-      const r = await syncFromBundle(bundle);
-      this.syncNote = r.diverged ? { diverged: true, with: newer.name ?? newer.id } : null;
-      if (r.updated) console.log(`[helm] took the newer version saved on ${newer.name ?? newer.id} - restarting`);
+      const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
+        selfUpdate, syncFromBundle, net, id: this.id, rpc: hubRpc });
+      this.syncNote = r.note ?? null;
+      if (r.updated) console.log('[helm] updated Helm - restarting when safe');
     } catch (err) {
       console.error('[helm] version sync:', err?.message || err);
     } finally { this.#syncing = false; }
@@ -469,7 +456,7 @@ export class Daemon {
     this.#syncMedia().catch((err) =>
       console.error('[helm] nas media:', err?.message || err));
 
-    // Every machine runs the owner's newest saved Helm, without GitHub: a
+    // Every machine checks the published release and peers: a
     // version saved here is built and started, and a newer one saved on
     // another machine is copied over the network. Soon after start, then
     // every couple of minutes.
@@ -486,7 +473,7 @@ export class Daemon {
       if (!remote.some((l) => l.connected)) this.#offlineSince ??= Date.now();
       return;
     }
-    if (this.#offlineSince && Date.now() - this.#offlineSince > BACK_ONLINE_MS) void this.#syncVersions();
+    if (this.#offlineSince) void this.#syncVersions();
     this.#offlineSince = null;
   }
 

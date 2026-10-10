@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -70,4 +70,36 @@ test('a folder made through mkdir is searchable at once, and bad names are refus
 
   await assert.rejects(() => makeDir({ path: '~/dev', name: '../escape' }), /path separator/);
   await assert.rejects(() => makeDir({ path: '~/dev', name: '..' }), /invalid/);
+});
+
+test('a restarted index uses the persisted cache before walking', async () => {
+  const cacheFile = join(process.env.HELM_DIR, 'folder-index.json');
+  const cache = JSON.parse(readFileSync(cacheFile, 'utf8'));
+  assert.equal(cache.home, HOME);
+  assert.ok(cache.dirs.some((d) => d.path === '~/dev/fresh'), 'picker additions survive restart');
+  assert.equal(statSync(cacheFile).mode & 0o777, 0o600);
+  rmSync(join(HOME, 'dev/fresh'), { recursive: true });
+  const restarted = await import('../packages/connect/src/fs.js?restart');
+  assert.deepEqual((await restarted.search('fresh')).results.map((d) => d.path), ['~/dev/fresh']);
+});
+
+test('a stale cache serves results while refreshing and removes deleted folders after the walk', async () => {
+  const cacheFile = join(process.env.HELM_DIR, 'folder-index.json');
+  const cache = JSON.parse(readFileSync(cacheFile, 'utf8'));
+  cache.at = Date.now() - 11 * 60_000;
+  writeFileSync(cacheFile, JSON.stringify(cache));
+  const restarted = await import('../packages/connect/src/fs.js?stale');
+  assert.deepEqual((await restarted.search('fresh')).results.map((d) => d.path), ['~/dev/fresh']);
+  await restarted.warmIndex();
+  assert.deepEqual((await restarted.search('fresh')).results, []);
+});
+
+test('a corrupt or wrong-home cache is ignored and rebuilt', async () => {
+  const cacheFile = join(process.env.HELM_DIR, 'folder-index.json');
+  for (const [tag, data] of [['corrupt', '{'], ['wrong-home', JSON.stringify({ version: 1, home: '/other', at: Date.now(), dirs: [] })]]) {
+    writeFileSync(cacheFile, data);
+    const restarted = await import(`../packages/connect/src/fs.js?${tag}`);
+    assert.ok((await restarted.search('dev helm')).results.some((d) => d.path === '~/dev/helm'));
+    assert.equal(JSON.parse(readFileSync(cacheFile, 'utf8')).home, HOME);
+  }
 });

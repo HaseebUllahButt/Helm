@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction 
 import { Client, type Environment, type Session, type ModelList } from '../client';
 import { useNow, waitingSince } from '../useNow';
 import { Composer } from './Composer';
-import { MAX_ATTACHMENTS, looksLikeImage, prepareImage } from './image';
+import { looksLikeImage, prepareImage } from './image';
 import { EngineMark } from '../EngineMark';
 import { PermissionSheet } from './PermissionSheet';
 import { RecoveryCard } from './RecoveryCard';
@@ -13,6 +13,7 @@ import { useGitStatus } from './Changes';
 import { expandPastes } from './pasteStore';
 import { Confirm, TextPrompt } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
+import { useDraftImages } from './useDraftImages';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
 import { money, busyStatus } from '../format';
 import { loadModels, saveModels } from '../modelCache';
@@ -69,16 +70,14 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     setDraftRaw(v);
     saveDraft(env.id, session.id, v);
   }, [env.id, session.id]);
-  const [attachments, setAttachmentsRaw] = useState<Attachment[]>([]);
+  const [error, setError] = useState('');
+  const { images: attachments, setImages: setAttachmentsRaw, loading: loadingImages, saving: savingImages } = useDraftImages<Attachment>(env.id, session.id, setError);
   const setAttachments = useCallback((next: SetStateAction<Attachment[]>) => {
     editRevision.current += 1;
-    setAttachmentsRaw((current) => {
-      const value = typeof next === 'function' ? next(current) : next;
-      return value;
-    });
-  }, []);
+    return setAttachmentsRaw(next);
+  }, [setAttachmentsRaw]);
   const [preparingImages, setPreparingImages] = useState(0);
-  const [error, setError] = useState('');
+  const [sendingImages, setSendingImages] = useState(false);
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [details, setDetails] = useState<DetailsTab | null>(null);
@@ -184,29 +183,18 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   /**
    * Picked, pasted or dropped images, compressed in the browser.
    *
-   * Every way this can refuse says so. It used to return silently when the
-   * four slots were already full, so picking a photo did nothing at all and
-   * nothing explained why - and files past the limit were dropped without a
-   * word.
+   * Every decode failure says so; all chosen images are prepared.
    */
   const onAttach = async (files: FileList | File[]) => {
+    if (loadingImages || savingImages || sendingImages) return 0;
     const chosen = Array.from(files);
     if (!chosen.length) return 0;
     const failures: string[] = [];
-    const available = Math.max(0, MAX_ATTACHMENTS - attachments.length);
-    if (!available) {
-      setError(`Image not added — ${MAX_ATTACHMENTS} images is the limit for one message.`);
-      return 0;
-    }
-    const selected = chosen.slice(0, available);
-    if (chosen.length > selected.length) {
-      failures.push(`only ${selected.length} of ${chosen.length} fit — ${MAX_ATTACHMENTS} images is the limit`);
-    }
     const next: typeof attachments = [];
     setPreparingImages((count) => count + 1);
     setError('');
     try {
-      for (const f of selected) {
+      for (const f of chosen) {
         if (!looksLikeImage(f)) {
           failures.push(`${f.name}: not an image`);
           continue;
@@ -217,7 +205,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           failures.push(`${f.name}: ${e?.message || 'compression failed'}`);
         }
       }
-      if (next.length) setAttachments((current) => [...current, ...next].slice(0, MAX_ATTACHMENTS));
+      if (next.length) await setAttachments((current) => [...current, ...next]);
       if (failures.length) setError(`Image not added — ${failures.join('; ')}`);
       return next.length;
     } finally {
@@ -226,9 +214,16 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   };
   const sendText = async (body: string, atts: Attachment[], sentReferences = references) => {
     setReferences([]);
-    setDraft(''); setAttachments([]);
+    if (!atts.length) setDraft('');
+    if (atts.length) setSendingImages(true);
     const clearedAt = editRevision.current;
-    try { await client.rpc(env.id, 'session.input', { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000); }
+    try {
+      await client.rpc(env.id, 'session.input', { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000);
+      if (atts.length) {
+        if (editRevision.current === clearedAt) setDraft('');
+        await setAttachments(current => current.filter(image => !atts.includes(image)));
+      }
+    }
     catch (e: any) {
       setError(e.message);
       // Only restore the failed send if the composer is still exactly in the
@@ -237,14 +232,13 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       // must not be overwritten by a late RPC failure.
       if (editRevision.current === clearedAt) {
         setDraft(body);
-        setAttachments(atts);
         setReferences(sentReferences);
       }
-    }
+    } finally { if (atts.length) setSendingImages(false); }
   };
   const send = async () => {
     const body = expandPastes(draft.trim());
-    if (preparingImages) return;
+    if (preparingImages || loadingImages || savingImages || sendingImages) return;
     if (!body && !attachments.length) return;
     await sendText(body, attachments);
   };
@@ -300,7 +294,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         const back = splitNote(turn.text).text ?? turn.text;
         setDraft(draftRef.current ? `${draftRef.current.replace(/\s*$/, '')}\n${back}` : back);
         if (turn.references?.length) setReferences((current) => [...current, ...turn.references!.filter((id) => !current.some((item) => item.id === id)).map((id) => referenceOptions.find((item) => item.id === id) ?? { id, title: id })].slice(0, 3));
-        if (turn.attachments?.length) setAttachments((current) => [...current, ...turn.attachments!.filter((item) => item.data).map((item) => ({ name: item.filename, mime: item.mime, data: item.data!, url: `data:${item.mime};base64,${item.data}` }))].slice(0, MAX_ATTACHMENTS));
+        if (turn.attachments?.length) setAttachments((current) => [...current, ...turn.attachments!.filter((item) => item.data).map((item) => ({ name: item.filename, mime: item.mime, data: item.data!, url: `data:${item.mime};base64,${item.data}` }))]);
       }
     } catch (e: any) { setError(e.message); }
     finally { setQueueBusy(''); }
@@ -594,7 +588,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onTranscribe={onTranscribe}
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
         engine={engine} keys={false} waiting={!!pending} danger={mode?.danger}
-        foot={controls.chips} statusLine={account || limits.length > 0 ? <LimitsLine windows={limits} account={account} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0}
+        foot={controls.chips} statusLine={account || limits.length > 0 ? <LimitsLine windows={limits} account={account} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
         commands={commands}

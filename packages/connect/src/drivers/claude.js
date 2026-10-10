@@ -85,6 +85,11 @@ export class ClaudeDriver extends Driver {
     this.resume = !!opts.engineSessionId && !opts.unsent;
     this.instructions = opts.instructions || null;
     this.delegated = !!opts.delegated;
+    // Helm is an interactive chat client using Claude's stream protocol.
+    // Print mode otherwise labels it sdk-cli, which Claude's native resume
+    // picker deliberately hides. Use the supported interactive-client path;
+    // child tasks remain SDK sessions rather than cluttering that picker.
+    this.env = { ...this.env, CLAUDE_CODE_ENTRYPOINT: this.delegated ? 'sdk-cli' : 'claude-vscode' };
     // A thread branched from another: begin as that conversation was at `at`.
     // Both ids are checked here as well as by whoever asked - they end up as
     // arguments to a process.
@@ -741,4 +746,3 @@ export function permissionCard(tool, input = {}, r = {}) {
     raw: { input, permission_suggestions: r.permission_suggestions },
   };
 }
-

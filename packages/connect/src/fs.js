@@ -1,7 +1,7 @@
-import { readdir, stat, mkdir } from 'node:fs/promises';
+import { readdir, stat, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
-import { HOME, expand, collapse } from './paths.js';
+import { HOME, HELM_DIR, expand, collapse } from './paths.js';
 
 const SKIP = new Set([
   'node_modules', '.git', '.cache', '__pycache__', 'target', 'dist', '.venv',
@@ -51,7 +51,12 @@ export async function makeDir({ path, name }) {
   await mkdir(full, { recursive: false, mode: 0o755 });
   // A folder made through the picker should be searchable at once, not after
   // the index's next scheduled walk.
-  if (indexAt) indexDirs.push({ name: clean, path: collapse(full), repo: false });
+  if (indexAt) {
+    const entry = { name: clean, path: collapse(full), repo: false };
+    indexDirs.push(entry);
+    if (building) additions.push(entry);
+    await saveIndex();
+  }
   return { path: collapse(full) };
 }
 
@@ -110,27 +115,58 @@ let indexDirs = [];
 let indexAt = 0;
 /** The in-flight build, so two callers share one walk rather than racing. */
 let building = null;
+let restoring = null;
+let additions = [];
+let saving = Promise.resolve();
+const INDEX_FILE = join(HELM_DIR, 'folder-index.json');
+
+// The cache is scoped to this home and schema; an old cache is still useful
+// immediately while the background walk refreshes it.
+function restoreIndex() {
+  return restoring ??= readFile(INDEX_FILE, 'utf8').then(JSON.parse).then((cache) => {
+    if (cache.version !== 1 || cache.home !== HOME || !Number.isFinite(cache.at)
+        || cache.at <= 0 || cache.at > Date.now() || !Array.isArray(cache.dirs)
+        || cache.dirs.length > INDEX_MAX || !cache.dirs.every((d) =>
+          typeof d.name === 'string' && typeof d.path === 'string' && d.path.startsWith('~/')
+          && typeof d.repo === 'boolean')) return;
+    indexDirs = cache.dirs;
+    indexAt = cache.at;
+  }).catch(() => {});
+}
+
+function saveIndex() {
+  const data = JSON.stringify({ version: 1, home: HOME, at: indexAt, dirs: indexDirs });
+  saving = saving.then(async () => {
+    await mkdir(HELM_DIR, { recursive: true });
+    const temp = `${INDEX_FILE}.${process.pid}.tmp`;
+    await writeFile(temp, data, { mode: 0o600 });
+    await rename(temp, INDEX_FILE);
+  }).catch(() => {}); // A read-only/full disk must not prevent searching.
+  return saving;
+}
 
 async function buildIndex() {
   const out = [];
   const queue = [[HOME, 0]];
-  const worker = async () => {
-    while (queue.length && out.length < INDEX_MAX) {
-      const [dir, depth] = queue.shift();
+  // Start each batch with actual work for every worker. Starting 16 loops
+  // with only HOME queued made 15 exit before HOME's first readdir returned.
+  while (queue.length && out.length < INDEX_MAX) {
+    await Promise.all(queue.splice(0, INDEX_WORKERS).map(async ([dir, depth]) => {
       let ents;
-      try { ents = await readdir(dir, { withFileTypes: true }); } catch { continue; }
+      try { ents = await readdir(dir, { withFileTypes: true }); } catch { return; }
       for (const d of ents) {
         if (out.length >= INDEX_MAX) return;
         if (!d.isDirectory()) continue;
         if (SKIP.has(d.name)) continue;
         if (d.name.startsWith('.') && d.name !== '.config') continue;
         const full = join(dir, d.name);
-        out.push({ name: d.name, path: collapse(full), repo: existsSync(join(full, '.git')) });
+        const repo = await stat(join(full, '.git')).then(() => true, () => false);
+        if (out.length >= INDEX_MAX) return;
+        out.push({ name: d.name, path: collapse(full), repo });
         if (depth < INDEX_DEPTH) queue.push([full, depth + 1]);
       }
-    }
-  };
-  await Promise.all(Array.from({ length: INDEX_WORKERS }, worker));
+    }));
+  }
   return out;
 }
 
@@ -139,10 +175,17 @@ async function buildIndex() {
  * finds it stale or absent; the rebuild itself happens once, in the
  * background, shared by however many callers ask while it runs.
  */
-export function warmIndex() {
+export async function warmIndex() {
+  await restoreIndex();
   if (!building && (Date.now() - indexAt > INDEX_TTL)) {
+    additions = [];
     building = buildIndex()
-      .then((dirs) => { indexDirs = dirs; indexAt = Date.now(); })
+      .then(async (dirs) => {
+        const known = new Set(dirs.map((d) => d.path));
+        indexDirs = [...dirs, ...additions.filter((d) => !known.has(d.path))];
+        indexAt = Date.now();
+        await saveIndex();
+      })
       .catch(() => { /* a half-read tree still beats refusing to search */ })
       .finally(() => { building = null; });
   }
@@ -161,10 +204,11 @@ export function warmIndex() {
 export async function search(query, { limit = 30 } = {}) {
   const words = String(query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return { results: [], indexed: indexDirs.length };
-  warmIndex();
+  await restoreIndex();
+  void warmIndex();
   // No index yet means the first-ever search: wait for the walk rather than
   // answering from nothing. Afterwards, stale results still beat no answer.
-  if (!indexDirs.length && building) await building;
+  if (!indexAt) await warmIndex();
   const q = words.join(' ');
   const scored = [];
   for (const d of indexDirs) {

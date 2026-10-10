@@ -2,6 +2,37 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HELM_DIR } from './paths.js';
+import { M } from '@helm/protocol';
+
+/** Resolve CLI targets from the full inventory; the digest omits helper tasks. */
+export async function findNetworkSession(id, { machines, snapshot, rpc }) {
+  if (!id) throw new Error('which session? `helm digest` lists them');
+  const inventories = await Promise.all(Object.entries(machines ?? {}).map(async ([env, machine]) => {
+    try {
+      const result = await rpc(env, M.SESSION_LIST, { includeDelegations: true });
+      return { env, machine: machine.name ?? env, sessions: result.sessions ?? [] };
+    } catch {
+      // An offline machine can still own the ID. Keep that candidate so a
+      // short prefix cannot silently select another machine's live session.
+      const saved = snapshot?.machines?.[env];
+      return { env, machine: saved?.name ?? machine.name ?? env, sessions: saved?.sessions ?? [] };
+    }
+  }));
+  const hits = [];
+  for (const { env, machine, sessions } of inventories) {
+    for (const session of sessions) {
+      if (session.id === id || shortId(session.id) === id || session.id.startsWith(id)) {
+        hits.push({ env, machine, session });
+      }
+    }
+  }
+  if (!hits.length) throw new Error(`no session "${id}" - \`helm digest\` lists them`);
+  if (hits.length > 1) {
+    throw new Error(`"${id}" matches ${hits.length} sessions:\n` +
+      hits.map((h) => `  ${h.machine}  ${h.session.id}  ${h.session.title}`).join('\n'));
+  }
+  return hits[0];
+}
 
 /**
  * What a brain knows.

@@ -913,7 +913,7 @@ test('images ride the driver when it implements the verb, else a placeholder', a
     makeDriver: (engine, opts) => new ImageDriver({ engine, ...opts }),
   });
   const s2 = await rich.start({ cwd: '/tmp', profileId: 'claudea' });
-  const atts = [{ filename: 'b.png', mime: 'image/png', data: 'iVBORw0KGgo=' }];
+  const atts = Array.from({ length: 12 }, (_, i) => ({ filename: `b-${i}.png`, mime: 'image/png', data: 'iVBORw0KGgo=' }));
   await rich.input(s2.id, 'look', { attachments: atts });
   const d2 = ImageDriver.made.at(-1);
   assert.equal(d2.gotAttachments.text, 'look');
@@ -986,7 +986,8 @@ test('an attached image survives a restart, and nonsense is refused', async () =
   // What a client may send is checked here, not only in the browser.
   assert.throws(() => acceptImages([{ filename: 'notes.txt', mime: 'text/plain', data }]), /only images/);
   assert.throws(() => acceptImages([{ filename: 'a.png', mime: 'image/png', data: 'not base64!' }]), /valid base64/);
-  assert.throws(() => acceptImages(Array.from({ length: 9 }, () => ({ filename: 'a.png', mime: 'image/png', data }))), /too many/);
+  const many = Array.from({ length: 20 }, (_, i) => ({ filename: `${i}.png`, mime: 'image/png', data }));
+  assert.deepEqual(acceptImages(many), many);
   assert.deepEqual(acceptImages([]), []);
   assert.deepEqual(acceptImages(undefined), []);
 });

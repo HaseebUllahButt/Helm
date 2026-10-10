@@ -81,6 +81,23 @@ test('a new commit lands as a hard reset to it', async () => {
   assert.equal(git(installed, ['rev-parse', 'HEAD']), git(remote, ['rev-parse', 'main']));
 });
 
+test('a clean detached release catches up after being offline without losing local commits', async () => {
+  const { remote, installed } = make();
+  git(installed, ['checkout', '--detach', '-q']);
+  commit(remote, 'two');
+  assert.equal((await update(installed)).updated, true);
+  assert.equal(git(installed, ['rev-parse', 'HEAD']), git(remote, ['rev-parse', 'HEAD']));
+  git(installed, ['config', 'user.email', 't@t']);
+  git(installed, ['config', 'user.name', 't']);
+  commit(installed, 'local release change');
+  const local = git(installed, ['rev-parse', 'HEAD']);
+  commit(remote, 'three');
+  const refused = await update(installed);
+  assert.equal(refused.updated, false);
+  assert.match(refused.reason, /your own changes/);
+  assert.equal(git(installed, ['rev-parse', 'HEAD']), local);
+});
+
 test('a failed install rolls HEAD back so a healthy retry rebuilds the release', async () => {
   const { remote, installed } = make();
   commit(remote, 'two');
