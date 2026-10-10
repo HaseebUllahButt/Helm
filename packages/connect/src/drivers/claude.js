@@ -66,6 +66,13 @@ export class ClaudeDriver extends Driver {
   #scopes = new Map();
   /** task_id -> tool_use_id, from task_started system frames */
   #tasks = new Map();
+  /**
+   * Background shell commands (`run_in_background`). Claude reports them
+   * with the same task frames as a helper agent, but they are not child
+   * tasks: a crashed scraper is a failed command in the transcript, not a
+   * "child task failed" alarm that points at nothing.
+   */
+  #shellTasks = new Set();
   #turnId = null;
   /** A turn is running: a replayed user message now is one handed over mid-turn. */
   #inTurn = false;
@@ -196,6 +203,7 @@ export class ClaudeDriver extends Driver {
       const agents = new Map();
       for (const e of this.resumeEvents?.() ?? []) {
         if (e.type === 'item.update' && e.agent?.id) this.#tasks.set(e.agent.id, e.id);
+        if (e.type === 'item.update' && e.agent?.type === 'local_bash') this.#shellTasks.add(e.id);
         if (e.type === 'item.update' && e.agent?.status) agents.set(e.id, e.agent.status);
         if (e.type !== 'item.start' || e.turnId !== this.#turnId || !['text', 'thinking'].includes(e.kind)) continue;
         const match = /^(.*)#(\d+)$/.exec(e.id);
@@ -205,7 +213,7 @@ export class ClaudeDriver extends Driver {
         scope.messageId = match[1];
         scope.blocks.set(Number(match[2]), e.id);
       }
-      for (const [id, status] of agents) if (status === 'running') {
+      for (const [id, status] of agents) if (status === 'running' && !this.#shellTasks.has(id)) {
         this.push('subagent.status', { id, status: [...this.pending.values()].some(p => p.parentId === id) ? 'blocked' : 'working' });
       }
       this.push('status', { status: this.pending.size ? 'blocked' : this.#turnId ? 'working' : 'idle' });
@@ -480,15 +488,17 @@ export class ClaudeDriver extends Driver {
     if (m.subtype === 'task_started') {
       if (m.task_id && m.tool_use_id) this.#tasks.set(m.task_id, m.tool_use_id);
       if (m.tool_use_id) {
-        this.push('subagent.status', { id: m.tool_use_id, status: 'working' });
-        this.push('item.update', { id: m.tool_use_id, agent: { id: m.task_id, status: 'running', description: m.description } });
+        const shell = m.task_type === 'local_bash';
+        if (shell) this.#shellTasks.add(m.tool_use_id);
+        else this.push('subagent.status', { id: m.tool_use_id, status: 'working' });
+        this.push('item.update', { id: m.tool_use_id, agent: { id: m.task_id, status: 'running', description: m.description, ...(shell ? { type: m.task_type } : {}) } });
       }
       return;
     }
     if (m.subtype === 'task_progress' || m.subtype === 'task_updated') {
       const id = this.#tasks.get(m.task_id) ?? m.tool_use_id;
       if (id) {
-        this.push('subagent.status', { id, status: 'working' });
+        if (!this.#shellTasks.has(id)) this.push('subagent.status', { id, status: 'working' });
         this.push('item.update', {
           id,
           agent: {
@@ -507,7 +517,7 @@ export class ClaudeDriver extends Driver {
       // Terminal: the card is done. A foreground Task's tool_result lands
       // too and overwrites this with the agent's own report.
       if (['completed', 'failed', 'stopped'].includes(m.status)) {
-        this.push('subagent.status', { id, status: m.status === 'failed' ? 'error' : 'idle' });
+        if (!this.#shellTasks.delete(id)) this.push('subagent.status', { id, status: m.status === 'failed' ? 'error' : 'idle' });
         this.push('item.done', { id, status, output: clip(m.summary) });
       }
     }

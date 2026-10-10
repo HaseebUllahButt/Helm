@@ -266,6 +266,33 @@ test('reattaching Claude restores a background task and routes its completion wi
   await driver.suspend();
 });
 
+test('a background shell command is not a child task, even when it fails', async () => {
+  let receive;
+  const pipe = { onData: cb => { receive = cb; }, onExit: () => {}, detach: () => {} };
+  const { driver, log } = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => null, resumeEvents: () => [] });
+  await driver.start();
+  const frame = (m) => receive(JSON.stringify({ type: 'system', ...m }) + '\n');
+  frame({ subtype: 'task_started', task_id: 'bash-1', tool_use_id: 'toolu_bash', task_type: 'local_bash', description: 'scrape' });
+  frame({ subtype: 'task_progress', task_id: 'bash-1' });
+  frame({ subtype: 'task_notification', task_id: 'bash-1', status: 'failed', summary: 'exit 1' });
+  // A real helper agent still reports its failure.
+  frame({ subtype: 'task_started', task_id: 'agent-1', tool_use_id: 'toolu_agent', task_type: 'local_agent', description: 'look' });
+  frame({ subtype: 'task_notification', task_id: 'agent-1', status: 'failed', summary: 'gave up' });
+  assert.deepEqual(log.of('subagent.status').map(e => [e.id, e.status]), [['toolu_agent', 'working'], ['toolu_agent', 'error']]);
+  assert.equal(log.of('item.done').find(e => e.id === 'toolu_bash')?.status, 'error', 'the command itself still shows as failed');
+  await driver.suspend();
+});
+
+test('reattaching Claude does not revive a background shell command as a helper', async () => {
+  const pipe = { onData: () => {}, onExit: () => {}, detach: () => {} };
+  const { driver, log } = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => null, resumeEvents: () => [{ type: 'item.update', id: 'bash-card', agent: { id: 'bash-1', status: 'running', type: 'local_bash' } }] });
+  await driver.start();
+  assert.equal(log.of('subagent.status').length, 0);
+  await driver.suspend();
+});
+
 test('tool: a Bash call becomes a tool item with streamed input and its output; a Write asks permission', async () => {
   const { driver, log, fake } = make('tool');
   await driver.send('Use the Bash tool…');

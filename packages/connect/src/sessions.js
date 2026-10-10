@@ -295,6 +295,7 @@ export class Sessions extends EventEmitter {
     // feature does not wait on - or cost - whatever the pty host is holding.
     this.procs = procHost ?? new TerminalHost({ socketPath: PROC_SOCKET_PATH, unit: 'helm-procs' });
     this.#load();
+    this.#dropShellAlarms();
     // A daemon killed abruptly cannot answer its old hook sockets. Leave the
     // terminal's own prompt available, without showing an unanswerable card.
     for (const s of this.#index.values()) if (s.nativeCli) {
@@ -689,6 +690,26 @@ export class Sessions extends EventEmitter {
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
       for (const [id, at] of Object.entries(raw.removedAt || {})) this.#removedAt.set(id, at);
     } catch { /* a corrupt index must not stop the daemon booting */ }
+  }
+
+  /**
+   * Older daemons counted a crashed background shell command as a failed
+   * child task, and that alarm stays on the thread's card until the chat
+   * ends. A command is not a child: drop those, keep real helpers.
+   */
+  #dropShellAlarms() {
+    let changed = false;
+    for (const s of this.#index.values()) {
+      const failed = Object.entries(s.nativeAgents ?? {}).filter(([, state]) => state === 'error');
+      if (!failed.length) continue;
+      let events;
+      try { events = this.events.since(s.id, 0); } catch { continue; }
+      const commands = new Set(events.filter((e) => e.type === 'item.start' && (e.kind === 'command' || e.name === 'Bash')).map((e) => e.id));
+      const shells = failed.filter(([id]) => commands.has(id));
+      for (const [id] of shells) delete s.nativeAgents[id];
+      if (shells.length) { changed = true; this.#refreshTeam(s); }
+    }
+    if (changed) this.#save();
   }
 
   #save() {
