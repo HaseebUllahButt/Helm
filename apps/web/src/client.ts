@@ -473,41 +473,6 @@ const reachableFromHere = (base: string) =>
   location.protocol !== 'https:' ||
   !base.startsWith('http://');
 
-/**
- * Choose a hub to attach to.
- *
- * Probing in parallel beats trying addresses in order: the list includes
- * machines that are asleep and LAN addresses for networks we are not on, and
- * those fail slowly.
- *
- * The winner is the hub that can see the most machines, not the one that
- * answers first. Hubs differ in reach - a laptop on a home network can dial
- * out to a VM, but the VM cannot dial back in, so the laptop's hub sees only
- * itself while the VM's sees both. Picking the nearest hub would quietly cost
- * you every machine it cannot reach. Latency is only the tie-break, and costs
- * little either way: the hub introduces peers and then the session data goes
- * directly between devices.
- */
-export async function pickEndpoint(
-  endpoints: string[], token: string
-): Promise<string | null> {
-  return (await probeEndpoints(endpoints, token)).best;
-}
-
-/**
- * Probe every address at once. Besides the winner, report whether the
- * machines that did answer all refused the token: that is not "offline", it
- * is "this device is no longer in the network" - after `helm remove`, or a
- * network rebuilt from scratch - and retrying forever is the wrong response.
- */
-export async function probeEndpoints(
-  endpoints: string[], token: string, timeout = PROBE_PATIENCE_MS
-): Promise<ProbeResult> {
-  const round = startProbes(endpoints, token, timeout);
-  await round.settled;
-  return round.result();
-}
-
 /** A hub that answered: where it is, how much of the network it can see. */
 interface Reached { base: string; reach: number; elapsed: number }
 
@@ -518,7 +483,12 @@ interface ProbeResult {
   reached: Reached[];
 }
 
-/** Most machines visible wins; nearest is only the tie-break. */
+/**
+ * Most machines visible wins; nearest is only the tie-break. Reach can be
+ * asymmetric - the laptop dials out to a VM that cannot dial back in, so the
+ * laptop's hub sees only itself while the VM's sees both. Picking the nearest
+ * hub would quietly cost you every machine it cannot reach.
+ */
 const byReach = (a: Reached, b: Reached) => b.reach - a.reach || a.elapsed - b.elapsed;
 
 /**

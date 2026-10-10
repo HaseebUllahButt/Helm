@@ -272,14 +272,6 @@ export const ENGINES = {
   },
 };
 
-export const ENGINE_IDS = Object.keys(ENGINES);
-
-/** The argv basenames that identify an engine's process. */
-export function procNames(engine) {
-  const e = ENGINES[engine];
-  return e?.proc?.names ?? (e?.bin ? [e.bin] : []);
-}
-
 /**
  * Is this process argv an interactive chat session of `engine` - something a
  * person could be typing into in a terminal, and therefore a live session

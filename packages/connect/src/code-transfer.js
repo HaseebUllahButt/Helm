@@ -777,4 +777,3 @@ export async function materializeCode(envelope, handoffId, requestedFolder, { pr
   };
 }
 
-export const codeTransferLimits = { MAX_FILES, MAX_FILE_BYTES, MAX_SNAPSHOT_BYTES };

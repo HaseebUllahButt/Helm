@@ -59,7 +59,6 @@
      selected row. */
   --primary:   oklch(0.585 0.17 270);
   --primary-t: oklch(0.65 0.15 272);
-  --primary-h: oklch(0.645 0.17 270);
   --primary-q: #8590ff;
   --amber:     #e8b23f;
   /* Amber as text, which in the light theme has to be darker than amber as a
@@ -102,7 +101,6 @@
 
   /* The left gutter every row's mark sits in, so text starts on one line all
      the way down a screen. */
-  --gutter:    30px;
   --sidebar-w: 300px;
   --measure:   46rem;
 
@@ -121,8 +119,6 @@
   --toast-bg:  var(--raised);
   --shadow:    0 1px 0 rgb(255 255 255 / 4%) inset, 0 18px 48px -18px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 25%);
   --need-bg:   color-mix(in srgb, var(--amber) 7%, var(--raised));
-  --need-bg-on: color-mix(in srgb, var(--amber) 12%, var(--raised));
-  --need-m:    #c9b894;
   --link:      #8fb4ff;
   --diff-add:  var(--emerald);
   --diff-del:  var(--red);
@@ -154,7 +150,6 @@
   --icon: #90b9c3;
   --primary: #117c78;
   --primary-t: #4acbbb;
-  --primary-h: #168d86;
   --primary-q: #65dfcb;
   --amber: #f2bd66;
   --amber-text: #f2bd66;
@@ -351,13 +346,6 @@ code, pre, kbd { font-family: var(--mono); }
 .section.attention::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex: none; }
 
 .rows { display: flex; flex-direction: column; gap: 0; }
-/* The folder a group of threads lives in - the All sessions screen files
-   every session under where it ran. */
-.foldhead {
-  margin: 12px 0 4px; padding: 0 10px;
-  font: 500 var(--t-micro) var(--mono); color: var(--mutedfg);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 
 /* A group is one panel with hairlines inside it - not a card per row, which
    was nine rectangles competing with their own contents, and not bare text
@@ -1025,7 +1013,6 @@ pre.snippet {
 .pick:hover { background: var(--hover); color: var(--text); }
 .sub .offline { color: var(--amber-text); }
 .menu.wide { min-width: 240px; max-width: min(360px, calc(100vw - 24px)); max-height: 60dvh; overflow-y: auto; }
-.menu .menu-title { font-size: var(--t-micro); font-weight: 650; text-transform: uppercase; letter-spacing: 0.07em; color: var(--mutedfg); padding: 8px 10px 4px; }
 .menu button.on { background: var(--accent); }
 .menu button .rt { display: block; }
 .menu button .rm { display: block; font-size: var(--t-meta); color: var(--mutedfg); white-space: normal; }
@@ -1120,7 +1107,6 @@ pre.snippet {
 .sheet-actions button.primary { background: var(--amber); color: var(--on-amber); }
 .sheet-actions button.primary:hover:not(:disabled) { filter: brightness(1.07); }
 .sheet-actions button.primary:disabled { background: var(--accent); color: var(--mutedfg); }
-.more-pending { text-align: center; margin: 0 0 4px; }
 
 /* Questions: a quiet card - who asks, the question, the answers as rows.
    No amber wash: one small dot says it is waiting on you. */
@@ -1252,8 +1238,6 @@ pre.snippet {
 .modesheet-head span { flex: 1; }
 .modesheet-head .x { width: auto; margin: 0; padding: 4px 6px; background: none; border: 0; color: var(--icon); font-size: 12px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; justify-content: center; }
 .modesheet-head .x:hover { color: var(--text); }
-.modesheet-foot { padding: 8px 6px 0; font-size: var(--t-micro); color: var(--mutedfg); }
-@media (pointer: coarse) { .modesheet-foot { display: none; } }
 
 .moderow {
   display: flex; align-items: center; gap: 10px; width: 100%; margin: 0;
@@ -1282,13 +1266,6 @@ pre.snippet {
 /* A search box with the filters that belong to it on the same line. */
 .filterbar { display: flex; align-items: center; gap: 6px; }
 .filterbar .sheetfilter { flex: 1; min-width: 0; margin-bottom: 6px; }
-.pill {
-  flex: none; margin-bottom: 6px; padding: 8px 11px;
-  border: 1px solid var(--input); border-radius: var(--radius-md);
-  background: var(--card); color: var(--mutedfg);
-  font-size: var(--t-meta); font-weight: 500;
-}
-.pill.on { background: var(--accent); color: var(--text); border-color: transparent; }
 
 /* Setup rows that have opened into a form or a note keep the group's left
    edge, so the section does not jump sideways when one expands. */
@@ -1502,16 +1479,6 @@ li.marked .usage-share-track { margin-left: 32px; }
    than the screen; the list scrolls, the sheet does not grow. */
 .sheetlist { max-height: 55dvh; overflow-y: auto; margin-bottom: 12px; }
 
-/* "Another machine needs you" while a session is open. Under the header: at
-   the bottom it sat on the composer, and a tap meant for the textarea opened
-   a different session. */
-.app-update {
-  position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 12px);
-  z-index: 55; display: flex; align-items: center; gap: 12px; padding: 10px 14px;
-  max-width: calc(100vw - 24px); border-radius: var(--radius-xl);
-  background: var(--toast-bg); border: 1px solid var(--line-2); box-shadow: var(--shadow);
-  color: var(--text); font-size: var(--t-meta);
-}
 /* "Another thread is waiting on you": a banner from the top on a phone,
    like the system's own; a card in the top-right corner on a wide screen,
    where the top centre is the conversation's header. */
@@ -1826,7 +1793,6 @@ button.sheet-editlink:hover { color: var(--text); }
   --icon:      #6b7280;
   --primary:   oklch(0.52 0.18 270);
   --primary-t: oklch(0.52 0.17 272);
-  --primary-h: oklch(0.56 0.18 270);
   --primary-q: #4450c8;
   /* Amber as a fill keeps its colour; amber as words is darkened until it
      can be read in sunlight. Text on an amber fill is dark in both themes. */
@@ -1845,8 +1811,6 @@ button.sheet-editlink:hover { color: var(--text); }
   --toast-bg:  #ffffff;
   --shadow:    0 18px 48px -20px rgb(26 29 36 / 30%), 0 2px 8px rgb(26 29 36 / 8%);
   --need-bg:   color-mix(in srgb, var(--amber) 9%, #ffffff);
-  --need-bg-on: color-mix(in srgb, var(--amber) 15%, #ffffff);
-  --need-m:    #6e5520;
   --link:      #2a55c4;
   --diff-add-fg: #166534;
   --diff-del-fg: #991b1b;
@@ -1906,13 +1870,6 @@ button.sheet-editlink:hover { color: var(--text); }
 
 .main { position: relative; }
 .changes { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--bg); animation: screen-in 0.16s var(--ease); }
-.changesbtn { position: relative; }
-.changesbtn.has { color: var(--text-dim); }
-.menu .git-mobile-only, .moredot.git-mobile-only { display: none; }
-@media (max-width: 599px) and (hover: none) and (pointer: coarse) {
-  .changesbtn { display: none; }
-  .menu .git-mobile-only, .moredot.git-mobile-only { display: block; }
-}
 .git-head { border-bottom: 1px solid var(--line); background: var(--bg); }
 .git-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; max-width: var(--measure); width: 100%; margin: 0 auto; padding: 8px 14px 10px; }
 @media (min-width: 900px) { .git-toolbar { padding: 10px 24px; } }
@@ -2280,7 +2237,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .home-search kbd { font-size: 10.5px; padding: 1px 5px; }
 
 /* A branch rail identifies the account and model behind every delegated task. */
-.subagents-launch { position: relative; }
 .delegation-panel {
   width: min(640px, calc(100vw - 24px)); max-width: 640px; max-height: calc(100dvh - 32px);
   display: flex; flex-direction: column; padding: 0; overflow: hidden;
@@ -2404,7 +2360,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 /* Header controls that trade places with a menu item at phone width. */
 @media (max-width: 599px) { .wide-only { display: none !important; } }
 @media (min-width: 600px) { .narrow-only { display: none !important; } }
-.moredot { position: absolute; top: 7px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--sky); }
 @media (min-width: 900px) { :root[data-theme="light"] .sidebar .rows.plain { box-shadow: none; } }
 /* At 200% zoom a phone is under 340px wide: the title keeps its line and
    the state chip steps aside - the transcript and the sheet still say it. */
@@ -2499,9 +2454,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .details-tabs button { flex: 1; min-height: 40px; padding: 8px 4px; border: none; background: transparent; font-size: var(--t-meta); }
 .details-tabs button[aria-selected="true"] { background: var(--raised); color: var(--text); }
 .details-content { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 16px max(16px, env(safe-area-inset-bottom)); }
-.thread-overview dl { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 16px; padding: 8px; font-size: var(--t-meta); }
-.thread-overview dt { color: var(--text-dim); }
-.thread-overview dd { margin: 0; overflow-wrap: anywhere; }
 .thread-details .delegation-panel { width: 100%; max-height: none; box-shadow: none; border: none; padding: 0; background: transparent; }
 .thread-details .delegation-heading { padding: 4px 0 12px; }
 .thread-details .delegation-body { padding: 0; overflow: visible; }

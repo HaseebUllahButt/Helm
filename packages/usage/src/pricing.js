@@ -188,17 +188,6 @@ export function normalizeAntigravityModelName(modelName) {
   return name;
 }
 
-export function antigravityModelCost(modelName, u) {
-  const base = normalizeAntigravityModelName(modelName);
-  const r = ANTIGRAVITY_PRICING[base] || { input: 0.75, cachedInput: 0.1875, output: 3.75 };
-  return {
-    input: ((u.input || 0) * r.input) / 1_000_000,
-    output: ((u.output || 0) * r.output) / 1_000_000,
-    cacheWrite: 0,
-    cacheRead: ((u.cacheRead || 0) * r.cachedInput) / 1_000_000,
-  };
-}
-
 // Antigravity CLI stores response usage in protobuf blobs inside one SQLite
 // database per conversation. These helpers decode only the documented fields
 // needed for usage; message content is never loaded or exposed.
@@ -209,16 +198,6 @@ export function providerOf(modelName) {
   if (/^grok-/.test(modelName)) return 'xAI';
   if (/^gemini-/.test(modelName)) return 'Google';
   return 'Google';
-}
-
-export function blankBreakdown(modelName, provider) {
-  return {
-    modelName,
-    provider,
-    unpriced: false,
-    tokens: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 },
-    cost: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0 },
-  };
 }
 
 // Granular breakdown: real tokens x real published per-category rate for

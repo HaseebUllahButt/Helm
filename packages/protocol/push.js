@@ -1,6 +1,6 @@
 import {
   createHmac, createECDH, randomBytes, createCipheriv,
-  generateKeyPairSync, createPrivateKey, createPublicKey, sign as signRaw,
+  generateKeyPairSync, createPrivateKey, sign as signRaw,
 } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -37,16 +37,6 @@ const unb64 = (s) => Buffer.from(String(s), 'base64url');
 const extract = (salt, ikm) => createHmac('sha256', salt).update(ikm).digest();
 const expand = (prk, info, length) =>
   createHmac('sha256', prk).update(Buffer.concat([info, Buffer.from([1])])).digest().subarray(0, length);
-
-/** A raw P-256 point (0x04||X||Y) as a node key. */
-function publicKeyFrom(raw) {
-  const b = Buffer.from(raw);
-  if (b.length !== 65 || b[0] !== 0x04) throw new Error('not an uncompressed P-256 point');
-  return createPublicKey({
-    key: { kty: 'EC', crv: 'P-256', x: b64url(b.subarray(1, 33)), y: b64url(b.subarray(33, 65)) },
-    format: 'jwk',
-  });
-}
 
 /** A raw P-256 scalar as a node private key; the point is derived from it. */
 function privateKeyFrom(rawPrivate) {

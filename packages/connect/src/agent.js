@@ -62,11 +62,8 @@ const HEARTBEAT_MS = 20_000;
 const WARM_DELAY_MS = 2_000;
 /** The first quiet update check, once startup has settled. */
 const UPDATE_AFTER_START_MS = 20_000;
-/** A gap this long between ticks means the machine slept. */
-const WAKE_TICK_MS = 60_000;
 /** How often machines compare saved versions. */
 const SYNC_EVERY_MS = 2 * 60_000;
-const WAKE_GAP_MS = 5 * 60_000;
 
 /**
  * One connection to one hub.

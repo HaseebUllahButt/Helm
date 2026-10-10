@@ -23,8 +23,6 @@
  * @property {string} [agentName]
  */
 
-export { HerdrRuntime } from './herdr-runtime.js';
-
 /** Pick a runtime. Only one exists today; the seam is the point. */
 export async function createRuntime(kind = process.env.HELM_RUNTIME || 'herdr', opts = {}) {
   if (kind === 'herdr') {
