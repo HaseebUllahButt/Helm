@@ -178,6 +178,7 @@ export const M = {
   SESSION_MODE: 'session.mode',       // { id, mode } -> { session }
   SESSION_MODEL: 'session.model',
   SESSION_EFFORT: 'session.effort',    // { id, effort } -> { session }
+  SESSION_CONTROL: 'session.control', // { id, kind } -> opens the running native CLI's picker
   SESSION_SPEED: 'session.speed',      // { id, speed } -> { session }  codex service tier
   SESSION_INVENTORY: 'session.inventory', // {} -> { live[], recent[] }
   EXEC_START: 'exec.start',       // { id, argv[], cwd?, heavy?, timeout?, env? } -> { id, status }

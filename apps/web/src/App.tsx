@@ -34,7 +34,7 @@ import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brai
 import { brainHost } from '@helm/protocol/brain-host';
 import {
   Client, login, validMachineName, MACHINE_NAME_RULE, LOOPBACK_HOST, isCleartext, CLEARTEXT_NOTE,
-  type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type ModelPrefs,
+  type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type NativeControl, type ModelPrefs,
   type InventorySession, type Device, type Project, type MediaRoot, type MediaEntry,
 } from './client';
 import { money, bytes, busyWord, needsAttention, runningThread, settledThread, unknownThread, listedThread } from './format';
@@ -4467,7 +4467,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const [nativeNotice, setNativeNotice] = useState('');
   useEffect(() => {
     setNativeOptions(null); setNativeCommands([]);
-    if (!session.nativeChat) return;
+    if (!session.nativeCli) return;
     let stale = false;
     const catalog = followModelRefresh(
       () => client.rpc<ModelList>(env.id, 'model.list', { id: session.id, profileId: session.profileId }, 30_000),
@@ -4487,7 +4487,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
       }
     });
     return () => { stale = true; catalog.stop(); off(); };
-  }, [client, env.id, session.id, session.profileId, session.nativeChat, session.engineModel]);
+  }, [client, env.id, session.id, session.profileId, session.nativeCli, session.engineModel]);
 
   const nativeCommand = async (command: string) => {
     if (settingBusy || sending) return;
@@ -4508,7 +4508,10 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
       if (kind === 'mode') { if (r?.session) onSession(r.session); }
       // Writing a command is not confirmation that Claude applied it.
       // Keep the reported setting and let the user inspect native output.
-      else setNativeNotice(`/${kind} ${value}`);
+      else {
+        setNativeNotice(`/${kind} ${value}`);
+        if (!session.nativeChat) setRaw(true);
+      }
     } catch (e: any) { setError(e.message); }
     finally { setSettingBusy(false); }
   };
@@ -4648,10 +4651,20 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     } catch (e: any) { setError(e.message); }
   };
 
-  const nativePrefs = trayPrefs({ client, env: env.id, engine: session.engine, profileId: session.profileId || nativeOptions?.profileId,
+  const nativePrefs = trayPrefs({ client, env: env.id, engine: session.engine, profileId: nativeOptions?.profileId,
     options: nativeOptions, setOptions: setNativeOptions, setError });
+  const openNativeControl = async (kind: NativeControl) => {
+    if (settingBusy || sending || status === 'blocked' || status === 'working' || !env.online) return;
+    setSettingBusy(true); setError('');
+    try {
+      await client.rpc(env.id, 'session.control', { id: session.id, kind }, 70_000);
+      setRaw(true);
+    } catch (e: any) { setError(e.message); }
+    finally { setSettingBusy(false); }
+  };
   const nativeControls = Controls({ options: nativeOptions, session,
-    busy: settingBusy || sending || status === 'blocked' || !env.online, onPick: pickNative, ...nativePrefs });
+    busy: settingBusy || sending || status === 'blocked' || (!session.nativeChat && status === 'working') || !env.online,
+    onPick: pickNative, onNativeControl: openNativeControl, ...nativePrefs });
 
   useEffect(() => {
     if (!session.nativeChat || raw) return;
@@ -4757,19 +4770,19 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
       {session.nativeChat && !raw && nativeNotice && (
         <div className="composer-wrap"><div className="composer-col">
           <div className="banner native-command" role="status">
-            <span>Sent <code>{nativeNotice}</code> to Claude.</span>
+            <span>Sent <code>{nativeNotice}</code> to {eng.label}.</span>
             <button className="ghost" onClick={() => setRaw(true)}>View in terminal</button>
             <button className="iconbtn" aria-label="Dismiss command notice" onClick={() => setNativeNotice('')}><Icon name="close" size={14} /></button>
           </div>
         </div></div>
       )}
-      {!raw && (
+      {(!raw || session.nativeCli) && (
         <Composer
           onTranscribe={onTranscribe}
           draft={draft} setDraft={setDraft} onSend={send} onKey={key}
           keys={!session.nativeChat} preparing={sending || preparingImages || loadingImages || savingImages}
-          commands={session.nativeChat ? nativeCommands : undefined}
-          foot={session.nativeChat ? nativeControls.chips : undefined}
+          commands={session.nativeCli ? nativeCommands : undefined}
+          foot={session.nativeCli ? nativeControls.chips : undefined}
           onAttach={session.nativeChat ? attachImages : undefined} attachments={images}
           onRemoveAttachment={index => setImages(current => current.filter((_, i) => i !== index))}
           canAttach={!!session.nativeChat}
@@ -4781,7 +4794,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           {(error || (!messages && readError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || readError}</div>}
         </Composer>
       )}
-      {raw && error && <div className="error floating" role="alert" onClick={() => setError('')}>{error}</div>}
+      {raw && !session.nativeCli && error && <div className="error floating" role="alert" onClick={() => setError('')}>{error}</div>}
     </>
   );
 }

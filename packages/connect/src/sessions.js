@@ -1,3 +1,5 @@
+import { nativeAccount } from './native-account.js';
+import { nativeCommands, nativeControlCommand, nativeSettingCommand } from './native-controls.js';
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdirSync, readlinkSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { join, basename } from 'node:path';
@@ -678,6 +680,7 @@ export class Sessions extends EventEmitter {
   async commands(id) {
     const s = this.get(id);
     if (s.nativeChat && s.engine === 'claude') return CLAUDE_NATIVE_COMMANDS;
+    if (s.nativeCli) return nativeCommands(s.engine);
     if (!s.driver) return [];
     // Starting a second Claude/ACP process merely to populate a menu can
     // contend with the external CLI we are monitoring. These two reads are
@@ -931,8 +934,9 @@ export class Sessions extends EventEmitter {
       if (s.pty) {
         const alive = this.#terminal(s).has(s.id);
         if (s.nativeCli && alive) {
-          const profile = profiles.find((p) => p.engine === s.engine &&
-            expand(p.env?.[ENGINES[s.engine].homeEnv] || ENGINES[s.engine].defaultHome) === s.nativeHome);
+          let nativeEnv = null;
+          if (s.nativePid) try { nativeEnv = readProcess(s.nativePid).env; } catch { /* exited or unreadable */ }
+          const profile = nativeAccount(s, profiles, { env: nativeEnv });
           const owned = (pid) => !!pid && !!s.nativePid && descendsFrom(pid, s.nativePid);
           const claudeOwners = s.engine === 'claude' && s.nativeHome ? claudeLiveSessions(s.nativeHome) : null;
           // Prefer the terminal's actual process over its previous conversation
@@ -940,7 +944,7 @@ export class Sessions extends EventEmitter {
           const current = detected.find((x) => x.engine === s.engine &&
             (owned(x.writerPid) || claudeOwners?.get(x.id)?.some((owner) => owned(owner.pid))))
             ?? detected.find((x) => x.engine === s.engine && x.id === s.engineSessionId);
-          if (profile) s.profileId = profile.id;
+          s.profileId = profile?.id ?? null;
           if (current) {
             s.engineSessionId = current.id;
             s.transcript = current.transcript;
@@ -2650,6 +2654,32 @@ export class Sessions extends EventEmitter {
     this.setTaskTransfer(id, transfer);
   }
 
+  /** Open the same process's native picker. Byte delivery never claims a setting changed. */
+  async control(id, kind) {
+    const s = this.get(id);
+    if (!s.nativeCli) throw new Error('this session is not a shared CLI');
+    const command = nativeControlCommand(s.engine, kind);
+    return this.#nativeWrite(s, command);
+  }
+
+  async #nativeWrite(s, text, { control = true } = {}) {
+    const id = s.id;
+    const work = (this.#nativeInputs.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      if (!this.nativeTerminals.has(id)) throw new Error('This CLI is no longer running.');
+      if ((control && s.status === 'blocked') || [...this.#hookAsks.values()].some(ask => ask.id === id)) throw new Error('Answer the CLI question first.');
+      if (control && s.status === 'working') throw new Error('Wait until the CLI finishes its turn before changing settings.');
+      if (text != null) {
+        await this.nativeTerminals.write(id, `\x1b[200~${text}\x1b[201~`);
+        await new Promise(resolve => setTimeout(resolve, 60));
+        await this.nativeTerminals.write(id, '\r');
+      }
+      return { ok: true, terminal: true, ...(text != null ? { command: text } : {}) };
+    });
+    this.#nativeInputs.set(id, work);
+    try { return await work; }
+    finally { if (this.#nativeInputs.get(id) === work) this.#nativeInputs.delete(id); }
+  }
+
   async setMode(id, mode) {
     if (mode === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
     const s = this.get(id);
@@ -2760,6 +2790,7 @@ export class Sessions extends EventEmitter {
       if (!['low', 'medium', 'high', 'xhigh', 'max', 'ultracode', 'auto'].includes(level)) throw new Error('invalid Claude thinking effort');
       return this.input(id, `/effort ${level}`);
     }
+    if (s.nativeCli) return this.#nativeWrite(s, nativeSettingCommand(s.engine, 'effort', effort));
     if (!s.driver) throw new Error('not a headless session');
     const value = effort === 'auto' ? null : effort || null;
     const d = this.#drivers.get(id);
@@ -2812,6 +2843,7 @@ export class Sessions extends EventEmitter {
       // is not acknowledgment, so never persist it as the active setting.
       return this.input(id, `/model ${value}`);
     }
+    if (s.nativeCli) return this.#nativeWrite(s, nativeSettingCommand(s.engine, 'model', model));
     if (!s.driver) throw new Error('not a headless session');
     const value = model || null;
     const d = this.#drivers.get(id);
@@ -3126,6 +3158,12 @@ export class Sessions extends EventEmitter {
       this.#nativeInputs.set(id, send);
       try { return await send; }
       finally { if (this.#nativeInputs.get(id) === send) this.#nativeInputs.delete(id); }
+    }
+    if (s.nativeCli && !raw) {
+      if (attachments.length) throw new Error('Attach files in the native CLI.');
+      const body = text.replace(/\r\n?/g, '\n').trim();
+      if (!body) return { ok: true };
+      return this.#nativeWrite(s, body, { control: false });
     }
     if (source !== 'user' && s.stoppedAt) throw new Error('the thread was stopped');
     if (delivery === 'steer' && ['working', 'blocked'].includes(s.status)

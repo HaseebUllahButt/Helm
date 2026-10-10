@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Client, Mode, ModelList, Session } from '../client';
+import type { Client, Mode, ModelList, Session, NativeControl } from '../client';
 import { Icon, type IconName } from '../Icon';
 
 /** One thing you can change while the agent is running. */
@@ -22,8 +22,9 @@ export interface Choice {
  * The sheet docks in the same slot a permission prompt uses, because that is
  * where your eyes already are.
  */
-export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs, onDefault }: {
+export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs, onDefault, onNativeControl }: {
   options: ModelList | null;
+  onNativeControl?: (kind: NativeControl) => void;
   session: Session;
   busy?: boolean;
   onPick: (kind: Kind, id: string) => void;
@@ -57,6 +58,13 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
             <span className="chip-label">{g.currentLabel}</span>
           </button>
         ))}
+        {(options?.nativeControls ?? []).map(kind => {
+          const title = kind === 'effort' ? 'thinking' : kind === 'mode' ? 'permissions' : kind;
+          const glyph: IconName = kind === 'model' ? 'model' : kind === 'effort' ? 'effort' : kind === 'mode' ? 'shield' : kind === 'speed' ? 'bolt' : 'terminal';
+          return <button key={`native:${kind}`} className="chip-pick" disabled={busy}
+            title={`Open ${title} in the CLI`} aria-label={`${title}: open CLI picker`}
+            onClick={() => onNativeControl?.(kind)}><i className={`cg ${kind}`}><Icon name={glyph} size={13} /></i><span className="chip-label">{title}</span></button>;
+        })}
       </span>
     ),
     sheet: group ? (
@@ -210,7 +218,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     // A terminal Claude's mode is whatever it last said; until it says,
     // the chip does not guess.
     const current = modes.find((m: Mode) => m.id === session.mode)
-      ?? (session.nativeChat ? undefined
+      ?? (session.nativeCli || session.nativeChat ? undefined
         : modes.find((m) => m.id === options.defaultMode)
           ?? modes.find((m) => m.short === 'yolo') ?? modes[0]);
     out.push({

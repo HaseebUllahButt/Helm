@@ -15,7 +15,8 @@ import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
 import { listModels, mergeLiveModelCatalog } from './models.js';
-import { nativeClaudeAccount } from './native-account.js';
+import { nativeControls, nativeModelChoices, nativeEffortChoices } from './native-controls.js';
+import { nativeClaudeAccount, nativeAccount } from './native-account.js';
 import { readProcess } from './takeover.js';
 import { usableProfiles, authStatuses } from './auth.js';
 import { listCommands } from './commands.js';
@@ -1496,6 +1497,24 @@ export class Daemon {
       case M.MODEL_LIST: {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
         const native = p.id ? this.sessions.get(p.id) : null;
+        if (native?.nativeCli && !(native.nativeChat && native.engine === 'claude')) {
+          let nativeEnv = null;
+          if (native.nativePid) try { nativeEnv = readProcess(native.nativePid).env; } catch { /* exited */ }
+          const account = nativeAccount(native, await getProfiles(), { env: nativeEnv });
+          const engine = ENGINES[native.engine];
+          const home = native.nativeHome ?? engine?.defaultHome;
+          const hasModels = nativeModelChoices(native.engine);
+          const catalog = hasModels ? await listModels(native.engine, home, nativeEnv ?? {}) : { models: [] };
+          const prefs = account ? modelPrefs(account) : null;
+          const filtered = applyModelPrefs(catalog, prefs, { all: !!p.all });
+          const hasEffort = nativeEffortChoices(native.engine) && !!(catalog.efforts?.length || Object.keys(catalog.effortsByModel ?? {}).length);
+          return { ...filtered, default: null, effort: null, defaultMode: null, modes: [], speeds: [], speedByModel: {},
+            ...(!hasEffort ? { efforts: [], effortsByModel: {} } : {}),
+            nativeControls: nativeControls(native.engine).filter(kind =>
+              !(kind === 'model' && (filtered.models?.length || filtered.more?.length)) && !(kind === 'effort' && hasEffort)),
+            favs: pickerPrefs().favs[native.engine] ?? [], effortFavs: pickerPrefs().favs[`${native.engine}-effort`] ?? [],
+            ...(account ? { prefs, defaults: startPrefs(account), account: accountKey(account), profileId: account.id } : { defaults: {} }) };
+        }
         if (native?.nativeChat && native.engine === 'claude') {
           const home = native.nativeHome ?? profile?.env?.CLAUDE_CONFIG_DIR ?? ENGINES.claude.defaultHome;
           const catalog = await listModels('claude', home);
@@ -1634,6 +1653,7 @@ export class Daemon {
         if (method === M.SCHEDULE_DELETE) return this.schedules.remove(p.id);
         return this.schedules.run(p.id);
       case M.SESSION_NOTIFY:   return this.sessions.setNotifyDone(p.id, p.on !== false);
+      case M.SESSION_CONTROL: return this.sessions.control(p.id, p.kind);
       case M.SESSION_MODE:    return this.sessions.setMode(p.id, p.mode);
       case M.SESSION_MODEL:   return this.sessions.setModel(p.id, p.model);
       case M.SESSION_EFFORT:  return this.sessions.setEffort(p.id, p.effort);
@@ -1673,7 +1693,7 @@ export class Daemon {
             cwd: s2.cwd,
             home: s2.nativeHome ?? profile?.env?.[engine?.homeEnv] ?? engine?.defaultHome,
             available,
-            native: !!s2.nativeChat,
+            native: !!s2.nativeCli || !!s2.nativeChat,
           }),
         };
       }

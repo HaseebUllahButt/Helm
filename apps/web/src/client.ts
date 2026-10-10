@@ -172,7 +172,11 @@ export interface InventorySession {
 
 /** A permission mode an engine offers, in words; the daemon knows the flags. */
 export interface Mode { id: string; label: string; short?: string; hint?: string; danger?: boolean }
+export type NativeControl = 'model' | 'effort' | 'mode' | 'speed' | 'settings';
+
 export interface ModelList {
+  /** Controls provided by the running terminal CLI's own dialogs. */
+  nativeControls?: NativeControl[];
   default: string | null;
   models: string[];
   /** Public catalog is still arriving; fetch again after showing this answer. */
