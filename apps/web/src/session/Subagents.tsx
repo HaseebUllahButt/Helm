@@ -15,9 +15,9 @@ const ACTIVE = ['blocked', 'working', 'starting'];
 const stateOf = (task: Session) => task.delegation?.status || task.status;
 
 /** Account → model → task, then a live branch list beside the parent thread. */
-export function Subagents({ client, env, parent, onClose, onOpen, embedded = false }: {
+export function Subagents({ client, env, parent, onClose, onOpen, embedded = false, reviewAttention = false }: {
   client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (session: Session) => void;
-  embedded?: boolean;
+  embedded?: boolean; reviewAttention?: boolean;
 }) {
   const [agents, setAgents] = useState<CliAgent[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -72,6 +72,13 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
         if (!firstList.current) {
           firstList.current = true;
           if (!listing.sessions.some(belongsHere)) setComposing(true);
+          if (reviewAttention) {
+            const tasks = listing.sessions.filter(belongsHere);
+            const attention = tasks.find((task) => stateOf(task) === 'blocked')
+              ?? tasks.find((task) => stateOf(task) === 'error')
+              ?? tasks.find((task) => task.team?.blocked || task.team?.failed);
+            if (attention) { select(attention.id); setFocus(attention.id); }
+          }
         }
         setListed(true);
       })

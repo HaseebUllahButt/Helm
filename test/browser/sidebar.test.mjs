@@ -719,3 +719,95 @@ test('a working brain says so in the sidebar, where its machine count already in
   assert.equal(await sidebar.locator('.row.machine').filter({ hasText: 'VM' }).locator('.rm').textContent(), '1 running');
   assert.equal(await sidebar.locator('.thread-row').count(), 0, 'the brain keeps its own place, not a second row');
 });
+
+for (const width of [1280, 390]) for (const childState of ['error', 'blocked']) test(`child attention cards reach ${childState} task details at ${width}px`, async t => {
+  const { page, boot } = await pageFor(t, { width, height: 1000 });
+  await boot();
+  await page.evaluate(childState => {
+    const base = { cwd: '/project/game', engine: 'claude', profileId: 'claude', driver: 'claude', alive: true, updatedAt: Date.now(), turns: 1, hasInput: true };
+    const parent = { ...base, id: 'parent-alert', title: 'Game task', status: 'working', team: { working: 0, blocked: childState === 'blocked' ? 1 : 0, failed: childState === 'error' ? 1 : 0 } };
+    const failed = { ...base, id: 'failed-child', title: 'Fix scenery', status: 'idle', delegation: { parentId: parent.id, status: childState, task: 'Fix scenery', summary: 'Provider request failed' } };
+    const own = { ...base, id: 'own-request', title: 'Own permission', status: 'blocked', pending: 1, team: { failed: 1 }, ask: { kind: 'question', text: 'Proceed?' } };
+    const all = [parent, failed, own];
+    const client = window.makeClient([{ id: 'remote', name: 'VM', online: true, info: {} }], { remote: [parent, own] });
+    const rpc = client.rpc;
+    client.rpc = (env, method, params = {}) => {
+      if (method === 'session.list' && (params.parentId || params.includeDelegations)) return Promise.resolve({ sessions: all });
+      if (method === 'session.events') return Promise.resolve({ events: [], pending: [], last: 0, session: all.find(s => s.id === params.id) });
+      if (method === 'session.delegation-result') return Promise.resolve({ id: failed.id, status: childState, complete: childState === 'error', error: 'Provider request failed' });
+      if (method === 'agent.list') return Promise.resolve({ agents: [] });
+      if (method === 'model.list') return Promise.resolve({ models: [], modes: [] });
+      return rpc(env, method, params);
+    };
+    window.mount(client);
+  }, childState);
+  const card = page.locator('.sidebar .need').filter({ hasText: 'Game task' });
+  await card.getByRole('button', { name: 'Snooze…' }).click();
+  await card.getByRole('button', { name: '5 mins' }).waitFor();
+  assert.equal(await page.getByRole('dialog', { name: 'Thread details', exact: true }).count(), 0);
+  await card.getByRole('button', { name: 'cancel', exact: true }).click();
+  await card.locator('.need-go').click();
+  const details = page.getByRole('dialog', { name: 'Thread details', exact: true });
+  await details.getByRole('tab', { name: 'Agents', selected: true }).waitFor();
+  await details.locator('.delegation-branch.selected').getByText('Provider request failed', { exact: true }).waitFor();
+  await details.getByRole('button', { name: 'Close thread details' }).click();
+  if (width < 500) await page.locator('.session-bar').getByRole('button', { name: 'Back', exact: true }).click();
+  await card.locator('.need-main').click();
+  await details.locator('.delegation-branch.selected').waitFor();
+  await details.getByRole('button', { name: 'Open conversation' }).click();
+  await page.locator('.session-bar').getByText('Fix scenery', { exact: true }).waitFor();
+  assert.equal(await details.count(), 0);
+  await page.locator('.session-bar').getByRole('button', { name: 'Back to parent thread', exact: true }).click();
+  await page.locator('.session-bar').getByText('Game task', { exact: true }).waitFor();
+});
+
+test('snooze offers short delays and Never survives refresh until the chat is opened', async t => {
+  const { page, boot } = await pageFor(t, { width: 390, height: 1000 });
+  await boot();
+  const mount = () => page.evaluate(() => {
+    const session = { id: 'snooze-chat', title: 'Quiet chat', cwd: '/project', engine: 'codex', profileId: 'codex', driver: 'codex', status: 'blocked', alive: true, pending: 1, updatedAt: Date.now() };
+    window.mount(window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [session] }));
+  });
+  await mount();
+  const card = page.locator('.sidebar .need');
+  await card.getByRole('button', { name: 'Snooze…' }).click();
+  assert.deepEqual(await card.locator('.snooze-opts button').allTextContents(), ['5 mins', '1 hr', '3 hrs', 'Never', '']);
+  assert.equal(await card.locator('input').count(), 0);
+  const before = Date.now();
+  await card.getByRole('button', { name: '5 mins', exact: true }).click();
+  const until = await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:snooze-chat']);
+  assert.ok(until >= before + 299000 && until <= Date.now() + 300000);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await card.getByRole('button', { name: 'Snooze…' }).click();
+  await card.getByRole('button', { name: 'Never', exact: true }).click();
+  await card.waitFor({ state: 'detached' });
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:snooze-chat']), Number.MAX_SAFE_INTEGER);
+  await page.reload(); await boot(); await mount();
+  await page.locator('.sidebar').getByRole('button', { name: 'snoozed 1', exact: true }).click();
+  await page.locator('.sidebar').getByText('Snoozed · Never', { exact: true }).waitFor();
+  await page.locator('.sidebar').getByText('Quiet chat', { exact: true }).click();
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:snooze-chat']), undefined);
+});
+
+for (const status of ['working', 'idle']) test(`snoozing a child's alert restores a ${status} parent's ongoing work`, async t => {
+  const { page, boot } = await pageFor(t, { width: 1280, height: 1000 });
+  await page.clock.install();
+  await boot();
+  await page.evaluate(status => {
+    const parent = { id: 'working-parent', title: 'Continue game', cwd: '/project', engine: 'claude', driver: 'claude', profileId: 'claude', status, alive: true, turns: 1, updatedAt: Date.now(), team: { working: status === 'idle' ? 1 : 0, blocked: 1, failed: 0 } };
+    window.mount(window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [parent] }));
+  }, status);
+  const sidebar = page.locator('.sidebar');
+  const card = sidebar.locator('.need');
+  await card.getByRole('button', { name: 'Snooze…' }).click();
+  await card.getByRole('button', { name: '5 mins', exact: true }).click();
+  await card.waitFor({ state: 'detached' });
+  await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).locator('.chip.working').waitFor();
+  assert.equal(await sidebar.getByRole('button', { name: 'snoozed 1', exact: true }).count(), 0);
+  assert.ok(!/waiting/.test(await page.title()));
+  await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).click();
+  assert.ok(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:working-parent'] > Date.now()), 'opening the working parent keeps the snooze');
+  await page.clock.fastForward(331000);
+  await card.waitFor();
+  assert.equal(await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).count(), 0);
+});

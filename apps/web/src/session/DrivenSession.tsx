@@ -43,8 +43,10 @@ type Attachment = { name: string; mime: string; data: string; url: string };
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
-export function DrivenSession({ client, env, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onOpenMachineSession }: {
+export function DrivenSession({ client, env, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onOpenMachineSession, reviewChildren }: {
   client: Client; env: Environment; session: Session;
+  /** A new attention-card visit opens the child task details, even in the current chat. */
+  reviewChildren?: number;
   /** The socket's own health, so a dropped connection shows where it matters. */
   conn?: { online: boolean; reachable: boolean };
   onBack: () => void; onClosed: () => void; onArchived: () => void; onSession: (s: Session) => void;
@@ -80,7 +82,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const [sendingImages, setSendingImages] = useState(false);
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
-  const [details, setDetails] = useState<DetailsTab | null>(null);
+  const [details, setDetails] = useState<DetailsTab | null>(reviewChildren ? 'agents' : null);
+  useEffect(() => { if (reviewChildren) setDetails('agents'); }, [reviewChildren]);
   const [editingQueue, setEditingQueue] = useState<Turn | null>(null);
   const [references, setReferencesRaw] = useState<{ id: string; title: string }[]>([]);
   const setReferences = useCallback((next: SetStateAction<{ id: string; title: string }[]>) => {
@@ -643,7 +646,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         </div>}
       </Composer>
 
-      {details && <ThreadDetails client={client} env={env} session={session} tab={details} onTab={setDetails} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
+      {details && <ThreadDetails reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} onTab={setDetails} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined} />}
       {editingQueue && <QueueEdit turn={editingQueue} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSave={async (text, attachments) => {
         if (await queueAction(editingQueue, 'session.queue-edit', { text, attachments })) setEditingQueue(null);

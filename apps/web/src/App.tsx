@@ -323,7 +323,7 @@ type MainView =
   | { kind: 'app-settings' }
   // The media a nas shares, browsed and played - only ever offered on one.
   | { kind: 'media' }
-  | { kind: 'session'; session: Session };
+  | { kind: 'session'; session: Session; reviewChildren?: number };
 
 /** A request answered elsewhere, or a session that just started waiting -
     the toast the sidebar cannot show while it is hidden behind a session. */
@@ -429,6 +429,7 @@ function Shell({ client, conn, onSignOut }: {
     });
   };
   const snoozedNow = (envId: string, id: string) => (snoozed[`${envId}:${id}`] ?? 0) > tick;
+  const attentionOn = (envId: string, s: Session) => needsAttention(s) && !snoozedNow(envId, s.id);
   useEffect(() => {
     if (!snoozeUndo) return;
     const timer = setTimeout(() => setSnoozeUndo(null), 7000);
@@ -802,7 +803,7 @@ function Shell({ client, conn, onSignOut }: {
       for (const s of [...liveThreads, ...snapshotThreads]) {
         items.push({
           id: `t:${e.id}:${s.id}`, group: 'thread', title: s.title, engine: s.engine, at: s.updatedAt,
-          sub: `${dirName(s.cwd)} · ${e.name}${needsAttention(s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
+          sub: `${dirName(s.cwd)} · ${e.name}${attentionOn(e.id, s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
           keywords: `${s.cwd} ${engineOf(s.engine).label}`,
           run: () => openSession(e.id, s),
         });
@@ -942,7 +943,7 @@ function Shell({ client, conn, onSignOut }: {
    * session's name matters outside the app itself.
    */
   const blockedCount = envs.reduce((n, e) =>
-    n + (sessions[e.id] ?? []).filter((s) => listedThread(s) && s.engine !== 'shell' && !s.archived && needsAttention(s)).length, 0);
+    n + (sessions[e.id] ?? []).filter((s) => listedThread(s) && s.engine !== 'shell' && !s.archived && attentionOn(e.id, s)).length, 0);
   useEffect(() => {
     const parts: string[] = [];
     if (view?.kind === 'session') parts.push(view.session.title);
@@ -987,10 +988,10 @@ function Shell({ client, conn, onSignOut }: {
     if (id === nav.current.selected && nav.current.stack.length === 1) return;
     navigate([{ kind: 'env' }], id);
   };
-  const openSession = (envId: string, s: Session) => {
+  const attentionVisit = useRef(0);
+  const openSession = (envId: string, s: Session, reviewChildren = false) => {
     if (s.id.startsWith('found:')) { void resumeFound(envId, s); return; }
-    if (snoozed[`${envId}:${s.id}`]) setSnooze(`${envId}:${s.id}`, null);
-    navigate([{ kind: 'env' }, { kind: 'session', session: s }], envId);
+    navigate([{ kind: 'env' }, { kind: 'session', session: s, reviewChildren: reviewChildren ? ++attentionVisit.current : undefined }], envId);
   };
   // A session that changed under an open view: refresh the machine's list and
   // fold the new record into the stack, so the title in the bar and the title
@@ -999,7 +1000,7 @@ function Shell({ client, conn, onSignOut }: {
     recordSession(envId, s);
     loadSessions(envId);
     restate(nav.current.stack.map((v) => (
-      v.kind === 'session' && v.session.id === s.id ? { kind: 'session', session: { ...v.session, ...s, recovery: s.recovery } } : v)));
+      v.kind === 'session' && v.session.id === s.id ? { ...v, session: { ...v.session, ...s, recovery: s.recovery } } : v)));
   };
   const push = (v: MainView) => navigate([...nav.current.stack, v]);
   const back = () => {
@@ -1037,8 +1038,8 @@ function Shell({ client, conn, onSignOut }: {
 
   const agentsOf = (id: string) => (sessions[id] ?? []).filter((s) => listedThread(s) && s.engine !== 'shell' && !s.archived);
   const workingThreadsOn = (machine: Environment) =>
-    machine.online ? agentsOf(machine.id).filter((thread) => !needsAttention(thread) && runningThread(thread)) : [];
-  const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(needsAttention).length;
+    machine.online ? agentsOf(machine.id).filter((thread) => !attentionOn(machine.id, thread) && runningThread(thread)) : [];
+  const waitingCountOn = (machine: Environment) => agentsOf(machine.id).filter(s => attentionOn(machine.id, s)).length;
   /** "3 running · 1 status unavailable": a thread the machine cannot read is not idle. */
   const activityOn = (machine: Environment, nothing: string) => {
     const working = workingThreadsOn(machine).length;
@@ -1159,7 +1160,7 @@ function Shell({ client, conn, onSignOut }: {
   // running. A brain has its own place under "brains".
   const everyone = envs.flatMap((e) => agentsOf(e.id).filter((s) => !s.brain).map((s) => ({ env: e, s })));
   const byNewest = (a: { s: Session }, b: { s: Session }) => (b.s.updatedAt ?? 0) - (a.s.updatedAt ?? 0);
-  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !needsAttention(thread) && runningThread(thread)).sort(byNewest);
+  const runningNow = everyone.filter(({ env: machine, s: thread }) => machine.online && !attentionOn(machine.id, thread) && runningThread(thread)).sort(byNewest);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Tab' || !event.ctrlKey || event.metaKey || event.altKey || event.isComposing
@@ -1278,7 +1279,7 @@ function Shell({ client, conn, onSignOut }: {
                     </span>
                     {brainOpening ? <span className="chip working"><i />opening</span>
                       // The brain is counted in its machine's "running", so it says so here.
-                      : s && brainEnv.online && !needsAttention(s) && runningThread(s) ? <StatusChip status={busyWord(s.status)} at={s.updatedAt} />
+                      : s && brainEnv.online && !attentionOn(brainEnv.id, s) && runningThread(s) ? <StatusChip status={busyWord(s.status)} at={s.updatedAt} />
                       : <span className="chev"><Icon name="forward" size={15} /></span>}
                   </button>;
                 })() : <button className="row tall" disabled>
@@ -1289,18 +1290,18 @@ function Shell({ client, conn, onSignOut }: {
 
             {blocked.map(({ env: e, s }) => (
               <NeedCard
-                key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)}
+                key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
                 onSnooze={(until) => snoozeThread(e.id, s, until)}
               />
             ))}
 
-            {asleep.length > 0 && (
-              <Fold title="snoozed" count={asleep.length} remember="sidebar:snoozed">
+            {asleep.some(({ s }) => !runningThread(s)) && (
+              <Fold title="snoozed" count={asleep.filter(({ s }) => !runningThread(s)).length} remember="sidebar:snoozed">
                 <div className="rows plain">
-                  {asleep.map(({ env: e, s }) => (
+                  {asleep.filter(({ s }) => !runningThread(s)).map(({ env: e, s }) => (
                     <HomeRow
-                      key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s)}
-                      note={`back ${when(snoozed[`${e.id}:${s.id}`])}`}
+                      key={s.id} s={s} machine={e.name} onOpen={() => { setSnooze(`${e.id}:${s.id}`, null); openSession(e.id, s); }}
+                      note={snoozed[`${e.id}:${s.id}`] === NEVER_SNOOZE ? 'Snoozed · Never' : `back ${when(snoozed[`${e.id}:${s.id}`])}`}
                     />
                   ))}
                 </div>
@@ -1454,6 +1455,7 @@ function Shell({ client, conn, onSignOut }: {
             key={env.id}
             client={client} env={env} wide={wide} onBack={back}
             sessions={(sessions[env.id] ?? []).filter(listedThread)} reload={reloadEnv}
+            isSnoozed={(s) => snoozedNow(env.id, s.id)}
             remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions.filter((s) => listedThread(s)
               && !(sessions[env.id] ?? []).some(known => known.id === s.id))}
             rememberedAt={env.online ? undefined : snap?.machines?.[env.id]?.at}
@@ -1534,7 +1536,7 @@ function Shell({ client, conn, onSignOut }: {
         ) : (view.session.driver || (sessions[env.id] ?? []).find((s) => s.id === view.session.id)?.driver) ? (
           <DrivenSession
             key={`${env.id}:${view.session.id}`}
-            client={client} env={env} conn={conn} onTranscribe={transcribeVia(env.id)}
+            client={client} env={env} conn={conn} onTranscribe={transcribeVia(env.id)} reviewChildren={view.reviewChildren}
             onSendTask={() => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
@@ -1583,7 +1585,7 @@ function Shell({ client, conn, onSignOut }: {
 
       {snoozeUndo && (
         <div className="undo" role="status">
-          <span className="undo-text">Snoozed <b>{snoozeUndo.title}</b> until {when(snoozeUndo.until)}</span>
+          <span className="undo-text">Snoozed <b>{snoozeUndo.title}</b> {snoozeUndo.until === NEVER_SNOOZE ? 'indefinitely' : `until ${when(snoozeUndo.until)}`}</span>
           <button onClick={() => { setSnooze(snoozeUndo.key, null); setSnoozeUndo(null); }}>Undo</button>
         </div>
       )}
@@ -2317,8 +2319,9 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   );
 }
 
-function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming }: {
+function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming, isSnoozed = () => false }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[];
+  isSnoozed?: (session: Session) => boolean;
   /** What this machine last said it was running, while it cannot be asked. */
   remembered?: Session[]; rememberedAt?: number;
   reload: () => void; onBack: () => void; onNewSession: () => void; onAddProject: () => void;
@@ -2448,13 +2451,14 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
 
   const live = (s: Session) => s.engine !== 'shell' && !s.archived && hit(s);
   const mine = rows.filter(live);
-  const blocked = mine.filter(needsAttention).sort(byRecent);
+  const attention = (s: Session) => needsAttention(s) && !isSnoozed(s);
+  const blocked = mine.filter(attention).sort(byRecent);
   // An offline machine cannot say what is running now. Its last word stays
   // in the lists below, marked as old, never under "working": the sidebar
   // keeps it out of Running for the same reason.
-  const working = env.online ? mine.filter((s) => !needsAttention(s) && runningThread(s)).sort(byRecent) : [];
+  const working = env.online ? mine.filter((s) => !attention(s) && runningThread(s)).sort(byRecent) : [];
   const workingIds = new Set(working.map((s) => s.id));
-  const rest = mine.filter((s) => !needsAttention(s) && !workingIds.has(s.id));
+  const rest = mine.filter((s) => !attention(s) && !workingIds.has(s.id));
   const recent = rest.filter((s) => !botThread(s)).sort(byRecent).slice(0, 3);
   const recentIds = new Set(recent.map((s) => s.id));
 
@@ -2588,7 +2592,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
     />
   ) : (
     <SessionRow
-      key={s.id} s={s} onOpen={() => onOpen(s)} offline={!env.online}
+      key={s.id} s={s} onOpen={() => onOpen(s)} offline={!env.online} attentionSuppressed={isSnoozed(s)}
       selecting={selecting} marked={marked.has(s.id)} onToggle={() => toggle(s.id)}
       onRename={(t) => setTitle(s, t)}
       onArchive={() => setArchived(s, !s.archived)}
@@ -2802,7 +2806,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
                         {s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
                       </span>
                     </span>
-                    {runningThread(s) && !needsAttention(s)
+                    {runningThread(s) && !attention(s)
                       ? <span className="chip exited">was {busyWord(s.status)}</span>
                       : <StatusChip status={s.status} at={s.updatedAt} />}
                   </div>
@@ -2969,7 +2973,8 @@ function ProjectActions({ title, online, onStart, onSend, onCheck, onRename, onR
  * only from inside it. An agent helm did not start is left alone - helm
  * does not own that process and has no business ending it.
  */
-function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting = false, marked = false, onToggle, offline = false }: {
+function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting = false, marked = false, onToggle, offline = false, attentionSuppressed = false }: {
+  attentionSuppressed?: boolean;
   s: Session; onOpen?: () => void; onRename?: (title: string) => void;
   /** The machine is not answering: a busy status is its last word, not now. */
   offline?: boolean;
@@ -3014,8 +3019,8 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
           </span>
           {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
           {busy ? <span className="chip working"><i />opening</span>
-            : offline && runningThread(s) && !needsAttention(s) ? <span className="chip exited">was {busyWord(s.status)}</span>
-            : <StatusChip status={runningThread(s) && !needsAttention(s) ? busyWord(s.status) : s.status} at={s.updatedAt} />}
+            : offline && runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? <span className="chip exited">was {busyWord(s.status)}</span>
+            : <StatusChip status={runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? busyWord(s.status) : s.status} at={s.updatedAt} />}
         </Main>
         {!selecting && managed && (
           <>
@@ -3080,23 +3085,23 @@ const dirName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
  * screen to be read before Allow is tapped.
  */
 /** "3:40 pm", "tomorrow 9:00 am", "Mon 9:00 am" - when a snooze ends, in words. */
+const NEVER_SNOOZE = Number.MAX_SAFE_INTEGER;
 const when = (ts: number) => {
+  if (ts === NEVER_SNOOZE) return 'Never';
   const d = new Date(ts);
   const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const days = Math.round((new Date(d.toDateString()).getTime() - new Date(new Date().toDateString()).getTime()) / 86_400_000);
   return days <= 0 ? time : days === 1 ? `tomorrow ${time}` : `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
 };
 
-/** Later today, tomorrow morning, next week: the ways a thread usually gets put off. */
+/** Short delays, or keep this thread quiet until it is opened again. */
 function snoozeChoices(): { label: string; at: number }[] {
-  const now = new Date();
-  const at = (days: number, hour: number) => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(hour, 0, 0, 0); return d.getTime(); };
-  const dow = now.getDay();
+  const now = Date.now();
   return [
-    { label: '1 hour', at: Date.now() + 3_600_000 },
-    { label: '3 hours', at: Date.now() + 3 * 3_600_000 },
-    { label: 'Tomorrow, 9 am', at: at(1, 9) },
-    { label: 'Next week', at: at(((8 - dow) % 7) || 7, 9) },
+    { label: '5 mins', at: now + 5 * 60_000 },
+    { label: '1 hr', at: now + 3_600_000 },
+    { label: '3 hrs', at: now + 3 * 3_600_000 },
+    { label: 'Never', at: NEVER_SNOOZE },
   ];
 }
 
@@ -3107,7 +3112,6 @@ const NEED_GO: Record<string, string> = {
 function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: string; onOpen: () => void; onSnooze: (until: number) => void }) {
   const now = useNow();
   const [choosing, setChoosing] = useState(false);
-  const [custom, setCustom] = useState('');
   const eng = engineOf(s.engine);
   const n = s.pending ?? 0;
   const ask = s.status === 'blocked' ? s.ask : null;
@@ -3137,14 +3141,6 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
             {snoozeChoices().map((c) => (
               <button key={c.label} onClick={() => onSnooze(c.at)}>{c.label}</button>
             ))}
-            <span className="snooze-custom">
-              <input
-                type="datetime-local" value={custom} aria-label="snooze until"
-                min={new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16)}
-                onChange={(e) => setCustom(e.target.value)}
-              />
-              <button disabled={!custom || new Date(custom).getTime() <= Date.now()} onClick={() => onSnooze(new Date(custom).getTime())}>Set</button>
-            </span>
             <button className="snooze-x" onClick={() => setChoosing(false)} aria-label="cancel"><Icon name="close" size={14} /></button>
           </div>
         )}
