@@ -51,6 +51,27 @@ function resultText(content) {
   return '';
 }
 
+/**
+ * Claude's record of a command it ran itself (/model, /cost, a model change
+ * made from the picker): a caveat, the command, and what it printed - each
+ * replayed as a user message in Claude's own markup. None of them is
+ * something the owner wrote.
+ */
+export function localCommandRecord(text) {
+  const s = String(text ?? '').trim();
+  if (s.startsWith('<local-command-caveat>')) return { kind: 'note' };
+  const name = s.match(/^<command-name>\s*([^<]*?)\s*<\/command-name>/);
+  if (name) {
+    const args = s.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1].trim();
+    return { kind: 'command', text: args ? `${name[1]} ${args}` : name[1] };
+  }
+  const out = [...s.matchAll(/<local-command-(?:stdout|stderr)>([\s\S]*?)<\/local-command-(?:stdout|stderr)>/g)];
+  if (out.length && /^<local-command-(?:stdout|stderr)>/.test(s)) {
+    return { kind: 'output', text: stripAnsi(out.map((m) => m[1]).join('\n')).trim() };
+  }
+  return null;
+}
+
 export class ClaudeDriver extends Driver {
   /** helm's brief rides in the system prompt, not the first message. */
   static takesInstructions = true;
@@ -547,6 +568,17 @@ export class ClaudeDriver extends Driver {
     }
   }
 
+  /** An answer complete on arrival, beside whatever else is going on. */
+  #commandCard(id, body) {
+    const turnId = `command-${id}`;
+    const itemId = `command-result-${id}`;
+    this.push('turn.start', { turnId, text: '', local: true });
+    this.push('item.start', { id: itemId, turnId, kind: 'text' });
+    this.push('item.delta', { id: itemId, text: body });
+    this.push('item.done', { id: itemId, status: 'ok' });
+    this.push('turn.done', { turnId, status: 'ok' });
+  }
+
   #wake(m) {
     this.#turnId = `wake-${m.uuid ?? randomUUID()}`;
     this.#inTurn = true;
@@ -560,7 +592,17 @@ export class ClaudeDriver extends Driver {
     if (m.isReplay) {
       // A subagent's own prompt is not one of the owner's messages.
       if (m.parent_tool_use_id) return;
-      const text = resultText(m.message?.content);
+      let text = resultText(m.message?.content);
+      const record = localCommandRecord(text);
+      if (record?.kind === 'note') return;
+      if (record?.kind === 'output') {
+        // What the command printed. Mid-turn it is noise; between turns it
+        // is a quiet answer card, never a message and never a turn the next
+        // real message gets folded into.
+        if (!this.#inTurn && record.text) this.#commandCard(m.uuid ?? randomUUID(), record.text);
+        return;
+      }
+      if (record?.kind === 'command') text = record.text;
       const input = this.#inputs.get(m.uuid);
       if (input) this.#inputs.delete(m.uuid);
       // A message written while a turn runs is read at the end of the step

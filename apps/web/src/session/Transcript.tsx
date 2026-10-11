@@ -447,6 +447,9 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   // A prompt that is itself a command means the turn's text is that
   // command's answer - styled as a quiet result panel rather than prose.
   const commandOutput = /^\/\S+/.test((said.text ?? '').trim());
+  // An answer with no question - what a command printed, like "Set model
+  // to opus" - is a quiet line of text, never a message from the owner.
+  const note = turn.local && !turn.text && !turn.attachments?.length;
   const d = turn.done;
   // New daemons say it outright: `queued` is set on the optimistic turn,
   // false included, so a first send into an idle session never flashes as
@@ -471,7 +474,8 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   });
   return (
     <>
-      {head && !!(turn.text || turn.attachments?.length) && (
+      {head && display.printed && !!said.text && <div className="turn assistant command-note"><Markdown text={said.text} className="prose" /></div>}
+      {head && !display.printed && !!(turn.text || turn.attachments?.length) && (
         <div className={`turn user${queued ? ' queued' : ''}`}><div className="bubble">
           {said.note && (said.note.length > 160
             // The delegation brief is a paragraph of instructions to the
@@ -500,7 +504,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           </span>
         </div></div>
       )}
-      <div className="turn assistant">
+      <div className={`turn assistant${note ? ' command-note' : ''}`}>
         {(() => {
           // Everything between two things the agent said folds into one line:
           // tool calls, commands and their output, edits, helpers. Keyed by

@@ -1866,7 +1866,8 @@ export class Sessions extends EventEmitter {
     }
     if (e.type === 'item.done') this.#steps.get(s.id)?.delete(e.id);
     if (e.type === 'turn.done') this.#steps.delete(s.id);
-    if (e.type === 'turn.start' && !e.wake) {
+    // A wordless command card is an answer, not the echo of anything sent.
+    if (e.type === 'turn.start' && !e.wake && !(e.local && !e.text)) {
       // The echo of a message sent as a new turn carries its ticket's id.
       // A driver that knows it says so; otherwise the oldest matching text
       // sent through this driver claims it.

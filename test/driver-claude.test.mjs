@@ -570,3 +570,40 @@ test('helm\'s brief goes in the system prompt, not the owner\'s message', () => 
   assert.equal(a[a.indexOf('--append-system-prompt') + 1], '[helm delegation: x]');
   assert.ok(!new ClaudeDriver({ cmd: 'claude', env: {}, cwd: '/x', mode: 'default' }).args.includes('--append-system-prompt'));
 });
+
+test("Claude's record of a command it ran is a quiet answer, not a message or a turn", async (t) => {
+  let receive, exited;
+  const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; }, write() {},
+    end() { exited({ code: 0 }); }, detach() {}, kill() { exited({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: 'unused', cwd: '/tmp', procId: 'hosted',
+    procHost: { hasProc: () => true, procPipe: () => pipe } });
+  const events = [];
+  driver.on('event', (e) => events.push(e));
+  await driver.start();
+  t.after(() => driver.kill());
+  const replay = (content, extra = {}) => receive(JSON.stringify({ type: 'user', isReplay: true,
+    parent_tool_use_id: null, uuid: `u-${events.length}`, message: { role: 'user', content }, ...extra }) + '\n');
+  replay('<local-command-caveat>The command below was run directly in Claude Code.</local-command-caveat>', { isMeta: true });
+  replay('<local-command-stdout>Set model to \x1b[1m`claude-opus-5-5`\x1b[22m</local-command-stdout>');
+  replay('<local-command-stdout></local-command-stdout>');
+  const starts = events.filter((e) => e.type === 'turn.start');
+  assert.equal(starts.length, 1, 'one card, and nothing for the caveat or an empty print');
+  assert.equal(starts[0].local, true);
+  assert.equal(starts[0].text, '');
+  assert.equal(events.find((e) => e.type === 'item.delta').text, 'Set model to `claude-opus-5-5`');
+  assert.equal(events.at(-1).type, 'turn.done', 'the card closes at once');
+
+  // The next real message is a turn of its own, not folded into the card.
+  replay('Now the real work');
+  assert.equal(events.filter((e) => e.type === 'turn.start').at(-1).text, 'Now the real work');
+  assert.equal(events.some((e) => e.type === 'input.consumed'), false);
+});
+
+test('a slash command Claude echoes in its own markup reads as the command', async () => {
+  const { localCommandRecord } = await import('../packages/connect/src/drivers/claude.js');
+  assert.deepEqual(localCommandRecord('<command-name>/model</command-name>\n  <command-message>model</command-message>\n  <command-args>claude-opus-5-5</command-args>'),
+    { kind: 'command', text: '/model claude-opus-5-5' });
+  assert.deepEqual(localCommandRecord('<command-name>/cost</command-name><command-message>cost</command-message><command-args></command-args>'),
+    { kind: 'command', text: '/cost' });
+  assert.equal(localCommandRecord('Explain <local-command-stdout> tags'), null);
+});

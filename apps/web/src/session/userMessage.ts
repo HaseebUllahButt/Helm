@@ -36,5 +36,21 @@ export function userMessage(text?: string, attachments: Turn['attachments'] = []
       }));
     }
   }
-  return { text, attachments };
+  // Claude's record of a command it ran itself (/model, /cost, a model
+  // picked from the menu) comes back in its own markup. The caveat is for
+  // the model; the command reads as typed; what it printed is an answer,
+  // not something the owner said.
+  let printed = false;
+  if (/^\s*<local-command-caveat>/.test(text ?? '')) text = '';
+  const command = text?.match(/^\s*<command-name>\s*([^<]*?)\s*<\/command-name>/);
+  if (command) {
+    const args = text?.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1].trim();
+    text = args ? `${command[1]} ${args}` : command[1];
+  }
+  if (/^\s*<local-command-(?:stdout|stderr)>/.test(text ?? '')) {
+    text = [...text!.matchAll(/<local-command-(?:stdout|stderr)>([\s\S]*?)<\/local-command-(?:stdout|stderr)>/g)]
+      .map((m) => m[1]).join('\n').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
+    printed = true;
+  }
+  return { text, attachments, printed };
 }

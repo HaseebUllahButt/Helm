@@ -731,6 +731,8 @@ pre.snippet {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
 }
 .command-result > p { white-space: pre-wrap; }
+/* What a command printed with nothing asked: one quiet line of text. */
+.turn.assistant.command-note .prose { color: var(--mutedfg); font-size: var(--t-body); }
 /* Before the markdown chunk lands, the same text as plain text. */
 .md.raw { white-space: pre-wrap; }
 

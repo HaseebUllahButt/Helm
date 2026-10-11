@@ -22,3 +22,12 @@ test('a plain message, with or without the paste wrapper, is left as written', (
   assert.equal(userMessage('<pasted_content id="1">\nline one\nline two\n</pasted_content>').text, 'line one\nline two');
   assert.equal(userMessage('Read the attached image files before answering: nothing').text, 'Read the attached image files before answering: nothing');
 });
+
+test("Claude's record of a command it ran reads cleanly: the command as typed, its output as an answer", () => {
+  const out = userMessage('<local-command-stdout>Set model to `claude-opus-5-5`</local-command-stdout>');
+  assert.equal(out.text, 'Set model to `claude-opus-5-5`');
+  assert.equal(out.printed, true);
+  assert.equal(userMessage('<command-name>/model</command-name>\n  <command-message>model</command-message>\n  <command-args>claude-opus-5-5</command-args>').text, '/model claude-opus-5-5');
+  assert.equal(userMessage('<local-command-caveat>The command below was run directly.</local-command-caveat>').text, '');
+  assert.equal(userMessage('hello there').printed, false);
+});
