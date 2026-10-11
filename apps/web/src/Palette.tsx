@@ -125,21 +125,30 @@ export function Palette({ items, onClose, engineOf }: {
   );
 }
 
-const SHORTCUTS: [string, string][] = [
-  ['Ctrl/⌘ K', 'Command palette'],
-  ['/', 'Search threads'],
-  ['Ctrl/⌘ N', 'New chat'],
-  ['Ctrl/⌘ Shift N', 'New chat in current or last folder'],
-  ['Ctrl/⌘ Shift O', 'New chat, in a browser tab'],
-  ['Ctrl Tab', 'Next running chat'],
-  ['Ctrl Shift Tab', 'Previous running chat'],
-  ['Ctrl/⌘ [', 'Back'],
-  ['Ctrl/⌘ ]', 'Forward'],
-  ['Enter', 'Send a message'],
-  ['Shift Enter', 'New line in a message'],
-  ['↑ ↓', 'Earlier messages, in the box'],
-  ['Ctrl Shift Space', 'Dictate a message'],
-  ['?', 'This list'],
+const SHORTCUTS: [string, [string, string][]][] = [
+  ['Anywhere', [
+    ['Ctrl/⌘ K', 'Command palette'],
+    ['/', 'Search threads'],
+    ['Ctrl/⌘ N', 'New chat'],
+    ['Ctrl/⌘ Shift N', 'New chat in current or last folder'],
+    ['Ctrl/⌘ Shift O', 'New chat, in a browser tab'],
+    ['Ctrl Tab', 'Next running chat'],
+    ['Ctrl Shift Tab', 'Previous running chat'],
+    ['Ctrl/⌘ [', 'Back'],
+    ['Ctrl/⌘ ]', 'Forward'],
+    ['?', 'This list'],
+  ]],
+  ['In a chat', [
+    ['Enter', 'Send a message'],
+    ['Shift Enter', 'New line in a message'],
+    ['↑ ↓', 'Earlier messages, in the box'],
+    ['Ctrl Shift Space', 'Dictate a message'],
+    ['Shift Tab', 'Next permission mode'],
+    ['Ctrl/⌘ Shift E', 'Next thinking level'],
+    ['Ctrl/⌘ Shift M', 'Next model (favorites first)'],
+    ['Ctrl/⌘ Shift A', 'Open or close agents'],
+    ['↑ ↓ Enter', 'Move and pick in an open list'],
+  ]],
 ];
 
 export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
@@ -152,8 +161,11 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
           <button className="iconbtn" onClick={onClose} aria-label="Close keyboard shortcuts" title="Close"><Icon name="close" size={16} /></button>
         </div>
         <div className="shortcuts">
-          {SHORTCUTS.map(([keys, what]) => (
-            <div key={keys}><kbd>{keys}</kbd><span>{what}</span></div>
+          {SHORTCUTS.map(([group, keys]) => (
+            <section key={group} aria-label={group}>
+              <h3 className="palette-group">{group}</h3>
+              {keys.map(([key, what]) => <div key={key}><kbd>{key}</kbd><span>{what}</span></div>)}
+            </section>
           ))}
         </div>
       </div>

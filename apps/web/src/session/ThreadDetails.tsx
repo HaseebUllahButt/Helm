@@ -20,7 +20,18 @@ export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit
     </div>
   </div>;
   return <div className="thread-details-back" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="thread-details" ref={ref} role="dialog" aria-modal="true" aria-label="Thread details" tabIndex={-1}>
+    <div className="thread-details" ref={ref} role="dialog" aria-modal="true" aria-label="Thread details" tabIndex={-1}
+      onKeyDown={(event) => {
+        // Up and Down walk the agents from anywhere in the panel, Enter opens
+        // the one in focus. Text fields and lists keep their own arrows.
+        if (tab !== 'agents' || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') || (event.target as HTMLElement).closest('input, textarea, select')) return;
+        const tasks = [...event.currentTarget.querySelectorAll<HTMLElement>('button.delegation-task')];
+        if (!tasks.length) return;
+        event.preventDefault();
+        const at = tasks.indexOf(document.activeElement as HTMLElement);
+        const down = event.key === 'ArrowDown';
+        tasks[at < 0 ? (down ? 0 : tasks.length - 1) : (at + (down ? 1 : tasks.length - 1)) % tasks.length].focus();
+      }}>
       <div className="details-heading"><div><h2>Thread details</h2><p>{session.title}</p></div><button className="iconbtn" aria-label="Close thread details" onClick={onClose}><Icon name="close" size={18} /></button></div>
       <div className="details-tabs" role="tablist" aria-label="Thread details sections">
         {tabs.map((item, index) => <button key={item.id} id={`details-${item.id}`} role="tab" aria-selected={tab === item.id} aria-controls="details-content" tabIndex={tab === item.id ? 0 : -1}

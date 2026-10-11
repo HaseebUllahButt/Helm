@@ -29,6 +29,8 @@ import { Route } from '../Route';
 import { TaskReturn } from './TaskReturn';
 import { LimitsLine } from './LimitsLine';
 import { current, limitWindows, rememberLimits, rememberedLimits, type LimitWindow } from './limits';
+import { useChatKeys } from './chatKeys';
+import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
@@ -430,11 +432,12 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const openTurn = transcriptTurns.filter((t) => !t.done).at(-1);
   const since = working && openTurn ? openTurn.at : session.updatedAt;
   const age = since ? waitingSince(since, now) : '';
+  const rate = useTokenRate(openTurn, status === 'working');
   const chip = (s: string) => {
     const ago = age && age !== 'just now' ? ` ${age}` : '';
     return s === 'blocked' ? <span className="chip blocked"><i />waiting{ago}</span>
       : s === 'starting' ? <span className="chip working"><i />starting</span>
-      : s === 'working' ? <span className="chip working"><i />working{ago}</span>
+      : s === 'working' ? <span className="chip working"><i />working{ago}{rate ? ` · ${rate} tok/s` : ''}</span>
       // Its own turn is over, but child tasks are not: the sidebar calls
       // this working, so the open chat must not look finished.
       : childrenWorking ? <span className="chip working" title="Child tasks are still working"><i />working</span>
@@ -444,6 +447,13 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
 
   const prefs = trayPrefs({ client, env: env.id, engine: session.engine, profileId: session.profileId, options, setOptions, setError });
   const controls = Controls({ options, session, busy, onPick: pick, ...prefs });
+  // Pressed again over its own panel, the agents key closes it; over the
+  // Git tab it switches to agents.
+  useChatKeys({
+    effort: () => controls.step('effort'),
+    model: () => controls.step('model'),
+    agents: () => setDetails((open) => open === 'agents' ? null : 'agents'),
+  });
   // The account's limits, as this chat last heard them or any chat on the
   // same account did before it.
   const limitAccount = `${env.id}:${session.profileId}`;
@@ -688,4 +698,26 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       )}
     </>
   );
+}
+
+/**
+ * The live tok/s for the turn being written, read once a second so the
+ * figure holds still long enough to read. Null when nothing is streaming.
+ */
+function useTokenRate(turn: Turn | undefined, working: boolean): number | null {
+  const samples = useRef<Sample[]>([]);
+  const watching = useRef('');
+  const chars = streamedChars(turn);
+  useEffect(() => {
+    const id = working ? turn?.id ?? '' : '';
+    if (id !== watching.current) { watching.current = id; samples.current = []; }
+    if (id) samples.current = addSample(samples.current, Date.now(), chars);
+  }, [turn?.id, working, chars]);
+  const [rate, setRate] = useState<number | null>(null);
+  useEffect(() => {
+    if (!working) { setRate(null); return; }
+    const timer = setInterval(() => setRate(tokensPerSecond(samples.current, Date.now())), 1000);
+    return () => clearInterval(timer);
+  }, [working]);
+  return rate;
 }
