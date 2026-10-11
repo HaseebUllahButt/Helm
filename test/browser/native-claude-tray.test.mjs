@@ -88,3 +88,20 @@ test('a taken-over Claude chat offers the whole tray and changes its permission 
   assert.equal(await page.getByText('Existing conversation', {exact:true}).count(), 1);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 });
+
+test('the chat keys reach a taken-over Claude chat the same way its chips do', async t => {
+  const page = await browser.newPage(); t.after(() => page.close());
+  page.setDefaultTimeout(6000);
+  await page.setViewportSize({width:1280, height:900});
+  await page.route('http://helm.test/**', route => route.fulfill({contentType:'text/html', body:'<div id="root" style="display:flex;flex-direction:column;height:100dvh"></div>'}));
+  await page.goto('http://helm.test/'); await page.addStyleTag({content:css}); await page.addScriptTag({content:script});
+  await page.getByRole('button', {name:'thinking: think', exact:true}).waitFor();
+  await page.locator('textarea').first().focus();
+  await page.keyboard.press('Control+Shift+M');
+  await page.waitForFunction(() => window.calls.some((c) => c.method === 'session.model'));
+  await page.getByText(/Sent .* to Claude/).waitFor();
+  await page.keyboard.press('Control+Shift+E');
+  await page.waitForFunction(() => window.calls.some((c) => c.method === 'session.effort'));
+  const calls = await page.evaluate(() => window.calls.filter((c) => ['session.model', 'session.effort'].includes(c.method)).map((c) => c.params));
+  assert.deepEqual(calls, [{id:'native-test', model:'claude-sonnet-5-5'}, {id:'native-test', effort:'low'}]);
+});
