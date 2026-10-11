@@ -507,7 +507,7 @@ export class Sessions extends EventEmitter {
     // too, so a missed PostCompact cannot leave it compacting for ever.
     const compacting = (on) => {
       if (!!s.compacting === on) return;
-      if (on) s.compacting = true; else delete s.compacting;
+      if (on) s.compacting = Date.now(); else delete s.compacting;
       this.#save();
       this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id), ...pendingSummary(this.events.pending(s.id)) });
     };
@@ -1765,6 +1765,9 @@ export class Sessions extends EventEmitter {
     return d;
   }
 
+  /** session id -> the compaction item open in it */
+  #compactions = new Map();
+
   #onDriverEvent(s, d, e) {
     const current = this.#drivers.get(s.id);
     if (current !== d && (current || e.type !== 'status')) return;
@@ -1872,6 +1875,17 @@ export class Sessions extends EventEmitter {
     // The CLI refused or lost a message handed to it mid-turn. It fails as
     // its own bubble rather than leaving it "sent" with nothing behind it.
     if (e.type === 'input.failed') return this.#consumed(s, e.text, e.inputId, e.error || 'The CLI did not take this message.');
+    // Compacting is part of where the thread stands - its row, its chip and
+    // the bar over the composer say so, for every CLI - from the compaction
+    // item's start until it ends, or the CLI stops or exits.
+    const compaction = e.type === 'item.start' && e.name === 'compact' && !e.parentId ? Date.now()
+      : (e.type === 'item.done' && e.id === this.#compactions.get(s.id))
+        || (e.type === 'status' && ['idle', 'exited'].includes(e.status)) ? 0 : null;
+    if (compaction != null && (!!compaction !== !!s.compacting)) {
+      if (compaction) { s.compacting = compaction; this.#compactions.set(s.id, e.id); }
+      else { delete s.compacting; this.#compactions.delete(s.id); }
+      if (this.#index.has(s.id)) { this.#save(); this.emit('session', s); }
+    }
     // A compaction is not a step: nothing waiting should go in while the CLI rewrites its context.
     if (e.type === 'item.start' && !e.parentId && !['text', 'thinking'].includes(e.kind) && e.name !== 'compact') {
       const steps = this.#steps.get(s.id) ?? new Set();

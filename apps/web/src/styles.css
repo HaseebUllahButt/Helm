@@ -835,6 +835,17 @@ pre.snippet {
   border-color: color-mix(in srgb, var(--amber) 32%, transparent);
   background: color-mix(in srgb, var(--amber) 8%, var(--card));
 }
+/* Compacting: a quiet bar over the composer with a strip that keeps moving. */
+.docked.compacting { overflow: hidden; }
+.docked-meta { color: var(--mutedfg); font-variant-numeric: tabular-nums; }
+.compact-progress {
+  position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--sky), transparent);
+  background-size: 40% 100%; background-repeat: no-repeat;
+  animation: compact-progress 1.6s ease-in-out infinite;
+}
+@keyframes compact-progress { from { background-position: -40% 0 } to { background-position: 140% 0 } }
+@media (prefers-reduced-motion: reduce) { .compact-progress { animation: none; background: var(--sky); opacity: .4; } }
 .docked-text { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; color: var(--text-dim); font-weight: 500; }
 .docked-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 /* The one-tap answer to a blocked session: sized for a thumb, not a cursor. */

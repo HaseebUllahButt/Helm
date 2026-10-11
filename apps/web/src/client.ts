@@ -70,8 +70,8 @@ export interface Profile {
 
 export interface Session {
   paneId?: string;
-  /** A terminal CLI is summarising its conversation right now. */
-  compacting?: boolean;
+  /** When the agent began summarising its conversation, while it still is. */
+  compacting?: number | boolean;
   id: string;
   title: string;
   cwd: string;

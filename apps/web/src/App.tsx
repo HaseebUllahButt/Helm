@@ -823,7 +823,7 @@ function Shell({ client, conn, onSignOut }: {
       for (const s of [...liveThreads, ...snapshotThreads]) {
         items.push({
           id: `t:${e.id}:${s.id}`, group: 'thread', title: s.title, engine: s.engine, at: s.updatedAt,
-          sub: `${whereOf(s)} · ${e.name}${attentionOn(e.id, s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
+          sub: `${whereOf(s)} · ${e.name}${attentionOn(e.id, s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status, s.compacting)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
           keywords: `${s.quick ? 'quick chat' : s.cwd} ${engineOf(s.engine).label}`,
           run: () => openSession(e.id, s),
         });
@@ -1326,7 +1326,7 @@ function Shell({ client, conn, onSignOut }: {
                     </span>
                     {brainOpening ? <span className="chip working"><i />opening</span>
                       // The brain is counted in its machine's "running", so it says so here.
-                      : s && brainEnv.online && !attentionOn(brainEnv.id, s) && runningThread(s) ? <StatusChip status={busyWord(s.status)} at={s.updatedAt} />
+                      : s && brainEnv.online && !attentionOn(brainEnv.id, s) && runningThread(s) ? <StatusChip status={busyWord(s.status, s.compacting)} at={s.updatedAt} />
                       : <span className="chev"><Icon name="forward" size={15} /></span>}
                   </button>;
                 })() : <button className="row tall" disabled>
@@ -2864,8 +2864,8 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
                       </span>
                     </span>
                     {runningThread(s) && !attention(s)
-                      ? <span className="chip exited">was {busyWord(s.status)}</span>
-                      : <StatusChip status={s.status} at={s.updatedAt} />}
+                      ? <span className="chip exited">was {busyWord(s.status, s.compacting)}</span>
+                      : <StatusChip status={s.status === 'working' && s.compacting ? 'compacting' : s.status} at={s.updatedAt} />}
                   </div>
                 </button>
               ))}
@@ -3072,8 +3072,8 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
           </span>
           {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
           {busy ? <span className="chip working"><i />opening</span>
-            : offline && runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? <span className="chip exited">was {busyWord(s.status)}</span>
-            : <StatusChip status={runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? busyWord(s.status) : s.status} at={s.updatedAt} />}
+            : offline && runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? <span className="chip exited">was {busyWord(s.status, s.compacting)}</span>
+            : <StatusChip status={runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? busyWord(s.status, s.compacting) : s.status} at={s.updatedAt} />}
         </Main>
         {!selecting && managed && <ThreadActions s={s} onRename={onRename} onArchive={onArchive} onDelete={onDelete} />}
       </div>
@@ -3244,7 +3244,7 @@ function HomeRow({ s, machine, onOpen, note, selected = false, actions }: {
         <span className="tri-end">
           {/* The age is already on the top line; the chip says only what. */}
           {runningThread(s)
-            ? <StatusChip status={busyWord(s.status)} />
+            ? <StatusChip status={busyWord(s.status, s.compacting)} />
             // Stopped by the owner part-way: finished with, but not finished.
             : s.recovery?.kind === 'interrupted' ? <span className="chip exited">stopped</span>
             : unknownThread(s) ? <StatusChip status="unknown" />
@@ -3268,6 +3268,7 @@ function StatusChip({ status, at }: { status: string; at?: number }) {
   const age = ago && ago !== 'just now' ? ` ${ago}` : '';
   if (status === 'blocked') return <span className="chip blocked"><i />waiting{age}</span>;
   if (status === 'working') return <span className="chip working"><i />working{age}</span>;
+  if (status === 'compacting') return <span className="chip working"><i />compacting</span>;
   if (status === 'starting') return <span className="chip working"><i />starting</span>;
   if (status === 'done') return <span className="chip done"><i />done</span>;
   if (status === 'exited') return <span className="chip exited">ended</span>;
@@ -4549,7 +4550,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat && !nativeConversation(session.engine));
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [status, setStatus] = useState(session.status);
-  const [compacting, setCompacting] = useState(!!session.compacting);
+  const [compacting, setCompacting] = useState(session.compacting || false);
   // When it entered the status it is in, for "working 14m" beside the word.
   const [statusAt, setStatusAt] = useState(session.updatedAt);
   const [draft, setDraft] = useState(() => loadDraft(env.id, session.id));
@@ -4656,7 +4657,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
       if (kind === 'session.transcript' && payload?.id === session.id) refresh();
       if (kind === 'session.update' && payload.session?.id === session.id) {
         setStatus(payload.session.status);
-        setCompacting(!!payload.session.compacting);
+        setCompacting(payload.session.compacting || false);
         setStatusAt(payload.session.updatedAt ?? Date.now());
         refresh();
       }
@@ -4804,7 +4805,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
             {!isShell && messages && (readError || !env.online) && <span className="offline" role="status"> · Saved chat · reconnecting…</span>}
           </span>
         </div>
-        <StatusChip status={status} at={statusAt} />
+        <StatusChip status={compacting && status === 'working' ? 'compacting' : status} at={statusAt} />
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
@@ -4900,6 +4901,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           commands={session.nativeCli ? nativeCommands : undefined}
           foot={session.nativeCli ? nativeControls.chips : undefined}
           statusLine={nativeProfile || limits.length ? <LimitsLine windows={limits} account={nativeProfile || undefined} /> : undefined}
+          compacting={compacting || undefined}
           onAttach={session.nativeChat ? attachImages : undefined} attachments={images}
           onRemoveAttachment={index => setImages(current => current.filter((_, i) => i !== index))}
           canAttach={!!session.nativeChat}
@@ -4946,7 +4948,7 @@ function ago(ts: number | null | undefined) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function Chat({ messages, status, compacting = false }: { messages: Message[] | null; status: string; compacting?: boolean }) {
+function Chat({ messages, status, compacting = false }: { messages: Message[] | null; status: string; compacting?: number | boolean }) {
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);

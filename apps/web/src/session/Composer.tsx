@@ -30,11 +30,27 @@ function shortQueued(text: string) {
   return done ? `Task finished: ${done[1].split('\n')[0]}` : text;
 }
 
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, pendingLabel = 'After current response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+/** Since when, as "0:42": the bar counts while you look at it. */
+function CompactingBar({ since }: { since?: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
+  const took = since ? Math.max(0, Math.round((now - since) / 1000)) : 0;
+  return (
+    <div className="docked compacting" role="status" aria-live="polite">
+      <span className="docked-text"><span className="shine">Compacting conversation…</span></span>
+      {since ? <span className="docked-meta">{fmtSeconds(took)}</span> : null}
+      <i className="compact-progress" aria-hidden="true" />
+    </div>
+  );
+}
+
+export function Composer({ compacting, draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, pendingLabel = 'After current response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
   foot?: React.ReactNode; statusLine?: React.ReactNode; danger?: boolean;
+  /** The agent is compacting, since this time (or true when unknown). */
+  compacting?: number | boolean;
   children?: React.ReactNode;
   /** Resolves to how many images were added, so each gets its "[Image #N]". */
   onAttach?: (files: FileList | File[]) => void | Promise<number | void>;
@@ -274,6 +290,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
     <div className="composer-wrap">
       <div className="composer-col">
         {children}
+        {!!compacting && !waiting && <CompactingBar since={typeof compacting === 'number' ? compacting : undefined} />}
         {waiting && withKeys && onKey && (
           <div className="docked warn">
             <span className="docked-text"><i className="sdot blocked" />Waiting on you</span>

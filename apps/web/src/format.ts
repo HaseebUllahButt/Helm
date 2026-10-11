@@ -42,7 +42,8 @@ export const listedThread = (s: { delegation?: unknown; unhomed?: boolean }) => 
 export const busyStatus = (status?: string) => status === 'working' || status === 'starting';
 
 /** The word for a busy agent: one still launching has not started the work yet. */
-export const busyWord = (status?: string) => (status === 'starting' ? 'starting' : 'working');
+export const busyWord = (status?: string, compacting?: unknown) =>
+  (status === 'starting' ? 'starting' : compacting ? 'compacting' : 'working');
 
 /** A question or approval is open, a child is stuck, or a turn failed and is waiting for a decision. */
 export const needsAttention = (s: ThreadState) =>

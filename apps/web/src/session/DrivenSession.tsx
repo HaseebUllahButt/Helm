@@ -8,7 +8,7 @@ import { EngineMark } from '../EngineMark';
 import { PermissionSheet } from './PermissionSheet';
 import { RecoveryCard } from './RecoveryCard';
 import { Controls, trayPrefs, type Kind } from './Controls';
-import { Transcript, splitNote } from './Transcript';
+import { Transcript, splitNote, isCompaction } from './Transcript';
 import { useGitStatus } from './Changes';
 import { expandPastes } from './pasteStore';
 import { Confirm, TextPrompt } from '../Modal';
@@ -437,10 +437,15 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const since = working && openTurn ? openTurn.at : session.updatedAt;
   const age = since ? waitingSince(since, now) : '';
   const rate = useTokenRate(openTurn, status === 'working');
+  // The machine says so for every CLI; an older machine only has the item.
+  const liveCompaction = working ? [...transcriptTurns].reverse().flatMap((turn) => turn.items)
+    .find((item) => isCompaction(item) && item.status === 'streaming') : undefined;
+  const compacting = working && (session.compacting || liveCompaction?.startedAt || !!liveCompaction);
   const chip = (s: string) => {
     const ago = age && age !== 'just now' ? ` ${age}` : '';
     return s === 'blocked' ? <span className="chip blocked"><i />waiting{ago}</span>
       : s === 'starting' ? <span className="chip working"><i />starting</span>
+      : s === 'working' && compacting ? <span className="chip working"><i />compacting</span>
       : s === 'working' ? <span className="chip working"><i />working{ago}{rate ? ` · ${rate} tok/s` : ''}</span>
       // Its own turn is over, but child tasks are not: the sidebar calls
       // this working, so the open chat must not look finished.
@@ -587,7 +592,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       <Composer
         onTranscribe={onTranscribe}
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
-        engine={engine} keys={false} waiting={!!pending} danger={mode?.danger}
+        engine={engine} keys={false} waiting={!!pending} danger={mode?.danger} compacting={compacting || undefined}
         foot={controls.chips} statusLine={account || limits.length > 0 ? <LimitsLine windows={limits} account={account} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
