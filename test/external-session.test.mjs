@@ -370,7 +370,7 @@ test('detected sessions enter working and done without opening or stopping the e
   const id = '01a0cafe-0000-7000-8000-000000000002';
   const path = join(sessionsDir, `rollout-test-${id}.jsonl`);
   const writerLock = join(locksDir, `${id}.lock`);
-  writeFileSync(path, JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/tmp/external-work' } }) + '\n'
+  writeFileSync(path, JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/home/owner/external-work' } }) + '\n'
     + JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }) + '\n');
   writeFileSync(writerLock, '');
   writeFileSync(join(codexHome, 'session_index.jsonl'), JSON.stringify({ id, thread_name: 'Fix external status' }) + '\n');

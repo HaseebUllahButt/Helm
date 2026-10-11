@@ -1,6 +1,7 @@
 import { readdir, stat, open } from 'node:fs/promises';
 import { existsSync, readdirSync, readlinkSync, readFileSync, statSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { join, basename, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { HOME, expand, collapse } from './paths.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
@@ -744,6 +745,21 @@ async function muse(home, account) {
  * Every past session this machine knows about, newest first.
  * @param {Array} profiles  so we scan each configured account, not just the default
  */
+/**
+ * A chat that ran under the system's temporary folder is a test or a check
+ * someone's tool made - a sandboxed daemon, a "reply with ok" probe - not a
+ * conversation the owner had. Left in, they bury the owner's own chats under
+ * rows named "tmp" and "scratchpad", which is what the owner complained of.
+ * Applied where the daemon hands rows to the owner (agent.js, sessions.js),
+ * not here: this module's tests build their fixtures under that folder.
+ */
+export function scratchFolder(cwd) {
+  if (typeof cwd !== 'string' || !cwd) return false;
+  const tmp = resolve(tmpdir());
+  const dir = resolve(expand(cwd));
+  return dir === tmp || dir.startsWith(tmp + '/');
+}
+
 export async function inventory(profiles = []) {
   procSnap = null;
   const seen = new Set();

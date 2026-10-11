@@ -24,7 +24,7 @@ import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, pic
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
-import { inventory } from './inventory.js';
+import { inventory, scratchFolder } from './inventory.js';
 import { UsageReader, foldBuckets } from '@helm/usage';
 import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
@@ -1668,7 +1668,7 @@ export class Daemon {
         const marks = this.sessions.marks();
         const recent = [];
         for (const x of await inventory(await currentProfiles())) {
-          if (this.sessions.isDelegatedConversation(x.engine, x.id)) continue;
+          if (this.sessions.isDelegatedConversation(x.engine, x.id) || scratchFolder(x.cwd)) continue;
           const mark = marks[`found:${x.engine}:${x.id}`];
           if (mark === 'removed') continue;
           // Transcript paths are machine-private. The app only needs the

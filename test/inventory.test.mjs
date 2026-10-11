@@ -15,6 +15,15 @@ process.env.XDG_DATA_HOME = XDG;
 
 const SECONDS = Math.floor(Date.now() / 1000);
 
+test('chats that ran under the temporary folder are tests, not the owner\'s history', async () => {
+  const { scratchFolder } = await import('../packages/connect/src/inventory.js');
+  assert.equal(scratchFolder(tmpdir()), true);
+  assert.equal(scratchFolder(join(tmpdir(), 'claude-1000', 'scratchpad')), true);
+  assert.equal(scratchFolder('~/dev/helm'), false);
+  assert.equal(scratchFolder('/tmpfoo/project'), false, 'only inside the folder, not a name that starts the same');
+  assert.equal(scratchFolder(null), false);
+});
+
 test('Codex native subagent rollouts stay out of recent history without hiding user forks', async () => {
   const home = mkdtempSync(join(tmpdir(), 'helm-codex-inventory-'));
   const dir = join(home, 'sessions');

@@ -31,7 +31,7 @@ import { delegationMode, delegationOutput, isWakeTurn, trackDelegationReply, tur
 import { addWorktree } from './git.js';
 import { authStatuses } from './auth.js';
 import { TerminalHost, NativeHosts, PROC_SOCKET_PATH } from './terminals.js';
-import { inventory } from './inventory.js';
+import { inventory, scratchFolder } from './inventory.js';
 import { claudeLiveSessions, claudeLiveStatus, descendsFrom, dedupeNativeConversations } from './external-process.js';
 import { hostedProcId } from './hosted-process.js';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
@@ -981,6 +981,8 @@ export class Sessions extends EventEmitter {
         const id = `found:${x.engine}:${x.id}`;
         const mark = this.#marks.get(id);
         if (mark === 'removed' || known.has(`${x.engine}:${x.id}`) || this.isDelegatedConversation(x.engine, x.id)) continue;
+        // A test's chat under /tmp is not one the owner had.
+        if (scratchFolder(x.cwd)) continue;
         // A runtime pane without a native ID can still represent this CLI.
         if (x.active && out.some((s) => s.paneId && s.alive && s.engine === x.engine && expand(s.cwd) === expand(x.cwd))) continue;
         out.push({ id, engine: x.engine, engineSessionId: x.id, account: x.account,
