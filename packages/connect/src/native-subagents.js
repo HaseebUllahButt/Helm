@@ -152,9 +152,9 @@ function summarise(head, tail) {
 // path -> { stamp, parsed, meta }; a file that has not moved is not re-read.
 const cache = new Map();
 
-async function readAgent(dir, id) {
+async function readAgent(dir, id, info) {
   const path = join(dir, `agent-${id}.jsonl`);
-  const info = await stat(path);
+  info ??= await stat(path);
   const stamp = `${info.size}:${info.mtimeMs}`;
   let hit = cache.get(path);
   if (hit?.stamp !== stamp) {
@@ -203,15 +203,19 @@ export async function nativeSubagents(dir, { now = Date.now(), limit = MAX_AGENT
   if (!dir) return [];
   let names;
   try { names = await readdir(dir); } catch { return []; }
-  const found = [];
+  // Pick the newest by mtime before opening any: a folder of hundreds of
+  // old runs costs a stat each, not a read each.
+  const files = [];
   for (const name of names) {
     const id = AGENT_FILE.exec(name)?.[1];
     if (!id) continue;
-    try { found.push({ id, ...(await readAgent(dir, id)) }); } catch { /* vanished or unreadable */ }
+    try { files.push({ id, info: await stat(join(dir, name)) }); } catch { /* vanished mid-scan */ }
   }
-  return found.sort((a, b) => b.mtime - a.mtime).slice(0, limit)
-    .map((x) => entry(x.id, x, now, false))
-    .sort((a, b) => a.startedAt - b.startedAt);
+  const found = [];
+  for (const { id, info } of files.sort((a, b) => b.info.mtimeMs - a.info.mtimeMs).slice(0, limit)) {
+    try { found.push(entry(id, await readAgent(dir, id, info), now, false)); } catch { /* vanished or unreadable */ }
+  }
+  return found.sort((a, b) => a.startedAt - b.startedAt);
 }
 
 /** One subagent with its result and a short activity tail, or null. */

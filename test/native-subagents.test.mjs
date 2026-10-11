@@ -149,6 +149,15 @@ test('a huge transcript is read only at its head and tail, and not again until i
   assert.equal((await nativeSubagents(dir))[0].last, 'Grep: needle');
 });
 
+test('only the newest runs are listed, oldest first', async () => {
+  const dir = agentDir();
+  const t = Date.now() - 600_000;
+  for (const [i, id] of ['r1', 'r2', 'r3', 'r4'].entries()) {
+    writeAgent(dir, id, [user(`Run ${id}`, t + i * 1000), reply('m', [text('ok')], 'end_turn', t + i * 1000 + 1)], { ageMs: 400_000 - i * 60_000 });
+  }
+  assert.deepEqual((await nativeSubagents(dir, { limit: 2 })).map((a) => a.id), ['r3', 'r4']);
+});
+
 test('folders and ids are found the way Claude names them, never outside the folder', async () => {
   assert.equal(subagentsDir('/h/projects/-p/abc.jsonl'), '/h/projects/-p/abc/subagents');
   assert.equal(subagentsDir(null), null);
