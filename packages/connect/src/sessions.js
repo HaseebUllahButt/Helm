@@ -4239,6 +4239,9 @@ export class Sessions extends EventEmitter {
       if (busy) {
         s.queuePaused = true;
         s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} ${err.message}`, at: Date.now() };
+      } else if (this.#unreachable(s)) {
+        // A mark left by an earlier restart, on a thread with nothing to hold.
+        delete s.recovery; s.queuePaused = false;
       }
       const event = this.events.append(s.id, { type: 'status', status: 'idle' });
       s.lastSeq = event.seq;
@@ -4283,6 +4286,9 @@ export class Sessions extends EventEmitter {
         if (this.#inFlight(s)) {
           s.queuePaused = true;
           s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} Codex did not answer, so this thread could not be checked.`, at: Date.now() };
+        } else if (this.#unreachable(s)) {
+          // A mark left by an earlier restart, on a thread with nothing to hold.
+          delete s.recovery; s.queuePaused = false;
         }
         s.lastSeq = this.events.last(s.id);
         this.emit('session', s);

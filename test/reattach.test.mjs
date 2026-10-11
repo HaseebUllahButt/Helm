@@ -103,6 +103,25 @@ test('a failed reconnect leaves an idle chat idle and quiet, but holds and marks
   await again.stop();
 });
 
+test('a mark left by an earlier restart clears when the chat has nothing in flight', async () => {
+  const { make, drivers } = setup('stale-mark');
+  const first = await make();
+  const s = await first.start({ cwd: '/tmp', profileId: 'claudea' });
+  await first.input(s.id, 'hello'); drivers.get(s.id).finish('t1');
+  // What the old daemon left behind: a failed-reconnect mark on an idle chat.
+  first.get(s.id).recovery = { kind: 'error', message: 'Could not reconnect to the agent: Codex thread/read timed out', at: Date.now() };
+  first.get(s.id).queuePaused = true;
+  await first.stop();
+  FakeDriver.failStarts.add(s.id);
+  const again = await make();
+  await again.resume();
+  await settle();
+  assert.equal(again.get(s.id).recovery, undefined);
+  assert.notEqual(again.get(s.id).queuePaused, true);
+  FakeDriver.failStarts.clear();
+  await again.stop();
+});
+
 test('reconnects run a few at a time, not all at once', async () => {
   const { make, drivers } = setup('concurrency', { reattachConcurrency: 2 });
   const first = await make();
