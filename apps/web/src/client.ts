@@ -73,6 +73,8 @@ export interface Session {
   id: string;
   title: string;
   cwd: string;
+  /** A chat with no folder: `cwd` is an empty scratch folder the machine made for it. */
+  quick?: boolean;
   /** The git branch the folder is on, read by the machine; null outside a repo. */
   branch?: string | null;
   engine: string;

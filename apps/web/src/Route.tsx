@@ -8,11 +8,19 @@
 const folderName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
 const homePath = (p = '') => p.replace(/^\/(home|Users)\/[^/]+/, '~') || '/';
 
-export function Route({ machine, folder, full = false }: {
+export function Route({ machine, folder, full = false, quick = false }: {
   machine: string; folder?: string;
   /** The whole path rather than its last part - where the path is the point, as when browsing. */
   full?: boolean;
+  /** A chat with no folder: its scratch folder's name means nothing, so it says so instead. */
+  quick?: boolean;
 }) {
+  if (quick) return (
+    <span className="route" title={`${machine} · quick chat`}>
+      <span className="route-machine">{machine}</span>
+      <span className="route-quick">· quick chat</span>
+    </span>
+  );
   return (
     <span className="route" title={folder ? `${machine} · ${folder}` : machine}>
       <span className="route-machine">{machine}</span>

@@ -141,7 +141,7 @@ export const M = {
   MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[] } -> { prefs }  per-account picker filter
   PICKER_PREFS: 'picker.prefs',    // { hidden?, last?, favs? } -> { picker }  what the new-session picker shows, shared by every device
   SESSION_LIST: 'session.list',    // {} -> { sessions[] }
-  SESSION_START: 'session.start',  // { cwd, profileId, model?, effort?, mode?, speed?, title?, parent? } -> { session }
+  SESSION_START: 'session.start',  // { cwd | quick: true, profileId, model?, effort?, mode?, speed?, title?, parent? } -> { session }  quick: no folder; runs in an empty ~/.helm/quick/<id> removed on delete
   SESSION_LINK:  'session.link',   // { id, child } -> { session }  durable parent/child handoff link
   SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task, worktree? } -> { session }; cwd beats the parent's folder; worktree: own checkout on a helm/ branch
   SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id, consume?, parentId?, callerThreadId? } -> { session, status, complete, output, pending }

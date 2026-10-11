@@ -131,6 +131,8 @@ const SHORTCUTS: [string, string][] = [
   ['Ctrl/⌘ N', 'New chat'],
   ['Ctrl/⌘ Shift N', 'New chat in current or last folder'],
   ['Ctrl/⌘ Shift O', 'New chat, in a browser tab'],
+  ['Ctrl/⌘ Enter', 'Quick chat, no folder (in the new-chat box)'],
+  ['Ctrl/⌘ Shift Enter', 'New folder with the typed name (in the new-chat box)'],
   ['Ctrl Tab', 'Next running chat'],
   ['Ctrl Shift Tab', 'Previous running chat'],
   ['Ctrl/⌘ [', 'Back'],

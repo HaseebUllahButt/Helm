@@ -498,8 +498,9 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     setTimeout(() => setNotice(''), 5000);
   });
   // What the folder looks like to git. Asked again whenever a turn ends,
-  // which is when something has usually just changed.
-  const git = useGitStatus(client, env, session.cwd, working ? 'working' : `rest:${session.updatedAt ?? 0}`);
+  // which is when something has usually just changed. A quick chat has no
+  // folder of its own to ask about.
+  const git = useGitStatus(client, env, session.quick ? '' : session.cwd, working ? 'working' : `rest:${session.updatedAt ?? 0}`);
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
 
   // The clip is only offered when the running model can see images;
@@ -523,7 +524,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
           <h1>{session.title}</h1>
           <span className="sub">
             <EngineMark engine={session.engine} />
-            <Route machine={env.name} folder={session.brain ? undefined : session.cwd} />
+            <Route machine={env.name} folder={session.brain ? undefined : session.cwd} quick={session.quick} />
             {session.nativeCodex && <span> · Live CLI</span>}
             {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
               <span key={part}><span className="sep"> · </span>{part}</span>
