@@ -494,3 +494,39 @@ test('Claude Code native subagents show as read-only cards beside delegated task
     } finally { await view.close(); }
   }
 });
+
+test('a terminal thread lists its native subagents without a task form', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Subagents } from './apps/web/src/session/Subagents';
+    const parent = { id:'term', title:'Terminal Claude', cwd:'/project', engine:'claude', status:'idle', nativeCli:true, nativeChat:true,
+      nativeAgents:[{ id:'b1', native:true, title:'Check the docs', agentType:'Explore', model:null, status:'interrupted',
+        startedAt:1, updatedAt:2, branch:null, toolUseId:null, last:'Read: README.md' }] };
+    const client = {
+      on: () => () => {},
+      rpc: async (env, method, params) => {
+        (window.calls ??= []).push({env,method,params});
+        if (method === 'session.list') return { sessions:[] };
+        if (method === 'session.native-agent') return { agent:{ ...parent.nativeAgents[0], result:'', activity:[], task:'Check the docs', worktree:null } };
+        return { ok:true };
+      },
+    };
+    createRoot(document.getElementById('root')).render(<Subagents nativeOnly client={client} env={{id:'local',name:'Laptop',online:true,info:{}}}
+      parent={parent} onClose={()=>{ window.closed = true; }} />);
+  `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true, write:false, format:'iife', jsx:'automatic' });
+  const view = await browser.newPage({ viewport:{width:390,height:844} });
+  view.setDefaultTimeout(10_000);
+  try {
+    await view.setContent('<div id="root"></div>');
+    await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
+    await view.addScriptTag({ content:bundle.outputFiles[0].text });
+    const dialog = view.getByRole('dialog', {name:'Subagents'});
+    await dialog.locator('.delegation-group.finished .native-badge').waitFor();
+    await dialog.getByRole('button', {name:'Stopped, details'}).click();
+    await dialog.getByText('Finished without a written reply.', {exact:true}).waitFor();
+    assert.equal(await dialog.getByRole('button', {name:/New task/}).count(), 0);
+    assert.equal(await dialog.locator('form').count(), 0);
+    assert.equal(await view.evaluate(() => window.calls.some(c => c.method === 'agent.list')), false);
+  } finally { await view.close(); }
+});

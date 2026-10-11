@@ -14,6 +14,7 @@ import { Controls, type Kind } from './session/Controls';
 import { MAX_ATTACHMENTS, prepareImage, type PreparedImage } from './session/image';
 import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
+import { Subagents } from './session/Subagents';
 import { plainProblem } from './session/problem';
 import { ExternalSessionNotice } from './session/ExternalSessionNotice';
 import { useSessionLog } from './session/useSessionLog';
@@ -4355,6 +4356,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat);
+  const [agentsOpen, setAgentsOpen] = useState(false);
   const [status, setStatus] = useState(session.status);
   // When it entered the status it is in, for "working 14m" beside the word.
   const [statusAt, setStatusAt] = useState(session.updatedAt);
@@ -4569,6 +4571,12 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
           </button>
         )}
+        {/* Claude Code's own subagents, read-only: Helm cannot delegate from a terminal thread. */}
+        {!!session.nativeAgents?.length && (
+          <button className="iconbtn thread-details-launch" aria-label="Agents" title="Claude Code subagents" onClick={() => setAgentsOpen(true)}>
+            <Icon name="subagents" size={17} /><b className="cbadge quiet">{session.nativeAgents.length}</b>
+          </button>
+        )}
         {isShell && onNewTerminal && (
           <button className="iconbtn" title="New terminal" aria-label="New terminal" disabled={opening} onClick={() => void newTerminal()}>
             <Icon name="plus" size={18} />
@@ -4593,6 +4601,8 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           </div>
         ))}
       </div>
+
+      {agentsOpen && <Subagents nativeOnly client={client} env={env} parent={session} onClose={() => setAgentsOpen(false)} />}
 
       {/* Every open terminal on this machine, one tap apart. */}
       {isShell && terminals.length > 1 && (

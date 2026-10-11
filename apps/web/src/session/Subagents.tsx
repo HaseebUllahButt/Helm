@@ -14,10 +14,14 @@ const STATUS: Record<string, string> = {
 const ACTIVE = ['blocked', 'working', 'starting'];
 const stateOf = (task: Session) => task.delegation?.status || task.status;
 
-/** Account → model → task, then a live branch list beside the parent thread. */
-export function Subagents({ client, env, parent, onClose, onOpen, embedded = false }: {
+/**
+ * Account → model → task, then a live branch list beside the parent thread.
+ * `nativeOnly` is for a terminal thread Helm cannot delegate from: just the
+ * Claude Code subagents it ran, with no task form.
+ */
+export function Subagents({ client, env, parent, onClose, onOpen, embedded = false, nativeOnly = false }: {
   client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (session: Session) => void;
-  embedded?: boolean;
+  embedded?: boolean; nativeOnly?: boolean;
 }) {
   const [agents, setAgents] = useState<CliAgent[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -78,7 +82,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
         setSessions(listing.sessions);
         if (!firstList.current) {
           firstList.current = true;
-          if (!listing.sessions.some(belongsHere) && !parent.nativeAgents?.length) setComposing(true);
+          if (!nativeOnly && !listing.sessions.some(belongsHere) && !parent.nativeAgents?.length) setComposing(true);
         }
         setListed(true);
       })
@@ -107,7 +111,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     } catch (failure: any) { fail('form')(failure); }
     finally { setLoading(false); }
   };
-  useEffect(() => { void loadAgents(); }, [client, env.id]);
+  useEffect(() => { if (!nativeOnly) void loadAgents(); }, [client, env.id, nativeOnly]);
   useEffect(() => { setModel(''); setMode(''); }, [account]);
 
   useEffect(() => {
@@ -320,7 +324,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
       </div>
       <div className="delegation-body">
         {errorBox('')}
-        {composing ? <form className="delegation-form" aria-label="New task" onSubmit={(event) => { event.preventDefault(); void start(); }}>
+        {nativeOnly ? null : composing ? <form className="delegation-form" aria-label="New task" onSubmit={(event) => { event.preventDefault(); void start(); }}>
           <label htmlFor="delegate-task">Task</label>
           <textarea id="delegate-task" rows={3} maxLength={32000} autoFocus placeholder="Describe a specific, bounded task…"
             value={task} disabled={busy} onChange={(event) => setTask(event.target.value)} onKeyDown={submitOnShortcut(() => void start())} />
