@@ -128,11 +128,12 @@ a turn with tokens but no price is priced with `priceBucket` at list rates
 (Codex counts cached tokens inside input; subtracted), accumulated on
 `costUsd`, and shown on Home rows and Needs-you cards too.
 
-**Later the same day.** Ctrl/Cmd+Shift+S opens Settings, Ctrl/Cmd+Shift+L
-opens Usage (global keys in App.tsx; listed under "Anywhere"). First try
+**Later the same day.** Ctrl/Cmd+Shift+S opens Settings, Ctrl/Cmd+Shift+4 (the $
+key, matched by position) opens Usage (global keys in App.tsx; listed under "Anywhere"). First try
 was Ctrl+, and Ctrl+Shift+U: the owner got browser zoom and Linux's
-Unicode-entry underline. Letters with Ctrl+Shift that neither Chrome nor the
-Linux input method use are the safe choice. The owner found
+Unicode-entry underline; Ctrl+Shift+L then locked their screen (no such
+binding in the Hyprland configs - source unknown). Check the owner's desktop
+before choosing any Ctrl+Shift key. The owner found
 "New session" on the VM sitting on "looking for agents…": the VM was
 unreachable (its link to the laptop was stale, ssh timed out, it was at
 10/12 GB with ~10 Devin sessions), and the screen waited the full RPC

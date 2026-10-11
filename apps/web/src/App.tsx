@@ -789,7 +789,9 @@ function Shell({ client, conn, onSignOut }: {
       // Linux's "type a Unicode character", which is what the owner got.
       if (mod && e.shiftKey && !e.altKey && !el?.closest?.('.xterm')) {
         if (e.key === 's' || e.key === 'S') { e.preventDefault(); setPalette(false); navigate([{ kind: 'app-settings' }]); return; }
-        if (e.key === 'l' || e.key === 'L') { e.preventDefault(); setPalette(false); navigate([{ kind: 'usage' }]); return; }
+        // The $ key (Shift+4), by position so any layout works; Ctrl+Shift+L
+        // locked the owner's screen.
+        if (e.code === 'Digit4' || e.key === '$') { e.preventDefault(); setPalette(false); navigate([{ kind: 'usage' }]); return; }
       }
       if (typing || mod || e.altKey) return;
       if (e.key === '?') { e.preventDefault(); setHelp(true); return; }

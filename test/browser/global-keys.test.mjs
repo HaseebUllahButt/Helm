@@ -67,11 +67,11 @@ async function pageFor(t, context) {
   return page;
 }
 
-test('Ctrl+Shift+S opens Settings and Ctrl+Shift+L opens Usage from anywhere', async t => {
+test('Ctrl+Shift+S opens Settings and Ctrl+Shift+4 ($) opens Usage from anywhere', async t => {
   const page = await pageFor(t);
   await page.keyboard.press('Control+Shift+s');
   await page.getByRole('heading',{name:'Settings'}).first().waitFor();
-  await page.keyboard.press('Control+Shift+l');
+  await page.keyboard.press('Control+Shift+Digit4');
   await page.getByLabel('Environment').waitFor({timeout:10000});
 });
 
