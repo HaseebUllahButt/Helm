@@ -11,7 +11,8 @@ const SKIP = new Set([
 export async function list(path = HOME) {
   const dir = expand(path);
   const entries = [];
-  for (const d of await readdir(dir, { withFileTypes: true })) {
+  const contents = await readdir(dir, { withFileTypes: true });
+  for (const d of contents) {
     if (d.name.startsWith('.') && d.name !== '.config') continue;
     if (!d.isDirectory()) continue;
     const full = join(dir, d.name);
@@ -29,6 +30,9 @@ export async function list(path = HOME) {
     path: collapse(dir),
     parent: dir === '/' ? null : collapse(dirname(dir)),
     entries,
+    // Pickers show folders, but transfer preflight must also see ordinary
+    // files and hidden entries before deciding a destination is empty.
+    entryCount: contents.length,
   };
 }
 

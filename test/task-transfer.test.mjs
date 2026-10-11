@@ -400,3 +400,72 @@ test('a copied-ahead handoff starts only beside the marker the source signed', a
   back.sourceSignature = signHandoffDigest(back.requestDigest);
   await assert.rejects(() => handoffs.accept(back, sourceId), /no return/);
 });
+
+test('big tasks refuse occupied or uninspectable destinations, including older peers with folder-only listings', async () => {
+  const folder = join(work, 'destination-preflight');
+  mkdirSync(folder);
+  writeFileSync(join(folder, 'big.bin'), Buffer.alloc(17 * 1024 * 1024));
+  for (const listing of [{ entries: [], entryCount: 1 }, { entries: [] }, new Error('permission denied'), new Error('environment is not connected')]) {
+    let copies = 0;
+    const sender = new TaskTransfers({ network: () => net, sessions: {}, directory: join(root, 'occupied'), copy: async () => { copies++; },
+      rpc: async (_id, method) => {
+        if (method === M.AGENT_LIST) return { agents: [{ id: 'codex', engine: 'codex', available: true }] };
+        if (method === M.ENV_INFO) return { home: work, precopiedHandoff: true };
+        if (method === M.FS_LIST) { if (listing instanceof Error) throw listing; return listing; }
+        throw Error(`unexpected ${method}`);
+      } });
+    await assert.rejects(sender.send({ handoffId: randomBytes(12).toString('hex'), targetMachineId: targetId,
+      folder, targetFolder: join(work, 'existing-destination'), profileId: 'codex', prompt: 'Hi' }, 'phone'),
+    listing instanceof Error ? /Cannot check.*VM/ : /not confirmed empty on VM/);
+    assert.equal(copies, 0);
+  }
+});
+
+test('a failed bulk copy resumes from its persisted destination and starts only one task', async () => {
+  const folder = join(work, 'retry-big'), destination = join(work, 'retry-destination');
+  mkdirSync(folder);
+  writeFileSync(join(folder, 'big.bin'), Buffer.alloc(17 * 1024 * 1024));
+  writeFileSync(join(folder, '.env'), 'TEST=throwaway');
+  const params = { handoffId: randomBytes(12).toString('hex'), targetMachineId: targetId,
+    folder, targetFolder: destination, profileId: 'codex', prompt: 'Hi', includeEnv: false };
+  let attempts = 0, starts = 0, statChecks = 0;
+  const options = { network: () => net, sessions: {}, directory: join(root, 'retry-bulk'),
+    copy: async (o, streams) => {
+      if (o.source === folder && attempts++ === 0) {
+        mkdirSync(join(o.targetFolder, '.helm-transfer-partial'), { recursive: true });
+        writeFileSync(join(o.targetFolder, '.helm-transfer-partial', 'big.bin'), 'partial');
+        throw Error('copy link closed');
+      }
+      if (o.source === folder) {
+        assert.equal(readFileSync(join(o.targetFolder, '.helm-transfer-partial', 'big.bin'), 'utf8'), 'partial');
+        streams.stdout.write('  17,825,792 100% 10.00MB/s 0:00:01\r');
+      }
+      mkdirSync(o.targetFolder, { recursive: true });
+      execFileSync('rsync', ['-a', ...(o.excludes ?? []).flatMap(e => ['--exclude', e]), `${o.source}/`, `${o.targetFolder}/`]);
+    },
+    rpc: async (_id, method, p) => {
+      if (method === M.AGENT_LIST) return { agents: [{ id: 'codex', engine: 'codex', available: true }] };
+      if (method === M.ENV_INFO) return { home: work, precopiedHandoff: true };
+      if (method === M.FS_LIST) { statChecks++; throw Error('ENOENT'); }
+      if (method === M.HANDOFF_ACCEPT) { starts++; return { sessionId: 'resumed-task', folder: p.folder }; }
+      throw Error(`unexpected ${method}`);
+    } };
+  const first = new TaskTransfers(options);
+  assert.equal((await first.send(params, 'phone')).status, 'copying');
+  await new Promise(r => setImmediate(r));
+  assert.equal(starts, 0);
+  const restarted = new TaskTransfers(options);
+  await assert.rejects(restarted.send({ ...params, includeEnv: true }, 'phone'), /task retry does not match its original request/);
+  let result = await restarted.send(params, 'phone');
+  for (let i = 0; i < 100 && result.status === 'copying'; i++) {
+    await new Promise(r => setTimeout(r, 10));
+    result = await restarted.send(params, 'phone');
+  }
+  assert.equal(result.status, 'running');
+  assert.equal(statChecks, 1, 'retry uses the recorded destination even though the partial folder now exists');
+  assert.equal(starts, 1);
+  assert.equal(existsSync(join(destination, '.env')), false);
+  assert.deepEqual(readFileSync(join(destination, 'big.bin')), readFileSync(join(folder, 'big.bin')));
+  assert.deepEqual(await restarted.send(params, 'phone'), result);
+  assert.equal(starts, 1);
+});

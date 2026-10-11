@@ -103,3 +103,14 @@ test('a corrupt or wrong-home cache is ignored and rebuilt', async () => {
     assert.equal(JSON.parse(readFileSync(cacheFile, 'utf8')).home, HOME);
   }
 });
+
+test('list counts ordinary and hidden files even though the picker lists only folders', async () => {
+  const { list } = await import('../packages/connect/src/fs.js');
+  const folder = join(HOME, 'occupied-transfer');
+  mkdirSync(folder);
+  writeFileSync(join(folder, 'app.txt'), 'keep me');
+  writeFileSync(join(folder, '.env'), 'TEST=throwaway');
+  const listing = await list(folder);
+  assert.deepEqual(listing.entries, []);
+  assert.equal(listing.entryCount, 2);
+});

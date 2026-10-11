@@ -12,7 +12,7 @@ import { handoffRequestDigest } from './handoffs.js';
 import { transferPreflight } from './transfer-check.js';
 import { readThread } from './brain.js';
 import { delegationMode } from './delegation.js';
-import { bulkPlan, discardPlan, bulkMarker, writeMarkerDir, progressFrom } from './bulk-transfer.js';
+import { bulkPlan, bulkWarnings, discardPlan, bulkMarker, writeMarkerDir, progressFrom } from './bulk-transfer.js';
 import { runCopy } from './copy.js';
 import { rmSync as removeTree } from 'node:fs';
 
@@ -90,7 +90,7 @@ export class TaskTransfers {
     if (record && record.fingerprint !== fingerprint) {
       const { returnToSource, ...legacyIntent } = intent;
       const legacyFingerprint = createHash('sha256').update(JSON.stringify(legacyIntent)).digest('hex');
-      if (record.request.returnToSource !== undefined || record.fingerprint !== legacyFingerprint) {
+      if (record.request?.returnToSource !== undefined || record.fingerprint !== legacyFingerprint) {
         throw new Error('task retry does not match its original request');
       }
     }
@@ -98,9 +98,11 @@ export class TaskTransfers {
     if (record?.bulk && !record.request) return this.#startBulk(net, target, params, intent, fingerprint, record);
     if (!record) {
       if (!target.codePubkey) throw new Error('the target needs a code-transfer key; restart Helm there');
-      const { agents } = await this.rpc(target.id, M.AGENT_LIST, { models: false });
+      let agents;
+      try { ({ agents } = await this.rpc(target.id, M.AGENT_LIST, { models: false })); }
+      catch (error) { throw new Error(`Cannot check agent accounts on ${target.name}: ${error.message}`); }
       const account = agents.find((agent) => agent.id === intent.profileId && agent.available);
-      if (!account) throw new Error('the selected agent account is unavailable on the target');
+      if (!account) throw new Error(`Agent account "${intent.profileId}" is unavailable on ${target.name}; choose a signed-in account there`);
       let source = intent.sessionId ? this.sessions.get(intent.sessionId) : null;
       if (source && (source.cwd !== intent.folder || source.external || source.engine === 'shell')) {
         throw new Error('only a managed agent task in this project can be continued');
@@ -223,10 +225,13 @@ export class TaskTransfers {
       if (wanted) {
         folder = wanted === '~' ? info.home : wanted.startsWith('~/') ? `${info.home}/${wanted.slice(2)}` : wanted;
         if (!folder.startsWith('/')) throw new Error('the destination folder must start with / or ~/');
-        if (await this.#occupied(target.id, folder)) throw new Error(`${folder} already has files on ${target.name}; choose an empty or new folder`);
+        if (await this.#occupied(target, folder)) throw new Error(`${folder} is not confirmed empty on ${target.name}; choose a new folder`);
       } else {
         folder = `${info.home}/${plan.rootName}`;
-        if (await this.#occupied(target.id, folder)) folder = `${folder}-${params.handoffId.slice(0, 8)}`;
+        if (await this.#occupied(target, folder)) {
+          folder = `${folder}-${params.handoffId.slice(0, 8)}`;
+          if (await this.#occupied(target, folder)) throw new Error(`${folder} is not confirmed empty on ${target.name}; choose a new folder`);
+        }
       }
       const history = source ? await this.sessions.history(source.id, { tail: 500, limit: 500 }) : null;
       record = {
@@ -236,9 +241,7 @@ export class TaskTransfers {
         context: history ? readThread(history.events, { limit: 80 }).join('\n').slice(-24_000) : '',
         preflight: { files: plan.files ?? 0, bytes: plan.bytes, envFiles: plan.envFiles, skipped: 0,
           skippedEntries: [], omittedEntries: 0, requiresAcknowledgement: false,
-          warnings: [{ code: 'bulk-copy', message: plan.git
-            ? 'Big project: the folder is copied with its full git history. Files git ignores (build output, caches) stay here.'
-            : 'Big project: the folder is copied whole, except dependency and cache folders.' }] },
+          warnings: bulkWarnings(plan, intent.includeEnv) },
       };
       this.#save(params.handoffId, record);
     }
@@ -254,11 +257,16 @@ export class TaskTransfers {
       targetName: target.name, progress: { ...job.progress }, preflight: record.preflight };
   }
 
-  async #occupied(machineId, folder) {
+  async #occupied(target, folder) {
     try {
-      const listing = await this.rpc(machineId, M.FS_LIST, { path: folder }, { timeout: 20_000 });
-      return (listing?.entries ?? listing?.items ?? []).length > 0;
-    } catch { return false; }
+      const listing = await this.rpc(target.id, M.FS_LIST, { path: folder }, { timeout: 20_000 });
+      // Older peers list only visible directories. Treat an existing folder
+      // conservatively when they cannot count files; never guess it is empty.
+      return !Number.isInteger(listing?.entryCount) || listing.entryCount !== 0;
+    } catch (error) {
+      if (/ENOENT|no such file or directory|no such folder/i.test(error.message)) return false;
+      throw new Error(`Cannot check ${folder} on ${target.name}: ${error.message}`);
+    }
   }
 
   async #bulk(net, target, params, intent, record, job) {

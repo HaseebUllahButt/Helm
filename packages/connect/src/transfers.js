@@ -8,7 +8,7 @@ import {
 import {
   inspectTransferReadiness, readHandoffSkipped, transferPreflight,
 } from './transfer-check.js';
-import { bulkPlan, discardPlan } from './bulk-transfer.js';
+import { bulkPlan, bulkWarnings, discardPlan } from './bulk-transfer.js';
 
 const TRANSFER_ID = /^[a-f0-9]{24}$/;
 const MACHINE_ID = /^[a-f0-9]{1,64}$/;
@@ -361,9 +361,7 @@ function bulkPreview(net, folder, includeEnv, reason) {
     preflight: {
       files: plan.files ?? 0, bytes: plan.bytes, envFiles: plan.envFiles, skipped: 0, skippedEntries: [],
       omittedEntries: 0, requiresAcknowledgement: false,
-      warnings: [{ code: 'bulk-copy', message: plan.git
-        ? 'Big project: it is copied with its full git history, and the copy resumes if the connection drops. Files git ignores (build output, caches) stay here.'
-        : 'Big project: it is copied whole except dependency and cache folders, and the copy resumes if the connection drops.' }],
+      warnings: bulkWarnings(plan, includeEnv),
     },
   };
 }
