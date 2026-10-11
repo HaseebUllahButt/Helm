@@ -143,6 +143,20 @@ deleted quick chats) are hidden from history like `/tmp` ones; the helpers'
 own CLI transcripts and the VM's transfer-test rollouts were deleted by hand
 so Done shows only the owner's chats.
 
+**Sidebar ⋯ and the pasted-message mess.** The sidebar's thread rows
+(HomeRow, the T3-style ones) never had the ⋯ menu; only the machine
+screen's SessionRow did. `ThreadActions` is now one component for both:
+rename, archive, delete, shown on hover (always on touch); the Shell's
+`threadActions(e, s)` does the RPCs and reloads the list. A message Helm
+pasted into a terminal Claude (bracketed paste, `sessions.js` native
+input) came back from Claude's own record as `<pasted_content id=…>…
+Read the attached image files before answering: [Image #1]: "…"
+</pasted_content>`, shown raw; `userMessage()` now strips the wrapper and
+the note and shows the pictures (`test/user-message.test.mjs`). If the
+owner says a new key "does nothing", check first that the installed app
+window has reloaded: the daemon serves the new bundle straight from
+`dist`, but an open window keeps the old one until the update nudge.
+
 **Known failing on this laptop, before and after this round:** the four
 `native-cli.test.mjs` "native launch" tests time out (they did so on the
 untouched 6da47b1 in two helpers' worktrees too). Not investigated beyond
