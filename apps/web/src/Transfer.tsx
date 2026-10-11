@@ -144,7 +144,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
         const request = {
           handoffId, folder, sessionId: session?.id, targetMachineId: target.id,
           targetFolder: targetFolder.trim() || undefined, profileId, model: model || undefined,
-          prompt, includeEnv: true, allowSkipped: true,
+          prompt, includeEnv, allowSkipped: true,
         };
         let sent = await client.rpc<TaskTransferResult>(source.id, 'task.send', request, 360_000);
         // A big project copies in the background; the same request, asked
@@ -398,7 +398,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
               </select>
             </label></div>}
 
-            {!task && <label className={`check-row${envCanChoose ? '' : ' disabled'}`}>
+            <label className={`check-row${envCanChoose ? '' : ' disabled'}`}>
               <input
                 type="checkbox" checked={includeEnv} disabled={!envCanChoose || busy || locked}
                 onChange={(e) => setIncludeEnv(e.target.checked)}
@@ -407,13 +407,13 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
                 Include .env files
                 <small>
                   {envCount
-                    ? `${envCount} found. Encrypted in transit and written owner-only on ${target?.name ?? 'the target'}.`
+                    ? `${envCount} found. Encrypted in transit${bulk ? ' and copied with their file permissions' : ' and written owner-only'} on ${target?.name ?? 'the target'}.`
                     : preflight?.skipped
                       ? 'Check to include any .env files that exist.'
                       : 'No .env files were found.'}
                 </small>
               </span>
-            </label>}
+            </label>
 
             <div className="field">
               <label className="field-label">
