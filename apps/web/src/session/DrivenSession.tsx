@@ -90,6 +90,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   }, []);
   const [referenceOptions, setReferenceOptions] = useState<{ id: string; title: string }[]>([]);
   const team = useThreadTeam(client, env.id, session.id);
+  // Claude's own subagents have no Helm session, so they ride on this one.
+  const agentCount = team.length + (session.nativeAgents?.length ?? 0);
   useEffect(() => {
     let stale = false;
     client.rpc<{ sessions: Session[] }>(env.id, 'session.list', {}).then((result) => {
@@ -526,7 +528,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         )}
         <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents and scheduled tasks"
-          onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{team.length > 0 && <b className="cbadge quiet">{team.length}</b>}</button>
+          onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
