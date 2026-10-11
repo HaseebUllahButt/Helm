@@ -16,6 +16,93 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-11 — Keyboard chat controls, quick chats, connectors, transfers, helper rules
+
+A "delegator and reviewer" round: four `helm delegate` helpers (two Claude
+Opus 5.5 at high effort, two Codex GPT-6.1 Sol at high) each worked in a
+git worktree under `~/.helm/worktrees/<name>` on a `feat/<name>` branch;
+Fable reviewed and merged. Everything below was checked by running it unless
+it says otherwise.
+
+**Helpers, and three owner rules learned the hard way.** The helpers first
+appeared as four separate chats in Running, titled with the first line of
+their brief, because they were started detached (`env -u HELM_SESSION_ID`)
+to dodge a bug: a helper started from a chat always ran in the chat's folder
+and ignored `--cwd`. Fixed (d9b5986): `--cwd` wins, a child without it still
+inherits the parent's folder. New `helm delegate --worktree` (bec4b3d) gives
+a helper its own checkout of the chat's repo on a `helm/<task>` branch, so
+several can edit at once; the result names the branch. The brief every agent
+gets now says: keep helpers attached to the chat (cards, never rows in
+Running); use `--cwd`/`--worktree` for another folder; never leave chats
+started only to test something (delete them). Claude chats Helm starts also
+set `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h` on subscription accounts, so
+the CLI's own Agent-tool helpers keep their cache as long as the chat does
+(Claude docs: main 1h, subagents 5m by default; API keys stay 5m).
+
+**Done was full of test chats.** The owner saw rows like "Quick Chats",
+"Proj", "0d1", "Scratchpad": the transfer helper's live `helm spawn` /
+`send-task` runs on the VM (five chats in `~/helm-transfer-tests/proj-…`),
+my own `claude -p` probe from the scratchpad folder, the helper sessions
+themselves, and transcripts of the killed first helper batch. All deleted.
+Since da9d86f the daemon hides on-disk chats whose folder is under the system
+temp dir. Also found: the integrations test's fake CLI wrote test MCP entries
+into the real `~/.claude-personal/.claude.json` when run from a shell that
+carries `CLAUDE_CONFIG_DIR` (a Helm chat does). Entries removed (backup in
+the session scratchpad), and `integrations.js` now drops other engines' home
+variables from a CLI's environment (005c7af).
+
+**Quick chats and folders from the keyboard** (feat/quick-chats, Opus). In
+the Ctrl/Cmd+N box the folder step has a first row "No folder · quick chat"
+(Ctrl/Cmd+Enter) and, when the typed text is not an existing folder, a last
+row "New folder "<name>" in <folder>" (Ctrl/Cmd+Shift+Enter) that makes it
+with `fs.mkdir` and goes on to the agent step. `session.start` takes
+`{ quick: true }` instead of `cwd`; the daemon runs the CLI in an empty
+`~/.helm/quick/<id>` that survives restarts and is removed on delete (not
+archive). Quick chats show "quick chat" where the folder would be, have no
+branch, no Git tab, no "Send task". `helm spawn <machine> - <account>` and
+`helm chat <account> --quick` do the same. Tests: `test/quick-chat.test.mjs`,
+browser `new-chat.test.mjs`.
+
+**Transfers and spawn** (feat/transfer-spawn, Codex; evidence in
+`~/.helm/transfer-tests/findings.md`). Found by real runs against the VM and
+fixed: bulk `--no-env` still copied `.env` (confirmed on the VM); bulk
+accepted a destination that held ordinary files because the preflight listed
+only folders (`fs.list` now returns `entryCount`; an older peer that cannot
+count is treated as not-empty); `--source-folder` inherited the calling chat
+and failed with "only a managed agent task…"; a changed retry after a bulk
+failure dereferenced a missing request; `helm spawn` accepted a missing folder
+and only said "prompted". New `spawn-cli.js`: names the missing folder,
+`--mkdir` creates it, `--wait [--timeout]` prints the first completed reply
+and leaves the task running on timeout, clear machine/account errors. The
+app's Send task screen lets you choose whether `.env` files travel. Still
+rough: 20 MB took ~164 s over the VPN, and interrupting the CLI detaches
+rather than cancels.
+
+**Connectors, skills, plugins** (feat/integrations, Codex; notes in
+`docs/integrations.md`). New screen "Connectors & skills" from the machine
+screen and palette: pick an account, see its MCP servers (read from
+`~/.claude.json` / `config.toml`, secrets masked, no connections started),
+add from a catalog (Google Drive, Calendar, Gmail - official Developer
+Preview endpoints that need Preview access and an OAuth client - GitHub,
+Notion, Linear, Slack, Sentry, Context7, Playwright) or a custom HTTP/command
+server, remove, and "Connect", which opens a Helm terminal running
+`<cli> mcp login <name> --no-browser` (both installed CLIs have it; older
+Claude falls back to `/mcp`). Skills install from a git URL or folder into
+`~/.agents/skills` (Codex reads it) with symlinks into each Claude account's
+`skills`. Plugins: `plugin install/uninstall` via marketplaces already set up
+in the CLI. Gemini/agy unsupported for now. New deps: `smol-toml`, `yaml`.
+Verified with real add → list → remove on `codex` and `claudea`, nothing
+left behind; OAuth completion itself not exercised.
+
+**Keyboard chat controls and tok/s** (feat/chat-shortcuts, Opus): see the
+merge note below once it lands.
+
+**Known failing on this laptop, before and after this round:** the four
+`native-cli.test.mjs` "native launch" tests time out (they did so on the
+untouched 6da47b1 in two helpers' worktrees too). Not investigated beyond
+confirming it is environmental. Worktrees without a built node-pty hang in
+`proc-host.test.mjs`; `npx node-gyp rebuild` in the pty package fixes it.
+
 ## 2026-10-02 (evening) — Faster startup, machines update themselves
 
 **Startup.** On a copy of the laptop's real state with its network cut
