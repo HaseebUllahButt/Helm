@@ -1178,7 +1178,9 @@ export class Sessions extends EventEmitter {
     if (parent && callerThreadId && (parent.engine !== 'codex' || parent.engineSessionId !== callerThreadId)) {
       throw new Error('the calling Codex thread does not match the inherited Helm parent; use --parent with the intended orchestrator ID');
     }
-    const folder = parent?.cwd ?? cwd;
+    // A folder named by the caller wins (`--cwd`: a worktree beside the
+    // parent's checkout); otherwise the child works where its parent does.
+    const folder = cwd ?? parent?.cwd;
     if (typeof folder !== 'string' || !folder.trim()) throw new Error('delegation needs a working folder');
     let depth = 1, ancestor = parent;
     while (ancestor?.delegation) {

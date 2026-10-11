@@ -51,7 +51,9 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
       options.model = agent.cheapModel;
     }
     const { session } = await rpc(self, M.SESSION_DELEGATE, {
-      id: options.parent ?? parentId, cwd: options.cwd ?? cwd, profileId: agent.id,
+      // Inside a Helm chat the child works in the chat's folder unless
+      // `--cwd` says otherwise; from a plain shell, where this runs.
+      id: options.parent ?? parentId, cwd: options.cwd ?? ((options.parent ?? parentId) ? undefined : cwd), profileId: agent.id,
       model: options.model, mode: options.mode, effort: options.effort, task: task.join(' '),
       // Background/native Codex threads can inherit another thread's Helm
       // environment. Verify the actual caller before using that parent.

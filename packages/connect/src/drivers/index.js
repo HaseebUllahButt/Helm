@@ -47,7 +47,7 @@ export class Driver extends EventEmitter {
   #buffer = new Map();
   #flushTimer = null;
 
-  constructor({ engine, cmd, env, args = [], cwd, model, effort, mode, engineSessionId, transcript = null, log = () => {},
+  constructor({ engine, cmd, env, args = [], cwd, model, effort = null, mode, engineSessionId, transcript = null, log = () => {},
                 procHost = null, procId = null, openTurn = null, pendingEvents = null, resumeEvents = null }) {
     super();
     Object.assign(this, {

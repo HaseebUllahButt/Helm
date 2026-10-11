@@ -97,6 +97,16 @@ export class ClaudeDriver extends Driver {
     // picker deliberately hides. Use the supported interactive-client path;
     // child tasks remain SDK sessions rather than cluttering that picker.
     this.env = { ...this.env, CLAUDE_CODE_ENTRYPOINT: this.delegated ? 'sdk-cli' : 'claude-vscode' };
+    // Claude keeps a chat's saved context for an hour on a subscription but
+    // only five minutes for the helpers its own Agent tool starts, so a
+    // helper that pauses for a build re-reads everything at full price.
+    // Give helpers the hour too. An API-key account pays extra for the hour
+    // and gets five minutes everywhere, so it is left alone, as is any
+    // account whose own environment already decides.
+    const apiKey = !!(this.env.ANTHROPIC_API_KEY || this.env.ANTHROPIC_AUTH_TOKEN);
+    const decided = ['CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', 'FORCE_PROMPT_CACHING_5M', 'ENABLE_PROMPT_CACHING_1H']
+      .some((name) => this.env[name] !== undefined);
+    if (!apiKey && !decided) this.env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL = '1h';
     // A thread branched from another: begin as that conversation was at `at`.
     // Both ids are checked here as well as by whoever asked - they end up as
     // arguments to a process.

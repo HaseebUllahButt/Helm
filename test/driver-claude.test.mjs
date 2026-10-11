@@ -91,6 +91,17 @@ test('user chats use an interactive client entrypoint while delegated tasks stay
   }
 });
 
+test("Claude's own helpers keep their saved context for an hour, unless the account decides or pays per token", () => {
+  const sub = new ClaudeDriver({ cmd: 'claude', env: { CLAUDE_CONFIG_DIR: '/account' }, cwd: '/project' });
+  assert.equal(sub.env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, '1h');
+  const own = new ClaudeDriver({ cmd: 'claude', env: { CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m' }, cwd: '/project' });
+  assert.equal(own.env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, '5m');
+  const forced = new ClaudeDriver({ cmd: 'claude', env: { FORCE_PROMPT_CACHING_5M: '1' }, cwd: '/project' });
+  assert.equal(forced.env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, undefined);
+  const key = new ClaudeDriver({ cmd: 'claude', env: { ANTHROPIC_API_KEY: 'sk-test' }, cwd: '/project' });
+  assert.equal(key.env.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, undefined);
+});
+
 test('hosted Claude receives the project directory and interactive history entrypoint', async t => {
   const fake = fakeCli('claude', 'plain');
   let opened, exited;

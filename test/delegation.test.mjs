@@ -607,7 +607,7 @@ test('nesting is bounded and empty tasks fail before starting a CLI', async (t) 
 
 test('delegation instructions stay compact and independent of the account roster', () => {
   const note = delegationNote();
-  assert.ok(note.length < 1000);
+  assert.ok(note.length < 1100);
   assert.equal(delegationNote(profiles), note);
   assert.equal(delegationNote([]), note);
   assert.match(note, /Do the work yourself by default/);
@@ -618,6 +618,35 @@ test('delegation instructions stay compact and independent of the account roster
   assert.match(note, /helm delegate <account> --model <model> --wait --json/);
   assert.match(note, /helm run --heavy/);
   assert.match(note, /Inspect package scripts/);
+  assert.match(note, /--cwd <folder>/);
+  assert.match(note, /saved context for an hour/);
+});
+
+test('a child works in the folder the caller names, else where its parent does', async (t) => {
+  const { sessions } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const elsewhere = `${process.env.HELM_DIR}/worktree`;
+  const { session: child } = await sessions.delegate({ id: parent.id, cwd: elsewhere, profileId: 'claude-main', task: 'Review there' });
+  assert.equal(child.cwd, elsewhere);
+  const { session: here } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review here' });
+  assert.equal(here.cwd, parent.cwd);
+});
+
+test('the CLI sends its own folder only when no parent chat decides it', async () => {
+  const calls = [];
+  const rpc = async (_self, method, params) => {
+    calls.push({ method, params });
+    if (method === M.AGENT_LIST) return { agents: [{ id: 'claude-main', engine: 'claude', available: true }] };
+    return { session: { id: 'child', engine: 'claude' } };
+  };
+  const run = (args, extra) => runAgentCommand('delegate', [...args, '--json', '--', 'Look'],
+    { rpc, self: 'self', cwd: '/shell', write: () => {}, sleep: async () => {}, ...extra });
+  await run(['claude-main'], { parentId: 'parent' });
+  assert.equal(calls.at(-1).params.cwd, undefined, 'inside a chat the parent folder wins');
+  await run(['claude-main', '--cwd', '/worktree'], { parentId: 'parent' });
+  assert.equal(calls.at(-1).params.cwd, '/worktree');
+  await run(['claude-main'], { parentId: null });
+  assert.equal(calls.at(-1).params.cwd, '/shell');
 });
 
 test('agents get the tool instructions as standing instructions, not in the owner\'s message', async (t) => {
