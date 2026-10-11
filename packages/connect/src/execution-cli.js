@@ -34,6 +34,24 @@ export function parseWorkArgs(args, { remote = false } = {}) {
 const queueLine = (reason, machine = 'this machine') => reason === 'memory'
   ? `Waiting for available memory on ${machine}.\n` : `Waiting for the heavy-work slot on ${machine}.\n`;
 
+/** A timed-out command reads as 124, the way `timeout` reports it; otherwise the remote exit code. */
+const exitStatus = result => /timed out|timeout/i.test(result.error ?? '') ? 124 : result.exitCode ?? 1;
+
+const COMMAND_ID = /^[a-f0-9]{32}$/;
+
+/** `<machine> <command-id>` plus the switches a verb allows, in any order. */
+export function parseCommandRef(args, verb, switches = []) {
+  const usage = `helm ${verb} <machine> <command-id>${switches.map(s => ` [${s}]`).join('')}`;
+  const words = [], flags = new Set();
+  for (const arg of args) {
+    if (!arg.startsWith('--')) words.push(arg);
+    else if (switches.includes(arg)) flags.add(arg.slice(2));
+    else throw new Error(`unknown option ${arg}\n${usage}`);
+  }
+  if (words.length !== 2 || !COMMAND_ID.test(words[1])) throw new Error(usage);
+  return { machine: words[0], id: words[1], wait: flags.has('wait'), json: flags.has('json') };
+}
+
 /** Local execution preserves the calling shell's environment, including test DB choices. */
 export async function runLocalWork(args, { stdout = process.stdout, stderr = process.stderr, stdin = process.stdin } = {}) {
   const options = parseWorkArgs(args);
@@ -86,7 +104,7 @@ export async function runRemoteWork(args, { net, machineId, connect = connectHub
         heavy: options.heavy, timeout: options.timeout, env: options.env,
         ...(target === net.self && parentId ? { sessionId: parentId } : {}) });
     } catch (error) {
-      throw new Error(`${error.message}\nCommand ${id} may have started; it was not retried. Inspect it with helm exec-result ${options.machine} ${id}.`);
+      throw new Error(`${error.message}\nCommand ${id} may have started; it was not retried. Inspect it with helm exec-status ${options.machine} ${id} --wait, or stop it with helm exec-cancel ${options.machine} ${id}.`);
     }
     if (cancelRequested) await connection.rpc(M.EXEC_CANCEL, { id });
     while (true) {
@@ -103,7 +121,7 @@ export async function runRemoteWork(args, { net, machineId, connect = connectHub
       if (result.status === 'queued' && queued !== result.reason) { stderr.write(queueLine(result.reason, options.machine)); queued = result.reason; }
       if (result.status === 'exited' && !result.more) {
         if (result.error) stderr.write(`helm: ${result.error}\n`);
-        return /timed out|timeout/i.test(result.error ?? '') ? 124 : result.exitCode ?? 1;
+        return exitStatus(result);
       }
     }
   } finally {
@@ -112,19 +130,69 @@ export async function runRemoteWork(args, { net, machineId, connect = connectHub
   }
 }
 
-export async function readRemoteWork(machine, id, { net, machineId, connect = connectHub,
+/**
+ * Read a command by id after the caller lost it: what output is still kept
+ * and how it ended. `wait` follows it to the end, reconnecting if the link
+ * drops - reading never starts it again. Exit status is the command's own
+ * (124 for a timeout), or 3 while it is still running.
+ */
+export async function readRemoteWork(machine, id, { wait = false, json = false, net, machineId, connect = connectHub,
+  stdout = process.stdout, stderr = process.stderr, retries = 3 } = {}) {
+  const target = machineId(machine);
+  let connection = await connect(net, target);
+  const kept = { stdout: [], stderr: [] };
+  let cursor = 0, result, truncated = false, failures = 0;
+  try {
+    for (;;) {
+      try {
+        result = await connection.rpc(M.EXEC_READ, { id, since: cursor, ...(wait ? { wait: 10_000 } : {}) });
+        failures = 0;
+      } catch (error) {
+        // A missing command is an answer, not a dropped link.
+        if (!wait || /not found/i.test(error.message) || ++failures > retries) throw error;
+        connection.close();
+        connection = await connect(net, target);
+        continue;
+      }
+      if (result.truncated && !truncated) {
+        truncated = true;
+        if (!json) stderr.write('helm: earlier command output has expired.\n');
+      }
+      for (const chunk of result.chunks) {
+        const data = Buffer.from(chunk.data, 'base64');
+        if (json) kept[chunk.stream === 'stderr' ? 'stderr' : 'stdout'].push(data);
+        else (chunk.stream === 'stderr' ? stderr : stdout).write(data);
+      }
+      cursor = result.last;
+      if (result.more) continue;
+      if (!wait || result.status === 'exited') break;
+    }
+    const done = result.status === 'exited';
+    const code = done ? exitStatus(result) : 3;
+    if (json) {
+      stdout.write(`${JSON.stringify({
+        id, machine, status: result.status, done, exitCode: done ? code : null,
+        ...(result.signal ? { signal: result.signal } : {}), ...(result.error ? { error: result.error } : {}),
+        stdout: Buffer.concat(kept.stdout).toString('utf8'), stderr: Buffer.concat(kept.stderr).toString('utf8'), truncated,
+      })}\n`);
+    } else {
+      stderr.write(`${id}: ${result.status}${done ? ` (exit ${code})` : ''}\n`);
+      if (result.error) stderr.write(`helm: ${result.error}\n`);
+    }
+    return code;
+  } finally { connection.close(); }
+}
+
+/** Ask the machine to stop a command by id: its process group on POSIX, exit 130. */
+export async function cancelRemoteWork(machine, id, { json = false, net, machineId, connect = connectHub,
   stdout = process.stdout, stderr = process.stderr } = {}) {
   const connection = await connect(net, machineId(machine));
   try {
-    let cursor = 0, result;
-    do {
-      result = await connection.rpc(M.EXEC_READ, { id, since: cursor });
-      if (result.truncated) stderr.write('helm: earlier command output has expired.\n');
-      for (const chunk of result.chunks) (chunk.stream === 'stderr' ? stderr : stdout).write(Buffer.from(chunk.data, 'base64'));
-      cursor = result.last;
-    } while (result.more);
-    stderr.write(`${id}: ${result.status}${result.status === 'exited' ? ` (exit ${result.exitCode})` : ''}\n`);
-    if (result.error) stderr.write(`helm: ${result.error}\n`);
-    return result.status === 'exited' ? result.exitCode ?? 1 : 3;
+    const result = await connection.rpc(M.EXEC_CANCEL, { id });
+    if (json) stdout.write(`${JSON.stringify({ id, machine, status: result.status })}\n`);
+    else stderr.write(result.status === 'exited'
+      ? `${id} had already finished on ${machine}.\n`
+      : `Asked ${machine} to stop ${id}. Check it with helm exec-status ${machine} ${id} --wait.\n`);
+    return 0;
   } finally { connection.close(); }
 }

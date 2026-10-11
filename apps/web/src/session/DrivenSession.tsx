@@ -15,6 +15,7 @@ import { Confirm, TextPrompt } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
 import { useDraftImages } from './useDraftImages';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
+import { messageDelivery } from '@helm/protocol/message-delivery';
 import { money, busyStatus } from '../format';
 import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
@@ -304,7 +305,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const queueAction = async (turn: Turn, method: string, params: object = {}) => {
     if (queueBusy) return false;
     setQueueBusy(turn.id); setError('');
-    try { await client.rpc(env.id, method, { id: session.id, turnId: turn.id, ...params }); return true; }
+    // Send now may first have to wait for the CLI to stop its reply.
+    try { await client.rpc(env.id, method, { id: session.id, turnId: turn.id, ...params }, method === 'session.send-now' ? 70_000 : undefined); return true; }
     catch (failure: any) { setError(failure.message); return false; }
     finally { setQueueBusy(''); }
   };
@@ -600,7 +602,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onRemoveQueued={(turn) => void queueAction(turn, 'session.dequeue')}
         onMoveQueued={moveQueued}
         onSendQueued={(turn) => void queueAction(turn, 'session.send-now')}
-        steers={session.engine === 'codex' || session.engine === 'claude'}
+        pendingLabel={messageDelivery(session.engine).pending}
         queueBusy={queueBusy}
         history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
       >

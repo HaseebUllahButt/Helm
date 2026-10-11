@@ -43,6 +43,7 @@ import { claudeChatArgs, startHookServer } from './claude-hooks.js';
 import { gitBranch } from './git-head.js';
 import { AccountLimits } from './account-limits.js';
 import { CLAUDE_NATIVE_COMMANDS } from './commands.js';
+import { messageDelivery } from '@helm/protocol/message-delivery';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 /** How a recovery note says the agent's state could not be checked. */
@@ -270,9 +271,10 @@ export class Sessions extends EventEmitter {
    * Every CLI queues input typed mid-turn *differently*: claude holds it
    * internally, codex's app-server refuses a second turn/start outright, and
    * an ACP agent answers a prompt sent while one is open however it pleases.
-   * So the queue lives here, where it works the same on all four: a message
-   * sent while the agent is working or blocked waits for the turn to end,
-   * then goes out in the order it was typed - what typing into a CLI does.
+   * So the queue lives here, where it works the same on all of them: a
+   * message sent while the agent is working or blocked waits here, then goes
+   * out in the order it was typed - mid-turn at the CLI's own handover point
+   * (`messageDelivery`), otherwise when the turn ends.
    * Open `local-` turns are the durable tickets; `resume()` rebuilds this
    * map from the event log after a daemon restart.
    */
@@ -288,6 +290,18 @@ export class Sessions extends EventEmitter {
   #steps = new Map();
   /** sessionId -> messages handed to the CLI that it has not used yet. */
   #steered = new Map();
+  /**
+   * sessionId -> the ticket Send now is delivering. It is reserved: while
+   * the current reply is being cancelled for it, it cannot be withdrawn and
+   * then reach the CLI anyway.
+   */
+  #delivering = new Map();
+  /**
+   * sessionId -> messages sent as a new turn whose echo has not arrived.
+   * The echo gets the ticket's id, so the app and a restart match it to
+   * the right message even when two say the same thing.
+   */
+  #awaitingEcho = new Map();
   /** session object -> in-flight full-rollout reconciliation */
   #imports = new WeakMap();
   /**
@@ -1712,7 +1726,7 @@ export class Sessions extends EventEmitter {
       const status = e.status === 'exited' ? 'idle' : e.status;
       if (s.delegation && !s.stoppedAt && ['working', 'blocked'].includes(status)) s.delegation.status = status;
       if (s.delegation) this.#updateTeam(s);
-      if (e.status === 'exited' && this.#drivers.get(s.id) === d) this.#drivers.delete(s.id);
+      if (e.status === 'exited' && this.#drivers.get(s.id) === d) { this.#drivers.delete(s.id); this.#awaitingEcho.delete(s.id); }
       if (e.status === 'exited' && s.shared) this.emit('session', { ...s, alive: false });
       this.#reap(s, status);
       if (status !== s.status && this.#index.has(s.id)) {
@@ -1737,7 +1751,10 @@ export class Sessions extends EventEmitter {
     }
     // The CLI used a message handed to it mid-turn: from here it is part of
     // the conversation, at this point in it.
-    if (e.type === 'input.consumed') return this.#consumed(s, e.text);
+    if (e.type === 'input.consumed') return this.#consumed(s, e.text, e.inputId);
+    // The CLI refused or lost a message handed to it mid-turn. It fails as
+    // its own bubble rather than leaving it "sent" with nothing behind it.
+    if (e.type === 'input.failed') return this.#consumed(s, e.text, e.inputId, e.error || 'The CLI did not take this message.');
     if (e.type === 'item.start' && !e.parentId && !['text', 'thinking'].includes(e.kind)) {
       const steps = this.#steps.get(s.id) ?? new Set();
       steps.add(e.id);
@@ -1747,11 +1764,25 @@ export class Sessions extends EventEmitter {
     if (e.type === 'item.done') this.#steps.get(s.id)?.delete(e.id);
     if (e.type === 'turn.done') this.#steps.delete(s.id);
     if (e.type === 'turn.start' && !e.wake) {
+      // The echo of a message sent as a new turn carries its ticket's id.
+      // A driver that knows it says so; otherwise the oldest matching text
+      // sent through this driver claims it.
+      const awaiting = this.#awaitingEcho.get(s.id);
+      const echo = (e.text ?? '').trim();
+      const index = awaiting?.findIndex((entry) => entry.driver === d && (e.inputId != null
+        ? entry.turnId === e.inputId
+        : entry.text === echo || (entry.text && echo.startsWith(`${entry.text}\n`)))) ?? -1;
+      if (index >= 0) {
+        const [entry] = awaiting.splice(index, 1);
+        if (!awaiting.length) this.#awaitingEcho.delete(s.id);
+        forwarded = { ...forwarded, inputId: entry.turnId };
+      }
       // Handed over too late for the turn it was typed into, the CLI runs
       // it as the next one instead; the echo is the client's cue.
       const steered = this.#steered.get(s.id);
-      const i = steered?.findIndex((x) => x.text.trim() === (e.text ?? '').trim()) ?? -1;
+      const i = steered?.findIndex((x) => forwarded.inputId != null ? x.turnId === forwarded.inputId : x.text.trim() === echo) ?? -1;
       if (i >= 0) steered.splice(i, 1);
+      if (i >= 0 && !steered.length) this.#steered.delete(s.id);
     }
     if (e.type === 'title') return this.#titled(s, e.title, 'agent');
     // Every turn has always said what it cost and nothing added them up.
@@ -1832,6 +1863,9 @@ export class Sessions extends EventEmitter {
       const done = this.events.tail(s.id, 500).findLast(entry => entry.type === 'turn.done');
       if (done) void this.#notifyParent(s, done);
     }
+    // A CLI that reads input inside its running loop takes a waiting
+    // message as soon as it is working again (see `messageDelivery`).
+    if (e.type === 'status' && e.status === 'working') void this.#handOver(s);
     if (e.type === 'turn.done') {
       this.emit('session', s);
       if (s.delegation && !card) void this.#notifyParent(s, event);
@@ -3266,8 +3300,6 @@ export class Sessions extends EventEmitter {
       return this.#nativeWrite(s, body, { control: false });
     }
     if (source !== 'user' && s.stoppedAt) throw new Error('the thread was stopped');
-    if (delivery === 'steer' && ['working', 'blocked'].includes(s.status)
-      && typeof this.#drivers.get(id)?.steer !== 'function') throw new Error(`${s.engine} cannot steer its current turn; queue the message instead`);
     const referenceContext = references.length ? this.#referenceContext(references) : undefined;
     if (s.taskTransfer?.role === 'destination' && ['returning', 'returned', 'conflict'].includes(s.taskTransfer.status)) {
       throw new Error(`This task is returning to ${s.taskTransfer.machineName}; continue on the original machine.`);
@@ -3471,16 +3503,19 @@ export class Sessions extends EventEmitter {
         const q = this.#outbox.get(s.id) ?? [];
         q.push(item);
         this.#outbox.set(s.id, q);
-        if ((delivery === 'steer' || delivery === 'auto' && s.nativeSocket && !referenceContext && compact == null && !clean.trimStart().startsWith('/')) && s.status === 'working' && !this.#sending.has(s.id)) await this.sendNow(s.id, turnId);
-        else if (delivery === 'auto') void this.#handOver(s);
+        if ((delivery === 'steer' || delivery === 'auto' && s.nativeSocket && !referenceContext && compact == null && !clean.trimStart().startsWith('/')) && s.status === 'working' && !this.#sending.has(s.id)) {
+          // The message is already safely queued; a Send now that cannot
+          // happen leaves it there for the end of the reply.
+          try { await this.sendNow(s.id, turnId); }
+          catch (err) { this.log(`[${s.id}] could not send a message now: ${err.message}`); }
+        } else if (delivery === 'auto') void this.#handOver(s);
         return { ok: true };
       }
       this.#sending.add(s.id);
       try {
         await this.#deliver(s, item, d);
       } finally {
-        this.#sending.delete(s.id);
-        this.#pump(s);
+        this.#releaseSending(s);
       }
       return { ok: true };
     }
@@ -3533,6 +3568,7 @@ export class Sessions extends EventEmitter {
   async #deliver(s, item, d = null) {
     if (this.#discardConsumedResult(s, item.turnId)) return;
     if (this.#retiring.has(s.id)) d = null;
+    let echo = null;
     try {
       d ??= await this.#driver(s);
       if (this.#discardConsumedResult(s, item.turnId)) return;
@@ -3556,6 +3592,7 @@ export class Sessions extends EventEmitter {
         ? `This task ran on another machine and its finished changes have returned to this project. Here is the result for context:\n${returnedContext}\n\nCurrent user request:\n${request}`
         : request;
       if (item.images.length && driverTakesImages(d)) {
+        echo = this.#expectEcho(s, d, item, prompt);
         await d.sendWithAttachments(prompt, item.images);
       } else {
         let msg = prompt;
@@ -3569,6 +3606,7 @@ export class Sessions extends EventEmitter {
               : `${s.engine} cannot be sent images, so ${item.images.length} attachments were named but not sent.`,
           });
         }
+        echo = this.#expectEcho(s, d, item, msg);
         await d.send(msg);
       }
       if (returnedContext && s.taskReturnContext === returnedContext) {
@@ -3577,6 +3615,10 @@ export class Sessions extends EventEmitter {
       }
       if (s.unsent) { delete s.unsent; this.#save(); }
     } catch (err) {
+      const awaiting = this.#awaitingEcho.get(s.id);
+      const index = awaiting?.indexOf(echo) ?? -1;
+      if (index >= 0) awaiting.splice(index, 1);
+      if (awaiting && !awaiting.length) this.#awaitingEcho.delete(s.id);
       if (s.delegation) {
         s.delegation.status = 'error';
         this.#updateTeam(s);
@@ -3635,8 +3677,27 @@ export class Sessions extends EventEmitter {
         }
       } finally {
         this.#sending.delete(s.id);
+        // The turn just started may take the rest mid-turn (OpenCode).
+        if (s.status === 'working') void this.#handOver(s);
       }
     })();
+  }
+
+  /** Remember a message sent as a new turn until its echo names it. */
+  #expectEcho(s, driver, item, text) {
+    const awaiting = this.#awaitingEcho.get(s.id) ?? [];
+    const entry = { turnId: item.turnId, text: text.trim(), driver };
+    // A CLI that never echoes must not grow this without end.
+    if (awaiting.push(entry) > 16) awaiting.shift();
+    this.#awaitingEcho.set(s.id, awaiting);
+    return entry;
+  }
+
+  /** The send is over: the turn-end queue and the mid-turn handover both get a look. */
+  #releaseSending(s) {
+    this.#sending.delete(s.id);
+    this.#pump(s);
+    if (s.status === 'working') void this.#handOver(s);
   }
 
   /**
@@ -3652,11 +3713,14 @@ export class Sessions extends EventEmitter {
     const s = this.get(id);
     const q = this.#outbox.get(id) ?? [];
     const i = q.findIndex((x) => x.turnId === turnId);
-    if (i < 0) return { ok: true, found: false };
+    // Send now has reserved it: it is on its way, not waiting.
+    if (i < 0 || this.#delivering.get(id) === turnId) return { ok: true, found: false };
     const [item] = q.splice(i, 1);
     const event = this.events.append(id, { type: 'turn.remove', turnId });
     s.lastSeq = event.seq;
     this.emit('event', { id, event });
+    // What waited behind it may be free to go mid-turn now.
+    void this.#handOver(s);
     return { ok: true, found: true, text: item.text };
   }
 
@@ -3688,6 +3752,7 @@ export class Sessions extends EventEmitter {
     this.#save();
     this.#outbox.set(id, turnIds.map((turnId) => queue.find((entry) => entry.turnId === turnId)));
     this.emit('session', session);
+    void this.#handOver(session);
     return { ok: true, session: wire(session) };
   }
 
@@ -3722,56 +3787,131 @@ export class Sessions extends EventEmitter {
   }
 
   /**
-   * Hand a queued message to the turn already running, without stopping it.
+   * Send one waiting message now, the best way its CLI allows.
    *
-   * Only engines with a real steering primitive get this - Codex's
-   * app-server turn/steer, and Claude reading stream input between steps -
-   * so the capability is the method existing on the driver, not a flag.
-   * Where it does not exist the refusal lands before the queue is touched:
-   * ACP v1 has no safe equivalent, and faking one would mislabel the promise.
-   * Delegated tasks use this directly; a chat's held messages go through
-   * `#handOver` when a step starts.
+   * A CLI with a real steering primitive - Codex's app-server turn/steer,
+   * Claude reading stream input between steps, OpenCode taking a second
+   * prompt into its running loop - gets it inside the turn, without
+   * stopping anything. Every other CLI has its current reply cancelled -
+   * only the reply: the rest of the queue, delegated tasks and the thread
+   * itself carry on - and the message goes as the next turn once the CLI
+   * has settled. Delegated tasks use this directly; a chat's waiting
+   * messages go through `#handOver` at the CLI's own handover point.
    *
-   * `#sending` is held across the steer so a turn settling mid-call cannot
-   * let `#pump` hand the same ticket to the agent twice. `turn.deliver`
-   * lands instead of a close; `turn.accept` follows when the CLI says it
-   * used the message, and promotes the bubble into the transcript there.
+   * `#sending` is held throughout so a turn settling mid-call cannot let
+   * `#pump` hand the same ticket over twice, and `#delivering` reserves the
+   * ticket so it cannot be withdrawn while a reply is cancelled for it.
+   * A Stop in the meantime still wins: it moves the stop generation on.
+   * `turn.deliver` lands for a steer instead of a close; `turn.accept`
+   * follows when the CLI says it used the message.
    */
   async sendNow(id, turnId) {
     const s = this.get(id);
     const item = (this.#outbox.get(id) ?? []).find((x) => x.turnId === turnId);
     if (!item) return { ok: true, found: false, sent: false };
-    const d = this.#drivers.get(id);
-    if (typeof d?.steer !== 'function') {
-      throw new Error(`${s.engine} cannot send a queued message into the current turn`);
-    }
     if (this.#sending.has(s.id)) throw new Error('message is already being sent');
     this.#sending.add(s.id);
+    this.#delivering.set(id, turnId);
     try {
-      await this.#steerOne(s, d, item);
+      const d = this.#drivers.get(id) ?? await this.#driver(s);
+      this.#checkDelivery(s, item);
+      const busy = s.status === 'working' || s.status === 'blocked';
+      if (busy && this.#canSteer(d, item)) {
+        await this.#steerOne(s, d, item);
+        return { ok: true, found: true, sent: true };
+      }
+      // A read the CLI answers beside its turn (Devin's /usage) needs no
+      // cancelled reply to make room for it.
+      const beside = item.compact == null && !item.images.length && !!d.canRunWhileBusy?.(item.text);
+      if (busy && !beside) {
+        // Cut short, a delegated task would report itself stopped to the
+        // orchestrator waiting on it.
+        if (s.delegation) throw new Error(`${s.engine} reads this message when its current reply ends.`);
+        if (this.#steered.get(id)?.length) throw new Error('Wait until the CLI reads the messages already sent to it.');
+        await this.#interruptReply(s, d);
+      } else if (this.#settling.has(id)) throw new Error('The last reply is still finishing; try again in a moment.');
+      this.#checkDelivery(s, item);
+      const q = this.#outbox.get(id);
+      const index = q?.indexOf(item) ?? -1;
+      if (index < 0) return { ok: true, found: false, sent: false };
+      q.splice(index, 1);
+      if (!q.length) this.#outbox.delete(id);
+      // The reply cut short to make room is not a task the owner stopped.
+      if (busy && !beside && s.recovery?.kind === 'interrupted') {
+        delete s.recovery;
+        this.#save();
+        this.emit('session', s);
+      }
+      await this.#deliver(s, item, this.#drivers.get(id) === d ? d : null);
       return { ok: true, found: true, sent: true };
     } finally {
-      this.#sending.delete(s.id);
-      this.#pump(s);
+      this.#delivering.delete(id);
+      this.#releaseSending(s);
+    }
+  }
+
+  /** A Stop, a kill or a stop generation moved on cancels a waiting message. */
+  #checkDelivery(s, item) {
+    if (s.stoppedAt || !this.#index.has(s.id) || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0))) {
+      throw new Error('message cancelled because the thread was stopped');
+    }
+  }
+
+  /** Whether this message can join the running turn instead of waiting for it. */
+  #canSteer(d, item) {
+    return typeof d?.steer === 'function' && item.compact == null && !item.text.trimStart().startsWith('/')
+      && (!item.images.length || driverTakesImages(d));
+  }
+
+  /** Cancel only the reply in flight - not the queue, not delegated tasks - and wait until the CLI settles. */
+  async #interruptReply(s, d) {
+    let settle, timer;
+    const settled = new Promise((resolve) => { settle = resolve; });
+    const onEvent = (event) => { if (event.type === 'status' && ['idle', 'exited'].includes(event.status)) settle(); };
+    d.on('event', onEvent);
+    try {
+      await Promise.race([
+        (async () => {
+          await d.interrupt();
+          if (['idle', 'exited'].includes(d.status)) settle();
+          await settled;
+        })(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('The CLI did not stop its reply in time; your message is still waiting.')), 15_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      d.off('event', onEvent);
+      settle();
     }
   }
 
   /**
-   * Hand held messages to a CLI that is in the middle of a step, oldest
-   * first. It uses them when the step ends - what typing into the CLI's own
-   * input does. A slash command or /compact is a verb for between turns, so
-   * it and everything behind it waits for the turn to end.
+   * Hand waiting messages to a CLI mid-turn at its own handover point,
+   * oldest first (`messageDelivery`): Claude and Codex while a tool step
+   * runs - each reads it when the step ends, what typing into the CLI does -
+   * and OpenCode whenever its loop is running. Other CLIs read input only
+   * between turns, so theirs wait for the pump. An explicit hold, a slash
+   * command or /compact is for between turns, so it and everything behind
+   * it waits for the turn to end; so does a message the CLI refused once.
    */
   async #handOver(s) {
+    if (this.#sending.has(s.id) || s.queuePaused || s.stoppedAt) return;
     const d = this.#drivers.get(s.id);
-    if (typeof d?.steer !== 'function' || !this.#steps.get(s.id)?.size) return;
-    if (this.#sending.has(s.id)) return;
+    const timing = messageDelivery(s.engine).timing;
+    if (timing === 'turn' || typeof d?.steer !== 'function') return;
+    const ready = () => !s.queuePaused && !s.stoppedAt && (timing === 'tool'
+      ? ['working', 'blocked'].includes(s.status) && !!this.#steps.get(s.id)?.size
+      : s.status === 'working');
+    const eligible = (item) => !!item && item.delivery !== 'queue' && !item.nativeRejected && !item.referenceContext
+      && this.#canSteer(d, item);
+    if (!ready() || !eligible(this.#outbox.get(s.id)?.[0])) return;
     this.#sending.add(s.id);
     try {
       for (;;) {
         const item = this.#outbox.get(s.id)?.[0];
-        if (!item || item.delivery === 'queue' || item.referenceContext || item.compact != null || item.text.trimStart().startsWith('/')) break;
-        if (s.status !== 'working' && s.status !== 'blocked') break;
+        if (!eligible(item) || !ready()) break;
         try { await this.#steerOne(s, d, item); }
         catch (err) {
           // The turn ended under it: the pump sends it as the next turn.
@@ -3780,43 +3920,75 @@ export class Sessions extends EventEmitter {
         }
       }
     } finally {
-      this.#sending.delete(s.id);
-      this.#pump(s);
+      this.#releaseSending(s);
     }
   }
 
-  /** One message to the running turn; `turn.deliver` says it can no longer be withdrawn. */
+  /**
+   * One message to the running turn; `turn.deliver` says it can no longer
+   * be withdrawn. The ticket leaves the queue before the CLI is asked, so a
+   * withdraw racing the call cannot take back what the CLI is receiving.
+   * Refused, it goes back in its place and waits for the turn to end.
+   */
   async #steerOne(s, d, item) {
-    if (s.stoppedAt || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0))) throw new Error('message cancelled because the thread was stopped');
+    this.#checkDelivery(s, item);
+    const q = this.#outbox.get(s.id);
+    const index = q?.indexOf(item) ?? -1;
+    if (index < 0) return;
+    const before = new Set(q.slice(0, index).map((entry) => entry.turnId));
+    const after = new Set(q.slice(index + 1).map((entry) => entry.turnId));
+    q.splice(index, 1);
+    if (!q.length) this.#outbox.delete(s.id);
     const prompt = item.referenceContext ? `${item.text}\n\n${item.referenceContext}` : item.text;
-    await d.steer(prompt, item.images);
-    if (s.stoppedAt || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0)) || !this.#index.has(s.id)) return;
-    // A withdraw or a queue-clearing interrupt may have landed while the
-    // steer was in flight: take the ticket out by id, not by position.
-    const rest = this.#outbox.get(s.id);
-    if (rest) {
-      const j = rest.findIndex((x) => x.turnId === item.turnId);
-      if (j >= 0) rest.splice(j, 1);
-      if (!rest.length) this.#outbox.delete(s.id);
-    }
     const steered = this.#steered.get(s.id) ?? [];
-    steered.push({ turnId: item.turnId, text: prompt });
+    const entry = { turnId: item.turnId, text: prompt };
+    steered.push(entry);
     this.#steered.set(s.id, steered);
+    try {
+      await d.steer(prompt, item.images, { inputId: item.turnId });
+    } catch (err) {
+      const at = steered.indexOf(entry);
+      if (at >= 0) steered.splice(at, 1);
+      if (!steered.length && this.#steered.get(s.id) === steered) this.#steered.delete(s.id);
+      // A Stop while the call was out has already removed the ticket.
+      const current = !s.stoppedAt && this.#index.has(s.id)
+        && (item.stopGeneration == null || item.stopGeneration === (s.stopGeneration ?? 0));
+      if (at >= 0 && current) {
+        const rest = this.#outbox.get(s.id) ?? [];
+        const next = rest.findIndex((ticket) => after.has(ticket.turnId));
+        const previous = rest.findLastIndex((ticket) => before.has(ticket.turnId));
+        item.nativeRejected = true;
+        rest.splice(next >= 0 ? next : previous + 1, 0, item);
+        this.#outbox.set(s.id, rest);
+      }
+      throw err;
+    }
+    // Already used (a CLI can say so before its call returns), or stopped.
+    if (!steered.includes(entry) || s.stoppedAt || !this.#index.has(s.id)
+      || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0))) return;
     const event = this.events.append(s.id, { type: 'turn.deliver', turnId: item.turnId });
     s.lastSeq = event.seq;
     this.emit('event', { id: s.id, event });
   }
 
-  /** The CLI used a handed-over message: its bubble joins the transcript here. */
-  #consumed(s, text) {
+  /**
+   * The CLI used a handed-over message, and its bubble joins the transcript
+   * here - or refused it, and it ends failed so it can be sent again.
+   * Matched by the ticket id the driver was given; text only for a driver
+   * that cannot say. Nothing is matched by position: guessing would put a
+   * refusal on the wrong message.
+   */
+  #consumed(s, text, inputId, error = null) {
     const steered = this.#steered.get(s.id);
     if (!steered?.length) return this.#absorbed(s, text);
     const want = String(text ?? '').trim();
-    let i = steered.findIndex((x) => x.text.trim() === want);
-    if (i < 0) i = 0;
+    const i = steered.findIndex((x) => inputId != null ? x.turnId === inputId : x.text.trim() === want);
+    if (i < 0) return;
     const [{ turnId }] = steered.splice(i, 1);
     if (!steered.length) this.#steered.delete(s.id);
-    const event = this.events.append(s.id, { type: 'turn.accept', turnId });
+    const event = this.events.append(s.id, error
+      ? { type: 'turn.done', turnId, status: 'error', error: String(error) }
+      : { type: 'turn.accept', turnId });
     s.lastSeq = event.seq;
     this.emit('event', { id: s.id, event });
   }
@@ -3915,6 +4087,8 @@ export class Sessions extends EventEmitter {
       this.#outbox.delete(id);
       this.#steps.delete(id);
       this.#steered.delete(id);
+      this.#delivering.delete(id);
+      this.#awaitingEcho.delete(id);
       this.#settled(id);
       this.#commandCards.delete(id);
       this.#closedTurns.delete(id);
@@ -4146,8 +4320,9 @@ export class Sessions extends EventEmitter {
       // A queued ticket under a caller-chosen id is still a ticket.
       const local = String(e.turnId).startsWith('local-') || e.queued === true;
       const mine = (e.text ?? '').trim();
-      const echoIndex = local ? echoes.findIndex((x) => x.seq > e.seq && (
-        (x.text ?? '').trim() === mine || (mine && (x.text ?? '').trim().startsWith(mine + '\n'))
+      const echoIndex = local ? echoes.findIndex((x) => x.seq > e.seq && (x.inputId != null
+        ? x.inputId === e.turnId
+        : (x.text ?? '').trim() === mine || (mine && (x.text ?? '').trim().startsWith(mine + '\n'))
       )) : -1;
       const echoed = echoIndex >= 0;
       if (echoed) echoes.splice(echoIndex, 1);

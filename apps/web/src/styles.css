@@ -910,6 +910,7 @@ pre.snippet {
 .queued-sent { flex: none; font-size: var(--t-micro); color: var(--mutedfg); padding: 0 4px; }
 .queued-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queued-attachments { color: var(--mutedfg); font-size: var(--t-micro); }
+.queued-timing { display: block; color: var(--mutedfg); font-size: var(--t-micro); overflow: hidden; text-overflow: ellipsis; }
 .queued-row button { flex: none; font-size: var(--t-micro); font-weight: 550; color: var(--text-dim); min-height: 28px; padding: 0 4px; border-radius: var(--radius-sm); }
 @media (pointer: coarse) { .queued-row button { min-height: 36px; padding: 0 8px; } }
 .queued-row button:hover { color: var(--text); }

@@ -30,7 +30,7 @@ function shortQueued(text: string) {
   return done ? `Task finished: ${done[1].split('\n')[0]}` : text;
 }
 
-export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, pendingLabel = 'After current response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
@@ -58,10 +58,11 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   /** Pull a queued message back into the draft before the agent sees it. */
   onWithdrawQueued?: (turn: Turn) => void;
   /**
-   * The CLI takes a message mid-turn, after the step in flight (Claude,
-   * Codex). Others read it only once the reply ends.
+   * When this CLI reads a waiting message, in words: Codex and Claude after
+   * the tool step in flight, OpenCode at its next step, the rest once the
+   * reply ends (`messageDelivery`). Send now works on all of them.
    */
-  steers?: boolean;
+  pendingLabel?: string;
   /** The queued turn id an action is in flight for, so it cannot run twice. */
   queueBusy?: string;
   /**
@@ -326,16 +327,21 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
                       {!!item.text && item.attachments > 0 && (
                         <span className="queued-attachments">{item.attachments === 1 ? ' + image' : ` + ${item.attachments} images`}</span>
                       )}
+                      {/* When it will be read: a held message waits for the
+                          task; the rest follow the CLI's own timing. */}
+                      {!item.delivered && <span className="queued-timing">
+                        {item.turn.delivery === 'queue' ? 'After this task' : item.turn.delivery === 'steer' ? 'Sending now' : pendingLabel}
+                      </span>}
                     </span>
                     {/* Once the CLI has it there is no taking it back -
-                        neither CLI can - so the buttons go. Edit covers
+                        no CLI can - so the buttons go. Edit covers
                         taking it back; arrows only when there is an order. */}
-                    {item.delivered ? <span className="queued-sent">sent</span> : <div className="queue-actions">
+                    {item.delivered ? <span className="queued-sent">Sent to CLI</span> : <div className="queue-actions">
                       {onEditQueued
                         ? <button disabled={busy} aria-label={`Edit queued message: ${name}`} onClick={() => onEditQueued(item.turn)}>Edit</button>
                         : onWithdrawQueued && <button disabled={busy} onClick={() => onWithdrawQueued(item.turn)} title={`take back into the draft: ${name}`} aria-label={`withdraw queued message: ${name}`}>withdraw</button>}
                       {onMoveQueued && queued.length > 1 && <><button disabled={busy || index === 0 || queued[index - 1]?.delivered} aria-label={`Move up: ${name}`} onClick={() => onMoveQueued(item.turn, -1)}>↑</button><button disabled={busy || index === queued.length - 1} aria-label={`Move down: ${name}`} onClick={() => onMoveQueued(item.turn, 1)}>↓</button></>}
-                      {onSendQueued && steers && <button disabled={busy} onClick={() => onSendQueued(item.turn)}>Send now</button>}
+                      {onSendQueued && <button disabled={busy} onClick={() => onSendQueued(item.turn)}>Send now</button>}
                       {onRemoveQueued && <button className="queue-remove" disabled={busy} title="Remove" aria-label={`Remove queued message: ${name}`} onClick={() => onRemoveQueued(item.turn)}><Icon name="close" size={12} /></button>}
                     </div>}
                   </div>

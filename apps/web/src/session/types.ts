@@ -103,6 +103,8 @@ export interface Turn {
   at: number;
   /** Still in helm's outbox: accepted, but the agent has not seen it yet. */
   queued?: boolean;
+  /** How it was asked to go: `queue` waits for the task to finish. */
+  delivery?: 'auto' | 'queue' | 'steer';
   references?: string[];
   /** Handed to the CLI mid-turn: it can no longer be withdrawn. */
   delivered?: boolean;
@@ -225,10 +227,15 @@ export function apply(state: LogState, e: HelmEvent): void {
       // messages stay in the order they were sent.
       const echo = (e.text ?? '').trim();
       let open: Turn | undefined;
-      // A turn the agent began by itself echoes nothing the owner sent.
-      for (let i = 0; !e.wake && i < state.turns.length; i++) {
+      // A turn the agent began by itself echoes nothing the owner sent, and
+      // helm's own ticket is a message of its own: two identical waiting
+      // messages are two rows, not one.
+      for (let i = 0; !e.wake && !id.startsWith('local-') && i < state.turns.length; i++) {
         const t = state.turns[i];
-        if (!t.id.startsWith('local-') || t.items.length || t.done || t.steered) continue;
+        if (t.items.length || t.done || t.steered) continue;
+        // An echo that names its message is that message, whatever it says.
+        if (e.inputId != null) { if (t.id === e.inputId) { open = t; break; } continue; }
+        if (!t.id.startsWith('local-')) continue;
         // Compared trimmed: helm strips the trailing newline off what it
         // sends, and the CLI echoes the prompt back with it still attached.
         // A prefix match covers the one case where the text sent and the
@@ -254,7 +261,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         }
         return;
       }
-      const turn: Turn = { id, revision: e.seq, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, references: e.references };
+      const turn: Turn = { id, revision: e.seq, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, delivery: e.delivery, references: e.references };
       if (e.local) {
         turn.local = true;
         turn.insideOf = host?.id;
@@ -370,6 +377,10 @@ export function apply(state: LogState, e: HelmEvent): void {
         // which sits where it happened, and let the footer say only that the
         // turn failed.
         const shown = turn.items.some((it) => it.kind === 'error' && it.text === e.error);
+        // A waiting message that failed - refused by the CLI, or lost when
+        // it exited - leaves the queue for the transcript, where its error
+        // and a resend can be seen, instead of vanishing from both.
+        if (e.status !== 'ok' && turn.id === e.turnId) turn.queued = false;
         turn.done = {
           status: e.status, costUsd: e.costUsd, durationMs: e.durationMs,
           error: shown ? undefined : e.error, usage: e.usage,
