@@ -704,6 +704,15 @@ export class AcpDriver extends Driver {
   }
 
   /**
+   * ACP has no word for compaction, so the /compact prompt's own turn is
+   * the compaction: it is open until the agent answers that prompt.
+   */
+  async compact(hint) {
+    await this.send('/compact' + (hint ? ` ${hint}` : ''));
+    if (this.#turnId) this.compactionStarted(this.#turnId);
+  }
+
+  /**
    * Bring the agent up for a prompt. Starting is part of answering - the
    * spawn, the handshake, a session/load replaying a long history - so the
    * session reads as working from here, not from when the prompt goes out.
@@ -851,6 +860,7 @@ export class AcpDriver extends Driver {
       this.push('input.failed', { text: input.text, inputId: input.inputId, error: res.error?.message || 'The run ended before reading this message.' });
     }
     this.#closeStream();
+    this.compactionEnded(res.error ? 'error' : res.result?.stopReason === 'cancelled' ? 'declined' : 'ok', res.error?.message);
     this.#turnId = null;
     this.#promptId = null;
     this.#interrupting = false;

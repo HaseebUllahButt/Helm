@@ -4,10 +4,11 @@ import {
   diffieHellman, generateKeyPairSync, hkdfSync, randomBytes,
 } from 'node:crypto';
 import { resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { T } from '@helm/protocol';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { codeKeyInfo, signHandoffDigest, verifyHandoffSignature } from './code-transfer.js';
-import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
+import { TunnelSender, TunnelReceiver, TUNNEL_WINDOW, COPY_WINDOW } from './tunnel-flow.js';
 
 const MACHINE_ID = /^[a-f0-9]{1,64}$/;
 const COPY_ID = /^[a-f0-9]{24}$/;
@@ -24,6 +25,11 @@ const KILL_GRACE_MS = 3000;
 const CTRL = /[\u0000-\u001f\u007f]/;
 const KEY_B64 = /^[A-Za-z0-9_-]{40,512}$/;
 
+/** The window the other end said it can take; older helms say nothing. */
+export const copyWindow = (offered) => (Number.isSafeInteger(offered) && offered >= TUNNEL_WINDOW
+  ? Math.min(offered, COPY_WINDOW)
+  : TUNNEL_WINDOW);
+
 const refuse = (link, sid, reason, permanent = false) => {
   try {
     const sent = link.send(T.TUNNEL_CLOSE, {
@@ -36,12 +42,12 @@ const refuse = (link, sid, reason, permanent = false) => {
 };
 
 export function cleanCopyFolder(folder) {
-  if (typeof folder !== 'string' || !folder.startsWith('/') || folder.length > MAX_FOLDER || CTRL.test(folder)) {
-    throw new Error('a copy target must be an absolute folder, not a device or url');
+  if (typeof folder !== 'string' || folder.length > MAX_FOLDER || CTRL.test(folder)) {
+    throw new Error('a copy target must be a folder path');
   }
-  const resolved = resolve(folder);
-  if (resolved === '/') throw new Error('a copy target must be a folder, not the filesystem root');
-  return resolved;
+  if (folder === '~' || folder.startsWith('~/')) return folder;
+  if (!folder.startsWith('/')) throw new Error('a copy target is an absolute or ~ path');
+  return resolve(folder);
 }
 
 export function validateCopyServerArgs(args) {
@@ -150,6 +156,7 @@ export function createCopyRequest(net, peer, targetFolder, serverArgs) {
   };
   request.requestDigest = copyRequestDigest(request);
   request.sourceSignature = signHandoffDigest(request.requestDigest);
+  request.window = COPY_WINDOW;
   if (JSON.stringify(request).length > MAX_REQUEST) throw new Error('copy request is too large');
   const cipher = createCopyCipher(ephemeral.privateKey, peer.codePubkey, request.salt, copyId, 'source');
   return { request, cipher };
@@ -254,7 +261,8 @@ export class CopyReceiver {
     }
     let child;
     try {
-      child = this.spawnProcess('rsync', request.serverArgs, { shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+      // Home-relative targets arrive as relative paths, so rsync starts at home.
+      child = this.spawnProcess('rsync', request.serverArgs, { shell: false, cwd: homedir(), stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (err) {
       return fail(`could not start rsync on this machine: ${err.message}`);
     }
@@ -265,6 +273,7 @@ export class CopyReceiver {
       copyId: request.copyId,
       source: caller,
       requestDigest: request.requestDigest,
+      window: copyWindow(request.window),
       cipher,
       child,
       release: beginTransferActivity(),
@@ -298,6 +307,7 @@ export class CopyReceiver {
     try {
       const sent = stream.link.send(T.TUNNEL_READY, {
         sid: stream.sid,
+        window: COPY_WINDOW,
         copy: stream.cipher.seal({
           type: 'ready',
           requestDigest: stream.requestDigest,
@@ -314,11 +324,13 @@ export class CopyReceiver {
       stream.child.stdin,
       (bytes) => this.#send(stream, { type: 'ack', bytes }),
       fail,
+      { window: COPY_WINDOW },
     );
     stream.sender = new TunnelSender(
       stream.child.stdout,
       (chunk) => this.#send(stream, { type: 'data', data: chunk.toString('base64') }),
       fail,
+      { window: stream.window },
     );
     stream.child.stderr.on('data', (chunk) => {
       if (stream.stderrSent >= MAX_STDERR) return;

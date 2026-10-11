@@ -95,6 +95,19 @@ for (const engine of ['devin', 'opencode']) {
   });
 }
 
+test('devin: /compact is a compaction item, open until its prompt answers', async () => {
+  const { driver, log, fake } = make('devin', 'plain');
+  await driver.compact();
+  const start = log.of('item.start').find((e) => e.name === 'compact');
+  assert.ok(start, 'the compaction shows while the agent works on it');
+  const turn = log.of('turn.start').at(-1);
+  assert.equal(start.turnId, turn.turnId);
+  await log.until((e) => e.type === 'turn.done');
+  assert.equal(log.of('item.done').find((e) => e.id === start.id)?.status, 'ok');
+  assert.deepEqual(fake.stdinLines().find((l) => l.method === 'session/prompt').params.prompt, [{ type: 'text', text: '/compact' }]);
+  await driver.kill();
+});
+
 test('devin: the session names itself and the title reaches helm', async () => {
   const { driver, log } = make('devin', 'plain');
   await driver.send('Reply with exactly the words: hello from helm');

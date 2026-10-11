@@ -118,8 +118,9 @@ const usage = () => {
     --include-env                   carry .env files too, written owner-only there
     --dry-run                       report what a send would carry - no grant needed
     --allow-skipped                 send even though some files stay behind
-  helm copy <machine> <file-or-folder> --target-folder <absolute-path>
+  helm copy <machine> <file-or-folder> [--target-folder <path>]
                                   resumable copy over Helm; needs rsync 3.2.3+ on both ends
+    --target-folder <path>          where it lands (default: the same place; ~ is their home)
     --exclude <pattern>             omit caches or dependencies (repeatable)
     --dry-run                       preview the copy, including hidden files
     --direct | --relay | --ssh      choose a route (default: automatic Helm routing)

@@ -607,3 +607,30 @@ test('a slash command Claude echoes in its own markup reads as the command', asy
     { kind: 'command', text: '/cost' });
   assert.equal(localCommandRecord('Explain <local-command-stdout> tags'), null);
 });
+
+test('Claude compaction is one compact item, open from "compacting" until the CLI says it is done', async t => {
+  let receive, exited;
+  const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; },
+    write() {}, end() { exited({ code: 0 }); }, detach() {}, kill() { exited({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: 'unused', cwd: '/tmp', engineSessionId: 'conversation', procId: 'hosted',
+    procHost: { hasProc: () => false, openProc: async () => {}, procPipe: () => pipe } });
+  const log = collect(driver);
+  await driver.start();
+  t.after(() => driver.kill());
+  const say = (m) => receive(JSON.stringify(m) + '\n');
+  say({ type: 'system', subtype: 'status', status: 'compacting' });
+  say({ type: 'system', subtype: 'status', status: 'compacting' });
+  const starts = log.of('item.start').filter((e) => e.name === 'compact');
+  assert.equal(starts.length, 1, 'the heartbeat repeat is the same compaction');
+  assert.equal(driver.status, 'working');
+  say({ type: 'system', subtype: 'status', status: null, compact_result: 'success' });
+  say({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual' } });
+  assert.deepEqual(log.of('item.done').filter((e) => e.id === starts[0].id).map((e) => e.status), ['ok']);
+
+  say({ type: 'system', subtype: 'status', status: 'compacting' });
+  say({ type: 'system', subtype: 'status', status: null, compact_result: 'failed', compact_error: 'too long' });
+  const second = log.of('item.start').filter((e) => e.name === 'compact')[1];
+  const failed = log.of('item.done').find((e) => e.id === second.id);
+  assert.equal(failed.status, 'error');
+  assert.equal(failed.error, 'too long');
+});

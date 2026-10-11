@@ -44,6 +44,8 @@ export function hookSettings(node = process.execPath, script = hookScript) {
     UserPromptSubmit: [{ hooks: run() }],
     PermissionRequest: [{ matcher: '*', hooks: run(ANSWER_WAIT_S) }],
     PostToolUse: [{ matcher: '*', hooks: run() }],
+    PreCompact: [{ hooks: run() }],
+    PostCompact: [{ hooks: run() }],
     Notification: [{ hooks: run() }],
     Stop: [{ hooks: run() }],
     SessionEnd: [{ hooks: run() }],

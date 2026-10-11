@@ -1,26 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, readlinkSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { parseCopyArgs, copySpec } from '../packages/connect/src/copy.js';
+import { parseCopyArgs, copySpec, copyTarget, rsyncPath } from '../packages/connect/src/copy.js';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-copy-'));
 test.after(() => rmSync(root, { force: true, recursive: true }));
 const net = { self: 'a', machines: { b: { id: 'b', name: 'target', sshUser: 'tester' } }, revoked: {} };
 
-test('copy rejects ambiguous and unsafe arguments before any connection', () => {
-  for (const args of [[], ['target','src'], ['target','src','--target-folder'],
-    ['target','src','--target-folder','/'], ['target','src','--target-folder','relative'],
+test('copy rejects ambiguous arguments before any connection', () => {
+  for (const args of [[], ['target'], ['target','src','--target-folder'],
     ['target','src','--target-folder','/tmp/x','--delete'], ['target','src','--target-folder','/tmp/x','--target-folder','/tmp/y']]) {
     assert.throws(() => parseCopyArgs(args));
   }
+  assert.equal(parseCopyArgs(['target','src']).targetFolder, undefined);
+  assert.equal(parseCopyArgs(['target','src','--target-folder','/']).targetFolder, '/');
   const options = parseCopyArgs(['target',root,'--target-folder','/tmp/a b','--exclude','.cache','--exclude','node_modules','--dry-run']);
   assert.equal(options.dryRun, true);
   assert.deepEqual(options.excludes, ['.cache','node_modules']);
   assert.throws(() => copySpec(options, { ...net, revoked: { b: 1 } }), /current machine/);
   assert.throws(() => copySpec({ ...options, machine: 'unknown' }, net), /exact machine/);
+});
+
+test('a copy lands in the same place by default, and ~ or relative targets mean the other home', () => {
+  const home = homedir();
+  assert.equal(copyTarget(undefined, join(home, 'dev', 'app'), true), '~/dev/app');
+  assert.equal(copyTarget(undefined, join(home, 'notes.txt'), false), '~');
+  assert.equal(copyTarget(undefined, '/srv/data', true), '/srv/data');
+  assert.equal(copyTarget('dev/app/', '/x', true), '~/dev/app');
+  assert.equal(copyTarget('~/dev', '/x', true), '~/dev');
+  assert.equal(copyTarget('/', '/x', true), '/');
+  assert.equal(rsyncPath('~'), '.');
+  assert.equal(rsyncPath('~/dev/app'), 'dev/app');
+  assert.equal(rsyncPath('/srv'), '/srv');
+  const spec = copySpec({ machine: 'target', source: root, targetFolder: '~/dev', excludes: [], mode: 'ssh' }, net);
+  assert.equal(spec.args.at(-1), 'tester@target:dev/');
 });
 
 test('streamed full copy preserves hidden files, symlinks and modes; repeat copies preserve unrelated files', t => {

@@ -7,6 +7,32 @@ import { Icon, toolKind } from '../Icon';
 import { userMessage } from './userMessage';
 import { plainError } from './problem';
 
+/** The session is still working, so an open compaction is really running. */
+const Busy = createContext(false);
+
+/** A CLI shrinking its context - every engine's compaction is this one item. */
+export const isCompaction = (it: Item) => it.kind === 'tool' && (it.name === 'compact' || it.name === 'contextCompaction');
+
+/** The line a compaction draws across the conversation, live while it runs. */
+export function CompactionLine({ live, item }: { live: boolean; item?: Item }) {
+  const took = item?.doneAt && item.startedAt ? item.doneAt - item.startedAt : 0;
+  const label = live ? 'Compacting conversation…'
+    : item?.status === 'error' ? 'Compaction failed'
+      : item?.status === 'declined' ? 'Compaction stopped'
+        : item?.status === 'streaming' ? 'Compaction interrupted'
+          : `Conversation compacted${took > 2000 ? ` · ${seconds(took)}` : ''}`;
+  return (
+    <div className={`compaction${live ? ' live' : ''}${item?.status === 'error' ? ' bad' : ''}`} title={item?.error || undefined} role={live ? 'status' : undefined}>
+      <span className={live ? 'shine' : undefined}>{label}</span>
+    </div>
+  );
+}
+
+function CompactItem({ item }: { item: Item }) {
+  const busy = useContext(Busy);
+  return <CompactionLine live={item.status === 'streaming' && busy} item={item} />;
+}
+
 const Requests = createContext<{ pending: Permission[]; review?: (id: string) => void; focusItem?: { id: string; visit: number } }>({ pending: [] });
 
 /**
@@ -387,7 +413,7 @@ function ItemContent({ item, byParent, commandOutput }: { item: Item; byParent: 
   switch (item.kind) {
     case 'text': return <TextItem item={item} commandOutput={commandOutput} />;
     case 'thinking': return <ThinkingItem item={item} />;
-    case 'tool': return <ToolItem item={item} />;
+    case 'tool': return isCompaction(item) ? <CompactItem item={item} /> : <ToolItem item={item} />;
     case 'command': return <CommandItem item={item} />;
     case 'edit': return <EditItem item={item} />;
     case 'subagent': return <SubagentItem item={item} byParent={byParent} />;
@@ -511,7 +537,9 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           // the run's first item, so a run that grows while the agent works
           // keeps the same line - and whether you opened it.
           const nodes: ReactNode[] = [];
-          const quiet = (it: Item) => it.kind !== 'text' && it.kind !== 'error';
+          // A compaction stands on its own line: it is about the whole
+          // conversation, not one of the steps around it.
+          const quiet = (it: Item) => it.kind !== 'text' && it.kind !== 'error' && !isCompaction(it);
           for (let i = 0; i < roots.length;) {
             if (!quiet(roots[i])) {
               nodes.push(<ItemView key={roots[i].id} item={roots[i]} byParent={byParent} commandOutput={commandOutput} />);
@@ -536,7 +564,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           }
           return nodes;
         })()}
-        {tail && !d && working && !turn.items.some((it) => it.status === 'streaming' && it.kind === 'text') && (
+        {tail && !d && working && !turn.items.some((it) => it.status === 'streaming' && (it.kind === 'text' || isCompaction(it))) && (
           blocked
             ? <div className="working quiet">Waiting for you</div>
             : <div className="working"><span className="shine">Working…</span></div>
@@ -681,6 +709,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   }
 
   return (
+    <Busy.Provider value={working || status === 'starting'}>
     <Requests.Provider value={requests}>
     <div className="chat-wrap">
       <div className="chat" ref={box} onScroll={onScroll}>
@@ -710,5 +739,6 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
       {zoom && <Lightbox src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}
     </div>
     </Requests.Provider>
+    </Busy.Provider>
   );
 }

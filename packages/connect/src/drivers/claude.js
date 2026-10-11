@@ -528,6 +528,19 @@ export class ClaudeDriver extends Driver {
       this.emit('init', this.info);
       return;
     }
+    // Compacting: `status: 'compacting'` (repeated while it runs), then a
+    // status without it, and a boundary once the summary is in place.
+    if (m.subtype === 'status') {
+      if (m.status === 'compacting') {
+        this.compactionStarted(this.#inTurn ? this.#turnId : null);
+        if (!this.pending.size) this.push('status', { status: 'working' });
+      } else if (this.compacting) {
+        const failed = m.compact_result === 'failed' || !!m.compact_error;
+        this.compactionEnded(failed ? 'error' : 'ok', m.compact_error);
+      }
+      return;
+    }
+    if (m.subtype === 'compact_boundary') return this.compactionEnded('ok');
     // Task lifecycle frames. `tool_use_id` is the spawn card; `task_id` is
     // what progress and completion frames key off.
     if (m.subtype === 'task_started') {
@@ -710,6 +723,7 @@ export class ClaudeDriver extends Driver {
   }
 
   #onResult(m) {
+    if (this.compacting) this.compactionEnded(m.is_error ? 'error' : 'ok');
     // A result outside any turn closes nothing that is open. A failure still
     // says so - the CLI can refuse a message before it echoes it - but with no
     // turn id, never the last turn's again; a success is that turn's repeated.

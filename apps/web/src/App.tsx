@@ -14,6 +14,7 @@ import { Controls, trayPrefs, type Kind } from './session/Controls';
 import { LimitsLine } from './session/LimitsLine';
 import { useAccountLimits } from './session/useAccountLimits';
 import { nativeConversation } from './session/nativeView';
+import { CompactionLine } from './session/Transcript';
 import { useChatKeys } from './session/chatKeys';
 import { watchAccounts, prefetchAccounts } from './accountsCache';
 import { prepareImage, type PreparedImage } from './session/image';
@@ -4548,6 +4549,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat && !nativeConversation(session.engine));
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [status, setStatus] = useState(session.status);
+  const [compacting, setCompacting] = useState(!!session.compacting);
   // When it entered the status it is in, for "working 14m" beside the word.
   const [statusAt, setStatusAt] = useState(session.updatedAt);
   const [draft, setDraft] = useState(() => loadDraft(env.id, session.id));
@@ -4654,6 +4656,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
       if (kind === 'session.transcript' && payload?.id === session.id) refresh();
       if (kind === 'session.update' && payload.session?.id === session.id) {
         setStatus(payload.session.status);
+        setCompacting(!!payload.session.compacting);
         setStatusAt(payload.session.updatedAt ?? Date.now());
         refresh();
       }
@@ -4877,7 +4880,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
         ? <Suspense fallback={<div className="xterm-host" />}>
             <Terminal client={client} env={env.id} sessionId={session.id} />
           </Suspense>
-        : <Chat messages={messages} status={status} />}
+        : <Chat messages={messages} status={status} compacting={compacting} />}
 
       {session.nativeChat && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
       {session.nativeChat && !raw && nativeNotice && (
@@ -4943,7 +4946,7 @@ function ago(ts: number | null | undefined) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function Chat({ messages, status }: { messages: Message[] | null; status: string }) {
+function Chat({ messages, status, compacting = false }: { messages: Message[] | null; status: string; compacting?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
@@ -4980,7 +4983,8 @@ function Chat({ messages, status }: { messages: Message[] | null; status: string
             </p>
           )}
           {messages?.map((m, i) => <Turn key={i} m={m} />)}
-          {status === 'working' && <div className="working"><span className="shine">Working…</span></div>}
+          {compacting ? <CompactionLine live />
+            : status === 'working' && <div className="working"><span className="shine">Working…</span></div>}
         </div>
       </div>
       {unread && <button className="jump" onClick={jump}><Icon name="arrow-down" size={14} />new</button>}

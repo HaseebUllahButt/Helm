@@ -27,6 +27,10 @@ import { execFile } from 'node:child_process';
  *   limits              { ... }
  *   error               { message, kind? }
  *
+ * A compaction is a `tool` item named `compact`, open while the CLI shrinks
+ * its context - whichever way the CLI says so - so every engine shows it the
+ * same way.
+ *
  * A `subagent` item is a spawned child agent; items that ran inside it carry
  * its id as `parentId` so the app can nest them under the spawn card. Its
  * `agent` field tracks what the engine reports about the child - status,
@@ -46,6 +50,8 @@ export class Driver extends EventEmitter {
   /** itemId -> buffered text */
   #buffer = new Map();
   #flushTimer = null;
+  /** The open compaction item, if the CLI is compacting. */
+  #compaction = null;
 
   constructor({ engine, cmd, env, args = [], cwd, model, effort = null, mode, engineSessionId, transcript = null, log = () => {},
                 procHost = null, procId = null, openTurn = null, pendingEvents = null, resumeEvents = null }) {
@@ -76,6 +82,7 @@ export class Driver extends EventEmitter {
     // Anything else must not overtake the text that came before it.
     this.flush();
     if (type === 'status') {
+      if (payload.status === 'exited') this.compactionEnded('error', 'the CLI exited while compacting');
       if (payload.status === this.status) return;
       this.status = payload.status;
     }
@@ -83,6 +90,24 @@ export class Driver extends EventEmitter {
     if (type === 'permission.resolved') this.pending.delete(payload.requestId);
     this.emit('event', { type, ...payload });
   }
+
+  /** The CLI started compacting; repeats while it runs say nothing new. */
+  compactionStarted(turnId) {
+    if (this.#compaction) return this.#compaction;
+    this.#compaction = `compact-${Math.random().toString(36).slice(2, 10)}`;
+    this.push('item.start', { id: this.#compaction, kind: 'tool', name: 'compact', turnId: turnId ?? undefined, input: {} });
+    return this.#compaction;
+  }
+
+  /** The compaction ended: done, failed or abandoned with its turn. */
+  compactionEnded(status = 'ok', error) {
+    if (!this.#compaction) return;
+    const id = this.#compaction;
+    this.#compaction = null;
+    this.push('item.done', { id, status, ...(error ? { error: String(error) } : {}) });
+  }
+
+  get compacting() { return !!this.#compaction; }
 
   flush() {
     if (this.#flushTimer) { clearTimeout(this.#flushTimer); this.#flushTimer = null; }

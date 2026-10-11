@@ -70,6 +70,8 @@ export interface Profile {
 
 export interface Session {
   paneId?: string;
+  /** A terminal CLI is summarising its conversation right now. */
+  compacting?: boolean;
   id: string;
   title: string;
   cwd: string;

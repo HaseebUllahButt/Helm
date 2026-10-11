@@ -1,6 +1,8 @@
 /** End-to-end credit, so a fast sender cannot fill a slow peer's hub socket. */
 export const TUNNEL_WINDOW = 512 * 1024;
 export const TUNNEL_CHUNK = 64 * 1024;
+/** Copies run long and far; a bigger window keeps a high-latency link full. */
+export const COPY_WINDOW = 16 * 1024 * 1024;
 
 export class TunnelSender {
   sent = 0;
@@ -10,10 +12,11 @@ export class TunnelSender {
   finishing = null;
   finishTimer = null;
 
-  constructor(input, send, fail) {
+  constructor(input, send, fail, { window = TUNNEL_WINDOW } = {}) {
     this.input = input;
     this.send = send;
     this.fail = fail;
+    this.window = window;
     this.data = chunk => {
       input.pause();
       this.pending = Buffer.from(chunk);
@@ -25,8 +28,8 @@ export class TunnelSender {
 
   pump() {
     if (this.stopped) return;
-    while (this.pending?.length && this.sent - this.acknowledged < TUNNEL_WINDOW) {
-      const size = Math.min(this.pending.length, TUNNEL_CHUNK, TUNNEL_WINDOW - this.sent + this.acknowledged);
+    while (this.pending?.length && this.sent - this.acknowledged < this.window) {
+      const size = Math.min(this.pending.length, TUNNEL_CHUNK, this.window - this.sent + this.acknowledged);
       const chunk = this.pending.subarray(0, size);
       this.pending = this.pending.subarray(size);
       this.sent += size;
@@ -38,7 +41,7 @@ export class TunnelSender {
         const done = this.finishing;
         this.stop();
         done();
-      } else if (!this.finishing && this.sent - this.acknowledged < TUNNEL_WINDOW) this.input.resume();
+      } else if (!this.finishing && this.sent - this.acknowledged < this.window) this.input.resume();
     }
   }
 
@@ -82,10 +85,11 @@ export class TunnelReceiver {
   acknowledged = 0;
   stopped = false;
 
-  constructor(output, acknowledge, fail) {
+  constructor(output, acknowledge, fail, { window = TUNNEL_WINDOW } = {}) {
     this.output = output;
     this.acknowledge = acknowledge;
     this.fail = fail;
+    this.window = window;
   }
 
   write(data) {
@@ -97,7 +101,7 @@ export class TunnelReceiver {
     }
     const chunk = Buffer.from(data, 'base64');
     if (!chunk.length || chunk.length > TUNNEL_CHUNK
-        || this.received - this.acknowledged + chunk.length > TUNNEL_WINDOW) {
+        || this.received - this.acknowledged + chunk.length > this.window) {
       this.fail(new Error('tunnel receive window exceeded'));
       return;
     }

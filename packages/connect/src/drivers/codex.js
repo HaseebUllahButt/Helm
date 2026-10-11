@@ -1447,6 +1447,11 @@ export class CodexDriver extends Driver {
         this.push('item.start', { ...base, kind: 'edit', changes });
         return;
       }
+      // Codex's own compaction, whether it chose to or helm asked.
+      case 'contextCompaction':
+        this.#items.set(item.id, { kind: 'tool' });
+        this.push('item.start', { ...base, kind: 'tool', name: 'compact', input: {} });
+        return;
       default:
         this.#items.set(item.id, { kind: 'tool' });
         this.push('item.start', { ...base, kind: 'tool', name: item.type, input: item.arguments ?? item.input ?? undefined });

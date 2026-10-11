@@ -864,9 +864,15 @@ connection, with signed requests and encrypted data. Both computers need
 `--direct` or `--relay` selects one, and `--ssh` uses the older SSH transport
 when an SSH server is available. This command does not install system services.
 
+Without `--target-folder`, files land in the same place on the other machine:
+a folder under your home goes under that machine's home, anything else keeps
+its path. `~/...` and plain relative targets mean the other machine's home.
+Copies between updated machines keep up to 16 MiB in flight, so a far-away
+machine is not held back by the round trip.
+
 ```sh
-helm copy why ./my-project --target-folder /home/haseeb/dev/my-project --dry-run
-helm copy why ./my-project --target-folder /home/haseeb/dev/my-project --exclude node_modules --exclude .cache
+helm copy why ./my-project
+helm copy why ./my-project --target-folder ~/dev/my-project --exclude node_modules --exclude .cache
 ```
 
 Unlike the filtered, size-limited code handoff, this copies hidden files and Git

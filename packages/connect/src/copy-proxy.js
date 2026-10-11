@@ -4,9 +4,9 @@ import { T } from '@helm/protocol';
 import { requireNetwork, hubCredential, allEndpoints } from '@helm/protocol/network';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { verifyHandoffSignature } from './code-transfer.js';
-import { cleanCopyFolder, createCopyRequest } from './copy-transport.js';
+import { cleanCopyFolder, createCopyRequest, copyWindow } from './copy-transport.js';
 import { directPeer } from './direct-rpc.js';
-import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
+import { TunnelSender, TunnelReceiver, COPY_WINDOW } from './tunnel-flow.js';
 
 const SERVER_FLAGS = /^-s[A-Za-z.]{0,126}$/;
 const MACHINE_ID = /^[a-f0-9]{1,64}$/;
@@ -199,8 +199,9 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
         try { onReady?.(); } catch {}
         clearTimeout(readyTimer);
         release = beginTransferActivity();
-        receiver = new TunnelReceiver(output, (bytes) => sendPacket({ type: 'ack', bytes }), fail);
-        sender = new TunnelSender(input, (chunk) => sendPacket({ type: 'data', data: chunk.toString('base64') }), fail);
+        receiver = new TunnelReceiver(output, (bytes) => sendPacket({ type: 'ack', bytes }), fail, { window: COPY_WINDOW });
+        sender = new TunnelSender(input, (chunk) => sendPacket({ type: 'data', data: chunk.toString('base64') }), fail,
+          { window: copyWindow(msg.window) });
         input.on('end', onInputEnd);
         input.on('error', onStreamError);
         output.on('error', onStreamError);

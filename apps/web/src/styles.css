@@ -768,6 +768,10 @@ pre.snippet {
   background-size: 4.5rem 100%, 100% 100%; background-repeat: no-repeat; background-clip: text; -webkit-background-clip: text;
   animation: shine 2.2s steps(30) infinite;
 }
+/* A compaction is a rule across the conversation, like the CLI's own. */
+.compaction { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-size: var(--t-meta); color: var(--mutedfg); }
+.compaction::before, .compaction::after { content: ''; flex: 1; border-top: 1px dashed var(--line-2); }
+.compaction.bad { color: var(--red); }
 @keyframes shine { from { background-position: -4.5rem 0, 0 0 } to { background-position: calc(100% + 4.5rem) 0, 0 0 } }
 @media (prefers-reduced-motion: reduce) { .shine { color: var(--mutedfg); background: none; } }
 

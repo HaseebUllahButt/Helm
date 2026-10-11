@@ -584,3 +584,19 @@ test('a wake-up the log already shows is not opened again after a restart', asyn
   assert.equal(log.of('turn.start').length, 0, 'neither is announced again');
   assert.deepEqual(log.of('turn.done').map((e) => e.turnId), [shown, 'mine']);
 });
+
+test('a Codex context compaction shows as the shared compact item', async (t) => {
+  const { driver, log, notify } = scriptedCodex(t, {
+    reply(request) {
+      if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+    },
+  });
+  await driver.start();
+  notify('turn/started', { turn: { id: 'c1' } });
+  notify('item/started', { turnId: 'c1', item: { id: 'cc-1', type: 'contextCompaction' } });
+  const start = log.of('item.start').find((e) => e.id === 'cc-1');
+  assert.equal(start.kind, 'tool');
+  assert.equal(start.name, 'compact');
+  notify('item/completed', { turnId: 'c1', item: { id: 'cc-1', type: 'contextCompaction' } });
+  assert.equal(log.of('item.done').find((e) => e.id === 'cc-1').status, 'ok');
+});

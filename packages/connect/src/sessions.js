@@ -502,6 +502,18 @@ export class Sessions extends EventEmitter {
       }
       return;
     }
+    // Compacting: Claude says when it starts and when it is done. A turn
+    // that ends, a fresh start after the summary, or the CLI closing ends it
+    // too, so a missed PostCompact cannot leave it compacting for ever.
+    const compacting = (on) => {
+      if (!!s.compacting === on) return;
+      if (on) s.compacting = true; else delete s.compacting;
+      this.#save();
+      this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id), ...pendingSummary(this.events.pending(s.id)) });
+    };
+    if (name === 'PreCompact') { compacting(true); setStatus('working'); return; }
+    if (['PostCompact', 'SessionStart', 'Stop', 'SessionEnd', 'UserPromptSubmit'].includes(name)) compacting(false);
+    if (name === 'PostCompact') return;
     if (name === 'SessionStart') {
       s.nativeChat = true;
       if (typeof event.model === 'string' && event.model) s.engineModel = event.model;
@@ -808,6 +820,8 @@ export class Sessions extends EventEmitter {
         if (s.driver && s.notifyDone == null) s.notifyDone = !s.delegation;
         // Legacy planning sessions resume as executable tasks, not a plan gate.
         if (s.driver && s.mode === 'plan') s.mode = defaultMode(s.engine);
+        // Whatever was compacting before the daemon stopped has said nothing since.
+        delete s.compacting;
         this.#index.set(s.id, s);
       }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
@@ -1858,7 +1872,8 @@ export class Sessions extends EventEmitter {
     // The CLI refused or lost a message handed to it mid-turn. It fails as
     // its own bubble rather than leaving it "sent" with nothing behind it.
     if (e.type === 'input.failed') return this.#consumed(s, e.text, e.inputId, e.error || 'The CLI did not take this message.');
-    if (e.type === 'item.start' && !e.parentId && !['text', 'thinking'].includes(e.kind)) {
+    // A compaction is not a step: nothing waiting should go in while the CLI rewrites its context.
+    if (e.type === 'item.start' && !e.parentId && !['text', 'thinking'].includes(e.kind) && e.name !== 'compact') {
       const steps = this.#steps.get(s.id) ?? new Set();
       steps.add(e.id);
       this.#steps.set(s.id, steps);

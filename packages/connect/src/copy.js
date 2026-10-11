@@ -1,13 +1,13 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { lstatSync } from 'node:fs';
-import { resolve, join } from 'node:path';
-import { platform, userInfo } from 'node:os';
+import { statSync } from 'node:fs';
+import { resolve, join, relative, dirname, isAbsolute } from 'node:path';
+import { platform, userInfo, homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { requireNetwork } from '@helm/protocol/network';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { expand, KEY_FILE, HELM_DIR } from './paths.js';
 
-const USAGE = 'usage: helm copy <machine> <file-or-folder> --target-folder <absolute-path> [--exclude <pattern>] [--dry-run] [--direct|--relay|--ssh] [--retries 0-5]';
+const USAGE = 'usage: helm copy <machine> <file-or-folder> [--target-folder <path>] [--exclude <pattern>] [--dry-run] [--direct|--relay|--ssh] [--retries 0-5]';
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SSH_USER = /^[a-z_][a-z0-9_-]{0,31}$/i;
 const KEY_B64 = /^[A-Za-z0-9_-]{40,512}$/;
@@ -58,12 +58,34 @@ export function parseCopyArgs(args) {
     if (arg.startsWith('-')) throw new Error(`helm copy: unknown flag ${arg}`);
     positional.push(arg);
   }
-  if (positional.length !== 2 || !targetFolder) throw new Error(`helm copy: ${USAGE}`);
-  if (!targetFolder.startsWith('/') || /[\u0000-\u001f\u007f]/.test(targetFolder) || resolve(targetFolder) === '/') {
-    throw new Error('helm copy: --target-folder must be an absolute destination folder, not /');
+  if (positional.length !== 2) throw new Error(`helm copy: ${USAGE}`);
+  if (targetFolder !== undefined && /[\u0000-\u001f\u007f]/.test(targetFolder)) {
+    throw new Error('helm copy: --target-folder has control characters');
   }
   return { machine: positional[0], source: positional[1], targetFolder, excludes, dryRun, mode, retries };
 }
+
+/**
+ * Where the files land on the other machine. No folder means the same place
+ * as here: under home when the source is under home, else the same path.
+ * `~` and plain relative paths are the other machine's home.
+ */
+export function copyTarget(targetFolder, sourcePath, isFolder) {
+  if (targetFolder === undefined || targetFolder === null || targetFolder === '') {
+    const folder = isFolder ? sourcePath : dirname(sourcePath);
+    const home = homedir();
+    const inHome = relative(home, folder);
+    if (inHome === '') return '~';
+    if (!inHome.startsWith('..') && !isAbsolute(inHome)) return `~/${inHome}`;
+    return folder;
+  }
+  if (targetFolder === '~' || targetFolder.startsWith('~/')) return targetFolder.replace(/\/+$/, '') || '~';
+  if (targetFolder.startsWith('/')) return resolve(targetFolder);
+  return `~/${targetFolder.replace(/\/+$/, '')}`;
+}
+
+/** rsync's own form of a target: home-relative paths are relative to the receiver's home. */
+export const rsyncPath = (target) => (target === '~' ? '.' : target.startsWith('~/') ? target.slice(2) : target);
 
 const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
@@ -75,15 +97,15 @@ export function copySpec(options, net = requireNetwork()) {
   if (peer.id === net.self || net.revoked?.[peer.id]) {
     throw new Error('helm copy: choose another current machine from `helm machines`');
   }
-  const targetFolder = resolve(options.targetFolder);
-  if (targetFolder === '/') throw new Error('helm copy: --target-folder must be a folder, not the filesystem root');
   const sourcePath = resolve(expand(options.source ?? options.folder));
   let stat;
-  try { stat = lstatSync(sourcePath); } catch { throw new Error(`helm copy: ${options.source} is not readable here`); }
+  try { stat = statSync(sourcePath); } catch { throw new Error(`helm copy: ${options.source ?? options.folder} is not readable here`); }
   let source;
   if (stat.isDirectory()) source = `${sourcePath}/`;
   else if (stat.isFile()) source = sourcePath;
-  else throw new Error('helm copy: the source must be a regular file or folder, not a link or special file');
+  else throw new Error('helm copy: the source must be a file or folder');
+  const targetFolder = copyTarget(options.targetFolder, sourcePath, stat.isDirectory());
+  const remotePath = rsyncPath(targetFolder);
   const rsyncFlags = ['-a', '--no-owner', '--no-group', '--protect-args', '--mkpath',
     '--compress', '--compress-level=1', '--partial-dir=.helm-transfer-partial',
     '--info=progress2', '--stats', '--timeout=120'];
@@ -113,8 +135,8 @@ export function copySpec(options, net = requireNetwork()) {
       '-o', `ProxyCommand=${proxy}`].map(quote).join(' ');
     return {
       command: 'rsync',
-      args: [...rsyncFlags, '-e', ssh, ...dryRun, ...excludes, '--', source, `${sshUser}@${peer.name}:${targetFolder}/`],
-      peer,
+      args: [...rsyncFlags, '-e', ssh, ...dryRun, ...excludes, '--', source, `${sshUser}@${peer.name}:${remotePath}/`],
+      peer, targetFolder,
     };
   }
   if (!KEY_B64.test(peer.codePubkey ?? '') || !KEY_B64.test(peer.codeSignPubkey ?? '')) {
@@ -130,8 +152,8 @@ export function copySpec(options, net = requireNetwork()) {
   ].filter(Boolean).join(' ');
   return {
     command: 'rsync',
-    args: [...rsyncFlags, '-e', remote, ...dryRun, ...excludes, '--', source, `${peer.id}:${targetFolder}/`],
-    peer,
+    args: [...rsyncFlags, '-e', remote, ...dryRun, ...excludes, '--', source, `${peer.id}:${remotePath}/`],
+    peer, targetFolder,
   };
 }
 
@@ -168,7 +190,7 @@ export async function runCopy(options, deps = {}) {
   try {
     checkRsync();
     const who = options.mode === 'ssh' ? `${spec.peer.name} over SSH` : `${spec.peer.name} over Helm`;
-    stdout.write(`Copying ${options.source} to ${who}:${options.targetFolder}...\n`);
+    stdout.write(`Copying ${options.source ?? options.folder} to ${who}:${spec.targetFolder}...\n`);
     stdout.write('Includes hidden files; existing matching files may be replaced. No destination files are deleted.\n');
     const attempts = 1 + options.retries;
     for (let attempt = 0; attempt < attempts; attempt++) {

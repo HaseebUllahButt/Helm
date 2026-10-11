@@ -9,7 +9,8 @@ import { WebSocketServer } from 'ws';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TunnelSender, TunnelReceiver, TUNNEL_WINDOW, TUNNEL_CHUNK } from '../packages/connect/src/tunnel-flow.js';
+import { TunnelSender, TunnelReceiver, TUNNEL_WINDOW, TUNNEL_CHUNK, COPY_WINDOW } from '../packages/connect/src/tunnel-flow.js';
+import { copyWindow } from '../packages/connect/src/copy-transport.js';
 import { T } from '@helm/protocol';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-flow-'));
@@ -39,6 +40,25 @@ test('sender stops at its window and resumes only on validated receiver credit',
   assert.equal(errors.length, 2);
   sender.stop();
   assert.equal(input.listenerCount('data'), 0);
+});
+
+test('a copy keeps a larger window in flight only when the other end offered it', async () => {
+  assert.equal(copyWindow(undefined), TUNNEL_WINDOW);
+  assert.equal(copyWindow(1024), TUNNEL_WINDOW);
+  assert.equal(copyWindow(COPY_WINDOW * 4), COPY_WINDOW);
+  const input = new PassThrough(); const chunks = [];
+  const sender = new TunnelSender(input, c => chunks.push(c), assert.fail, { window: copyWindow(COPY_WINDOW) });
+  input.write(Buffer.alloc(COPY_WINDOW + TUNNEL_CHUNK));
+  await tick();
+  assert.equal(sender.sent, COPY_WINDOW);
+  sender.stop();
+  const errors = [];
+  const receiver = new TunnelReceiver({ write: () => {} }, () => {}, e => errors.push(e), { window: COPY_WINDOW });
+  const data = Buffer.alloc(TUNNEL_CHUNK).toString('base64');
+  for (let n = 0; n < COPY_WINDOW / TUNNEL_CHUNK; n++) receiver.write(data);
+  assert.equal(errors.length, 0);
+  receiver.write(data);
+  assert.equal(errors.length, 1);
 });
 
 test('a closing sender flushes a tail that is waiting for credit before closing the tunnel', async () => {

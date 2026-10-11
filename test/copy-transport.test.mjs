@@ -3,9 +3,13 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { cleanCopyFolder, validateCopyServerArgs, createCopyCipher } from '../packages/connect/src/copy-transport.js';
 
-test('copy receiver permits only absolute destinations and receiving rsync arguments', () => {
+test('copy receiver takes absolute and home destinations and only receiving rsync arguments', () => {
   assert.equal(cleanCopyFolder('/tmp/a b'), '/tmp/a b');
-  for (const folder of ['/', '/tmp/..', 'relative', '/tmp/x\ncommand']) assert.throws(() => cleanCopyFolder(folder));
+  assert.equal(cleanCopyFolder('/'), '/');
+  assert.equal(cleanCopyFolder('/tmp/..'), '/');
+  assert.equal(cleanCopyFolder('~'), '~');
+  assert.equal(cleanCopyFolder('~/dev/x'), '~/dev/x');
+  for (const folder of ['relative', '/tmp/x\ncommand']) assert.throws(() => cleanCopyFolder(folder));
   assert.deepEqual(validateCopyServerArgs(['--server', '-slogDtpre.iLsfxCIvu']), ['--server', '-slogDtpre.iLsfxCIvu']);
   for (const args of [['--sender', '-s'], ['--server', '-s', '/tmp'], ['--server', '-s;sh'], ['--server', '--daemon']]) {
     assert.throws(() => validateCopyServerArgs(args));
