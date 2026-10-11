@@ -94,8 +94,24 @@ in the CLI. Gemini/agy unsupported for now. New deps: `smol-toml`, `yaml`.
 Verified with real add → list → remove on `codex` and `claudea`, nothing
 left behind; OAuth completion itself not exercised.
 
-**Keyboard chat controls and tok/s** (feat/chat-shortcuts, Opus): see the
-merge note below once it lands.
+**Keyboard chat controls and tok/s** (feat/chat-shortcuts, Opus). In a
+chat: Ctrl/Cmd+Shift+E steps to the next thinking level the model offers,
+Ctrl/Cmd+Shift+M to the next model (favourites first, then the account's
+short list, wrapping), Ctrl/Cmd+Shift+A opens/closes the agents panel (Up/Down
++ Enter open a child there), Shift+Tab still cycles permissions. The keys
+work while typing in the composer, not in a terminal or under another sheet;
+they reach terminal-CLI chats through the shared tray too (no agents panel
+there). The model/thinking/permission sheets take focus on desktop: typing
+searches, arrows move, Enter picks, Esc closes; the model sheet shows its
+search box past six models. While text streams the working chip reads
+"working 12s · 97 tok/s": streamed characters / 4 over the last 5 s, updated
+once a second, gone 2 s after the text stops (`session/tokenRate.ts`). The
+drivers' usage figures arrive once per turn and cover only the last model
+call (one 65,000-character turn reported 77 output tokens), so they cannot
+drive a live speed and the per-turn token total was skipped. "?" lists the
+keys in three groups (Anywhere / new-chat box / in a chat). Tests:
+`test/chat-keys.test.mjs`, `test/token-rate.test.mjs`, browser
+`chat-shortcuts.test.mjs`.
 
 **Known failing on this laptop, before and after this round:** the four
 `native-cli.test.mjs` "native launch" tests time out (they did so on the
