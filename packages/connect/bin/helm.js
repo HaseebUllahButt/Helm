@@ -97,6 +97,7 @@ const usage = () => {
   helm chat <account> --resume <id> continue a native conversation after its CLI closes
   helm integrate [--remove]        manage automatic control of normal CLI commands
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
+    --mkdir --wait [--timeout <ms>]  create the folder; print the first completed reply
   helm delegate <account> --model <id> --wait --json -- "<task>"
                                     run a CLI subagent in the current folder
   helm delegate-result <id> [--wait] [--json]   read its result or pending approval
@@ -891,29 +892,11 @@ async function say() {
 }
 
 async function spawn_() {
-  const { parseAgentArgs } = await import('../src/delegation.js');
-  const { words: args, options } = parseAgentArgs(rest, { values: ['model', 'mode', 'effort', 'title'] });
-  const [who, folder, account, ...words] = args;
-  const text = words.join(' ');
-  if (!who || !folder || !account) {
-    die('helm spawn <machine> <folder> <account> <text...>');
-  }
-  const env = machineId(who);
-  const { profiles } = await brainRpc(env, M.PROFILE_LIST, {});
-  const want = account.toLowerCase();
-  const profile = profiles.find((x) => x.id === account)
-    || profiles.find((x) => String(x.account ?? '').toLowerCase() === want)
-    || profiles.find((x) => x.id.toLowerCase().startsWith(want));
-  if (!profile) {
-    die(`no account "${account}" on that machine - it has: ${profiles.map((x) => x.id).join(', ')}`);
-  }
-  const { session } = await brainRpc(env, M.SESSION_START, {
-    cwd: folder, profileId: profile.id, model: options.model, mode: options.mode,
-    effort: options.effort, title: options.title,
-  }, 60_000);
-  if (text) await brainRpc(env, M.SESSION_INPUT, { id: session.id, data: text });
-  console.log(`${shortId(session.id)}  ${session.title}  (${profile.engine} on ${who}, ${folder})`);
-  if (text) console.log('prompted.');
+  const { spawnAgent, parseSpawnArgs } = await import('../src/spawn-cli.js');
+  const { machine } = parseSpawnArgs(rest);
+  const env = machineId(machine);
+  await spawnAgent(rest, { rpc: (method, params, timeout) => brainRpc(env, method, params, timeout),
+    write: (text) => process.stdout.write(text) });
 }
 
 /**
@@ -1154,23 +1137,12 @@ async function handoff() {
 }
 
 async function sendTask() {
-  const { parseAgentArgs } = await import('../src/delegation.js');
-  const { options, words } = parseAgentArgs(rest, {
-    values: ['account', 'source-folder', 'target-folder', 'session', 'model', 'mode', 'handoff-id'],
-    switches: ['no-env', 'allow-skipped', 'json'],
-  });
-  const who = words.shift();
-  if (!who || !options.account) die('usage: helm send-task <machine> --account <target-profile> [task...]');
+  const { parseTaskArgs } = await import('../src/task-cli.js');
+  const { options, request } = parseTaskArgs(rest, { machineId });
   const net = requireNetwork();
-  const handoffId = options['handoff-id'] || randomBytes(12).toString('hex');
+  const { handoffId } = request;
   console.error(`helm: task ${handoffId}; retry with the same arguments and --handoff-id ${handoffId}`);
-  const request = {
-    handoffId, targetMachineId: machineId(who), profileId: options.account,
-    folder: resolve(expand(options['source-folder'] || process.env.HELM_CWD || process.cwd())),
-    targetFolder: options['target-folder'], sessionId: options.session || process.env.HELM_SESSION_ID,
-    model: options.model, mode: options.mode, prompt: words.join(' '),
-    includeEnv: !options['no-env'], allowSkipped: !!options['allow-skipped'],
-  };
+  const started = Date.now();
   let result = await brainRpc(net.self, M.TASK_SEND, request, 360_000);
   // A big project copies first, in the background; asking again with the
   // same request follows it until the task is running.
@@ -1193,6 +1165,10 @@ async function sendTask() {
   if (!options.json) {
     console.log(`Task ${handoffId} ${result.status} on ${result.targetName}.`);
     if (result.receipt) console.log(`  ${result.receipt.sessionId} · ${result.receipt.folder} · ${result.route}`);
+    if (result.preflight) {
+      console.log(`  ${result.preflight.files} files · ${(result.preflight.bytes / 1e6).toFixed(2)} MB · request completed in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      for (const warning of result.preflight.warnings ?? []) console.error(`  ${warning.message}`);
+    }
     if (result.warning) console.error(result.warning);
   }
 }
