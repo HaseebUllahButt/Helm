@@ -548,8 +548,23 @@ side panel on desktop and a bottom sheet on phones.
 
 There is no message-delivery selector. Native terminal sessions pass input
 straight to the CLI, retaining that CLI's own queue and interruption behavior.
-Managed Claude and Codex chats hand follow-up input to the running turn at a
-tool boundary; adapters without steering queue it until the turn finishes.
+In managed chats a message sent while the agent works follows its CLI's own
+timing, and each waiting message says which: Codex reads it after its next
+tool call, Claude when its current tools finish, OpenCode at the next step of
+its running loop, and Devin, OpenCode 2 and the rest after the current
+response. Scheduled prompts and delegated results say **After this task**;
+a message the CLI has taken says **Sent to CLI**. Messages with attached
+thread context wait for the response to end.
+
+**Send now** works on every CLI. Codex, Claude and OpenCode take the message
+inside the running turn. Other CLIs stop only the current response and then
+send it - the other waiting messages, delegated tasks and the thread carry
+on. A delegated task without steering is not cut short; it reads the message
+when its response ends. A message being sent this way cannot be withdrawn
+halfway, and **Stop** still cancels it. If a CLI refuses a message or exits
+before reading it, that message shows as failed in the chat, ready to resend,
+rather than disappearing.
+
 Queued messages can be edited, reordered,
 removed, or withdrawn into the composer until delivery starts. Edits, order,
 attachments, and attached context survive a daemon restart. Delivery already

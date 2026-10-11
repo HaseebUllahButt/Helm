@@ -12,6 +12,7 @@
     "./notifications": "./notifications.js",
     "./transfer-activity": "./transfer-activity.js",
     "./share": "./share.js",
-    "./limits": "./limits.js"
+    "./limits": "./limits.js",
+    "./message-delivery": "./message-delivery.js"
   }
 }

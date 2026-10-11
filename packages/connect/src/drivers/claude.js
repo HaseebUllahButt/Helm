@@ -73,6 +73,8 @@ export class ClaudeDriver extends Driver {
   #lastAssistant = null;
   #interrupting = false;
   #capabilities = new Set();
+  /** uuid -> { text, inputId } for messages steered into a turn and not yet read. */
+  #inputs = new Map();
   /** Commands advertised by this exact Claude Code process at init. */
   #commands = [];
   /** request_id -> resolve, for control requests we sent */
@@ -206,6 +208,9 @@ export class ClaudeDriver extends Driver {
       pipe.onExit(({ code, signal, stderr }) => {
         this.#pipe = null;
         this.#inTurn = false;
+        // Messages handed over mid-turn that it never read die with it too.
+        for (const input of this.#inputs.values()) this.push('input.failed', { ...input, error: 'Claude exited before reading this message.' });
+        this.#inputs.clear();
         markReady();
         // A prompt the CLI was holding open dies with it; say so.
         for (const requestId of [...this.pending.keys()]) {
@@ -259,7 +264,7 @@ export class ClaudeDriver extends Driver {
    * steps, so this lands when the step in flight ends - what typing while
    * the CLI works does. The replay says when it was used.
    */
-  async steer(text, attachments = []) {
+  async steer(text, attachments = [], { inputId } = {}) {
     if (!this.#pipe || !this.#inTurn) throw new Error('claude has no active turn to steer');
     const content = [];
     if (text) content.push({ type: 'text', text });
@@ -271,10 +276,19 @@ export class ClaudeDriver extends Driver {
       content.push({ type: 'image', source: { type: 'base64', media_type: a.mime, data: a.data } });
     }
     if (!content.length) content.push({ type: 'text', text: '(empty message)' });
-    this.#write({
-      type: 'user', session_id: '', parent_tool_use_id: null, uuid: randomUUID(),
-      message: { role: 'user', content },
-    });
+    // The replay names this uuid, which is how its read is matched to the
+    // right waiting message even when two say the same thing.
+    const uuid = randomUUID();
+    this.#inputs.set(uuid, { text: resultText(content), inputId });
+    try {
+      this.#write({
+        type: 'user', session_id: '', parent_tool_use_id: null, uuid,
+        message: { role: 'user', content },
+      });
+    } catch (err) {
+      this.#inputs.delete(uuid);
+      throw err;
+    }
   }
 
   async availableCommands() {
@@ -495,17 +509,24 @@ export class ClaudeDriver extends Driver {
 
   #onUser(m) {
     if (m.isReplay) {
+      // A subagent's own prompt is not one of the owner's messages.
+      if (m.parent_tool_use_id) return;
       const text = resultText(m.message?.content);
+      const input = this.#inputs.get(m.uuid);
+      if (input) this.#inputs.delete(m.uuid);
       // A message written while a turn runs is read at the end of the step
-      // in flight and joins that turn - the turn keeps its id.
+      // in flight and joins that turn - the turn keeps its id. A replay
+      // under a uuid helm never wrote is not one of its waiting messages.
       if (this.#inTurn) {
-        this.push('input.consumed', { text });
+        if (input) this.push('input.consumed', input);
+        else if (!m.uuid) this.push('input.consumed', { text });
         return;
       }
-      // The CLI accepted our message; this uuid is the turn.
+      // The CLI accepted our message; this uuid is the turn. A steer that
+      // arrived after the turn ended runs as this one, under its ticket.
       this.#turnId = m.uuid;
       this.#inTurn = true;
-      this.push('turn.start', { turnId: m.uuid, text });
+      this.push('turn.start', { turnId: m.uuid, text, ...(input?.inputId ? { inputId: input.inputId } : {}) });
       return;
     }
     for (const block of m.message?.content ?? []) {

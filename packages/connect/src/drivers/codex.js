@@ -564,7 +564,7 @@ export class CodexDriver extends Driver {
   #lastSpawn = null;
   /** server request id -> { method, params } */
   #requests = new Map();
-  /** Texts handed to the running turn that Codex has not used yet. */
+  /** { clientId, inputId, turnId, text } handed to the running turn that Codex has not used yet. */
   #steers = [];
   #nativeTurnStarts = new Set();
   #nativeSubscribed = false;
@@ -757,6 +757,8 @@ export class CodexDriver extends Driver {
       return;
     }
     for (const requestId of [...this.pending.keys()]) this.push('permission.resolved', { requestId, decision: 'cancelled' });
+    // Handed over mid-turn but never read: the process that had them is gone.
+    for (const { text, inputId } of this.#steers.splice(0)) this.push('input.failed', { text, inputId, error: 'Codex exited before reading this message.' });
     if (!this.killed) this.push('error', { message: `codex exited with code ${code}${stderr ? `: ${stderr.trim().split('\n').pop()}` : ''}`, kind: 'exit' });
     this.push('status', { status: 'exited' });
   }
@@ -1086,7 +1088,7 @@ export class CodexDriver extends Driver {
    * turn/start takes; there is deliberately no status or turn event here -
    * the running turn's stream covers what the message becomes.
    */
-  async steer(text, attachments = []) {
+  async steer(text, attachments = [], { inputId } = {}) {
     await this.start();
     if (!this.#turnId) throw new Error('codex has no active turn to steer');
     const input = text ? [{ type: 'text', text, text_elements: [] }] : [];
@@ -1098,16 +1100,20 @@ export class CodexDriver extends Driver {
       input.push({ type: 'image', url: `data:${a.mime};base64,${a.data}` });
     }
     if (!input.length) input.push({ type: 'text', text: '(empty message)', text_elements: [] });
-    const content = input.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-    this.#steers.push(content);
+    // Recorded before the call: Codex can report using it before it answers.
+    const entry = {
+      clientId: randomUUID(), inputId, turnId: this.#turnId,
+      text: input.filter((b) => b.type === 'text').map((b) => b.text).join('\n'),
+    };
+    this.#steers.push(entry);
     const res = await this.#server.call('turn/steer', {
       threadId: this.threadId,
-      expectedTurnId: this.#turnId,
+      expectedTurnId: entry.turnId,
       input,
-      clientUserMessageId: randomUUID(),
+      clientUserMessageId: entry.clientId,
     });
     if (res.error) {
-      const index = this.#steers.lastIndexOf(content);
+      const index = this.#steers.indexOf(entry);
       if (index >= 0) this.#steers.splice(index, 1);
       throw new Error(res.error.message);
     }
@@ -1363,7 +1369,12 @@ export class CodexDriver extends Driver {
       case 'userMessage': {
         if (parentId) return;
         const text = (item.content ?? []).filter((b) => b?.type === 'text').map((b) => b.text).join('\n');
-        const i = this.#steers.indexOf(text);
+        // By the id it was sent under where Codex reports one; otherwise
+        // the oldest identical text steered into this turn.
+        const clientId = item.clientId ?? item.clientUserMessageId;
+        const i = this.#steers.findIndex((entry) => clientId != null
+          ? entry.clientId === clientId
+          : entry.text === text && (!turnId || entry.turnId === turnId));
         if (i < 0) {
           if (this.nativeSocket && base.turnId && !this.#nativeTurnStarts.has(base.turnId)) {
             this.#nativeTurnStarts.add(base.turnId);
@@ -1371,8 +1382,8 @@ export class CodexDriver extends Driver {
           }
           return;
         }
-        this.#steers.splice(i, 1);
-        this.push('input.consumed', { text });
+        const [entry] = this.#steers.splice(i, 1);
+        this.push('input.consumed', { text, inputId: entry.inputId });
         return;
       }
       // One agent spawning another (spawn_agent | send_input | resume_agent

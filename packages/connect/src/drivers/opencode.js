@@ -25,11 +25,22 @@ export class OpencodeDriver extends AcpDriver {
       args: (d) => ['acp', '--cwd', d.cwd],
       acpMode: (m) => modeFor('opencode', m)?.acp ?? null,
       effortId: 'effort',
+      // A prompt sent while a run is going is added to that session and
+      // read by the running loop at its next step, the way the TUI queues
+      // typing; both prompts answer when the loop ends.
+      promptWhileBusy: true,
     }, opts);
   }
+
+  /** A waiting message joins the running loop at its next step. */
+  async steer(text, attachments = [], options = {}) { return this.sendDuringTurn(text, attachments, options); }
 }
 
-/** OpenCode 2 preview, which ships as a separate `opencode2` executable. */
+/**
+ * OpenCode 2 preview, which ships as a separate `opencode2` executable. Its
+ * ACP side has not been seen to fold a second prompt into a running loop,
+ * so messages typed mid-turn wait for the reply there.
+ */
 export class Opencode2Driver extends AcpDriver {
   constructor(opts) {
     super({
