@@ -95,8 +95,10 @@ const usage = () => {
   helm chat <account> [-- text]    share a live agent between this terminal and the app
   helm chat --attach <id>          reconnect to the same managed session
   helm chat <account> --resume <id> continue a native conversation after its CLI closes
+  helm chat <account> --quick      a chat with no folder, for a small question
   helm integrate [--remove]        manage automatic control of normal CLI commands
   helm spawn <machine> <folder> <account> <text...>   start a session and prompt it
+  helm spawn <machine> - <account> <text...>          the same, as a quick chat with no folder
   helm delegate <account> --model <id> --wait --json -- "<task>"
                                     run a CLI subagent in the current folder
   helm delegate-result <id> [--wait] [--json]   read its result or pending approval
@@ -896,7 +898,7 @@ async function spawn_() {
   const [who, folder, account, ...words] = args;
   const text = words.join(' ');
   if (!who || !folder || !account) {
-    die('helm spawn <machine> <folder> <account> <text...>');
+    die('helm spawn <machine> <folder | - for a quick chat> <account> <text...>');
   }
   const env = machineId(who);
   const { profiles } = await brainRpc(env, M.PROFILE_LIST, {});
@@ -907,12 +909,14 @@ async function spawn_() {
   if (!profile) {
     die(`no account "${account}" on that machine - it has: ${profiles.map((x) => x.id).join(', ')}`);
   }
+  // "-" is no folder: a quick chat, in an empty folder the machine makes.
+  const quick = folder === '-';
   const { session } = await brainRpc(env, M.SESSION_START, {
-    cwd: folder, profileId: profile.id, model: options.model, mode: options.mode,
+    ...(quick ? { quick: true } : { cwd: folder }), profileId: profile.id, model: options.model, mode: options.mode,
     effort: options.effort, title: options.title,
   }, 60_000);
   if (text) await brainRpc(env, M.SESSION_INPUT, { id: session.id, data: text });
-  console.log(`${shortId(session.id)}  ${session.title}  (${profile.engine} on ${who}, ${folder})`);
+  console.log(`${shortId(session.id)}  ${session.title}  (${profile.engine} on ${who}, ${quick ? 'quick chat' : folder})`);
   if (text) console.log('prompted.');
 }
 

@@ -1421,7 +1421,8 @@ export class Daemon {
         // its threads belong under that one rather than under a project each.
         const worktrees = new Map();
         for (const s of await this.sessions.list()) {
-          if (s.engine === 'shell' || !s.cwd) continue;
+          // A quick chat's scratch folder is not a project.
+          if (s.engine === 'shell' || !s.cwd || s.quick) continue;
           try {
             const base = gitq.worktreeBase(s.cwd);
             const found = await fsApi.project(base ?? s.cwd);
@@ -1599,7 +1600,7 @@ export class Daemon {
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
         const { originHandoffId: _originHandoffId, delegation: _delegation, ...start } = p;
-        return { session: await this.sessions.start(start) };
+        return { session: await this.sessions.start({ ...start, quick: start.quick === true }) };
       }
       case M.SESSION_LINK:    return this.sessions.linkChild(p.id, p.child);
       // Attaching starts a push stream of the screen (E.SESSION_DATA); the

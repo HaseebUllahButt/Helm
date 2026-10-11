@@ -25,3 +25,16 @@ export const collapse = (p) => {
   const abs = resolve(p);
   return abs.startsWith(HOME) ? '~' + abs.slice(HOME.length) : abs;
 };
+
+/**
+ * Where a chat with no folder runs. Every CLI needs a working directory, so a
+ * "quick chat" gets an empty one of its own, named by its session id, that
+ * lives and dies with the chat.
+ */
+export const QUICK_DIR = join(HELM_DIR, 'quick');
+export const quickDir = (id) => join(QUICK_DIR, id);
+/** Whether a path is one of those scratch folders (or inside one). */
+export const isQuickDir = (p) => {
+  const full = typeof p === 'string' ? resolve(expand(p)) : '';
+  return full.startsWith(QUICK_DIR + '/') && full.length > QUICK_DIR.length + 1;
+};

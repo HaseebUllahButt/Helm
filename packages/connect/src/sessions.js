@@ -1,11 +1,11 @@
 import { nativeAccount } from './native-account.js';
 import { nativeCommands, nativeControlCommand, nativeSettingCommand } from './native-controls.js';
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdirSync, readlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdirSync, readlinkSync, rmSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { HELM_DIR, expand } from './paths.js';
+import { HELM_DIR, expand, quickDir, isQuickDir } from './paths.js';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages, sessionSnapshot, sessionActivity } from './transcript.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
@@ -606,7 +606,7 @@ export class Sessions extends EventEmitter {
             driver: 'codex', nativeSocket: thread.nativeSocket, nativeCodex: true,
             shared: true, external: false, externalActive: false, externalSource: true, adopted: false,
             updatedAt: thread.updatedAt * 1000 });
-          if (!s.titleBy) s.title = thread.name || thread.preview?.slice(0, 80) || basename(thread.cwd);
+          if (!s.titleBy) s.title = thread.name || thread.preview?.slice(0, 80) || (s.quick ? 'Quick chat' : basename(thread.cwd));
           // The snapshot names a newly found thread's state. After that the
           // live thread is the authority: this read can be older than the
           // notification that just arrived, and writing it here silently
@@ -983,7 +983,7 @@ export class Sessions extends EventEmitter {
         // A runtime pane without a native ID can still represent this CLI.
         if (x.active && out.some((s) => s.paneId && s.alive && s.engine === x.engine && expand(s.cwd) === expand(x.cwd))) continue;
         out.push({ id, engine: x.engine, engineSessionId: x.id, account: x.account,
-          title: x.title, cwd: x.cwd, profileId: x.account, model: x.model,
+          title: x.title, cwd: x.cwd, quick: isQuickDir(x.cwd) || undefined, profileId: x.account, model: x.model,
           status: x.status, turns: x.turns, alive: !!x.active, externalActive: !!x.active,
           adopted: true, archived: mark === 'archived', updatedAt: x.updatedAt });
       }
@@ -995,7 +995,7 @@ export class Sessions extends EventEmitter {
       .map((s) => s.delegations ? { ...s, delegations: this.#visibleDelegations(s) } : s)
       .map((s) => (s.delegation && this.#unhomedDelegation(s) ? { ...s, unhomed: true } : s))
       // The branch each thread's folder is on, for the sidebar's third line.
-      .map((s) => (s.cwd ? { ...s, branch: gitBranch(s.cwd) } : s))
+      .map((s) => (s.cwd && !s.quick ? { ...s, branch: gitBranch(s.cwd) } : s))
       .sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 
@@ -1085,19 +1085,24 @@ export class Sessions extends EventEmitter {
     const profile = (await getProfiles()).find((p) => p.id === s.profileId);
     if (!profile) throw new Error(`unknown profile: ${s.profileId}`);
     return this.#startDriven({
-      cwd: s.cwd, profile, title: `${s.title} (branch)`,
+      cwd: s.cwd, quick: !!s.quick, profile, title: `${s.title} (branch)`,
       model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
       forkFrom: { sessionId: s.engineSessionId, at },
     });
   }
 
-  async start({ cwd, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null }) {
+  async start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null }) {
     if (originHandoffId !== null && !/^[a-f0-9]{24}$/.test(originHandoffId)) {
       throw new Error('invalid origin handoff id');
     }
+    if (quick && cwd) throw new Error('a quick chat has no folder: send quick or cwd, not both');
+    if (!quick && !cwd) throw new Error('which folder? send cwd, or quick for a chat with no folder');
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
+    if (quick && (brain || delegation || !ENGINES[profile.engine]?.driver)) {
+      throw new Error(`${profile.label || profile.engine} cannot start a quick chat: only agents helm drives can`);
+    }
     // The account's configured default is what a new session starts with; a
     // model chosen up front always wins.
     if (!model) model = modelPrefs(profile)?.default ?? null;
@@ -1107,7 +1112,7 @@ export class Sessions extends EventEmitter {
     if (!mode) mode = defaults.mode === 'plan' ? defaultMode(profile.engine) : defaults.mode ?? null;
     if (!speed) speed = defaults.speed ?? null;
     const lineage = parentLink(parent);
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation });
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -1350,10 +1355,18 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null }) {
+  async #startDriven({ cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null }) {
+    const id = randomBytes(6).toString('hex');
+    // A quick chat's folder is made for it, empty, and named by its id. A
+    // branch of one keeps its parent's: the CLI files a conversation under
+    // the folder it ran in, so that is where the copy has to be read from.
+    if (quick && !cwd) {
+      cwd = quickDir(id);
+      mkdirSync(cwd, { recursive: true, mode: 0o700 });
+    }
     const dir = expand(cwd);
     const session = {
-      id: randomBytes(6).toString('hex'),
+      id,
       driver: profile.engine,
       profileId: profile.id,
       engine: profile.engine,
@@ -1362,8 +1375,11 @@ export class Sessions extends EventEmitter {
       mode: mode || (auto != null ? modeFromAuto(profile.engine, auto) : defaultMode(profile.engine)),
       speed: speed || null,
       cwd: dir,
-      title: title || `${dir.split('/').pop() || dir}`,
+      // A quick chat's folder name is its id, which says nothing; it waits
+      // for the agent or the first prompts to name it.
+      title: title || (quick ? 'Quick chat' : `${dir.split('/').pop() || dir}`),
       titleBy: title ? 'user' : null,
+      quick: quick || undefined,
       // The brain is a thread like any other - same driver, same events, same
       // permission cards - marked so that it can be found again and so that
       // `input` knows to put the network's state in front of what is typed.
@@ -1426,6 +1442,7 @@ export class Sessions extends EventEmitter {
       this.#reapers.delete(session.id);
       driver?.removeAllListeners?.('event');
       await Promise.resolve(driver?.kill?.()).catch(() => {});
+      this.#dropQuickDir(session);
       this.#save();
       throw err;
     }
@@ -1472,6 +1489,9 @@ export class Sessions extends EventEmitter {
     const profile = profiles.find((p) => p.id === s.profileId);
     if (!profile) throw new Error(`the account for this session (${s.profileId}) is gone`);
     const spec = materialize(profile);
+    // A quick chat's folder is helm's own; if it went missing (cleaned by
+    // hand), an empty one is as good as the old one.
+    if (s.quick && isQuickDir(s.cwd)) mkdirSync(expand(s.cwd), { recursive: true, mode: 0o700 });
     // The brain's tools are the `helm` command, so which `helm` it finds is
     // the whole question. Give it this daemon's own, ahead of the installed
     // one: a machine that has not been upgraded yet would otherwise hand the
@@ -3821,6 +3841,7 @@ export class Sessions extends EventEmitter {
       clearTimeout(this.#reapers.get(id));
       if (d) await d.kill();
       this.#index.delete(id);
+      this.#dropQuickDir(s);
       this.#save();
       this.events.remove(id);
       this.#updateTeam(s);
@@ -3840,6 +3861,18 @@ export class Sessions extends EventEmitter {
       this.#save();
     }
     return { ok: true };
+  }
+
+  /**
+   * Deleting a quick chat deletes the folder made for it - unless a branch of
+   * it, or a child it started, still works there. Archiving keeps it.
+   */
+  #dropQuickDir(s) {
+    if (!s.quick || !isQuickDir(s.cwd)) return;
+    const dir = expand(s.cwd);
+    if ([...this.#index.values()].some((o) => o !== s && expand(o.cwd ?? '') === dir)) return;
+    try { rmSync(dir, { recursive: true, force: true }); }
+    catch (err) { this.log(`[${s.id}] could not remove ${dir}: ${err.message}`); }
   }
 
   /**

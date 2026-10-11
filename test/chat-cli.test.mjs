@@ -200,3 +200,16 @@ test('persistent controller RPC carries answers and events; disconnect rejects c
   await assert.rejects(client.rpc(M.SESSION_INPUT, {}), /closed/);
   assert.equal(socket.sent.length, 2, 'mutations are sent once');
 });
+
+test('helm chat --quick starts a chat with no folder', async () => {
+  const { sessions, Connection } = backend();
+  const terminal = new Connection();
+  const { session } = await openChat(['claude', '--quick'], { rpc: terminal.rpc.bind(terminal), cwd: '/tmp' });
+  const start = terminal.calls.find((c) => c.method === M.SESSION_START);
+  assert.deepEqual([start.params.quick, start.params.cwd], [true, undefined]);
+  assert.equal(session.quick, true);
+  assert.notEqual(session.cwd, '/tmp');
+  await assert.rejects(openChat(['claude', '--quick', '--cwd', '/tmp'], { rpc: terminal.rpc.bind(terminal) }), /cannot take --cwd/);
+  await sessions.kill(session.id);
+  terminal.close();
+});

@@ -167,14 +167,15 @@ export class ManagedChat {
 
 /** Session creation is separate from the foreground controller's lifetime. */
 export async function openChat(args, { rpc, cwd = process.cwd() } = {}) {
-  const { options, words } = parseAgentArgs(args, { values: ['attach', 'resume', 'cwd', 'model', 'mode', 'effort', 'title'] });
+  const { options, words } = parseAgentArgs(args, { values: ['attach', 'resume', 'cwd', 'model', 'mode', 'effort', 'title'], switches: ['quick'] });
+  if (options.quick && (options.cwd || options.resume)) throw new Error('--quick is a chat with no folder; it cannot take --cwd or --resume');
   if (options.attach && (words.length || options.resume || Object.keys(options).length > 1)) throw new Error('use helm chat --attach <Helm session ID>');
   let session;
   if (options.attach) {
     ({ session } = await rpc(M.SESSION_CONNECT, { id: options.attach }));
   } else {
     const [account, ...prompt] = words;
-    if (!account) throw new Error('use helm chat <account> [--resume <native ID>] [-- <first message>] or helm chat --attach <Helm session ID>');
+    if (!account) throw new Error('use helm chat <account> [--quick | --resume <native ID>] [-- <first message>] or helm chat --attach <Helm session ID>');
     const { agents } = await rpc(M.AGENT_LIST, { models: false });
     const agent = chooseAgent(agents, account);
     if (!agent.available) throw new Error(`${agent.id} is signed out; log in through its CLI first`);
@@ -182,7 +183,7 @@ export async function openChat(args, { rpc, cwd = process.cwd() } = {}) {
       ({ session } = await rpc(M.SESSION_RESUME, { engine: agent.engine, account: agent.id, id: options.resume }));
     } else {
       ({ session } = await rpc(M.SESSION_START, {
-        cwd: resolve(options.cwd ?? cwd), profileId: agent.id,
+        ...(options.quick ? { quick: true } : { cwd: resolve(options.cwd ?? cwd) }), profileId: agent.id,
         model: options.model, mode: options.mode, effort: options.effort, title: options.title,
       }, 70_000));
     }
@@ -202,7 +203,7 @@ export async function runChat(args, { connection, input = process.stdin, output 
   try {
     const opened = await openChat(args, { rpc: connection.rpc.bind(connection) });
     session = opened.session;
-    output.write(`\nHelm ${session.id} · ${safe(session.engine)} · ${safe(session.cwd)}\nSame conversation and approvals in the Helm app.\nReconnect: helm chat --attach ${session.id}\n${HELP}`);
+    output.write(`\nHelm ${session.id} · ${safe(session.engine)} · ${session.quick ? 'quick chat' : safe(session.cwd)}\nSame conversation and approvals in the Helm app.\nReconnect: helm chat --attach ${session.id}\n${HELP}`);
     chat = new ManagedChat(connection, session.id, { write: (text) => output.write(text), detach: () => finish() });
     await connection.rpc(M.SESSION_WATCH, { id: session.id, watchId });
     await chat.sync();
