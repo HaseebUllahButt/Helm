@@ -122,14 +122,12 @@ rl.question('Permission: allow harmless operation? [y/n] ', answer=>{
   await second.adoptTerminals();
   const snapshot = await second.attach(meta.id);
   assert.match(snapshot.text, /Question:/);
-  await assert.rejects(second.input(meta.id, 'an ordinary message'), /Live control/,
-    'chat messages must never press Enter into a native permission menu');
   assert.equal(secondHost.nativeSessions()[0].nativePid, identity.pid);
   let remote = snapshot.text;
   second.on('data', (d) => { if (d.id === meta.id) remote += d.text; });
-  await second.input(meta.id, 'blue\r', { raw: true });
+  await second.input(meta.id, 'blue');
   await until(() => remote.includes('ANSWER=blue') && remote.includes('Message:'));
-  await second.input(meta.id, 'continue on phone\r', { raw: true });
+  await second.input(meta.id, 'continue on phone');
   await until(() => remote.includes('MESSAGE=continue on phone'));
   assert.match(remote, new RegExp('SAME_PID='+identity.pid));
   await until(() => !secondHost.has(meta.id));

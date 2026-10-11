@@ -73,3 +73,47 @@ test('one account gets the same fingerprint on every machine, whatever its home 
   const report = new AccountLimits({ file: join(dir, 'limits.json') }).report([laptop]);
   assert.equal(report.accounts[0].identity, accountIdentity(laptop));
 });
+
+test('native Claude reads the correct OAuth account, normalizes percentages and coalesces quota requests', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-native-quota-'));
+  t.after(() => rmSync(dir, {recursive:true, force:true}));
+  const home = join(dir, 'account'); mkdirSync(home);
+  writeFileSync(join(home, '.credentials.json'), JSON.stringify({claudeAiOauth:{accessToken:'test-only-token',expiresAt:Date.now()+86400000}}));
+  const p = {id:'claude-native',engine:'claude',env:{CLAUDE_CONFIG_DIR:home}};
+  const store = new AccountLimits({file:join(dir,'limits.json')});
+  let calls = 0;
+  const now = Date.now();
+  const fetchUsage = async (url, options) => {
+    calls++; assert.equal(url, 'https://api.anthropic.com/api/oauth/usage');
+    assert.equal(options.headers.Authorization,'Bearer test-only-token');
+    return {ok:true,json:async()=>({five_hour:{utilization:12,resets_at:new Date(now+3600000).toISOString()},seven_day:{utilization:0,resets_at:new Date(now+86400000).toISOString()}})};
+  };
+  await Promise.all([store.refreshClaude([p,{...p,id:'alias'}],{fetchUsage,now}),store.refreshClaude([p],{fetchUsage,now})]);
+  assert.equal(calls,1);
+  const report=store.report([p]);
+  assert.deepEqual(report.accounts[0].windows.map(w=>[w.label,w.used]),[['5h',12],['7d',0]]);
+  assert.ok(!JSON.stringify(report).includes('test-only-token'));
+  await store.refreshClaude([p],{fetchUsage,now:now+120000}); assert.equal(calls,1);
+  await store.refreshClaude([p],{fetchUsage:async()=>{calls++;return {ok:false,status:429}},now:now+16*60000});
+  assert.equal(calls,2);
+  assert.deepEqual(store.report([p]).accounts[0].windows.map(w=>w.used),[12,0]);
+});
+
+test('native Claude uses a fresh local quota cache and skips API-key accounts', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'helm-native-quota-cache-'));
+  t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const now=Date.now(), p={id:'claude',engine:'claude',env:{CLAUDE_CONFIG_DIR:dir}};
+  writeFileSync(join(dir,'.claude.json'),JSON.stringify({cachedUsageUtilization:{fetchedAtMs:now,utilization:{five_hour:{utilization:25,resets_at:new Date(now+3600000).toISOString()}}}}));
+  const store=new AccountLimits({file:join(dir,'limits.json')});
+  let calls=0;const fetchUsage=async()=>{calls++;throw Error('should not request')};
+  await store.refreshClaude([p],{fetchUsage,now});
+  assert.equal(store.report([p]).accounts[0].windows[0].used,25);
+  await store.refreshClaude([{...p,id:'key',envFrom:['ANTHROPIC_API_KEY'],env:{...p.env,ANTHROPIC_API_KEY:'test-api-key'}}],{fetchUsage,now:now+16*60000});
+  assert.equal(calls,0);
+  const tokenProfile={...p,id:'token',envFrom:['CLAUDE_CODE_OAUTH_TOKEN'],env:{...p.env,CLAUDE_CODE_OAUTH_TOKEN:'another-login'}};
+  await store.refreshClaude([tokenProfile],{fetchUsage:async(_url, options)=>{
+    assert.equal(options.headers.Authorization,'Bearer another-login');
+    return {ok:true,json:async()=>({five_hour:{utilization:75,resets_at:new Date(now+3600000).toISOString()}})};
+  },spec:p=>({env:p.env}),now});
+  assert.equal(store.report([tokenProfile]).accounts[0].windows[0].used,75);
+});

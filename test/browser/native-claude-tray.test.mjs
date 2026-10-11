@@ -28,6 +28,7 @@ before(async () => {
           favs: [], effortFavs: [], prefs: {approved: [], default: 'claude-opus-5-5'}, defaults: {effort:'high', mode:'auto'},
           account: 'claude:personal', profileId: 'claudea' };
         if (method === 'session.commands') return { commands: [] };
+        if (method === 'usage.limits') return {accounts:[{engine:'claude',aliases:['claudea'],windows:[{label:'5h',used:18,resetsAt:Math.floor(Date.now()/1000)+3600},{label:'7d',used:42,resetsAt:Math.floor(Date.now()/1000)+86400}]}]};
         if (method === 'session.mode') return { ok: true, session: { ...window.current, mode: params.mode } };
         return {ok:true};
       } };
@@ -86,6 +87,14 @@ test('a taken-over Claude chat offers the whole tray and changes its permission 
   // A permission change is not a typed command: no "Sent … to Claude" notice.
   assert.equal(await page.getByText(/Sent .* to Claude/).count(), 0);
   assert.equal(await page.getByText('Existing conversation', {exact:true}).count(), 1);
+  await page.locator('.limits-line').getByText('5h 18% used',{exact:true}).waitFor();
+  await page.locator('.limits-line').getByText('7d 42% used',{exact:true}).waitFor();
+  await page.getByRole('button', {name:'permissions: edit', exact:true}).click();
+  const bypass = page.getByRole('option', {name:/Bypass all checks/});
+  await bypass.click();
+  assert.equal(await page.getByRole('button', {name:'permissions: yolo', exact:true}).count(),0);
+  await bypass.click();
+  await page.getByRole('button', {name:'permissions: yolo', exact:true}).waitFor();
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
 });
 

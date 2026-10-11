@@ -14,8 +14,8 @@ test('chat hooks retain explicit settings and existing hooks, including a relati
   writeFileSync(join(root, 'settings.json'), JSON.stringify(settings));
   for (const arg of [['--settings', 'settings.json'], [`--settings=${JSON.stringify(settings)}`]]) {
     const args = claudeChatArgs(['--model', 'opus', ...arg], root);
-    assert.deepEqual(args.slice(0, 3), ['--model', 'opus', '--settings']);
-    const merged = JSON.parse(args[3]);
+    assert.deepEqual(args.slice(0, 4), ['--model', 'opus', '--allow-dangerously-skip-permissions', '--settings']);
+    const merged = JSON.parse(args[4]);
     assert.deepEqual(merged.permissions, settings.permissions);
     assert.deepEqual(merged.hooks.Stop[0], settings.hooks.Stop[0]);
     assert.equal(merged.hooks.Stop.length, 2);
@@ -79,4 +79,28 @@ test('a hook that goes away tells Helm the question was answered elsewhere', asy
 
 test('no Helm listening: the hook says nothing and Claude carries on', async () => {
   assert.equal(await sendHook('native-1', { hook_event_name: 'PermissionRequest' }, { path: join(root, 'none.sock') }), null);
+});
+
+test('native launches enable the YOLO choice without selecting bypass or duplicating flags', () => {
+  const args = claudeChatArgs(['--permission-mode', 'default']);
+  assert.ok(args.includes('--allow-dangerously-skip-permissions'));
+  assert.ok(!args.includes('--dangerously-skip-permissions'));
+  assert.deepEqual(args.slice(0, 2), ['--permission-mode', 'default']);
+  for (const flag of ['--allow-dangerously-skip-permissions', '--dangerously-skip-permissions']) {
+    const explicit = claudeChatArgs([flag]);
+    assert.equal(explicit.filter(arg => arg.includes('dangerously-skip-permissions')).length, 1);
+    assert.ok(explicit.includes(flag));
+  }
+});
+
+test('native quota capture preserves status-line commands and their original stdin', async () => {
+  const {execFileSync} = await import('node:child_process');
+  const command = 'node -e \"process.stdin.pipe(process.stdout)\"';
+  const args = claudeChatArgs(['--setting-sources', '', '--settings', JSON.stringify({statusLine:{type:'command',command,padding:2}})]);
+  const settings = JSON.parse(args.at(-1));
+  assert.equal(settings.statusLine.padding,2);
+  const payload = JSON.stringify({model:{display_name:'original'},rate_limits:{five_hour:{used_percentage:12,resets_at:2000000000}}});
+  assert.equal(execFileSync('/bin/sh',['-c',settings.statusLine.command],{input:payload,encoding:'utf8',env:{...process.env,HELM_NATIVE_SESSION:''}}),payload);
+  const again = JSON.parse(claudeChatArgs(['--settings',JSON.stringify(settings)]).at(-1));
+  assert.deepEqual(again.statusLine,settings.statusLine);
 });

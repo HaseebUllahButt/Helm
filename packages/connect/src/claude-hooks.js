@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, readFileSync, unlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HELM_DIR } from './paths.js';
+import { HELM_DIR, HOME, expand } from './paths.js';
 import { NATIVE_SOCKET_PATH } from './terminals.js';
 
 /**
@@ -23,6 +23,7 @@ import { NATIVE_SOCKET_PATH } from './terminals.js';
  * other's wait.
  */
 
+const statusScript = fileURLToPath(new URL('../bin/helm-claude-statusline.js', import.meta.url));
 const hookScript = fileURLToPath(new URL('../bin/helm-claude-hook.js', import.meta.url));
 
 /** Private to this user and this HELM_DIR; the hook is its only client. */
@@ -67,7 +68,31 @@ export function claudeChatArgs(args, cwd = process.cwd()) {
   for (const [name, entries] of Object.entries(JSON.parse(hookSettings()).hooks)) {
     hooks[name] = [...(hooks[name] ?? []), ...entries];
   }
-  return [...rest, '--settings', JSON.stringify({ ...settings, hooks })];
+  // Enable the native YOLO choice without selecting it at startup.
+  if (!rest.includes('--allow-dangerously-skip-permissions') && !rest.includes('--dangerously-skip-permissions')) {
+    rest.push('--allow-dangerously-skip-permissions');
+  }
+  const statusLine = claudeStatusLine(rest, settings, cwd);
+  return [...rest, '--settings', JSON.stringify({ ...settings, hooks, statusLine })];
+}
+
+/** Capture native quota updates while passing the effective status-line command its original stdin. */
+function claudeStatusLine(args, settings, cwd) {
+  let statusLine;
+  const at = args.indexOf('--setting-sources');
+  const sources = (at >= 0 ? args[at + 1] : args.find(arg => arg.startsWith('--setting-sources='))?.split('=')[1]) ?? 'user,project,local';
+  const files = { user: join(expand(process.env.CLAUDE_CONFIG_DIR || join(HOME, '.claude')), 'settings.json'),
+    project: join(cwd, '.claude', 'settings.json'), local: join(cwd, '.claude', 'settings.local.json') };
+  for (const source of sources.split(',')) {
+    try {
+      const config = JSON.parse(readFileSync(files[source], 'utf8'));
+      if (Object.hasOwn(config, 'statusLine')) statusLine = config.statusLine;
+    } catch { /* absent or disabled source */ }
+  }
+  if (Object.hasOwn(settings, 'statusLine')) statusLine = settings.statusLine;
+  // A take-over may already contain Helm's override. Keep a single wrapper.
+  if (statusLine?.command?.includes(statusScript)) return statusLine;
+  return { ...statusLine, type: 'command', command: `${quote(process.execPath)} ${quote(statusScript)} ${quote(statusLine?.command || '')}` };
 }
 
 /**

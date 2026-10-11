@@ -123,8 +123,9 @@ test('take over waits for the running step, then moves the same CLI into a share
   await until(() => shared.includes('GOT=continue'), 20000);
   const args = JSON.parse(shared.match(/ARGS=(.+) ACCOUNT=/)[1]);
   assert.deepEqual(args.slice(0, 4), ['--model', 'opus', '--resume', conversation]);
-  assert.equal(args[4], '--settings');
-  assert.ok(JSON.parse(args[5]).hooks.PermissionRequest);
+  assert.equal(args[4], '--allow-dangerously-skip-permissions');
+  assert.equal(args[5], '--settings');
+  assert.ok(JSON.parse(args[6]).hooks.PermissionRequest);
   assert.equal(host.nativeSessions().find((s) => s.id === next.id).nativeChat, true);
   assert.match(shared, new RegExp(`ACCOUNT=${home}`));
   assert.throws(() => sessions.get(external.id), 'the old monitor row is gone');

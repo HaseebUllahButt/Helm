@@ -321,3 +321,15 @@ test('native mode changes preserve an existing terminal viewer', async () => {
     assert.equal(host.views,0);
   } finally { await sessions.stop(); }
 });
+
+test('native status-line quotas arrive as limits without changing permission mode or status', async () => {
+  const sessions=create();
+  const before={mode:sessions.get('native-test').mode,status:sessions.get('native-test').status};
+  try {
+    await sessions.hooks;
+    await sendHook('native-test',{hook_event_name:'HelmUsage',rate_limits:{five_hour:{used_percentage:18,resets_at:2000000000},seven_day:{used_percentage:0,resets_at:2000000001}}});
+    const event=sessions.events.tail('native-test',0).find(e=>e.type==='limits');
+    assert.deepEqual(event.claude.unifiedWindows,{five_hour:{utilization:0.18,resetsAt:2000000000},seven_day:{utilization:0,resetsAt:2000000001}});
+    assert.deepEqual({mode:sessions.get('native-test').mode,status:sessions.get('native-test').status},before);
+  } finally { await sessions.stop(); }
+});

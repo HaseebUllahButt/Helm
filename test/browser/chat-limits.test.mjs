@@ -20,12 +20,15 @@ test('a chat on a fresh browser shows its account limits and reset times from th
     const env = { id:'limits-test', name:'Laptop', online:true, info:{} };
     const chat = { id:'chat', title:'Limits chat', cwd:'/project', engine:'claude', profileId:'claudes', status:'idle', driver:true };
     const soon = Math.floor(Date.now() / 1000) + 115 * 60, later = Math.floor(Date.now() / 1000) + 4 * 86400;
+    const listeners = new Set();
+    window.quota = 4;
+    window.emit = (kind, payload) => listeners.forEach(fn => fn('limits-test',kind,payload));
     const client = {
-      on: () => () => {}, subscribe: () => {},
+      on: fn => {listeners.add(fn); return () => listeners.delete(fn)}, subscribe: () => {},
       rpc: async (env, method) => {
         if (method === 'usage.limits') return { unsupported:0, accounts:[
           { account:'claude|~/.claude-personal|a', engine:'claude', label:'personal', aliases:['claudea'], windows:[{label:'5h',used:50,resetsAt:soon,at:1}] },
-          { account:'claude|~/.claude-personal|s', engine:'claude', label:'personal', aliases:['claudes'], windows:[{label:'5h',used:4,resetsAt:soon,at:1},{label:'7d',used:59,resetsAt:later,at:1}] },
+          { account:'claude|~/.claude-personal|s', engine:'claude', label:'personal', aliases:['claudes'], windows:[{label:'5h',used:window.quota,resetsAt:soon,at:1},{label:'7d',used:59,resetsAt:later,at:1}] },
         ] };
         if (method === 'model.list') return { models:[], modes:[] };
         if (method === 'agent.list') return { agents:[] };
@@ -58,5 +61,7 @@ test('a chat on a fresh browser shows its account limits and reset times from th
     assert.match(five, /^5h: 4% used · resets in 1h 5\dm, at \d/);
     assert.match(seven, /^7d: 59% used · resets [A-Z][a-z]{2} \d/);
     await capture(line, 'chat-limits-line.png');
+    await view.evaluate(() => {window.quota=23;window.emit('session.event',{event:{type:'limits'}})});
+    await line.getByText('5h 23% used',{exact:true}).waitFor();
   } finally { await view.close(); }
 });

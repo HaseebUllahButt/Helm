@@ -5,6 +5,7 @@ import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
 import { ENGINES } from '../../packages/connect/src/engines.js';
 import { nativeControls } from '../../packages/connect/src/native-controls.js';
+const conversationEngines = ['claude','codex','opencode','opencode2','devin','grok','pi','omp','muse'];
 let browser, script, css;
 before(async () => {
   const bundle = await build({
@@ -20,7 +21,11 @@ before(async () => {
         window.calls.push({method,params});
         if(method==='model.list')return full ? {default:null,models:['provider/old','provider/new'],efforts:['low','high'],modes:[],nativeControls:['settings'],profileId:'pi-account',prefs:{approved:[],default:'provider/old'},favs:[],effortFavs:[],defaults:{}} : {default:null,models:[],modes:[],nativeControls:nativeControls(engine)};
         if(method==='model.prefs')return {prefs:{approved:[],default:params.default}};
-        if(method==='session.messages')return {messages:[],status};
+        if(method==='session.messages')return {messages:[{role:'assistant',text:'Existing native conversation',tools:[]}],status};
+        if(method==='usage.limits')return {accounts:[
+          {engine,aliases:['wrong-account'],windows:[{label:'5h',used:99}]},
+          {engine,aliases:['native-account','pi-account'],windows:[{label:'5h',used:12,resetsAt:Math.floor(Date.now()/1000)+3600}]}
+        ]};
         if(method==='session.commands')return {commands:[{name:'model',description:'Open model picker'}]};
         if(method==='session.events')return {events:[],pending:[],last:0};
         if(method==='session.pending')return {pending:[]};
@@ -28,7 +33,7 @@ before(async () => {
         return {ok:true,terminal:true};
       }};
       createRoot(document.getElementById('root')).render(<SessionView client={client}
-        env={{id:'laptop',name:'Laptop',online:true}} session={{id:'native-test',engine,engineModel:full?'provider/old':null,nativeCli:true,pty:true,status,cwd:'/project',title:'Native CLI'}}
+        env={{id:'laptop',name:'Laptop',online:true}} session={{id:'native-test',engine,engineModel:full?'provider/old':null,nativeCli:true,profileId:'native-account',pty:true,status,cwd:'/project',title:'Native CLI'}}
         onBack={()=>{}} onClosed={()=>{}} onArchived={()=>{}} onSession={()=>{}} />);
     `, resolveDir:process.cwd(),loader:'tsx'}, bundle:true,write:false,format:'iife',jsx:'automatic',
     plugins:[{name:'native-session-view',setup(b){
@@ -47,7 +52,14 @@ async function open(t,engine,status='idle',full=false) {
 }
 for(const engine of Object.values(ENGINES).filter(e=>e.bin&&!e.plain).map(e=>e.id))test(`${engine}: tray and composer stay usable in the native terminal on a phone`,async t=>{
   const page=await open(t,engine);
+  if (conversationEngines.includes(engine)) {
+    await page.getByText('Existing native conversation', {exact:true}).waitFor();
+    assert.equal(await page.getByTestId('terminal').count(),0);
+    await page.getByRole('button',{name:'show the terminal',exact:true}).click();
+  }
   await page.getByTestId('terminal').waitFor();
+  await page.locator('.limits-line').getByText('5h 12% used',{exact:true}).waitFor();
+  assert.equal(await page.locator('.limits-line').getByText('5h 99% used',{exact:true}).count(),0);
   for(const kind of nativeControls(engine)){
     const title=kind==='effort'?'thinking':kind==='mode'?'permissions':kind;
     await page.getByRole('button',{name:`${title}: open CLI picker`,exact:true}).click();
@@ -58,6 +70,8 @@ for(const engine of Object.values(ENGINES).filter(e=>e.bin&&!e.plain).map(e=>e.i
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.input'));
   assert.equal(await page.locator('textarea').inputValue(),'');
   assert.equal(await page.getByTestId('terminal').count(),1);
+  await page.getByRole('button',{name:'show the conversation',exact:true}).click();
+  await page.getByText('Existing native conversation',{exact:true}).waitFor();
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
 });
 for(const status of ['working','blocked'])test(`native controls do not send input while ${status}`,async t=>{

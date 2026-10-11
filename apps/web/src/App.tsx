@@ -11,6 +11,9 @@ import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { Controls, trayPrefs, type Kind } from './session/Controls';
+import { LimitsLine } from './session/LimitsLine';
+import { useAccountLimits } from './session/useAccountLimits';
+import { nativeConversation } from './session/nativeView';
 import { useChatKeys } from './session/chatKeys';
 import { watchAccounts, prefetchAccounts } from './accountsCache';
 import { prepareImage, type PreparedImage } from './session/image';
@@ -4541,7 +4544,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat);
+  const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat && !nativeConversation(session.engine));
   const [status, setStatus] = useState(session.status);
   // When it entered the status it is in, for "working 14m" beside the word.
   const [statusAt, setStatusAt] = useState(session.updatedAt);
@@ -4742,6 +4745,9 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     } catch (e: any) { setError(e.message); }
   };
 
+  const nativeProfile = nativeOptions?.profileId ?? session.profileId;
+  const limits = useAccountLimits(client, env.id, session.engine, nativeProfile);
+
   const nativePrefs = trayPrefs({ client, env: env.id, engine: session.engine, profileId: nativeOptions?.profileId,
     options: nativeOptions, setOptions: setNativeOptions, setError });
   const openNativeControl = async (kind: NativeControl) => {
@@ -4794,7 +4800,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           </span>
         </div>
         <StatusChip status={status} at={statusAt} />
-        {!isShell && !isExternal && (!session.nativeCli || session.nativeChat) && (
+        {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
           </button>
@@ -4880,6 +4886,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           keys={!session.nativeChat} preparing={sending || preparingImages || loadingImages || savingImages}
           commands={session.nativeCli ? nativeCommands : undefined}
           foot={session.nativeCli ? nativeControls.chips : undefined}
+          statusLine={nativeProfile || limits.length ? <LimitsLine windows={limits} account={nativeProfile || undefined} /> : undefined}
           onAttach={session.nativeChat ? attachImages : undefined} attachments={images}
           onRemoveAttachment={index => setImages(current => current.filter((_, i) => i !== index))}
           canAttach={!!session.nativeChat}

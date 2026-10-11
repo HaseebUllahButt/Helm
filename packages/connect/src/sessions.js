@@ -391,6 +391,9 @@ export class Sessions extends EventEmitter {
     this.limitsSeed ??= this.limits.seed(this.#index.values(), profiles, this.events.dir)
       .catch(err => this.log(`account limits: ${err.message}`));
     await this.limitsSeed;
+    const nativeProfiles = new Set([...this.#index.values()]
+      .filter(s => s.nativeCli && s.engine === 'claude' && this.nativeTerminals.has(s.id)).map(s => s.profileId));
+    await this.limits.refreshClaude(profiles.filter(p => nativeProfiles.has(p.id)));
     return this.limits.report(profiles);
   }
 
@@ -417,6 +420,27 @@ export class Sessions extends EventEmitter {
     const s = this.#index.get(native);
     if (!s?.nativeCli) return reply(null);
     const name = event.hook_event_name;
+    if (name === 'HelmUsage') {
+      reply(null);
+      const unifiedWindows = {};
+      for (const key of ['five_hour', 'seven_day']) {
+        const window = event.rate_limits?.[key];
+        if (typeof window?.used_percentage === 'number') unifiedWindows[key] = {
+          utilization: window.used_percentage / 100, resetsAt: window.resets_at,
+        };
+      }
+      const limits = { claude: { unifiedWindows } };
+      if (!Object.keys(unifiedWindows).length) return;
+      const saved = this.events.append(s.id, { type: 'limits', ...limits });
+      void getProfiles().then(profiles => {
+        let env = null;
+        if (s.nativePid) try { env = readProcess(s.nativePid).env; } catch { /* process exited */ }
+        const profile = nativeAccount(s, profiles, { env });
+        if (profile) this.limits.record(accountKey(profile), limits, saved.at);
+      }).catch(err => this.log(`native usage: ${err.message}`))
+        .finally(() => this.emit('event', { id: s.id, event: saved }));
+      return;
+    }
     if (typeof event.permission_mode === 'string' && event.permission_mode && s.mode !== event.permission_mode) {
       s.mode = event.permission_mode;
       this.#save();
@@ -974,8 +998,9 @@ export class Sessions extends EventEmitter {
           if (current) {
             s.engineSessionId = current.id;
             s.transcript = current.transcript;
+            if (current.model) s.engineModel = current.model;
             const owners = claudeOwners?.get(current.id)?.filter((owner) => owned(owner.pid)) ?? [];
-            s.status = claudeLiveStatus(owners) ?? current.status;
+            s.status = claudeLiveStatus(owners) ?? current.status ?? s.status;
             s.turns = current.turns;
             if (!s.titleBy) s.title = current.title || s.title;
             s.updatedAt = Math.max(s.updatedAt, current.updatedAt || 0);
