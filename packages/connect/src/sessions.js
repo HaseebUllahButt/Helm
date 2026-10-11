@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import { HELM_DIR, expand } from './paths.js';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages, sessionSnapshot, sessionActivity } from './transcript.js';
+import { findSubagentsDir, nativeSubagent, nativeSubagents, nativeWorking, subagentsDir } from './native-subagents.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
@@ -53,6 +54,8 @@ const WATCH_TTL_MS = 60_000;
 // resumes the same conversation, so nothing is lost but the warm process.
 const IDLE_REAP_MS = 30 * 60_000;
 const DELEGATION_IDLE_MS = 30_000;
+// How often one Claude session's own subagent folder is re-listed at most.
+const NATIVE_POLL_MS = 2_000;
 
 /** engine id -> its headless driver class; ENGINES[id].driver names one. */
 export const DRIVERS = {
@@ -344,6 +347,11 @@ export class Sessions extends EventEmitter {
       // pending question out of the terminal host's abandoned-CLI reaper.
       for (const s of this.#index.values()) if (s.nativeChat && ['working', 'blocked'].includes(s.status)) {
         this.nativeTerminals.renew(s.id).catch(() => {});
+      }
+      // Claude's own subagents start while their parent works and can run
+      // on in the background after it settles; follow both, nothing idle.
+      for (const s of this.#index.values()) {
+        if (s.engine === 'claude' && (['working', 'starting', 'blocked'].includes(s.status) || nativeWorking(s.nativeAgents))) void this.#refreshNative(s);
       }
       if (!this.nativeDiscovery) return;
       try {
@@ -700,7 +708,8 @@ export class Sessions extends EventEmitter {
       `${INDEX_FILE}.tmp`,
       JSON.stringify({
         version: 1,
-        sessions: [...this.#index.values()],
+        // Claude's own subagents are re-read from its files, never remembered.
+        sessions: [...this.#index.values()].map(({ nativeAgents, ...s }) => s),
         external: Object.fromEntries(this.#marks),
         removedAt: Object.fromEntries(this.#removedAt),
       }, null, 2),
@@ -924,6 +933,11 @@ export class Sessions extends EventEmitter {
           adopted: true, archived: mark === 'archived', updatedAt: x.updatedAt });
       }
     }
+    // A Claude session's own subagents are found once here, then followed
+    // by the poll; the first read lands as a session event, not a wait.
+    for (const s of this.#index.values()) {
+      if (s.engine === 'claude' && !s.archived && !this.#native.has(s.id)) void this.#refreshNative(s);
+    }
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
@@ -944,16 +958,87 @@ export class Sessions extends EventEmitter {
   #updateTeam(child) {
     const parent = this.#index.get(child.delegation?.parentId);
     if (!parent) return;
+    this.#tallyTeam(parent);
+    this.emit('session', parent);
+    if (parent.delegation) this.#updateTeam(parent);
+  }
+
+  /**
+   * The parent's team counts: its delegated children, plus Claude's own
+   * subagents still running. Those only add to `working` - one that failed
+   * or stopped has no Helm session to answer, so it never asks for you.
+   */
+  #tallyTeam(parent) {
     const children = [...this.#index.values()].filter((session) => session.delegation?.parentId === parent.id && !session.archived);
+    if (!children.length && !parent.nativeAgents?.length && !parent.team) return;
     parent.team = children.reduce((team, session) => {
       const state = session.delegation.status ?? session.status;
       team.working += Number(['working', 'starting'].includes(state)) + (session.team?.working ?? 0);
       team.blocked += Number(state === 'blocked') + (session.team?.blocked ?? 0);
       team.failed += Number(state === 'error') + (session.team?.failed ?? 0);
       return team;
-    }, { working: 0, blocked: 0, failed: 0 });
-    this.emit('session', parent);
-    if (parent.delegation) this.#updateTeam(parent);
+    }, { working: nativeWorking(parent.nativeAgents), blocked: 0, failed: 0 });
+  }
+
+  /** id -> { key, dir, sig, at, busy }: where each Claude session's subagents are, and what was last shown. */
+  #native = new Map();
+
+  /** A Claude session's subagent folder; null until Claude has made it. */
+  async #nativeDir(s) {
+    if (s.transcript) return subagentsDir(s.transcript);
+    if (!s.engineSessionId) return null;
+    const engine = ENGINES.claude;
+    const profile = (await getProfiles()).find((p) => p.id === s.profileId);
+    return findSubagentsDir({ home: profile?.env?.[engine.homeEnv] ?? engine.defaultHome, cwd: s.cwd, sessionId: s.engineSessionId });
+  }
+
+  /**
+   * Re-read a Claude session's own subagents (its Agent/Task tool) and tell
+   * the app when what it shows changed. Read-only cards: Helm did not start
+   * them and cannot steer them. At most every NATIVE_POLL_MS, one at a time.
+   */
+  async #refreshNative(s, { force = false } = {}) {
+    if (s.engine !== 'claude' || !this.#index.has(s.id)) { this.#native.delete(s.id); return; }
+    let n = this.#native.get(s.id);
+    if (!n) this.#native.set(s.id, n = { key: null, dir: null, sig: '', at: 0, busy: null });
+    if (n.busy) { if (!force) return; await n.busy; }
+    if (!force && Date.now() - n.at < NATIVE_POLL_MS) return;
+    n.at = Date.now();
+    n.busy = this.#readNative(s, n).finally(() => { n.busy = null; });
+    return n.busy;
+  }
+
+  async #readNative(s, n) {
+    try {
+      const key = `${s.transcript ?? ''}|${s.engineSessionId ?? ''}|${s.profileId ?? ''}|${s.cwd ?? ''}`;
+      if (n.key !== key || !n.dir) { n.key = key; n.dir = await this.#nativeDir(s); }
+      let agents = await nativeSubagents(n.dir);
+      // A chat Helm drives already shows each one inline, live, under the
+      // tool call that started it; a card as well would be the same twice.
+      if (agents.length && s.driver) {
+        const inline = new Set(this.events.tail(s.id, 0)
+          .filter((e) => e.type === 'item.start' && e.kind === 'subagent').map((e) => e.id));
+        agents = agents.filter((a) => !inline.has(a.toolUseId));
+      }
+      const sig = JSON.stringify(agents.map((a) => [a.id, a.status, a.title, a.model, a.last, a.branch]));
+      if (sig === n.sig) return;
+      n.sig = sig;
+      if (agents.length) s.nativeAgents = agents; else delete s.nativeAgents;
+      this.#tallyTeam(s);
+      this.emit('session', s);
+      if (s.delegation) this.#updateTeam(s);
+    } catch (err) { this.log(`native subagents: ${err.message}`); }
+  }
+
+  /** One of a Claude session's own subagents, with its result and recent activity. */
+  async nativeAgent(id, agentId) {
+    const s = this.get(id);
+    if (s.engine !== 'claude') throw new Error('only Claude Code sessions have native subagents');
+    await this.#refreshNative(s, { force: true });
+    if (!s.nativeAgents?.some((a) => a.id === agentId)) throw new Error('no such subagent');
+    const agent = await nativeSubagent(this.#native.get(s.id)?.dir, agentId);
+    if (!agent) throw new Error('no such subagent');
+    return { agent };
   }
 
   /** Provider history must not rediscover a hidden task as an ordinary chat. */
@@ -2793,7 +2878,12 @@ export class Sessions extends EventEmitter {
         // until their process checkpoints or exits.
         const wal = await stat(`${path}-wal`).catch(() => null);
         const stamp = `${size}:${mtimeMs}:${wal?.size ?? 0}:${wal?.mtimeMs ?? 0}`;
-        if (t.size !== -1 && stamp !== t.size) this.emit('transcript', { id });
+        if (t.size !== -1 && stamp !== t.size) {
+          this.emit('transcript', { id });
+          // A Task call lands here first; pick its subagent up at once.
+          const session = this.#index.get(id);
+          if (session) void this.#refreshNative(session);
+        }
         if (t.size !== -1 && stamp !== t.size) {
           const session = this.#index.get(id);
           if (session?.external && session.driver) {

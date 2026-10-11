@@ -146,6 +146,7 @@ export const M = {
   SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task } -> { session }
   SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id } -> { session, status, complete, output, pending }
   SESSION_DELEGATION_MESSAGE: 'session.delegation-message', // { parentId, id, data } -> { ok }
+  SESSION_NATIVE_AGENT: 'session.native-agent', // { id, agentId } -> { agent }  one of Claude's own subagents, read-only
   SESSION_ATTACH: 'session.attach',// { id, cols, rows } -> { session, scrollback }
   SESSION_CONNECT: 'session.connect', // { id } -> { session }  share one managed provider with CLI and app
   SESSION_DETACH: 'session.detach',// { id }
