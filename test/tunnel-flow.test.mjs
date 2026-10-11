@@ -10,7 +10,6 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TunnelSender, TunnelReceiver, TUNNEL_WINDOW, TUNNEL_CHUNK, COPY_WINDOW } from '../packages/connect/src/tunnel-flow.js';
-import { copyWindow } from '../packages/connect/src/copy-transport.js';
 import { T } from '@helm/protocol';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-flow-'));
@@ -18,6 +17,9 @@ process.env.HELM_DIR = join(root, 'helm');
 process.env.HELM_DB = join(root, 'db');
 process.env.HELM_SSH_DIR = join(root, 'ssh');
 const { bridge } = await import('../packages/connect/src/proxy.js');
+// After HELM_DIR points at the scratch folder: a static import here loads
+// paths.js first, and the test network then lands on the owner's real one.
+const { copyWindow } = await import('../packages/connect/src/copy-transport.js');
 const N = await import('@helm/protocol/network');
 N.createNetwork({ name: 'test' });
 const { Daemon } = await import('../packages/connect/src/agent.js');
