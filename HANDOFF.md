@@ -128,6 +128,21 @@ a turn with tokens but no price is priced with `priceBucket` at list rates
 (Codex counts cached tokens inside input; subtracted), accumulated on
 `costUsd`, and shown on Home rows and Needs-you cards too.
 
+**Later the same day.** Ctrl/Cmd+, opens Settings, Ctrl/Cmd+Shift+U opens
+Usage (global keys in App.tsx; listed under "Anywhere"). The owner found
+"New session" on the VM sitting on "looking for agents…": the VM was
+unreachable (its link to the laptop was stale, ssh timed out, it was at
+10/12 GB with ~10 Devin sessions), and the screen waited the full RPC
+timeout with nothing to show. Now `accountsCache.ts` remembers each
+machine's `profile.list` on the device (IndexedDB, 14 days); the New
+session screen and the new-chat box paint it at once and replace it when
+the machine answers; the folder screen prefetches; an offline machine is
+named instead of "looking". A chosen row survives the fresh answer. Browser
+test `global-keys.test.mjs`. Found chats under `~/.helm` (helper worktrees,
+deleted quick chats) are hidden from history like `/tmp` ones; the helpers'
+own CLI transcripts and the VM's transfer-test rollouts were deleted by hand
+so Done shows only the owner's chats.
+
 **Known failing on this laptop, before and after this round:** the four
 `native-cli.test.mjs` "native launch" tests time out (they did so on the
 untouched 6da47b1 in two helpers' worktrees too). Not investigated beyond
