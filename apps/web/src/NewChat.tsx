@@ -14,9 +14,18 @@ import { accountsFrom, loadPrefs, rememberFolder, savePrefs, type Account, type 
  * - a new chat never continues an old one. Enter picks a folder, → opens it
  * in place to show the folders inside, ← closes it again. Typing searches
  * every folder on that machine; a result opens with → the same way.
+ *
+ * Two rows are not folders. "No folder · quick chat" sits first: a chat for
+ * a small question that belongs to no project (Ctrl/Cmd+Enter). And when the
+ * typed text is not a folder there already, the last row makes it, inside
+ * the folder the cursor was last on (Ctrl/Cmd+Shift+Enter), and picks it.
  */
 
 type Step = 'machine' | 'folder' | 'cli';
+
+const QUICK_ROW = ':quick';
+const NEW_ROW = ':new-folder';
+const MOD = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
 
 interface Row {
   id: string;
@@ -24,7 +33,7 @@ interface Row {
   sub?: string;
   group?: string;
   engine?: string;
-  icon?: 'machine' | 'folder' | 'repo';
+  icon?: 'machine' | 'folder' | 'repo' | 'bolt' | 'plus';
   tag?: string;
   disabled?: boolean;
   /** A folder: how deep in the tree, and whether it is opened. */
@@ -39,14 +48,19 @@ const matches = (row: Row, q: string) => {
 };
 
 const leaf = (p: string) => p.replace(/\/$/, '').split('/').pop() || p;
+/** The folder a path is in: "~/dev/helm" -> "~/dev", "~/dev" -> "~". */
+const up = (p: string) => p.replace(/\/+$/, '').replace(/\/[^/]*$/, '') || (p.startsWith('/') ? '/' : '~');
+const join = (dir: string, name: string) => `${dir.replace(/\/+$/, '')}/${name}`;
 
-export function NewChat({ client, envs, envId, initialFolder, near, onFolder, onClose, onStarted, engineOf }: {
+export function NewChat({ client, envs, envId, initialFolder, quick: startQuick = false, near, onFolder, onClose, onStarted, engineOf }: {
   client: Client;
   envs: Environment[];
   /** Start on this machine's folder step instead of asking which machine. */
   envId?: string | null;
   /** A known directory skips the folder step and asks which agent to start. */
   initialFolder?: string;
+  /** A chat with no folder: the folder step is skipped once there is a machine. */
+  quick?: boolean;
   /** The machine on screen: asked about first, with the cursor already on it. */
   near?: string | null;
   onFolder?: (envId: string, folder: string) => void;
@@ -59,9 +73,11 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const startEnv = envId ? envs.find((e) => e.id === envId && e.online) : undefined;
-  const [step, setStep] = useState<Step>(startEnv ? initialFolder ? 'cli' : 'folder' : 'machine');
+  const [step, setStep] = useState<Step>(startEnv ? initialFolder || startQuick ? 'cli' : 'folder' : 'machine');
   const [machine, setMachine] = useState<Environment | null>(startEnv ?? null);
-  const [folder, setFolder] = useState(startEnv ? initialFolder ?? '' : '');
+  const [folder, setFolder] = useState(startEnv && !startQuick ? initialFolder ?? '' : '');
+  /** No folder: the CLI step starts a quick chat. */
+  const [quick, setQuick] = useState(startQuick);
   const [q, setQ] = useState('');
   const [at, setAt] = useState(0);
   const [error, setError] = useState('');
@@ -73,6 +89,12 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
   const [opened, setOpened] = useState<Set<string>>(new Set());
   const [inside, setInside] = useState<Record<string, DirEntry[] | null>>({});
   const [hits, setHits] = useState<{ name: string; path: string; repo: boolean }[] | null>(null);
+  /**
+   * The folder row the cursor was last moved to, which says where a new
+   * folder goes. Typing resets the cursor to the first search hit, so only a
+   * move made on purpose (arrows, mouse) changes it.
+   */
+  const [anchor, setAnchor] = useState<{ id: string; path: string } | null>(null);
 
   // CLI step.
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -85,7 +107,7 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
   useEffect(() => {
     if (!machine) return;
     let stale = false;
-    setHome(null); setAccounts(null); setPicker(null); setOpened(new Set()); setInside({});
+    setHome(null); setAccounts(null); setPicker(null); setOpened(new Set()); setInside({}); setAnchor(null);
     client.rpc<{ entries: DirEntry[] }>(machine.id, 'fs.list', { path: '~' })
       .then((r) => { if (!stale) setHome(r.entries); }).catch((e) => { if (!stale) { setHome([]); setError(e.message); } });
     client.rpc<any>(machine.id, 'profile.list')
@@ -132,15 +154,44 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
   // Stepping back from the CLIs lands on the same folder in the same list.
   const folderSpot = useRef({ q: '', id: '' });
   const pickFolder = (path: string, id: string) => {
-    folderSpot.current = { q, id }; setFolder(path);
+    folderSpot.current = { q, id }; setFolder(path); setQuick(false);
     if (machine) onFolder?.(machine.id, path);
     go('cli');
   };
+  const pickQuick = () => {
+    folderSpot.current = { q, id: QUICK_ROW }; setFolder(''); setQuick(true);
+    go('cli');
+  };
+
+  // A new folder goes inside the folder the cursor is on when that one is
+  // opened, and beside it otherwise - the way a file tree reads. Home when
+  // the cursor has not been anywhere yet.
+  const newParent = !anchor ? '~' : opened.has(anchor.id) ? anchor.path : up(anchor.path);
+  const newPath = join(newParent, query);
+  const makeFolder = async () => {
+    if (!machine || busy || !query) return;
+    setBusy(true); setError('');
+    try {
+      // The machine checks the name (one segment, no "..") and says why not.
+      const r = await client.rpc<{ path: string }>(machine.id, 'fs.mkdir', { path: newParent, name: query }, 20_000);
+      // The lists already fetched learn it too, so it is there on the way back.
+      const entry: DirEntry = { name: leaf(r.path), path: r.path, isRepo: false, skip: false };
+      const add = (list: DirEntry[]) => [...list.filter((e) => e.path !== r.path), entry].sort((a, b) => a.name.localeCompare(b.name));
+      if (newParent === '~') setHome((h) => (h ? add(h) : h));
+      setInside((all) => (all[newParent] ? { ...all, [newParent]: add(all[newParent]!) } : all));
+      setBusy(false);
+      pickFolder(r.path, r.path);
+    } catch (e: any) { setError(e.message); setBusy(false); }
+  };
+
+  // The box is disabled while the machine works, which drops the cursor out
+  // of it; it goes back once there is something to type again.
+  useEffect(() => { if (!busy) input.current?.focus(); }, [busy]);
 
   const start = async (a: Account) => {
     if (!machine || busy) return;
     setBusy(true); setError('');
-    rememberFolder(machine.id, folder);
+    if (!quick) rememberFolder(machine.id, folder);
     if (picker?.onMachine) client.rpc(machine.id, 'picker.prefs', { last: a.key }, 15_000).catch(() => { /* only a default */ });
     else {
       const prefs = loadPrefs();
@@ -148,7 +199,7 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
     }
     try {
       const r = await client.rpc<{ session: Session }>(machine.id, 'session.start', {
-        cwd: folder, profileId: a.profile.id,
+        ...(quick ? { quick: true } : { cwd: folder }), profileId: a.profile.id,
         model: a.prefs?.default || undefined,
         effort: a.defaults?.effort || undefined,
         mode: a.defaults?.mode && a.defaults.mode !== 'plan' ? a.defaults.mode : undefined,
@@ -163,7 +214,7 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
     if (step === 'machine') {
       const all = envs.map((e): Row => ({
         id: e.id, title: e.name, icon: 'machine', sub: e.online ? 'online' : 'offline', disabled: !e.online,
-        pick: () => { if (machine?.id !== e.id) setMachine(e); go('folder'); },
+        pick: () => { if (machine?.id !== e.id) setMachine(e); go(quick ? 'cli' : 'folder'); },
       }));
       // Online first; offline ones stay visible so a missing machine is explained.
       return all.filter((r) => matches(r, query)).sort((a, b) => Number(!!a.disabled) - Number(!!b.disabled));
@@ -192,6 +243,13 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
         }
       }
       else for (const e of home ?? []) add(e.path, e.name, e.isRepo, 0);
+      const quickRow: Row = { id: QUICK_ROW, title: 'No folder · quick chat', sub: 'a small question, in no folder', icon: 'bolt', pick: pickQuick };
+      if (!query || matches(quickRow, query)) out.unshift(quickRow);
+      // Offered once the typed name is not a folder that is already there.
+      const known = [...(hits ?? []), ...(home ?? []), ...(inside[newParent] ?? [])];
+      if (query && (!searching || hits !== null) && !known.some((f) => f.path === newPath)) {
+        out.push({ id: NEW_ROW, title: `New folder "${query}" in ${newParent === '~' ? 'home' : leaf(newParent)}`, sub: newPath, icon: 'plus', pick: () => void makeFolder() });
+      }
       return out;
     }
     const hidden = new Set(picker?.hidden ?? []);
@@ -207,7 +265,7 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
       tag: a.key === picker?.agent ? 'default' : a.key === picker?.last ? 'last used' : undefined,
       pick: () => void start(a),
     })).filter((r) => matches(r, query));
-  }, [step, envs, machine, query, opened, inside, searching, hits, home, accounts, picker, folder, busy]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, envs, machine, query, opened, inside, searching, hits, home, accounts, picker, folder, quick, anchor, busy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // On the machine step the one you are on is where the cursor starts.
   useEffect(() => {
@@ -230,6 +288,12 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
     list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [selected, rows]);
 
+  /** Put the cursor on a row on purpose: a folder row there becomes the anchor. */
+  const point = (i: number) => {
+    setAt(i);
+    const f = rows[i]?.folder;
+    if (f && !rows[i].disabled) setAnchor({ id: rows[i].id, path: f.path });
+  };
   const move = (by: number) => {
     if (!rows.length) return;
     let i = selected;
@@ -237,26 +301,26 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
       i = (i + by + rows.length) % rows.length;
       if (!rows[i].disabled) break;
     }
-    setAt(i);
+    point(i);
   };
   const back = () => {
     setError('');
-    if (step === 'cli') { go('folder'); setQ(folderSpot.current.q); returning.current = folderSpot.current.id; }
+    if (step === 'cli') { go('folder'); setQuick(false); setQ(folderSpot.current.q); returning.current = folderSpot.current.id; }
     else if (step === 'folder') go('machine');
   };
   // → opens a folder, or steps into one already open; ← closes it, or steps
   // out to the folder it is in - the way every file tree answers the arrows.
   const right = (row: Row) => {
     const f = row.folder!;
-    if (!f.open) { expand(f.path, row.id); return; }
+    if (!f.open) { expand(f.path, row.id); setAnchor({ id: row.id, path: f.path }); return; }
     const next = rows[selected + 1];
-    if (next?.folder?.parent === row.id && !next.disabled) setAt(selected + 1);
+    if (next?.folder?.parent === row.id && !next.disabled) point(selected + 1);
   };
   const left = (row: Row) => {
     const f = row.folder!;
     if (f.open) { collapse(row.id); return; }
-    const up = rows.findIndex((r) => r.id === f.parent);
-    if (up >= 0) { collapse(f.parent!); setAt(up); }
+    const outer = rows.findIndex((r) => r.id === f.parent);
+    if (outer >= 0) { collapse(f.parent!); point(outer); }
   };
 
   const loading = step === 'folder'
@@ -273,7 +337,7 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
           <span className="newchat-steps">
             <span className={step === 'machine' ? 'on' : ''}>{machine?.name ?? 'Machine'}</span>
             <Icon name="forward" size={12} />
-            <span className={step === 'folder' ? 'on' : ''}>{step === 'cli' ? leaf(folder) : 'Folder'}</span>
+            <span className={step === 'folder' ? 'on' : ''}>{step === 'cli' ? quick ? 'Quick chat' : leaf(folder) : 'Folder'}</span>
             <Icon name="forward" size={12} />
             <span className={step === 'cli' ? 'on' : ''}>CLI</span>
           </span>
@@ -289,6 +353,14 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
             const row = rows[selected];
+            // With Ctrl/Cmd, Enter is about the folder step's own two rows:
+            // no folder at all, or a new one with the typed name.
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && step !== 'cli') {
+              e.preventDefault();
+              if (step !== 'folder' || busy) return;
+              if (e.shiftKey) void makeFolder(); else pickQuick();
+              return;
+            }
             if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
             else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
             else if (e.key === 'Enter') { e.preventDefault(); if (row && !row.disabled) row.pick(); }
@@ -300,7 +372,7 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
           }}
         />
         <div className="palette-list" ref={list} role="listbox" id={listId} aria-label={placeholder}>
-          {busy && <div className="empty quiet">Starting {rows[selected]?.title} in {leaf(folder)}…</div>}
+          {busy && <div className="empty quiet">{step === 'folder' ? `Making ${newPath}…` : quick ? `Starting ${rows[selected]?.title} as a quick chat…` : `Starting ${rows[selected]?.title} in ${leaf(folder)}…`}</div>}
           {!busy && loading && !rows.length && <div className="empty quiet">{step === 'cli' ? 'looking for CLIs…' : 'looking…'}</div>}
           {!busy && !loading && !rows.length && (
             <div className="empty quiet">
@@ -318,7 +390,7 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
                       className={`newchat-twisty${row.folder.open ? ' open' : ''}`} tabIndex={-1}
                       title={row.folder.open ? `close ${row.title}` : `open ${row.title}`}
                       aria-label={row.folder.open ? `close ${row.title}` : `open ${row.title}`}
-                      onClick={() => { setAt(i); if (row.folder!.open) collapse(row.id); else expand(row.folder!.path, row.id); }}
+                      onClick={() => { point(i); if (row.folder!.open) collapse(row.id); else expand(row.folder!.path, row.id); }}
                     ><Icon name="forward" size={14} /></button>
                   ))}
                   <button
@@ -326,7 +398,7 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
                     aria-disabled={row.disabled || undefined} disabled={row.disabled}
                     aria-expanded={row.folder && !row.disabled ? row.folder.open : undefined}
                     className={`palette-row${i === selected ? ' on' : ''}`}
-                    onMouseMove={() => setAt(i)} onClick={() => row.pick()}
+                    onMouseMove={() => { if (i !== selected) point(i); }} onClick={() => row.pick()}
                   >
                     {row.engine ? <EngineMark engine={engineOf(row.engine).cls} />
                       : !row.disabled && <span className="pglyph"><Icon name={row.icon ?? 'folder'} size={15} /></span>}
@@ -345,6 +417,8 @@ export function NewChat({ client, envs, envId, initialFolder, near, onFolder, on
           <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
           <span><kbd>Enter</kbd> {step === 'cli' ? 'start' : 'choose'}</span>
           {step === 'folder' && <span><kbd>→</kbd><kbd>←</kbd> open, close</span>}
+          {step === 'folder' && <span><kbd>{MOD}</kbd><kbd>Enter</kbd> quick chat</span>}
+          {step === 'folder' && query && <span><kbd>{MOD}</kbd><kbd>Shift</kbd><kbd>Enter</kbd> new folder</span>}
           {step !== 'machine' && !busy && <span><kbd>⌫</kbd> back</span>}
           <span><kbd>Esc</kbd> close</span>
         </div>

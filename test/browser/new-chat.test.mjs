@@ -15,19 +15,34 @@ before(async () => {
       const envs = ['laptop','vm'].map(id => ({id,name:id,online:true,info:{}}));
       const session = {id:'native',title:'Current chat',cwd:'/work/current',engine:'claude',profileId:'claude',
         nativeCli:true,pty:true,shared:true,alive:true,status:'idle',turns:1,updatedAt:Date.now()};
+      const quick = {id:'quickone',title:'Quick question',cwd:'/home/test/.helm/quick/quickone',quick:true,engine:'claude',
+        profileId:'claude',driver:'claude',alive:true,status:'working',turns:1,updatedAt:Date.now()-60000};
       window.calls = [];
       const client = {token,relay:'http://helm-test',
         environments:async()=>({environments:envs}), on:()=>()=>{}, subscribe:()=>{}, watchLatency:()=>()=>{},
         openDirect:async()=>{}, route:async()=>null,
         rpc:async(env,method,params)=>{
           window.calls.push({env,method,params});
-          if(method==='session.list') return {sessions:env==='laptop'?[session]:[]};
+          if(method==='session.list') return {sessions:env==='laptop'?[session,quick]:[]};
+          if(method==='session.events') return {session:quick,events:[],pending:[],last:0};
+          if(method==='session.watch') return {last:0};
+          if(method==='model.list') return {models:[],modes:[]};
+          if(method==='git.status') return {repo:true,files:[]};
+          if(method==='fs.search') return {results:[]};
+          // The machine's own checks on a folder name (fs.js makeDir).
+          if(method==='fs.mkdir') {
+            if(params.name.includes('/')) throw new Error('folder name cannot contain a path separator');
+            if(params.name==='..') throw new Error('invalid folder name');
+            return {path:params.path+'/'+params.name};
+          }
           if(method==='session.attach') return {pty:true,text:'Ready'};
           if(method==='session.messages') return {messages:[]};
-          if(method==='fs.list') return {path:params.path==='~'?'/home/test':params.path,entries:[{name:'project',path:'/work/project',isDir:true}]};
+          if(method==='fs.list') return params.path==='~'
+            ? {path:'/home/test',entries:[{name:'project',path:'/work/project',isDir:true}]}
+            : {path:params.path,entries:[{name:'existing',path:params.path+'/existing',isDir:true}]};
           if(method==='project.list') return {projects:[]};
           if(method==='profile.list') return {profiles:[{id:'claude',engine:'claude',cmd:'claude'}]};
-          if(method==='session.start') return {session:{...session,id:'fresh',cwd:params.cwd,nativeCli:false,pty:false}};
+          if(method==='session.start') return {session:{...session,id:'fresh',cwd:params.quick?'/home/test/.helm/quick/fresh':params.cwd,quick:params.quick,nativeCli:false,pty:false}};
           return {};
         }};
       createRoot(document.getElementById('root')).render(<Shell client={client} conn={{online:true,reachable:true}} onSignOut={()=>{}}/>);
@@ -118,4 +133,153 @@ test('Ctrl+Shift+N remembers a folder chosen in the new-chat picker',async t=>{
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+Shift+n');
   await startPickedChat(page,{envId:'vm',folder:'/work/project'});
+});
+
+/** Open the new-chat box on the vm's folder step. */
+async function folderStep(page) {
+  await page.keyboard.press('Control+Shift+o');
+  await page.getByRole('option').filter({hasText:'vm'}).click();
+  const box=page.getByRole('combobox',{name:'Which folder on vm?'});
+  await box.waitFor();
+  await page.getByRole('option').filter({hasText:'project'}).waitFor();
+  return box;
+}
+const startCall = (page) => page.evaluate(()=>window.calls.find(c=>c.method==='session.start'));
+
+test('the folder step starts with a quick-chat row, and Enter on it skips the folder',async t=>{
+  const page=await pageFor(t);
+  await folderStep(page);
+  const first=page.getByRole('option').first();
+  assert.equal(await first.locator('.palette-title').innerText(),'No folder · quick chat');
+  assert.equal(await first.getAttribute('aria-selected'),'true');
+  await page.keyboard.press('Enter');
+  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  assert.equal(await page.locator('.newchat-steps .on').innerText(),'CLI');
+  assert.match(await page.locator('.newchat-steps').innerText(),/Quick chat/);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.start'));
+  const call=await startCall(page);
+  assert.deepEqual({env:call.env,quick:call.params.quick,cwd:call.params.cwd},{env:'vm',quick:true,cwd:undefined});
+  // A quick chat is never remembered as "the last folder".
+  assert.equal(await page.evaluate(()=>localStorage.getItem('helm.last-folder:network:device')),null);
+});
+
+test('Ctrl+Enter at the folder step is a quick chat; at the machine step it does nothing',async t=>{
+  const page=await pageFor(t);
+  await page.keyboard.press('Control+Shift+o');
+  await page.getByRole('combobox',{name:'Which machine?'}).waitFor();
+  await page.keyboard.press('Control+Enter');
+  await page.keyboard.press('Control+Shift+Enter');
+  assert.equal(await page.getByRole('combobox',{name:'Which machine?'}).count(),1);
+  await page.keyboard.press('Escape');
+  const box=await folderStep(page);
+  await box.fill('pro');
+  await page.keyboard.press('Control+Enter');
+  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  // Back lands on the folder step again, with what was typed still there.
+  await page.keyboard.press('Backspace');
+  await page.getByRole('combobox',{name:'Which folder on vm?'}).waitFor();
+  assert.equal(await box.inputValue(),'pro');
+  await box.fill('');
+  await page.getByRole('option').filter({hasText:'project'}).click();
+  await startPickedChat(page,{envId:'vm',folder:'/work/project'});
+  assert.equal((await startCall(page)).params.quick,undefined);
+});
+
+test('a typed name that is not a folder offers a new-folder row that makes it and picks it',async t=>{
+  const page=await pageFor(t);
+  const box=await folderStep(page);
+  await box.fill('fresh');
+  const make=page.getByRole('option').last();
+  await make.filter({hasText:'New folder "fresh" in home'}).waitFor();
+  if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
+  if (process.env.HELM_TEST_SCREENSHOT_DIR) for (const width of [1280,390]) {
+    await page.setViewportSize({width,height:844});
+    await page.screenshot({path:`${process.env.HELM_TEST_SCREENSHOT_DIR}/new-chat-folder-${width}.png`});
+  }
+  assert.equal(await make.locator('.palette-sub').innerText(),'~/fresh');
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await make.getAttribute('aria-selected'),'true');
+  await page.keyboard.press('Enter');
+  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  const mkdir=await page.evaluate(()=>window.calls.find(c=>c.method==='fs.mkdir'));
+  assert.deepEqual(mkdir,{env:'vm',method:'fs.mkdir',params:{path:'~',name:'fresh'}});
+  assert.match(await page.locator('.newchat-steps').innerText(),/fresh/);
+  // The home list learned it: back with an empty box shows it.
+  await page.keyboard.press('Backspace');
+  await box.fill('');
+  await page.getByRole('option').filter({hasText:/^fresh$/}).waitFor();
+  await page.getByRole('option').filter({hasText:/^fresh$/}).click();
+  await startPickedChat(page,{envId:'vm',folder:'~/fresh'});
+});
+
+test('Ctrl+Shift+Enter makes the folder beside the highlighted one, or inside it once opened',async t=>{
+  const page=await pageFor(t);
+  const box=await folderStep(page);
+  // Cursor on "project" (closed): the new folder goes beside it.
+  await page.keyboard.press('ArrowDown');
+  await box.fill('beside');
+  await page.getByRole('option').filter({hasText:'New folder "beside" in work'}).waitFor();
+  assert.equal(await page.getByRole('option').last().locator('.palette-sub').innerText(),'/work/beside');
+  // Opened with →: inside it.
+  await box.fill('');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowRight');
+  await box.fill('inner');
+  await page.getByRole('option').filter({hasText:'New folder "inner" in project'}).waitFor();
+  await page.keyboard.press('Control+Shift+Enter');
+  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  const mkdir=await page.evaluate(()=>window.calls.filter(c=>c.method==='fs.mkdir'));
+  assert.deepEqual(mkdir.map(c=>c.params),[{path:'/work/project',name:'inner'}]);
+  await startPickedChat(page,{envId:'vm',folder:'/work/project/inner'});
+});
+
+test('a name the machine refuses is explained in the box and nothing starts',async t=>{
+  const page=await pageFor(t);
+  const box=await folderStep(page);
+  await box.fill('a/b');
+  await page.getByRole('option').filter({hasText:'New folder "a/b"'}).waitFor();
+  await page.keyboard.press('Control+Shift+Enter');
+  await page.locator('.newchat .error').filter({hasText:'folder name cannot contain a path separator'}).waitFor();
+  assert.equal(await page.getByRole('combobox',{name:'Which folder on vm?'}).count(),1);
+  // Not offered for a folder that is already there.
+  await box.fill('');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowRight');
+  await page.getByRole('option').filter({hasText:'existing'}).waitFor();
+  await box.fill('existing');
+  await page.getByText('No folder matches.').waitFor();
+  assert.equal(await page.getByRole('option').filter({hasText:'New folder'}).count(),0);
+});
+
+test('the palette opens a quick chat on the machine on screen',async t=>{
+  const page=await pageFor(t);
+  await page.keyboard.press('Control+k');
+  await page.getByRole('combobox').fill('Quick chat');
+  await page.getByRole('option').filter({hasText:'no folder, for a small question'}).click();
+  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.start'));
+  const call=await startCall(page);
+  assert.deepEqual({env:call.env,quick:call.params.quick},{env:'laptop',quick:true});
+});
+
+for (const width of [1280,390]) test(`a quick chat says "quick chat" where the folder goes, with no Git, at ${width}px`,async t=>{
+  const page=await pageFor(t);
+  await page.setViewportSize({width,height:844});
+  await page.evaluate(()=>window.visit('laptop',{kind:'env'}));
+  const row=page.locator('.thread-row').filter({hasText:'Quick question'}).first();
+  await row.waitFor();
+  assert.equal(await row.locator('.tri-where').innerText(),'quick chat · laptop');
+  assert.equal(await row.locator('.tri-branch').count(),0);
+  await row.click();
+  const bar=page.locator('.session-bar');
+  await bar.waitFor();
+  assert.match(await bar.locator('.sub').innerText(),/laptop\s*· quick chat/);
+  assert.doesNotMatch(await bar.innerText(),/quickone|\.helm/);
+  assert.equal(await bar.getByRole('button',{name:/^Git/}).count(),0);
+  assert.equal(await page.evaluate(()=>window.calls.some(c=>c.method==='git.status')),false);
+  await bar.getByRole('button',{name:'more'}).click();
+  assert.equal(await page.getByRole('button',{name:'Send to another machine'}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Rename thread'}).count(),1);
 });

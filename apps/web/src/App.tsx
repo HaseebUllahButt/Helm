@@ -178,6 +178,7 @@ const shortPath = (p: string) => {
   const parts = p.replace(/\/$/, '').split('/');
   return parts.length > 3 ? '…/' + parts.slice(-2).join('/') : p;
 };
+const pathOf = (s: Session) => (s.quick ? 'quick chat' : shortPath(s.cwd));
 
 const byRecent = (a: Session, b: Session) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 
@@ -309,7 +310,8 @@ type MainView =
   | { kind: 'transfer-browse'; path?: string }
   | { kind: 'transfer'; cwd: string; session?: Session }
   | { kind: 'verify'; path: string }
-  | { kind: 'start'; cwd: string }
+  // `quick`: a chat with no folder; `cwd` is then unused.
+  | { kind: 'start'; cwd: string; quick?: boolean }
   | { kind: 'settings' }
   | { kind: 'network-settings' }
   // Which helm each machine runs, and updating them from here.
@@ -393,7 +395,7 @@ function Shell({ client, conn, onSignOut }: {
   const [toast, setToast] = useState<Toast | null>(null);
   const [palette, setPalette] = useState(false);
   /** The keyboard new-chat box; a folder skips straight to the agent picker. */
-  const [newChat, setNewChat] = useState<{ envId?: string; folder?: string } | null>(null);
+  const [newChat, setNewChat] = useState<{ envId?: string; folder?: string; quick?: boolean } | null>(null);
   const [lastFolder, setLastFolder] = useState<{ envId: string; folder: string } | null>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(`helm.last-folder:${scope}`) || 'null');
@@ -803,8 +805,8 @@ function Shell({ client, conn, onSignOut }: {
       for (const s of [...liveThreads, ...snapshotThreads]) {
         items.push({
           id: `t:${e.id}:${s.id}`, group: 'thread', title: s.title, engine: s.engine, at: s.updatedAt,
-          sub: `${dirName(s.cwd)} · ${e.name}${attentionOn(e.id, s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
-          keywords: `${s.cwd} ${engineOf(s.engine).label}`,
+          sub: `${whereOf(s)} · ${e.name}${attentionOn(e.id, s) ? ' · needs you' : runningThread(s) ? ` · ${busyWord(s.status)}` : unknownThread(s) ? ' · status unavailable' : ''}${!e.online ? ' · offline' : ''}`,
+          keywords: `${s.quick ? 'quick chat' : s.cwd} ${engineOf(s.engine).label}`,
           run: () => openSession(e.id, s),
         });
       }
@@ -820,6 +822,11 @@ function Shell({ client, conn, onSignOut }: {
       }
     }
     items.push({ id: 'a:new', group: 'action', title: 'New chat', keywords: 'start create agent session', run: () => setNewChat({}) });
+    // A chat in no folder, on the machine on screen (or asked, when that one is not there).
+    items.push({
+      id: 'a:quick', group: 'action', title: 'Quick chat', sub: 'no folder, for a small question', keywords: 'start new agent question scratch',
+      run: () => setNewChat({ envId: envs.find((e) => e.id === selected && e.online)?.id, quick: true }),
+    });
     const go = (id: string, title: string, keywords: string, stack: MainView[]) =>
       items.push({ id, group: 'action', title, keywords, run: () => navigate(stack) });
     go('a:settings', 'Settings', 'preferences', [{ kind: 'app-settings' }]);
@@ -839,8 +846,12 @@ function Shell({ client, conn, onSignOut }: {
 
   const env = envs.find((e) => e.id === selected) ?? null;
   const view = stack[stack.length - 1];
-  const currentFolder = view.kind === 'session'
-    ? ((sessions[selected ?? ''] ?? []).find(s => s.id === view.session.id) ?? view.session).cwd
+  const viewSession = view.kind === 'session'
+    ? (sessions[selected ?? ''] ?? []).find(s => s.id === view.session.id) ?? view.session : null;
+  // A quick chat's scratch folder is not a place anyone would start in again.
+  const inQuick = !!viewSession?.quick || (view.kind === 'start' && !!view.quick);
+  const currentFolder = inQuick ? undefined
+    : viewSession ? viewSession.cwd
     : view.kind === 'start' || view.kind === 'transfer' ? view.cwd
     : view.kind === 'verify' ? view.path
     : view.kind === 'new' || view.kind === 'browse' || view.kind === 'transfer-browse' ? view.path ?? '~'
@@ -856,14 +867,16 @@ function Shell({ client, conn, onSignOut }: {
       e.preventDefault();
       e.stopPropagation();
       if (e.repeat) return;
-      const target = selected && currentFolder ? { envId: selected, folder: currentFolder } : lastFolder;
+      // From a quick chat, "the same place" is another quick chat.
+      const target = selected && inQuick ? { envId: selected, quick: true }
+        : selected && currentFolder ? { envId: selected, folder: currentFolder } : lastFolder;
       setPalette(false);
       setNewChat(target ?? {});
     };
     // Capture before a focused terminal handles the key as terminal input.
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [selected, currentFolder, lastFolder]);
+  }, [selected, currentFolder, inQuick, lastFolder]);
 
   /**
    * Which session this window is looking at, told to the service worker so
@@ -1486,6 +1499,7 @@ function Shell({ client, conn, onSignOut }: {
             title="New session" action="Choose this folder"
             onInto={(path) => push({ kind: 'new', path })}
             onPick={(cwd) => push({ kind: 'start', cwd })}
+            onQuick={() => push({ kind: 'start', cwd: '', quick: true })}
           />
         ) : view.kind === 'browse' ? (
           <Browse
@@ -1524,7 +1538,7 @@ function Shell({ client, conn, onSignOut }: {
           </Suspense>
         ) : view.kind === 'start' ? (
           <Start
-            client={client} env={env} cwd={view.cwd} onBack={back}
+            client={client} env={env} cwd={view.cwd} quick={view.quick} onBack={back}
             onStarted={(s) => {
               loadSessions(env.id);
               // The browsing chain collapses into the session it produced:
@@ -1537,7 +1551,7 @@ function Shell({ client, conn, onSignOut }: {
           <DrivenSession
             key={`${env.id}:${view.session.id}`}
             client={client} env={env} conn={conn} onTranscribe={transcribeVia(env.id)} reviewChildren={view.reviewChildren}
-            onSendTask={() => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
+            onSendTask={view.session.quick ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
@@ -1551,7 +1565,7 @@ function Shell({ client, conn, onSignOut }: {
           <SessionView
             key={`${env.id}:${view.session.id}`}
             client={client} env={env} onTranscribe={transcribeVia(env.id)}
-            onSendTask={() => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
+            onSendTask={view.session.quick ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             terminals={(sessions[env.id] ?? []).filter(ownTerminal).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))}
             onSwitch={(s) => restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: s }])}
@@ -1592,8 +1606,8 @@ function Shell({ client, conn, onSignOut }: {
       {palette && <Palette items={paletteItems()} onClose={() => setPalette(false)} engineOf={engineOf} />}
       {newChat && (
         <NewChat
-          key={`${newChat.envId ?? ''}:${newChat.folder ?? ''}`}
-          client={client} envs={envs} envId={newChat.envId} initialFolder={newChat.folder} near={selected} engineOf={engineOf}
+          key={`${newChat.envId ?? ''}:${newChat.folder ?? ''}:${newChat.quick ? 'quick' : ''}`}
+          client={client} envs={envs} envId={newChat.envId} initialFolder={newChat.folder} quick={newChat.quick} near={selected} engineOf={engineOf}
           onFolder={rememberChatFolder}
           onClose={() => setNewChat(null)}
           onStarted={(envId, s) => { loadSessions(envId); navigate([{ kind: 'env' }, { kind: 'session', session: s }], envId); }}
@@ -2439,7 +2453,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   // all three are what the words are matched against.
   const q = query.trim().toLowerCase();
   const hit = (s: Session) =>
-    !q || `${s.title} ${s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q);
+    !q || `${s.title} ${s.quick ? 'quick chat' : s.cwd} ${engineOf(s.engine).label}`.toLowerCase().includes(q);
 
   // Threads this machine's CLIs recorded without helm, beside helm's own.
   const detected = dedupeDetected(sessions, earlier);
@@ -2802,7 +2816,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
                     <span className="grow">
                       <span className="rt"><span className="rt-text">{s.title}</span></span>
                       <span className="rm">
-                        {[engineOf(s.engine).label, s.model, shortPath(s.cwd)].filter(Boolean).join(' · ')}
+                        {[engineOf(s.engine).label, s.model, pathOf(s)].filter(Boolean).join(' · ')}
                         {s.updatedAt ? ` · ${waitingSince(s.updatedAt, now)}` : ''}
                       </span>
                     </span>
@@ -3014,7 +3028,7 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
               {s.archived && <span className="tag">archived</span>}
             </span>
             <span className="rm">
-              {[eng.label, s.model, shortPath(s.cwd), money(s.costUsd)].filter(Boolean).join(' · ')}
+              {[eng.label, s.model, pathOf(s), money(s.costUsd)].filter(Boolean).join(' · ')}
             </span>
           </span>
           {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
@@ -3076,6 +3090,8 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
 }
 
 const dirName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
+/** Where a thread runs, in a word: its folder, or "quick chat" when it has none. */
+const whereOf = (s: Session) => (s.quick ? 'quick chat' : dirName(s.cwd));
 
 /**
  * A session that is waiting on you, as the first thing on Home.
@@ -3127,7 +3143,7 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
           <EngineMark engine={eng.cls} />
           <span className="grow">
             <span className="need-title">{s.title}</span>
-            <span className="need-m">{eng.label} · {dirName(s.cwd)} · {machine}</span>
+            <span className="need-m">{eng.label} · {whereOf(s)} · {machine}</span>
           </span>
         </span>
         {ask?.text && <span className={`need-q${ask.kind === 'command' ? ' mono' : ''}`}>{ask.text}{ask.more ? ` (+${ask.more} more)` : ''}</span>}
@@ -3162,8 +3178,8 @@ function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; m
       </span>
       <span className="tri-title">{s.title}</span>
       <span className="tri-bot">
-        <Icon name="folder" size={12} />
-        <span className="tri-where">{dirName(s.cwd)} · {machine}</span>
+        <Icon name={s.quick ? 'bolt' : 'folder'} size={12} />
+        <span className="tri-where">{whereOf(s)} · {machine}</span>
         <span className="tri-end">
           {/* The age is already on the top line; the chip says only what. */}
           {runningThread(s)
@@ -3901,9 +3917,11 @@ function ModelPrefsView({ client, env, account, onBack }: {
 
 // ----------------------------------------------------------------- browsing
 
-function Browse({ client, env, path, title = 'Where?', action = 'Start here', onBack, onInto, onPick }: {
+function Browse({ client, env, path, title = 'Where?', action = 'Start here', onBack, onInto, onPick, onQuick }: {
   client: Client; env: Environment; path?: string; title?: string; action?: string;
   onBack: () => void; onInto: (p: string) => void; onPick: (p: string) => void | Promise<void>;
+  /** Offered on the way in: a chat that needs no folder at all. */
+  onQuick?: () => void;
 }) {
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [here, setHere] = useState(path ?? '~');
@@ -3999,6 +4017,18 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
           </div>
         ) : (
           <>
+            {!path && onQuick && (
+              <div className="rows">
+                <button className="row" onClick={onQuick}>
+                  <span className="glyph"><Icon name="bolt" size={16} /></span>
+                  <span className="grow">
+                    <span className="rt"><span className="rt-text">No folder · quick chat</span></span>
+                    <span className="rm">a small question, in no folder</span>
+                  </span>
+                  <span className="chev"><Icon name="forward" size={15} /></span>
+                </button>
+              </div>
+            )}
             {/* Only on the way in: once you are browsing, the list on screen
                 already says where you are. */}
             {!path && recent.length > 0 && (
@@ -4226,8 +4256,10 @@ function MediaView({ client, env, onBack }: {
  * process starts - so it is the only thing left, and the last one you used
  * is already selected.
  */
-function Start({ client, env, cwd, onBack, onStarted }: {
+function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
   client: Client; env: Environment; cwd: string;
+  /** A chat with no folder: the machine makes an empty one for it. */
+  quick?: boolean;
   onBack: () => void; onStarted: (s: Session) => void;
 }) {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -4326,7 +4358,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
     savePicker({ last: account.key });
     try {
       const r = await client.rpc<{ session: Session }>(env.id, 'session.start', {
-        cwd, profileId: account.profile.id,
+        ...(quick ? { quick: true } : { cwd }), profileId: account.profile.id,
         model: model || undefined, effort: effort || undefined,
         mode: mode || undefined, speed: speed || undefined,
       }, 70_000);
@@ -4340,7 +4372,7 @@ function Start({ client, env, cwd, onBack, onStarted }: {
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <div className="titles"><h1>New session</h1><span className="sub"><Route machine={env.name} folder={cwd} /></span></div>
+        <div className="titles"><h1>{quick ? 'Quick chat' : 'New session'}</h1><span className="sub"><Route machine={env.name} folder={cwd} quick={quick} /></span></div>
         {(accounts?.length ?? 0) > 0 && (
           <button
             className="iconbtn" title="choose which agents show" aria-label="choose which agents show"
@@ -4691,7 +4723,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           <h1>{session.title}</h1>
           <span className="sub">
             <EngineMark engine={eng.cls} />
-            <Route machine={env.name} folder={session.cwd} />
+            <Route machine={env.name} folder={session.cwd} quick={session.quick} />
             <span className="sep"> · </span>{eng.label}{(session as any).model ? ` · ${(session as any).model}` : ''}
             {!isShell && messages && (readError || !env.online) && <span className="offline" role="status"> · Saved chat · reconnecting…</span>}
           </span>
