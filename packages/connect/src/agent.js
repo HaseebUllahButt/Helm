@@ -1,3 +1,4 @@
+import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { hostname, platform, arch, release, homedir } from 'node:os';
@@ -1458,6 +1459,15 @@ export class Daemon {
         removeProject(path);
         return { ok: true };
       }
+
+      case M.INTEGRATIONS_LIST: return listIntegrations(p);
+      case M.INTEGRATIONS_MCP_ADD: return addMcp(p);
+      case M.INTEGRATIONS_MCP_REMOVE: return removeMcp(p);
+      case M.INTEGRATIONS_MCP_CONNECT: return connectMcp(p, this.sessions);
+      case M.INTEGRATIONS_SKILLS_ADD: return addSkills(p);
+      case M.INTEGRATIONS_SKILLS_REMOVE: return removeSkill(p);
+      case M.INTEGRATIONS_PLUGINS_ADD: return changePlugin(p);
+      case M.INTEGRATIONS_PLUGINS_REMOVE: return changePlugin(p, true);
 
       case M.PROFILE_LIST: {
         // Asked for the list means somebody is looking at what this machine
