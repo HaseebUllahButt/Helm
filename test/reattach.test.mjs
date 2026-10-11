@@ -122,6 +122,21 @@ test('a mark left by an earlier restart clears when the chat has nothing in flig
   await again.stop();
 });
 
+test('a stale mark also clears when the process it was about is gone', async () => {
+  const { make, drivers } = setup('stale-dead', { procHost: Object.assign(new EventEmitter(), { hasProc: () => false, procPipe: () => null }) });
+  const first = await make();
+  const s = await first.start({ cwd: '/tmp', profileId: 'claudea' });
+  await first.input(s.id, 'hello'); drivers.get(s.id).finish('t1');
+  first.get(s.id).recovery = { kind: 'error', message: 'Could not reconnect to the agent: Codex thread/read timed out', at: Date.now() };
+  first.get(s.id).queuePaused = true;
+  await first.stop();
+  const again = await make();
+  await again.resume();
+  assert.equal(again.get(s.id).recovery, undefined);
+  assert.notEqual(again.get(s.id).queuePaused, true);
+  await again.stop();
+});
+
 test('reconnects run a few at a time, not all at once', async () => {
   const { make, drivers } = setup('concurrency', { reattachConcurrency: 2 });
   const first = await make();

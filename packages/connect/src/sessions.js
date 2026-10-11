@@ -4319,6 +4319,9 @@ export class Sessions extends EventEmitter {
       // than closing them as though the agent had already seen them.
       const tail = this.events.tail(s.id, 0);
       this.#restoreOpenTurns(s, tail, false);
+      // The process a failed reconnect was about is gone; so is the mark.
+      // Anything it was doing is settled just above, as "restart" if need be.
+      if (this.#unreachable(s)) { delete s.recovery; s.queuePaused = false; }
       if (s.status !== 'idle') {
         s.status = 'idle';
         s.updatedAt = Date.now();
