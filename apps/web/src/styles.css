@@ -901,6 +901,9 @@ pre.snippet {
   display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
   padding: 0 4px 5px; font-size: var(--t-micro); color: var(--mutedfg);
 }
+.queued-head { display: flex; justify-content: space-between; align-items: center; }
+.queued-head button { font-size: var(--t-micro); color: var(--text-dim); }
+.queued-panel { max-height: 40vh; overflow-y: auto; }
 .queued-head b { font-weight: 600; color: var(--text-dim); }
 .queued-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 4px; }
 .queued-row + .queued-row { border-top: 1px solid var(--line); }

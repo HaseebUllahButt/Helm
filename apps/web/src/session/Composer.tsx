@@ -22,6 +22,14 @@ export const QUICK: { label: string; key: string }[] = [
  * terminal-backed session; a headless agent takes messages, and an
  * interrupt, instead.
  */
+const QUEUE_SHOWN = 4;
+
+/** A finished-task report is long; the queue only needs to say which task it is. */
+function shortQueued(text: string) {
+  const done = /^A delegated task finished\..*?\nTask: (.+)/s.exec(text ?? '');
+  return done ? `Task finished: ${done[1].split('\n')[0]}` : text;
+}
+
 export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, steers = false, queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
   onKey?: (k: string) => void; onStop?: () => void;
@@ -75,6 +83,7 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
   const [dragging, setDragging] = useState(false);
   const [pick, setPick] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [allQueued, setAllQueued] = useState(false);
   const [referencePick, setReferencePick] = useState(0);
   const referenceMatch = /(?:^|\s)@([^\n@]{0,80})$/.exec(draft);
   const referenceMatches = !dismissed && onReference && referenceMatch && references.length < 3
@@ -304,9 +313,10 @@ export function Composer({ draft, setDraft, onSend, onKey, onStop, waiting, work
             <div className="queued-panel">
               <div className="queued-head">
                 <b>{queued.length} waiting</b>
+                {queued.length > QUEUE_SHOWN && <button onClick={() => setAllQueued(!allQueued)}>{allQueued ? 'Show fewer' : `Show all ${queued.length}`}</button>}
               </div>
-              {queued.map((item, index) => {
-                const label = item.text || (item.attachments === 1 ? 'Image' : `${item.attachments} images`);
+              {queued.map((item, index) => ({ item, index })).filter(({ index }) => allQueued || index < QUEUE_SHOWN).map(({ item, index }) => {
+                const label = shortQueued(item.text) || (item.attachments === 1 ? 'Image' : `${item.attachments} images`);
                 const name = label.length > 80 ? `${label.slice(0, 79)}…` : label;
                 const busy = queueBusy === item.turn.id;
                 return (
