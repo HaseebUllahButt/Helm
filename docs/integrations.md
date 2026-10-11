@@ -104,3 +104,29 @@ Building only the worktree's native dependency with
 `npm exec --yes --package=node-gyp -- node-gyp rebuild --directory node_modules/@homebridge/node-pty-prebuilt-multiarch --nodedir=/usr`
 restored normal validation; `node --test test/proc-host.test.mjs` then passed 8/8.
 No installed checkout or running Helm daemon was changed.
+
+Final checks on the finished feature:
+
+- `npm exec --workspace @helm/web -- tsc --noEmit`: passed.
+- `npm --workspace @helm/web run build`: passed; Integrations is a separate lazy chunk.
+- `node --test test/integrations.test.mjs`: 13 passed, including native argument
+  ordering, shared removal without an account, alternate shared links and
+  sanitized errors when malformed configuration contains credentials.
+- `node --test test/browser/integrations.test.mjs`: 3 passed. List and add-sheet
+  behavior, machine/account routing, terminal opening and unsupported accounts
+  were checked at 390px and desktop width. Screenshots were visually inspected.
+- `node --test --test-concurrency=2 test/*.test.mjs`: 1,096 passed, 5 failed
+  out of 1,101, with no skips or cancellations. The failure in
+  `driver-claude.test.mjs:153` expects `null` effort but gets `undefined`.
+  Four `native-cli.test.mjs:74` cases fail: Claude accepts input that the test
+  expects to reject; the remaining engines encounter the leftover Claude session.
+  Those failures also reproduce in isolation. The two test files, Claude driver,
+  native launcher and native integration implementation are unchanged from
+  6da47b1. They were not repaired as part of this assigned integration work.
+- `git diff --check`: passed.
+
+The real Claude stdio smoke was repeated with an environment value. A separate
+isolated Claude configuration verified native HTTP/header add, header masking
+in the list and native remove. The owner account test entries and the isolated
+configuration were removed. CLI OAuth completion, remote-machine behavior,
+real marketplace installs and git-URL skill downloads remain unverified.

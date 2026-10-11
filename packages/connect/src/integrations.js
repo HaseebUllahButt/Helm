@@ -122,7 +122,8 @@ export async function runAccount(profile, args, { cwd, secretValues = [], extraE
 function skillMeta(text) {
   const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
   if (!front) throw new Error('SKILL.md needs frontmatter with a name.');
-  const meta = parseYaml(front);
+  let meta;
+  try { meta = parseYaml(front); } catch { throw new Error('SKILL.md has invalid YAML frontmatter.'); }
   const name = validName(meta?.name);
   if (['synced', 'anthropic-skills'].includes(name.toLowerCase())) throw new Error('That skill name is reserved by Claude.');
   return { name, description: typeof meta.description === 'string' ? meta.description.slice(0, 500) : '' };
@@ -143,12 +144,14 @@ export async function listAccount(profile, { cwd } = {}) {
   const a = account(profile), sharedRoot = join(a.userHome, '.agents', 'skills');
   if (!supported(profile)) return { profileId: profile.id, label: profile.label ?? profile.id, engine: profile.engine, mcp: [], skills: [], plugins: [], support: { mcp: false, skills: false, plugins: false, auth: 'none' } };
   let mcp = [], plugins = [];
-  if (profile.engine === 'claude') {
-    const config = a.customHome ? join(a.home, '.claude.json') : join(a.userHome, '.claude.json');
-    mcp = parseClaudeConfig(await textFile(config, '{}'), cwd ? await textFile(join(cwd, '.mcp.json'), '{}') : '{}', cwd);
-    const installed = await jsonFile(join(a.home, 'plugins', 'installed_plugins.json'));
-    plugins = Object.entries(installed.plugins ?? {}).flatMap(([name, installs]) => installs.map((i) => ({ name, scope: i.scope, version: i.version, cwd: i.projectPath })));
-  } else ({ mcp, plugins } = parseCodexConfig(await textFile(join(a.home, 'config.toml'), '')));
+  try {
+    if (profile.engine === 'claude') {
+      const config = a.customHome ? join(a.home, '.claude.json') : join(a.userHome, '.claude.json');
+      mcp = parseClaudeConfig(await textFile(config, '{}'), cwd ? await textFile(join(cwd, '.mcp.json'), '{}') : '{}', cwd);
+      const installed = await jsonFile(join(a.home, 'plugins', 'installed_plugins.json'));
+      plugins = Object.entries(installed.plugins ?? {}).flatMap(([name, installs]) => installs.map((i) => ({ name, scope: i.scope, version: i.version, cwd: i.projectPath })));
+    } else ({ mcp, plugins } = parseCodexConfig(await textFile(join(a.home, 'config.toml'), '')));
+  } catch { throw new Error('Could not read this account’s configuration. Check its config file.'); }
   const own = await skillRows(join(a.home, 'skills'), sharedRoot);
   const shared = profile.engine === 'codex' ? await skillRows(sharedRoot, sharedRoot) : [];
   const seen = new Set();
@@ -183,13 +186,14 @@ async function addMcpUnlocked(p, profiles) {
   if (current.mcp.some((r) => r.name === name && r.scope === scope && (scope === 'user' || r.cwd === cwd))) throw new Error('A connector with that name already exists in this scope.');
   const args = ['mcp', 'add'];
   if (profile.engine === 'claude') {
-    args.push('--scope', scope, '--transport', transport);
+    // Claude's env/header flags are variadic: bind positionals before them.
+    args.push(name, ...(transport === 'stdio' ? [] : [p.url]), '--scope', scope, '--transport', transport);
     for (const [k, v] of env) args.push('-e', `${k}=${v}`);
     for (const [k, v] of headers) args.push('-H', `${k}: ${v}`);
     if (p.clientId) args.push('--client-id', p.clientId);
     if (p.clientSecret) args.push('--client-secret');
     if (p.callbackPort) args.push('--callback-port', String(p.callbackPort));
-    args.push(name, ...(transport === 'stdio' ? ['--', p.command, ...(p.args ?? [])] : [p.url]));
+    if (transport === 'stdio') args.push('--', p.command, ...(p.args ?? []));
   } else {
     args.push(name);
     for (const [k, v] of env) args.push('--env', `${k}=${v}`);
@@ -284,21 +288,36 @@ async function addSkillsUnlocked(p, profiles) {
     throw e;
   } finally { await rm(temp, { recursive: true, force: true }); }
 }
-async function removeSkillUnlocked(p, profiles) {
-  const profile = await profileFor(p.profileId, profiles), a = account(profile);
-  const folder = validName(p.folder ?? p.name), sharedRoot = join(a.userHome, '.agents', 'skills');
-  const skills = (await listAccount(profile)).skills;
-  const skill = skills.find((s) => s.folder === folder && s.name === p.name);
-  if (!skill) throw new Error('That skill is no longer installed.');
-  if (skill.shared) {
-    const target = await realpath(skill.path);
-    if (resolve(target, '..') !== resolve(sharedRoot)) throw new Error('Only direct shared skill folders can be removed here.');
-    // Only unlink entries that actually point to the shared copy being removed.
-    for (const other of (profiles ?? await getProfiles()).filter(supported)) {
-      const link = join(account(other).home, 'skills', folder);
-      if ((await lstat(link).catch(() => null))?.isSymbolicLink() && await realpath(link).catch(() => '') === target) await unlink(link);
+async function removeSharedSkill(skill, sharedRoot, profiles) {
+  const target = await realpath(skill.path);
+  if (resolve(target, '..') !== resolve(sharedRoot)) throw new Error('Only direct shared skill folders can be removed here.');
+  // Aliases can name the same shared copy differently. Remove only actual links.
+  const homes = new Set(profiles.filter(supported).map((p) => account(p).home));
+  for (const home of homes) {
+    const dir = join(home, 'skills');
+    for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isSymbolicLink()) continue;
+      const link = join(dir, entry.name);
+      if (await realpath(link).catch(() => '') === target) await unlink(link);
     }
-    await rm(target, { recursive: true, force: true });
-  } else await rm(skill.path, { recursive: true, force: true });
+  }
+  await rm(target, { recursive: true, force: true });
+}
+async function removeSkillUnlocked(p, profiles) {
+  const all = profiles ?? await getProfiles();
+  validName(p.name);
+  if (!p.profileId) {
+    const sharedRoot = join(homedir(), '.agents', 'skills');
+    const skills = (await skillRows(sharedRoot, sharedRoot)).filter((s) => s.name === p.name);
+    if (skills.length !== 1) throw new Error('Choose one installed shared skill.');
+    await removeSharedSkill(skills[0], sharedRoot, all);
+    return { ok: true };
+  }
+  const profile = await profileFor(p.profileId, all), a = account(profile);
+  const folder = validName(p.folder ?? p.name), sharedRoot = join(a.userHome, '.agents', 'skills');
+  const skill = (await listAccount(profile)).skills.find((s) => s.folder === folder && s.name === p.name);
+  if (!skill) throw new Error('That skill is no longer installed.');
+  if (skill.shared) await removeSharedSkill(skill, sharedRoot, all);
+  else await rm(skill.path, { recursive: true, force: true });
   return { ok: true };
 }

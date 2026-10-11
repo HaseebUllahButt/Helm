@@ -22,11 +22,10 @@ if (group === 'mcp') {
   let name;
   if (verb === 'remove') name = args[0];
   else if (claude) {
-    const t = option('--transport');
-    name = args[t === 'stdio' ? args.indexOf('--') - 1 : args.length - 2];
+    name = args[0];
   } else name = args[0];
   if (verb === 'remove') delete servers[name];
-  else if (verb === 'add') servers[name] = args.includes('--') ? { command: args[args.indexOf('--') + 1], args: args.slice(args.indexOf('--') + 2) } : { type: 'http', url: claude ? args.at(-1) : option('--url') };
+  else if (verb === 'add') servers[name] = args.includes('--') ? { command: args[args.indexOf('--') + 1], args: args.slice(args.indexOf('--') + 2) } : { type: 'http', url: claude ? args[1] : option('--url') };
 } else if (group === 'plugin') {
   if (claude) {
     const pluginFile = join(root, 'plugins', 'installed_plugins.json'); mkdirSync(join(root, 'plugins'), { recursive: true });

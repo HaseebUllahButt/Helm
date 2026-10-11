@@ -140,7 +140,7 @@ export const M = {
   INTEGRATIONS_MCP_REMOVE: 'integrations.mcp.remove', // { profileId, name, scope, cwd? } -> { ok }
   INTEGRATIONS_MCP_CONNECT: 'integrations.mcp.connect', // { profileId, name, scope?, cwd? } -> { session, sessionId }
   INTEGRATIONS_SKILLS_ADD: 'integrations.skills.add', // { source } -> { names[] }; shared across accounts
-  INTEGRATIONS_SKILLS_REMOVE: 'integrations.skills.remove', // { profileId, name, folder? } -> { ok }
+  INTEGRATIONS_SKILLS_REMOVE: 'integrations.skills.remove', // { name, profileId?, folder? } -> { ok }; shared by default
   INTEGRATIONS_PLUGINS_ADD: 'integrations.plugins.add', // { profileId, name, scope?, cwd? } -> { ok }
   INTEGRATIONS_PLUGINS_REMOVE: 'integrations.plugins.remove', // { profileId, name, scope?, cwd? } -> { ok }
   PROFILE_LIST: 'profile.list',    // {} -> { profiles[] }

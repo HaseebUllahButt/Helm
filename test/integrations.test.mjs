@@ -49,7 +49,7 @@ test('native MCP add and remove stay isolated in each account and respect scope'
     assert.equal((await listAccount(p)).mcp[0].name, 'echo'); assert.equal((await listAccount(other)).mcp.length, 0);
     await assert.rejects(addMcp({ profileId: p.id, name: 'echo', transport: 'stdio', command: 'node', scope: 'user' }, profiles), /already exists/);
     await removeMcp({ profileId: p.id, name: 'echo', scope: 'user' }, profiles); assert.equal((await listAccount(p)).mcp.length, 0);
-    const log = await calls(p); assert.equal(log.length, 2); assert.ok(log[0].args.includes('--')); assert.equal(log[1].verb, 'remove');
+    const log = await calls(p); if (engine === 'claude') { assert.equal(log[0].args[0], 'echo'); assert.ok(log[0].args.indexOf('echo') < log[0].args.indexOf('-e')); } assert.equal(log.length, 2); assert.ok(log[0].args.includes('--')); assert.equal(log[1].verb, 'remove');
     if (engine === 'claude') {
       const project = join(sandbox, 'project'); await mkdir(project, { recursive: true });
       for (const scope of ['local', 'project']) {
@@ -66,6 +66,7 @@ test('headers, OAuth secrets, errors and configuration failures never expose cre
   await addMcp({ profileId: p.id, name: 'oauth', transport: 'http', url: 'https://x.test', clientId: 'id', clientSecret: 'oauth-secret', callbackPort: 8080 }, [p]);
   const call = (await calls(p)).at(-1); assert.equal(call.secret, 'oauth-secret'); assert.ok(call.args.includes('--client-secret')); assert.ok(!call.args.includes('oauth-secret'));
   await writeFile(join(p.env.CLAUDE_CONFIG_DIR, '.claude.json'), 'broken secret-token');
+  await assert.rejects(addMcp({ profileId: p.id, name: 'safe-error', transport: 'stdio', command: 'node' }, [p]), (e) => /configuration/.test(e.message) && !/secret-token/.test(e.message));
   const reply = await listIntegrations({}, [p]); assert.match(reply.accounts[0].error, /configuration/); assert.doesNotMatch(JSON.stringify(reply), /secret-token/);
 });
 test('Connect creates a fresh terminal with account environment, no credentials in its command', async () => {
@@ -95,7 +96,9 @@ test('shared skill install, duplicate protection and removal preserve unrelated 
   for (const a of [p, other]) assert.equal(await realpath(join(a.env.CLAUDE_CONFIG_DIR, 'skills/example-skill')), dest);
   assert.equal((await listAccount(codex)).skills[0].shared, true);
   await assert.rejects(addSkills({ source }, profiles), /already exists/);
-  await removeSkill({ profileId: p.id, name: 'example-skill' }, profiles);
+  await symlink(dest, join(other.env.CLAUDE_CONFIG_DIR, 'skills/alternate-name'));
+  await removeSkill({ name: 'example-skill' }, profiles);
+  await assert.rejects(lstat(join(other.env.CLAUDE_CONFIG_DIR, 'skills/alternate-name')), /ENOENT/);
   assert.equal((await listAccount(codex)).skills.length, 0); assert.equal((await listAccount(other)).skills.length, 0);
   await assert.rejects(lstat(dest), /ENOENT/);
   await writeFile(join(source, 'SKILL.md'), '---\ndescription: No name\n---');
