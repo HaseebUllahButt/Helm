@@ -2319,6 +2319,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   margin: 0; padding: 12px 14px; max-height: none; box-shadow: none;
   border-radius: var(--radius-xl); border-bottom: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
 }
+/* Claude Code's own subagents: read-only cards beside Helm's tasks. */
+.native-badge {
+  display: inline-block; margin-right: 6px; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 999px;
+  font: 600 var(--t-micro) var(--sans); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim);
+}
+.native-activity summary { cursor: pointer; color: var(--mutedfg); font-size: var(--t-meta); }
+.native-activity ol { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; font: var(--t-micro) var(--mono); color: var(--text-dim); overflow-wrap: anywhere; }
 .delegation-follow { display: flex; gap: 8px; align-items: flex-end; margin: 0; }
 .delegation-follow textarea { flex: 1; min-width: 0; margin: 0; padding: 9px 10px; resize: vertical; }
 .delegation-follow button { width: auto; margin: 0; flex: none; }

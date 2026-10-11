@@ -429,6 +429,20 @@ task history is not replayed into conversations when the daemon restarts.
 stopped children do not restart the parent. Archiving hides a task without
 stopping its process.
 
+Subagents Claude Code starts itself (its `Agent`/`Task` tool) appear in the
+same list marked **native**: in a terminal or monitored Claude thread, and in
+Helm chats where those tools are allowed. A terminal thread gets an **Agents**
+button beside its title for them. Helm reads them from the files Claude keeps
+beside the conversation (`<session>/subagents/agent-*.jsonl`), so they are
+read-only: expand one for its latest reply and recent steps; there is nothing
+to message, stop or open. Running ones count in the Agents badge and keep the
+thread marked working. A finished reply reads **Finished** after a few quiet
+seconds; one that stops writing without finishing reads **Stopped** after ten
+minutes. A Helm chat that already shows a subagent inline does not repeat it
+as a card, and the newest 24 per thread are listed. When the chat itself
+reports on the same subagent, its card shows that state instead: **Needs
+approval** while it waits on you, **Failed** if the chat says it failed.
+
 Helm-managed agents receive a short introduction to these tools on their next
 ordinary message. Any local CLI with shell access can also use them directly
 on a joined machine with the Helm daemon running:

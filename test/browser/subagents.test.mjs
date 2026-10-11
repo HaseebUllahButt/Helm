@@ -421,3 +421,118 @@ test('Shell back history leaves parent and child chats without cycling between t
     } finally { await view.close(); }
   }
 });
+
+test('Claude Code native subagents show as read-only cards beside delegated tasks', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React, { useState } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { DrivenSession } from './apps/web/src/session/DrivenSession';
+    const env = { id:'native-test', name:'Laptop', online:true, info:{} };
+    const native = (id, status, title, last) => ({ id, native:true, title, agentType:'general-purpose', model:'claude-opus-test',
+      status, startedAt:1, updatedAt:2, branch: id === 'a1' ? 'worktree-agent-a1' : null, toolUseId:'toolu_'+id, last });
+    const parent = { id:'parent', title:'Native parent', cwd:'/project', engine:'claude', profileId:'claude', status:'idle', driver:true,
+      team:{ working:1, blocked:1, failed:0 },
+      nativeCards:[native('a1','working','Map the code','Grep: needle'), native('a2','done','Write the summary','All tests pass.'),
+        native('a3','blocked','Edit the config','Edit: config.js')] };
+    const child = { ...parent, id:'child', title:'Delegated review', nativeCards:undefined, team:undefined,
+      delegation:{ parentId:'parent', task:'Delegated review', status:'done' } };
+    const client = {
+      on: () => () => {}, subscribe: () => {},
+      rpc: async (env, method, params) => {
+        (window.calls ??= []).push({env,method,params});
+        if (method === 'model.list') return { models:[], modes:[] };
+        if (method === 'agent.list') return { agents:[] };
+        if (method === 'session.list') return { sessions:[child] };
+        if (method === 'session.watch') return { last:0 };
+        if (method === 'session.events') return { session:parent, events:[], pending:[], last:0 };
+        if (method === 'session.native-agent') return { agent:{ ...parent.nativeCards.find(a=>a.id===params.agentId),
+          result:'**All tests pass.** Two files changed.', activity:['Read: /project/a.js','Bash: Run the tests','All tests pass.'],
+          task:'Write the summary of the change', worktree:null } };
+        return { ok:true };
+      },
+    };
+    function Chat() {
+      const [session, setSession] = useState(parent);
+      return <DrivenSession client={client} env={env} session={session} onBack={()=>{}} onClosed={()=>{}}
+        onArchived={()=>{}} onSession={setSession} onOpenSession={(s)=>{ window.opened = s.id; }} />;
+    }
+    createRoot(document.getElementById('root')).render(<Chat />);
+  `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true, write:false, format:'iife', jsx:'automatic' });
+  for (const width of [1280, 390]) {
+    const view = await browser.newPage({ viewport:{width,height:844} });
+    view.setDefaultTimeout(10_000);
+    try {
+      await view.route('http://helm-native-test/**', r => r.fulfill({contentType:'text/html',body:'<div class="session" id="root"></div>'}));
+      await view.goto('http://helm-native-test/');
+      await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
+      await view.addScriptTag({ content:bundle.outputFiles[0].text });
+      // One delegated task and three native subagents, counted together.
+      const launcher = view.getByRole('button', {name:'Agents',exact:true});
+      await launcher.locator('.cbadge').filter({hasText:/^4$/}).waitFor();
+      await view.locator('.chip.working').waitFor();
+      await launcher.click();
+      await view.getByRole('tab', {name:'Agents',exact:true}).click();
+      const active = view.locator('.delegation-group.active');
+      const finished = view.locator('.delegation-group.finished');
+      await active.getByRole('heading').filter({hasText:'2'}).waitFor();
+      await finished.getByRole('heading').filter({hasText:'2'}).waitFor();
+      assert.equal(await active.locator('.native-badge').count(), 2);
+      // The chat says one waits on an approval: one card, first, saying so.
+      assert.deepEqual(await active.locator('.delegation-status').allInnerTexts(), ['Needs approval', 'Working']);
+      await active.getByRole('button', {name:'Needs approval, details'}).click();
+      await view.locator('#task-detail-native-a3').getByText('It is waiting for your approval in the chat.', {exact:true}).waitFor();
+      await active.getByRole('button', {name:'Needs approval, details'}).click();
+      assert.match(await active.locator('.delegation-task small').nth(1).innerText(), /general-purpose · claude-opus-test · worktree-agent-a1/i);
+      assert.equal(await finished.locator('.delegation-branch.native').count(), 1);
+      // Expanding reads its result and steps; nothing offers to steer it.
+      await view.getByRole('button', {name:/Write the summary/}).click();
+      const detail = view.locator('#task-detail-native-a2');
+      await detail.locator('.delegation-output strong').filter({hasText:'All tests pass.'}).waitFor();
+      await detail.getByText('Write the summary of the change', {exact:true}).waitFor();
+      await detail.locator('summary').filter({hasText:'Recent activity'}).click();
+      await detail.getByText('Bash: Run the tests', {exact:true}).waitFor();
+      assert.equal(await detail.getByRole('button').count(), 0);
+      assert.equal(await detail.locator('textarea').count(), 0);
+      assert.ok(await view.evaluate(() => window.calls.some(c => c.method === 'session.native-agent' && c.params.id === 'parent' && c.params.agentId === 'a2')));
+      assert.equal(await view.evaluate(() => window.calls.some(c => c.method === 'session.delegation-result' && String(c.params.id).startsWith('a'))), false);
+      assert.equal(await view.evaluate(() => window.opened), undefined);
+      await capture(view, `native-subagents-${width}.png`);
+    } finally { await view.close(); }
+  }
+});
+
+test('a terminal thread lists its native subagents without a task form', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Subagents } from './apps/web/src/session/Subagents';
+    const parent = { id:'term', title:'Terminal Claude', cwd:'/project', engine:'claude', status:'idle', nativeCli:true, nativeChat:true,
+      nativeCards:[{ id:'b1', native:true, title:'Check the docs', agentType:'Explore', model:null, status:'interrupted',
+        startedAt:1, updatedAt:2, branch:null, toolUseId:null, last:'Read: README.md' }] };
+    const client = {
+      on: () => () => {},
+      rpc: async (env, method, params) => {
+        (window.calls ??= []).push({env,method,params});
+        if (method === 'session.list') return { sessions:[] };
+        if (method === 'session.native-agent') return { agent:{ ...parent.nativeCards[0], result:'', activity:[], task:'Check the docs', worktree:null } };
+        return { ok:true };
+      },
+    };
+    createRoot(document.getElementById('root')).render(<Subagents nativeOnly client={client} env={{id:'local',name:'Laptop',online:true,info:{}}}
+      parent={parent} onClose={()=>{ window.closed = true; }} />);
+  `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true, write:false, format:'iife', jsx:'automatic' });
+  const view = await browser.newPage({ viewport:{width:390,height:844} });
+  view.setDefaultTimeout(10_000);
+  try {
+    await view.setContent('<div id="root"></div>');
+    await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
+    await view.addScriptTag({ content:bundle.outputFiles[0].text });
+    const dialog = view.getByRole('dialog', {name:'Subagents'});
+    await dialog.locator('.delegation-group.finished .native-badge').waitFor();
+    await dialog.getByRole('button', {name:'Stopped, details'}).click();
+    await dialog.getByText('Finished without a written reply.', {exact:true}).waitFor();
+    assert.equal(await dialog.getByRole('button', {name:/New task/}).count(), 0);
+    assert.equal(await dialog.locator('form').count(), 0);
+    assert.equal(await view.evaluate(() => window.calls.some(c => c.method === 'agent.list')), false);
+  } finally { await view.close(); }
+});

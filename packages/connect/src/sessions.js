@@ -8,6 +8,7 @@ import { EventEmitter } from 'node:events';
 import { HELM_DIR, expand, quickDir, isQuickDir } from './paths.js';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages, sessionSnapshot, sessionActivity } from './transcript.js';
+import { findSubagentsDir, nativeActive, nativeSubagent, nativeSubagents, nativeWorking, subagentsDir } from './native-subagents.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
@@ -60,6 +61,8 @@ const WATCH_TTL_MS = 60_000;
 const IDLE_REAP_MS = 30 * 60_000;
 const DELEGATION_IDLE_MS = 30_000;
 const UNHOMED_DELEGATION_MS = 24 * 60 * 60_000;
+// How often one Claude session's own subagent folder is re-listed at most.
+const NATIVE_POLL_MS = 2_000;
 
 /** engine id -> its headless driver class; ENGINES[id].driver names one. */
 export const DRIVERS = {
@@ -158,6 +161,12 @@ const pendingSummary = (pending) => ({ pending: pending.length,
 
 export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, ...s }) =>
   typeof s.title === 'string' && /\[(?:Image|Pasted text) #/.test(s.title) ? { ...s, title: bareTitle(s.title) || s.title } : s;
+
+/**
+ * What the driver last reported for one of Claude's own subagent cards:
+ * `nativeAgents` is keyed by the tool call that started it.
+ */
+const hookState = (s, card) => s.nativeAgents?.[card.toolUseId] ?? s.nativeAgents?.[card.id];
 
 const EXTERNAL_INFO_COMMANDS = [
   { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
@@ -387,6 +396,11 @@ export class Sessions extends EventEmitter {
         this.nativeTerminals.renew(s.id).catch(() => {});
       }
       this.#syncNativeClaude();
+      // Claude's own subagents start while their parent works and can run
+      // on in the background after it settles; follow both, nothing idle.
+      for (const s of this.#index.values()) {
+        if (s.engine === 'claude' && (['working', 'starting', 'blocked'].includes(s.status) || nativeActive(s.nativeCards))) void this.#refreshNative(s);
+      }
       if (!this.nativeDiscovery) return;
       try {
         await this.nativeTerminals.ensure({ spawn: false });
@@ -827,7 +841,8 @@ export class Sessions extends EventEmitter {
       `${INDEX_FILE}.tmp`,
       JSON.stringify({
         version: 1,
-        sessions: [...this.#index.values()],
+        // Subagent cards are re-read from Claude's files, never remembered.
+        sessions: [...this.#index.values()].map(({ nativeCards, ...s }) => s),
         external: Object.fromEntries(this.#marks),
         removedAt: Object.fromEntries(this.#removedAt),
       }, null, 2),
@@ -1055,6 +1070,11 @@ export class Sessions extends EventEmitter {
           adopted: true, archived: mark === 'archived', updatedAt: x.updatedAt });
       }
     }
+    // A Claude session's own subagents are found once here, then followed
+    // by the poll; the first read lands as a session event, not a wait.
+    for (const s of this.#index.values()) {
+      if (s.engine === 'claude' && !s.archived && !this.#native.has(s.id)) void this.#refreshNative(s);
+    }
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
@@ -1095,19 +1115,102 @@ export class Sessions extends EventEmitter {
     this.#refreshTeam(parent);
   }
 
+  /**
+   * The parent's team counts: its delegated children, the subagents its
+   * driver reported (`nativeAgents`), and Claude's own subagent cards the
+   * driver does not know about. Those cards only add to `working` - one that
+   * failed or stopped has no Helm session to answer, so it never asks for you.
+   */
   #refreshTeam(parent) {
     const children = [...this.#index.values()].filter((session) => session.delegation?.parentId === parent.id && !session.archived);
     const native = Object.values(parent.nativeAgents ?? {});
+    const cards = this.#nativeCards(parent);
+    if (cards.length) parent.nativeCards = cards; else delete parent.nativeCards;
+    // A card the driver also reported is already counted through the map.
+    const unreported = nativeWorking(cards.filter((card) => !hookState(parent, card)));
     parent.team = children.reduce((team, session) => {
       const state = session.delegation.status ?? session.status;
       team.working += Number(['working', 'starting'].includes(state)) + (session.team?.working ?? 0);
       team.blocked += Number(state === 'blocked') + (session.team?.blocked ?? 0);
       team.failed += Number(state === 'error') + (session.team?.failed ?? 0);
       return team;
-    }, { working: native.filter(state => state === 'working').length,
+    }, { working: native.filter(state => state === 'working').length + unreported,
       blocked: native.filter(state => state === 'blocked').length, failed: native.filter(state => state === 'error').length });
     this.emit('session', parent);
     if (parent.delegation) this.#updateTeam(parent);
+  }
+
+  /** id -> { key, dir, sig, cards, at, busy }: where each Claude session's subagents are, and what its files last said. */
+  #native = new Map();
+
+  /**
+   * One card per subagent: its files give the title, model, branch and
+   * reply; what the driver last reported for the same tool call, when it
+   * did, is the fresher state (waiting on you, still running, failed).
+   */
+  #nativeCards(s) {
+    return (this.#native.get(s.id)?.cards ?? []).map((card) => {
+      const state = hookState(s, card);
+      return ['working', 'blocked', 'error'].includes(state) && state !== card.status ? { ...card, status: state } : card;
+    });
+  }
+
+  /** A Claude session's subagent folder; null until Claude has made it. */
+  async #nativeDir(s) {
+    if (s.transcript) return subagentsDir(s.transcript);
+    if (!s.engineSessionId) return null;
+    const engine = ENGINES.claude;
+    const profile = (await getProfiles()).find((p) => p.id === s.profileId);
+    return findSubagentsDir({ home: profile?.env?.[engine.homeEnv] ?? engine.defaultHome, cwd: s.cwd, sessionId: s.engineSessionId });
+  }
+
+  /**
+   * Re-read a Claude session's own subagents (its Agent/Task tool) and tell
+   * the app when what it shows changed. Read-only cards: Helm did not start
+   * them and cannot steer them. At most every NATIVE_POLL_MS, one at a time.
+   */
+  async #refreshNative(s, { force = false } = {}) {
+    if (s.engine !== 'claude' || !this.#index.has(s.id)) { this.#native.delete(s.id); return; }
+    let n = this.#native.get(s.id);
+    // '[]' is "none": a session that never had any announces nothing.
+    if (!n) this.#native.set(s.id, n = { key: null, dir: null, sig: '[]', cards: [], at: 0, busy: null });
+    if (n.busy) { if (!force) return; await n.busy; }
+    if (!force && Date.now() - n.at < NATIVE_POLL_MS) return;
+    n.at = Date.now();
+    n.busy = this.#readNative(s, n).finally(() => { n.busy = null; });
+    return n.busy;
+  }
+
+  async #readNative(s, n) {
+    try {
+      const key = `${s.transcript ?? ''}|${s.engineSessionId ?? ''}|${s.profileId ?? ''}|${s.cwd ?? ''}`;
+      if (n.key !== key || !n.dir) { n.key = key; n.dir = await this.#nativeDir(s); }
+      let agents = await nativeSubagents(n.dir);
+      // A chat Helm drives already shows each one inline, live, under the
+      // tool call that started it; a card as well would be the same twice.
+      if (agents.length && s.driver) {
+        const inline = new Set(this.events.tail(s.id, 0)
+          .filter((e) => e.type === 'item.start' && e.kind === 'subagent').map((e) => e.id));
+        agents = agents.filter((a) => !inline.has(a.toolUseId));
+      }
+      const sig = JSON.stringify(agents.map((a) => [a.id, a.status, a.title, a.model, a.last, a.branch]));
+      if (sig === n.sig) return;
+      n.sig = sig;
+      n.cards = agents;
+      this.#refreshTeam(s);
+    } catch (err) { this.log(`native subagents: ${err.message}`); }
+  }
+
+  /** One of a Claude session's own subagents, with its result and recent activity. */
+  async nativeAgent(id, agentId) {
+    const s = this.get(id);
+    if (s.engine !== 'claude') throw new Error('only Claude Code sessions have native subagents');
+    await this.#refreshNative(s, { force: true });
+    const card = s.nativeCards?.find((a) => a.id === agentId);
+    if (!card) throw new Error('no such subagent');
+    const agent = await nativeSubagent(this.#native.get(s.id)?.dir, agentId);
+    if (!agent) throw new Error('no such subagent');
+    return { agent: { ...agent, status: card.status } };
   }
 
   /** Provider history must not rediscover a hidden task as an ordinary chat. */
@@ -3200,7 +3303,12 @@ export class Sessions extends EventEmitter {
         // until their process checkpoints or exits.
         const wal = await stat(`${path}-wal`).catch(() => null);
         const stamp = `${size}:${mtimeMs}:${wal?.size ?? 0}:${wal?.mtimeMs ?? 0}`;
-        if (t.size !== -1 && stamp !== t.size) this.emit('transcript', { id });
+        if (t.size !== -1 && stamp !== t.size) {
+          this.emit('transcript', { id });
+          // A Task call lands here first; pick its subagent up at once.
+          const session = this.#index.get(id);
+          if (session) void this.#refreshNative(session);
+        }
         if (t.size !== -1 && stamp !== t.size) {
           const session = this.#index.get(id);
           if (session?.external && session.driver) {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Client, type CliAgent, type Environment, type Session, type DelegationResult } from '../client';
+import { Client, type CliAgent, type Environment, type Session, type DelegationResult, type NativeAgent, type NativeAgentDetail } from '../client';
 import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
@@ -14,10 +14,14 @@ const STATUS: Record<string, string> = {
 const ACTIVE = ['blocked', 'working', 'starting'];
 const stateOf = (task: Session) => task.delegation?.status || task.status;
 
-/** Account → model → task, then a live branch list beside the parent thread. */
-export function Subagents({ client, env, parent, onClose, onOpen, embedded = false, reviewAttention = false, onNativeAttention }: {
+/**
+ * Account → model → task, then a live branch list beside the parent thread.
+ * `nativeOnly` is for a terminal thread Helm cannot delegate from: just the
+ * Claude Code subagents it ran, with no task form.
+ */
+export function Subagents({ client, env, parent, onClose, onOpen, embedded = false, reviewAttention = false, onNativeAttention, nativeOnly = false }: {
   client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (session: Session) => void;
-  embedded?: boolean; reviewAttention?: boolean; onNativeAttention?: () => void;
+  embedded?: boolean; reviewAttention?: boolean; onNativeAttention?: () => void; nativeOnly?: boolean;
 }) {
   const [agents, setAgents] = useState<CliAgent[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -40,6 +44,8 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
   const [notice, setNotice] = useState('');
   const [revision, setRevision] = useState(0);
   const [focus, setFocus] = useState('');
+  const [nativeOpen, setNativeOpen] = useState('');
+  const [nativeDetail, setNativeDetail] = useState<NativeAgentDetail | null>(null);
   const firstList = useRef(false);
   const ref = useDialog(() => { if (!busy) onClose(); }, !embedded);
   const fail = (at: string) => (failure: any) => setError({ text: failure?.message || String(failure), at });
@@ -51,6 +57,12 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     Number(stateOf(right) === 'blocked') - Number(stateOf(left) === 'blocked') || (left.createdAt ?? 0) - (right.createdAt ?? 0));
   const finished = children.filter((child) => !ACTIVE.includes(stateOf(child)))
     .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
+  // Claude Code's own subagents: read from its files, shown, never steered.
+  const natives = parent.nativeCards ?? [];
+  const nativeActive = natives.filter((agent) => ACTIVE.includes(agent.status))
+    .sort((left, right) => Number(right.status === 'blocked') - Number(left.status === 'blocked'));
+  const nativeFinished = natives.filter((agent) => !ACTIVE.includes(agent.status)).sort((left, right) => right.startedAt - left.startedAt);
+  const openNative = natives.find((agent) => agent.id === nativeOpen);
   const readOnly = ['plan', 'readonly', 'read'].includes(parent.mode ?? '');
   const modes = agent?.modes.filter((option) => option.id !== 'plan' && (!readOnly || ['readonly', 'read'].includes(option.id))) ?? [];
   const showOptions = advanced || (!loading && !agent?.available);
@@ -71,7 +83,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
         setSessions(listing.sessions);
         if (!firstList.current) {
           firstList.current = true;
-          if (!listing.sessions.some(belongsHere)) setComposing(true);
+          if (!nativeOnly && !listing.sessions.some(belongsHere) && !parent.nativeCards?.length) setComposing(true);
           if (reviewAttention) {
             const tasks = listing.sessions.filter(belongsHere);
             const attention = tasks.find((task) => stateOf(task) === 'blocked')
@@ -108,7 +120,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     } catch (failure: any) { fail('form')(failure); }
     finally { setLoading(false); }
   };
-  useEffect(() => { void loadAgents(); }, [client, env.id]);
+  useEffect(() => { if (!nativeOnly) void loadAgents(); }, [client, env.id, nativeOnly]);
   useEffect(() => { setModel(''); setMode(''); }, [account]);
 
   useEffect(() => {
@@ -136,6 +148,17 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     void load();
     return () => { stale = true; clearTimeout(timer); };
   }, [client, env.id, selected, revision]);
+
+  // Re-read when the card moves on (a new step, a final reply), not on a timer:
+  // the session update that moved it is the signal.
+  useEffect(() => {
+    if (!nativeOpen) { setNativeDetail(null); return; }
+    let stale = false;
+    client.rpc<{ agent: NativeAgentDetail }>(env.id, 'session.native-agent', { id: parent.id, agentId: nativeOpen })
+      .then((reply) => { if (!stale) setNativeDetail(reply.agent); })
+      .catch((failure) => { if (!stale) fail(`native:${nativeOpen}`)(failure); });
+    return () => { stale = true; };
+  }, [client, env.id, parent.id, nativeOpen, openNative?.status, openNative?.last]);
 
   const select = (id: string) => {
     setSelected(id); setResult(null); setPermissions([]); setMessage(''); setNotice(''); setError(null);
@@ -262,10 +285,45 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     </li>;
   };
 
-  const group = (id: string, title: string, items: Session[]) => !!items.length &&
+  const nativeRow = (agent: NativeAgent) => {
+    const key = `native-${agent.id}`;
+    const open = nativeOpen === agent.id;
+    const label = STATUS[agent.status] || agent.status;
+    const toggle = () => { setNativeOpen(open ? '' : agent.id); setNativeDetail(null); setError(null); };
+    const detail = open && nativeDetail?.id === agent.id ? nativeDetail : null;
+    return <li key={key} className={`delegation-branch native${open ? ' selected' : ''}`}>
+      <div className="delegation-row">
+        <button type="button" className="delegation-task" title="Started by Claude Code itself; read only"
+          aria-expanded={open} aria-controls={`task-detail-${key}`} onClick={toggle}>
+          <EngineMark engine="claude" />
+          <span className="grow"><b>{agent.title}</b>
+            <small><span className="native-badge">native</span>{[agent.agentType || 'subagent', agent.model || 'Claude default', agent.branch].filter(Boolean).join(' · ')}</small></span>
+        </button>
+        <button type="button" className={`delegation-status state-${agent.status}`} data-task={key} aria-label={`${label}, details`}
+          aria-expanded={open} aria-controls={`task-detail-${key}`} onClick={toggle}>
+          <i aria-hidden="true" />{label}<Icon name={open ? 'up' : 'down'} size={14} />
+        </button>
+      </div>
+      {open && <div className="delegation-detail" id={`task-detail-${key}`}>
+        {detail?.task && detail.task !== agent.title && <p className="delegation-request">{detail.task}</p>}
+        {!detail ? (agent.last ? <p className="note">{agent.last}</p> : <p className="note" role="status">Reading result…</p>)
+          : detail.result ? <div className="delegation-output"><Markdown text={detail.result} live={ACTIVE.includes(agent.status)} /></div>
+          : <p className="note">{ACTIVE.includes(agent.status) ? 'No reply yet.' : 'Finished without a written reply.'}</p>}
+        {agent.status === 'blocked' && <p className="note">It is waiting for your approval in the chat.</p>}
+        {!!detail?.activity.length && <details className="native-activity">
+          <summary>Recent activity</summary>
+          <ol>{detail.activity.map((line, index) => <li key={index}>{line}</li>)}</ol>
+        </details>}
+        <p className="note">Claude Code started this subagent inside the chat. Helm shows it here but cannot message or stop it.</p>
+        {errorBox(`native:${agent.id}`)}
+      </div>}
+    </li>;
+  };
+
+  const group = (id: string, title: string, items: Session[], native: NativeAgent[] = []) => !!(items.length + native.length) &&
     <section className={`delegation-group ${id}`} aria-labelledby={`delegation-${id}`}>
-      <h3 id={`delegation-${id}`}>{title} <span>{items.length}</span></h3>
-      <ul>{items.map(row)}</ul>
+      <h3 id={`delegation-${id}`}>{title} <span>{items.length + native.length}</span></h3>
+      <ul>{items.map(row)}{native.map(nativeRow)}</ul>
     </section>;
 
   return <div className={embedded ? 'embedded-agents' : 'modal-back'} onClick={(event) => { if (!embedded && event.target === event.currentTarget && !busy) onClose(); }}>
@@ -276,7 +334,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
       </div>
       <div className="delegation-body">
         {errorBox('')}
-        {composing ? <form className="delegation-form" aria-label="New task" onSubmit={(event) => { event.preventDefault(); void start(); }}>
+        {nativeOnly ? null : composing ? <form className="delegation-form" aria-label="New task" onSubmit={(event) => { event.preventDefault(); void start(); }}>
           <label htmlFor="delegate-task">Task</label>
           <textarea id="delegate-task" rows={3} maxLength={32000} autoFocus placeholder="Describe a specific, bounded task…"
             value={task} disabled={busy} onChange={(event) => setTask(event.target.value)} onKeyDown={submitOnShortcut(() => void start())} />
@@ -317,9 +375,9 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
           : <button type="button" className="delegation-new" onClick={() => setComposing(true)}><Icon name="plus" size={16} />New task</button>}
         <div className="delegation-branches" aria-label="Delegated tasks">
           {!listed ? <p className="note" role="status">Loading tasks…</p>
-            : !children.length && !composing && <p className="note">No tasks yet.</p>}
-          {group('active', 'Active', active)}
-          {group('finished', 'Finished', finished)}
+            : !children.length && !natives.length && !composing && <p className="note">No tasks yet.</p>}
+          {group('active', 'Active', active, nativeActive)}
+          {group('finished', 'Finished', finished, nativeFinished)}
         </div>
       </div>
     </div>
