@@ -24,7 +24,8 @@ import { expand } from './paths.js';
 /** The same folders a sealed snapshot leaves out, for a project without git. */
 export const BULK_SKIP_DIRS = ['node_modules', '.cache', '__pycache__', '.venv', 'venv', '.tox',
   '.next', '.nuxt', 'dist-ssr', '.pytest_cache', '.mypy_cache', '.gradle', '.terraform', '.helm-transfer-partial'];
-const ENV_NAME = /^\.env(\..+)?$/;
+const ENV_NAME = /^\.env(?:\..+)?$/i;
+const envExcludes = ['.env', '.env.*', '.[eE][nN][vV]', '.[eE][nN][vV].*'];
 const MAX_PROGRESS_LINE = 512;
 
 const git = (folder, args) => execFileSync('git', ['-C', folder, ...args], {
@@ -55,8 +56,24 @@ export function bulkPlan(folder, { includeEnv = true } = {}) {
   let isGit = false;
   try { isGit = git(root, ['rev-parse', '--show-toplevel']).toString().trim() === root; } catch {}
   if (!isGit) {
-    return { root, rootName: basename(root), git: null, listFile: null, files: null,
-      bytes: treeBytes(root), excludes: BULK_SKIP_DIRS.map((d) => `${d}/`), envFiles: [] };
+    let files = 0, bytes = 0;
+    const envFiles = [];
+    const walk = (dir, prefix = '') => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name), relative = `${prefix}${entry.name}`;
+        if (entry.isDirectory()) {
+          if (!BULK_SKIP_DIRS.includes(entry.name)) walk(path, `${relative}/`);
+        } else if (entry.isFile() || entry.isSymbolicLink()) {
+          if (!includeEnv && ENV_NAME.test(entry.name)) continue;
+          files++;
+          bytes += lstatSync(path).size;
+          if (entry.isFile() && ENV_NAME.test(entry.name)) envFiles.push(relative);
+        }
+      }
+    };
+    walk(root);
+    return { root, rootName: basename(root), git: null, listFile: null, files, bytes,
+      excludes: [...BULK_SKIP_DIRS.map((d) => `${d}/`), ...(includeEnv ? [] : envExcludes)], envFiles };
   }
   const split = (buf) => buf.toString('utf8').split('\0').filter(Boolean);
   // A tracked file deleted but not yet committed is in the index, not on
@@ -67,7 +84,10 @@ export function bulkPlan(folder, { includeEnv = true } = {}) {
     ? split(git(root, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard']))
       .filter((p) => ENV_NAME.test(posix.basename(p)) && !p.split('/').some((part) => BULK_SKIP_DIRS.includes(part)))
     : [];
-  const paths = [...new Set([...kept, ...envFiles])];
+  // --no-env applies to tracked and untracked files as well as ignored
+  // ones. Git history still travels; it can contain previously committed env.
+  const paths = [...new Set([...kept, ...envFiles])]
+    .filter((p) => includeEnv || !ENV_NAME.test(posix.basename(p)));
   let bytes = treeBytes(join(root, '.git'));
   for (const p of paths) { try { bytes += lstatSync(join(root, p)).size; } catch {} }
   const dir = mkdtempSync(join(tmpdir(), 'helm-bulk-'));
@@ -77,11 +97,19 @@ export function bulkPlan(folder, { includeEnv = true } = {}) {
   try { head = git(root, ['rev-parse', 'HEAD']).toString().trim(); } catch {}
   try { branch = git(root, ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim(); } catch {}
   return { root, rootName: basename(root), git: { commit: head, branch }, listFile, files: paths.length,
-    bytes, excludes: [], envFiles };
+    bytes, excludes: [], envFiles: paths.filter((p) => ENV_NAME.test(posix.basename(p))) };
 }
 
 export function discardPlan(plan) {
   if (plan?.listFile) rmSync(resolve(plan.listFile, '..'), { recursive: true, force: true });
+}
+
+export function bulkWarnings(plan, includeEnv) {
+  return [{ code: 'bulk-copy', message: plan.git
+    ? 'Big project: the folder is copied with its full git history and resumes if the connection drops. Files git ignores (build output, caches) stay here.'
+    : 'Big project: the folder is copied except dependency and cache folders and resumes if the connection drops.' },
+  ...(!includeEnv && plan.git ? [{ code: 'env-history', message:
+    'Working .env files stay here. Full Git history is included and may contain previously committed .env files.' }] : [])];
 }
 
 /**
