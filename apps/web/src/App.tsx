@@ -3155,7 +3155,7 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
           <EngineMark engine={eng.cls} />
           <span className="grow">
             <span className="need-title">{s.title}</span>
-            <span className="need-m">{eng.label} · {whereOf(s)} · {machine}</span>
+            <span className="need-m">{[eng.label, whereOf(s), machine, money(s.costUsd)].filter(Boolean).join(' · ')}</span>
           </span>
         </span>
         {ask?.text && <span className={`need-q${ask.kind === 'command' ? ' mono' : ''}`}>{ask.text}{ask.more ? ` (+${ask.more} more)` : ''}</span>}
@@ -3191,7 +3191,7 @@ function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; m
       <span className="tri-title">{s.title}</span>
       <span className="tri-bot">
         <Icon name={s.quick ? 'bolt' : 'folder'} size={12} />
-        <span className="tri-where">{whereOf(s)} · {machine}</span>
+        <span className="tri-where">{[whereOf(s), machine, money(s.costUsd)].filter(Boolean).join(' · ')}</span>
         <span className="tri-end">
           {/* The age is already on the top line; the chip says only what. */}
           {runningThread(s)

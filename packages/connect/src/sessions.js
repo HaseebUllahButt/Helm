@@ -34,6 +34,7 @@ import { TerminalHost, NativeHosts, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory, scratchFolder } from './inventory.js';
 import { claudeLiveSessions, claudeLiveStatus, descendsFrom, dedupeNativeConversations } from './external-process.js';
 import { hostedProcId } from './hosted-process.js';
+import { priceBucket } from '@helm/usage/pricing';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
 import { openFiles, processArgv, processCwd } from './procinfo.js';
 import { GREETING, bareTitle, informative, promptTitle } from './titles.js';
@@ -90,6 +91,28 @@ const TITLE_RANK = { auto: 1, agent: 2, user: 3 };
 
 /** A title cut to fit, with the cut said out loud. */
 const clip = (text, max) => (text.length > max ? text.slice(0, max - 1) + '…' : text);
+/** Run async jobs at most `n` at a time: `slot(() => work())` returns the job's promise. */
+/**
+ * What one turn's tokens cost at list price, or null when the model is not
+ * in the table. Codex counts cached tokens inside `input`; Claude does not.
+ */
+export function priceTurn(engine, model, usage) {
+  if (!model || !usage) return null;
+  const cacheRead = usage.cacheRead || 0;
+  const input = Math.max(0, (usage.input || 0) - (usage.inputIncludesCache ? cacheRead : 0));
+  const priced = priceBucket(engine, model, { input, output: usage.output || 0, cacheRead, cacheWrite: usage.cacheWrite || 0 }, new Date().toISOString().slice(0, 10));
+  return priced && priced.total > 0 ? Math.round(priced.total * 1e6) / 1e6 : null;
+}
+
+const limiter = (n) => {
+  let running = 0;
+  const waiting = [];
+  const next = () => { running--; waiting.shift()?.(); };
+  return (job) => new Promise((resolve, reject) => {
+    const run = () => { running++; Promise.resolve().then(job).then(resolve, reject).finally(next); };
+    if (running < n) run(); else waiting.push(run);
+  });
+};
 
 const linkText = (value, max = 200) => typeof value === 'string' && value.length > 0
   && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
@@ -283,11 +306,13 @@ export class Sessions extends EventEmitter {
   /** `<child>:<turn>` whose report to the parent is on its way. */
   #notifying = new Set();
 
-  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, delegationIdleMs = DELEGATION_IDLE_MS } = {}) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, delegationIdleMs = DELEGATION_IDLE_MS, reattachRetryMs = 90_000, reattachConcurrency = 4 } = {}) {
     super();
     this.runtime = runtime;
     this.turnSettleMs = turnSettleMs;
     this.delegationIdleMs = delegationIdleMs;
+    this.reattachRetryMs = reattachRetryMs;
+    this.reattachConcurrency = reattachConcurrency;
     this.events = events;
     this.limits = new AccountLimits();
     this.log = log;
@@ -1751,6 +1776,13 @@ export class Sessions extends EventEmitter {
         if (limited) s.queuePaused = true;
       } else if (!wake && !s.stoppedAt) delete s.recovery;
       if (e.usage) s.lastUsage = { ...e.usage, at: Date.now(), model: s.model || s.engineModel };
+      // A CLI that reports tokens but no price (Codex, and most others)
+      // still gets a figure, at the same published rates the Usage screen
+      // uses, so every chat can say what it cost.
+      if (forwarded.costUsd == null && e.usage && e.status !== 'interrupted') {
+        const priced = priceTurn(s.engine, s.model || s.engineModel || e.usage.model, e.usage);
+        if (priced != null) forwarded = { ...forwarded, costUsd: priced };
+      }
       if (!wake) {
         s.turns = (s.turns ?? 0) + 1;
         // A prompt and its first completed reply are two messages. Providers
@@ -4160,9 +4192,66 @@ export class Sessions extends EventEmitter {
     }
   }
 
+  /**
+   * Work the agent still owes: a turn the log has not seen the end of, a
+   * question, or queued messages. The log is asked as well as the status,
+   * because a native thread's status is only what its daemon last said.
+   */
+  #inFlight(s) {
+    return ['working', 'blocked', 'starting'].includes(s.status)
+      || this.events.pending(s.id).length > 0
+      || (this.#outbox.get(s.id)?.length ?? 0) > 0
+      || !!activeTurnFromEvents(this.events.tail(s.id, 0));
+  }
+
+  /**
+   * Listen again to an agent process that outlived the daemon. A failed
+   * check is not a failed task: an idle thread with nothing in flight stays
+   * idle and attaches on its next message, quietly. One that was working,
+   * asking, or holding queued messages is held and marked until a retry
+   * (three, ninety seconds apart) reaches it - a machine busy enough to time
+   * out a read is usually fine a minute later.
+   */
+  async #reattach(s, attempt) {
+    try {
+      const d = await this.#driver(s);
+      // Drivers start idle and suppress duplicate status events. Seed the
+      // persisted state so an adopted idle process corrects a stale busy row.
+      d.status = s.status;
+      await d.start();
+      this.#reconnected(s);
+      this.#pump(s);
+      this.#reap(s, d.status);
+    } catch (err) {
+      if (!this.#index.has(s.id)) return;
+      this.log(`[${s.id}] could not reattach surviving agent: ${err.message}`);
+      this.#drivers.delete(s.id);
+      const busy = this.#inFlight(s);
+      if (busy && attempt < 3) {
+        const timer = setTimeout(() => { this.#reapers.delete(`reattach:${s.id}`); void this.#reattach(s, attempt + 1); }, this.reattachRetryMs);
+        timer.unref?.();
+        this.#reapers.set(`reattach:${s.id}`, timer);
+      }
+      // An account process may be alive while this thread cannot be
+      // checked. Hold the queue so nothing replays into work that may still
+      // be running, and say so - but only when there is work to hold.
+      s.status = 'idle';
+      if (busy) {
+        s.queuePaused = true;
+        s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} ${err.message}`, at: Date.now() };
+      }
+      const event = this.events.append(s.id, { type: 'status', status: 'idle' });
+      s.lastSeq = event.seq;
+      this.#save();
+      this.emit('event', { id: s.id, event });
+      this.emit('session', s);
+    }
+  }
+
   /** Re-watch every surviving pane after a daemon restart. */
   async resume() {
     const reattaching = [];
+    const reattachSlot = limiter(this.reattachConcurrency);
     const profiles = loadProfiles()?.profiles ?? [];
     // Native Codex belongs to its terminal daemon, not Helm's proc host.
     // Discover its real loaded threads before deciding which turns survived.
@@ -4189,8 +4278,12 @@ export class Sessions extends EventEmitter {
         // still be running. The next answer from the daemon settles it.
         if (s.recovery?.kind === 'restart') delete s.recovery;
         this.#restoreOpenTurns(s, this.events.tail(s.id, 0), true);
-        s.queuePaused = true;
-        s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} Codex did not answer, so this thread could not be checked.`, at: Date.now() };
+        // Only a thread with work in flight has anything to hold or to warn
+        // about; an idle one simply carries on at its next message.
+        if (this.#inFlight(s)) {
+          s.queuePaused = true;
+          s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} Codex did not answer, so this thread could not be checked.`, at: Date.now() };
+        }
         s.lastSeq = this.events.last(s.id);
         this.emit('session', s);
         continue;
@@ -4203,28 +4296,10 @@ export class Sessions extends EventEmitter {
         // Listen immediately, including to unattended threads. Otherwise a
         // turn that finishes during the update stays busy until someone opens
         // the thread, and its queued messages never get delivered.
-        reattaching.push(this.#driver(s).then(async (d) => {
-          // Drivers start idle and suppress duplicate status events. Seed the
-          // persisted state so an adopted idle process corrects a stale busy row.
-          d.status = s.status;
-          await d.start();
-          this.#reconnected(s);
-          this.#pump(s);
-          this.#reap(s, d.status);
-        }).catch((err) => {
-          this.log(`[${s.id}] could not reattach surviving agent: ${err.message}`);
-          // An account process may be alive while this thread cannot be
-          // checked. Surface that failure and hold its queue; a remembered
-          // busy label must not hide it or cause automatic prompt replay.
-          s.status = 'idle';
-          s.queuePaused = true;
-          s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} ${err.message}`, at: Date.now() };
-          const event = this.events.append(s.id, { type: 'status', status: 'idle' });
-          s.lastSeq = event.seq;
-          this.#save();
-          this.emit('event', { id: s.id, event });
-          this.emit('session', s);
-        }));
+        // A few at a time: forty threads asking one app-server at once on a
+        // busy machine all timed out together, and every one of them read
+        // as a failed task.
+        reattaching.push(reattachSlot(() => this.#reattach(s, 0)));
         continue;
       }
       // The process that asked died with the previous daemon; a prompt it
