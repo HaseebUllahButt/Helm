@@ -113,6 +113,21 @@ keys in three groups (Anywhere / new-chat box / in a chat). Tests:
 `test/chat-keys.test.mjs`, `test/token-rate.test.mjs`, browser
 `chat-shortcuts.test.mjs`.
 
+**"Task failed" on every VM Codex chat (found after the deploy).** The VM
+restarted its daemon while thrashing (my deploy and its own auto-update
+collided), `resume()` asked the one Codex app-server about ~40 surviving
+threads at once, every `thread/read` timed out, and each chat got
+`recovery = error "Could not reconnect…"`, which the app shows as "Task
+failed" - on idle chats from six days ago. Fix: reconnects run 4 at a time;
+an idle chat with nothing in flight (no open turn in the log, no question,
+no queue) gets no mark and attaches on its next message; one with work in
+flight is held, marked, and retried 3× at 90 s (`#reattach`, `#inFlight`).
+The same rule applies to native Codex threads whose daemon did not answer.
+Test: `test/reattach.test.mjs`. The owner also asked for cost everywhere:
+a turn with tokens but no price is priced with `priceBucket` at list rates
+(Codex counts cached tokens inside input; subtracted), accumulated on
+`costUsd`, and shown on Home rows and Needs-you cards too.
+
 **Known failing on this laptop, before and after this round:** the four
 `native-cli.test.mjs` "native launch" tests time out (they did so on the
 untouched 6da47b1 in two helpers' worktrees too). Not investigated beyond
