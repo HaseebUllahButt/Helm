@@ -85,7 +85,9 @@ const usage = () => {
                                     execute through Helm's managed connection
     --env NAME=value               explicit remote environment (repeatable)
     --timeout <milliseconds>       command + capacity wait limit (default 15 minutes)
-  helm exec-result <machine> <id>   read a command after a connection loss
+  helm exec-status <machine> <id> [--wait] [--json]
+                                    read a command after a connection loss
+  helm exec-cancel <machine> <id>   stop a command started earlier
   helm antigravity [install|login|status|remove]   the managed Google ACP agent
 
   helm brain                       open the network's brain on the VM
@@ -2063,10 +2065,18 @@ try {
       process.exitCode = await runRemoteWork(rest, { net: requireNetwork(), machineId });
       break;
     }
+    // exec-result is the older name, kept for scripts that use it.
+    case 'exec-status':
     case 'exec-result': {
-      if (rest.length !== 2) throw new Error('helm exec-result <machine> <id>');
-      const { readRemoteWork } = await import('../src/execution-cli.js');
-      process.exitCode = await readRemoteWork(rest[0], rest[1], { net: requireNetwork(), machineId });
+      const { parseCommandRef, readRemoteWork } = await import('../src/execution-cli.js');
+      const ref = parseCommandRef(rest, cmd, ['--wait', '--json']);
+      process.exitCode = await readRemoteWork(ref.machine, ref.id, { ...ref, net: requireNetwork(), machineId });
+      break;
+    }
+    case 'exec-cancel': {
+      const { parseCommandRef, cancelRemoteWork } = await import('../src/execution-cli.js');
+      const ref = parseCommandRef(rest, cmd, ['--json']);
+      process.exitCode = await cancelRemoteWork(ref.machine, ref.id, { ...ref, net: requireNetwork(), machineId });
       break;
     }
     case 'agents':

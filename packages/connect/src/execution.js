@@ -5,7 +5,8 @@ import { startWork, WORK_TIMEOUT_MS } from './work-command.js';
 
 const OUTPUT_BYTES = 256 * 1024;
 const PAGE_BYTES = 64 * 1024;
-const RETAIN_MS = 10 * 60_000;
+// Long enough to read a result back after a laptop sleeps through it.
+const RETAIN_MS = 60 * 60_000;
 const MAX_JOBS = 64;
 
 /** Commands use the existing authenticated machine RPC, without SSH or a login shell. */

@@ -524,13 +524,24 @@ shell environment is never copied there. Pass required overrides with repeatable
 `helm run` preserves the local shell's working folder and environment.
 
 `--timeout <milliseconds>` bounds capacity waiting and execution together
-(default: 15 minutes). Ctrl+C cancels the command. Output retains a bounded
-256 KiB tail for ten minutes; truncation is reported. If the connection drops,
-the CLI resumes reading the same job, without restarting it. An unacknowledged
-start is not automatically replayed; inspect it with
-`helm exec-result <machine> <command-id>`. Daemon shutdown cancels managed commands;
-after a restart, a missing command is reported instead of silently running it
-again. `helm run` without a command remains the legacy alias for `helm up`.
+(default: 15 minutes). Ctrl+C cancels the command. The exit code is the remote
+command's own; a timeout exits 124 and a cancelled command 130. Stopping a
+command stops its whole process group on Linux and macOS. Output retains a
+bounded 256 KiB tail for an hour; truncation is reported. If the connection
+drops, the CLI resumes reading the same job, without restarting it. An
+unacknowledged start is not automatically replayed; the CLI prints the command
+id, and the command can be read or stopped from any terminal on that machine:
+
+```sh
+helm exec-status VM <command-id>               output so far; exit 3 while it runs
+helm exec-status VM <command-id> --wait --json  wait for the end, as one JSON object
+helm exec-cancel VM <command-id>               stop it
+```
+
+`helm exec-result` is the older name for `exec-status` and still works. Daemon
+shutdown cancels managed commands; after a restart, a missing command is
+reported instead of silently running it again. `helm run` without a command
+remains the legacy alias for `helm up`.
 
 `--wait` returns the reply when finished, or returns immediately when the
 child needs approval. Read it again after answering in Helm. The default

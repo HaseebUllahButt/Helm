@@ -55,3 +55,27 @@ test('read-only session restrictions and ownership are checked by the machine di
     await assert.rejects(()=>c.rpc(M.EXEC_READ,{id:'2'.repeat(32)}),/not found/);
   }finally{c.close();}
 });
+
+test('a command started earlier is read back by id, waited on as JSON, and stopped with exec-cancel',async()=>{
+  const c=await connectHub(net,net.self);
+  const done='3'.repeat(32),slow='4'.repeat(32);
+  try {
+    await c.rpc(M.EXEC_START,{id:done,argv:[process.execPath,'-e','setTimeout(()=>{console.log("late");process.exitCode=7},300)'],cwd:root});
+    await c.rpc(M.EXEC_START,{id:slow,argv:[process.execPath,'-e','setInterval(()=>{},1000)'],cwd:root});
+  }finally{c.close();}
+  const waited=await invoke(['exec-status','execution-box',done,'--wait','--json']);
+  assert.equal(waited.code,7,waited.err);
+  const result=JSON.parse(waited.out);
+  assert.equal(result.status,'exited');assert.equal(result.done,true);assert.equal(result.exitCode,7);
+  assert.equal(result.stdout.trim(),'late');
+  const running=await invoke(['exec-status','execution-box',slow]);
+  assert.equal(running.code,3,'still running');
+  const cancelled=await invoke(['exec-cancel','execution-box',slow]);
+  assert.equal(cancelled.code,0,cancelled.err);assert.match(cancelled.err,/Asked execution-box to stop/);
+  const stopped=await invoke(['exec-status','execution-box',slow,'--wait']);
+  assert.equal(stopped.code,130,stopped.err);
+  const older=await invoke(['exec-result','execution-box',done]);
+  assert.equal(older.code,7,'the older verb still reads it');
+  const bad=await invoke(['exec-status','execution-box','not-an-id']);
+  assert.notEqual(bad.code,0);assert.match(bad.err,/exec-status <machine> <command-id>/);
+});
