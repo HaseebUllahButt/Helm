@@ -84,10 +84,7 @@ export interface Session {
   createdAt?: number;
   updatedAt?: number;
   queueOrder?: string[];
-  /** Delegated children's states, plus native subagents; a card only adds to `working`. */
   team?: { working: number; blocked: number; failed: number };
-  /** Claude Code's own subagents (its Agent/Task tool), read from its files; no Helm session behind them. */
-  nativeCards?: NativeAgent[];
   recovery?: { kind: 'limited' | 'error' | 'interrupted' | 'restart'; message: string; at: number };
   lastUsage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputIncludesCache?: boolean; at: number; model?: string };
   /** Set on a headless agent session: which driver runs it. */
@@ -142,21 +139,6 @@ export interface Session {
   delegations?: string[];
   /** A helper with no thread to sit under (started from a shell, or orphaned), listed on its own. */
   unhomed?: boolean;
-}
-
-/** A Claude Code subagent Helm can show but not message, stop or open. */
-export interface NativeAgent {
-  id: string; native: true; title: string; agentType: string | null; model: string | null;
-  /** `blocked` comes from the chat itself: the subagent waits on an approval there. */
-  status: 'working' | 'blocked' | 'done' | 'error' | 'interrupted';
-  startedAt: number; updatedAt: number; branch: string | null; toolUseId: string | null;
-  /** Its latest step while working, else the start of its final reply. */
-  last: string;
-}
-
-/** `session.native-agent`: the card plus its final reply and recent steps. */
-export interface NativeAgentDetail extends NativeAgent {
-  result: string; activity: string[]; task: string; worktree: string | null;
 }
 
 export interface CliAgent {

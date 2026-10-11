@@ -38,10 +38,6 @@ import { modeFor, modesFor } from '../modes.js';
  *                     prints its OAuth URL outside the protocol)
  *   onExit(driver)    after the process dies: clean up what prepare made
  *   resumeVerb        the session-resume method to try before 'session/load'
- *   promptWhileBusy   the agent folds a second session/prompt into the run
- *                     already going instead of refusing it (opencode 1's
- *                     loop reads new user messages at its next step); only
- *                     then does `sendDuringTurn` exist for a subclass to use
  *
  * helm's own permission modes may be wider than what the agent's modes
  * express; a mode with `autoAllow` in modes.js is enforced here by answering
@@ -103,10 +99,6 @@ export class AcpDriver extends Driver {
    * event that carried it.
    */
   #promptId = null;
-  /** Prompts sent into the open run (`sendDuringTurn`) that have not answered. */
-  #injections = new Set();
-  /** The run's own answer, held while an injected prompt is still out. */
-  #turnResult = null;
   #interrupting = false;
   /** session/load replays the transcript as updates; the log already has it. */
   #loading = false;
@@ -575,14 +567,7 @@ export class AcpDriver extends Driver {
         // A turn adopted from a previous daemon has no call here to fail;
         // the process dying is its end all the same.
         const adopted = this.#turnId && !(this.#promptId != null && this.#calls.has(this.#promptId)) ? this.#turnId : null;
-        // Messages sent into the run die with it, said once each, before
-        // the run itself ends below.
-        for (const { text, inputId } of this.#injections) this.push('input.failed', { text, inputId, error: `${this.engine} exited before reading this message.` });
-        this.#injections.clear();
-        const held = this.#turnResult;
-        this.#turnResult = null;
         for (const resolve of this.#calls.values()) resolve({ error: { message: `${this.engine} exited` } });
-        if (held) this.#turnDone(held.turnId, held.res);
         this.#calls.clear();
         for (const requestId of [...this.pending.keys()]) {
           this.push('permission.resolved', { requestId, decision: 'cancelled' });
@@ -801,55 +786,9 @@ export class AcpDriver extends Driver {
     this.#prompt(text, prompt);
   }
 
-  /**
-   * A message for the run already going, sent as a second session/prompt.
-   * Only for an agent that folds it into that run (`promptWhileBusy`); its
-   * answer comes when the run ends, which is when it is known to have been
-   * read - or refused. The run is not over until both have answered.
-   */
-  async sendDuringTurn(text, attachments = [], { inputId } = {}) {
-    if (!this.spec.promptWhileBusy || !this.#pipe || !this.#turnId || !this.engineSessionId) {
-      throw new Error(`${this.engine} has no active turn to steer`);
-    }
-    if (attachments?.length && !this.#imagePrompts) throw new Error(`${this.engine} cannot take images in this session`);
-    const prompt = text ? [{ type: 'text', text }] : [];
-    // Labelled in order, so "[Image #2]" in the message names this one.
-    let n = 0;
-    for (const a of attachments ?? []) {
-      if (!String(a?.mime ?? '').startsWith('image/') || !a?.data) continue;
-      prompt.push({ type: 'text', text: `[Image #${++n}]` });
-      prompt.push({ type: 'image', mimeType: a.mime, data: a.data });
-    }
-    if (!prompt.length) prompt.push({ type: 'text', text: '(empty message)' });
-    const entry = { turnId: this.#turnId, text: text || '(empty message)', inputId };
-    this.#injections.add(entry);
-    this.#call('session/prompt', { sessionId: this.engineSessionId, prompt }).then((res) => {
-      if (!this.#injections.delete(entry)) return;
-      const stop = res.result?.stopReason;
-      const error = res.error?.message || (stop && stop !== 'end_turn' ? `stopped: ${stop}` : null);
-      this.push(error ? 'input.failed' : 'input.consumed', { text: entry.text, inputId, ...(error ? { error } : {}) });
-      const held = this.#turnResult;
-      if (held && ![...this.#injections].some((input) => input.turnId === held.turnId)) {
-        this.#turnResult = null;
-        this.#turnDone(held.turnId, held.res);
-      }
-    });
-  }
-
   /** The prompt response: the turn is over, one way or another. */
   #turnDone(turnId, res) {
     if (this.#turnId !== turnId) return;
-    // A message sent into this run is still being worked on - unless the
-    // run was cancelled or failed, when nothing more will come of it.
-    const waiting = [...this.#injections].filter((input) => input.turnId === turnId);
-    if (waiting.length && !res.error && res.result?.stopReason !== 'cancelled' && !this.#interrupting) {
-      this.#turnResult = { turnId, res };
-      return;
-    }
-    for (const input of waiting) {
-      this.#injections.delete(input);
-      this.push('input.failed', { text: input.text, inputId: input.inputId, error: res.error?.message || 'The run ended before reading this message.' });
-    }
     this.#closeStream();
     this.#turnId = null;
     this.#promptId = null;

@@ -120,8 +120,6 @@ function pendingTickets(events) {
     else if (event.type === 'turn.edit' && pending.has(event.turnId)) pending.set(event.turnId, event.text ?? '');
     else if (['turn.deliver', 'turn.accept', 'turn.done', 'turn.remove'].includes(event.type)) pending.delete(event.turnId);
     else if (event.type === 'turn.start' && !event.wake && !String(event.turnId).startsWith('local-')) {
-      // An echo that names its ticket settles exactly that one.
-      if (event.inputId != null) { pending.delete(event.inputId); continue; }
       const echo = (event.text ?? '').trim();
       for (const [turnId, text] of pending) {
         const prefix = text.trim();
@@ -134,8 +132,8 @@ function pendingTickets(events) {
 
 /** Small identities outside the contiguous tail, never old tool payloads. */
 function anchor(event) {
-  const { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason } = event;
-  const result = { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason };
+  const { seq, at, type, id, turnId, kind, parentId, name, queued, local, status, reason } = event;
+  const result = { seq, at, type, id, turnId, kind, parentId, name, queued, local, status, reason };
   if (type === 'turn.start' || type === 'turn.edit' || type === 'turn.images') {
     result.text = String(event.text ?? '').slice(0, 8000);
     if (event.delivery) result.delivery = event.delivery;
@@ -165,7 +163,7 @@ function retain(tail, older) {
   const first = tail[0]?.seq ?? 0;
   const pending = pendingTickets([...older()].reverse().concat(tail));
   const items = new Set(tail.filter(e => e.type.startsWith('item.')).map(e => e.id));
-  const owners = new Set(tail.flatMap(e => [e.turnId, e.inputId]).filter(Boolean));
+  const owners = new Set(tail.map(e => e.turnId).filter(Boolean));
   for (const turnId of pending) owners.add(turnId);
   const starts = new Set(tail.filter(e => e.type === 'item.start').map(e => e.id));
   const turns = new Set(tail.filter(e => TURN_CONTEXT.has(e.type)).map(e => `${e.turnId ?? e.seq}:${e.type}`));
@@ -184,8 +182,6 @@ function retain(tail, older) {
     if (fallback) implicit = false;
     const key = `${event.turnId ?? event.seq}:${event.type}`;
     if (turns.has(key)) continue;
-    // An echo names its ticket; the ticket's own start is kept with it.
-    if (event.inputId) owners.add(event.inputId);
     turns.add(key); context.push(pending.has(event.turnId) ? event : anchor(event));
   }
   return { events: [...context, ...tail].sort((a, b) => a.seq - b.seq), first };

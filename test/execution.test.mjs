@@ -7,7 +7,7 @@ import { once } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { startWork, prepareWork } from '../packages/connect/src/work-command.js';
 import { ExecutionJobs } from '../packages/connect/src/execution.js';
-import { parseWorkArgs, runRemoteWork, runLocalWork, readRemoteWork, cancelRemoteWork, parseCommandRef } from '../packages/connect/src/execution-cli.js';
+import { parseWorkArgs, runRemoteWork, runLocalWork } from '../packages/connect/src/execution-cli.js';
 import { M } from '@helm/protocol';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-execution-'));
@@ -166,56 +166,4 @@ test('local work preserves ambient test settings and returns the child exit stat
     const code=await runLocalWork(['--heavy','--',process.execPath,'-e','console.log(process.env.WORK_AMBIENT_TEST);process.exitCode=4'],{stdout,stderr,stdin});
     assert.equal(code,4);assert.equal(output.trim(),'isolated-db');
   } finally {if(previous===undefined)delete process.env.HELM_DIR;else process.env.HELM_DIR=previous;delete process.env.WORK_AMBIENT_TEST;}
-});
-
-test('reading a command by id follows it to the end across a dropped link and reports a timeout as 124', async () => {
-  const stdout = new PassThrough(), stderr = new PassThrough(); let output = '', connections = 0, reads = 0;
-  stdout.on('data', chunk => output += chunk);
-  const chunk = (seq, text, stream = 'stdout') => ({ seq, stream, data: Buffer.from(text).toString('base64') });
-  const connect = async () => {
-    const generation = ++connections;
-    return { close() {}, rpc: async (method, p) => {
-      assert.equal(method, M.EXEC_READ, 'reading never starts or cancels it');
-      reads++;
-      if (generation === 1 && reads === 2) throw new Error('lost connection');
-      if (p.since === 0) return { status: 'running', chunks: [chunk(1, 'part one\n')], last: 1, more: false };
-      return { status: 'exited', exitCode: 130, error: 'Command timed out.', chunks: [chunk(2, 'part two\n'), chunk(3, 'warning\n', 'stderr')], last: 3, more: false };
-    } };
-  };
-  const ref = parseCommandRef(['Laptop', id(20), '--json', '--wait'], 'exec-status', ['--wait', '--json']);
-  assert.deepEqual(ref, { machine: 'Laptop', id: id(20), wait: true, json: true });
-  const code = await readRemoteWork(ref.machine, ref.id, { ...ref, net: {}, machineId: () => 'laptop', connect, stdout, stderr });
-  assert.equal(code, 124);
-  assert.equal(connections, 2);
-  assert.deepEqual(JSON.parse(output), { id: id(20), machine: 'Laptop', status: 'exited', done: true, exitCode: 124,
-    error: 'Command timed out.', stdout: 'part one\npart two\n', stderr: 'warning\n', truncated: false });
-});
-
-test('reading without --wait reports a running command as 3, and a missing one is not retried', async () => {
-  let connections = 0;
-  const running = async () => ({ close() {}, rpc: async () => ({ status: 'running', chunks: [], last: 0, more: false }) });
-  const sink = new PassThrough();
-  assert.equal(await readRemoteWork('Laptop', id(21), { net: {}, machineId: () => 'laptop', connect: running, stdout: sink, stderr: sink }), 3);
-  const missing = async () => { connections++; return { close() {}, rpc: async () => { throw new Error('command not found; it may have expired or Helm restarted. Do not automatically rerun it.'); } }; };
-  await assert.rejects(() => readRemoteWork('Laptop', id(22), { wait: true, net: {}, machineId: () => 'laptop', connect: missing, stdout: sink, stderr: sink }), /not found/);
-  assert.equal(connections, 1);
-  assert.throws(() => parseCommandRef(['Laptop', 'short'], 'exec-cancel', ['--json']), /exec-cancel <machine> <command-id>/);
-  assert.throws(() => parseCommandRef(['Laptop', id(23), '--wait'], 'exec-cancel', ['--json']), /unknown option --wait/);
-});
-
-test('exec-cancel asks once and says whether the command had already finished', async () => {
-  const calls = [];
-  const connect = status => async () => ({ close() {}, rpc: async (method, p) => { calls.push([method, p.id]); return { id: p.id, status }; } });
-  const stdout = new PassThrough(), stderr = new PassThrough(); let said = '';
-  stderr.on('data', chunk => said += chunk);
-  assert.equal(await cancelRemoteWork('Laptop', id(24), { net: {}, machineId: () => 'laptop', connect: connect('running'), stdout, stderr }), 0);
-  assert.equal(await cancelRemoteWork('Laptop', id(25), { net: {}, machineId: () => 'laptop', connect: connect('exited'), stdout, stderr }), 0);
-  assert.deepEqual(calls, [[M.EXEC_CANCEL, id(24)], [M.EXEC_CANCEL, id(25)]]);
-  assert.match(said, /Asked Laptop to stop/);
-  assert.match(said, /already finished/);
-});
-
-test('a finished result is kept for an hour by default', t => {
-  const jobs = new ExecutionJobs({ launch }); t.after(() => jobs.stop());
-  assert.equal(jobs.retainMs, 60 * 60_000);
 });

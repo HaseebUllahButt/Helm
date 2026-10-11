@@ -13,7 +13,7 @@ before(async () => {
     const token = 'helm1.' + btoa(JSON.stringify({net:'network',sub:'device'})) + '.test';
     window.mount = () => {
       const envs = ['laptop','vm'].map(id => ({id,name:id,online:true,info:{}}));
-      const session = {id:'native',title:'Current chat',cwd:'/work/current',engine:'gemini',profileId:'claude',
+      const session = {id:'native',title:'Current chat',cwd:'/work/current',engine:'claude',profileId:'claude',
         nativeCli:true,pty:true,shared:true,alive:true,status:'idle',turns:1,updatedAt:Date.now()};
       const quick = {id:'quickone',title:'Quick question',cwd:'/home/test/.helm/quick/quickone',quick:true,engine:'claude',
         profileId:'claude',driver:'claude',alive:true,status:'working',turns:1,updatedAt:Date.now()-60000};
