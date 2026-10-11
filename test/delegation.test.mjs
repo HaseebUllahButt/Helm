@@ -607,7 +607,7 @@ test('nesting is bounded and empty tasks fail before starting a CLI', async (t) 
 
 test('delegation instructions stay compact and independent of the account roster', () => {
   const note = delegationNote();
-  assert.ok(note.length < 1100);
+  assert.ok(note.length < 1300);
   assert.equal(delegationNote(profiles), note);
   assert.equal(delegationNote([]), note);
   assert.match(note, /Do the work yourself by default/);
@@ -619,6 +619,8 @@ test('delegation instructions stay compact and independent of the account roster
   assert.match(note, /helm run --heavy/);
   assert.match(note, /Inspect package scripts/);
   assert.match(note, /--cwd <folder>/);
+  assert.match(note, /Keep every helper attached to this chat/);
+  assert.match(note, /not as a separate chat in Running/);
   assert.match(note, /saved context for an hour/);
 });
 
