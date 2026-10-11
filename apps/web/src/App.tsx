@@ -784,10 +784,13 @@ function Shell({ client, conn, onSignOut }: {
       if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
-      // Settings and usage from anywhere: Ctrl/Cmd+, is what every app uses
-      // for settings; Shift+U for what it has cost.
-      if (mod && !e.shiftKey && e.key === ',') { e.preventDefault(); setPalette(false); navigate([{ kind: 'app-settings' }]); return; }
-      if (mod && e.shiftKey && (e.key === 'u' || e.key === 'U') && !el?.closest?.('.xterm')) { e.preventDefault(); setPalette(false); navigate([{ kind: 'usage' }]); return; }
+      // Settings and usage from anywhere. Letters with Ctrl/Cmd+Shift that
+      // nothing else wants: Ctrl+, zooms on some layouts and Ctrl+Shift+U is
+      // Linux's "type a Unicode character", which is what the owner got.
+      if (mod && e.shiftKey && !e.altKey && !el?.closest?.('.xterm')) {
+        if (e.key === 's' || e.key === 'S') { e.preventDefault(); setPalette(false); navigate([{ kind: 'app-settings' }]); return; }
+        if (e.key === 'l' || e.key === 'L') { e.preventDefault(); setPalette(false); navigate([{ kind: 'usage' }]); return; }
+      }
       if (typing || mod || e.altKey) return;
       if (e.key === '?') { e.preventDefault(); setHelp(true); return; }
       if (e.key === '/') { e.preventDefault(); setPalette(true); }

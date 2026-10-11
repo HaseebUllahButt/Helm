@@ -67,11 +67,11 @@ async function pageFor(t, context) {
   return page;
 }
 
-test('Ctrl+, opens Settings and Ctrl+Shift+U opens Usage from anywhere', async t => {
+test('Ctrl+Shift+S opens Settings and Ctrl+Shift+L opens Usage from anywhere', async t => {
   const page = await pageFor(t);
-  await page.keyboard.press('Control+Comma');
+  await page.keyboard.press('Control+Shift+s');
   await page.getByRole('heading',{name:'Settings'}).first().waitFor();
-  await page.keyboard.press('Control+Shift+u');
+  await page.keyboard.press('Control+Shift+l');
   await page.getByLabel('Environment').waitFor({timeout:10000});
 });
 
@@ -80,7 +80,7 @@ test('the shortcuts list names both keys', async t => {
   await page.keyboard.press('?');
   const text = await page.locator('.shortcuts').innerText();
   assert.match(text, /Settings/);
-  assert.match(text, /Usage and cost/);
+  assert.match(text, /Usage, limits and cost/);
 });
 
 test('New session paints the agents it remembers before a slow machine answers', async t => {
