@@ -11,6 +11,7 @@ import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { Controls, trayPrefs, type Kind } from './session/Controls';
+import { useChatKeys } from './session/chatKeys';
 import { prepareImage, type PreparedImage } from './session/image';
 import { useDraftImages } from './session/useDraftImages';
 import { loadDraft, saveDraft } from './draftStore';
@@ -4708,6 +4709,12 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
   const nativeControls = Controls({ options: nativeOptions, session,
     busy: settingBusy || sending || status === 'blocked' || (!session.nativeChat && status === 'working') || !env.online,
     onPick: pickNative, onNativeControl: openNativeControl, ...nativePrefs });
+  // The same keys as a Helm chat, wherever this tray is shown. There is no
+  // agents panel here, so that key is left to the browser.
+  useChatKeys(session.nativeCli ? {
+    effort: () => nativeControls.step('effort'),
+    model: () => nativeControls.step('model'),
+  } : {});
 
   useEffect(() => {
     if (!session.nativeChat || raw) return;

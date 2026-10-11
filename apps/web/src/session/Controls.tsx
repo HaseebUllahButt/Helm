@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { Client, Mode, ModelList, Session, NativeControl } from '../client';
 import { Icon, type IconName } from '../Icon';
+import { modelRing, nextInRing } from './chatKeys';
 
 /** One thing you can change while the agent is running. */
 export interface Choice {
@@ -43,8 +44,28 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
     try { const [m, effort] = JSON.parse(entry); return m === model && typeof effort === 'string' ? [effort] : []; }
     catch { return []; }
   });
+  // The chat keys: one press, the next choice, applied exactly as a tap on
+  // that row would be. A CLI that keeps the list to itself gets its own
+  // picker opened instead, as its chip does.
+  const step = (kind: 'model' | 'effort') => {
+    if (busy) return;
+    const g = groups.find((x) => x.kind === kind);
+    if (!g) {
+      if (options?.nativeControls?.includes(kind)) onNativeControl?.(kind);
+      return;
+    }
+    const favs = options?.favs !== undefined && onFavs ? options.favs : favsOf(session.engine);
+    const ring = kind === 'model'
+      ? modelRing(g.choices.map((c) => c.id), (g.more ?? []).map((c) => c.id), favs)
+      : g.choices.map((c) => c.id);
+    const next = nextInRing(ring, g.current);
+    if (next === undefined || next === g.current) return;
+    setOpen(null);
+    onPick(kind, next);
+  };
 
   return {
+    step,
     chips: (
       <span className="chips">
         {groups.map((g) => (
@@ -77,6 +98,7 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
         current={group.current}
         saved={group.saved}
         busy={busy}
+        searchable={group.kind === 'model'}
         favKey={group.kind === 'model' ? session.engine : group.kind === 'effort' ? `${session.engine}:effort:${model}` : undefined}
         favs={group.kind === 'model' ? options?.favs : group.kind === 'effort' && options?.effortFavs !== undefined ? effortFavs : undefined}
         onFavs={group.kind === 'model' ? onFavs : group.kind === 'effort' && onEffortFavs ? (next) => onEffortFavs(model, next) : undefined}
@@ -264,8 +286,10 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
  */
 const favsOf = (key: string): string[] => { try { return JSON.parse(localStorage.getItem(`helm.favmodels:${key}`) || '[]'); } catch { return []; } };
 
-function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, favKey, favs: shared, onFavs, onDefault, onPick, onClose }: {
+function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, searchable, favKey, favs: shared, onFavs, onDefault, onPick, onClose }: {
   title: string; note?: string; choices: Choice[]; more?: Choice[]; current: string;
+  /** A long list gets a search box even when nothing is folded away. */
+  searchable?: boolean;
   saved?: string | null;
   busy?: boolean; onPick: (id: string) => void; onClose: () => void;
   /** Favorite models sit at the top, per engine. */
@@ -351,16 +375,60 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, fa
       </div>
     );
   };
+  const search = more.length > 0 || (!!searchable && choices.length > 6);
+  const sheet = useRef<HTMLDivElement>(null);
+  const filter = useRef<HTMLInputElement>(null);
+  // With a keyboard the sheet takes focus, so typing searches and the arrows
+  // move; on a touch screen it does not, or the phone's keyboard would cover
+  // the list it was opened to show.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    if (matchMedia('(hover: hover) and (pointer: fine)').matches) {
+      const box = sheet.current;
+      (filter.current ?? box?.querySelector<HTMLElement>('button.moderow[aria-selected="true"]') ?? box?.querySelector<HTMLElement>('button.moderow'))?.focus();
+    }
+    return () => {
+      // Back to the composer (or the chip) once the sheet goes.
+      const left = document.activeElement;
+      if (opener?.isConnected && (!left || left === document.body || !left.isConnected)) opener.focus();
+    };
+  }, []);
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const box = sheet.current;
+    if (!box || e.nativeEvent.isComposing) return;
+    const inFilter = e.target === filter.current;
+    const rows = [...box.querySelectorAll<HTMLElement>('button.moderow:not(:disabled)')];
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    if (e.key === 'Escape') {
+      e.preventDefault(); e.stopPropagation(); onClose();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!rows.length) return;
+      e.preventDefault(); e.stopPropagation();
+      const down = e.key === 'ArrowDown';
+      if (inFilter) rows[down ? 0 : rows.length - 1].focus();
+      else if (!down && at === 0 && filter.current) filter.current.focus();
+      else rows[at < 0 ? 0 : (at + (down ? 1 : rows.length - 1)) % rows.length].focus();
+    } else if (e.key === 'Enter' && inFilter) {
+      // The first match is the one the owner is looking at.
+      e.preventDefault(); e.stopPropagation();
+      rows[0]?.click();
+    } else if (!inFilter && filter.current && e.key.length === 1 && e.key !== ' ' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // A letter typed on a row starts a search; the key lands in the box.
+      e.stopPropagation();
+      filter.current.focus();
+    }
+  };
   return (
-    <div className="modesheet" role="listbox" aria-label={title}>
+    <div className="modesheet" role="listbox" aria-label={title} ref={sheet} onKeyDown={onKey}>
       <div className="modesheet-head">
         <span>{title}</span>
         <button className="x" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button>
       </div>
       {note && <div className="modesheet-note">{note}</div>}
       {onDefault && <div className="modesheet-legend">Defaults apply to new chats{favKey && <span><Icon name="star" size={13} /> favorites only</span>}</div>}
-      {more.length > 0 && (
+      {search && (
         <input
+          ref={filter} aria-label={`Search ${title}`}
           className="sheetfilter" value={query} placeholder="search all models"
           autoCapitalize="off" autoCorrect="off" autoComplete="off"
           onChange={(e) => setQuery(e.target.value)}

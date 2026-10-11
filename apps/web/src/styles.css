@@ -2134,7 +2134,8 @@ button.sheet-editlink:hover { color: var(--text); }
 /* No keys to press on a phone: the hints would be instructions for nothing. */
 @media (pointer: coarse) { .palette-foot { display: none; } }
 
-.shortcuts { display: grid; gap: 8px; }
+.shortcuts, .shortcuts section { display: grid; gap: 8px; }
+.shortcuts .palette-group { margin: 0; padding: 8px 0 0; }
 .shortcuts div { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: var(--t-body); color: var(--text-dim); }
 kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; background: var(--accent); border: 1px solid var(--line-2); color: var(--text); white-space: nowrap; }
 
