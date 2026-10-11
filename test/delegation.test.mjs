@@ -4,7 +4,7 @@ import { EventEmitter, once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -607,7 +607,7 @@ test('nesting is bounded and empty tasks fail before starting a CLI', async (t) 
 
 test('delegation instructions stay compact and independent of the account roster', () => {
   const note = delegationNote();
-  assert.ok(note.length < 1300);
+  assert.ok(note.length < 1400);
   assert.equal(delegationNote(profiles), note);
   assert.equal(delegationNote([]), note);
   assert.match(note, /Do the work yourself by default/);
@@ -619,6 +619,7 @@ test('delegation instructions stay compact and independent of the account roster
   assert.match(note, /helm run --heavy/);
   assert.match(note, /Inspect package scripts/);
   assert.match(note, /--cwd <folder>/);
+  assert.match(note, /--worktree gives it its own checkout/);
   assert.match(note, /Keep every helper attached to this chat/);
   assert.match(note, /not as a separate chat in Running/);
   assert.match(note, /saved context for an hour/);
@@ -634,6 +635,23 @@ test('a child works in the folder the caller names, else where its parent does',
   assert.equal(here.cwd, parent.cwd);
 });
 
+test('--worktree gives the child its own checkout on a helm/ branch, named after the task', async (t) => {
+  const { sessions } = setup(t);
+  const { execFileSync } = await import('node:child_process');
+  const repo = join(process.env.HELM_DIR, 'repo');
+  mkdirSync(repo, { recursive: true });
+  const run = (...args) => execFileSync('git', args, { cwd: repo, stdio: 'pipe', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+  run('init', '-q', '-b', 'main'); writeFileSync(join(repo, 'a.txt'), 'a'); run('add', 'a.txt'); run('commit', '-q', '-m', 'one');
+  const parent = await sessions.start({ cwd: repo, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Fix the login bug\nin detail', worktree: true });
+  assert.equal(child.delegation.worktree.branch, 'helm/fix-the-login-bug');
+  assert.equal(child.delegation.worktree.base, 'main');
+  assert.equal(child.cwd, child.delegation.worktree.path);
+  assert.notEqual(child.cwd, repo);
+  assert.ok(existsSync(join(child.cwd, 'a.txt')), 'the checkout has the files');
+  await assert.rejects(() => sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Nope', worktree: true }), /not a git repository/);
+});
+
 test('the CLI sends its own folder only when no parent chat decides it', async () => {
   const calls = [];
   const rpc = async (_self, method, params) => {
@@ -647,6 +665,9 @@ test('the CLI sends its own folder only when no parent chat decides it', async (
   assert.equal(calls.at(-1).params.cwd, undefined, 'inside a chat the parent folder wins');
   await run(['claude-main', '--cwd', '/worktree'], { parentId: 'parent' });
   assert.equal(calls.at(-1).params.cwd, '/worktree');
+  assert.equal(calls.at(-1).params.worktree, undefined);
+  await run(['claude-main', '--worktree'], { parentId: 'parent' });
+  assert.equal(calls.at(-1).params.worktree, true);
   await run(['claude-main'], { parentId: null });
   assert.equal(calls.at(-1).params.cwd, '/shell');
 });

@@ -28,6 +28,7 @@ import { devinUsageReport } from './devin-usage.js';
 import { MODES, defaultMode, modeFromAuto } from './modes.js';
 import { ModeFooter, MODE_LABELS, MODE_FROM_LABEL } from './native-mode.js';
 import { delegationMode, delegationOutput, isWakeTurn, trackDelegationReply, turnOf, turnText } from './delegation.js';
+import { addWorktree } from './git.js';
 import { authStatuses } from './auth.js';
 import { TerminalHost, NativeHosts, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory } from './inventory.js';
@@ -1168,7 +1169,7 @@ export class Sessions extends EventEmitter {
   }
 
   /** A task owned by its orchestrator, with durable output and configurable permissions. */
-  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId }) {
+  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId, worktree = false }) {
     if (typeof task !== 'string' || !task.trim() || task.length > 32_000) {
       throw new Error('a subagent task must contain 1–32000 characters');
     }
@@ -1180,8 +1181,17 @@ export class Sessions extends EventEmitter {
     }
     // A folder named by the caller wins (`--cwd`: a worktree beside the
     // parent's checkout); otherwise the child works where its parent does.
-    const folder = cwd ?? parent?.cwd;
+    let folder = cwd ?? parent?.cwd;
     if (typeof folder !== 'string' || !folder.trim()) throw new Error('delegation needs a working folder');
+    // `--worktree`: the child gets its own checkout of the same repository
+    // on a new helm/ branch, so several helpers can edit at once without
+    // writing over each other, and the parent merges what it wants back.
+    // Made before anything else so a repo that is not one fails cleanly.
+    let checkout = null;
+    if (worktree) {
+      checkout = await addWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
+      folder = checkout.path;
+    }
     let depth = 1, ancestor = parent;
     while (ancestor?.delegation) {
       if (++depth > 3) throw new Error('subagents can nest at most three levels');
@@ -1195,7 +1205,8 @@ export class Sessions extends EventEmitter {
     const auth = (await authStatuses([profile])).get(profile.id);
     if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
     const selectedMode = delegationMode(profile.engine, parent?.mode, mode, startPrefs(profile)?.mode, parent?.engine);
-    const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting' };
+    const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
+      ...(checkout ? { worktree: checkout } : {}) };
     const child = await this.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
       title: clip(task.trim().split('\n')[0], 80), delegation });
     if (parent && (parent.stopGeneration ?? 0) !== parentGeneration) {

@@ -9,7 +9,7 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
   write = console.log, sleep = pause } = {}) {
   const { options, words } = parseAgentArgs(args, {
     values: command === 'delegate' ? ['model', 'mode', 'effort', 'parent', 'cwd', 'timeout'] : command === 'delegate-result' ? ['timeout'] : [],
-    switches: command === 'agents' ? ['json', 'refresh'] : ['wait', 'json'],
+    switches: command === 'agents' ? ['json', 'refresh'] : command === 'delegate' ? ['wait', 'json', 'worktree'] : ['wait', 'json'],
   });
   if (command === 'agents') {
     if (words.length) throw new Error('helm agents [--json] [--refresh]');
@@ -55,14 +55,16 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
       // `--cwd` says otherwise; from a plain shell, where this runs.
       id: options.parent ?? parentId, cwd: options.cwd ?? ((options.parent ?? parentId) ? undefined : cwd), profileId: agent.id,
       model: options.model, mode: options.mode, effort: options.effort, task: task.join(' '),
+      ...(options.worktree ? { worktree: true } : {}),
       // Background/native Codex threads can inherit another thread's Helm
       // environment. Verify the actual caller before using that parent.
       ...(!options.parent && parentId && callerThreadId ? { callerThreadId } : {}),
     }, 70_000);
     id = session.id;
     if (!options.wait) {
+      const where = session.delegation?.worktree;
       write(options.json ? JSON.stringify({ session, status: session.status })
-        : `Started ${id} (${session.engine}${session.model ? ` / ${session.model}` : ''}). Read with helm delegate-result ${id} --wait`);
+        : `Started ${id} (${session.engine}${session.model ? ` / ${session.model}` : ''})${where ? ` in ${where.path} on branch ${where.branch}` : ''}. Read with helm delegate-result ${id} --wait`);
       return 0;
     }
   } else {
@@ -86,6 +88,8 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
   if (options.json) write(JSON.stringify(result));
   else {
     write(`${id}: ${result.status}${result.timedOut ? ' (wait timed out; task continues)' : ''}`);
+    const where = result.session?.delegation?.worktree;
+    if (where) write(`worked in ${where.path} on branch ${where.branch} (from ${where.base})`);
     if (result.output) write(result.output);
     if (result.error) write(result.error);
     if (result.pending) write(`Needs approval in Helm: ${result.pending.title ?? result.pending.kind}`);
