@@ -4,6 +4,20 @@ import type { Turn } from './types';
 export function userMessage(text?: string, attachments: Turn['attachments'] = []) {
   const channel = text?.match(/^\s*<channel\s+source="helm-native"[^>]*>\s*([\s\S]*?)\s*<\/channel>\s*$/);
   if (channel) text = channel[1];
+  // A message Helm pasted into a terminal CLI comes back from the CLI's own
+  // record wrapped as a paste; the wrapper is the CLI's bookkeeping, not
+  // what the owner wrote.
+  const pasted = text?.match(/^\s*<pasted_content\b[^>]*>\s*([\s\S]*?)\s*<\/pasted_content>\s*$/);
+  if (pasted) text = pasted[1];
+  // Pictures sent to a terminal CLI travel as files it is told to read; the
+  // note is for the CLI, the pictures are what to show.
+  const note = text?.match(/\n*Read the attached image files before answering:\n((?:\[Image #\d+\]: "[^"\n]+"\n?)+)\s*$/);
+  if (note) {
+    text = text!.slice(0, note.index).trim();
+    if (!attachments?.length) attachments = [...note[1].matchAll(/\[Image #\d+\]: "([^"\n]+)"/g)].map((m) => ({
+      filename: m[1].split('/').at(-1) || 'image', mime: 'image/jpeg', missing: true,
+    }));
+  }
   const reply = text?.match(/^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*<\/send_user_message_question_reply>\s*$/);
   if (reply) {
     try {

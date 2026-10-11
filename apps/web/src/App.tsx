@@ -853,6 +853,21 @@ function Shell({ client, conn, onSignOut }: {
     return items;
   };
 
+  // The sidebar's ⋯: the same three things the machine screen offers. The
+  // list is reloaded either way, so a row that would not go stays and says so.
+  const threadActions = (e: Environment, s: Session) => {
+    const act = async (method: string, params: object) => {
+      try { await client.rpc(e.id, method, params, 20_000); }
+      catch (err: any) { console.error(`${method} failed on ${e.name}: ${err.message}`); }
+      loadSessions(e.id);
+    };
+    return {
+      onRename: (title: string) => act('session.title', { id: s.id, title }),
+      onArchive: () => act('session.archive', { id: s.id, archived: !s.archived }),
+      onDelete: () => act('session.kill', { id: s.id }),
+    };
+  };
+
   const env = envs.find((e) => e.id === selected) ?? null;
   const view = stack[stack.length - 1];
   const viewSession = view.kind === 'session'
@@ -1324,6 +1339,7 @@ function Shell({ client, conn, onSignOut }: {
                     <HomeRow
                       key={s.id} s={s} machine={e.name} onOpen={() => { setSnooze(`${e.id}:${s.id}`, null); openSession(e.id, s); }}
                       note={snoozed[`${e.id}:${s.id}`] === NEVER_SNOOZE ? 'Snoozed · Never' : `back ${when(snoozed[`${e.id}:${s.id}`])}`}
+                      actions={threadActions(e, s)}
                     />
                   ))}
                 </div>
@@ -1335,7 +1351,7 @@ function Shell({ client, conn, onSignOut }: {
                 <div className="section">running</div>
                 <div className="rows plain">
                   {runningNow.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} />
+                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} actions={threadActions(e, s)} />
                   ))}
                 </div>
               </>
@@ -1345,7 +1361,7 @@ function Shell({ client, conn, onSignOut }: {
               <Fold title="done" count={doneNow.length} note={doneIsSaved ? 'saved' : undefined} remember="sidebar:done">
                 <div className="rows plain">
                   {doneNow.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} />
+                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} actions={threadActions(e, s)} />
                   ))}
                 </div>
               </Fold>
@@ -3021,10 +3037,6 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
   const adopted = s.adopted;
   // A thread read out of a CLI's own history rather than run by helm.
   const found = s.id.startsWith('found:');
-  const [menu, setMenu] = useState(false);
-  useDismiss(menu, useCallback(() => setMenu(false), []));
-  const [naming, setNaming] = useState(false);
-  const [ending, setEnding] = useState(false);
   // Work helm did not start is still the owner's to file away. It used to get
   // no menu at all, which on a machine that has been worked at means most of
   // the list is rows you cannot do anything about.
@@ -3053,32 +3065,49 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
             : offline && runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? <span className="chip exited">was {busyWord(s.status)}</span>
             : <StatusChip status={runningThread(s) && (attentionSuppressed || !needsAttention(s)) ? busyWord(s.status) : s.status} at={s.updatedAt} />}
         </Main>
-        {!selecting && managed && (
-          <>
-            <button
-              className="rowend" title="thread actions" aria-label={`actions for ${s.title}`} aria-haspopup="menu" aria-expanded={menu}
-              onClick={(e) => { e.stopPropagation(); setMenu((open) => !open); }}
-            ><Icon name="more" size={16} /></button>
-            {menu && (
-              <div className="menu row-menu" onClick={(e) => e.stopPropagation()}>
-                {onRename && !adopted && (
-                  <button onClick={() => { setMenu(false); setNaming(true); }}>Rename thread</button>
-                )}
-                {onArchive && (
-                  <button onClick={() => { setMenu(false); onArchive(); }}>
-                    {s.archived ? 'Unarchive thread' : 'Archive thread'}
-                  </button>
-                )}
-                {onDelete && (
-                  <button className="destructive" onClick={() => { setMenu(false); setEnding(true); }}>
-                    {found ? 'Remove from helm' : adopted ? 'Close this pane' : 'Delete thread'}
-                  </button>
-                )}
-              </div>
-            )}
-          </>
-        )}
+        {!selecting && managed && <ThreadActions s={s} onRename={onRename} onArchive={onArchive} onDelete={onDelete} />}
       </div>
+    </>
+  );
+}
+
+/**
+ * The ⋯ on a thread row: rename, archive, delete. One component, so the
+ * sidebar's rows and the machine screen's rows offer the same things.
+ */
+function ThreadActions({ s, onRename, onArchive, onDelete }: {
+  s: Session; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void;
+}) {
+  const eng = engineOf(s.engine);
+  const adopted = s.adopted;
+  const found = s.id.startsWith('found:');
+  const [menu, setMenu] = useState(false);
+  useDismiss(menu, useCallback(() => setMenu(false), []));
+  const [naming, setNaming] = useState(false);
+  const [ending, setEnding] = useState(false);
+  return (
+    <>
+      <button
+        className="rowend" title="thread actions" aria-label={`actions for ${s.title}`} aria-haspopup="menu" aria-expanded={menu}
+        onClick={(e) => { e.stopPropagation(); setMenu((open) => !open); }}
+      ><Icon name="more" size={16} /></button>
+      {menu && (
+        <div className="menu row-menu" onClick={(e) => e.stopPropagation()}>
+          {onRename && !adopted && (
+            <button onClick={() => { setMenu(false); setNaming(true); }}>Rename thread</button>
+          )}
+          {onArchive && (
+            <button onClick={() => { setMenu(false); onArchive(); }}>
+              {s.archived ? 'Unarchive thread' : 'Archive thread'}
+            </button>
+          )}
+          {onDelete && (
+            <button className="destructive" onClick={() => { setMenu(false); setEnding(true); }}>
+              {found ? 'Remove from helm' : adopted ? 'Close this pane' : 'Delete thread'}
+            </button>
+          )}
+        </div>
+      )}
       {naming && onRename && (
         <TextPrompt
           title="Name this thread" value={s.title}
@@ -3183,12 +3212,17 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
 }
 
 /** One line of Home: the mark, the thread, where it runs, and what it is doing. */
-function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean }) {
+function HomeRow({ s, machine, onOpen, note, selected = false, actions }: {
+  s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean;
+  /** Rename, archive, delete - the same ⋯ the machine screen's rows have. */
+  actions?: { onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void };
+}) {
   const now = useNow();
   const eng = engineOf(s.engine);
   return (
     // Branch and age above the title; folder and status below it.
-    <button className={`row tall thread-row tri${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
+    <div className={`row tall rowx tri-row${selected ? ' active' : ''}`}>
+    <button className={`rowmain thread-row tri${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
       <span className="tri-top">
         {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
         <span className="tri-when">{note ?? (s.updatedAt ? waitingSince(s.updatedAt, now) : '')}</span>
@@ -3209,6 +3243,8 @@ function HomeRow({ s, machine, onOpen, note, selected = false }: { s: Session; m
         </span>
       </span>
     </button>
+    {actions && <ThreadActions s={s} {...actions} />}
+    </div>
   );
 }
 

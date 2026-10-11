@@ -23,7 +23,9 @@ before(async () => {
         openDirect:async()=>{}, route:async()=>null, usage:async()=>report,
         rpc:async(env,method,params)=>{
           window.calls.push({env,method,params});
-          if(method==='session.list') return {sessions:[]};
+          if(method==='session.list') return {sessions:env==='laptop'?[{id:'done1',title:'Yesterday work',cwd:'/work/yesterday',engine:'claude',profileId:'claude',driver:'claude',alive:true,status:'idle',turns:3,updatedAt:Date.now()-3600000}]:[]};
+          if(method==='session.events') return {session:null,events:[],pending:[],last:0};
+          if(method==='session.title'||method==='session.archive'||method==='session.kill') return {ok:true};
           if(method==='model.list') return {models:[],modes:[]};
           if(method==='fs.list') return {path:'/home/test',entries:[]};
           if(method==='fs.search') return {results:[]};
@@ -96,4 +98,18 @@ test('New session paints the agents it remembers before a slow machine answers',
   await second.evaluate(()=>{ window.slowProfiles = true; });
   await second.evaluate(()=>window.visit('vm',{kind:'start',cwd:'/work/project'}));
   await second.locator('.row.tall').filter({hasText:'Claude'}).first().waitFor({timeout:3000});
+});
+
+test('the sidebar rows have the same ⋯ menu as the machine screen: rename, archive, delete', async t => {
+  const page = await pageFor(t);
+  // "done" is folded shut until opened.
+  await page.locator('.sidebar').getByRole('button',{name:/^done/}).click();
+  const row = page.locator('.sidebar .tri-row').filter({hasText:'Yesterday work'});
+  await row.waitFor({timeout:5000});
+  await row.getByRole('button',{name:'actions for Yesterday work'}).click({force:true});
+  await page.getByRole('button',{name:'Archive thread'}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Rename thread'}).count(),1);
+  await page.getByRole('button',{name:'Delete thread'}).click();
+  await page.getByRole('button',{name:'delete'}).click();
+  await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.kill'&&c.params.id==='done1'));
 });
