@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readlinkSync, readFileSync, statSync } from 'n
 import { join, basename, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
-import { HOME, expand, collapse } from './paths.js';
+import { HOME, HELM_DIR, expand, collapse } from './paths.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { sessionActivity } from './transcript.js';
 import { claudeLiveSessions, claudeLiveStatus } from './external-process.js';
@@ -755,9 +755,13 @@ async function muse(home, account) {
  */
 export function scratchFolder(cwd) {
   if (typeof cwd !== 'string' || !cwd) return false;
-  const tmp = resolve(tmpdir());
   const dir = resolve(expand(cwd));
-  return dir === tmp || dir.startsWith(tmp + '/');
+  // Helm's own folders too: a helper's worktree or a deleted quick chat's
+  // scratch folder is Helm's business, never a chat the owner started.
+  for (const root of [resolve(tmpdir()), resolve(HELM_DIR)]) {
+    if (dir === root || dir.startsWith(root + '/')) return true;
+  }
+  return false;
 }
 
 export async function inventory(profiles = []) {

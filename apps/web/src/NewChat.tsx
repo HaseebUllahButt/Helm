@@ -3,6 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { EngineMark } from './EngineMark';
 import { Icon } from './Icon';
 import type { Client, DirEntry, Environment, Session } from './client';
+import { watchAccounts } from './accountsCache';
 import { accountsFrom, loadPrefs, rememberFolder, savePrefs, type Account, type PickerPrefs } from './accounts';
 
 /**
@@ -110,16 +111,16 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     setHome(null); setAccounts(null); setPicker(null); setOpened(new Set()); setInside({}); setAnchor(null);
     client.rpc<{ entries: DirEntry[] }>(machine.id, 'fs.list', { path: '~' })
       .then((r) => { if (!stale) setHome(r.entries); }).catch((e) => { if (!stale) { setHome([]); setError(e.message); } });
-    client.rpc<any>(machine.id, 'profile.list')
-      .then((r) => {
-        if (stale) return;
-        const local = loadPrefs()[machine.id];
-        const prefs: PickerPrefs = r.picker ?? { hidden: local?.hidden ?? [], last: local?.account ?? null };
-        setPicker({ ...prefs, onMachine: !!r.picker });
-        setAccounts(accountsFrom(r.profiles));
-      })
-      .catch((e) => { if (!stale) { setAccounts([]); setError(e.message); } });
-    return () => { stale = true; };
+    // The remembered list first, so the agent step never waits on a slow
+    // machine; the machine's own answer replaces it when it lands.
+    const stop = watchAccounts(client, machine.id, (r) => {
+      if (stale) return;
+      const local = loadPrefs()[machine.id];
+      const prefs: PickerPrefs = r.picker ?? { hidden: local?.hidden ?? [], last: local?.account ?? null };
+      setPicker({ ...prefs, onMachine: !!r.picker });
+      setAccounts(accountsFrom(r.profiles));
+    }, (message) => { if (!stale) { setAccounts((now) => now ?? []); setError(message); } });
+    return () => { stale = true; stop(); };
   }, [client, machine]);
 
   const expand = (path: string, id: string) => {

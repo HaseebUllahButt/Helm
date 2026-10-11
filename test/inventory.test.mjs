@@ -20,6 +20,7 @@ test('chats that ran under the temporary folder are tests, not the owner\'s hist
   assert.equal(scratchFolder(tmpdir()), true);
   assert.equal(scratchFolder(join(tmpdir(), 'claude-1000', 'scratchpad')), true);
   assert.equal(scratchFolder('~/dev/helm'), false);
+  assert.equal(scratchFolder(join(process.env.HELM_DIR, 'worktrees', 'x')), true, "Helm's own folders are not the owner's chats");
   assert.equal(scratchFolder('/tmpfoo/project'), false, 'only inside the folder, not a name that starts the same');
   assert.equal(scratchFolder(null), false);
 });

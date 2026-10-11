@@ -12,6 +12,7 @@ import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { Controls, trayPrefs, type Kind } from './session/Controls';
 import { useChatKeys } from './session/chatKeys';
+import { watchAccounts, prefetchAccounts } from './accountsCache';
 import { prepareImage, type PreparedImage } from './session/image';
 import { useDraftImages } from './session/useDraftImages';
 import { loadDraft, saveDraft } from './draftStore';
@@ -783,6 +784,10 @@ function Shell({ client, conn, onSignOut }: {
       if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
       if (mod && e.key === '[') { e.preventDefault(); history.back(); return; }
       if (mod && e.key === ']') { e.preventDefault(); history.forward(); return; }
+      // Settings and usage from anywhere: Ctrl/Cmd+, is what every app uses
+      // for settings; Shift+U for what it has cost.
+      if (mod && !e.shiftKey && e.key === ',') { e.preventDefault(); setPalette(false); navigate([{ kind: 'app-settings' }]); return; }
+      if (mod && e.shiftKey && (e.key === 'u' || e.key === 'U') && !el?.closest?.('.xterm')) { e.preventDefault(); setPalette(false); navigate([{ kind: 'usage' }]); return; }
       if (typing || mod || e.altKey) return;
       if (e.key === '?') { e.preventDefault(); setHelp(true); return; }
       if (e.key === '/') { e.preventDefault(); setPalette(true); }
@@ -3966,6 +3971,8 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
   }, [client, env.id, path]);
 
   useEffect(() => { load(); }, [load]);
+  // The agent step comes next; ask for its list while the folder is chosen.
+  useEffect(() => { prefetchAccounts(client, env.id); }, [client, env.id]);
 
   // The machine indexes its folders once, so a query answered from memory
   // costs a debounce and a round trip rather than a disk walk per letter.
@@ -4302,39 +4309,38 @@ function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
     savePrefs(prefs.current);
   };
 
-  useEffect(() => {
-    client.rpc(env.id, 'profile.list')
-      .then((r: any) => {
-        const list = accountsFrom(r.profiles);
-        setAccounts(list);
-        const local = prefs.current[env.id];
-        let picker: PickerPrefs = { hidden: local?.hidden ?? [], last: local?.account ?? null };
-        if (r.picker) {
-          onMachine.current = true;
-          picker = r.picker;
-          // This browser chose before the machine could keep it: hand the
-          // choice over once, then forget the local copy.
-          if (local && !picker.hidden.length && !picker.last && (local.hidden?.length || local.account)) {
-            picker = { ...picker, hidden: local.hidden ?? [], last: local.account ?? null };
-            savePicker({ hidden: picker.hidden, last: picker.last });
-          }
-          if (local) {
-            const { [env.id]: _gone, ...rest } = prefs.current;
-            prefs.current = rest;
-            savePrefs(rest);
-          }
-        }
-        const seen = new Set(picker.hidden);
-        setHidden(seen);
-        setPreferred(picker.agent ?? null);
-        // The chosen default first, then the last one used. A hidden row
-        // cannot be the selected one: it is not on the screen.
-        setKey(list.find((a) => a.key === picker.agent && !seen.has(a.key))?.key
-          ?? list.find((a) => a.key === picker.last && !seen.has(a.key))?.key
-          ?? list.find((a) => !seen.has(a.key))?.key ?? '');
-      })
-      .catch((e) => setError(e.message));
-  }, [client, env.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The remembered list paints at once; the machine's answer replaces it.
+  useEffect(() => watchAccounts(client, env.id, (r: any, fresh) => {
+    const list = accountsFrom(r.profiles);
+    setAccounts(list);
+    const local = prefs.current[env.id];
+    let picker: PickerPrefs = { hidden: local?.hidden ?? [], last: local?.account ?? null };
+    if (r.picker) {
+      onMachine.current = true;
+      picker = r.picker;
+      // This browser chose before the machine could keep it: hand the
+      // choice over once, then forget the local copy.
+      if (fresh && local && !picker.hidden.length && !picker.last && (local.hidden?.length || local.account)) {
+        picker = { ...picker, hidden: local.hidden ?? [], last: local.account ?? null };
+        savePicker({ hidden: picker.hidden, last: picker.last });
+      }
+      if (fresh && local) {
+        const { [env.id]: _gone, ...rest } = prefs.current;
+        prefs.current = rest;
+        savePrefs(rest);
+      }
+    }
+    const seen = new Set(picker.hidden);
+    setHidden(seen);
+    setPreferred(picker.agent ?? null);
+    // The chosen default first, then the last one used. A hidden row
+    // cannot be the selected one: it is not on the screen. A row already
+    // chosen from the remembered list stays chosen when the answer lands.
+    setKey((now) => (now && list.some((a) => a.key === now && !seen.has(a.key))) ? now
+      : list.find((a) => a.key === picker.agent && !seen.has(a.key))?.key
+        ?? list.find((a) => a.key === picker.last && !seen.has(a.key))?.key
+        ?? list.find((a) => !seen.has(a.key))?.key ?? '');
+  }, (message) => setError(message)), [client, env.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = accounts?.filter((a) => !hidden.has(a.key)) ?? null;
   const account = shown?.find((a) => a.key === key) ?? null;
@@ -4394,7 +4400,7 @@ function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
       </div>
       <div className="scroll"><div className="pad column">
         <div className="section">agent</div>
-        {accounts === null && <div className="empty quiet">looking for agents…</div>}
+        {accounts === null && <div className="empty quiet">{env.online ? 'looking for agents…' : `${env.name} cannot be reached right now`}</div>}
         {shown?.length === 0 && (accounts?.length ?? 0) > 0 && (
           <div className="empty quiet">every agent is hidden — the sliders above turn them back on</div>
         )}
