@@ -31,7 +31,7 @@ before(async () => {
     }};
     function Compose() {
       const [draft,setDraft]=useState(''); const [references,setReferences]=useState([]);
-      return <Composer draft={draft} setDraft={setDraft} engine="Claude" keys={false} working steers
+      return <Composer draft={draft} setDraft={setDraft} engine="Claude" keys={false} working
         onSend={()=>{window.sent={draft,references}}}
         referenceOptions={[{id:'design',title:'Design review'}]} references={references}
         onReference={id=>setReferences([{id,title:'Design review'}])} onRemoveReference={()=>setReferences([])}
@@ -56,6 +56,19 @@ before(async () => {
         foot={<div className="chips">{['Model','Thinking','Permissions','Speed'].map(name=><button key={name} className="chip-pick" aria-label={name} onClick={()=>window.limitControl=name}><span className="cg">●</span><span className="chip-label">{name}</span></button>)}</div>}
         statusLine={<LimitsLine windows={[{label:'5h',used:87},{label:'7d',used:96}]}/>}/>;
     }
+    function ComposeTiming() {
+      const [draft,setDraft] = useState('');
+      return <Composer draft={draft} setDraft={setDraft} engine="Devin" keys={false} working onSend={()=>{}}
+        pendingLabel="After current response"
+        queued={[
+          {turn:{id:'sent',delivered:true},text:'Already with the CLI',attachments:0,delivered:true},
+          {turn:{id:'auto',delivery:'auto'},text:'Follows the CLI',attachments:0},
+          {turn:{id:'held',delivery:'queue'},text:'A scheduled prompt',attachments:0},
+        ]}
+        onEditQueued={()=>{}} onRemoveQueued={()=>{}} onMoveQueued={()=>{}}
+        onSendQueued={turn=>window.action=['send',turn.id]} />;
+    }
+    window.showTiming=()=>root.render(<ComposeTiming/>);
     window.showLimits=()=>root.render(<ComposeLimits/>);
     window.showComposer=()=>root.render(<Compose/>);
     window.showImages=()=>root.render(<ComposeImages/>);
@@ -100,6 +113,23 @@ test('composer selects thread references and sends without a delivery selector',
   assert.deepEqual(await page.evaluate(() => window.action), ['remove', 'one']);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await capture(page, 'orchestration-composer-phone.png');
+});
+
+test('waiting messages say when the CLI reads them, and Send now is offered on every CLI', async (context) => {
+  const page = await pageFor(context, 390);
+  await page.evaluate(() => window.showTiming());
+  const row = (text) => page.locator('.queued-row').filter({ hasText: text });
+  await row('Follows the CLI').getByText('After current response', { exact: true }).waitFor();
+  await row('A scheduled prompt').getByText('After this task', { exact: true }).waitFor();
+  const sent = row('Already with the CLI');
+  await sent.getByText('Sent to CLI', { exact: true }).waitFor();
+  assert.equal(await sent.getByRole('button').count(), 0, 'what the CLI has cannot be edited or taken back');
+  assert.equal(await sent.locator('.queued-timing').count(), 0);
+  await row('Follows the CLI').getByRole('button', { name: 'Send now', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.action), ['send', 'auto']);
+  assert.equal(await row('A scheduled prompt').getByRole('button', { name: 'Send now', exact: true }).count(), 1);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await capture(page, 'queue-timing-phone.png');
 });
 
 test('pasted images are labelled where the cursor was and renumbered when one goes', async (context) => {

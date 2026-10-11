@@ -114,7 +114,7 @@ for (const width of [1280, 390]) test(`a normal native CLI opens with keyboard c
   await boot();
   await page.evaluate(() => {
     const machine = { id: 'laptop', name: 'Laptop', online: true, info: {} };
-    const session = { id: 'native-example', title: 'Native Claude session', engine: 'claude', cwd: '/work/helm',
+    const session = { id: 'native-example', title: 'Native Claude session', engine: 'gemini', cwd: '/work/helm',
       nativeCli: true, pty: true, shared: true, alive: true, status: 'idle', updatedAt: Date.now() };
     const client = window.makeClient([machine], { laptop: [session] });
     const fallback = client.rpc;

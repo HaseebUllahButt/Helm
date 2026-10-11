@@ -429,6 +429,20 @@ task history is not replayed into conversations when the daemon restarts.
 stopped children do not restart the parent. Archiving hides a task without
 stopping its process.
 
+Subagents Claude Code starts itself (its `Agent`/`Task` tool) appear in the
+same list marked **native**: in a terminal or monitored Claude thread, and in
+Helm chats where those tools are allowed. A terminal thread gets an **Agents**
+button beside its title for them. Helm reads them from the files Claude keeps
+beside the conversation (`<session>/subagents/agent-*.jsonl`), so they are
+read-only: expand one for its latest reply and recent steps; there is nothing
+to message, stop or open. Running ones count in the Agents badge and keep the
+thread marked working. A finished reply reads **Finished** after a few quiet
+seconds; one that stops writing without finishing reads **Stopped** after ten
+minutes. A Helm chat that already shows a subagent inline does not repeat it
+as a card, and the newest 24 per thread are listed. When the chat itself
+reports on the same subagent, its card shows that state instead: **Needs
+approval** while it waits on you, **Failed** if the chat says it failed.
+
 Helm-managed agents receive a short introduction to these tools on their next
 ordinary message. Any local CLI with shell access can also use them directly
 on a joined machine with the Helm daemon running:
@@ -534,13 +548,24 @@ shell environment is never copied there. Pass required overrides with repeatable
 `helm run` preserves the local shell's working folder and environment.
 
 `--timeout <milliseconds>` bounds capacity waiting and execution together
-(default: 15 minutes). Ctrl+C cancels the command. Output retains a bounded
-256 KiB tail for ten minutes; truncation is reported. If the connection drops,
-the CLI resumes reading the same job, without restarting it. An unacknowledged
-start is not automatically replayed; inspect it with
-`helm exec-result <machine> <command-id>`. Daemon shutdown cancels managed commands;
-after a restart, a missing command is reported instead of silently running it
-again. `helm run` without a command remains the legacy alias for `helm up`.
+(default: 15 minutes). Ctrl+C cancels the command. The exit code is the remote
+command's own; a timeout exits 124 and a cancelled command 130. Stopping a
+command stops its whole process group on Linux and macOS. Output retains a
+bounded 256 KiB tail for an hour; truncation is reported. If the connection
+drops, the CLI resumes reading the same job, without restarting it. An
+unacknowledged start is not automatically replayed; the CLI prints the command
+id, and the command can be read or stopped from any terminal on that machine:
+
+```sh
+helm exec-status VM <command-id>               output so far; exit 3 while it runs
+helm exec-status VM <command-id> --wait --json  wait for the end, as one JSON object
+helm exec-cancel VM <command-id>               stop it
+```
+
+`helm exec-result` is the older name for `exec-status` and still works. Daemon
+shutdown cancels managed commands; after a restart, a missing command is
+reported instead of silently running it again. `helm run` without a command
+remains the legacy alias for `helm up`.
 
 `--wait` returns the reply when finished, or returns immediately when the
 child needs approval. Read it again after answering in Helm. The default
@@ -558,8 +583,23 @@ side panel on desktop and a bottom sheet on phones.
 
 There is no message-delivery selector. Native terminal sessions pass input
 straight to the CLI, retaining that CLI's own queue and interruption behavior.
-Managed Claude and Codex chats hand follow-up input to the running turn at a
-tool boundary; adapters without steering queue it until the turn finishes.
+In managed chats a message sent while the agent works follows its CLI's own
+timing, and each waiting message says which: Codex reads it after its next
+tool call, Claude when its current tools finish, OpenCode at the next step of
+its running loop, and Devin, OpenCode 2 and the rest after the current
+response. Scheduled prompts and delegated results say **After this task**;
+a message the CLI has taken says **Sent to CLI**. Messages with attached
+thread context wait for the response to end.
+
+**Send now** works on every CLI. Codex, Claude and OpenCode take the message
+inside the running turn. Other CLIs stop only the current response and then
+send it - the other waiting messages, delegated tasks and the thread carry
+on. A delegated task without steering is not cut short; it reads the message
+when its response ends. A message being sent this way cannot be withdrawn
+halfway, and **Stop** still cancels it. If a CLI refuses a message or exits
+before reading it, that message shows as failed in the chat, ready to resend,
+rather than disappearing.
+
 Queued messages can be edited, reordered,
 removed, or withdrawn into the composer until delivery starts. Edits, order,
 attachments, and attached context survive a daemon restart. Delivery already

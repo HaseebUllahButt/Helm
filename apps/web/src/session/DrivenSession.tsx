@@ -15,6 +15,7 @@ import { Confirm, TextPrompt } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
 import { useDraftImages } from './useDraftImages';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
+import { messageDelivery } from '@helm/protocol/message-delivery';
 import { money, busyStatus } from '../format';
 import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
@@ -96,6 +97,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   }, []);
   const [referenceOptions, setReferenceOptions] = useState<{ id: string; title: string }[]>([]);
   const team = useThreadTeam(client, env.id, session.id);
+  // Claude's own subagents have no Helm session, so they ride on this one.
+  const agentCount = team.length + (session.nativeCards?.length ?? 0);
   useEffect(() => {
     let stale = false;
     client.rpc<{ sessions: Session[] }>(env.id, 'session.list', {}).then((result) => {
@@ -304,7 +307,8 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   const queueAction = async (turn: Turn, method: string, params: object = {}) => {
     if (queueBusy) return false;
     setQueueBusy(turn.id); setError('');
-    try { await client.rpc(env.id, method, { id: session.id, turnId: turn.id, ...params }); return true; }
+    // Send now may first have to wait for the CLI to stop its reply.
+    try { await client.rpc(env.id, method, { id: session.id, turnId: turn.id, ...params }, method === 'session.send-now' ? 70_000 : undefined); return true; }
     catch (failure: any) { setError(failure.message); return false; }
     finally { setQueueBusy(''); }
   };
@@ -535,7 +539,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
             onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         )}
         <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents and scheduled tasks"
-          onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{team.length > 0 && <b className="cbadge quiet">{team.length}</b>}</button>
+          onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
@@ -600,7 +604,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onRemoveQueued={(turn) => void queueAction(turn, 'session.dequeue')}
         onMoveQueued={moveQueued}
         onSendQueued={(turn) => void queueAction(turn, 'session.send-now')}
-        steers={session.engine === 'codex' || session.engine === 'claude'}
+        pendingLabel={messageDelivery(session.engine).pending}
         queueBusy={queueBusy}
         history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
       >

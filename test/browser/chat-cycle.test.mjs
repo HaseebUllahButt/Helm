@@ -17,7 +17,7 @@ before(async () => {
       const sessions = {
         laptop: [
           {...base,id:'same',title:'First',updatedAt:30},
-          {...base,id:'terminal',title:'Second',updatedAt:20,driver:undefined,nativeCli:true,pty:true,shared:true},
+          {...base,id:'terminal',title:'Second',updatedAt:20,driver:undefined,engine:'gemini',nativeCli:true,pty:true,shared:true},
           {...base,id:'idle',title:'Idle',status:'idle',updatedAt:100},
           {...base,id:'blocked',title:'Blocked',status:'blocked',updatedAt:100},
           {...base,id:'unknown',title:'Unknown',status:'unknown',updatedAt:100},

@@ -901,12 +901,16 @@ pre.snippet {
   display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
   padding: 0 4px 5px; font-size: var(--t-micro); color: var(--mutedfg);
 }
+.queued-head { display: flex; justify-content: space-between; align-items: center; }
+.queued-head button { font-size: var(--t-micro); color: var(--text-dim); }
+.queued-panel { max-height: 40vh; overflow-y: auto; }
 .queued-head b { font-weight: 600; color: var(--text-dim); }
 .queued-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 4px; }
 .queued-row + .queued-row { border-top: 1px solid var(--line); }
 .queued-sent { flex: none; font-size: var(--t-micro); color: var(--mutedfg); padding: 0 4px; }
 .queued-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queued-attachments { color: var(--mutedfg); font-size: var(--t-micro); }
+.queued-timing { display: block; color: var(--mutedfg); font-size: var(--t-micro); overflow: hidden; text-overflow: ellipsis; }
 .queued-row button { flex: none; font-size: var(--t-micro); font-weight: 550; color: var(--text-dim); min-height: 28px; padding: 0 4px; border-radius: var(--radius-sm); }
 @media (pointer: coarse) { .queued-row button { min-height: 36px; padding: 0 8px; } }
 .queued-row button:hover { color: var(--text); }
@@ -2315,6 +2319,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   margin: 0; padding: 12px 14px; max-height: none; box-shadow: none;
   border-radius: var(--radius-xl); border-bottom: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
 }
+/* Claude Code's own subagents: read-only cards beside Helm's tasks. */
+.native-badge {
+  display: inline-block; margin-right: 6px; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 999px;
+  font: 600 var(--t-micro) var(--sans); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim);
+}
+.native-activity summary { cursor: pointer; color: var(--mutedfg); font-size: var(--t-meta); }
+.native-activity ol { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; font: var(--t-micro) var(--mono); color: var(--text-dim); overflow-wrap: anywhere; }
 .delegation-follow { display: flex; gap: 8px; align-items: flex-end; margin: 0; }
 .delegation-follow textarea { flex: 1; min-width: 0; margin: 0; padding: 9px 10px; resize: vertical; }
 .delegation-follow button { width: auto; margin: 0; flex: none; }
