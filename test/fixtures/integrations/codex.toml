@@ -1,0 +1,15 @@
+model = "anything"
+[mcp_servers."remote.with-dot"]
+url = 'https://person:password@server.test/mcp?api_key=hidden#secret'
+enabled = false
+http_headers = { Authorization = "secret-header" }
+[mcp_servers.echo]
+command = "node"
+args = [
+  "-e", # inline comment
+  "console.log('secret-arg')",
+]
+[mcp_servers.echo.env]
+TOKEN = "secret-env"
+[plugins."example@market"]
+enabled = true

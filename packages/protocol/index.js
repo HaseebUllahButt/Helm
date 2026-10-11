@@ -134,6 +134,15 @@ export const M = {
   PROJECT_LIST: 'project.list',
   PROJECT_SAVE: 'project.save',
   PROJECT_REMOVE: 'project.remove',
+  // Account configuration stays on the selected machine; secret values never leave it.
+  INTEGRATIONS_LIST: 'integrations.list', // { profileId?, cwd? } -> { accounts[], catalog[] }
+  INTEGRATIONS_MCP_ADD: 'integrations.mcp.add', // { profileId, name, transport, scope, cwd?, url?, command?, args?, env?, headers? } -> { row }
+  INTEGRATIONS_MCP_REMOVE: 'integrations.mcp.remove', // { profileId, name, scope, cwd? } -> { ok }
+  INTEGRATIONS_MCP_CONNECT: 'integrations.mcp.connect', // { profileId, name, scope?, cwd? } -> { session, sessionId }
+  INTEGRATIONS_SKILLS_ADD: 'integrations.skills.add', // { source } -> { names[] }; shared across accounts
+  INTEGRATIONS_SKILLS_REMOVE: 'integrations.skills.remove', // { name, profileId?, folder? } -> { ok }; shared by default
+  INTEGRATIONS_PLUGINS_ADD: 'integrations.plugins.add', // { profileId, name, scope?, cwd? } -> { ok }
+  INTEGRATIONS_PLUGINS_REMOVE: 'integrations.plugins.remove', // { profileId, name, scope?, cwd? } -> { ok }
   PROFILE_LIST: 'profile.list',    // {} -> { profiles[] }
   AGENT_LIST: 'agent.list',        // { refresh?, models? } -> { agents[] } credential-free CLI capabilities
   PROFILE_DEFAULTS: 'profile.defaults', // { profileId, effort?, mode?, speed? } -> { defaults }

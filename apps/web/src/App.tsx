@@ -106,6 +106,7 @@ const ENGINE: Record<string, { label: string; cls: string }> = {
 const Terminal = lazy(() => import('./Terminal').then((m) => ({ default: m.Terminal })));
 const UsageView = lazy(() => import('./Usage').then((m) => ({ default: m.UsageView })));
 const UpdatesView = lazy(() => import('./Updates').then((m) => ({ default: m.UpdatesView })));
+const IntegrationsView = lazy(() => import('./Integrations').then((m) => ({ default: m.IntegrationsView })));
 const TransferView = lazy(() => import('./Transfer').then((m) => ({ default: m.TransferView })));
 const VerifyView = lazy(() => import('./Transfer').then((m) => ({ default: m.VerifyView })));
 const AppearanceSettings = lazy(() => import('./AppearanceSettings').then((m) => ({ default: m.AppearanceSettings })));
@@ -301,6 +302,7 @@ export function App() {
 
 type MainView =
   | { kind: 'env' }
+  | { kind: 'integrations' }
   // Every machine summed, or one machine's own scope. Same screen, same
   // facets - the question is the same, only the scope changes.
   | { kind: 'usage'; envId?: string }
@@ -815,6 +817,7 @@ function Shell({ client, conn, onSignOut }: {
           id: `new:${e.id}`, group: 'action', title: `New chat on ${e.name}`, keywords: 'start create agent session',
           run: () => setNewChat({ envId: e.id }),
         });
+        items.push({ id: `integrations:${e.id}`, group: 'action', title: `Connectors & skills on ${e.name}`, keywords: 'mcp servers plugins integrations', run: () => navigate([{ kind: 'env' }, { kind: 'integrations' }], e.id) });
         items.push({
           id: `send:${e.id}`, group: 'action', title: `Send a project from ${e.name}`,
           keywords: 'transfer env copy move folder', run: () => navigate([{ kind: 'env' }, { kind: 'transfer-browse' }], e.id),
@@ -1475,6 +1478,7 @@ function Shell({ client, conn, onSignOut }: {
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
             onNewSession={() => push({ kind: 'new' })}
             onAddProject={() => push({ kind: 'browse' })}
+            onIntegrations={() => push({ kind: 'integrations' })}
             onSendProject={(cwd) => push(cwd ? { kind: 'transfer', cwd } : { kind: 'transfer-browse' })}
             onCheckProject={(path) => push({ kind: 'verify', path })}
             onStart={(cwd) => push({ kind: 'start', cwd })}
@@ -1483,6 +1487,10 @@ function Shell({ client, conn, onSignOut }: {
             onMedia={() => push({ kind: 'media' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
           />
+        ) : view.kind === 'integrations' ? (
+          <Suspense fallback={<ViewLoading title="Connectors & skills" onBack={back} />}>
+            <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
+          </Suspense>
         ) : view.kind === 'media' ? (
           <MediaView key={env.id} client={client} env={env} onBack={back} />
         ) : view.kind === 'settings' ? (
@@ -2333,12 +2341,13 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   );
 }
 
-function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming, isSnoozed = () => false }: {
+function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming, isSnoozed = () => false }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[];
   isSnoozed?: (session: Session) => boolean;
   /** What this machine last said it was running, while it cannot be asked. */
   remembered?: Session[]; rememberedAt?: number;
   reload: () => void; onBack: () => void; onNewSession: () => void; onAddProject: () => void;
+  onIntegrations: () => void;
   onSendProject: (cwd?: string) => void; onCheckProject: (path: string) => void;
   onStart: (cwd: string) => void;
   onSettings: () => void;
@@ -2693,6 +2702,8 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             <Icon name="transfer" size={16} /><span>Send a project</span>
           </button>
         </div>
+
+        <button className="row" disabled={!env.online} onClick={onIntegrations}><span className="grow"><span className="rt">Connectors &amp; skills</span><span className="rm">Manage agent connections, skills and plugins</span></span></button>
 
         {searchable && (
           <div className="filterbar">

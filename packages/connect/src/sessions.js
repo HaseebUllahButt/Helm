@@ -1338,6 +1338,14 @@ export class Sessions extends EventEmitter {
     return `Terminal ${highest + 1}`;
   }
 
+  /** Account credentials travel in the new terminal's environment, never its input log. */
+  async integrationTerminal({ cwd, title, env, command }) {
+    if (!await this.terminals.ensure()) throw new Error('Sign-in needs terminal support on this machine. Open the CLI locally to sign in.');
+    const session = await this.#startTerminal({ dir: expand(cwd), profileId: 'shell', title, env });
+    await this.input(session.id, `${command}\r`, { raw: true });
+    return session;
+  }
+
   async #startTerminal({ dir, profileId, title, env, parent = null, originHandoffId = null }) {
     const session = {
       id: randomBytes(6).toString('hex'),
