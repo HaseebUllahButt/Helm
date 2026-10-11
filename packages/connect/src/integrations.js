@@ -81,7 +81,13 @@ const supported = (profile) => ['claude', 'codex'].includes(profile.engine);
 function account(profile) {
   const spec = materialize(profile), engine = ENGINES[profile.engine];
   const home = expand(spec.env[engine?.homeEnv] || engine?.defaultHome || '~');
+  // The daemon may itself run inside a chat whose environment names another
+  // account's home (a Helm session carries CLAUDE_CONFIG_DIR). Only this
+  // profile's own choice of home reaches its CLI.
   const env = { ...process.env, ...spec.env };
+  for (const other of new Set(Object.values(ENGINES).map((e) => e.homeEnv).filter(Boolean))) {
+    if (other !== engine?.homeEnv && !(other in (spec.env ?? {}))) delete env[other];
+  }
   if (engine?.homeEnv) {
     // Setting Claude's default directory explicitly changes its JSON path.
     if (profile.engine === 'claude' && !spec.env[engine.homeEnv]) delete env[engine.homeEnv];
