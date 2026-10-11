@@ -14,8 +14,8 @@
  * only editable fields are a machine's own self-description and an explicit
  * revocation - neither of which two people race on.
  */
-import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch, realpathSync, renameSync } from 'node:fs';
+import { join, resolve, dirname, basename } from 'node:path';
 import { hostname, homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
 import {
@@ -28,18 +28,63 @@ import {
 export const HELM_DIR = process.env.HELM_DIR || join(homedir(), '.helm');
 export const NETWORK_FILE = join(HELM_DIR, 'network.json');
 
-const write = (net) => {
+// Compare the actual directories too: a symlink to ~/.helm is still production.
+const canonicalDirectory = (directory) => {
+  const path = resolve(directory);
+  try { return realpathSync(path); } catch {
+    try { return join(realpathSync(dirname(path)), basename(path)); } catch { return path; }
+  }
+};
+const productionDirectory = () => canonicalDirectory(join(homedir(), '.helm'));
+const isProductionDirectory = () => canonicalDirectory(HELM_DIR) === productionDirectory();
+
+const assertWritableDirectory = () => {
+  if (!isProductionDirectory()) return;
+  if (process.env.NODE_TEST_CONTEXT) {
+    throw new Error('Tests cannot write the production Helm registration. Set HELM_DIR to a temporary directory before importing Helm modules.');
+  }
+  if (process.env.HELM_DIR && canonicalDirectory(process.env.HELM_DIR) !== canonicalDirectory(HELM_DIR)) {
+    throw new Error('HELM_DIR changed after Helm was imported; refusing to write the production registration. Set HELM_DIR before importing Helm modules.');
+  }
+};
+
+const write = (net, { joining = false } = {}) => {
+  assertWritableDirectory();
+  if (isProductionDirectory()) {
+    const existing = loadNetwork();
+    const provisionalJoin = joining && existing?.provisional
+      && Object.keys(existing.machines ?? {}).length === 1;
+    if (existing && !provisionalJoin
+        && (existing.id !== net.id || existing.self !== net.self || existing.key !== net.key)) {
+      throw new Error('This machine already has a Helm registration; refusing to replace its network or machine identity. Use a temporary HELM_DIR for tests.');
+    }
+  }
   mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
   chmodSync(HELM_DIR, 0o700);
   // 0600: the file contains the network key, which is the whole ballgame.
-  writeFileSync(NETWORK_FILE, JSON.stringify(net, null, 2), { mode: 0o600 });
-  chmodSync(NETWORK_FILE, 0o600);
+  // Readers must see the complete old or new registration, never a truncated
+  // file that looks like an unregistered machine during a daemon restart.
+  const temporary = `${NETWORK_FILE}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    writeFileSync(temporary, JSON.stringify(net, null, 2), { mode: 0o600, flag: 'wx' });
+    renameSync(temporary, NETWORK_FILE);
+  } finally { rmSync(temporary, { force: true }); }
   return net;
 };
 
 export function loadNetwork() {
   if (!existsSync(NETWORK_FILE)) return null;
-  try { return JSON.parse(readFileSync(NETWORK_FILE, 'utf8')); } catch { return null; }
+  try {
+    const net = JSON.parse(readFileSync(NETWORK_FILE, 'utf8'));
+    if (isProductionDirectory() && (!net || typeof net.id !== 'string'
+        || typeof net.self !== 'string' || typeof net.key !== 'string')) throw new Error();
+    return net;
+  } catch {
+    if (isProductionDirectory()) {
+      throw new Error('The existing Helm registration cannot be read. Restore network.json from a backup; it will not be replaced with a new network.');
+    }
+    return null;
+  }
 }
 
 const LOCAL_KEY_FILE = join(HELM_DIR, 'local.key');
@@ -54,6 +99,7 @@ const LOCAL_KEY_FILE = join(HELM_DIR, 'local.key');
  * anyone who can read it can already read the network key sitting beside it.
  */
 export function localKey() {
+  assertWritableDirectory();
   mkdirSync(HELM_DIR, { recursive: true, mode: 0o700 });
   chmodSync(HELM_DIR, 0o700);
   if (existsSync(LOCAL_KEY_FILE)) {
@@ -172,10 +218,11 @@ export function joinNetwork({ id, key, name = hostname(), port = 8787, machines 
     },
     devices: given.devices,
     revoked: given.revoked,
-  });
+  }, { joining: true });
 }
 
 export function forgetNetwork() {
+  assertWritableDirectory();
   rmSync(NETWORK_FILE, { force: true });
 }
 

@@ -11,8 +11,11 @@
 set -u
 unset HELM_TERMINALS_SOCKET HELM_PROCS_SOCKET
 cd "$(dirname "$0")/.."
-S="${TMPDIR:-/tmp}/helm-test-$$"
-rm -rf "$S"; mkdir -p "$S/A" "$S/B"
+S="$(mktemp -d "${TMPDIR:-/tmp}/helm-test-XXXXXX")"
+mkdir -p "$S/A" "$S/B"
+# Test daemons reconcile SSH peers too. Those files and service operations
+# must stay inside the fixture, even when the suite runs on a live machine.
+export HELM_SSH_DIR="$S/ssh" HELM_NO_SERVICE=1
 APID=
 BPID=
 cleanup() {
