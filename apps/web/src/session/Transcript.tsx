@@ -662,6 +662,10 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
     let k = pre.length - 1;
     while (k >= 0 && !(pre[k].kind === 'text' && pre[k].text)) k -= 1;
     if (k >= 0) { answer = [pre[k], ...answer]; pre = [...pre.slice(0, k), ...pre.slice(k + 1)]; }
+    // A long chat keeps only its latest part, so an old turn can lose its
+    // words and keep just a helper's card. Folding that away left an empty
+    // "Worked for" row: show what is left instead.
+    else if (d.status === 'ok') { answer = [...pre, ...answer]; pre = []; }
   }
   const work = pre.filter((it) => !isApart(it));
   const outside = pre.filter(isApart);

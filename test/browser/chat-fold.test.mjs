@@ -38,6 +38,9 @@ before(async () => {
         text('said', 'Everything checks out.'),
         step('h1', { kind: 'subagent', name: 'Agent', input: { description: 'Look around' }, agent: { status: 'completed' } }),
       ] }],
+      wordsTrimmed: () => [{ id: 't1', text: 'Do it all', at: t0, done: { status: 'ok', durationMs: 96000 }, items: [
+        step('h1', { kind: 'subagent', name: 'Agent', input: { description: 'Rework the sidebar' }, agent: { status: 'completed' } }),
+      ] }],
       onlyText: () => [{ id: 't1', text: 'Hello', at: t0, done: { status: 'ok', durationMs: 2000 }, items: [text('x', 'Hi there.')] }],
       failed: () => [{ id: 't1', text: 'Go', at: t0, done: { status: 'error', error: 'boom' }, items: [
         step('r1', { kind: 'tool', name: 'Read', input: { file_path: '/repo/a.ts' }, output: 'x' }),
@@ -165,6 +168,13 @@ test("a terminal chat that files a helper after the reply still shows the reply 
   await page.evaluate(() => window.show('helperAfter'));
   await page.locator('.work-head').waitFor();
   assert.equal((await page.locator('.final').innerText()).trim(), 'Everything checks out.');
+});
+
+test('an old turn that lost its words shows its helpers, not an empty fold', async (t) => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.show('wordsTrimmed'));
+  await page.getByText('Rework the sidebar').first().waitFor();
+  assert.equal(await page.locator('.work-head').count(), 0);
 });
 
 test('a turn that is only words has no divider; an error stays outside the fold', async (t) => {
