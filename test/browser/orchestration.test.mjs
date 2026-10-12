@@ -97,7 +97,7 @@ async function pageFor(context, width = 1280) {
 test('composer selects thread references and sends without a delivery selector', async (context) => {
   const page = await pageFor(context, 390);
   await page.evaluate(() => window.showComposer());
-  const input = page.getByPlaceholder('Message Claude…');
+  const input = page.getByLabel('Message Claude', {exact:true});
   await input.fill('Check @des');
   await page.getByRole('listbox', { name: 'Attach thread context' }).waitFor();
   await input.press('Enter');
@@ -135,7 +135,7 @@ test('waiting messages say when the CLI reads them, and Send now is offered on e
 test('pasted images are labelled where the cursor was and renumbered when one goes', async (context) => {
   const page = await pageFor(context, 390);
   await page.evaluate(() => window.showImages());
-  const input = page.getByPlaceholder('Message Claude…');
+  const input = page.getByLabel('Message Claude', {exact:true});
   await input.click();
   await input.press('End');
   const paste = (names) => page.evaluate((names) => {

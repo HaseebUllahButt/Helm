@@ -116,7 +116,7 @@ test('main task click opens the full child conversation and Back returns to its 
       await view.locator('.turn.user .bubble').filter({hasText:'child original request'}).waitFor();
       await view.getByText('child full conversation response', {exact:true}).waitFor();
       assert.equal(await view.getByText('parent full conversation response', {exact:true}).count(), 0);
-      await view.getByPlaceholder('Message Codex…').fill('Continue the child task');
+      await view.getByLabel('Message Codex', {exact:true}).fill('Continue the child task');
       await view.getByRole('button', {name:'send',exact:true}).click();
       await view.waitForFunction(() => window.calls.some(c=>c.method==='session.input'&&c.params.id==='child'));
       assert.equal(await view.evaluate(() => window.calls.some(c=>c.method==='session.delegation-result')), false);

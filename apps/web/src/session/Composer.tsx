@@ -10,6 +10,20 @@ const fmtSeconds = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padSta
 /** A phone: no hardware keyboard to type into straight away, no Shift+Enter. */
 const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 
+/** A narrow screen: one line of placeholder is all the box has room for. */
+function useNarrow() {
+  const query = '(max-width: 599px)';
+  const [narrow, setNarrow] = useState(() => typeof matchMedia === 'function' && matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const list = matchMedia(query);
+    const change = () => setNarrow(list.matches);
+    list.addEventListener('change', change);
+    return () => list.removeEventListener('change', change);
+  }, []);
+  return narrow;
+}
+
 export const QUICK: { label: string; key: string }[] = [
   { label: 'yes', key: 'y' }, { label: 'no', key: 'n' },
   { label: 'enter', key: 'Enter' }, { label: 'esc', key: 'Escape' },
@@ -44,8 +58,14 @@ function CompactingBar({ since }: { since?: number }) {
   );
 }
 
-export function Composer({ compacting, draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, pendingLabel = 'After current response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
+export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, onSend, onKey, onStop, waiting, working, engine, keys: withKeys = true, foot, statusLine, danger, children, onAttach, attachments, onRemoveAttachment, canAttach = true, preparing = false, onAttachUnsupported, commands, history = [], queued = [], onWithdrawQueued, pendingLabel = 'After current response', queueBusy, onTranscribe, onEditQueued, onRemoveQueued, onMoveQueued, onSendQueued, referenceOptions = [], references = [], onReference, onRemoveReference }: {
   draft: string; setDraft: (v: string) => void; onSend: () => void;
+  /** The agent's pending question or approval, as the top of the card. */
+  banner?: React.ReactNode;
+  /** A tab tucked behind the card's top edge, such as the task list. */
+  shoulder?: React.ReactNode;
+  /** What is waiting on you, so the box can say what typing here would do. */
+  ask?: 'question' | 'approval';
   onKey?: (k: string) => void; onStop?: () => void;
   waiting?: boolean; working?: boolean; engine: string; keys?: boolean;
   foot?: React.ReactNode; statusLine?: React.ReactNode; danger?: boolean;
@@ -112,6 +132,12 @@ export function Composer({ compacting, draft, setDraft, onSend, onKey, onStop, w
     ref.current?.focus();
   };
   useEffect(() => { setReferencePick(0); }, [draft]);
+  const narrow = useNarrow();
+  const hints = [onReference && referenceOptions.length ? (narrow ? '@ chats' : '@ to attach a chat') : '', commands?.length ? (narrow ? '/ commands' : '/ for commands') : ''].filter(Boolean);
+  const placeholder = ask === 'question' ? (narrow ? 'Answer above, or type your own' : 'Answer the question above, or type your own answer')
+    : ask === 'approval' ? (narrow ? 'Decide above, or reply instead' : 'Decide above, or tell the agent what to do instead')
+    : waiting ? 'Reply to the agent…'
+    : ['Ask anything', ...hints].join(', ');
   const historyAt = useRef<number | null>(null);
   const historyDraft = useRef('');
   const paletteRef = useRef<HTMLDivElement>(null);
@@ -299,12 +325,14 @@ export function Composer({ compacting, draft, setDraft, onSend, onKey, onStop, w
             </span>
           </div>
         )}
+        {shoulder}
         <div
           className={`slab${danger ? ' danger' : ''}${dragging ? ' dropping' : ''}`}
           onDragOver={(e) => { if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) { e.preventDefault(); setDragging(true); } }}
           onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
           onDrop={(e) => { setDragging(false); if (take(e.dataTransfer?.files)) e.preventDefault(); }}
         >
+          {banner}
           {!!referenceMatches.length && <div className="palette" role="listbox" aria-label="Attach thread context">
             {referenceMatches.map((item, index) => <button key={item.id} role="option" aria-selected={index === referencePick} onClick={() => addReference(item.id)} onMouseEnter={() => setReferencePick(index)}><span>@{item.title}</span><small>Attach context</small></button>)}
           </div>}
@@ -379,7 +407,7 @@ export function Composer({ compacting, draft, setDraft, onSend, onKey, onStop, w
           <textarea
             ref={ref} rows={1} value={draft} autoFocus={!touch}
             enterKeyHint={touch ? 'enter' : 'send'}
-            placeholder={waiting ? 'Reply to the agent…' : `Message ${engine}…`}
+            placeholder={placeholder} aria-label={`Message ${engine}`} data-composer=""
             onChange={(e) => { historyAt.current = null; setDraft(e.target.value); }}
             onPaste={(e) => {
               if (take(clipboardImages(e.clipboardData))) { e.preventDefault(); return; }
@@ -484,13 +512,15 @@ export function Composer({ compacting, draft, setDraft, onSend, onKey, onStop, w
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           </div>
-          {statusLine && <div className="slab-status">{statusLine}</div>}
           {keys && withKeys && onKey && (
             <div className="keys">
               {QUICK.map((q) => <button key={q.key} onClick={() => onKey(q.key)}>{q.label}</button>)}
             </div>
           )}
         </div>
+        {/* Under the card, not in it: what the plan has left is not part of
+            what you are writing. */}
+        {statusLine && <div className="slab-status">{statusLine}</div>}
       </div>
     </div>
   );
