@@ -764,16 +764,16 @@ test('Claude reports context from the last top-level reply, sized by the compact
   // A helper's reply is not the conversation.
   reply({ input_tokens: 1, output_tokens: 1 }, { parent_tool_use_id: 'toolu_helper' });
   result();
-  assert.deepEqual(log.of('context'), [{ type: 'context', used: 105_510, window: 383_000 }]);
+  assert.deepEqual(log.of('context'), [{ type: 'context', used: 105_510, window: 383_000, full: 1_000_000, model: 'claude-opus-5-5' }]);
   reply({ input_tokens: 20, cache_read_input_tokens: 140_000, cache_creation_input_tokens: 8_000, output_tokens: 480 });
-  assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 148_500, window: 383_000 });
+  assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 148_500, window: 383_000, full: 1_000_000, model: 'claude-opus-5-5' });
 });
 
 test('Claude uses the model window when settings say nothing', async (t) => {
   const { log, reply, result } = await contextFeed(t, { modelUsage: { 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } } });
   reply({ input_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 20_000, output_tokens: 10 });
   result();
-  assert.deepEqual(log.of('context'), [{ type: 'context', used: 20_015, window: 1_000_000 }]);
+  assert.deepEqual(log.of('context'), [{ type: 'context', used: 20_015, window: 1_000_000, full: 1_000_000, model: 'claude-opus-5-5' }]);
 });
 
 test('a larger window in settings never grows the model window, and a dated model id still matches', async (t) => {
@@ -783,7 +783,7 @@ test('a larger window in settings never grows the model window, and a dated mode
   });
   reply({ input_tokens: 1_000, output_tokens: 0 }, { message: { model: 'claude-haiku-4-5-20251001', content: [], usage: { input_tokens: 1_000, output_tokens: 0 } } });
   result();
-  assert.deepEqual(log.of('context'), [{ type: 'context', used: 1_000, window: 200_000 }]);
+  assert.deepEqual(log.of('context'), [{ type: 'context', used: 1_000, window: 200_000, full: 200_000, model: 'claude-haiku-4-5' }]);
 });
 
 test('a dated model id takes the compaction window written for its short name', async (t) => {
@@ -793,5 +793,5 @@ test('a dated model id takes the compaction window written for its short name', 
   });
   reply({ input_tokens: 1_000, output_tokens: 0 }, { message: { model: 'claude-haiku-4-5-20251001', content: [], usage: { input_tokens: 1_000, output_tokens: 0 } } });
   result();
-  assert.deepEqual(log.of('context'), [{ type: 'context', used: 1_000, window: 99_000 }]);
+  assert.deepEqual(log.of('context'), [{ type: 'context', used: 1_000, window: 99_000, full: 200_000, model: 'claude-haiku-4-5' }]);
 });

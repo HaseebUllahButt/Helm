@@ -12,7 +12,7 @@ import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { Controls, trayPrefs, type Kind } from './session/Controls';
 import { LimitsLine } from './session/LimitsLine';
-import { ContextMeter } from './session/ContextMeter';
+import { ContextLimit } from './session/ContextLimit';
 import { useAccountLimits } from './session/useAccountLimits';
 import { nativeConversation } from './session/nativeView';
 import { CompactionLine } from './session/Transcript';
@@ -1592,7 +1592,7 @@ function Shell({ client, conn, onSignOut }: {
         ) : (view.session.driver || (sessions[env.id] ?? []).find((s) => s.id === view.session.id)?.driver) ? (
           <DrivenSession
             key={`${env.id}:${view.session.id}`}
-            client={client} env={env} conn={conn} onTranscribe={transcribeVia(env.id)} reviewChildren={view.reviewChildren}
+            client={client} env={env} machines={envs} conn={conn} onTranscribe={transcribeVia(env.id)} reviewChildren={view.reviewChildren}
             onSendTask={view.session.quick ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
@@ -1606,7 +1606,7 @@ function Shell({ client, conn, onSignOut }: {
         ) : (
           <SessionView
             key={`${env.id}:${view.session.id}`}
-            client={client} env={env} onTranscribe={transcribeVia(env.id)}
+            client={client} env={env} machines={envs} onTranscribe={transcribeVia(env.id)}
             onSendTask={view.session.quick ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             terminals={(sessions[env.id] ?? []).filter(ownTerminal).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))}
@@ -4532,8 +4532,10 @@ function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask }: {
+function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask }: {
   client: Client; env: Environment; session: Session;
+  /** Every machine, for settings that belong to the account. */
+  machines?: Environment[];
   onSendTask?: () => void;
   /** This machine's open terminals, for the tabs above one. */
   terminals?: Session[];
@@ -4908,7 +4910,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           keys={!session.nativeChat} preparing={sending || preparingImages || loadingImages || savingImages}
           commands={session.nativeCli ? nativeCommands : undefined}
           foot={session.nativeCli ? nativeControls.chips : undefined}
-          statusLine={nativeProfile || limits.length || session.context ? <LimitsLine windows={limits} account={nativeProfile || undefined} context={session.context && <ContextMeter used={session.context.used} window={session.context.window} />} /> : undefined}
+          statusLine={nativeProfile || limits.length || session.context ? <LimitsLine windows={limits} account={nativeProfile || undefined} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined}
           compacting={compacting || undefined}
           onAttach={session.nativeChat ? attachImages : undefined} attachments={images}
           onRemoveAttachment={index => setImages(current => current.filter((_, i) => i !== index))}

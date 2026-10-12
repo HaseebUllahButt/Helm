@@ -92,7 +92,7 @@ export interface Session {
   nativeCards?: NativeAgent[];
   recovery?: { kind: 'limited' | 'error' | 'interrupted' | 'restart'; message: string; at: number };
   /** How full the conversation's context is after its latest reply (Claude, Codex). */
-  context?: { used: number; window: number; at: number };
+  context?: { used: number; window: number; at: number; /** The model that replied (`claude-opus-5-5`). */ model?: string; /** The model's whole window, before the account's "compact at" size cuts it down. */ full?: number };
   lastUsage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputIncludesCache?: boolean; at: number; model?: string };
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;

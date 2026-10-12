@@ -1281,6 +1281,9 @@ export class CodexDriver extends Driver {
         // The latest call is what the conversation weighs right now.
         const last = p.tokenUsage?.last, window = p.tokenUsage?.modelContextWindow;
         const used = last?.totalTokens ?? ((last?.inputTokens ?? 0) + (last?.outputTokens ?? 0));
+        // Codex has no "compact at" size to choose here yet (its own
+        // auto-compact limit lives in config.toml), so no model/full: the
+        // app shows the meter without the menu.
         if (used > 0 && window > 0) this.push('context', { used, window });
         return;
       }

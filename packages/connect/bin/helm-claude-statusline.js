@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 // Capture only Claude's native quota windows; preserve the owner's status line verbatim.
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { sendHook } from '../src/claude-hooks.js';
+import { bareModel, compactWindow, configDir } from '../src/context-limit.js';
 let input = '';
 
 /**
@@ -14,16 +12,12 @@ let input = '';
 function contextFrom(state) {
   const c = state.context_window;
   const used = (c?.total_input_tokens ?? 0) + (c?.total_output_tokens ?? 0);
-  let window = c?.context_window_size;
-  if (!(used > 0) || !(window > 0)) return null;
-  try {
-    const dir = (process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')).replace(/^~(?=\/|$)/, homedir());
-    const bare = id => String(id).toLowerCase().replace(/\[.*\]$/, '').replace(/-\d{8}$/, '');
-    const settings = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).modelSettings ?? {};
-    const compact = Object.entries(settings).find(([id]) => bare(id) === bare(state.model?.id))?.[1]?.autoCompactWindow;
-    if (compact > 0 && compact < window) window = compact;
-  } catch { /* no settings: the model's own window */ }
-  return { used, window };
+  const full = c?.context_window_size;
+  if (!(used > 0) || !(full > 0)) return null;
+  let window = full;
+  const compact = state.model?.id ? compactWindow(configDir(process.env), state.model.id) : null;
+  if (compact > 0 && compact < window) window = compact;
+  return { used, window, full, model: state.model?.id ? bareModel(state.model.id) : undefined };
 }
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => { input += chunk; });

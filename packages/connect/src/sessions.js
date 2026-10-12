@@ -456,9 +456,14 @@ export class Sessions extends EventEmitter {
    * a person, and when it is done.
    */
   /** How full a conversation is: kept on its record, sent to clients as a session update. */
-  #setContext(s, used, window) {
-    if (!(used > 0) || !(window > 0) || (s.context?.used === used && s.context?.window === window)) return false;
-    s.context = { used, window, at: Date.now() };
+  #setContext(s, used, window, model, full) {
+    if (!(used > 0) || !(window > 0)) return false;
+    // `full` is the model's whole window: the menu's "Full" option, and what "Compact at" can never exceed.
+    full = full > 0 ? full : undefined;
+    model = typeof model === 'string' && model ? model : undefined;
+    const was = s.context;
+    if (was?.used === used && was?.window === window && was?.model === model && was?.full === full) return false;
+    s.context = { used, window, ...(model && { model }), ...(full && { full }), at: Date.now() };
     if (this.#index.has(s.id)) this.emit('session', s);
     return true;
   }
@@ -486,7 +491,7 @@ export class Sessions extends EventEmitter {
     // driven one reports it from its replies instead.
     if (name === 'HelmContext') {
       reply(null);
-      this.#setContext(s, event.used, event.window);
+      this.#setContext(s, event.used, event.window, event.model, event.full);
       return;
     }
     if (name === 'HelmUsage') {
@@ -1926,7 +1931,7 @@ export class Sessions extends EventEmitter {
     // in it: kept on the record (written out when the turn ends, with the
     // rest) and sent to clients as a session update.
     if (e.type === 'context') {
-      this.#setContext(s, e.used, e.window);
+      this.#setContext(s, e.used, e.window, e.model, e.full);
       return;
     }
     if (e.type === 'status') {

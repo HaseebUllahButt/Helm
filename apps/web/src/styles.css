@@ -2898,3 +2898,16 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .ctx-meter.bad .ctx-ring { stroke: var(--red); } .ctx-meter.bad .ctx-pct { color: var(--red); }
 /* Room on a wide screen for the numbers; a phone keeps the ring and the percent. */
 @media (min-width: 601px) { .ctx-detail { display: inline; } }
+
+/* "Compact at": the meter is a button, and its menu opens upward from the row under the composer. */
+.ctx-slot { position: relative; display: inline-flex; margin-left: auto; flex: none; }
+.ctx-slot .ctx-meter { margin-left: 0; }
+.ctx-meter.press { margin: -3px -6px; padding: 3px 6px; border-radius: var(--radius-md); cursor: pointer; }
+.ctx-meter.press:hover, .ctx-meter.press[aria-expanded="true"] { background: var(--accent); }
+.ctx-menu { top: auto; bottom: calc(100% + 8px); right: -6px; min-width: 210px; max-width: calc(100vw - 24px); padding: 5px; }
+.ctx-menu.down { bottom: auto; top: calc(100% + 8px); }
+.ctx-menu-title { padding: 5px 10px 4px; font-size: var(--t-meta); color: var(--mutedfg); }
+.ctx-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ctx-menu button .check { display: inline-flex; color: var(--primary-q); }
+.ctx-menu-note { display: grid; gap: 2px; padding: 6px 10px 4px; margin-top: 3px; border-top: 1px solid var(--line); font-size: var(--t-meta); color: var(--mutedfg); line-height: 1.4; white-space: normal; }
+.ctx-menu-note .warn { color: var(--amber-text); }

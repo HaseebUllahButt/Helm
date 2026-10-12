@@ -22,6 +22,7 @@ import { nativeClaudeAccount, nativeAccount } from './native-account.js';
 import { readProcess } from './takeover.js';
 import { usableProfiles, authStatuses } from './auth.js';
 import { listCommands } from './commands.js';
+import { contextLimit } from './context-limit.js';
 import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
@@ -1596,6 +1597,8 @@ export class Daemon {
           effortFavs: pickerPrefs().favs[`${profile.engine}-effort`] ?? [],
         };
       }
+
+      case M.CONTEXT_LIMIT: return contextLimit(await getProfiles(), p);
 
       case M.PICKER_PREFS: return { ok: true, picker: savePickerPrefs(p) };
 

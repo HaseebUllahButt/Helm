@@ -1,11 +1,9 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { Driver, checkVersion, assertFolder } from './index.js';
 import { modeFor } from '../modes.js';
 import { nonAgentClaudeTask } from '../claude-tasks.js';
+import { bareModel, compactWindow, configDir } from '../context-limit.js';
 
 // Messages that mean the CLI is working: outside a turn, a turn it began itself.
 // A bare `result` is not one: a result with no work before it is the last
@@ -117,9 +115,9 @@ export class ClaudeDriver extends Driver {
   /** How full the conversation is after the latest top-level reply, and the size it counts against. */
   #contextUsed = null;
   #contextWindow = null;
+  /** The model's whole window, before the account's compaction size cuts it down. */
+  #contextFull = null;
   #contextModel = null;
-  /** The account's `modelSettings` from settings.json, read once. */
-  #modelSettings;
   /** The last message sent as a new turn, for an answer that never echoes it. */
   #lastSent = '';
   /** request_id -> resolve, for control requests we sent */
@@ -780,7 +778,7 @@ export class ClaudeDriver extends Driver {
 
   /** Tell the thread how full its context is, once the size is known. */
   #pushContext() {
-    if (this.#contextUsed && this.#contextWindow) this.push('context', { used: this.#contextUsed, window: this.#contextWindow });
+    if (this.#contextUsed && this.#contextWindow) this.push('context', { used: this.#contextUsed, window: this.#contextWindow, full: this.#contextFull, model: bareModel(this.#contextModel ?? '') || undefined });
   }
 
   /**
@@ -790,20 +788,13 @@ export class ClaudeDriver extends Driver {
    */
   #windowFrom(m) {
     // A helper on another model is listed too; ours is the one that replied.
-    const bare = (id) => String(id).toLowerCase().replace(/\[.*\]$/, '').replace(/-\d{8}$/, '');
     const used = Object.entries(m.modelUsage ?? {}).filter(([, v]) => v?.contextWindow);
-    const [model, usage] = used.find(([id]) => this.#contextModel && bare(id) === bare(this.#contextModel)) ?? used[0] ?? [];
+    const [model, usage] = used.find(([id]) => this.#contextModel && bareModel(id) === bareModel(this.#contextModel)) ?? used[0] ?? [];
     if (!usage) return;
-    this.#contextWindow = usage.contextWindow;
-    if (this.#modelSettings === undefined) {
-      try {
-        const dir = (this.env?.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || '~/.claude').replace(/^~(?=\/|$)/, homedir());
-        this.#modelSettings = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).modelSettings ?? null;
-      } catch { this.#modelSettings = null; }
-    }
-    // `claude-opus-5-5[1m]` and `claude-haiku-4-5-20251001` are the settings' `claude-opus-5-5` and `claude-haiku-4-5`.
-    const entry = Object.entries(this.#modelSettings ?? {}).find(([id]) => bare(id) === bare(model));
-    const compact = entry?.[1]?.autoCompactWindow;
+    this.#contextWindow = this.#contextFull = usage.contextWindow;
+    // Read again whenever the file changed, so a new size chosen in the app
+    // applies from this reply on.
+    const compact = compactWindow(configDir(this.env), model);
     if (compact > 0 && compact < this.#contextWindow) this.#contextWindow = compact;
   }
 
