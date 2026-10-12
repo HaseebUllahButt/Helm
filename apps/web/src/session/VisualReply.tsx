@@ -33,7 +33,7 @@ function VisualFrame({ html, title, height = 420, expanded = false, onEscape }: 
     window.addEventListener('message', receive);
     return () => { observer.disconnect(); window.removeEventListener('message', receive); };
   }, [token]);
-  return <iframe ref={ref} className="visual-frame" title={title} srcDoc={doc} sandbox="allow-scripts" referrerPolicy="no-referrer" style={expanded ? undefined : { height: measured }} />;
+  return <iframe key={html} ref={ref} className="visual-frame" title={title} src="/helm/visual-frame" onLoad={() => ref.current?.contentWindow?.postMessage({ type: 'helm.visual.load', html: doc }, '*')} sandbox="allow-scripts" referrerPolicy="no-referrer" style={expanded ? undefined : { height: measured }} />;
 }
 
 function VisualDialog({ html, visual, source, onClose, onSave }: { html: string; visual: Visual; source: boolean; onClose: () => void; onSave: () => void }) {

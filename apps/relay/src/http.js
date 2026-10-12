@@ -353,7 +353,7 @@ function announceNewDevice(device) {
 // These calls return snapshots. Mutations must use the live, acknowledged
 // transport so a reconnect/hedge can never submit an action twice.
 const HTTP_READ_METHODS = new Set([
-  'session.events', 'session.messages', 'session.list', 'session.commands',
+  'session.events', 'session.messages', 'session.visual', 'session.list', 'session.commands',
   'model.list', 'env.info', 'session.watch', 'session.unwatch',
   'project.list',
 ]);

@@ -1,3 +1,21 @@
+export const VISUAL_POLICY = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: https:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+
+/** A real document avoids inheriting the app's script-src policy via srcdoc. */
+function loadVisual() {
+  const receive = event => {
+    if (event.source !== parent || event.data?.type !== 'helm.visual.load' || typeof event.data.html !== 'string') return;
+    removeEventListener('message', receive);
+    document.open();
+    document.write(event.data.html);
+    document.close();
+  };
+  addEventListener('message', receive);
+}
+
+export function visualHostDocument() {
+  return `<!doctype html><html><head><meta charset="utf-8"></head><body><script>(${loadVisual.toString()})()</script></body></html>`;
+}
+
 /** Runs inside the opaque iframe; keep it independent of this module. */
 function bootVisual(config) {
   const apply = theme => {
@@ -36,8 +54,7 @@ function bootVisual(config) {
 /** The same isolated document is used by the chat and the screenshot preview. */
 export function visualDocument(html, { token = '', theme = {} } = {}) {
   const values = JSON.stringify({ token, theme }).replace(/</g, '\\u003c');
-  const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob: https:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
-  const boot = `<meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"><style>:root{color-scheme:dark;--bg:#14161b;--card:#1b1e24;--raised:#242831;--mutedfg:#9ba2b1;--primary-q:#8590ff;--amber:#e8b23f;--amber-text:#e8b23f;--sky:#8ec6e8;--emerald:#9bc9b6;--red:#e88a8a;--text:#e8eaef;--text-dim:#b9bfcb;--line:#353943;--primary:#8590ff}html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif}img,svg,canvas{max-width:100%}</style><script>(${bootVisual.toString()})(${values})</script>`;
+  const boot = `<meta http-equiv="Content-Security-Policy" content="${VISUAL_POLICY}"><meta name="referrer" content="no-referrer"><style>:root{color-scheme:dark;--bg:#14161b;--card:#1b1e24;--raised:#242831;--mutedfg:#9ba2b1;--primary-q:#8590ff;--amber:#e8b23f;--amber-text:#e8b23f;--sky:#8ec6e8;--emerald:#9bc9b6;--red:#e88a8a;--text:#e8eaef;--text-dim:#b9bfcb;--line:#353943;--primary:#8590ff}html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif}img,svg,canvas{max-width:100%}</style><script>(${bootVisual.toString()})(${values})</script>`;
   // Stored pages have been parsed and serialized on the machine first: the
   // first head here is the document head, never text inside an agent script.
   return html.replace(/<head>/i, `<head>${boot}`);

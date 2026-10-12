@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { serveVisualFrame } from './visual-frame.js';
 
 /**
  * Start a hub.
@@ -86,7 +87,9 @@ export async function startRelay({
   };
 
   const routeHelm = (req, res) =>
-    req.url === '/api/version'
+    req.url === '/visual-frame'
+      ? serveVisualFrame(req, res)
+      : req.url === '/api/version'
       ? version(req, res)
       : req.url.startsWith('/media/')
       ? Promise.resolve(media(req, res)).then((handled) => {

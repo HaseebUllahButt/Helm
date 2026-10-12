@@ -8,6 +8,7 @@ import WebSocket from 'ws';
 const root = mkdtempSync(join(tmpdir(), 'helm-http-read-'));
 process.env.HELM_DIR = join(root, 'home');
 process.env.HELM_DB = join(root, 'hub.sqlite');
+for (const [key, name] of Object.entries({ HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(root, name);
 const N = await import('@helm/protocol/network');
 const { startRelay } = await import('@helm/relay');
 const net = N.createNetwork({ name: 'read-test', port: 8787 });
@@ -34,8 +35,31 @@ const read = (method, params = {}, token = phone.token, extra = {}) => fetch(bas
   body: JSON.stringify({ env: net.self, method, params, ...extra }),
 });
 
+test('the visual host has its own restrictive policy without weakening app responses', async () => {
+  for (const path of ['/visual-frame', '/helm/visual-frame']) {
+    const response = await fetch(base + path);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /text\/html/);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    const policy = response.headers.get('content-security-policy');
+    assert.match(policy, /script-src 'unsafe-inline'/);
+    assert.match(policy, /sandbox allow-scripts/);
+    assert.match(policy, /connect-src 'none'/);
+    assert.match(policy, /frame-ancestors 'self'/);
+    assert.doesNotMatch(policy, /allow-same-origin/);
+    assert.match(await response.text(), /helm\.visual\.load/);
+    const head = await fetch(base + path, { method: 'HEAD' });
+    assert.equal(head.status, 200);
+    assert.equal(await head.text(), '');
+    assert.equal((await fetch(base + path, { method: 'POST' })).status, 405);
+  }
+  const health = await fetch(base + '/api/health');
+  assert.match(health.headers.get('content-security-policy'), /script-src 'self';/);
+  assert.doesNotMatch(health.headers.get('content-security-policy'), /script-src 'unsafe-inline'/);
+});
+
 test('authenticated HTTP snapshots cross the real hub RPC router and are never browser cached', async () => {
-  for (const method of ['session.events', 'session.messages', 'session.list', 'model.list', 'session.commands', 'env.info', 'project.list']) {
+  for (const method of ['session.events', 'session.messages', 'session.visual', 'session.list', 'model.list', 'session.commands', 'env.info', 'project.list']) {
     const response = await read(method, { id: 'chat' });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');

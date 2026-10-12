@@ -43,7 +43,10 @@ at 4 MiB. HTTPS images and data URLs work too; embed images for a portable copy.
 Assets loaded later through JavaScript are not embedded automatically.
 
 Pages run in a sandbox with an opaque origin. They cannot read Helm's cookies,
-storage, or parent document. External scripts, network fetches, nested frames,
+storage, or parent document. The frame loads a separate document with its own
+security policy so inline scripts and slider updates work under Helm's strict
+app policy. Saved HTML reaches it through the parent after an authenticated read.
+External scripts, network fetches, nested frames,
 forms, and plugins are blocked. Clicked HTTP/HTTPS links open in a separate tab;
 fragment links stay inside the page. No dev server or background watcher is
 needed. Files follow Helm's existing conversation retention policy and are
