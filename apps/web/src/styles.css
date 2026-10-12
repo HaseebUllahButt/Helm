@@ -2779,3 +2779,27 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .pipeline-account p { font-size: var(--t-micro); color: var(--mutedfg); margin: 7px 0; }
 
 .brain-entry { margin-block: 10px 16px; }
+
+/* ---- inline diffs (idea 2) ---- */
+/* An edit in the chat shows its changed lines right under the file name.
+   Tints stay faint: the +/- gutter and the tint say red or green, the text
+   stays the normal colour. */
+.idiff { border-top: 1px solid var(--line); }
+.idiff-box { overflow-x: auto; overflow-y: hidden; padding: 4px 0; -webkit-overflow-scrolling: touch; }
+.idiff-box.all { max-height: 60dvh; overflow-y: auto; }
+.idiff-in { min-width: 100%; width: max-content; font: 12px/1.55 var(--mono); }
+.idiff-row { display: flex; padding-right: 12px; color: var(--mutedfg); }
+.idiff-row i { flex: none; width: 24px; text-align: center; font-style: normal; user-select: none; opacity: 0.85; }
+.idiff-row code { font: inherit; white-space: pre; color: inherit; }
+.idiff-row.add { background: color-mix(in srgb, var(--diff-add) 11%, transparent); color: var(--text); }
+.idiff-row.del { background: color-mix(in srgb, var(--diff-del) 11%, transparent); color: var(--text); }
+.idiff-row.add i { color: var(--diff-add-fg); }
+.idiff-row.del i { color: var(--diff-del-fg); }
+.idiff-gap { height: 1px; margin: 3px 0; background: var(--line); }
+.idiff-more {
+  display: block; width: 100%; margin: 0; padding: 5px 12px; min-height: 28px; text-align: left;
+  border-top: 1px solid var(--line); font-size: var(--t-micro); color: var(--mutedfg); background: transparent;
+}
+.idiff-more:hover { color: var(--text-dim); background: var(--hover); }
+:root[data-theme="light"] .idiff-row.add { background: color-mix(in srgb, var(--diff-add) 13%, transparent); }
+:root[data-theme="light"] .idiff-row.del { background: color-mix(in srgb, var(--diff-del) 11%, transparent); }
