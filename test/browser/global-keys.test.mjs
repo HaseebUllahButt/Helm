@@ -102,8 +102,7 @@ test('New session paints the agents it remembers before a slow machine answers',
 
 test('the sidebar rows have the same ⋯ menu as the machine screen: rename, archive, delete', async t => {
   const page = await pageFor(t);
-  // "done" is folded shut until opened.
-  await page.locator('.sidebar').getByRole('button',{name:/^done/}).click();
+  // Settled is open to begin with; its first rows are on show.
   const row = page.locator('.sidebar .tri-row').filter({hasText:'Yesterday work'});
   await row.waitFor({timeout:5000});
   await row.getByRole('button',{name:'actions for Yesterday work'}).click({force:true});

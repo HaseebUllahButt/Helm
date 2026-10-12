@@ -128,7 +128,6 @@ for (const width of [1280, 390]) test(`a normal native CLI opens with keyboard c
     };
     window.mount(client);
   });
-  await page.locator('.sidebar').getByRole('button', { name: 'done 1', exact: true }).click();
   await page.locator('.sidebar').getByText('Native Claude session', { exact: true }).click();
   const terminal = page.locator('.xterm-helper-textarea');
   await terminal.waitFor();
@@ -174,7 +173,6 @@ for (const width of [1280, 390]) test(`native Claude channel opens as a Helm cha
     };
     window.mount(client);
   });
-  await page.locator('.sidebar').getByRole('button', { name: 'done 1', exact: true }).click();
   await page.locator('.sidebar').getByText('Helm interface demo', { exact: true }).click();
   await page.getByText('This is the Helm conversation interface.', { exact: true }).waitFor();
   assert.equal(await page.locator('.xterm-host').count(), 0);
@@ -258,8 +256,11 @@ test('Done is newest first across machines, retires at three days, and the foote
     window.mount(window.makeClient(['laptop','vm'].map(id=>({id,name:id,online:true,info:{}})), sessions, 'https://private.sslip.io'));
   });
   const sidebar = page.locator('.sidebar');
-  const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^done$/ }) });
-  await done.getByRole('button', { name: 'done 35', exact: true }).click();
+  const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Settled$/ }) });
+  // Ten to begin with; Show 25 more brings the rest.
+  await done.locator('.tri-title').first().waitFor();
+  assert.equal(await done.locator('.tri-title').count(), 10);
+  await done.getByRole('button', { name: 'Show 25 more', exact: true }).click();
   const titles = await done.locator('.tri-title').allTextContents();
   assert.equal(titles.length, 35, 'all recent threads remain until their own retirement time');
   assert.deepEqual(titles.slice(-4), ['Newest', 'Yesterday', 'Two days ago', 'Almost retired']);
@@ -268,8 +269,8 @@ test('Done is newest first across machines, retires at three days, and the foote
   assert.equal(await sidebar.locator('.diag').count(), 0);
   assert.doesNotMatch(await sidebar.innerText(), /sslip\.io|socket live/i);
   await page.clock.fastForward(30000);
-  await done.getByRole('button', { name: 'done 34', exact: true }).waitFor();
-  assert.equal(await done.getByText('Almost retired', { exact: true }).count(), 0);
+  await done.getByText('Almost retired', { exact: true }).waitFor({ state: 'detached' });
+  assert.equal(await done.locator('.tri-title').count(), 34);
   await sidebar.getByRole('button', { name: 'Search threads, machines and folders' }).click();
   const palette = page.getByRole('dialog', { name: 'Command palette' });
   await palette.getByRole('combobox', { name: 'Search threads, machines, actions' }).fill('Almost retired');
@@ -317,9 +318,7 @@ test('Running counts only working threads and excludes idle native sessions', as
   assert.equal(await laptop.locator('.badge').textContent(), '1');
   assert.equal(await rows.filter({ hasText: 'vm' }).locator('.rm').textContent(), 'idle');
   assert.match(await rows.filter({ hasText: 'old' }).locator('.rm').textContent(), /^seen/);
-  const sectionRows = (name) => sidebar.locator('div.section', { hasText: new RegExp(`^${name}$`) })
-    .locator('xpath=following-sibling::div[1]');
-  const runningSection = sectionRows('running');
+  const runningSection = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Working$/ }) });
   assert.ok(await runningSection.getByText('Busy', { exact: true }).isVisible());
   assert.equal(await runningSection.getByText('Idle alive', { exact: true }).count(), 0);
   assert.equal(await runningSection.getByText('External idle', { exact: true }).count(), 0);
@@ -344,8 +343,8 @@ test('Running counts only working threads and excludes idle native sessions', as
   const machineSummaries = await rows.locator('.rm').allTextContents();
   const runningTotal = machineSummaries.reduce((total, text) => total + (+(/^(\d+) running$/.exec(text)?.[1] ?? 0)), 0);
   assert.equal(runningTotal, +(/(\d+) running/.exec(readout)[1]), 'sidebar per-machine counts add up to the readout');
-  const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^done$/ }) });
-  await done.getByRole('button', { name: 'done 5', exact: true }).click();
+  const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Settled$/ }) });
+  assert.equal(await done.locator('.tri-title').count(), 5);
   assert.ok(await done.getByText('Idle alive', { exact: true }).isVisible());
   assert.ok(await done.getByText('Shared stopped', { exact: true }).isVisible());
   await rows.filter({ hasText: 'vm' }).click();
@@ -559,13 +558,15 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
     window.mount(client);
   }, PROVIDERS);
   const sidebar = page.locator('.sidebar');
-  const running = sidebar.locator('div.section', { hasText: /^running$/ }).locator('xpath=following-sibling::div[1]');
-  const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^done$/ }) });
+  const running = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Working$/ }) });
+  const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Settled$/ }) });
   await running.locator('.tri-title').first().waitFor();
   const n = PROVIDERS.length;
   assert.equal(await running.locator('.thread-row').count(), n * 3, 'starting, working and child work are all running');
   assert.equal(await sidebar.locator('.need').count(), n, 'each blocked approval is a Needs you card');
-  await done.getByRole('button', { name: `done ${n}`, exact: true }).click();
+  await done.locator('.tri-title').first().waitFor();
+  const more = done.getByRole('button', { name: /^Show \d+ more$/ });
+  while (await more.count()) await more.click();
   const doneTitles = await done.locator('.tri-title').allTextContents();
   assert.deepEqual(doneTitles.sort(), PROVIDERS.map((engine) => `${engine} idle`).sort(), 'only idle threads are done');
   for (const engine of PROVIDERS) {
@@ -578,8 +579,8 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
     }
   }
   const starting = running.locator('.thread-row').filter({ hasText: 'claude starting' });
-  assert.equal(await starting.locator('.chip').textContent(), 'starting');
-  assert.equal(await running.locator('.thread-row').filter({ hasText: 'claude children' }).locator('.chip.working').count(), 1);
+  assert.equal(await starting.locator('.tstat.working').textContent(), 'starting');
+  assert.equal(await running.locator('.thread-row').filter({ hasText: 'claude children' }).locator('.tstat.working').count(), 1);
   const laptop = sidebar.locator('.row.machine').filter({ hasText: 'Laptop' });
   assert.equal(await laptop.locator('.rm').textContent(), `${n * 3} running · ${n} status unavailable`,
     'threads the machine cannot read are counted, not called idle');
@@ -648,9 +649,9 @@ test('a list read before a live update cannot undo it', async testContext => {
     window.mount(client);
   });
   const sidebar = page.locator('.sidebar');
-  const running = sidebar.locator('div.section', { hasText: /^running$/ }).locator('xpath=following-sibling::div[1]');
-  const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^done$/ }) });
-  await done.getByRole('button', { name: 'done 1', exact: true }).waitFor();
+  const running = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Working$/ }) });
+  const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Settled$/ }) });
+  await done.locator('.tri-row').first().waitFor();
   // A list goes out while the thread is idle and takes a while to come back.
   await page.evaluate(() => { window.hold = true; window.push({ title: 'Racing thread' }); });
   await page.waitForFunction(() => window.lists.length === 1);
@@ -671,11 +672,11 @@ test('a list read before a live update cannot undo it', async testContext => {
   await page.evaluate(() => window.push({ title: 'Racing thread' }));
   await page.waitForFunction(() => window.lists.length === 1);
   await page.evaluate(() => window.push({ status: 'idle' }));
-  await done.getByRole('button', { name: 'done 1', exact: true }).waitFor();
+  await done.locator('.tri-row').first().waitFor();
   await page.waitForTimeout(600);
   await page.evaluate(() => { window.lists.shift()(); });
   await page.waitForTimeout(100);
-  assert.equal(await sidebar.locator('div.section', { hasText: /^running$/ }).count(), 0, 'the old working list does not bring it back');
+  assert.equal(await sidebar.locator('.fold-title', { hasText: /^Working$/ }).count(), 0, 'the old working list does not bring it back');
 });
 
 for (const width of [1280, 390]) test(`an offline machine's last known work is not shown as working at ${width}px`, async testContext => {
@@ -695,7 +696,7 @@ for (const width of [1280, 390]) test(`an offline machine's last known work is n
   const sidebar = page.locator('.sidebar');
   const machine = sidebar.locator('.row.machine').filter({ hasText: 'HomePC' });
   await machine.waitFor();
-  assert.equal(await sidebar.locator('div.section', { hasText: /^running$/ }).count(), 0);
+  assert.equal(await sidebar.locator('.fold-title', { hasText: /^Working$/ }).count(), 0);
   assert.equal(await sidebar.getByText('Was busy', { exact: true }).count(), 0);
   await machine.click();
   const main = page.locator('.main');
@@ -783,7 +784,7 @@ test('snooze offers short delays and Never survives refresh until the chat is op
   await card.waitFor({ state: 'detached' });
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:snooze-chat']), Number.MAX_SAFE_INTEGER);
   await page.reload(); await boot(); await mount();
-  await page.locator('.sidebar').getByRole('button', { name: 'snoozed 1', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Snoozed 1', exact: true }).click();
   await page.locator('.sidebar').getByText('Snoozed · Never', { exact: true }).waitFor();
   await page.locator('.sidebar').getByText('Quiet chat', { exact: true }).click();
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:snooze-chat']), undefined);
@@ -802,8 +803,8 @@ for (const status of ['working', 'idle']) test(`snoozing a child's alert restore
   await card.getByRole('button', { name: 'Snooze…' }).click();
   await card.getByRole('button', { name: '5 mins', exact: true }).click();
   await card.waitFor({ state: 'detached' });
-  await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).locator('.chip.working').waitFor();
-  assert.equal(await sidebar.getByRole('button', { name: 'snoozed 1', exact: true }).count(), 0);
+  await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).locator('.tstat.working').waitFor();
+  assert.equal(await sidebar.getByRole('button', { name: 'Snoozed 1', exact: true }).count(), 0);
   assert.ok(!/waiting/.test(await page.title()));
   await sidebar.locator('.thread-row').filter({ hasText: 'Continue game' }).click();
   assert.ok(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.snoozed'))['laptop:working-parent'] > Date.now()), 'opening the working parent keeps the snooze');

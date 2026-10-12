@@ -160,11 +160,12 @@ test('saved imported chats retain their Done count and resume account before liv
     window.reads = async () => { throw new Error('offline'); };
     window.mount();
   });
-  const done = page.locator('.sidebar').getByRole('button', { name: /^done 2(?: saved)?$/ });
+  const done = page.locator('.sidebar .fold-toggle').filter({ hasText: /^Settled/ });
   await done.waitFor();
   assert.match(await done.innerText(), /saved/);
-  await done.click();
+  // The shelf is open to begin with, and says how many it holds.
   await page.locator('.sidebar').getByText('Imported', { exact: true }).waitFor();
+  assert.equal(await page.locator('.sidebar .foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Settled$/ }) }).locator('.tri-title').count(), 2);
   const imported = await page.evaluate(() => JSON.parse(localStorage.getItem('helm.workspace:' + window.scope)).sessions.machine.find(session => session.id === 'Imported'));
   assert.equal(imported.adopted, true);
   assert.equal(imported.account, 'second-account');
@@ -175,7 +176,7 @@ test('saved imported chats retain their Done count and resume account before liv
     window.dispatchEvent(new Event('online'));
   });
   await page.waitForFunction(() => ![...document.querySelectorAll('.sidebar button')]
-    .some(button => /^done 2.*saved/.test(button.textContent)));
+    .some(button => /^Settled.*saved/.test(button.textContent)));
   assert.equal(await done.count(), 1);
   assert.doesNotMatch(await done.innerText(), /saved/);
 });
