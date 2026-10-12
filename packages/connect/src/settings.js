@@ -38,7 +38,7 @@ export function migrateProfileSettings(previous, next) {
     if (!old) continue;
     const before = accountKey(old), after = accountKey(profile);
     if (before === after) continue;
-    for (const section of ['models', 'starts']) {
+    for (const section of ['models', 'starts', 'modelWatch']) {
       if (cfg[section]?.[before] && !Object.hasOwn(cfg[section], after)) {
         cfg[section][after] = { ...cfg[section][before] };
         changed = true;
@@ -87,19 +87,143 @@ export function saveStartPrefs(profile, values = {}) {
 /**
  * Replace an account's model prefs wholesale. An empty approved list means
  * "offer everything", so with no default either there is nothing to keep.
+ * `auto` (add new models by themselves) is the one part that is not wholesale:
+ * left out, it is kept. `keepApproved` is for a screen holding an old copy of
+ * the list (the in-chat picker): it sets the default and leaves the list alone,
+ * so it can neither undo a model that joined meanwhile nor "remove" it.
  */
-export function saveModelPrefs(profile, { default: def = null, approved = [] } = {}) {
+export function saveModelPrefs(profile, { default: def = null, approved = [], auto, keepApproved = false } = {}) {
   const cfg = loadSettings();
   cfg.models ??= {};
   // This arrives over the network from a phone and is read back by the
   // daemon on every session start, so only model names get in.
   const name = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-  const list = [...new Set((Array.isArray(approved) ? approved : []).map(name).filter(Boolean))];
+  const key = accountKey(profile);
+  const before = cfg.models[key]?.approved ?? [];
+  const list = keepApproved ? before : [...new Set((Array.isArray(approved) ? approved : []).map(name).filter(Boolean))];
   const pick = name(def);
-  if (!pick && !list.length) delete cfg.models[accountKey(profile)];
-  else cfg.models[accountKey(profile)] = { default: pick, approved: list };
+  if (!pick && !list.length) delete cfg.models[key];
+  else cfg.models[key] = { default: pick, approved: list };
+
+  const watch = cfg.modelWatch?.[key] ?? {};
+  // Taking a model off a short list is a choice: remember it, so new-model
+  // sync never puts it back. Clearing the whole list means "offer all", which
+  // is not a choice about any one model. Adding it back forgets the choice.
+  if (list.length) {
+    const hidden = new Set(watch.hidden ?? []);
+    for (const m of before) if (!list.includes(m)) hidden.add(m);
+    for (const m of list) hidden.delete(m);
+    watch.hidden = [...hidden].slice(-500);
+  }
+  if (typeof auto === 'boolean') watch.auto = auto;
+  if (!watch.hidden?.length) delete watch.hidden;
+  if (watch.auto !== false) delete watch.auto;
+  cfg.modelWatch ??= {};
+  if (Object.keys(watch).length) cfg.modelWatch[key] = watch; else delete cfg.modelWatch[key];
   writeSettings(cfg);
   return modelPrefs(profile, cfg);
+}
+
+/** The owner has seen the notes about models that joined by themselves. */
+export function dismissModelNews(profile) {
+  const cfg = loadSettings();
+  const key = accountKey(profile);
+  if (!cfg.modelWatch?.[key]?.news) return;
+  delete cfg.modelWatch[key].news;
+  writeSettings(cfg);
+}
+
+/**
+ * Whether new models join this account by themselves (on unless switched
+ * off), and the quiet notes about the last ones that did.
+ */
+export function modelWatch(profile, cfg = loadSettings()) {
+  const w = cfg?.modelWatch?.[accountKey(profile)];
+  return { auto: w?.auto !== false, news: Array.isArray(w?.news) ? w.news : [] };
+}
+
+/**
+ * A model id as a "line" and a version, or null when unsure. A line is what
+ * a new release replaces: claude-opus-5-5 -> {claude-opus, [5,5]}; gpt-5.3-codex
+ * -> {gpt-codex, [5,3]}. A dated snapshot is a pin, so it is flagged. Aliases
+ * ("opus"), effort-suffixed ids and anything else odd return null, and null
+ * means do nothing.
+ */
+export function modelLine(id) {
+  if (typeof id !== 'string') return null;
+  const ver = (v) => v.split(/[-.]/).map(Number);
+  let m = /^claude-([a-z]+)-(\d+(?:-\d{1,2})?)(-\d{8})?$/.exec(id);
+  if (m) return { line: `claude-${m[1]}`, version: ver(m[2]), pin: !!m[3] };
+  // The older spelling puts the version first: claude-3-5-sonnet-20241022.
+  m = /^claude-(\d+(?:-\d{1,2})?)-([a-z]+)(-\d{8})?$/.exec(id);
+  if (m) return { line: `claude-${m[2]}`, version: ver(m[1]), pin: !!m[3] };
+  m = /^gpt-(\d+(?:\.\d+)?)((?:-[a-z]+)*)$/.exec(id);
+  if (m) return { line: `gpt${m[2]}`, version: ver(m[1]), pin: false };
+  m = /^gemini-(\d+(?:\.\d+)?)-([a-z]+(?:-[a-z]+)*?)(-preview)?$/.exec(id);
+  if (m) return { line: `gemini-${m[2]}`, version: ver(m[1]), pin: false };
+  return null;
+}
+
+/** Positive when version a is newer than b (missing parts count as zero). */
+const newerVersion = (a, b) => {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d) return d;
+  }
+  return 0;
+};
+
+/**
+ * Notice models a refreshed catalog has that this account never saw, and let
+ * them join: onto the approved list (so they show in the pickers), and, when
+ * the default was the newest of its line, as the new default. Only lines we
+ * can read are touched (modelLine); an owner's removal is never undone
+ * (`hidden`); the first look at an account just records what is there, so an
+ * upgrade adds nothing by surprise. Returns the notes made, or [].
+ */
+export function syncNewModels(profile, ids, labels = {}) {
+  const have = [...new Set((Array.isArray(ids) ? ids : []).filter((x) => typeof x === 'string' && x.trim()))];
+  if (!have.length) return [];
+  const cfg = loadSettings();
+  const key = accountKey(profile);
+  cfg.modelWatch ??= {};
+  const watch = cfg.modelWatch[key] ??= {};
+  if (!watch.seen) { watch.seen = have; writeSettings(cfg); return []; }
+
+  const known = new Set(watch.seen);
+  const fresh = have.filter((m) => !known.has(m));
+  if (!fresh.length) return [];
+  const before = watch.seen;
+  watch.seen = [...before, ...fresh].slice(-3000);
+  const prefs = cfg.models?.[key];
+  const notes = [];
+  if (watch.auto !== false && prefs) {
+    const hidden = new Set(watch.hidden ?? []);
+    const lines = (list) => list.flatMap((id) => { const l = modelLine(id); return l ? [{ id, ...l }] : []; });
+    const old = lines(before);
+    // Newer than everything of its line we knew: a late-arriving old model
+    // (a catalog that was partial the first time) is not news.
+    const next = lines(fresh).filter((c) => !c.pin && !hidden.has(c.id)
+      && !old.some((o) => o.line === c.line && newerVersion(c.version, o.version) <= 0));
+    const label = (id) => labels?.[id] ?? id;
+    const approved = [...(prefs.approved ?? [])];
+    let moved = null;
+    const cur = lines([prefs.default ?? ''])[0];
+    if (cur && !cur.pin && !old.some((o) => o.line === cur.line && newerVersion(o.version, cur.version) > 0)) {
+      moved = next.filter((c) => c.line === cur.line && newerVersion(c.version, cur.version) > 0)
+        .sort((a, b) => newerVersion(b.version, a.version))[0] ?? null;
+      if (moved) prefs.default = moved.id;
+    }
+    for (const c of next) {
+      // With no short list everything already shows; there is nothing to add to.
+      if (approved.length && !approved.includes(c.id)) approved.push(c.id);
+      if (approved.length || c === moved) notes.push({ id: c.id, label: label(c.id), isDefault: c === moved });
+    }
+    prefs.approved = approved;
+    if (notes.length) watch.news = [...(watch.news ?? []), ...notes].slice(-5);
+  }
+  writeSettings(cfg);
+  return notes;
 }
 
 /**

@@ -147,7 +147,8 @@ export const M = {
   AGENT_LIST: 'agent.list',        // { refresh?, models? } -> { agents[] } credential-free CLI capabilities
   PROFILE_DEFAULTS: 'profile.defaults', // { profileId, effort?, mode?, speed? } -> { defaults }
   MODEL_LIST: 'model.list',        // { profileId, id?, all? } -> { default, models[], more?[], prefs?, effort?, efforts? }
-  MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[] } -> { prefs }  per-account picker filter
+  MODEL_PREFS: 'model.prefs',      // { profileId, default, approved[], auto?, keepApproved? } -> { prefs, auto, news }  per-account picker filter; keepApproved: leave the saved list as it is
+  MODEL_NEWS: 'model.news',        // { profileId } -> { ok }  the owner has seen the notes about auto-added models
   PICKER_PREFS: 'picker.prefs',    // { hidden?, last?, favs? } -> { picker }  what the new-session picker shows, shared by every device
   SESSION_LIST: 'session.list',    // {} -> { sessions[] }
   SESSION_START: 'session.start',  // { cwd | quick: true, profileId, model?, effort?, mode?, speed?, title?, parent? } -> { session }  quick: no folder; runs in an empty ~/.helm/quick/<id> removed on delete

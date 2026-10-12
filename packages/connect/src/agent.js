@@ -16,13 +16,13 @@ import { BASH_GUARD_MODES } from './pi-settings.js';
 import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
-import { listModels, mergeLiveModelCatalog } from './models.js';
+import { listModels, mergeLiveModelCatalog, followNewModels } from './models.js';
 import { nativeControls, nativeModelChoices, nativeEffortChoices } from './native-controls.js';
 import { nativeClaudeAccount, nativeAccount } from './native-account.js';
 import { readProcess } from './takeover.js';
 import { usableProfiles, authStatuses } from './auth.js';
 import { listCommands } from './commands.js';
-import { accountKey, modelPrefs, saveModelPrefs, startPrefs, saveStartPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
+import { accountKey, modelPrefs, modelWatch, dismissModelNews, saveModelPrefs, startPrefs, saveStartPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
@@ -1536,6 +1536,7 @@ export class Daemon {
           let nativeEnv = null;
           if (native.nativePid) try { nativeEnv = readProcess(native.nativePid).env; } catch { /* exited or unreadable */ }
           const account = nativeClaudeAccount({ ...native, nativeHome: home }, await getProfiles(), { env: nativeEnv });
+          if (account) followNewModels(account, catalog);
           const prefs = account ? modelPrefs(account) : null;
           const filtered = applyModelPrefs(catalog, prefs, { all: !!p.all });
           // Account defaults are not evidence of the terminal's live settings:
@@ -1543,7 +1544,7 @@ export class Daemon {
           // empty so they never stand in for it.
           return { ...filtered, default: null, effort: null, modes: modesFor('claude'), defaultMode: null,
             favs: pickerPrefs().favs.claude ?? [], effortFavs: pickerPrefs().favs['claude-effort'] ?? [],
-            ...(account ? { prefs, defaults: startPrefs(account), account: accountKey(account), profileId: account.id } : { defaults: {} }) };
+            ...(account ? { prefs, defaults: startPrefs(account), account: accountKey(account), profileId: account.id, ...modelWatch(account) } : { defaults: {} }) };
         }
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
         const engine = ENGINES[profile.engine];
@@ -1577,6 +1578,8 @@ export class Daemon {
         }
         // The account's approved list trims the picker; `all` skips that for
         // the settings editor, which needs everything to pick from.
+        // A model the catalogue just gained joins this account (settings.js).
+        followNewModels(profile, catalog);
         const prefs = modelPrefs(profile);
         // `models` is the cached catalogue object - copy before folding in
         // prefs/extras so the cache never carries one session's answer.
@@ -1593,6 +1596,7 @@ export class Daemon {
         return {
           ...filtered, prefs, modes: engine?.driver ? live?.modes ?? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine),
           favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile), account: accountKey(profile),
+          ...modelWatch(profile),
           effortFavs: pickerPrefs().favs[`${profile.engine}-effort`] ?? [],
         };
       }
@@ -1602,7 +1606,14 @@ export class Daemon {
       case M.MODEL_PREFS: {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
-        return { ok: true, prefs: saveModelPrefs(profile, { default: p.default, approved: p.approved }) };
+        return { ok: true, prefs: saveModelPrefs(profile, { default: p.default, approved: p.approved, auto: p.auto, keepApproved: p.keepApproved === true }), ...modelWatch(profile) };
+      }
+
+      case M.MODEL_NEWS: {
+        const profile = (await getProfiles()).find((x) => x.id === p.profileId);
+        if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
+        dismissModelNews(profile);
+        return { ok: true };
       }
 
       case M.SESSION_LIST:    return { sessions: await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true }) };

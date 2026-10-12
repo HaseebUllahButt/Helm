@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { ENGINES } from './engines.js';
 import { expand } from './paths.js';
+import { syncNewModels } from './settings.js';
 
 const exec = promisify(execFile);
 
@@ -69,6 +70,26 @@ const modelsKey = (engine, home, launcher) => {
   const root = expand(home ?? ENGINES[engine]?.defaultHome ?? '~');
   return `${engine}|${root}|${launcher ? [launcher.cmd, ...launcher.args].join(' ') : ''}`;
 };
+
+/** The held answer for an account, if there is one - never spawns anything. */
+export function peekModels(engine, home, launcher = null) {
+  return cache.get(modelsKey(engine, home, launcher))?.value ?? null;
+}
+
+// Only the CLIs whose model names say what replaces what. An aggregator
+// (opencode lists hundreds, and a new login changes them all) would flood
+// the picker, so those keep today's behaviour.
+const FOLLOWED = new Set(['claude', 'codex', 'gemini']);
+
+/**
+ * Let new models in a fresh catalog join the account's picker and, when the
+ * default was the newest of its line, become the default (settings.js).
+ * A catalog still waiting on the public list is half a picture, so it waits.
+ */
+export function followNewModels(profile, catalog) {
+  if (!FOLLOWED.has(profile?.engine) || !catalog?.models?.length || catalog.refreshing) return [];
+  try { return syncNewModels(profile, catalog.models, catalog.labels); } catch { return []; }
+}
 
 /** Fill the cache from output something else already fetched (auth.js). */
 export function primeModels(engine, home, launcher, value) {

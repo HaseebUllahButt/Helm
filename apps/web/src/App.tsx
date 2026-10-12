@@ -10,7 +10,7 @@ import { accountsFrom, loadPrefs, savePrefs, rememberFolder, recentFolders, type
 import { loadAppearance, saveAppearance, type Theme } from './appearance';
 import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
-import { Controls, trayPrefs, type Kind } from './session/Controls';
+import { Controls, trayPrefs, newsLines, type Kind } from './session/Controls';
 import { LimitsLine } from './session/LimitsLine';
 import { ContextMeter } from './session/ContextMeter';
 import { useAccountLimits } from './session/useAccountLimits';
@@ -43,7 +43,7 @@ import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brai
 import { brainHost } from '@helm/protocol/brain-host';
 import {
   Client, login, validMachineName, MACHINE_NAME_RULE, LOOPBACK_HOST, isCleartext, CLEARTEXT_NOTE,
-  type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type NativeControl, type ModelPrefs,
+  type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type NativeControl, type ModelPrefs, type ModelNote,
   type InventorySession, type Device, type Project, type MediaRoot, type MediaEntry,
 } from './client';
 import { money, bytes, busyWord, needsAttention, runningThread, settledThread, unknownThread, listedThread } from './format';
@@ -3809,12 +3809,15 @@ function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
  * start with. Checking nothing means "offer everything", the state the
  * account was in before this screen existed.
  */
-function ModelPrefsView({ client, env, account, onBack }: {
+export function ModelPrefsView({ client, env, account, onBack }: {
   client: Client; env: Environment; account: Account; onBack: () => void;
 }) {
   const [list, setList] = useState<ModelList | null>(null);
   const [approved, setApproved] = useState<Set<string>>(new Set());
   const [def, setDef] = useState('');
+  // On unless the owner switched it off; an older machine says nothing, and acts as on.
+  const [auto, setAuto] = useState(true);
+  const [news, setNews] = useState<ModelNote[]>([]);
   const [effort, setEffort] = useState(account.defaults?.effort ?? '');
   const [mode, setMode] = useState(account.defaults?.mode === 'plan' ? '' : account.defaults?.mode ?? '');
   const [speed, setSpeed] = useState(account.defaults?.speed ?? '');
@@ -3832,6 +3835,8 @@ function ModelPrefsView({ client, env, account, onBack }: {
       if (!initialized) {
         setApproved(new Set(r.prefs?.approved ?? []));
         setDef(r.prefs?.default ?? '');
+        setAuto(r.auto !== false);
+        setNews(r.news ?? []);
       }
       if (!remembered) initialized = true;
       if (!remembered) saveModels(env.id, account.profile.id, r, true);
@@ -3864,6 +3869,7 @@ function ModelPrefsView({ client, env, account, onBack }: {
           profileId: account.profile.id,
           default: def || null,
           approved: [...approved],
+          auto,
         }, 20_000),
         client.rpc(env.id, 'profile.defaults', {
           profileId: account.profile.id,
@@ -3926,6 +3932,15 @@ function ModelPrefsView({ client, env, account, onBack }: {
 
         {list !== null && (
           <>
+            {news.length > 0 && (
+              <div className="model-news" role="status">
+                <span className="grow">{newsLines(news).map((l) => <span key={l}>{l}</span>)}</span>
+                <button onClick={() => {
+                  setNews([]);
+                  client.rpc(env.id, 'model.news', { profileId: account.profile.id }, 15_000).catch(() => { /* shows once more */ });
+                }}>OK</button>
+              </div>
+            )}
             <div className="section">start new sessions with</div>
             <select value={def} onChange={(e) => setDef(e.target.value)} disabled={!defaults.length}>
               <option value="">the CLI's default</option>
@@ -3965,6 +3980,17 @@ function ModelPrefsView({ client, env, account, onBack }: {
             {on.length > 0 && off.length > 0 && <div className="section">everything else</div>}
             <div className="rows">{off.map((m) => row(m, false))}</div>
             {q && !on.length && !off.length && <div className="empty quiet">no matches</div>}
+
+            <div className="section">new models</div>
+            <div className="rows">
+              <button className="row tall toggle" role="switch" aria-checked={auto} onClick={() => setAuto(!auto)}>
+                <span className="grow">
+                  <span className="rt">Add new models automatically</span>
+                  <span className="rm wrap">A new release joins the short list. If your default was the newest of its kind, it moves up too.</span>
+                </span>
+                <span className={`switch${auto ? ' on' : ''}`}><i /></span>
+              </button>
+            </div>
 
             <p className="note">
               Checked models are the picker's short list; the rest stay reachable
