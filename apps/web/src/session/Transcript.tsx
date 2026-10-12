@@ -654,8 +654,15 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   // Errors and compactions are neither: they stay where anyone can see them.
   let cut = roots.length;
   while (cut > 0 && (isTextish(roots[cut - 1]) || isApart(roots[cut - 1]))) cut -= 1;
-  const pre = roots.slice(0, cut);
-  const answer = roots.slice(cut);
+  let pre = roots.slice(0, cut);
+  let answer = roots.slice(cut);
+  // A terminal chat's own history can file a helper's card after the reply
+  // it led to. Once the turn is over, the last thing said is still the answer.
+  if (d && !answer.some((it) => it.kind === 'text' && !!it.text)) {
+    let k = pre.length - 1;
+    while (k >= 0 && !(pre[k].kind === 'text' && pre[k].text)) k -= 1;
+    if (k >= 0) { answer = [pre[k], ...answer]; pre = [...pre.slice(0, k), ...pre.slice(k + 1)]; }
+  }
   const work = pre.filter((it) => !isApart(it));
   const outside = pre.filter(isApart);
   // A chat read from another CLI's history has no streaming steps and no end.

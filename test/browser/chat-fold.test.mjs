@@ -33,6 +33,11 @@ before(async () => {
         bash('b1', { description: 'Run the tests', command: 'npm test' }),
         text('final', 'All fixed.'),
       ] }],
+      helperAfter: () => [{ id: 't1', text: 'Check it', at: t0, done: { status: 'ok', durationMs: 96000 }, items: [
+        step('r1', { kind: 'tool', name: 'Read', input: { file_path: '/repo/a.ts' }, output: 'x' }),
+        text('said', 'Everything checks out.'),
+        step('h1', { kind: 'subagent', name: 'Agent', input: { description: 'Look around' }, agent: { status: 'completed' } }),
+      ] }],
       onlyText: () => [{ id: 't1', text: 'Hello', at: t0, done: { status: 'ok', durationMs: 2000 }, items: [text('x', 'Hi there.')] }],
       failed: () => [{ id: 't1', text: 'Go', at: t0, done: { status: 'error', error: 'boom' }, items: [
         step('r1', { kind: 'tool', name: 'Read', input: { file_path: '/repo/a.ts' }, output: 'x' }),
@@ -153,6 +158,13 @@ test('the fold holds the narration too; only the last words stay out as the answ
   assert.equal(await page.locator('.tf-title').innerText(), '1 changed file');
   assert.equal((await page.locator('.tf-head .tf-counts').innerText()).replace(/\s+/g, ' '), '+2 −1');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+});
+
+test("a terminal chat that files a helper after the reply still shows the reply below the fold", async (t) => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.show('helperAfter'));
+  await page.locator('.work-head').waitFor();
+  assert.equal((await page.locator('.final').innerText()).trim(), 'Everything checks out.');
 });
 
 test('a turn that is only words has no divider; an error stays outside the fold', async (t) => {
