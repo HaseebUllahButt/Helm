@@ -13,6 +13,7 @@
     "./transfer-activity": "./transfer-activity.js",
     "./share": "./share.js",
     "./limits": "./limits.js",
-    "./message-delivery": "./message-delivery.js"
+    "./message-delivery": "./message-delivery.js",
+    "./visual": "./visual.js"
   }
 }

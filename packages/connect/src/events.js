@@ -136,6 +136,7 @@ function pendingTickets(events) {
 function anchor(event) {
   const { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason } = event;
   const result = { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason };
+  if (kind === 'visual' && event.visual) result.visual = event.visual;
   if (type === 'turn.start' || type === 'turn.edit' || type === 'turn.images') {
     result.text = String(event.text ?? '').slice(0, 8000);
     if (event.delivery) result.delivery = event.delivery;
@@ -302,7 +303,10 @@ export class EventLog {
    */
   #sweep(id, events) {
     const live = new Set();
-    for (const e of events) for (const a of e.attachments ?? []) if (a?.ref) live.add(`${a.ref}.bin`);
+    for (const e of events) {
+      for (const a of e.attachments ?? []) if (a?.ref) live.add(`${a.ref}.bin`);
+      if (e.visual?.ref) live.add(`${e.visual.ref}.bin`);
+    }
     let names = [];
     try { names = readdirSync(this.#attDir(id)); } catch { return; }
     for (const name of names) {
@@ -323,7 +327,7 @@ export class EventLog {
       }));
       const kept = new Set(log.events.map(e => e.seq));
       const dropped = old.filter(e => !kept.has(e.seq));
-      if (dropped.some((e) => e.attachments?.length)) this.#sweep(id, log.events);
+      if (dropped.some((e) => e.attachments?.length || e.visual?.ref)) this.#sweep(id, log.events);
     } else log.first = log.events[0]?.seq ?? 0;
     mkdirSync(this.dir, { recursive: true });
     appendFileSync(this.#file(id), JSON.stringify(full) + '\n', { mode: 0o600 });
@@ -424,8 +428,8 @@ export class EventLog {
           if (sizeOf(anchor) > contextRoom) {
             // The identity is needed to apply a delta. An old tool's input
             // and diff can wait for the reader to page back to that step.
-            const { seq, at, type, id, turnId, kind, parentId, name } = e;
-            anchor = { seq, at, type, id, turnId, kind, parentId, name };
+            const { seq, at, type, id, turnId, kind, parentId, name, visual } = e;
+            anchor = { seq, at, type, id, turnId, kind, parentId, name, ...(visual ? { visual } : {}) };
           }
           contextRoom = Math.max(0, contextRoom - sizeOf(anchor));
           context.push(anchor);

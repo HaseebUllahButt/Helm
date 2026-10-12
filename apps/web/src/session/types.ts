@@ -8,7 +8,8 @@
 
 export interface HelmEvent { seq: number; at: number; type: string; [k: string]: any }
 
-export type ItemKind = 'text' | 'thinking' | 'tool' | 'command' | 'edit' | 'subagent' | 'error';
+export type ItemKind = 'text' | 'thinking' | 'tool' | 'command' | 'edit' | 'subagent' | 'error' | 'visual';
+export interface Visual { ref: string; title: string; height: number; bytes: number }
 export type ItemStatus = 'streaming' | 'ok' | 'error' | 'declined';
 
 export interface Change { path: string; kind: string; diff: string }
@@ -74,6 +75,7 @@ export interface Item {
   error?: string;
   elapsed?: number;
   result?: any;
+  visual?: Visual;
   startedAt: number;
   doneAt?: number;
 }
@@ -278,7 +280,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       turn.items.push({
         id: e.id, kind: e.kind, turnId: e.turnId, text: '', status: 'streaming', startedAt: e.at,
         name: e.name, input: e.input, command: e.command, cwd: e.cwd, changes: e.changes,
-        parentId: e.parentId, agent: e.agent,
+        parentId: e.parentId, agent: e.agent, visual: e.visual,
       });
       return;
     }

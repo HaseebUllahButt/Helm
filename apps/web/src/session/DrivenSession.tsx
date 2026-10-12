@@ -65,6 +65,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
   onOpenMachineSession?: (machineId: string, session: Session) => void;
 }) {
   const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
+  const readVisual = useCallback((ref: string) => client.rpc<{ html: string }>(env.id, 'session.visual', { id: session.id, ref }, 60_000), [client, env.id, session.id]);
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
   const [draft, setDraftRaw] = useState(() => loadDraft(env.id, session.id));
@@ -605,6 +606,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
+        readVisual={readVisual}
         pending={log.pending} onReviewRequest={reviewRequest} focusItem={focusItem}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
         onResend={resend} onWithdraw={withdraw}

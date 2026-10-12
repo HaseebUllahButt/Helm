@@ -94,6 +94,10 @@ const usage = () => {
   helm digest [--json]              every machine, folder and running session
   helm thread <id> [-n 40]          the recent conversation of one session
   helm say <id> <text...>           send a prompt into an existing session
+  helm render <file.html> [--title <text>] [--height <px>] [--session <id>]
+                                    save an interactive visual inside this chat
+  helm preview <file.html> [--output <file.png>] [--width <px>] [--appearance dark|light]
+                                    screenshot a visual and report JavaScript errors
   helm chat <account> [-- text]    share a live agent between this terminal and the app
   helm chat --attach <id>          reconnect to the same managed session
   helm chat <account> --resume <id> continue a native conversation after its CLI closes
@@ -2089,6 +2093,13 @@ try {
     case 'say':
       await say();
       break;
+
+    case 'render':
+    case 'preview': {
+      const { runVisualCommand } = await import('../src/visual-cli.js');
+      await runVisualCommand(cmd, rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession });
+      break;
+    }
 
     case 'integrate': {
       const { integrateNativeCommands, removeNativeLaunchers } = await import('../src/native-cli.js');

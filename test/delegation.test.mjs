@@ -849,8 +849,10 @@ test('agents are told which machine they are on and how to reach the others', as
   assert.match(brief, /The others: VM \(vm\), twin\./, 'each name once; ssh can only reach one of them');
   assert.match(brief, /helm exec <machine>/);
   assert.match(brief, /managed connection; prefer it to SSH/);
-  assert.ok(brief.endsWith(delegationNote()));
-  assert.equal(helmBrief({ self: 'a', machines: { a: net.machines.a } }), delegationNote(), 'alone: nothing to reach');
+  assert.ok(brief.includes(delegationNote()));
+  const alone = helmBrief({ self: 'a', machines: { a: net.machines.a } });
+  assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');
+  assert.match(alone, /helm render/, 'visual replies work even with one machine');
 });
 
 test('a helper with no thread to sit under lists on its own, and its team nests under it', async (t) => {

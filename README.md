@@ -253,6 +253,11 @@ renders the same structured conversation for all five CLIs, including streamed
 text, tool calls, permission prompts, models, modes, images and slash commands.
 Stop interrupts the turn.
 
+Agents can also publish [interactive visual replies](docs/visual-replies.md):
+`helm render page.html --title "Diagram"` saves an isolated HTML page inside the
+chat, with Expand, Source, and Save controls. `helm preview page.html` screenshots
+it before publication. Visuals remain available after the agent finishes.
+
 **How much the agent may do without asking** is a chip in the composer, next
 to Send: `ask` · `edit` · `auto` · `yolo` for Claude Code, `ask` ·
 `edit` · `yolo` · `read` for Codex. Tap it for the list with what each one

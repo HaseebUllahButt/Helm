@@ -171,6 +171,8 @@ export const M = {
   SESSION_MESSAGES: 'session.messages', // { id, limit? } -> { messages[], source }
   // Headless agent sessions: the conversation as helm's own event stream.
   SESSION_EVENTS: 'session.events',   // { id, since?, tail?, before?, limit? } -> { events[], pending[], last, session, hasMore, earlier, firstSeq }
+  SESSION_RENDER: 'session.render',   // { id, html, title?, height?, renderId } -> { visual } saved, never provider work
+  SESSION_VISUAL: 'session.visual',   // { id, ref } -> { html } lazy authenticated snapshot read
   SESSION_WATCH: 'session.watch',     // { id } -> { ok, last }   start/renew E.SESSION_EVENT pushes
   SESSION_UNWATCH: 'session.unwatch', // { id }
   SESSION_ANSWER: 'session.answer',   // { id, requestId, decision: { option, message?, answers? } }

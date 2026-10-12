@@ -15,6 +15,7 @@ import { LimitsLine } from './session/LimitsLine';
 import { useAccountLimits } from './session/useAccountLimits';
 import { nativeConversation } from './session/nativeView';
 import { CompactionLine } from './session/Transcript';
+import { VisualReply, Visuals, type VisualReader } from './session/VisualReply';
 import { useChatKeys } from './session/chatKeys';
 import { watchAccounts, prefetchAccounts } from './accountsCache';
 import { prepareImage, type PreparedImage } from './session/image';
@@ -4543,6 +4544,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
 }) {
   const isShell = session.engine === 'shell';
   const isExternal = !!session.external;
+  const readVisual = useCallback((ref: string) => client.rpc<{ html: string }>(env.id, 'session.visual', { id: session.id, ref }, 60_000), [client, env.id, session.id]);
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [readError, setReadError] = useState('');
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
@@ -4881,7 +4883,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
         ? <Suspense fallback={<div className="xterm-host" />}>
             <Terminal client={client} env={env.id} sessionId={session.id} />
           </Suspense>
-        : <Chat messages={messages} status={status} compacting={compacting} />}
+        : <Chat messages={messages} status={status} compacting={compacting} readVisual={readVisual} />}
 
       {session.nativeChat && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
       {session.nativeChat && !raw && nativeNotice && (
@@ -4948,7 +4950,7 @@ function ago(ts: number | null | undefined) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function Chat({ messages, status, compacting = false }: { messages: Message[] | null; status: string; compacting?: number | boolean }) {
+function Chat({ messages, status, compacting = false, readVisual }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader }) {
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
@@ -4984,7 +4986,7 @@ function Chat({ messages, status, compacting = false }: { messages: Message[] | 
                 : 'Send a message to start the conversation.'}
             </p>
           )}
-          {messages?.map((m, i) => <Turn key={i} m={m} />)}
+          <Visuals.Provider value={readVisual}>{messages?.map((m, i) => <Turn key={m.sourceId ?? i} m={m} />)}</Visuals.Provider>
           {compacting ? <CompactionLine live />
             : status === 'working' && <div className="working"><span className="shine">Working…</span></div>}
         </div>
@@ -4995,6 +4997,7 @@ function Chat({ messages, status, compacting = false }: { messages: Message[] | 
 }
 
 function Turn({ m }: { m: Message }) {
+  if (m.visual) return <div className="turn assistant"><VisualReply visual={m.visual} /></div>;
   if (m.role === 'user') {
     const display = userMessage(m.text, m.attachments);
     return (

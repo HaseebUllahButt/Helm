@@ -6,6 +6,7 @@ import { money, seconds } from '../format';
 import { Icon, toolKind } from '../Icon';
 import { userMessage } from './userMessage';
 import { plainError } from './problem';
+import { VisualReply, Visuals, type VisualReader } from './VisualReply';
 
 /** The session is still working, so an open compaction is really running. */
 const Busy = createContext(false);
@@ -412,6 +413,7 @@ function ItemView({ item, byParent, commandOutput }: { item: Item; byParent: Map
 function ItemContent({ item, byParent, commandOutput }: { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean }) {
   switch (item.kind) {
     case 'text': return <TextItem item={item} commandOutput={commandOutput} />;
+    case 'visual': return item.visual ? <VisualReply visual={item.visual} /> : null;
     case 'thinking': return <ThinkingItem item={item} />;
     case 'tool': return isCompaction(item) ? <CompactItem item={item} /> : <ToolItem item={item} />;
     case 'command': return <CommandItem item={item} />;
@@ -539,7 +541,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           const nodes: ReactNode[] = [];
           // A compaction stands on its own line: it is about the whole
           // conversation, not one of the steps around it.
-          const quiet = (it: Item) => it.kind !== 'text' && it.kind !== 'error' && !isCompaction(it);
+          const quiet = (it: Item) => it.kind !== 'text' && it.kind !== 'error' && it.kind !== 'visual' && !isCompaction(it);
           for (let i = 0; i < roots.length;) {
             if (!quiet(roots[i])) {
               nodes.push(<ItemView key={roots[i].id} item={roots[i]} byParent={byParent} commandOutput={commandOutput} />);
@@ -588,7 +590,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   );
 });
 
-export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, pending = [], onReviewRequest, focusItem }: {
+export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, pending = [], onReviewRequest, focusItem, readVisual }: {
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
   pending?: Permission[]; onReviewRequest?: (requestId: string) => void;
   /** The machine holds more of this conversation than is on screen. */
@@ -600,6 +602,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   /** Offered on every message but the first: branch the conversation from before it. */
   onBranch?: (turn: Turn) => void;
   focusItem?: { id: string; visit: number };
+  readVisual?: VisualReader;
 }) {
   const requestKey = pending.map(request => request.requestId).join('\0');
   // Text deltas clone the pending array too. Only changed requests should
@@ -711,6 +714,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   return (
     <Busy.Provider value={working || status === 'starting'}>
     <Requests.Provider value={requests}>
+    <Visuals.Provider value={readVisual}>
     <div className="chat-wrap">
       <div className="chat" ref={box} onScroll={onScroll}>
         <div className="timeline" onClick={(e) => {
@@ -738,6 +742,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
       )}
       {zoom && <Lightbox src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}
     </div>
+    </Visuals.Provider>
     </Requests.Provider>
     </Busy.Provider>
   );

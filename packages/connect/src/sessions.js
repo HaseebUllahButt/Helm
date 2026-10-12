@@ -3,7 +3,7 @@ import { nativeCommands, nativeControlCommand, nativeSettingCommand } from './na
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdirSync, readlinkSync, rmSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { join, basename } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { HELM_DIR, expand, quickDir, isQuickDir } from './paths.js';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
@@ -46,6 +46,7 @@ import { gitBranch } from './git-head.js';
 import { AccountLimits } from './account-limits.js';
 import { CLAUDE_NATIVE_COMMANDS } from './commands.js';
 import { messageDelivery } from '@helm/protocol/message-delivery';
+import { validateVisual, withVisualMessages } from './visual.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 /** How a recovery note says the agent's state could not be checked. */
@@ -2763,6 +2764,45 @@ export class Sessions extends EventEmitter {
     };
   }
 
+  /** Save a page independently of provider lifetime or background tasks. */
+  renderVisual(id, params) {
+    const s = this.get(id);
+    if (!this.#index.has(id) || s.engine === 'shell') throw new Error('visual replies need a saved agent chat');
+    const { html, title, height, renderId } = validateVisual(params);
+    const itemId = `visual-${renderId}`;
+    const ref = createHash('sha256').update(html).digest('hex').slice(0, 32);
+    const prior = this.events.tail(id, 0).find(e => e.type === 'item.start' && e.id === itemId);
+    if (prior) {
+      if (prior.visual?.ref !== ref || prior.visual.title !== title || prior.visual.height !== height) throw new Error('render ID already used for a different visual');
+      return { visual: prior.visual };
+    }
+    const stored = this.events.putAttachment(id, { filename: `${renderId}.html`, mime: 'text/html', data: Buffer.from(html).toString('base64') });
+    const visual = { ref: stored.ref, title, height, bytes: stored.bytes };
+    const active = s.driver && !s.external ? this.events.activeTurn(id) : null;
+    const turnId = active?.turnId ?? `local-visual-${renderId}`;
+    const append = event => {
+      const saved = this.events.append(id, event);
+      s.lastSeq = saved.seq;
+      this.emit('event', { id, event: saved });
+    };
+    if (!active) append({ type: 'turn.start', turnId, text: '', local: true });
+    append({ type: 'item.start', turnId, id: itemId, kind: 'visual', visual });
+    append({ type: 'item.done', turnId, id: itemId, status: 'ok' });
+    if (!active) append({ type: 'turn.done', turnId, status: 'ok', local: true });
+    this.#save();
+    this.emit('transcript', { id });
+    return { visual };
+  }
+
+  readVisual(id, ref) {
+    this.get(id);
+    if (!this.#index.has(id)) throw new Error('no such saved agent chat');
+    if (!/^[a-f0-9]{32}$/.test(ref ?? '') || !this.events.tail(id, 0).some(e => e.visual?.ref === ref)) throw new Error('no such visual in this chat');
+    const data = this.events.attachment(id, ref);
+    if (!data) throw new Error('this visual is no longer stored');
+    return { html: Buffer.from(data, 'base64').toString('utf8') };
+  }
+
   /** Backfill images when an existing imported chat is opened after upgrade. */
   async prepareHistory(id) {
     const s = this.get(id);
@@ -3161,7 +3201,7 @@ export class Sessions extends EventEmitter {
     if (s.driver) return { messages: [], source: 'events' };
     // A launched native process must be linked by process identity, never
     // by the newest file in a folder where several CLIs may be running.
-    if (s.nativeCli && !s.transcript) return { messages: [], status: s.status, source: null };
+    if (s.nativeCli && !s.transcript) return { messages: withVisualMessages([], this.events.tail(id, 0)), status: s.status, source: null };
     if (!s.transcript) {
       const profiles = await getProfiles();
       const profile = profiles.find((p) => p.id === s.profileId);
@@ -3202,7 +3242,7 @@ export class Sessions extends EventEmitter {
       }
     }
     return {
-      messages,
+      messages: withVisualMessages(messages, this.events.tail(id, 0)),
       status: s.status,
       source: s.transcript,
     };

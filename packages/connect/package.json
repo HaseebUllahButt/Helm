@@ -16,6 +16,8 @@
     "@helm/usage": "*",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.12.0",
     "node-datachannel": "^0.33.4",
+    "parse5": "^8.0.1",
+    "playwright": "^1.63.0",
     "qrcode-generator": "^2.0.4",
     "smol-toml": "^1.9.1",
     "ws": "^8.18.0",

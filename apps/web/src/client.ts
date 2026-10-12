@@ -392,6 +392,8 @@ export interface Message {
   tools: Tool[];
   thinking?: boolean;
   at?: string | number;
+  sourceId?: string;
+  visual?: import('./session/types').Visual;
   attachments?: { filename: string; mime: string; data?: string; missing?: boolean }[];
 }
 
@@ -433,7 +435,7 @@ const DC_CHUNK_TYPE = 'dc-chunk';
 // Kept deliberately narrow, matching the hub's authenticated /api/read route.
 // Prompts, approvals and other mutations must never acquire replay semantics.
 const HTTP_READ_METHODS = new Set([
-  'session.events', 'session.messages', 'session.list', 'model.list',
+  'session.events', 'session.messages', 'session.visual', 'session.list', 'model.list',
   'session.commands', 'env.info', 'session.watch', 'session.unwatch',
   'project.list',
 ]);

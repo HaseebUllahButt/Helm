@@ -72,13 +72,17 @@ export function helmBrief(net) {
   const others = machines
     .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
-  if (!self?.name || !others.length) return delegationNote();
+  if (!self?.name || !others.length) return `${delegationNote()}\n${visualNote()}`;
   return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}.
 - Run something on another machine: helm exec <machine> --cwd <absolute-path> -- <command> [args]. This uses Helm's managed connection; prefer it to SSH. For pipelines use -- sh -lc '<script>'. Add --heavy for tests/builds; pass environment explicitly with --env NAME=value. If it says the command may have started, never rerun it: read it with helm exec-status <machine> <command-id> --wait, or stop it with helm exec-cancel <machine> <command-id>.
 - Copy files there: helm copy <machine> <file-or-folder> [--target-folder <path>] (default: the same place; ~ is that machine's home).
 - Which machines are on and what is running where: helm digest. Read a session: helm thread <id>. Message it: helm say <id> <text>.
 - Start an agent on another machine: helm spawn <machine> <folder> <account> <task>.]
-${delegationNote()}`;
+${delegationNote()}\n${visualNote()}`;
+}
+
+export function visualNote() {
+  return '[Helm visuals: Use an inline visual when a diagram, chart, comparison, simulation, or interactive explanation would help the user. Write a self-contained HTML file with inline CSS/JS, then run helm run --heavy -- helm preview <file.html> --output <preview.png> (optionally --width 390 for mobile). Inspect the screenshot and reported JavaScript errors; correct it before publishing with helm render <file.html> --title "<short title>". Render saves a snapshot in this chat, works across providers, and does not keep the agent working. Local image paths in img/srcset, SVG images, and CSS url() are embedded; each image must be a recognized image up to 2 MiB and the whole page up to 4 MiB. Use CSS variables --bg, --card, --text, --text-dim, --line, --primary-q for theme-aware visuals. Scripts run inside an isolated frame: no app state, network fetch, external scripts, or forms; use inline SVG/canvas and vanilla JS. A visual needs no dev server or background watcher. Prefer plain text for simple answers.]';
 }
 
 /** Read-only parents cannot acquire write access through a different CLI. */

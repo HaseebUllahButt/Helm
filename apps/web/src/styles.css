@@ -1,5 +1,22 @@
 @import '@xterm/xterm/css/xterm.css';
 
+/* Saved visual replies: controls belong to Helm; the page stays isolated. */
+.visual-reply { margin: 12px 0; border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.visual-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; padding: 9px 12px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 12px; }
+.visual-bar strong { flex: 1; min-width: 100px; font-weight: 550; overflow-wrap: anywhere; }
+.visual-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.visual-actions button { padding: 7px 9px; color: var(--text-dim); background: transparent; border: 0; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.visual-actions button:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.visual-actions button:disabled { opacity: .4; cursor: default; }
+.visual-actions button:focus-visible { outline: 2px solid var(--primary-q); outline-offset: -2px; }
+.visual-frame { display: block; width: 100%; border: 0; background: var(--bg); }
+.visual-placeholder { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; padding: 24px; color: var(--mutedfg); font-size: 13px; text-align: center; }
+.visual-dialog { display: flex; flex-direction: column; width: min(1280px, 96vw); height: 92dvh; min-height: 0; background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; box-shadow: 0 20px 80px #0005; }
+.visual-dialog .visual-bar { flex-shrink: 0; }
+.visual-dialog .visual-frame { flex: 1; min-height: 0; }
+.visual-source { margin: 0; padding: 20px; overflow: auto; flex: 1; min-height: 0; color: var(--text-dim); font: 12px/1.6 var(--mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .visual-actions button { min-height: 44px; } .visual-dialog { width: 100%; height: 100dvh; border: 0; border-radius: 0; } .visual-back { padding: 0; } }
+
 /* ===========================================================================
    helm
    Graphite by default, with an optional navy palette. Theme colours use

@@ -10,7 +10,7 @@ export function useDialog(onClose: () => void, enabled = true) {
     const dialog = ref.current;
     if (!dialog || !enabled) return;
     const focusable = () => [...dialog.querySelectorAll<HTMLElement>(
-      'input:not(:disabled), textarea:not(:disabled), select:not(:disabled), button:not(:disabled), a[href], [tabindex="0"]',
+      'input:not(:disabled), textarea:not(:disabled), select:not(:disabled), button:not(:disabled), a[href], iframe, [tabindex="0"]',
     )].filter((el) => el.tabIndex >= 0 && el.getClientRects().length > 0);
     const first = () => (focusable()[0] ?? dialog).focus();
     const isTop = () => [...document.querySelectorAll('[aria-modal="true"]')].at(-1) === dialog;
