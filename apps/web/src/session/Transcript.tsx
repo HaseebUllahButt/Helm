@@ -198,14 +198,15 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
   );
 }
 
-/**
- * Everything the agent did between two things it said - reads, searches,
- * commands, edits, helpers - folded into one line you can open. While it
- * works, the line says what it is doing now; nothing it prints lands in the
- * conversation unless you ask for it.
- */
 /** How many steps of a live run stay on screen at once. */
 const LIVE_STEPS = 6;
+
+/**
+ * Everything the agent did between two things it said - reads, searches,
+ * commands, edits, helpers. While it works, each step shows as its own line
+ * the way the CLI shows them; once it is done they fold into one line you
+ * can open.
+ */
 
 function ActivityGroup({ items, byParent, live: turnLive }: { items: Item[]; byParent: Map<string, Item[]>; live: boolean }) {
   const [open, setOpen] = useState(false);
@@ -227,13 +228,17 @@ function ActivityGroup({ items, byParent, live: turnLive }: { items: Item[]; byP
   // (or tapping the "earlier" line) brings back the whole list.
   if (live && !open) {
     const hidden = Math.max(0, items.length - LIVE_STEPS);
+    // A helper's card on screen carries its own "Answer question" button;
+    // a second one here would be the same request twice.
+    const shown = new Set(items.slice(hidden).filter((it) => it.kind === 'subagent').map((it) => it.id));
+    const unseen = asking.filter((request) => !shown.has(request.parentId ?? ''));
     return (
       <div className="activity live">
         {hidden > 0 && <button type="button" className="steps-earlier" aria-expanded={false} onClick={() => setOpen(true)}>+{hidden} earlier {hidden === 1 ? 'step' : 'steps'}</button>}
         <div className="steps-live">
           {items.slice(hidden).map((it) => <div key={it.id} className="live-step"><ItemView item={it} byParent={byParent} /></div>)}
         </div>
-        {requests.review && asking.map(request => <button key={request.requestId} className="subagent-request"
+        {requests.review && unseen.map(request => <button key={request.requestId} className="subagent-request"
           onClick={() => requests.review?.(request.requestId)}>
           {request.kind === 'question' ? 'Answer question' : 'Review request'} · {request.title}<Icon name="forward" size={13} />
         </button>)}

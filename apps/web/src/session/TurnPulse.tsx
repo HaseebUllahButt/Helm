@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, Fragment, useContext, useEffect, useState } from 'react';
 import type { Item, Turn } from './types';
 import { money, seconds } from '../format';
 
@@ -80,7 +80,9 @@ export function WrapUp({ turn }: { turn: Turn }) {
   if (!parts.length) return null;
   return (
     <div className="turn-meta wrapup">
-      <span>{parts.join(' · ')}</span>
+      {/* Each part keeps its words together, so a narrow screen breaks
+          between parts and never strands a dot at the start of a line. */}
+      <span>{parts.map((p, i) => <Fragment key={i}>{i ? ' ' : ''}<span className="wrapup-part">{p}{i < parts.length - 1 ? ' ·' : ''}</span></Fragment>)}</span>
       {files.length > 0 && (
         <div className="wrapup-files">
           {files.slice(0, MAX_CHIPS).map((f) => (

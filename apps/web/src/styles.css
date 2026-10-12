@@ -2884,3 +2884,4 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .wrapup-chip:hover { color: var(--text); border-color: var(--mutedfg); }
 .wrapup-chip:focus-visible { outline: 2px solid var(--sky); outline-offset: 1px; }
 .wrapup-more { color: var(--mutedfg); }
+.wrapup-part { white-space: nowrap; }
