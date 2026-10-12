@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { Client, Mode, ModelList, Session, NativeControl } from '../client';
+import type { Client, Mode, ModelList, ModelNote, Session, NativeControl } from '../client';
 import { Icon, type IconName } from '../Icon';
 import { modelRing, nextInRing } from './chatKeys';
 
@@ -23,7 +23,7 @@ export interface Choice {
  * The sheet docks in the same slot a permission prompt uses, because that is
  * where your eyes already are.
  */
-export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs, onDefault, onNativeControl }: {
+export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs, onDefault, onNewsSeen, onNativeControl }: {
   options: ModelList | null;
   onNativeControl?: (kind: NativeControl) => void;
   session: Session;
@@ -35,6 +35,8 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
   onEffortFavs?: (model: string, next: string[]) => void;
   /** Make a choice what new chats on this account start with. */
   onDefault?: (kind: Kind, id: string) => Promise<void> | void;
+  /** The owner saw the "new model" note; it need not show again. */
+  onNewsSeen?: () => void;
 }) {
   const [open, setOpen] = useState<Kind | null>(null);
   const groups = groupsFor(options, session);
@@ -125,6 +127,8 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
         favs={group.kind === 'model' ? options?.favs : group.kind === 'effort' && options?.effortFavs !== undefined ? effortFavs : undefined}
         onFavs={group.kind === 'model' ? onFavs : group.kind === 'effort' && onEffortFavs ? (next) => onEffortFavs(model, next) : undefined}
         onDefault={onDefault && group.saved !== undefined ? (id) => onDefault(group.kind, id) : undefined}
+        news={group.kind === 'model' ? options?.news : undefined}
+        onNewsSeen={group.kind === 'model' ? onNewsSeen : undefined}
         onClose={() => setOpen(null)}
         onPick={(id) => { setOpen(null); onPick(group.kind, id); }}
       />
@@ -165,6 +169,8 @@ export function trayPrefs({ client, env, engine, profileId, options, setOptions,
       if (kind === 'model') {
         const r: any = await client.rpc(env, 'model.prefs', {
           profileId, default: value, approved: options.prefs?.approved ?? [],
+          // This copy of the list may be older than the machine's.
+          keepApproved: true,
         }, 15_000);
         setOptions((now) => now && { ...now, prefs: r.prefs });
       } else {
@@ -175,7 +181,12 @@ export function trayPrefs({ client, env, engine, profileId, options, setOptions,
       }
     } catch (e: any) { setError(e.message); throw e; }
   } : undefined;
-  return { onFavs, onEffortFavs, onDefault };
+  // The note is for one look: gone from this screen now, from the machine in a moment.
+  const onNewsSeen = profileId ? () => {
+    setOptions((now) => now && { ...now, news: [] });
+    client.rpc(env, 'model.news', { profileId }, 15_000).catch(() => { /* it shows once more, no harm */ });
+  } : undefined;
+  return { onFavs, onEffortFavs, onDefault, onNewsSeen };
 }
 
 interface Group {
@@ -310,7 +321,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
  */
 const favsOf = (key: string): string[] => { try { return JSON.parse(localStorage.getItem(`helm.favmodels:${key}`) || '[]'); } catch { return []; } };
 
-function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, searchable, favKey, favs: shared, onFavs, onDefault, onPick, onClose }: {
+function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, searchable, favKey, favs: shared, onFavs, onDefault, news, onNewsSeen, onPick, onClose }: {
   title: string; note?: string; choices: Choice[]; more?: Choice[]; current: string;
   /** A long list gets a search box even when nothing is folded away. */
   searchable?: boolean;
@@ -322,7 +333,13 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, se
   favs?: string[];
   onFavs?: (next: string[]) => void;
   onDefault?: (id: string) => Promise<void> | void;
+  news?: ModelNote[];
+  onNewsSeen?: () => void;
 }) {
+  // Seeing the sheet is seeing the note: closing it, any way, retires it.
+  const latest = useRef({ news, onNewsSeen });
+  latest.current = { news, onNewsSeen };
+  useEffect(() => () => { if (latest.current.news?.length) latest.current.onNewsSeen?.(); }, []);
   const machineFavs = shared !== undefined && !!onFavs;
   const [favs, setFavs] = useState<string[]>(() => (favKey ? (machineFavs ? shared! : favsOf(favKey)) : []));
   useEffect(() => {
@@ -449,6 +466,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, se
         <button className="x" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button>
       </div>
       {note && <div className="modesheet-note">{note}</div>}
+      {!!news?.length && <ModelNews news={news} onSeen={onNewsSeen} />}
       {onDefault && <div className="modesheet-legend">Defaults apply to new chats{favKey && <span><Icon name="star" size={13} /> favorites only</span>}</div>}
       {search && (
         <input
@@ -473,6 +491,21 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, se
       ))}
       {q && !favorites.length && !main.length && !rest.length && <div className="modesheet-note">no matches</div>}
       {saveError && <div className="error" role="alert">{saveError}</div>}
+    </div>
+  );
+}
+
+/** What joined by itself, in a few calm words: "New: Claude Opus 6 - now your default". */
+export const newsLines = (news: ModelNote[]) => {
+  const lines = news.slice(0, 3).map((n) => `New: ${n.label}${n.isDefault ? ' \u2014 now your default' : ''}`);
+  return news.length > 3 ? [...lines, `and ${news.length - 3} more`] : lines;
+};
+
+function ModelNews({ news, onSeen }: { news: ModelNote[]; onSeen?: () => void }) {
+  return (
+    <div className="model-news" role="status">
+      <span className="grow">{newsLines(news).map((l) => <span key={l}>{l}</span>)}</span>
+      {onSeen && <button onClick={onSeen}>OK</button>}
     </div>
   );
 }

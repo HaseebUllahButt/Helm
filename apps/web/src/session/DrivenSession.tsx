@@ -516,6 +516,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     if (model) {
       const r: any = await client.rpc(env.id, 'model.prefs', {
         profileId: session.profileId, default: model, approved: options.prefs?.approved ?? [],
+        keepApproved: true,
       }, 15_000);
       setOptions((now) => now && { ...now, prefs: r.prefs });
     }

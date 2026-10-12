@@ -48,6 +48,9 @@ export interface ModelPrefs {
   approved: string[];
 }
 
+/** A model that joined an account by itself, until the owner has seen the note. */
+export interface ModelNote { id: string; label: string; isDefault: boolean }
+
 export interface Profile {
   id: string;
   label: string;
@@ -209,6 +212,10 @@ export interface ModelList {
   /** What the account's approved list filtered out - reachable, not offered first. */
   more?: string[];
   prefs?: ModelPrefs | null;
+  /** Add new models to this account by themselves. Older machines do not say. */
+  auto?: boolean;
+  /** Quiet notes about models that just joined. */
+  news?: ModelNote[];
   /** Slug -> the name the CLI shows a person ("GPT-6-Astra"). */
   labels?: Record<string, string>;
   effort?: string | null;

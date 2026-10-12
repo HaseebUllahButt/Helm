@@ -15,7 +15,7 @@ import { nonAgentClaudeTask } from './claude-tasks.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
-import { optionArgs } from './models.js';
+import { optionArgs, peekModels, followNewModels } from './models.js';
 import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
 import { EventLog, activeTurnFromEvents, EVENT_KEEP } from './events.js';
 import { ClaudeDriver, permissionCard } from './drivers/claude.js';
@@ -1366,7 +1366,17 @@ export class Sessions extends EventEmitter {
     }
     // The account's configured default is what a new session starts with; a
     // model chosen up front always wins.
-    if (!model) model = modelPrefs(profile)?.default ?? null;
+    if (!model) {
+      // A model released since a picker was last opened still becomes the
+      // default before this chat starts - from the held catalogue only, so a
+      // start never waits on a CLI.
+      try {
+        const eng = ENGINES[profile.engine], spec = materialize(profile);
+        followNewModels(profile, peekModels(profile.engine, spec.env?.[eng?.homeEnv] ?? eng?.defaultHome,
+          profile.wraps ? { cmd: spec.cmd, args: spec.args } : null));
+      } catch { /* the default as it was is still fine */ }
+      model = modelPrefs(profile)?.default ?? null;
+    }
     const defaults = startPrefs(profile) ?? {};
     if (!effort) effort = defaults.effort ?? null;
     if (mode === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
