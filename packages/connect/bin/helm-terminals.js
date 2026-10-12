@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { nativeLaunchSettings } from '../src/native-settings.js';
 /**
  * The terminal host.
  *
@@ -170,7 +171,7 @@ async function handle(msg, viewer) {
         const terminal = await terminals.open(msg.id, msg);
         if (msg.native && !nativeSessions.has(msg.id)) {
           const session = { id: msg.id, engine: msg.native.engine, cwd: msg.cwd,
-            configHome: msg.native.configHome, nativePid: terminal.pty.pid,
+            configHome: msg.native.configHome, nativePid: terminal.pty.pid, settings: nativeLaunchSettings(msg.native.engine, msg.args),
             nativeChat: !!msg.native.nativeChat,
             conversation: msg.native.conversation ?? null, createdAt: Date.now() };
           nativeSessions.set(msg.id, session);

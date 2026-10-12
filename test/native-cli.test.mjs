@@ -15,6 +15,7 @@ mkdirSync(process.env.HELM_DIR);
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ version: 1, profiles: [] }));
 const { TerminalHost, NATIVE_SOCKET_PATH } = await import('../packages/connect/src/terminals.js');
 const { interactiveLaunch, installNativeLaunchers, integrateNativeCommands, removeNativeLaunchers } = await import('../packages/connect/src/native-cli.js');
+const { PI_SETTINGS_EXTENSION } = await import('../packages/connect/src/pi-settings.js');
 const { loadPty } = await import('../packages/connect/src/pty.js');
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 
@@ -93,11 +94,13 @@ rl.question('Permission: allow harmless operation? [y/n] ', answer=>{
   await until(() => local.includes('Permission:'));
   const host = new TerminalHost({ socketPath: NATIVE_SOCKET_PATH, unit: 'helm-native-test' });
   assert.equal(await host.ensure({ spawn: false }), true);
+  t.after(() => host.detach());
   const meta = host.nativeSessions()[0];
   assert.ok(meta.id.startsWith('native-'));
   assert.equal(meta.engine, engine);
   const identity = JSON.parse(local.slice(local.indexOf('{'), local.indexOf('}') + 1));
-  assert.deepEqual(identity.args, ['--model', 'provider-model']);
+  assert.deepEqual(identity.args, ['--model', 'provider-model', ...(engine === 'pi' ? ['--extension', PI_SETTINGS_EXTENSION] : [])]);
+  assert.equal(meta.settings.model, 'provider-model');
   assert.equal(identity.cwd, root);
   assert.equal(identity.account, join(root, 'personal-account'));
   assert.equal(identity.pid, meta.nativePid);

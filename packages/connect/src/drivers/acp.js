@@ -284,7 +284,7 @@ export class AcpDriver extends Driver {
 
     const opt = (id) => this.#options.find((o) => o.id === id)?.currentValue;
     this.info = { model: opt('model'), effort: this.spec.effortId ? opt(this.spec.effortId) : null };
-    this.emit('init', this.info);
+    this.emit('init', { ...this.info, mode: this.mode });
   }
 
   async #load(sessionId) {

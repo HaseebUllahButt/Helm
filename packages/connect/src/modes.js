@@ -18,7 +18,7 @@ export const MODES = {
     { id: 'default', label: 'Ask before acting', short: 'ask', hint: 'every edit and command is a question', cli: 'manual' },
     { id: 'acceptEdits', label: 'Edit freely', short: 'edit', hint: 'edits go through, commands still ask', cli: 'acceptEdits' },
     { id: 'auto', label: 'Act without asking', short: 'auto', hint: 'Claude blocks risky actions quietly; they will not ping your phone', cli: 'auto' },
-    { id: 'bypassPermissions', label: 'Bypass all checks', short: 'yolo', hint: 'permission checks are off; direct questions from Claude still need an answer', cli: 'bypassPermissions', danger: true },
+    { id: 'bypassPermissions', label: 'Bypass all checks', short: 'yolo', hint: 'Claude’s --dangerously-skip-permissions: skips permission prompts; hook blocks and direct questions still apply', cli: 'bypassPermissions', danger: true },
   ],
   codex: [
     { id: 'ask', label: 'Ask before acting', short: 'ask', hint: 'sandboxed in the workspace; anything else asks', approvalPolicy: 'on-request', sandbox: 'workspace-write', sandboxPolicy: { type: 'workspaceWrite' } },
@@ -96,3 +96,9 @@ export const modeFromAuto = (engine, auto) => {
   const list = modesFor(engine);
   return (auto ? list.find((m) => m.id === 'auto' || m.id === 'full' || m.danger) : list[0])?.id ?? null;
 };
+
+// These are bash-guard's session states, not permissions for Pi's other tools.
+export const BASH_GUARD_MODES = [
+  { id: 'guard', label: 'Bash guard on', short: 'guard', hint: 'bash-guard asks before flagged shell commands; other tools follow their extensions' },
+  { id: 'guard-off', label: 'Bash guard off', short: 'guard off', hint: 'skip shell prompts; bash-guard still blocks catastrophic commands', danger: true },
+];

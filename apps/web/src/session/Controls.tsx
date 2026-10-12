@@ -91,12 +91,22 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
             <span className="chip-label">{g.currentLabel}</span>
           </button>
         ))}
-        {(options?.nativeControls ?? []).map(kind => {
+        {(['model', 'effort', 'mode'] as const).filter(kind => !groups.some(g => g.kind === kind) && !options?.nativeControls?.includes(kind)).map(kind => {
+          const value = kind === 'model' ? session.model || session.engineModel : kind === 'effort' ? session.effort || session.engineEffort : session.mode;
+          if (!value) return null;
+          const title = kind === 'effort' ? 'thinking' : kind === 'mode' ? 'permissions' : kind;
+          const label = kind === 'model' ? shortModel(value, options?.labels, session.engine) : value;
+          return <span key={`reported:${kind}`} className="chip-pick" title={`${title}: ${value} (reported by the CLI)`}><span className="chip-label">{label}</span></span>;
+        })}
+        {session.permissionControl === 'none' && <span className="chip-pick" title="This CLI has no built-in permission modes. Tool approvals belong to its extensions."><i className="cg mode"><Icon name="shield" size={13} /></i><span className="chip-label">extensions</span></span>}
+        {(options?.nativeControls ?? []).filter(kind => !groups.some(g => g.kind === kind)).map(kind => {
           const title = kind === 'effort' ? 'thinking' : kind === 'mode' ? 'permissions' : kind;
           const glyph: IconName = kind === 'model' ? 'model' : kind === 'effort' ? 'effort' : kind === 'mode' ? 'shield' : kind === 'speed' ? 'bolt' : 'terminal';
+          const value = kind === 'model' ? session.engineModel : kind === 'effort' ? session.engineEffort : kind === 'mode' ? session.mode : null;
+          const label = kind === 'model' && value ? shortModel(value, options?.labels, session.engine) : value || title;
           return <button key={`native:${kind}`} className="chip-pick" disabled={busy}
-            title={`Open ${title} in the CLI`} aria-label={`${title}: open CLI picker`}
-            onClick={() => onNativeControl?.(kind)}><i className={`cg ${kind}`}><Icon name={glyph} size={13} /></i><span className="chip-label">{title}</span></button>;
+            title={`Open ${title} in the CLI`} aria-label={`${title}: ${value ? `${label}; ` : ''}open CLI picker`}
+            onClick={() => onNativeControl?.(kind)}><i className={`cg ${kind}`}><Icon name={glyph} size={13} /></i><span className="chip-label">{label}</span></button>;
         })}
       </span>
     ),
@@ -230,14 +240,16 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
   }
 
   // Only the levels this model actually offers.
-  const efforts = options.effortsByModel?.[model] ?? options.efforts ?? [];
-  if (efforts.length) {
+  const offeredEfforts = options.effortsByModel?.[model] ?? options.efforts ?? [];
+  const reportedEffort = session.effort || session.engineEffort;
+  const efforts = reportedEffort && !offeredEfforts.includes(reportedEffort) ? [reportedEffort, ...offeredEfforts] : offeredEfforts;
+  if (offeredEfforts.length) {
     const effort = [session.effort, session.engineEffort, options.effort].find((value) => value && efforts.includes(value)) || '';
     out.push({
       kind: 'effort',
       title: 'thinking',
       glyph: 'effort',
-      note: session.nativeChat
+      note: session.nativeChat && session.engine === 'claude'
         ? "How long it reasons before answering. Claude also saves this as the model's default for future chats."
         : 'How long it reasons before answering. More is slower and costs more.',
       choices: efforts.map((e) => ({ id: e, label: e })),
@@ -263,7 +275,7 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       current: current?.id ?? '',
       currentLabel: current?.short ?? current?.label ?? 'mode',
       danger: current?.danger,
-      saved: options.defaults?.mode ?? options.defaultMode ?? null,
+      saved: session.permissionControl === 'bash-guard' ? undefined : options.defaults?.mode ?? options.defaultMode ?? null,
     });
   }
 

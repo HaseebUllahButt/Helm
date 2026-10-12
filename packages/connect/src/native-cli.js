@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { HELM_DIR, HOME, expand } from './paths.js';
 import { NativeHosts } from './terminals.js';
 import { ENGINES } from './engines.js';
+import { piChatArgs } from './pi-settings.js';
 import { claudeChatArgs } from './claude-hooks.js';
 
 const marker = '# Helm native CLI integration';
@@ -300,6 +301,7 @@ export async function runNativeCli(engine, cmd, args) {
   // screen in Helm instead.
   const nativeChat = engine === 'claude' && !joined && process.env.HELM_NATIVE_CHAT !== '0';
   if (nativeChat) args = claudeChatArgs(args);
+  if (engine === 'pi' && !joined) args = piChatArgs(args);
   return new Promise(async (resolve, reject) => {
     let finished = false;
     let started = false;

@@ -201,7 +201,7 @@ test('an older idle Helm thread resumed in a terminal joins the daemon with the 
   assert.equal(rows[0].id,'older-helm-conversation');
   assert.equal(rows[0].nativeCodex,true);
   assert.equal(rows[0].alive,true);
-  assert.equal(rows[0].mode,undefined,'the resumed terminal owns its permission settings');
+  assert.equal(rows[0].mode,'ask','show the actual terminal policy rather than the stale saved full mode');
   await sessions.stop();
 });
 
