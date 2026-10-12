@@ -2779,3 +2779,17 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .pipeline-account p { font-size: var(--t-micro); color: var(--mutedfg); margin: 7px 0; }
 
 .brain-entry { margin-block: 10px 16px; }
+
+/* ---- working line + wrap-up (ideas 5/7) ---- */
+.working:not(.chip) { align-items: center; gap: 8px; }
+.pulse-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--mutedfg); animation: pulse-dot 1.6s ease-in-out infinite; }
+.working-time { margin-left: 2px; font-family: var(--mono); font-size: var(--t-micro); color: var(--mutedfg); font-variant-numeric: tabular-nums; opacity: .8; }
+@keyframes pulse-dot { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .pulse-dot { animation: none; opacity: .7; } }
+
+.turn-meta.wrapup { text-wrap: balance; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.wrapup-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wrapup-chip { max-width: 100%; min-height: 24px; padding: 2px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; color: var(--text-dim); background: var(--card); border: 1px solid var(--line-2); border-radius: 999px; cursor: pointer; }
+.wrapup-chip:hover { color: var(--text); border-color: var(--mutedfg); }
+.wrapup-chip:focus-visible { outline: 2px solid var(--sky); outline-offset: 1px; }
+.wrapup-more { color: var(--mutedfg); }
