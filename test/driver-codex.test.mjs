@@ -600,3 +600,21 @@ test('a Codex context compaction shows as the shared compact item', async (t) =>
   notify('item/completed', { turnId: 'c1', item: { id: 'cc-1', type: 'contextCompaction' } });
   assert.equal(log.of('item.done').find((e) => e.id === 'cc-1').status, 'ok');
 });
+
+test('a Codex retry says why it is retrying', async (t) => {
+  const { driver, log, notify } = scriptedCodex(t, {
+    reply(request) {
+      if (request.method === 'thread/read') return { result: { thread: { status: { type: 'idle' }, turns: [] } } };
+    },
+  });
+  await driver.start();
+  notify('turn/started', { turn: { id: 'r1' } });
+  // Recorded on 'why' with Codex 0.162.0 while OpenAI was overloaded.
+  notify('error', { willRetry: true, threadId: driver.threadId, turnId: 'r1', error: { message: 'Reconnecting... 2/5',
+    additionalDetails: 'We’re currently experiencing high demand, which may cause temporary errors.' } });
+  notify('error', { willRetry: false, threadId: driver.threadId, turnId: 'r1', error: { message: 'stream disconnected', additionalDetails: null } });
+  assert.deepEqual(log.of('error').map((e) => [e.message, e.kind]), [
+    ['Reconnecting... 2/5 — We’re currently experiencing high demand, which may cause temporary errors.', 'retrying'],
+    ['stream disconnected', 'turn'],
+  ]);
+});

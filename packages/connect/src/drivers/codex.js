@@ -1316,9 +1316,15 @@ export class CodexDriver extends Driver {
         }
         return;
       }
-      case 'error':
-        this.push('error', { message: p.error?.message ?? 'codex error', kind: p.willRetry ? 'retrying' : 'turn' });
+      case 'error': {
+        // "Reconnecting... 2/5" alone hides why: the reason (OpenAI's "high
+        // demand", a 503) rides in additionalDetails.
+        const message = p.error?.message ?? 'codex error';
+        const details = String(p.error?.additionalDetails ?? '').trim();
+        this.push('error', { message: details && !message.includes(details) ? `${message} — ${details}` : message,
+          kind: p.willRetry ? 'retrying' : 'turn' });
         return;
+      }
       default: return;
     }
   }
