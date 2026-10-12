@@ -199,6 +199,32 @@ test('durable auth restoration yields to a re-pairing during the IDB read', asyn
   assert.deepEqual(result, { loaded: 'new-pairing', sync: 'new-pairing', durable: 'new-pairing' });
 });
 
+test('a sign-out in another tab during the durable read stays signed out', async (t) => {
+  const page = await pageFor(t);
+  const result = await page.evaluate(async () => {
+    window.auth.saveAuth({ token: 'old-pairing', endpoints: ['http://old-network'] });
+    await window.txn('kv', 'readonly', (s) => s.get('helm.auth'));
+    localStorage.removeItem('helm.auth');
+    const db = await window.idb();
+    const tx = db.transaction('kv', 'readwrite');
+    const store = tx.objectStore('kv');
+    let hold = true;
+    const loop = () => {
+      const request = store.get('blocker');
+      request.onsuccess = () => { if (hold) loop(); };
+    };
+    loop();
+    const reading = window.auth.loadAuthDurable();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // What clearAuth writes in another tab; this tab gets no storage event of its own.
+    localStorage.setItem('helm.auth', 'null');
+    hold = false;
+    const loaded = await reading;
+    return { loaded: loaded?.token ?? null, stored: localStorage.getItem('helm.auth'), sync: window.auth.loadAuthSync() };
+  });
+  assert.deepEqual(result, { loaded: null, stored: 'null', sync: null });
+});
+
 test('IME composition Enter is ignored while ordinary Enter still sends', async (t) => {
   const page = await pageFor(t);
   await page.evaluate(() => window.mountIme());

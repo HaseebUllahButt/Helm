@@ -21,7 +21,8 @@ let authRevision = 0;
 // module, so observe them as well as incrementing the local generation below.
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
-    if (event.key === KEY) authRevision += 1;
+    // key null: another tab cleared all storage.
+    if (event.key === KEY || event.key === null) authRevision += 1;
   });
 }
 
@@ -49,13 +50,22 @@ function localGet(): StoredAuth | null {
   } catch { return null; }
 }
 
+/**
+ * Signing out leaves the literal 'null' rather than no key. Removing a key
+ * that is already gone tells no other tab, so a tab midway through restoring
+ * the durable copy wrote the old pairing back and signed the owner in again.
+ */
+function signedOut(): boolean {
+  try { return localStorage.getItem(KEY) === 'null'; } catch { return false; }
+}
+
 /** Synchronous first look, so the app can render without a loading flash. */
 export const loadAuthSync = localGet;
 
 /** The durable copy, for when localStorage came up empty. */
 export async function loadAuthDurable(): Promise<StoredAuth | null> {
   const local = localGet();
-  if (local) return local;
+  if (local || signedOut()) return local;
   const revision = authRevision;
   const durable = await idbGet();
   // saveAuth/clearAuth may have run while IndexedDB was blocked. Prefer the
@@ -64,12 +74,12 @@ export async function loadAuthDurable(): Promise<StoredAuth | null> {
   // another tab; the second localGet also handles the event arriving just
   // before this continuation runs.
   const current = localGet();
-  if (authRevision !== revision || current) return current;
+  if (authRevision !== revision || current || signedOut()) return current;
   if (durable) {
     try {
       // Re-check immediately before the write: this is still one synchronous
       // turn, so a same-tab save cannot interleave between these statements.
-      if (authRevision !== revision || localGet()) return localGet();
+      if (authRevision !== revision || localGet() || signedOut()) return localGet();
       localStorage.setItem(KEY, JSON.stringify(durable));
     } catch { /* full */ }
   }
@@ -86,6 +96,6 @@ export function saveAuth(a: StoredAuth) {
 
 export function clearAuth() {
   authRevision += 1;
-  try { localStorage.removeItem(KEY); } catch { /* nothing to clear */ }
+  try { localStorage.setItem(KEY, 'null'); } catch { /* nothing to clear */ }
   idbSet(null);
 }
