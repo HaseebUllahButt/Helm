@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Client, Environment, Profile, Session } from './client';
 import { BackIcon, Icon } from './Icon';
 import { Confirm } from './Modal';
+import { CodingTools } from './CodingTools';
 
 /**
  * Which Helm each machine runs, and the two ways to bring in GitHub's.
@@ -120,6 +121,14 @@ export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: 
           })}
           {!sorted.length && <div className="empty quiet">No machines are paired yet</div>}
         </div>
+
+        {online.length > 0 && (
+          <p className="note">
+            Claude Code, Codex and the other coding tools update themselves too. A chat that is already
+            running keeps going; new chats use the new version.
+          </p>
+        )}
+        {online.map((env) => <CodingTools key={env.id} client={client} env={env} />)}
 
         <div className="section">GitHub</div>
         <button className="action" disabled={busy || !newest} onClick={() => setAsking(true)}>

@@ -1832,6 +1832,8 @@ button.sheet-editlink:hover { color: var(--text); }
 .rm.up-done { color: var(--emerald); }
 .rm.up-refused { color: var(--amber-text); }
 .rm.up-failed { color: var(--red); }
+/* The per-machine button sits under its list, not against it. */
+.action.coding-update { margin-top: 10px; }
 
 
 /* ===========================================================================

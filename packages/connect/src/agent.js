@@ -23,7 +23,7 @@ import { readProcess } from './takeover.js';
 import { usableProfiles, authStatuses } from './auth.js';
 import { listCommands } from './commands.js';
 import { contextLimit } from './context-limit.js';
-import { accountKey, modelPrefs, modelWatch, dismissModelNews, saveModelPrefs, startPrefs, saveStartPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject } from './settings.js';
+import { accountKey, modelPrefs, modelWatch, dismissModelNews, saveModelPrefs, startPrefs, saveStartPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject, cliAutoUpdate, saveCliAutoUpdate } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
@@ -46,6 +46,7 @@ import { Handoffs } from './handoffs.js';
 import { TaskTransfers } from './task-transfer.js';
 import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
+import { CliUpdater } from './cli-updates.js';
 import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted } from './update.js';
 import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
@@ -295,6 +296,12 @@ export class Daemon {
     this.name = net.machines[net.self]?.name || name || hostname();
     this.copyReceiver = new CopyReceiver({ network: () => loadNetwork() ?? this.net });
     this.executions = new ExecutionJobs();
+    this.cliUpdates = new CliUpdater({
+      auto: () => cliAutoUpdate(),
+      // Only asked on Windows, where a running program can not be replaced.
+      busy: async (engine) => (await this.sessions.list())
+        .some((x) => x.engine === engine && ['working', 'blocked', 'starting'].includes(x.status)),
+    });
   }
 
   async start() {
@@ -467,6 +474,9 @@ export class Daemon {
     first.unref?.();
     this.#wake = setInterval(() => { if (!this.#stopped) void this.#syncVersions(); }, SYNC_EVERY_MS);
     this.#wake.unref?.();
+
+    // Test runs and `HELM_NO_UPDATE` machines never touch the coding tools.
+    if (process.env.HELM_NO_UPDATE !== '1' && process.env.HELM_NO_SERVICE !== '1') this.cliUpdates.start();
   }
 
   /** A remote hub came back after a long time away: the machine is back online. */
@@ -540,6 +550,7 @@ export class Daemon {
     clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
     clearInterval(this.#wake);
+    this.cliUpdates?.stop();
     this.taskTransfers?.stop();
     this.schedules?.stop();
     this.github?.stop();
@@ -1332,6 +1343,12 @@ export class Daemon {
       case M.GIT_WATCH: return this.github.watch(p.sessionId, p.on === true);
       case M.GIT_ACCOUNTS: return this.github.accounts(p.cwd);
       case M.GIT_ACCOUNT: return this.github.selectAccount(p.cwd, p.login);
+
+      // The coding tools on this machine. Updating answers at once and runs
+      // in the background; the app asks for the versions again to watch it.
+      case M.CLI_VERSIONS: return this.cliUpdates.versions({ refresh: p.refresh === true });
+      case M.CLI_UPDATE: return this.cliUpdates.begin({ engine: typeof p.engine === 'string' ? p.engine : undefined });
+      case M.CLI_AUTO_UPDATE: return { auto: saveCliAutoUpdate(p.on === true) };
 
       case M.ENV_BUNDLE: return makeBundle({ have: Array.isArray(p.have) ? p.have : [] });
 
