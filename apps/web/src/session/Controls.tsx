@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { Client, Mode, ModelList, ModelNote, Session, NativeControl } from '../client';
 import { Icon, type IconName } from '../Icon';
 import { modelRing, nextInRing } from './chatKeys';
@@ -80,6 +80,8 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
   return {
     step,
     show,
+    /** Fold whatever sheet is open: another picker beside these took the slot. */
+    close: () => setOpen(null),
     chips: (
       <span className="chips">
         {groups.map((g) => (
@@ -321,7 +323,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
  */
 const favsOf = (key: string): string[] => { try { return JSON.parse(localStorage.getItem(`helm.favmodels:${key}`) || '[]'); } catch { return []; } };
 
-function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, searchable, favKey, favs: shared, onFavs, onDefault, news, onNewsSeen, onPick, onClose }: {
+export function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, searchable, favKey, favs: shared, onFavs, onDefault, news, onNewsSeen, onPick, onClose, footer }: {
   title: string; note?: string; choices: Choice[]; more?: Choice[]; current: string;
   /** A long list gets a search box even when nothing is folded away. */
   searchable?: boolean;
@@ -335,6 +337,8 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, se
   onDefault?: (id: string) => Promise<void> | void;
   news?: ModelNote[];
   onNewsSeen?: () => void;
+  /** A quiet line under the rows, for an action that is not a choice. */
+  footer?: ReactNode;
 }) {
   // Seeing the sheet is seeing the note: closing it, any way, retires it.
   const latest = useRef({ news, onNewsSeen });
@@ -491,6 +495,7 @@ function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, se
       ))}
       {q && !favorites.length && !main.length && !rest.length && <div className="modesheet-note">no matches</div>}
       {saveError && <div className="error" role="alert">{saveError}</div>}
+      {footer}
     </div>
   );
 }

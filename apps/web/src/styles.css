@@ -3232,3 +3232,16 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 }
 .newchat-greeting b { font-weight: inherit; text-decoration: underline dotted; text-decoration-color: var(--icon); text-decoration-thickness: 2px; text-underline-offset: 5px; }
 @media (max-width: 899px) { .newchat-greeting { font-size: 20px; margin-inline: 16px; } }
+
+/* A new helper's account, model, thinking and permissions: the message
+   box's own chips and sheets, so picking for a helper reads like picking
+   for the chat. The sheet opens in the form instead of above a composer. */
+.delegation-chips .chips { flex-wrap: wrap; overflow: visible; }
+.delegation-chip-rest { display: contents; }
+.delegation-form .modesheet {
+  margin: 0; padding: 8px; max-height: 340px;
+  border-radius: var(--radius); border-bottom: 1px solid var(--line-2); box-shadow: none;
+}
+.delegation-chip-rest .chips { display: contents; }
+.chip-pick.account .mark { width: auto; height: auto; padding: 0; background: none; border-radius: 0; }
+.chip-pick.account .mark svg { width: 13px; height: 13px; }

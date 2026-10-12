@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Client, type CliAgent, type Environment, type Session, type DelegationResult, type NativeAgent, type NativeAgentDetail } from '../client';
+import { Client, type CliAgent, type Environment, type ModelList, type Session, type DelegationResult, type NativeAgent, type NativeAgentDetail } from '../client';
+import { loadModels, saveModels } from '../modelCache';
+import { ChoiceSheet, Controls, trayPrefs, type Kind } from './Controls';
 import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
@@ -29,12 +31,14 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
   const [account, setAccount] = useState('');
   const [model, setModel] = useState('');
   const [mode, setMode] = useState('');
+  const [effort, setEffort] = useState('');
+  const [catalog, setCatalog] = useState<ModelList | null>(null);
+  const [choosingAccount, setChoosingAccount] = useState(false);
   const [task, setTask] = useState('');
   const [error, setError] = useState<{ text: string; at: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [composing, setComposing] = useState(false);
-  const [advanced, setAdvanced] = useState(false);
   const [selected, setSelected] = useState('');
   const [result, setResult] = useState<DelegationResult | null>(null);
   const [permissions, setPermissions] = useState<Permission[]>([]);
@@ -65,15 +69,32 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
   const openNative = natives.find((agent) => agent.id === nativeOpen);
   const readOnly = ['plan', 'readonly', 'read'].includes(parent.mode ?? '');
   const modes = agent?.modes.filter((option) => option.id !== 'plan' && (!readOnly || ['readonly', 'read'].includes(option.id))) ?? [];
-  const showOptions = advanced || (!loading && !agent?.available);
-  const modeLabel = (id?: string | null) => modes.find((option) => option.id === id)?.label;
-  const permissionLabel = readOnly ? 'Read only'
-    : mode ? modeLabel(mode) || mode
-    : agent?.defaultMode && agent.defaultMode !== 'plan' ? modeLabel(agent.defaultMode) || 'YOLO'
-    : agent && !agent.modes.length ? 'CLI permissions' : 'Inherited permissions';
-  const summary = loading && !agent ? 'Finding CLI accounts…'
-    : !agent?.available ? 'No CLI account available'
-    : [agent.label || agent.id, model.trim() || agent.defaultModel || 'CLI default', permissionLabel].join(' · ');
+  // The same chips and sheets as the message box, fed the machine's own
+  // list for the chosen account: its models, favorites and defaults. What
+  // the account list carried paints first, the machine's answer replaces it.
+  const options: ModelList | null = agent ? {
+    default: agent.defaultModel ?? null, models: agent.models ?? [], labels: agent.labels,
+    ...catalog,
+    // A helper's permissions are the account's, narrowed for a read-only
+    // parent, and it never plans first. Its speed is not a choice here.
+    modes, defaultMode: agent.defaultMode && agent.defaultMode !== 'plan' ? agent.defaultMode : null,
+    speeds: [], speedByModel: {},
+  } : null;
+  const picked = { engine: agent?.engine ?? '', profileId: account, model, effort, mode } as Session;
+  const prefs = trayPrefs({ client, env: env.id, engine: agent?.engine ?? '', profileId: account || null,
+    options, setOptions: (update) => setCatalog((now) => update(now ?? options)),
+    setError: (text) => setError(text ? { text, at: 'form' } : null) });
+  const pick = (kind: Kind, id: string) => {
+    if (kind === 'model') {
+      setModel(id);
+      // A thinking level the new model does not offer is not kept.
+      const levels = options?.effortsByModel?.[id] ?? options?.efforts ?? [];
+      if (effort && !levels.includes(effort)) setEffort('');
+    } else if (kind === 'effort') setEffort(id);
+    else if (kind === 'mode') setMode(id);
+  };
+  const controls = Controls({ options, session: picked, busy, onPick: pick, ...prefs });
+  const accountName = (candidate: CliAgent) => candidate.label || candidate.id;
 
   useEffect(() => {
     let stale = false;
@@ -121,7 +142,21 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     finally { setLoading(false); }
   };
   useEffect(() => { if (!nativeOnly) void loadAgents(); }, [client, env.id, nativeOnly]);
-  useEffect(() => { setModel(''); setMode(''); }, [account]);
+  useEffect(() => { setModel(''); setMode(''); setEffort(''); }, [account]);
+  // The chosen account's catalogue, from this machine.
+  useEffect(() => {
+    setCatalog(null);
+    if (!account || nativeOnly) return;
+    let stale = false;
+    loadModels(env.id, account).then((cached) => { if (!stale && cached) setCatalog((now) => now ?? cached); });
+    client.rpc<ModelList>(env.id, 'model.list', { profileId: account }, 30_000)
+      .then((list) => {
+        if (stale || !Array.isArray(list?.models)) return;
+        setCatalog(list); void saveModels(env.id, account, list);
+      })
+      .catch(() => { /* the account's own short list still shows */ });
+    return () => { stale = true; };
+  }, [client, env.id, account, nativeOnly]);
 
   useEffect(() => {
     if (!focus) return;
@@ -172,10 +207,10 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     setBusy(true); setError(null);
     try {
       const { session } = await client.rpc<{ session: Session }>(env.id, 'session.delegate', {
-        id: parent.id, profileId: account, model: model.trim() || undefined,
-        mode: mode || undefined, task: task.trim(),
+        id: parent.id, profileId: account, model: model || undefined,
+        ...(effort ? { effort } : {}), mode: mode || undefined, task: task.trim(),
       }, 70_000);
-      setTask(''); setComposing(false); setAdvanced(false);
+      setTask(''); setComposing(false); setChoosingAccount(false); controls.close();
       added(session);
     } catch (failure: any) { fail('form')(failure); }
     finally { setBusy(false); }
@@ -338,33 +373,26 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
           <label htmlFor="delegate-task">Task</label>
           <textarea id="delegate-task" rows={3} maxLength={32000} autoFocus placeholder="Describe a specific, bounded task…"
             value={task} disabled={busy} onChange={(event) => setTask(event.target.value)} onKeyDown={submitOnShortcut(() => void start())} />
-          <button type="button" className="delegation-config" aria-expanded={showOptions} aria-controls="delegate-options"
-            disabled={busy} onClick={() => setAdvanced(!showOptions)}>
-            {agent && <EngineMark engine={agent.engine} />}
-            <span className="grow">{summary}</span>
-            <span className="delegation-config-more">Options<Icon name={showOptions ? 'up' : 'down'} size={14} /></span>
-          </button>
-          {showOptions && <div className="delegation-options" id="delegate-options">
-            <div className="delegation-account-label"><label htmlFor="delegate-account">CLI account</label>
-              <button type="button" className="linkish" disabled={loading || busy} onClick={() => void loadAgents(true)}>
-                {loading ? 'Refreshing…' : 'Refresh accounts'}</button></div>
-            <select id="delegate-account" value={account} disabled={loading || busy} onChange={(event) => setAccount(event.target.value)}>
-              {!account && <option value="">{loading ? 'Finding CLI accounts…' : 'No CLI accounts available'}</option>}
-              {agents.map((candidate) => <option key={candidate.id} value={candidate.id} disabled={!candidate.available}>
-                {candidate.label || candidate.id} · {candidate.engine} · {candidate.auth === 'authenticated' ? 'signed in' : candidate.auth === 'unauthenticated' ? 'signed out' : 'sign-in not verified'}
-              </option>)}
-            </select>
-            <div className="delegation-pickers">
-              <label>Model<input aria-label="Subagent model" list="delegate-models" placeholder={agent?.defaultModel || 'CLI default'}
-                value={model} disabled={!agent || busy} onChange={(event) => setModel(event.target.value)} /></label>
-              <datalist id="delegate-models">{agent?.models?.map((name) => <option key={name} value={name}>{agent.labels?.[name] || name}</option>)}</datalist>
-              {!!modes.length && <label>Permissions<select aria-label="Subagent permissions" value={mode} disabled={busy} onChange={(event) => setMode(event.target.value)}>
-                <option value="">{readOnly ? 'Read only' : agent?.defaultMode && agent.defaultMode !== 'plan' ? `${modeLabel(agent.defaultMode) || 'YOLO'} (account default)` : 'Inherit orchestrator · YOLO by default'}</option>
-                {modes.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-              </select></label>}
-            </div>
-            {agent && !agent.modes.length && <p className="note">This CLI controls its own permissions.</p>}
-          </div>}
+          <div className="delegation-chips">
+            <span className="chips">
+              <button type="button" className={`chip-pick account${choosingAccount ? ' on' : ''}`} disabled={busy || (loading && !agents.length)}
+                aria-label={`CLI account: ${agent ? accountName(agent) : loading ? 'finding accounts' : 'none available'}`}
+                onClick={() => { controls.close(); setChoosingAccount(!choosingAccount); }}>
+                {agent && <EngineMark engine={agent.engine} />}
+                <span className="chip-label">{agent ? accountName(agent) : loading ? 'Finding accounts…' : 'No account'}</span>
+              </button>
+              {agent?.available && <span className="delegation-chip-rest" onClickCapture={() => setChoosingAccount(false)}>{controls.chips}</span>}
+            </span>
+          </div>
+          {choosingAccount ? <ChoiceSheet title={`CLI account on ${env.name}`} current={account} busy={busy}
+            choices={agents.map((candidate) => ({ id: candidate.id, label: `${accountName(candidate)} · ${candidate.engine}`,
+              hint: candidate.auth === 'authenticated' ? 'signed in' : candidate.auth === 'unauthenticated' ? 'signed out' : 'sign-in not checked' }))}
+            onPick={(id) => { setChoosingAccount(false); if (agents.find((candidate) => candidate.id === id)?.available) setAccount(id); }}
+            onClose={() => setChoosingAccount(false)}
+            footer={<button type="button" className="moderow more" disabled={loading} onClick={() => void loadAgents(true)}>
+              <span className="grow"><span className="rt">{loading ? 'Looking again…' : 'Look for accounts again'}</span></span></button>} />
+            : controls.sheet}
+          {agent && !agent.modes.length && <p className="note">This CLI controls its own permissions.</p>}
           {errorBox('form')}
           <div className="delegation-start">
             <span>{readOnly ? 'Read only, in this thread’s folder.' : 'Works in this thread’s folder.'}</span>
