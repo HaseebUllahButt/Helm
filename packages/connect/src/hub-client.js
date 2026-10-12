@@ -99,9 +99,9 @@ export class HubConnection extends EventEmitter {
 /**
  * Calls that would happen twice if a second hub were asked after the first
  * may already have passed them on: a message typed into a session, a new
- * session, a task handed over, a machine's role changed.
+ * session or helper, a task handed over, a machine's role changed.
  */
-export const NON_REPEATABLE = new Set([M.SESSION_INPUT, M.SESSION_START, M.TASK_SEND, M.MACHINE_SET_KIND]);
+export const NON_REPEATABLE = new Set([M.SESSION_INPUT, M.SESSION_START, M.SESSION_DELEGATE, M.TASK_SEND, M.MACHINE_SET_KIND]);
 
 export async function hubRpc(net, env, method, params = {}, { timeout = 20_000, budget = Infinity, direct = false, onRoute } = {}) {
   const failures = [];
