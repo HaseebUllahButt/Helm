@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import { T } from '@helm/protocol';
+import { T, M } from '@helm/protocol';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { hubCredential, allEndpoints } from '@helm/protocol/network';
@@ -96,14 +96,28 @@ export class HubConnection extends EventEmitter {
   }
 }
 
+/**
+ * Calls that would happen twice if a second hub were asked after the first
+ * may already have passed them on: a message typed into a session, a new
+ * session, a task handed over, a machine's role changed.
+ */
+export const NON_REPEATABLE = new Set([M.SESSION_INPUT, M.SESSION_START, M.TASK_SEND, M.MACHINE_SET_KIND]);
+
 export async function hubRpc(net, env, method, params = {}, { timeout = 20_000, budget = Infinity, direct = false, onRoute } = {}) {
   const failures = [];
   const deadline = Date.now() + budget;
+  const once = NON_REPEATABLE.has(method);
   for (const hub of hubUrls(net)) {
     if (Date.now() >= deadline) break;
     try {
-      return await rpcVia(hub, net, env, method, params, timeout, { direct, onRoute, deadline });
+      return await rpcVia(hub, net, env, method, params, timeout, { direct, onRoute, deadline, once });
     } catch (err) {
+      // Sent and then lost: the machine may have it already. Asking another
+      // hub could do it twice, so the person checks before trying again.
+      if (once && err.uncertain) {
+        throw Object.assign(new Error(`${err.message}; the request may already have been delivered - check before retrying`),
+          { code: err.code, rpc: err.rpc, sent: true, uncertain: true });
+      }
       failures.push(`${hub}: ${err.message}`);
       // "offline" is the hub telling us the machine is not attached there;
       // another hub may still see it.
@@ -159,12 +173,13 @@ export function mergeQueueReceipts(rows) {
     .sort((a, b) => (rank[b.status] ?? 0) - (rank[a.status] ?? 0))[0] ?? null;
 }
 
-function rpcVia(hub, net, env, method, params, timeout, { direct = false, onRoute, deadline = Infinity } = {}) {
+function rpcVia(hub, net, env, method, params, timeout, { direct = false, onRoute, deadline = Infinity, once = false } = {}) {
   // helm's protocol lives at /helm/ws now; a hub from before the move still
-  // answers at /ws, so a transport failure there is worth one retry.
+  // answers at /ws, so a transport failure there is worth one retry - unless
+  // a call that must not run twice already went out.
   const base = hub.replace(/^http/, 'ws');
   return attempt(`${base}/helm/ws?role=client`).catch((err) =>
-    err.rpc ? Promise.reject(err) : attempt(`${base}/ws?role=client`));
+    err.rpc || (once && err.uncertain) ? Promise.reject(err) : attempt(`${base}/ws?role=client`));
 
   // One handshake per socket: the credential it yields is spent on use.
   async function attempt(url) {
@@ -180,8 +195,9 @@ function rpcVia(hub, net, env, method, params, timeout, { direct = false, onRout
         handshakeTimeout: Math.min(15_000, remaining),
       });
       const id = `c${Date.now().toString(36)}`;
-      const timer = setTimeout(() => { done(new Error('timed out')); }, remaining);
+      const timer = setTimeout(() => { done(Object.assign(new Error('timed out'), { code: 'timeout' })); }, remaining);
       let settled = false;
+      let sent = false;
       let peer;
       const done = (err, value, rpc = false) => {
         if (settled) return;
@@ -189,11 +205,19 @@ function rpcVia(hub, net, env, method, params, timeout, { direct = false, onRout
         clearTimeout(timer);
         peer?.close();
         try { ws.close(); } catch { /* already gone */ }
-        if (err) { err.rpc = rpc; reject(err); } else resolve(value);
+        if (!err) { resolve(value); return; }
+        // Once the frame is out, only a clear answer from the hub says
+        // what happened; silence or a dropped link leaves it unknown.
+        err.rpc = rpc;
+        err.sent = sent;
+        err.uncertain = sent && (!rpc || ['timeout', 'disconnected'].includes(err.code)
+          || /delivery may be uncertain/i.test(err.message));
+        reject(err);
       };
       ws.on('open', async () => {
         const frame = { t: T.RPC, id, env, method, params };
         if (directModule) {
+          sent = true;
           try {
             peer = directModule.directRpc({
               signal: (payload) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: T.SIGNAL, env, payload })); },
@@ -209,6 +233,7 @@ function rpcVia(hub, net, env, method, params, timeout, { direct = false, onRout
         }
         if (!settled && ws.readyState === WebSocket.OPEN) {
           onRoute?.('relay');
+          sent = true;
           ws.send(JSON.stringify(frame));
         }
       });
