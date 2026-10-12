@@ -114,7 +114,7 @@
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-xl: 13px;
-  --slab:      20px;
+  --slab:      22px;
 
   /* The left gutter every row's mark sits in, so text starts on one line all
      the way down a screen. */
@@ -858,7 +858,7 @@ pre.snippet {
 
 /* --------------------------------------------------------------- composer */
 
-.composer-wrap { flex: none; padding: 0 10px max(10px, env(safe-area-inset-bottom)); background: var(--bg); }
+.composer-wrap { flex: none; padding: 0 12px max(12px, env(safe-area-inset-bottom)); background: var(--bg); }
 .composer-col { max-width: var(--measure); margin: 0 auto; position: relative; }
 
 /* A pending question docks into the top of the slab. */
@@ -896,7 +896,8 @@ pre.snippet {
 .slab {
   position: relative; z-index: 1; border-radius: var(--slab); padding: 1px;
   background: var(--raised);
-  box-shadow: 0 -10px 30px -12px rgb(0 0 0 / 45%), 0 1px 2px rgb(0 0 0 / 20%);
+  /* A card floating over the page: it lifts away downward, not upward. */
+  box-shadow: 0 12px 28px -18px rgb(0 0 0 / 60%), 0 1px 2px rgb(0 0 0 / 20%);
 }
 .slab::after {
   content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
@@ -1274,7 +1275,7 @@ pre.snippet {
   .chip-pick .cg svg { width: 14px; height: 14px; }
 }
 /* Account usage has its own row beneath the controls, at every width. */
-.slab-status { margin: 0 10px; padding: 7px 0 9px; border-top: 1px solid var(--line); min-width: 0; }
+.slab-status { margin: 0 14px; padding: 8px 0 2px; min-width: 0; }
 .limits-line { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; color: var(--mutedfg); font-size: var(--t-micro); }
 .limits-caption { flex: none; }
 .limits-caption.account { flex: 0 1 auto; min-width: 0; max-width: 100%; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1911,7 +1912,7 @@ button.sheet-editlink:hover { color: var(--text); }
   box-shadow: 0 1px 2px rgb(26 29 36 / 5%);
 }
 :root[data-theme="light"] .modal .rows { box-shadow: none; }
-:root[data-theme="light"] .slab { box-shadow: 0 1px 2px rgb(26 29 36 / 8%), 0 12px 28px -16px rgb(26 29 36 / 22%); }
+:root[data-theme="light"] .slab { box-shadow: 0 1px 2px rgb(26 29 36 / 6%), 0 12px 28px -20px rgb(26 29 36 / 20%); }
 :root[data-theme="light"] .slab::after { box-shadow: none; }
 :root[data-theme="light"] .segmented button.on { box-shadow: 0 1px 2px rgb(26 29 36 / 12%), inset 0 0 0 1px var(--line-2); }
 :root[data-theme="light"] .need { box-shadow: 0 1px 2px rgb(26 29 36 / 6%); }
@@ -2918,3 +2919,68 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .ctx-menu button .check { display: inline-flex; color: var(--primary-q); }
 .ctx-menu-note { display: grid; gap: 2px; padding: 6px 10px 4px; margin-top: 3px; border-top: 1px solid var(--line); font-size: var(--t-meta); color: var(--mutedfg); line-height: 1.4; white-space: normal; }
 .ctx-menu-note .warn { color: var(--amber-text); }
+
+
+/* ------------------------------------------------ composer card, strip, banner
+   The composer is one floating card. A task tab tucks behind its top edge;
+   a question or approval is the top of the card itself. */
+
+/* The task strip: "Tasks · Writing the fix · 2/5", a tab behind the card. */
+.todo-strip {
+  position: relative; z-index: 0; margin: 0 24px -19px; padding: 7px 12px 26px;
+  border-radius: 16px 16px 0 0; background: var(--card);
+  border: 1px solid var(--line-2); border-bottom: 0;
+  font-size: var(--t-meta); line-height: 1.45;
+}
+.todo-strip-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 24px; margin: 0; padding: 0;
+  background: none; border: 0; text-align: left; color: var(--text-dim); font: inherit;
+}
+.todo-strip-head:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 3px; border-radius: 6px; }
+.todo-strip-label { flex: none; font-weight: 600; color: var(--text-dim); }
+.todo-strip-label::after { content: '·'; margin-left: 8px; color: var(--icon); }
+.todo-strip-now { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.todo-strip-count { flex: none; color: var(--mutedfg); font-variant-numeric: tabular-nums; }
+.todo-strip-chev { flex: none; color: var(--mutedfg); transition: transform 0.15s var(--ease); }
+.todo-strip.open .todo-strip-chev { transform: rotate(180deg); }
+.todo-segs { display: flex; gap: 3px; height: 3px; margin-top: 6px; }
+.todo-segs i { flex: 1 1 0; min-width: 3px; border-radius: 2px; background: var(--line-2); }
+.todo-segs i.completed { background: var(--emerald); }
+.todo-segs i.in_progress { background: var(--primary-q); }
+.todo-strip-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; max-height: min(34dvh, 280px); overflow-y: auto; }
+.todo-strip .todo { font-size: var(--t-meta); padding: 3px 6px; }
+.todo-strip .todo.in_progress .todo-text { animation: none; background: none; color: var(--text); }
+.todo-strip .todo.completed .todo-text { text-decoration: none; opacity: .75; }
+@media (prefers-reduced-motion: reduce) { .todo-strip-chev { transition: none; } }
+
+/* The request, as the top of the card. */
+.ask-box { display: block; }
+.sheet.banner {
+  margin: 0; max-height: min(52dvh, 480px); padding: 14px 16px 12px; gap: 10px;
+  border: 0; border-bottom: 1px solid var(--line); border-radius: calc(var(--slab) - 1px) calc(var(--slab) - 1px) 0 0;
+  box-shadow: none; background: var(--need-bg);
+}
+.sheet.banner.question { background: var(--card); gap: 10px; padding: 14px 16px 12px; }
+.ask-kind { flex: none; font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--amber-text); }
+.sheet.question.banner .ask-kind { color: var(--text-dim); }
+.sheet.banner .sheet-head { flex-wrap: nowrap; }
+.sheet.banner .sheet-head b { flex: 1 1 auto; font-size: var(--t-meta); font-weight: 550; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet.banner .sheet-head .tag { flex: none; }
+.sheet.banner .sheet-cmd { font: 12.5px/1.55 var(--mono); max-height: 26dvh; overflow: auto; }
+.sheet.banner .sheet-note { padding: 7px 10px; }
+.sheet.banner .sheet-actions { justify-content: flex-end; gap: 6px; }
+.sheet.banner .sheet-actions button { flex: 0 1 auto; min-height: 36px; padding: 6px 14px; font-size: var(--t-meta); border-radius: 10px; }
+.sheet.banner .q-text { margin-bottom: 10px; }
+.sheet.banner .q-opt { min-height: 44px; padding: 8px 12px; }
+.sheet.banner .q-num {
+  opacity: 1; min-width: 20px; height: 20px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line-2); border-radius: 5px; background: var(--card); color: var(--text-dim);
+}
+.sheet.banner .q-opt.on .q-num { color: var(--text); border-color: var(--text-dim); }
+.sheet.banner .q-actions button { min-height: 36px; }
+@media (max-width: 599px) {
+  .sheet.banner { max-height: 46dvh; padding: 12px 12px 10px; }
+  .todo-strip { margin: 0 20px -19px; }
+  .sheet.banner .sheet-actions button { flex: 1 1 auto; min-height: 44px; }
+}
+@media (hover: none) { .sheet.banner .q-num { display: none; } }

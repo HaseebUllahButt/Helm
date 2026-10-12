@@ -5,7 +5,8 @@ import { useNow, waitingSince } from '../useNow';
 import { Composer } from './Composer';
 import { looksLikeImage, prepareImage } from './image';
 import { EngineMark } from '../EngineMark';
-import { PermissionSheet } from './PermissionSheet';
+import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
+import { TodoStrip, stripTodos } from './Todos';
 import { RecoveryCard } from './RecoveryCard';
 import { Controls, trayPrefs, type Kind } from './Controls';
 import { Transcript, splitNote, isCompaction } from './Transcript';
@@ -130,6 +131,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   useEffect(() => { setReviewingRequest(session.ask?.requestId ?? ''); }, [session.id]);
   const pending = log.pending.find(request => request.requestId === reviewingRequest) ?? log.pending[0];
   const permissionBox = useRef<HTMLDivElement>(null);
+  // A question in the composer takes its free-text answer from the box you type in.
+  const questionHandle = useRef<QuestionHandle | null>(null);
+  const holdQuestion = useCallback((handle: QuestionHandle | null) => { questionHandle.current = handle; }, []);
   const reviewRequest = useCallback((requestId: string) => setReviewingRequest(requestId), []);
   useEffect(() => {
     if (!reviewingRequest || pending?.requestId !== reviewingRequest) return;
@@ -308,6 +312,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     const body = expandPastes(draft.trim());
     if (preparingImages || loadingImages || savingImages || sendingImages) return;
     if (!body && !attachments.length) return;
+    // Typing while a question is open answers it; the words are not a new message.
+    if (pending?.kind === 'question' && body && !attachments.length && questionHandle.current) {
+      if (questionHandle.current.submit(body) === 'sent') setDraft('');
+      return;
+    }
     // `/model` on its own means "let me choose", in every CLI: Helm's own
     // picker, not a line of usage text from the CLI.
     if (/^\/model$/i.test(body) && !attachments.length && controls.show('model')) {
@@ -467,6 +476,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // which also moves when a permission is answered.
   const now = useNow();
   const openTurn = transcriptTurns.filter((t) => !t.done).at(-1);
+  const taskList = stripTodos(transcriptTurns);
   const since = working && openTurn ? openTurn.at : session.updatedAt;
   const age = since ? waitingSince(since, now) : '';
   const rate = useTokenRate(openTurn, status === 'working');
@@ -637,7 +647,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       <Composer
         onTranscribe={onTranscribe}
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
-        engine={engine} keys={false} waiting={!!pending} danger={mode?.danger} compacting={compacting || undefined}
+        engine={engine} keys={false} waiting={!!pending} ask={pending ? (pending.kind === 'question' ? 'question' : 'approval') : undefined}
+        shoulder={taskList && <TodoStrip todos={taskList} />}
+        banner={pending && <div ref={permissionBox} className="ask-box"><PermissionSheet key={pending.requestId} variant="banner" permission={pending} onAnswer={answer} busy={busy} onHandle={holdQuestion} /></div>}
+        danger={mode?.danger} compacting={compacting || undefined}
         foot={controls.chips} statusLine={account || limits.length > 0 || session.context ? <LimitsLine windows={limits} account={account} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
@@ -671,7 +684,6 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             <Icon name="subagents" size={15} /><span><b>{child.title}</b><small>{child.ask?.kind === 'question' ? 'Answer question' : 'Review request'}{child.ask?.text ? ` · ${child.ask.text}` : ''}</small></span><Icon name="forward" size={14} />
           </button>)}
         </div>}
-        {pending && <div ref={permissionBox}><PermissionSheet key={pending.requestId} permission={pending} onAnswer={answer} busy={busy} /></div>}
         {log.pending.length > 1 && <div className="child-requests" role="group" aria-label="Other requests waiting for you">
           {log.pending.filter(request => request.requestId !== pending?.requestId).map(request => <button key={request.requestId} onClick={() => reviewRequest(request.requestId)}>
             <Icon name="forward" size={14} /><span>{request.title}</span>

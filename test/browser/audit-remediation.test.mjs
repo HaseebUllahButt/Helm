@@ -86,7 +86,7 @@ for (const action of ['change', 'type', 'unmount']) test(`question auto-submit c
   if (action === 'type') await page.getByLabel('Your own answer').fill('Purple');
   if (action === 'unmount') {
     await page.evaluate(() => window.unmount());
-    await page.getByRole('radio').waitFor({ state: 'detached' });
+    await page.getByRole('radio').first().waitFor({ state: 'detached' });
   }
   await page.clock.runFor(200);
   assert.deepEqual(await page.evaluate(() => window.answers ?? []),

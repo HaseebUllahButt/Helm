@@ -106,7 +106,7 @@ test('Ctrl+Tab intercepts composer suggestions and terminal input, and uses live
   const page = await pageFor(t);
   await page.keyboard.press('Control+Tab');
   await expectChat(page, 'laptop', 'First');
-  const composer = page.locator('textarea[placeholder^="Message"]').first();
+  const composer = page.locator('textarea[aria-label^="Message"]').first();
   await composer.fill('/');
   await composer.press('Control+Tab');
   await expectChat(page, 'laptop', 'Second');
@@ -119,8 +119,8 @@ test('Ctrl+Tab intercepts composer suggestions and terminal input, and uses live
   await page.locator('.sidebar').getByText('Second', { exact: true }).waitFor({ state: 'hidden' });
   await page.keyboard.press('Control+Shift+Tab');
   await expectChat(page, 'laptop', 'First');
-  await page.locator('textarea[placeholder^="Message"]').first().waitFor();
-  assert.equal(await page.locator('textarea[placeholder^="Message"]').first().inputValue(), '/');
+  await page.locator('textarea[aria-label^="Message"]').first().waitFor();
+  assert.equal(await page.locator('textarea[aria-label^="Message"]').first().inputValue(), '/');
   await page.evaluate(() => window.update('vm', 'third', { status: 'idle', team: { working: 1 } }));
   await page.keyboard.press('Control+Tab');
   await expectChat(page, 'vm', 'Third');

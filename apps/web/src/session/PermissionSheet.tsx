@@ -11,8 +11,27 @@ import { Icon } from '../Icon';
  * the answers as buttons. A question with options is rendered as those
  * options; a plan is rendered as the plan.
  */
-export function PermissionSheet({ permission: p, onAnswer, busy }: {
-  permission: Permission; onAnswer: (d: Decision) => void; busy: boolean;
+/**
+ * How a request is laid out. `sheet` is the old card that tucks behind the
+ * composer (still used by the subagent panel); `banner` is the same content
+ * as the top of the composer card, with the answer typed in the composer.
+ */
+export type AskVariant = 'sheet' | 'banner';
+
+/** What the composer needs from a question banner, to send a typed answer. */
+export interface QuestionHandle { submit: (text: string) => 'sent' | 'wait' }
+
+/** Said the way people say it, whatever the CLI's own word was. */
+const plainLabel = (label: string, banner: boolean) => banner ? (label === 'Allow' ? 'Approve' : label === 'Deny' ? 'Decline' : label) : label;
+
+const ASK_LABEL: Record<Permission['kind'], string> = {
+  command: 'Command approval', edit: 'File change approval', tool: 'Tool approval', plan: 'Plan approval', question: 'Question',
+};
+
+export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'sheet', onHandle }: {
+  permission: Permission; onAnswer: (d: Decision) => void; busy: boolean; variant?: AskVariant;
+  /** Banner questions: hand the composer a way to answer with what it holds. */
+  onHandle?: (handle: QuestionHandle | null) => void;
 }) {
   const [note, setNote] = useState('');
   // "Edit it, then allow" - for the kinds the driver said take an updated
@@ -24,7 +43,8 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
   const answer = (option: Decision['option'], updatedInput?: any) =>
     onAnswer({ option, message: note.trim() || undefined, ...(updatedInput ? { updatedInput } : {}) });
 
-  if (p.kind === 'question') return <QuestionSheet permission={p} onAnswer={onAnswer} busy={busy} />;
+  const banner = variant === 'banner';
+  if (p.kind === 'question') return <QuestionSheet permission={p} onAnswer={onAnswer} busy={busy} variant={variant} onHandle={onHandle} />;
 
   const allow = p.options.find((o) => o.role === 'allow');
   const always = p.options.find((o) => o.role === 'allow-always');
@@ -44,14 +64,15 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
     <button className="primary" disabled={busy || !edited.trim()} onClick={() => answer('allow', updatedInput())}>
       {p.kind === 'plan' ? 'Approve edited plan' : 'Allow edited command'}
     </button>
-  ) : <button className="primary" disabled={busy} onClick={() => answer('allow')}>{allow.label}</button>);
-  const alwaysButton = always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{always.label}</button>;
-  const denyButton = deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{deny.label}</button>;
+  ) : <button className="primary" disabled={busy} onClick={() => answer('allow')}>{plainLabel(allow.label, banner)}</button>);
+  const alwaysButton = always && <button className="ghost" disabled={busy} onClick={() => answer('always')}>{plainLabel(always.label, banner)}</button>;
+  const denyButton = deny && <button className="ghost deny" disabled={busy} onClick={() => answer('deny')}>{plainLabel(deny.label, banner)}</button>;
 
   return (
-    <div className={`sheet ${p.kind}`}>
+    <div className={`sheet ${p.kind}${banner ? ' banner' : ''}`}>
       <div className="sheet-head">
         <i className="sdot blocked" />
+        {banner && <span className="ask-kind">{ASK_LABEL[p.kind]}</span>}
         <b>{p.title}</b>
         {p.tool && p.kind !== 'plan' && <span className="tag">{p.tool}</span>}
         {p.parentId && <span className="tag">subagent</span>}
@@ -59,7 +80,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy }: {
       </div>
       {p.reason && <div className="sheet-reason">{p.reason}</div>}
       <div className="sheet-body">
-        {p.kind === 'command' && !editing && <pre className="sheet-cmd">❯ {original}</pre>}
+        {p.kind === 'command' && !editing && <pre className="sheet-cmd">{banner ? '' : '❯ '}{original}</pre>}
         {p.kind === 'plan' && !editing && <Markdown text={original} className="prose plan" />}
         {editing && (
           <textarea
@@ -164,8 +185,9 @@ function EditDetail({ detail }: { detail: any }) {
  * Only picking several, or typing your own, needs a button. On a keyboard
  * 1-9 pick and Enter sends, whenever you are not typing somewhere.
  */
-function QuestionSheet({ permission: p, onAnswer, busy }: {
-  permission: Permission; onAnswer: (d: Decision) => void; busy: boolean;
+function QuestionSheet({ permission: p, onAnswer, busy, variant, onHandle }: {
+  permission: Permission; onAnswer: (d: Decision) => void; busy: boolean; variant: AskVariant;
+  onHandle?: (handle: QuestionHandle | null) => void;
 }) {
   const questions = p.questions ?? [];
   const [step, setStep] = useState(0);
@@ -226,14 +248,32 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
   };
   const confirm = () => { cancelAdvance(); if (q && answers[key(q)]) advance(answers); };
 
+  /** What was typed in the composer is the answer to the question being shown. */
+  const submitText = (text: string): 'sent' | 'wait' => {
+    if (!q || busy || sent.current) return 'wait';
+    cancelAdvance();
+    const nextOther = { ...other, [key(q)]: text };
+    const nextPicked = q.multiSelect ? picked : { ...picked, [key(q)]: [] };
+    setOther(nextOther); setPicked(nextPicked);
+    advance(answersWith(nextPicked, nextOther));
+    return 'sent';
+  };
+
   // Digits and Enter, for whoever is at a keyboard - never while a text box
-  // has the cursor, where they are just typing.
-  const keys = useRef({ q, confirm, choose });
-  keys.current = { q, confirm, choose };
+  // has the cursor, where they are just typing. The composer counts as free
+  // while it is empty: there a digit is a choice, not the start of a message.
+  const keys = useRef({ q, confirm, choose, submitText });
+  keys.current = { q, confirm, choose, submitText };
+  useEffect(() => {
+    if (!onHandle) return;
+    onHandle({ submit: (text) => keys.current.submitText(text) });
+    return () => onHandle(null);
+  }, [onHandle]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
-      if (/^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName ?? '') || el?.isContentEditable) return;
+      const emptyComposer = el?.tagName === 'TEXTAREA' && el.hasAttribute('data-composer') && !(el as HTMLTextAreaElement).value;
+      if (!emptyComposer && (/^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName ?? '') || el?.isContentEditable)) return;
       if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector('[aria-modal="true"]')) return;
       const { q, confirm, choose } = keys.current;
       if (!q) return;
@@ -252,11 +292,16 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
   // A button only when a tap cannot be the answer: several picked, or typed.
   const needsButton = q.multiSelect ? chosen.length > 0 || !!free.trim() : !!free.trim();
   const remaining = questions.filter((x) => x !== q && !answers[key(x)]).length;
+  const banner = variant === 'banner';
+  // The composer takes a typed answer, except a secret one: a password
+  // should be typed into a password box.
+  const typeInline = !banner || !onHandle || !!q.secret;
 
   return (
-    <div className="sheet question">
+    <div className={`sheet question${banner ? ' banner' : ''}`}>
       <div className="q-head">
         <i className="sdot blocked" />
+        {banner && <span className="ask-kind">Question</span>}
         <span className="q-who">{p.title}</span>
         {questions.length > 1 && (
           <span className="q-steps" role="tablist" aria-label="Questions">
@@ -289,7 +334,7 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
             );
           })}
         </div>
-        <div className={`q-free${free.trim() ? ' on' : ''}`}>
+        {typeInline && <div className={`q-free${free.trim() ? ' on' : ''}`}>
           <input
             type={q.secret ? 'password' : 'text'} value={free}
             placeholder={q.options.length ? 'Or type your own answer' : 'Type your answer'}
@@ -297,7 +342,7 @@ function QuestionSheet({ permission: p, onAnswer, busy }: {
             onChange={(e) => type(q, e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirm(); } }}
           />
-        </div>
+        </div>}
         {preview && <pre className="q-preview">{preview}</pre>}
       </div>
       {(needsButton || busy) && (

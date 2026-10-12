@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import type { Item } from './types';
+import { useEffect, useRef, useState } from 'react';
+import type { Item, Turn } from './types';
 
 /**
  * The agent's to-do list as a checklist that ticks itself off, the way the
@@ -88,6 +88,63 @@ export function TodoCard({ item }: { item: Item }) {
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * The list the composer's task strip shows: the newest one in the latest
+ * turn. Nothing once that turn is over and everything is ticked, and nothing
+ * once a newer message has started (it becomes the latest turn, with none).
+ * Steps a child agent wrote belong to that agent's card, not to this chat.
+ */
+export function stripTodos(turns: Turn[]): Todo[] | null {
+  const turn = turns.at(-1);
+  if (!turn) return null;
+  const items = turn.items.filter((it) => !it.parentId);
+  const id = latestTodoId(items);
+  const todos = id ? parseTodos(items.find((it) => it.id === id)!) : null;
+  if (!todos) return null;
+  if (turn.done && todos.every((t) => t.state === 'completed')) return null;
+  return todos;
+}
+
+/** The step being worked on; failing that the next one waiting. */
+const currentOf = (todos: Todo[]) => todos.find((t) => t.state === 'in_progress') ?? todos.find((t) => t.state === 'pending');
+
+/**
+ * "Tasks · Writing the fix · 2/5": a tab tucked behind the top edge of the
+ * composer. Tap it to open the whole checklist.
+ */
+export function TodoStrip({ todos }: { todos: Todo[] }) {
+  const [open, setOpen] = useState(false);
+  const keys = keyOf(todos);
+  const done = todos.filter((t) => t.state === 'completed').length;
+  const current = currentOf(todos);
+  return (
+    <div className={`todo-strip${open ? ' open' : ''}`} role="group" aria-label="Tasks">
+      <button className="todo-strip-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="todo-strip-label">Tasks</span>
+        <span className="todo-strip-now">{current ? current.text : 'All done'}</span>
+        <span className="todo-strip-count">{done}/{todos.length}</span>
+        <svg className="todo-strip-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
+      </button>
+      <div className="todo-segs" role="progressbar" aria-label="Tasks done" aria-valuemin={0} aria-valuemax={todos.length} aria-valuenow={done}>
+        {todos.map((t, i) => <i key={keys[i]} className={t.state} />)}
+      </div>
+      {open && (
+        <ul className="todo-strip-list">
+          {todos.map((t, i) => (
+            <li key={keys[i]} className={`todo ${t.state}`} aria-current={t.state === 'in_progress' ? 'step' : undefined}>
+              <span className="todo-box" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+              </span>
+              <span className="todo-text">{t.text}</span>
+              <span className="todo-sr">{t.state === 'completed' ? ' (done)' : t.state === 'in_progress' ? ' (in progress)' : ''}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

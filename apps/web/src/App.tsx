@@ -28,7 +28,7 @@ import { Subagents } from './session/Subagents';
 import { plainProblem } from './session/problem';
 import { ExternalSessionNotice } from './session/ExternalSessionNotice';
 import { useSessionLog } from './session/useSessionLog';
-import { PermissionSheet } from './session/PermissionSheet';
+import { PermissionSheet, type QuestionHandle } from './session/PermissionSheet';
 import type { Decision } from './session/types';
 import { EngineMark } from './EngineMark';
 import { NotificationToast } from './NotificationToast';
@@ -4729,10 +4729,16 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
       return ready.length;
     } finally { imageBusy.current = false; setPreparingImages(false); }
   };
+  const questionHandle = useRef<QuestionHandle | null>(null);
   const send = async () => {
     const body = draft;
     const attachments = images;
     if ((!body.trim() && !attachments.length) || sending || settingBusy || imageBusy.current || loadingImages || savingImages) return;
+    // While Claude's question is on screen, typing is the answer to it.
+    if (questionHandle.current && body.trim() && !attachments.length) {
+      if (questionHandle.current.submit(body.trim()) === 'sent') setDraft('');
+      return;
+    }
     // `/model` on its own opens the model picker, as it does in a Helm chat.
     if (session.nativeCli && /^\/model$/i.test(body.trim()) && !attachments.length && nativeControls.show('model')) {
       setDraft('');
@@ -4828,6 +4834,28 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
   }, [session.nativeChat, session.mode, raw, nativeOptions, settingBusy, sending, status, env.online]);
 
 
+  const composer = (ask: { banner?: ReactNode; ask?: 'question' | 'approval' } = {}) => (
+    <Composer
+      {...ask}
+      onTranscribe={onTranscribe}
+      draft={draft} setDraft={setDraft} onSend={send} onKey={key}
+      keys={!session.nativeChat} preparing={sending || preparingImages || loadingImages || savingImages}
+      commands={session.nativeCli ? nativeCommands : undefined}
+      foot={session.nativeCli ? nativeControls.chips : undefined}
+      statusLine={nativeProfile || limits.length || session.context ? <LimitsLine windows={limits} account={nativeProfile || undefined} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined}
+      compacting={compacting || undefined}
+      onAttach={session.nativeChat ? attachImages : undefined} attachments={images}
+      onRemoveAttachment={index => setImages(current => current.filter((_, i) => i !== index))}
+      canAttach={!!session.nativeChat}
+      onAttachUnsupported={() => setError('This terminal cannot receive images through chat. Open a Claude or Codex chat to attach images.')}
+      waiting={status === 'blocked'} engine={eng.label}
+      history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
+    >
+      {nativeControls.sheet}
+      {(error || (!messages && readError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || readError}</div>}
+    </Composer>
+  );
+
   return (
     <>
       <div className="bar">
@@ -4919,7 +4947,7 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
           </Suspense>
         : <Chat messages={messages} status={status} compacting={compacting} readVisual={readVisual} />}
 
-      {session.nativeChat && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
+      {session.nativeChat && raw && !session.nativeCli && <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} />}
       {session.nativeChat && !raw && nativeNotice && (
         <div className="composer-wrap"><div className="composer-col">
           <div className="banner native-command" role="status">
@@ -4929,26 +4957,9 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
           </div>
         </div></div>
       )}
-      {(!raw || session.nativeCli) && (
-        <Composer
-          onTranscribe={onTranscribe}
-          draft={draft} setDraft={setDraft} onSend={send} onKey={key}
-          keys={!session.nativeChat} preparing={sending || preparingImages || loadingImages || savingImages}
-          commands={session.nativeCli ? nativeCommands : undefined}
-          foot={session.nativeCli ? nativeControls.chips : undefined}
-          statusLine={nativeProfile || limits.length || session.context ? <LimitsLine windows={limits} account={nativeProfile || undefined} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined}
-          compacting={compacting || undefined}
-          onAttach={session.nativeChat ? attachImages : undefined} attachments={images}
-          onRemoveAttachment={index => setImages(current => current.filter((_, i) => i !== index))}
-          canAttach={!!session.nativeChat}
-          onAttachUnsupported={() => setError('This terminal cannot receive images through chat. Open a Claude or Codex chat to attach images.')}
-          waiting={status === 'blocked'} engine={eng.label}
-          history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
-        >
-          {nativeControls.sheet}
-          {(error || (!messages && readError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || readError}</div>}
-        </Composer>
-      )}
+      {(!raw || session.nativeCli) && (session.nativeChat
+        ? <NativeClaudeApprovals client={client} env={env.id} sessionId={session.id} handle={questionHandle}>{composer}</NativeClaudeApprovals>
+        : composer())}
       {raw && !session.nativeCli && error && <div className="error floating" role="alert" onClick={() => setError('')}>{error}</div>}
     </>
   );
@@ -4956,7 +4967,13 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
 
 // --------------------------------------------------------------------- chat
 
-function NativeClaudeApprovals({ client, env, sessionId }: { client: Client; env: string; sessionId: string }) {
+function NativeClaudeApprovals({ client, env, sessionId, handle, children }: {
+  client: Client; env: string; sessionId: string;
+  /** Where a question banner leaves the way to answer it with what is typed in the composer. */
+  handle?: React.MutableRefObject<QuestionHandle | null>;
+  /** With a render function the request becomes the top of that composer; without, it stands alone. */
+  children?: (ask: { banner?: ReactNode; ask?: 'question' | 'approval' }) => ReactNode;
+}) {
   const { log, refresh } = useSessionLog(client, env, sessionId);
   const pending = log.pending[0];
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -4967,6 +4984,16 @@ function NativeClaudeApprovals({ client, env, sessionId }: { client: Client; env
     catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
   };
+  const hold = useCallback((h: QuestionHandle | null) => { if (handle) handle.current = h; }, [handle]);
+  if (children) {
+    return <>{children({
+      ask: pending ? (pending.kind === 'question' ? 'question' : 'approval') : undefined,
+      banner: pending ? <div className="ask-box">
+        <PermissionSheet key={pending.requestId} variant="banner" permission={pending} busy={busy} onAnswer={d => void answer(d)} onHandle={hold} />
+        {error && <div className="error" role="alert">{error}</div>}
+      </div> : undefined,
+    })}</>;
+  }
   if (!pending && !error) return null;
   return <div className="composer-wrap"><div className="composer-col">
     {pending && <PermissionSheet key={pending.requestId} permission={pending} busy={busy} onAnswer={d => void answer(d)} />}
