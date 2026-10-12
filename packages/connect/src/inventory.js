@@ -49,6 +49,24 @@ async function headLines(path, wanted = 1, cap = 1 << 20) {
   }
 }
 
+/**
+ * The whole lines in the last `bytes` of a file: where a long history keeps
+ * what it is doing now, without reading the megabytes before it.
+ */
+async function tailLines(path, bytes = 256 << 10) {
+  const fh = await open(path, 'r');
+  try {
+    const { size } = await fh.stat();
+    const start = Math.max(0, size - bytes);
+    const { buffer, bytesRead } = await fh.read(Buffer.alloc(size - start), 0, size - start, start);
+    const lines = buffer.subarray(0, bytesRead).toString('utf8').split('\n');
+    // A read that starts mid-file starts mid-line.
+    return start > 0 ? lines.slice(1) : lines;
+  } finally {
+    await fh.close();
+  }
+}
+
 const parse = (line) => { try { return JSON.parse(line); } catch { return null; } };
 
 /**
@@ -397,6 +415,35 @@ function opencode(home, account, engine = 'opencode') {
 // ----------------------------------------------------------------- pi / omp
 
 /**
+ * The model and thinking level a pi-family conversation runs with - what
+ * the CLI itself picks back up when the conversation is resumed. Neither is
+ * in the header: a `model_change` / `thinking_level_change` record says when
+ * the owner switched, and every reply names the model that wrote it. The
+ * latest of either wins, written the way pi takes it (`provider/id`).
+ */
+async function piSettings(path) {
+  let model;
+  let effort;
+  const take = (r) => {
+    if (r?.type === 'model_change' && r.modelId) model = r.provider ? `${r.provider}/${r.modelId}` : r.modelId;
+    else if (r?.type === 'thinking_level_change' && r.thinkingLevel) effort = r.thinkingLevel;
+    else if (r?.type === 'message' && r.message?.role === 'assistant') {
+      const m = r.message;
+      if (m.model) model = m.provider ? `${m.provider}/${m.model}` : m.model;
+      if (m.thinkingLevel) effort = m.thinkingLevel;
+    }
+  };
+  try {
+    // A short history is read whole; a long one by its start and its end.
+    const tail = 256 << 10;
+    const { size } = await stat(path);
+    const lines = size > tail ? [...await headLines(path, 40), ...await tailLines(path, tail)] : await tailLines(path, tail);
+    for (const line of lines) take(parse(line));
+  } catch { /* unreadable: say nothing rather than guess */ }
+  return { model, effort };
+}
+
+/**
  * Pi-family session logs: <home>/sessions/<dash-cwd>/<ts>_<uuid>.jsonl, whose
  * header record carries `id` and `cwd` outright. omp writes an extra `title`
  * record first. A live writer either holds the file open or shows up as an
@@ -433,6 +480,7 @@ async function piFamily(engine, home, account) {
       }
       if (!meta?.id) continue;
       const cwd = meta.cwd ?? meta.workingDirectory ?? HOME;
+      const { model, effort } = await piSettings(f.path);
       let pid = writerPid(f.path);
       if (!pid) {
         const p = active.get(cwd);
@@ -445,7 +493,8 @@ async function piFamily(engine, home, account) {
         title: title.replace(/\s+/g, ' ').slice(0, 90) || basename(cwd),
         cwd: collapse(cwd),
         updatedAt: f.mtime,
-        model: meta.modelId ?? undefined,
+        model,
+        effort,
         transcript: f.path,
         active: !!pid,
         writerPid: pid,

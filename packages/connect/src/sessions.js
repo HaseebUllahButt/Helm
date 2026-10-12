@@ -1043,6 +1043,7 @@ export class Sessions extends EventEmitter {
             s.engineSessionId = current.id;
             s.transcript = current.transcript;
             if (current.model) s.engineModel = current.model;
+            if (current.effort) s.engineEffort = current.effort;
             const owners = claudeOwners?.get(current.id)?.filter((owner) => owned(owner.pid)) ?? [];
             s.status = claudeLiveStatus(owners) ?? current.status ?? s.status;
             s.turns = current.turns;
@@ -2273,6 +2274,10 @@ export class Sessions extends EventEmitter {
         title: title || found.title || basename(expand(cwd || '~')),
         titleBy: title ? 'user' : null,
         engineSessionId: id,
+        // What the CLI will pick back up when it resumes this conversation:
+        // reported, never passed as a choice on the next launch.
+        engineModel: found.model ?? null,
+        engineEffort: found.effort ?? null,
         transcript: found.transcript || null,
         externalLock: engine === 'codex'
           ? join(expand(homeOf(profile)), 'thread-writer-locks', `${id}.lock`) : null,
@@ -2311,6 +2316,8 @@ export class Sessions extends EventEmitter {
         title: title || found.title || basename(expand(cwd || '~')),
         titleBy: title ? 'user' : null,
         engineSessionId: id,
+        engineModel: found.model ?? null,
+        engineEffort: found.effort ?? null,
         transcript: found.transcript,
         externalLock,
         externalPid: found.writerPid || null,

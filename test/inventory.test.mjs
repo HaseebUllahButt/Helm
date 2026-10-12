@@ -184,6 +184,41 @@ test('pi inventory trusts each log\'s own session header, not its folder name', 
   assert.equal(found.active, false);
 });
 
+test('pi inventory says which model and thinking level a conversation resumes with', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'helm-pi-model-'));
+  const dir = join(home, 'sessions', '--work--');
+  mkdirSync(dir, { recursive: true });
+  // Recorded shape from pi 0.99.1: the model is not in the header.
+  const short = [
+    { type: 'session', version: 3, id: 'pi-short', cwd: '/work' },
+    { type: 'model_change', provider: 'explabs', modelId: 'qwen3.8-flash' },
+    { type: 'thinking_level_change', thinkingLevel: 'high' },
+    { type: 'model_change', provider: 'devin', modelId: 'deepseek-v4-flash-high' },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } },
+    { type: 'thinking_level_change', thinkingLevel: 'max' },
+  ];
+  writeFileSync(join(dir, 'a_pi-short.jsonl'), short.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  // A long history switched model far past its opening lines.
+  const filler = { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'x'.repeat(4000) }] } };
+  const long = [
+    { type: 'session', version: 3, id: 'pi-long', cwd: '/work' },
+    { type: 'model_change', provider: 'explabs', modelId: 'qwen3.8-flash' },
+    ...Array.from({ length: 200 }, () => filler),
+    { type: 'message', message: { role: 'assistant', provider: 'devin', model: 'swe-2', thinkingLevel: 'low', content: [] } },
+    ...Array.from({ length: 5 }, () => filler),
+  ];
+  writeFileSync(join(dir, 'b_pi-long.jsonl'), long.map((l) => JSON.stringify(l)).join('\n') + '\n');
+
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const rows = await inventory([{ id: 'pi', engine: 'pi', env: { PI_CODING_AGENT_DIR: home } }]);
+  const shortRow = rows.find((r) => r.id === 'pi-short');
+  assert.equal(shortRow.model, 'devin/deepseek-v4-flash-high');
+  assert.equal(shortRow.effort, 'max');
+  const longRow = rows.find((r) => r.id === 'pi-long');
+  assert.equal(longRow.model, 'devin/swe-2');
+  assert.equal(longRow.effort, 'low');
+});
+
 test('agy inventory reads conversation_summaries.db under the gemini home', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'helm-agy-home-'));
   const root = join(home, 'antigravity-cli');
