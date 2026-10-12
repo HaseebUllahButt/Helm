@@ -1476,7 +1476,11 @@ export class CodexDriver extends Driver {
       case 'commandExecution': {
         const command = item.commandActions?.map((a) => a.command).filter(Boolean).join(' && ') || item.command;
         this.#items.set(item.id, { kind: 'command', command });
-        this.push('item.start', { ...base, kind: 'command', command, cwd: item.cwd });
+        // What Codex itself says the command does (read / search / listFiles),
+        // so the chat can say "Read app.ts" instead of a raw shell line.
+        const actions = (item.commandActions ?? []).filter((a) => a?.type).slice(0, 8)
+          .map((a) => ({ type: a.type, name: a.name, path: a.path, query: a.query }));
+        this.push('item.start', { ...base, kind: 'command', command, cwd: item.cwd, ...(actions.length ? { actions } : {}) });
         return;
       }
       case 'fileChange': {

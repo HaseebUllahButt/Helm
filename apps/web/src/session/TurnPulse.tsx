@@ -1,8 +1,9 @@
-import { createContext, Fragment, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import type { Item, Turn } from './types';
-import { money, seconds } from '../format';
+import { seconds } from '../format';
+import { changeStats, changesOf, baseName, rawCommand } from './stepWords';
 
-/** Lets a chip in the wrap-up ask the transcript to open and show one step. */
+/** Lets the changed-files card ask the transcript to open and show one step. */
 export const Reveal = createContext<(id: string) => void>(() => {});
 
 // Short and friendly, like the CLI's own. Seven is coprime with twenty, so
@@ -18,9 +19,6 @@ const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >
 export const verbAt = (turnId: string, elapsedSeconds: number) =>
   VERBS[(hash(turnId) + Math.floor(elapsedSeconds / VERB_SECONDS) * 7) % VERBS.length];
 
-/** "42s", "1m 05s": whole seconds, so a ticking counter never wobbles in width. */
-const clock = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`);
-
 /**
  * The shared useNow ticker runs at whatever pace its first user asked for
  * (often 15s), too slow for a seconds counter. This one lives only while a
@@ -35,15 +33,19 @@ function useEverySecond(): number {
   return now;
 }
 
-export function WorkingLine({ turn }: { turn: Turn }) {
+/** "Working for 42s · Pondering…": the one calm line that says the agent is busy. */
+export function WorkingLine({ turn, blocked = false }: { turn: Turn; blocked?: boolean }) {
   const now = useEverySecond();
+  if (blocked) return <div className="working quiet">Waiting for you</div>;
   const start = Number.isFinite(turn.at) ? turn.at : turn.items[0]?.startedAt;
   const elapsed = start ? Math.max(0, Math.floor((now - start) / 1000)) : 0;
   return (
     <div className="working">
       <span className="pulse-dot" aria-hidden="true" />
-      <span className="shine">{verbAt(turn.id, elapsed)}…</span>
-      {start ? <span className="working-time">{clock(elapsed)}</span> : null}
+      {start
+        ? <span className="working-for">Working for <span className="working-time">{elapsed < 1 ? '0s' : seconds(elapsed * 1000)}</span></span>
+        : <span className="working-for">Working</span>}
+      <span className="working-verb shine">{verbAt(turn.id, elapsed)}…</span>
     </div>
   );
 }
@@ -52,47 +54,64 @@ const TEST_RUN = /\b((npm|pnpm|yarn|bun)\s+(run\s+)?test|vitest|jest|pytest|go\s
 
 /** The last test run decides: an early failure that was then fixed is not news. */
 export function testResult(items: Item[]): 'passed' | 'failed' | null {
-  const last = items.filter((it) => it.kind === 'command' && it.command && TEST_RUN.test(it.command) && it.exitCode != null).at(-1);
-  return last ? (last.exitCode === 0 ? 'passed' : 'failed') : null;
+  // A Codex command has an exit code; a Claude Bash call only says whether it failed.
+  const ended = (it: Item) => (it.kind === 'command' ? it.exitCode != null : it.status === 'ok' || it.status === 'error');
+  const last = items.filter((it) => { const c = rawCommand(it); return !!c && TEST_RUN.test(c) && ended(it); }).at(-1);
+  if (!last) return null;
+  return (last.kind === 'command' ? last.exitCode === 0 : last.status === 'ok') ? 'passed' : 'failed';
 }
 
-/** Each distinct file the turn edited, with the first step that touched it. */
-export function changedFiles(items: Item[]): { path: string; itemId: string }[] {
-  const seen = new Map<string, string>();
-  for (const it of items) if (it.kind === 'edit') for (const c of it.changes ?? []) if (c.path && !seen.has(c.path)) seen.set(c.path, it.id);
-  return [...seen].map(([path, itemId]) => ({ path, itemId }));
+export interface FileChange { path: string; itemId: string; add: number; del: number }
+
+/** Each distinct file the turn edited: the first step that touched it, and how many lines went in and out. */
+export function changedFiles(items: Item[]): FileChange[] {
+  const files = new Map<string, FileChange>();
+  for (const it of items) {
+    for (const c of changesOf(it)) {
+      if (!c.path) continue;
+      const { add, del } = changeStats([c]);
+      const f = files.get(c.path);
+      if (f) { f.add += add; f.del += del; } else files.set(c.path, { path: c.path, itemId: it.id, add, del });
+    }
+  }
+  return [...files.values()];
 }
 
-const MAX_CHIPS = 5;
+const MAX_FILES = 6;
 
-/** "Done in 42s · 3 files changed · tests passed · $0.02", and a chip per file. */
-export function WrapUp({ turn }: { turn: Turn }) {
+/** Two files called index.ts need their folder to tell them apart. */
+const nameFor = (f: FileChange, all: FileChange[]) => {
+  const name = baseName(f.path);
+  if (all.filter((o) => baseName(o.path) === name).length < 2) return name;
+  return f.path.split('/').slice(-2).join('/');
+};
+
+const Counts = ({ add, del }: { add: number; del: number }) => (
+  <span className="tf-counts"><i className="add">+{add}</i> <i className="del">−{del}</i></span>
+);
+
+/** "3 changed files +29 −12", each file, and a way to open the diff. */
+export function ChangedFiles({ files }: { files: FileChange[] }) {
   const reveal = useContext(Reveal);
-  const d = turn.done;
-  const files = changedFiles(turn.items);
-  const tests = testResult(turn.items);
-  const parts = [
-    d?.durationMs ? `Done in ${seconds(d.durationMs)}` : '',
-    files.length ? `${files.length} ${files.length === 1 ? 'file' : 'files'} changed` : '',
-    tests ? `tests ${tests}` : '',
-    money(d?.costUsd),
-  ].filter(Boolean);
-  if (!parts.length) return null;
+  if (!files.length) return null;
+  const add = files.reduce((n, f) => n + f.add, 0);
+  const del = files.reduce((n, f) => n + f.del, 0);
   return (
-    <div className="turn-meta wrapup">
-      {/* Each part keeps its words together, so a narrow screen breaks
-          between parts and never strands a dot at the start of a line. */}
-      <span>{parts.map((p, i) => <Fragment key={i}>{i ? ' ' : ''}<span className="wrapup-part">{p}{i < parts.length - 1 ? ' ·' : ''}</span></Fragment>)}</span>
-      {files.length > 0 && (
-        <div className="wrapup-files">
-          {files.slice(0, MAX_CHIPS).map((f) => (
-            <button key={f.path} type="button" className="wrapup-chip" title={f.path} onClick={() => reveal(f.itemId)}>
-              {f.path.split('/').pop() || f.path}
-            </button>
-          ))}
-          {files.length > MAX_CHIPS && <span className="wrapup-more">+{files.length - MAX_CHIPS} more</span>}
-        </div>
-      )}
+    <div className="tf" role="group" aria-label="Changed files">
+      <div className="tf-head">
+        <span className="tf-title">{files.length} changed {files.length === 1 ? 'file' : 'files'}</span>
+        <Counts add={add} del={del} />
+        <button type="button" className="tf-open" onClick={() => reveal(files[0].itemId)}>Open diff</button>
+      </div>
+      <ul className="tf-list">
+        {files.slice(0, MAX_FILES).map((f) => (
+          <li key={f.path} title={f.path}>
+            <span className="tf-name">{nameFor(f, files)}</span>
+            <Counts add={f.add} del={f.del} />
+          </li>
+        ))}
+        {files.length > MAX_FILES && <li className="tf-more">+{files.length - MAX_FILES} more</li>}
+      </ul>
     </div>
   );
 }

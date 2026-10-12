@@ -3,14 +3,16 @@ import { createContext, useContext, memo, useCallback, useEffect, useLayoutEffec
 import { Markdown } from '../Markdown';
 import type { Change, Item, Turn, Permission } from './types';
 import { seconds } from '../format';
-import { Icon, toolKind } from '../Icon';
+import { Icon, toolKind, type IconName } from '../Icon';
 import { userMessage } from './userMessage';
 import { plainError } from './problem';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
 import { ContextCard } from './ContextCard';
-import { TodoCard, isTodoItem, latestTodoId } from './Todos';
+import { TodoCard, isTodoItem, parseTodos } from './Todos';
 import { parseContextUsage } from './contextUsage';
-import { Reveal, WorkingLine, WrapUp } from './TurnPulse';
+import { Reveal, WorkingLine, ChangedFiles, changedFiles, testResult } from './TurnPulse';
+import { stepWords, toolSummary, tryParse, rawCommand, toolChanges, changesOf, changeStats, unifiedDiff, diffCounts } from './stepWords';
+import { money } from '../format';
 
 /** The session is still working, so an open compaction is really running. */
 const Busy = createContext(false);
@@ -85,20 +87,6 @@ function ThinkingItem({ item }: { item: Item }) {
   );
 }
 
-/** The one line that describes what a tool is doing, from whatever input we have. */
-function toolSummary(item: Item): string {
-  const input = item.input ?? tryParse(item.inputJson);
-  if (input && typeof input === 'object') {
-    const v = input.command ?? input.file_path ?? input.path ?? input.notebook_path ?? input.pattern ?? input.query ?? input.url
-      ?? input.questions?.[0]?.question ?? input.description ?? input.prompt ?? input.plan;
-    if (typeof v === 'string') return v.length > 140 ? v.slice(0, 140) + '…' : v;
-  }
-  // Still streaming: show the first string value once its key has landed, never raw JSON.
-  const m = item.inputJson?.match(/"(?:command|file_path|path|pattern|query|url|question|description)"\s*:\s*"((?:[^"\\]|\\.)*)/);
-  return m ? m[1].slice(0, 140) : '';
-}
-const tryParse = (s?: string) => { if (!s) return undefined; try { return JSON.parse(s); } catch { return undefined; } };
-
 function ToolItem({ item }: { item: Item }) {
   const live = item.status === 'streaming';
   const summary = toolSummary(item);
@@ -124,62 +112,6 @@ function ToolItem({ item }: { item: Item }) {
   );
 }
 
-/**
- * What a run of finished tool calls did, in a few words - "Read 2 files ·
- * Edited math.js" - in the order it happened. Nobody reads six lines of
- * `Read /home/...` to learn the agent looked at some files.
- */
-function stepsSummary(items: Item[]): string {
-  const order: string[] = [];
-  const count: Record<string, number> = {};
-  const edited: string[] = [];
-  const add = (g: string) => {
-    if (!(g in count)) { count[g] = 0; order.push(g); }
-    count[g] += 1;
-  };
-  for (const it of items) {
-    if (it.kind === 'thinking') continue;
-    if (it.kind === 'command') add('run');
-    else if (it.kind === 'subagent') add('agent');
-    else if (it.kind === 'edit') {
-      const paths = (it.changes ?? []).map((c) => c.path);
-      for (const p of paths.length ? paths : ['']) if (!edited.includes(p)) { edited.push(p); add('edit'); }
-    } else add(toolKind(it.name ?? ''));
-  }
-  const many = (n: number, one: string, more: string) => (n === 1 ? one : more.replace('#', String(n)));
-  const names = edited.filter(Boolean).map((p) => p.split('/').pop());
-  const parts = order.map((g) => {
-    const n = count[g];
-    if (g === 'read') return many(n, 'Read 1 file', 'Read # files');
-    if (g === 'edit') return names.length && names.length <= 2 && names.length === n ? `Edited ${names.join(', ')}` : many(n, 'Edited 1 file', 'Edited # files');
-    if (g === 'run') return many(n, 'Ran 1 command', 'Ran # commands');
-    if (g === 'search') return many(n, 'Searched', 'Searched # times');
-    if (g === 'agent') return many(n, 'Ran 1 agent', 'Ran # agents');
-    return many(n, 'Used 1 tool', 'Used # tools');
-  });
-  return parts.join(' · ') || 'Thought';
-}
-
-/** What the newest step is doing, in one line, while it is still going. */
-function liveLine(it: Item): string {
-  if (it.kind === 'thinking') return 'Thinking';
-  if (it.kind === 'command') return it.command ? `Running ${it.command}` : 'Running a command';
-  if (it.kind === 'edit') return `Editing ${(it.changes ?? []).map((c) => shortPath(c.path)).join(', ') || 'a file'}`;
-  if (it.kind === 'subagent') {
-    const input = it.input ?? tryParse(it.inputJson);
-    return `${input?.subagent_type ?? it.name ?? 'Agent'}: ${it.agent?.description ?? input?.description ?? 'working'}`;
-  }
-  const summary = toolSummary(it);
-  return `${it.name ?? 'Tool'}${summary ? ` ${summary}` : ''}`;
-}
-
-/** "12s" from the first call to the last, when the timestamps are there. */
-function spanOf(items: Item[]): string {
-  const start = Math.min(...items.map((i) => i.startedAt).filter(Boolean));
-  const end = Math.max(...items.map((i) => i.doneAt ?? i.startedAt).filter(Boolean));
-  return Number.isFinite(start) && end - start >= 2000 ? seconds(end - start) : '';
-}
-
 /** A picture, full screen: tap to zoom in, tap again to zoom out, scroll to pan. */
 function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
   const [big, setBig] = useState(false);
@@ -198,73 +130,146 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
   );
 }
 
-/** How many steps of a live run stay on screen at once. */
-const LIVE_STEPS = 6;
+// ------------------------------------------------------------------- steps
+
+const isTextish = (it: Item) => it.kind === 'text' || it.kind === 'visual';
+/** Errors and compactions stay out in the open; they are not "work". */
+const isApart = (it: Item) => it.kind === 'error' || isCompaction(it);
+const isFailed = (it: Item) => it.status === 'error' || (it.kind === 'command' && it.exitCode != null && it.exitCode !== 0);
+
+function stepIcon(it: Item): IconName {
+  if (it.kind === 'command' && it.actions?.length && it.actions.every((a) => a.type === it.actions![0].type)) {
+    const t = it.actions[0].type;
+    if (t === 'read') return 'read';
+    if (t === 'search' || t === 'listFiles' || t === 'list_files') return 'search';
+  }
+  return it.kind === 'command' ? 'run' : it.kind === 'edit' ? 'edit' : it.kind === 'thinking' ? 'think'
+    : it.kind === 'subagent' ? 'subagents' : isTodoItem(it) ? 'plan' : toolKind(it.name ?? '');
+}
+
+/** Rows are for plain steps; a helper keeps its own card, and prose stays prose. */
+const rowable = (it: Item) => !isTextish(it) && !isApart(it) && it.kind !== 'subagent';
+
+/** What opening a step shows: the raw command and what it printed, the diff, the list. */
+function hasDetail(it: Item): boolean {
+  if (it.kind === 'command' || rawCommand(it) !== undefined) return true;
+  if (it.kind === 'edit') return (it.changes ?? []).length > 0;
+  if (isTodoItem(it)) return !!parseTodos(it);
+  if (it.kind === 'thinking') return !!it.text;
+  return changesOf(it).length > 0 || !!(it.output || it.error);
+}
+
+function StepDetail({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
+  const command = rawCommand(item);
+  const out = (item.output ?? item.text ?? '').replace(/\s+$/, '');
+  const body = out || item.error || '';
+  const raw = body.length > 4000 ? '…\n' + body.slice(-4000) : body;
+  if (command !== undefined) {
+    return (
+      <div className="step-raw">
+        <code className="step-cmd">{command}</code>
+        {raw && <pre className="cmd-out">{raw}</pre>}
+        {item.exitCode != null && item.exitCode !== 0 && <div className="step-exit">exit {item.exitCode}</div>}
+      </div>
+    );
+  }
+  if (item.kind === 'edit' || changesOf(item).length) return <ItemContent item={item} byParent={byParent} />;
+  if (isTodoItem(item)) return <TodoCard item={item} />;
+  if (item.kind === 'thinking') return <div className="think-body">{item.text}</div>;
+  const summary = toolSummary(item);
+  return (
+    <div className="step-raw">
+      <code className="step-cmd"><b>{item.name}</b>{summary && <> {summary}</>}</code>
+      {raw && <pre className="aout">{raw}</pre>}
+    </div>
+  );
+}
 
 /**
- * Everything the agent did between two things it said - reads, searches,
- * commands, edits, helpers. While it works, each step shows as its own line
- * the way the CLI shows them; once it is done they fold into one line you
- * can open.
+ * One step as one quiet line, in plain words: "Ran tests", "Read app.ts".
+ * Running, it shines; failed, it carries a small red x; tap it for the
+ * raw command and what it printed.
  */
+function StepRow({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
+  const { focusItem } = useContext(Requests);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (focusItem?.id === item.id) setOpen(true); }, [focusItem]);
+  const words = stepWords(item);
+  const live = item.status === 'streaming';
+  const failed = isFailed(item);
+  const detail = hasDetail(item);
+  const changes = changesOf(item);
+  const stats = !live && changes.length ? changeStats(changes) : null;
+  return (
+    <div className={`step${failed ? ' bad' : ''}${open ? ' open' : ''}`}>
+      <button type="button" className="step-head" disabled={!detail} aria-expanded={detail ? open : undefined} onClick={() => setOpen((v) => !v)}>
+        <span className={`aicon${failed ? ' bad' : ''}`}><Icon name={stepIcon(item)} size={15} /></span>
+        <span className={`alabel${live ? ' shine' : ''}`}>{live ? words.now : words.past}</span>
+        {stats && (stats.add > 0 || stats.del > 0) && <span className="ameta"><i className="add">+{stats.add}</i> <i className="del">−{stats.del}</i></span>}
+        {live && item.elapsed != null && item.elapsed > 2 && <span className="ameta">{Math.round(item.elapsed)}s</span>}
+        {item.status === 'declined' && <span className="ameta">declined</span>}
+        {failed && <span className="step-x" role="img" aria-label="failed"><Icon name="close" size={12} /></span>}
+        {detail && <span className={`achev${open ? ' open' : ''}`}><Icon name="forward" size={13} /></span>}
+      </button>
+      {open && <StepDetail item={item} byParent={byParent} />}
+    </div>
+  );
+}
 
-function ActivityGroup({ items, byParent, live: turnLive }: { items: Item[]; byParent: Map<string, Item[]>; live: boolean }) {
+/** How many steps of a running turn stay on screen. */
+const LIVE_STEPS = 3;
+
+/**
+ * Everything the agent did before its answer. While it works: a "Working
+ * for 42s" line and its newest few steps, one plain line each. When it is
+ * done the same block becomes one quiet "Worked for 8m 41s" row that opens
+ * to everything, in order. One block per turn, so nothing jumps.
+ */
+function Work({ turn, items, byParent, live, label, blocked }: {
+  turn: Turn; items: Item[]; byParent: Map<string, Item[]>; live: boolean; label: string; blocked: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const requests = useContext(Requests);
-  const live = turnLive || items.some(item => item.kind === 'subagent' && ['running', 'pendingInit', 'working'].includes(item.agent?.status ?? ''));
-  const ids = new Set(items.map(item => item.id));
+  const ids = new Set(items.map((item) => item.id));
   const collect = (id: string) => { for (const child of byParent.get(id) ?? []) if (!ids.has(child.id)) { ids.add(child.id); collect(child.id); } };
-  items.forEach(item => collect(item.id));
+  items.forEach((item) => collect(item.id));
   useEffect(() => { if (requests.focusItem && ids.has(requests.focusItem.id)) setOpen(true); }, [requests.focusItem]);
-  const asking = requests.pending.filter(request => request.parentId && ids.has(request.parentId));
-  const steps = items.filter((i) => i.kind !== 'thinking');
-  const failed = steps.filter((i) => i.status === 'error' || (i.kind === 'command' && i.exitCode != null && i.exitCode !== 0)).length;
-  const current = live ? [...items].reverse().find((i) => i.status === 'streaming') ?? items.at(-1) : undefined;
-  const done = live ? items.filter((i) => i !== current) : items;
-  const first = steps[0] ?? items[0];
-  const span = spanOf(items);
-  // While it works, every step is its own line, as the CLI shows them - but
-  // only the newest few, so a long run stays readable. Opening the group
-  // (or tapping the "earlier" line) brings back the whole list.
-  if (live && !open) {
-    const hidden = Math.max(0, items.length - LIVE_STEPS);
+  const asking = requests.pending.filter((request) => request.parentId && ids.has(request.parentId));
+  const helper = items.some((item) => item.kind === 'subagent' && ['running', 'pendingInit', 'working'].includes(item.agent?.status ?? ''));
+  const ask = (list: Permission[]) => requests.review && list.map((request) => (
+    <button key={request.requestId} className="subagent-request" onClick={() => requests.review?.(request.requestId)}>
+      {request.kind === 'question' ? 'Answer question' : 'Review request'} · {request.title}<Icon name="forward" size={13} />
+    </button>
+  ));
+
+  if (live) {
+    const stepAt = items.flatMap((it, i) => (isTextish(it) ? [] : [i]));
+    const hidden = open ? 0 : Math.max(0, stepAt.length - LIVE_STEPS);
+    const from = hidden ? stepAt[stepAt.length - LIVE_STEPS] : 0;
+    const shown = items.slice(from);
     // A helper's card on screen carries its own "Answer question" button;
     // a second one here would be the same request twice.
-    const shown = new Set(items.slice(hidden).filter((it) => it.kind === 'subagent').map((it) => it.id));
-    const unseen = asking.filter((request) => !shown.has(request.parentId ?? ''));
+    const cards = new Set(shown.filter((it) => it.kind === 'subagent').map((it) => it.id));
+    const unseen = asking.filter((request) => !cards.has(request.parentId ?? ''));
     return (
-      <div className="activity live">
+      <div className={`work live${open ? ' open' : ''}`}>
+        <WorkingLine turn={turn} blocked={blocked} />
         {hidden > 0 && <button type="button" className="steps-earlier" aria-expanded={false} onClick={() => setOpen(true)}>+{hidden} earlier {hidden === 1 ? 'step' : 'steps'}</button>}
+        {open && stepAt.length > LIVE_STEPS && <button type="button" className="steps-earlier" aria-expanded onClick={() => setOpen(false)}>Show fewer steps</button>}
         <div className="steps-live">
-          {items.slice(hidden).map((it) => <div key={it.id} className="live-step"><ItemView item={it} byParent={byParent} /></div>)}
+          {shown.map((it) => <div key={it.id} className="live-step"><ItemView item={it} byParent={byParent} plain /></div>)}
         </div>
-        {requests.review && unseen.map(request => <button key={request.requestId} className="subagent-request"
-          onClick={() => requests.review?.(request.requestId)}>
-          {request.kind === 'question' ? 'Answer question' : 'Review request'} · {request.title}<Icon name="forward" size={13} />
-        </button>)}
+        {ask(unseen)}
       </div>
     );
   }
   return (
-    <div className={`activity${open ? ' open' : ''}${live ? ' live' : ''}`}>
-      <button type="button" className="activity-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <span className="aicon">{first.kind === 'command' ? <Icon name="run" size={15} />
-          : first.kind === 'edit' ? <Icon name="edit" size={15} />
-          : first.kind === 'subagent' ? <Icon name="subagents" size={15} />
-          : first.kind === 'thinking' ? <Icon name="think" size={15} />
-          : <ToolIcon name={first.name} />}</span>
-        <span className="alabel">
-          {live && current
-            ? <><span className="shine">{liveLine(current)}</span>{done.some((i) => i.kind !== 'thinking') && <span className="activity-done"> · {stepsSummary(done)} so far</span>}</>
-            : <>{stepsSummary(items)}{failed ? <span className="bad"> · {failed} failed</span> : ''}</>}
-        </span>
-        {!live && span && <span className="ameta">{span}</span>}
+    <div className={`work${open ? ' open' : ''}`}>
+      <button type="button" className="work-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <span className={`work-label${helper ? ' shine' : ''}`}>{label}</span>
         <span className={`achev${open ? ' open' : ''}`}><Icon name="forward" size={13} /></span>
       </button>
-      {!open && requests.review && asking.map(request => <button key={request.requestId} className="subagent-request"
-        onClick={() => requests.review?.(request.requestId)}>
-        {request.kind === 'question' ? 'Answer question' : 'Review request'} · {request.title}<Icon name="forward" size={13} />
-      </button>)}
+      {!open && ask(asking)}
       {open && <div className="steps-body">{items.map((it) => <ItemView key={it.id} item={it} byParent={byParent} />)}</div>}
     </div>
   );
@@ -296,15 +301,6 @@ function CommandItem({ item }: { item: Item }) {
     </div>
   );
 }
-
-const diffCounts = (diff = '') => {
-  let add = 0, del = 0;
-  for (const l of diff.split('\n')) {
-    if (l.startsWith('+') && !l.startsWith('+++')) add++;
-    else if (l.startsWith('-') && !l.startsWith('---')) del++;
-  }
-  return { add, del };
-};
 
 export function Diff({ text }: { text: string }) {
   return (
@@ -384,8 +380,7 @@ function DiffPreview({ rows }: { rows: DiffRow[] }) {
 
 function ChangeCard({ c, open, preview }: { c: Change; open: boolean; preview: boolean }) {
   // Codex sends an added file as its content, not a unified diff.
-  const unified = /^(---|\+\+\+|@@|diff )/m.test(c.diff);
-  const shown = unified ? c.diff : c.diff.split('\n').map((l) => (c.kind === 'delete' ? '-' : '+') + l).join('\n');
+  const shown = unifiedDiff(c);
   const { add, del } = diffCounts(shown);
   return (
     <details className={`edit${preview ? ' previewed' : ''}`} open={open || preview}>
@@ -407,7 +402,7 @@ export function ChangeList({ changes, open = false, preview = false }: { changes
 }
 
 function EditItem({ item }: { item: Item }) {
-  const changes = item.changes ?? [];
+  const changes = changesOf(item);
   if (!changes.length) return <div className="act"><span className="aicon"><Icon name="edit" size={15} /></span><span className="alabel"><b>Edit</b></span></div>;
   return <div className={`edits${item.status === 'declined' ? ' declined' : item.status === 'error' ? ' bad' : ''}`}><ChangeList changes={changes} preview /></div>;
 }
@@ -475,6 +470,18 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
   );
 }
 
+/** A to-do update among the steps: one line that opens to the checklist as it stood. */
+function TodoStep({ item }: { item: Item }) {
+  const words = stepWords(item);
+  if (!parseTodos(item)) return <div className="act"><span className="aicon"><Icon name="plan" size={15} /></span><span className="alabel">{words.past}</span></div>;
+  return (
+    <details className="actgroup">
+      <summary><span className="aicon"><Icon name="plan" size={15} /></span><span className="alabel">{words.past}</span><span className="achev"><Icon name="forward" size={13} /></span></summary>
+      <TodoCard item={item} />
+    </details>
+  );
+}
+
 /** A failure, said plainly; what the CLI printed is one tap away. */
 function ErrorLine({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
@@ -492,7 +499,8 @@ function ErrorLine({ text }: { text: string }) {
   );
 }
 
-function ItemView({ item, byParent, commandOutput }: { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean }) {
+/** `plain` draws a plain step as one line of plain words; a finished turn's list keeps the full cards. */
+function ItemView({ item, byParent, commandOutput, plain }: { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean; plain?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const { focusItem } = useContext(Requests);
   useEffect(() => {
@@ -506,7 +514,11 @@ function ItemView({ item, byParent, commandOutput }: { item: Item; byParent: Map
     element.scrollIntoView({ block: 'center' });
     element.focus({ preventScroll: true });
   }, [focusItem]);
-  return <div ref={ref} data-item-id={item.id} tabIndex={-1}><ItemContent item={item} byParent={byParent} commandOutput={commandOutput} /></div>;
+  return (
+    <div ref={ref} data-item-id={item.id} tabIndex={-1}>
+      {plain && rowable(item) ? <StepRow item={item} byParent={byParent} /> : <ItemContent item={item} byParent={byParent} commandOutput={commandOutput} />}
+    </div>
+  );
 }
 
 function ItemContent({ item, byParent, commandOutput }: { item: Item; byParent: Map<string, Item[]>; commandOutput?: boolean }) {
@@ -515,8 +527,9 @@ function ItemContent({ item, byParent, commandOutput }: { item: Item; byParent: 
     case 'visual': return item.visual ? <VisualReply visual={item.visual} /> : null;
     case 'thinking': return <ThinkingItem item={item} />;
     case 'tool':
-      if (isTodoItem(item)) return <TodoCard item={item} />;
-      return isCompaction(item) ? <CompactItem item={item} /> : <ToolItem item={item} />;
+      if (isTodoItem(item)) return <TodoStep item={item} />;
+      if (isCompaction(item)) return <CompactItem item={item} />;
+      return toolChanges(item).length ? <EditItem item={item} /> : <ToolItem item={item} />;
     case 'command': return <CommandItem item={item} />;
     case 'edit': return <EditItem item={item} />;
     case 'subagent': return <SubagentItem item={item} byParent={byParent} />;
@@ -551,6 +564,41 @@ function clock(ts?: number) {
   const sameDay = d.toDateString() === today.toDateString();
   const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
+/** How long the work took, from the turn's start (or the first step) to the last step's end. */
+function workSpan(turn: Turn, work: Item[], whole: boolean): number {
+  const starts = work.map((i) => i.startedAt).filter(Boolean);
+  const first = whole && Number.isFinite(turn.at) && turn.at ? turn.at : Math.min(...starts);
+  const last = Math.max(...work.map((i) => i.doneAt ?? i.startedAt).filter(Boolean));
+  return Number.isFinite(first) && Number.isFinite(last) && last > first ? last - first : 0;
+}
+
+/** Under the answer, quietly: a copy button, what it cost, whether the tests passed. */
+function FinalMeta({ text, cost, tests }: { text: string; cost?: number; tests: 'passed' | 'failed' | null }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const price = money(cost);
+  if (!text && !price && !tests) return null;
+  const copy = () => {
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+  return (
+    <div className="turn-meta final-meta">
+      {text && (
+        <button type="button" className="copy-answer" onClick={copy} aria-label={copied ? 'Copied' : 'Copy answer'} title={copied ? 'Copied' : 'Copy answer'}>
+          <Icon name={copied ? 'check' : 'copy'} size={14} />
+        </button>
+      )}
+      {price && <span>{price}</span>}
+      {tests && <span className={tests === 'failed' ? 'bad' : undefined}>tests {tests}</span>}
+    </div>
+  );
 }
 
 const TurnView = memo(function TurnView({ turn, items, head = true, tail = true, saidBelow = false, working, blocked, onResend, onWithdraw, onBranch }: {
@@ -601,6 +649,32 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
     byParent.set(it.parentId, kids);
     return false;
   });
+  // The agent's answer is what it said last. Everything before that - the
+  // steps and the thinking out loud between them - is "work", and folds.
+  // Errors and compactions are neither: they stay where anyone can see them.
+  let cut = roots.length;
+  while (cut > 0 && (isTextish(roots[cut - 1]) || isApart(roots[cut - 1]))) cut -= 1;
+  const pre = roots.slice(0, cut);
+  const answer = roots.slice(cut);
+  const work = pre.filter((it) => !isApart(it));
+  const outside = pre.filter(isApart);
+  // A chat read from another CLI's history has no streaming steps and no end.
+  const live = !d && (list.some((it) => it.status === 'streaming') || (tail && !!working));
+  const answerNodes: ReactNode[] = [];
+  for (let i = 0; i < answer.length;) {
+    if (isApart(answer[i])) { answerNodes.push(<ItemView key={answer[i].id} item={answer[i]} byParent={byParent} commandOutput={commandOutput} />); i += 1; continue; }
+    let j = i;
+    while (j < answer.length && !isApart(answer[j])) j += 1;
+    const group = answer.slice(i, j);
+    answerNodes.push(<div key={`final-${group[0].id}`} className="final">{group.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}</div>);
+    i = j;
+  }
+  const answerText = answer.filter((it) => it.kind === 'text' && it.text).map((it) => it.text.trim()).join('\n\n');
+  const files = tail && d ? changedFiles(list) : [];
+  const took = d?.durationMs || workSpan(turn, work, tail);
+  const workLabel = d?.status === 'interrupted'
+    ? (took ? `You stopped after ${seconds(took)}` : 'You stopped')
+    : (took ? `Worked for ${seconds(took)}` : 'Worked');
   return (
     <>
       {head && display.printed && !!said.text && <div className="turn assistant command-note"><Markdown text={said.text} className="prose" /></div>}
@@ -634,49 +708,16 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
         </div></div>
       )}
       <div className={`turn assistant${note ? ' command-note' : ''}`}>
-        {(() => {
-          // Everything between two things the agent said folds into one line:
-          // tool calls, commands and their output, edits, helpers. Keyed by
-          // the run's first item, so a run that grows while the agent works
-          // keeps the same line - and whether you opened it.
-          const nodes: ReactNode[] = [];
-          // A compaction stands on its own line: it is about the whole
-          // conversation, not one of the steps around it.
-          const quiet = (it: Item) => it.kind !== 'text' && it.kind !== 'error' && it.kind !== 'visual' && !isCompaction(it) && !isTodoItem(it);
-          // The to-do list is one card that ticks in place: only the newest
-          // write shows, under a key that outlives each rewrite.
-          const todoId = latestTodoId(roots);
-          for (let i = 0; i < roots.length;) {
-            if (isTodoItem(roots[i]) && roots[i].id !== todoId) { i += 1; continue; }
-            if (!quiet(roots[i])) {
-              nodes.push(<ItemView key={roots[i].id === todoId ? `todos-${turn.id}` : roots[i].id} item={roots[i]} byParent={byParent} commandOutput={commandOutput} />);
-              i += 1;
-              continue;
-            }
-            let j = i;
-            while (j < roots.length && quiet(roots[j])) j += 1;
-            const run = roots.slice(i, j);
-            // A chat read from another CLI's history has no streaming steps;
-            // its open turn's last run is still what it is doing now.
-            const live = !d && j === roots.length && (run.some((x) => x.status === 'streaming') || (tail && !!working));
-            // A lone thought, or a single quiet one-line tool call, is already
-            // one line; anything more, or anything with output, folds.
-            const single = run.length === 1 && (run[0].kind === 'thinking' || (run[0].kind === 'tool' && !run[0].output && !run[0].error));
-            if (!single || live) {
-              nodes.push(<ActivityGroup key={run[0].id} items={run} byParent={byParent} live={live} />);
-            } else {
-              run.forEach((x) => nodes.push(<ItemView key={x.id} item={x} byParent={byParent} commandOutput={commandOutput} />));
-            }
-            i = j;
-          }
-          return nodes;
-        })()}
-        {tail && !d && working && !turn.items.some((it) => it.status === 'streaming' && (it.kind === 'text' || isCompaction(it))) && (
-          blocked
-            ? <div className="working quiet">Waiting for you</div>
-            : <WorkingLine turn={turn} />
+        {work.length > 0 && (
+          <Work key={`work-${turn.id}`} turn={turn} items={work} byParent={byParent} live={live} label={workLabel} blocked={blocked} />
         )}
-        {tail && d && (d.status === 'interrupted' ? <div className="turn-meta">stopped</div>
+        {outside.map((it) => <ItemView key={it.id} item={it} byParent={byParent} commandOutput={commandOutput} />)}
+        {answerNodes}
+        {tail && !d && working && work.length === 0 && !turn.items.some((it) => it.status === 'streaming' && (it.kind === 'text' || isCompaction(it))) && (
+          <WorkingLine turn={turn} blocked={blocked} />
+        )}
+        {tail && d && <ChangedFiles files={files} />}
+        {tail && d && (d.status === 'interrupted' ? (work.length ? null : <div className="turn-meta">stopped</div>)
           : d.status === 'error' ? (
             // The error line says why; this only marks the turn, unless
             // nothing else says anything. A bare error turn needs neither.
@@ -689,7 +730,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
               )}
             </div>
           )
-          : <WrapUp turn={turn} />)}
+          : <FinalMeta text={answerText} cost={d.costUsd} tests={testResult(list)} />)}
       </div>
     </>
   );
@@ -722,6 +763,8 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
+  // Away from the bottom: the "Latest" pill shows. `unread` only says there is something new down there.
+  const [away, setAway] = useState(false);
   const [unread, setUnread] = useState(false);
   // Parent renders supply fresh closures. Keep the memoized turns' handlers
   // stable while dispatching to the latest actions, including during a send.
@@ -741,6 +784,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     const el = box.current;
     if (!el) return;
     stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    setAway(!stuck.current);
     if (stuck.current) setUnread(false);
   };
   // Only changed transcript content needs a synchronous layout read. Older
@@ -777,7 +821,10 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
 
   const jump = () => {
     const el = box.current;
-    if (el) { el.scrollTop = el.scrollHeight; stuck.current = true; setUnread(false); }
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      stuck.current = true; setUnread(false); setAway(false);
+    }
   };
 
   // A helm answer that landed inside a still-running turn renders at the seam
@@ -845,7 +892,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
           {flow}
         </div>
       </div>
-      {unread && <button className="jump" onClick={jump}><Icon name="arrow-down" size={14} />new</button>}
+      {away && <button type="button" className={`jump${unread ? ' fresh' : ''}`} onClick={jump} aria-label="Scroll to the latest message"><Icon name="arrow-down" size={14} />Latest</button>}
       {prompts >= 3 && (
         <div className="turnnav" role="group" aria-label="jump between your messages">
           <button onClick={() => step(-1)} aria-label="previous message of yours" title="previous message"><Icon name="up" size={16} /></button>

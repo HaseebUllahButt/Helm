@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
 
-// The agent's to-do list shows as one checklist that ticks itself off in
-// place, not as a folded "TodoWrite" step. Only the newest list is drawn.
+// A to-do update is an ordinary step - "Updated the to-do list (2/5)" - that
+// opens to the checklist as it stood. (The live checklist itself sits above
+// the composer; the chat just keeps the history.)
 let browser, page;
 const shot = async (name) => { await page.waitForTimeout(700); if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, name) }); };
 before(async () => {
@@ -41,7 +42,8 @@ before(async () => {
     window.renderPlan = () => run([
       step('p', { kind: 'tool', name: 'plan', output: '☑ Inspect the repo\\n▸ Write the fix\\n☐ Check the tests' }),
       step('q', { kind: 'text', text: 'On it.' }),
-    ]);
+    ], false);
+    window.reset = () => root.render(<div />);
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   browser = await chromium.launch({ headless: true, ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
   page = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -54,25 +56,30 @@ before(async () => {
 after(async () => { await browser?.close(); });
 
 const rows = () => page.locator('.todo').evaluateAll((els) => els.map((e) => [e.className.split(' ')[1], e.querySelector('.todo-text').textContent]));
+const labels = () => page.locator('.work.live .step .alabel').allInnerTexts().then((l) => l.map((t) => t.trim()));
 
-test('a to-do list is a card, not a folded step, and says how far along it is', async () => {
+test('a to-do update is one plain step, not a card; opening it shows the checklist', async () => {
   await page.evaluate(() => window.renderTodos('one', true));
-  await page.locator('.todos').waitFor();
-  assert.equal(await page.locator('.todos').count(), 1);
+  await page.locator('.step').waitFor();
+  assert.deepEqual(await labels(), ['Updated the to-do list (0/5)']);
+  assert.equal(await page.locator('.todos').count(), 0, 'no card until asked for');
   assert.equal(await page.getByText('TodoWrite').count(), 0, 'no grey tool line');
-  assert.equal(await page.locator('.activity').count(), 0);
+  await page.locator('.step-head').click();
+  await page.locator('.todos').waitFor();
   assert.match(await page.locator('.todos-count').innerText(), /0 of 5 done/);
   assert.deepEqual((await rows())[0], ['in_progress', 'Reading the settings page'], 'the row being worked on uses its -ing wording');
 });
 
-test('a second write updates the same card in place; only the newest list shows', async () => {
+test('each write is its own step, in order, and each opens to its own list', async () => {
+  await page.evaluate(() => { window.reset(); });
   await page.evaluate(() => window.renderTodos('two', true));
+  await page.locator('.step').nth(2).waitFor();
+  assert.deepEqual(await labels(), ['Updated the to-do list (0/5)', 'Read a.ts', 'Updated the to-do list (2/5)']);
+  await page.locator('.step-head').nth(2).click();
   await page.locator('.todo.completed').first().waitFor();
-  assert.equal(await page.locator('.todos').count(), 1, 'one card, not one per write');
   assert.match(await page.locator('.todos-count').innerText(), /2 of 5 done/);
   assert.equal(await page.locator('.todos-bar').getAttribute('aria-valuenow'), '2');
   assert.deepEqual((await rows()).map((r) => r[0]), ['completed', 'completed', 'in_progress', 'pending', 'pending']);
-  assert.equal(await page.locator('.todo.ticked').count(), 2, 'rows that just finished tick in');
   assert.equal(await page.locator('.todo.in_progress .todo-text').innerText(), 'Running tests');
   await shot('todos.png');
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -80,23 +87,28 @@ test('a second write updates the same card in place; only the newest list shows'
   await page.setViewportSize({ width: 390, height: 844 });
 });
 
-test('a list still being written leaves the last good one on screen', async () => {
+test('a list still being written reads as updating, never raw JSON', async () => {
   await page.evaluate(() => window.renderTodos('streaming', true));
-  await page.locator('.todos').waitFor();
-  assert.equal(await page.locator('.todos').count(), 1);
-  assert.match(await page.locator('.todos-count').innerText(), /0 of 5 done/);
+  await page.locator('.step').nth(1).waitFor();
+  assert.deepEqual(await labels(), ['Updated the to-do list (0/5)', 'Updating the to-do list']);
+  assert.equal(await page.getByText('"todos"').count(), 0);
 });
 
-test('an ACP plan reads as the same checklist', async () => {
-  await page.evaluate(() => window.renderPlan());
+test('an ACP plan reads as the same step and the same checklist, folded with the rest', async () => {
+  await page.evaluate(() => { window.reset(); window.renderPlan(); });
+  await page.locator('.work-head').waitFor();
   await page.getByText('On it.').waitFor();
+  await page.locator('.work-head').click();
+  await page.locator('details.actgroup summary').filter({ hasText: 'Updated the to-do list (1/3)' }).click();
   assert.match(await page.locator('.todos-count').innerText(), /1 of 3 done/);
   assert.deepEqual(await rows(), [['completed', 'Inspect the repo'], ['in_progress', 'Write the fix'], ['pending', 'Check the tests']]);
   assert.equal(await page.getByText('plan', { exact: true }).count(), 0);
 });
 
 test('works in the light theme too', async () => {
-  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; window.renderTodos('two', false); });
+  await page.evaluate(() => { window.reset(); document.documentElement.dataset.theme = 'light'; window.renderTodos('two', true); });
+  await page.locator('.step').nth(2).waitFor();
+  await page.locator('.step-head').nth(2).click();
   await page.locator('.todos').waitFor();
   await shot('todos-light.png');
   await page.evaluate(() => { delete document.documentElement.dataset.theme; });

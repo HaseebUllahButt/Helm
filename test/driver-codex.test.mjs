@@ -485,7 +485,10 @@ test('edit: a file change carries its diff and asks; accept applies it', async (
   const editDone = log.of('item.done').find((e) => e.id === ask.itemId);
   assert.equal(editDone.status, 'ok');
   // the agent then read the file back with a command that needed no approval
-  assert.ok(log.of('item.start').some((e) => e.kind === 'command' && e.command.startsWith('sed')));
+  const read = log.of('item.start').find((e) => e.kind === 'command' && e.command.startsWith('sed'));
+  assert.ok(read);
+  // Codex's own word for what the command does reaches the chat, so it can say "Read helm-note.txt".
+  assert.deepEqual(read.actions, [{ type: 'read', name: 'helm-note.txt', path: '/tmp/helm-record-wJjiYQ/helm-note.txt', query: undefined }]);
   await driver.kill();
 });
 

@@ -49,5 +49,5 @@ test('once it is done the bar goes and the line says it compacted', async () => 
   await page.evaluate(() => window.render(false));
   await page.locator('.compaction:not(.live)').waitFor();
   assert.equal(await page.locator('.docked.compacting').count(), 0);
-  assert.match(await page.locator('.compaction').innerText(), /Conversation compacted · 9\.0s/);
+  assert.match(await page.locator('.compaction').innerText(), /Conversation compacted · 9s/);
 });

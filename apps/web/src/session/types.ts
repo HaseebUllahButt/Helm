@@ -67,6 +67,8 @@ export interface Item {
   input?: any;
   inputJson?: string;
   command?: string;
+  /** What the engine says a command does: read, search, listFiles. */
+  actions?: { type: string; name?: string; path?: string; query?: string }[];
   cwd?: string;
   changes?: Change[];
   status: ItemStatus;
@@ -279,7 +281,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       turn.revision = e.seq;
       turn.items.push({
         id: e.id, kind: e.kind, turnId: e.turnId, text: '', status: 'streaming', startedAt: e.at,
-        name: e.name, input: e.input, command: e.command, cwd: e.cwd, changes: e.changes,
+        name: e.name, input: e.input, command: e.command, actions: e.actions, cwd: e.cwd, changes: e.changes,
         parentId: e.parentId, agent: e.agent, visual: e.visual,
       });
       return;

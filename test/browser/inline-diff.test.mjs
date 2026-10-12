@@ -46,9 +46,10 @@ before(async () => {
   await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
   await page.evaluate(() => window.render());
-  // A lone edit between two replies still folds into a step line; open each.
-  await page.locator('.activity-head').first().waitFor();
-  for (const head of await page.locator('.activity-head').all()) await head.click();
+  // Everything before the last reply is one fold; open it to see the edits.
+  await page.locator('.work-head').first().waitFor();
+  assert.equal(await page.locator('.edit').count(), 0, 'diffs stay folded until the work is opened');
+  await page.locator('.work-head').first().click();
   await page.locator('.edit').first().waitFor();
 });
 after(async () => { await browser?.close(); });

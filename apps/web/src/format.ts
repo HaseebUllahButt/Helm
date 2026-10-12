@@ -4,8 +4,18 @@
  * `$0.02` must not roll up into a thread that reads `0.0243`.
  */
 
-export const seconds = (ms?: number) =>
-  (ms == null ? '' : ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`);
+/**
+ * How long something took, the way a person says it: "45s", "3m 43s",
+ * "1h 05m". Whole seconds, so a ticking counter never wobbles in width.
+ */
+export const seconds = (ms?: number) => {
+  if (ms == null || !Number.isFinite(ms)) return '';
+  if (ms < 1000) return '<1s';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+};
 
 /** Sub-cent work is real work; it just is not a number worth printing. */
 export const money = (usd?: number | null) =>
