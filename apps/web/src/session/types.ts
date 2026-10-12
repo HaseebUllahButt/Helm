@@ -358,6 +358,11 @@ export function apply(state: LogState, e: HelmEvent): void {
       return;
     }
     case 'turn.done': {
+      // helm closes its own ticket for a message the agent already took up
+      // under an id of its own. That ticket is gone; falling back to the
+      // last turn marked the reply still running as finished, and a message
+      // typed into it then had no turn to sit inside and stuck to the bottom.
+      if (e.turnId?.startsWith('local-') && !state.turns.some((t) => t.id === e.turnId)) return;
       const turn = turnFor(state.turns, e.turnId);
       // An older daemon closed withdrawn and stop-cleared tickets with an
       // interrupted turn.done on the `local-` turn. The message was never

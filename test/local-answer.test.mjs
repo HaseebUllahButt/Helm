@@ -133,3 +133,22 @@ test('a message the CLI took mid-turn sits where it was used; the turn goes on b
   assert.ok(log.turns.some((t) => t.id === 't2'));
   assert.equal(msg.id, 'local-9');
 });
+
+test('closing the ticket of a message the agent already took up leaves the running reply open', () => {
+  const log = emptyLog();
+  let seq = 0;
+  const ev = (e) => apply(log, { ...e, seq: ++seq });
+  ev({ type: 'turn.start', turnId: 'local-a', text: 'add a status bar', queued: false });
+  ev({ type: 'turn.start', turnId: 'r1', text: 'add a status bar', inputId: 'local-a' });
+  ev({ type: 'item.start', id: 'i1', kind: 'tool', turnId: 'r1', name: 'Bash' });
+  // helm closes its ticket while the reply r1 is still running.
+  ev({ type: 'turn.done', turnId: 'local-a', status: 'ok' });
+  assert.equal(log.turns.find((t) => t.id === 'r1').done, undefined, 'the running reply is not finished');
+  // A message typed mid-reply is taken up and sits inside r1, at that point.
+  ev({ type: 'turn.start', turnId: 'local-b', text: 'also do this', queued: true });
+  ev({ type: 'turn.deliver', turnId: 'local-b' });
+  ev({ type: 'turn.accept', turnId: 'local-b' });
+  const b = log.turns.find((t) => t.id === 'local-b');
+  assert.equal(b.insideOf, 'r1');
+  assert.equal(b.insideAt, 1);
+});
