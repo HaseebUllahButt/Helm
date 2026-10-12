@@ -53,6 +53,16 @@ function stopAgents(turns: Turn[], seq: number) {
   }
 }
 
+/** Any compaction still marked running is over: a newer one has started or ended. */
+function closeCompactions(turns: Turn[], at: number, seq: number) {
+  for (const turn of turns) for (const it of turn.items) {
+    if (it.status !== 'streaming' || it.kind !== 'tool' || (it.name !== 'compact' && it.name !== 'contextCompaction')) continue;
+    it.status = 'ok';
+    it.doneAt = at;
+    turn.revision = seq;
+  }
+}
+
 export interface Item {
   id: string;
   kind: ItemKind;
@@ -279,6 +289,9 @@ export function apply(state: LogState, e: HelmEvent): void {
       if (!turn) return;
       if (turn.items.some((x) => x.id === e.id)) return;
       turn.revision = e.seq;
+      // One compaction runs at a time. A restart of helm mid-compaction left
+      // the old marker open, spinning on after the new one finished.
+      if (e.kind === 'tool' && (e.name === 'compact' || e.name === 'contextCompaction')) closeCompactions(state.turns, e.at, e.seq);
       turn.items.push({
         id: e.id, kind: e.kind, turnId: e.turnId, text: '', status: 'streaming', startedAt: e.at,
         name: e.name, input: e.input, command: e.command, actions: e.actions, cwd: e.cwd, changes: e.changes,
@@ -311,6 +324,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       if (e.error) it.error = e.error;
       if (e.changes) it.changes = e.changes;
       if (e.result !== undefined) it.result = e.result;
+      if (it.kind === 'tool' && (it.name === 'compact' || it.name === 'contextCompaction')) closeCompactions(state.turns, e.at, e.seq);
       return;
     }
     case 'permission.request':
