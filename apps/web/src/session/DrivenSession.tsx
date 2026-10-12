@@ -305,6 +305,12 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     const body = expandPastes(draft.trim());
     if (preparingImages || loadingImages || savingImages || sendingImages) return;
     if (!body && !attachments.length) return;
+    // `/model` on its own means "let me choose", in every CLI: Helm's own
+    // picker, not a line of usage text from the CLI.
+    if (/^\/model$/i.test(body) && !attachments.length && controls.show('model')) {
+      setDraft('');
+      return;
+    }
     await sendText(body, attachments);
   };
   /**

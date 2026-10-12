@@ -64,8 +64,20 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
     onPick(kind, next);
   };
 
+  /**
+   * Open a chip's sheet as if it were tapped - what typing `/model` does.
+   * A CLI that keeps the list to itself gets its own picker. False when
+   * this chat has no such control at all.
+   */
+  const show = (kind: Kind) => {
+    if (groups.some((g) => g.kind === kind)) { setOpen(kind); return true; }
+    if (options?.nativeControls?.includes(kind)) { onNativeControl?.(kind); return true; }
+    return false;
+  };
+
   return {
     step,
+    show,
     chips: (
       <span className="chips">
         {groups.map((g) => (

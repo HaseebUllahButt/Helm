@@ -20,9 +20,13 @@ import { ENGINES } from './engines.js';
  * the normal case, not an error.
  */
 
-/** Actions helm performs itself. These work in every engine. */
+/**
+ * Actions helm performs itself. These work in every engine. A bare `/model`
+ * never reaches the CLI: the app opens its model picker instead.
+ */
 export const BUILT_IN = [
   { name: 'compact', description: 'Summarise the conversation into a fresh context', source: 'helm' },
+  { name: 'model', description: 'Choose a model', source: 'helm' },
 ];
 
 /** Common native Claude commands; the terminal remains the full live menu. */

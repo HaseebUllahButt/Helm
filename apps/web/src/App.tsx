@@ -4704,6 +4704,11 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
     const body = draft;
     const attachments = images;
     if ((!body.trim() && !attachments.length) || sending || settingBusy || imageBusy.current || loadingImages || savingImages) return;
+    // `/model` on its own opens the model picker, as it does in a Helm chat.
+    if (session.nativeCli && /^\/model$/i.test(body.trim()) && !attachments.length && nativeControls.show('model')) {
+      setDraft('');
+      return;
+    }
     setSending(true); setError('');
     try {
       const result = await client.rpc<{ terminal?: boolean }>(env.id, 'session.input', { id: session.id, data: body + '\n',
