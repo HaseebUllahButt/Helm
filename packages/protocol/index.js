@@ -111,6 +111,12 @@ export const M = {
   // Pull this machine to the newest helm and restart it. Asked of the machine
   // itself: an update is a git reset and a restart, and only it can do either.
   ENV_UPDATE: 'env.update',        // { replace? } -> { updated, reason?, backup?, restarting?, version }  from GitHub, only when asked
+  // The coding tools (claude, codex, ...) installed on this machine: their
+  // versions, and keeping them current. Asked of the machine itself, because
+  // only it knows how each one was installed.
+  CLI_VERSIONS: 'cli.versions',    // { refresh? } -> { auto, running, tools[{ engine, label, version, latest?, method, canUpdate, reason?, lastChecked, lastResult? }] }
+  CLI_UPDATE: 'cli.update',        // { engine? } -> { started, busy?, results[] }  now, one tool or all
+  CLI_AUTO_UPDATE: 'cli.autoUpdate', // { on } -> { auto }  this machine's setting, on by default
   ENV_BUNDLE: 'env.bundle',        // { have } -> { head, bundle }  this machine's saved version, for another to take
   // What a machine is for ('pc' | 'vm' | 'nas'), asked of the machine itself
   // for the same reason as a rename: `kind` lives on its own roster record.

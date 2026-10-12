@@ -145,6 +145,21 @@ export function savePickerPrefs(change = {}) {
   return pickerPrefs(cfg);
 }
 
+/**
+ * Whether this machine keeps its coding tools (claude, codex, ...) up to date
+ * by itself. On unless the owner turned it off.
+ */
+export function cliAutoUpdate(cfg = loadSettings()) {
+  return cfg?.cliUpdates?.auto !== false;
+}
+
+export function saveCliAutoUpdate(on) {
+  const cfg = loadSettings();
+  cfg.cliUpdates = { ...(cfg.cliUpdates ?? {}), auto: on !== false };
+  writeSettings(cfg);
+  return cliAutoUpdate(cfg);
+}
+
 function writeSettings(cfg) {
   mkdirSync(dirname(CONFIG_FILE), { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify({ version: 1, ...cfg }, null, 2), { mode: 0o600 });
