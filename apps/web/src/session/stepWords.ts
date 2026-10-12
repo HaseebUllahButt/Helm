@@ -102,6 +102,9 @@ export function commandWords(cmd = ''): Words {
     case 'rm': return { now: 'Removing files', past: 'Removed files' };
     case 'mv': return { now: 'Moving files', past: 'Moved files' };
     case 'cp': return { now: 'Copying files', past: 'Copied files' };
+    // A loop or a test is a small script, not a program called "for".
+    case 'for': case 'while': case 'until': case 'if': case 'case': case '{': case '(':
+      return { now: 'Running a script', past: 'Ran a script' };
     default:
   }
   let name = prog;

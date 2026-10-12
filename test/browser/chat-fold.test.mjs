@@ -108,6 +108,7 @@ test('steps are said in plain words, in both tenses', async (t) => {
       thought: w({ kind: 'thinking', startedAt: 1000, doneAt: 9000 }),
       todo: w({ kind: 'tool', name: 'TodoWrite', input: { todos: [{ content: 'a', status: 'completed' }, { content: 'b', status: 'pending' }] } }),
       other: w({ kind: 'tool', name: 'mcp__github__create_issue', input: { title: 'Bug' } }),
+      loop: window.commandWords('for m in a b; do echo $m; done'),
     };
   });
   assert.deepEqual(words.described, { now: 'Running the unit tests', past: 'Ran the unit tests' });
@@ -115,6 +116,7 @@ test('steps are said in plain words, in both tenses', async (t) => {
   assert.deepEqual(words.wrapped, { now: 'Running git status', past: 'Ran git status' }, 'bash -lc and cd are stripped');
   assert.deepEqual(words.npm, { now: 'Running npm run build', past: 'Ran npm run build' });
   assert.equal(words.ls.past, 'Listed src/');
+  assert.equal(words.loop.past, 'Ran a script', 'a loop is not a program called "for"');
   assert.equal(words.cat.past, 'Read app.ts');
   assert.equal(words.grep.past, 'Searched for TODO');
   assert.deepEqual(words.read, { now: 'Reading app.ts', past: 'Read app.ts' });
