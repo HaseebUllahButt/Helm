@@ -1891,7 +1891,8 @@ try {
 
     case 'proxy':
       if (!rest[0]) die('usage: helm proxy <host>');
-      await (await import('../src/proxy.js')).proxy(rest[0]);
+      // ssh hands the port it wants as %p; without it a non-default port was dropped.
+      await (await import('../src/proxy.js')).proxy(rest[0], Number(rest[1]) || undefined);
       break;
 
     case 'self-update':
