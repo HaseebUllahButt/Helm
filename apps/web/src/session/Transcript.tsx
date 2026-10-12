@@ -309,34 +309,100 @@ export function Diff({ text }: { text: string }) {
   );
 }
 
-export function ChangeList({ changes, open = false }: { changes: Change[]; open?: boolean }) {
+type DiffRow = { kind: 'add' | 'del' | 'ctx' | 'hunk'; text: string };
+
+/** A diff as rows to draw: the file header lines are dropped, since the card
+ *  already names the file, and each @@ line becomes a separator. */
+const diffRows = (diff: string): DiffRow[] => {
+  const rows: DiffRow[] = [];
+  let head = true;
+  for (const l of diff.split('\n')) {
+    // Header lines only come before the first hunk; later on a removed
+    // "-- comment" really starts with three dashes.
+    if (head && /^(diff |index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(l)) continue;
+    if (l.startsWith('@@')) { head = false; if (rows.length) rows.push({ kind: 'hunk', text: '' }); continue; }
+    head = false;
+    if (l.startsWith('\\')) continue; // "\ No newline at end of file"
+    rows.push(l.startsWith('+') ? { kind: 'add', text: l.slice(1) } : l.startsWith('-') ? { kind: 'del', text: l.slice(1) } : { kind: 'ctx', text: l.startsWith(' ') ? l.slice(1) : l });
+  }
+  // A trailing newline leaves one empty context row behind.
+  while (rows.length && rows[rows.length - 1].kind === 'ctx' && !rows[rows.length - 1].text) rows.pop();
+  return rows;
+};
+
+const PREVIEW_CHANGES = 8;
+const isChange = (r: DiffRow) => r.kind === 'add' || r.kind === 'del';
+
+/** The first few changed lines with one line of context either side - enough
+ *  to see what happened without opening anything. */
+const previewRows = (rows: DiffRow[]) => {
+  const first = rows.findIndex(isChange);
+  if (first < 0) return rows.slice(0, PREVIEW_CHANGES);
+  let end = first, seen = 0;
+  for (; end < rows.length; end++) {
+    if (isChange(rows[end])) { if (seen === PREVIEW_CHANGES) break; seen++; }
+  }
+  // One line of context after the last changed line, but not a separator.
+  if (rows[end]?.kind === 'ctx') end++;
+  const window = rows.slice(Math.max(0, first - 1), end);
+  // Hiding a line or two is not worth a toggle.
+  return rows.length - window.length <= 2 ? rows : window;
+};
+
+const rowSign = { add: '+', del: '−', ctx: '', hunk: '' };
+
+function DiffPreview({ rows }: { rows: DiffRow[] }) {
+  const [all, setAll] = useState(false);
+  if (!rows.length) return null;
+  const preview = previewRows(rows);
+  const shown = all ? rows : preview;
+  const total = rows.filter((r) => r.kind !== 'hunk').length;
   return (
-    <>
-      {changes.map((c, i) => {
-        // Codex sends an added file as its content, not a unified diff.
-        const unified = /^(---|\+\+\+|@@|diff )/m.test(c.diff);
-        const shown = unified ? c.diff : c.diff.split('\n').map((l) => (c.kind === 'delete' ? '-' : '+') + l).join('\n');
-        const { add, del } = diffCounts(shown);
-        return (
-          <details key={i} className="edit" open={open}>
-            <summary>
-              <span className="aicon"><Icon name="edit" size={15} /></span>
-              <span className="alabel"><b>{c.kind === 'add' ? 'Create' : c.kind === 'delete' ? 'Delete' : 'Edit'}</b> {shortPath(c.path)}</span>
-              <span className="ameta"><i className="add">+{add}</i> <i className="del">−{del}</i></span>
-              <span className="achev"><Icon name="forward" size={13} /></span>
-            </summary>
-            <Diff text={shown} />
-          </details>
-        );
-      })}
-    </>
+    <div className="idiff">
+      <div className={`idiff-box${all ? ' all' : ''}`}>
+        <div className="idiff-in">
+          {shown.map((r, i) => r.kind === 'hunk'
+            ? <div key={i} className="idiff-gap" aria-hidden="true" />
+            : <div key={i} className={`idiff-row ${r.kind}`}><i>{rowSign[r.kind]}</i><code>{r.text || ' '}</code></div>)}
+        </div>
+      </div>
+      {preview.length < rows.length && (
+        <button type="button" className="idiff-more" aria-expanded={all} onClick={() => setAll((v) => !v)}>
+          {all ? 'Show fewer' : `Show all ${total} lines`}
+        </button>
+      )}
+    </div>
   );
+}
+
+function ChangeCard({ c, open, preview }: { c: Change; open: boolean; preview: boolean }) {
+  // Codex sends an added file as its content, not a unified diff.
+  const unified = /^(---|\+\+\+|@@|diff )/m.test(c.diff);
+  const shown = unified ? c.diff : c.diff.split('\n').map((l) => (c.kind === 'delete' ? '-' : '+') + l).join('\n');
+  const { add, del } = diffCounts(shown);
+  return (
+    <details className={`edit${preview ? ' previewed' : ''}`} open={open || preview}>
+      <summary>
+        <span className="aicon"><Icon name="edit" size={15} /></span>
+        <span className="alabel"><b>{c.kind === 'add' ? 'Create' : c.kind === 'delete' ? 'Delete' : 'Edit'}</b> {shortPath(c.path)}</span>
+        <span className="ameta"><i className="add">+{add}</i> <i className="del">−{del}</i></span>
+        <span className="achev"><Icon name="forward" size={13} /></span>
+      </summary>
+      {preview ? <DiffPreview rows={diffRows(shown)} /> : <Diff text={shown} />}
+    </details>
+  );
+}
+
+/** `preview` draws the change right in the chat; the permission sheet keeps
+ *  the plain full diff. */
+export function ChangeList({ changes, open = false, preview = false }: { changes: Change[]; open?: boolean; preview?: boolean }) {
+  return <>{changes.map((c, i) => <ChangeCard key={i} c={c} open={open} preview={preview} />)}</>;
 }
 
 function EditItem({ item }: { item: Item }) {
   const changes = item.changes ?? [];
   if (!changes.length) return <div className="act"><span className="aicon"><Icon name="edit" size={15} /></span><span className="alabel"><b>Edit</b></span></div>;
-  return <div className={`edits${item.status === 'declined' ? ' declined' : item.status === 'error' ? ' bad' : ''}`}><ChangeList changes={changes} /></div>;
+  return <div className={`edits${item.status === 'declined' ? ' declined' : item.status === 'error' ? ' bad' : ''}`}><ChangeList changes={changes} preview /></div>;
 }
 
 /** 48210 -> 48.2k. A subagent's token count is a sense of scale, not a bill. */
