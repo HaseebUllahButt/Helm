@@ -12,6 +12,7 @@ import { Markdown } from './Markdown';
 import { Composer } from './session/Composer';
 import { Controls, trayPrefs, type Kind } from './session/Controls';
 import { LimitsLine } from './session/LimitsLine';
+import { ContextMeter } from './session/ContextMeter';
 import { useAccountLimits } from './session/useAccountLimits';
 import { nativeConversation } from './session/nativeView';
 import { CompactionLine } from './session/Transcript';
@@ -4907,7 +4908,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
           keys={!session.nativeChat} preparing={sending || preparingImages || loadingImages || savingImages}
           commands={session.nativeCli ? nativeCommands : undefined}
           foot={session.nativeCli ? nativeControls.chips : undefined}
-          statusLine={nativeProfile || limits.length ? <LimitsLine windows={limits} account={nativeProfile || undefined} /> : undefined}
+          statusLine={nativeProfile || limits.length || session.context ? <LimitsLine windows={limits} account={nativeProfile || undefined} context={session.context && <ContextMeter used={session.context.used} window={session.context.window} />} /> : undefined}
           compacting={compacting || undefined}
           onAttach={session.nativeChat ? attachImages : undefined} attachments={images}
           onRemoveAttachment={index => setImages(current => current.filter((_, i) => i !== index))}

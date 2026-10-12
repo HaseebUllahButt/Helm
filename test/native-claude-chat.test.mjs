@@ -335,6 +335,17 @@ test('native status-line quotas arrive as limits without changing permission mod
 });
 
 
+test('native status-line context fullness lands on the chat record', async () => {
+  const sessions=create();
+  try {
+    await sessions.hooks;
+    await sendHook('native-test',{hook_event_name:'HelmContext',used:150500,window:383000});
+    const {used,window}=sessions.get('native-test').context;
+    assert.deepEqual({used,window},{used:150500,window:383000});
+    assert.equal(sessions.events.tail('native-test',0).some(e=>e.type==='context'),false,'never a line in the transcript');
+  } finally { await sessions.stop(); }
+});
+
 test('Claude takeover can select and leave dangerously-skip-permissions after the native footer confirms it',async()=>{
   const host=new CycleHost();host.ring=['auto mode','bypass permissions','manual mode','accept edits','plan mode'];
   const sessions=create(host);

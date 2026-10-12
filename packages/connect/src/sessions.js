@@ -455,6 +455,14 @@ export class Sessions extends EventEmitter {
    * three things it cannot say - which file it is, that Claude is waiting on
    * a person, and when it is done.
    */
+  /** How full a conversation is: kept on its record, sent to clients as a session update. */
+  #setContext(s, used, window) {
+    if (!(used > 0) || !(window > 0) || (s.context?.used === used && s.context?.window === window)) return false;
+    s.context = { used, window, at: Date.now() };
+    if (this.#index.has(s.id)) this.emit('session', s);
+    return true;
+  }
+
   #onHook(native, event, reply) {
     // The first hook can beat the host's "a terminal opened" notice.
     if (!this.#index.has(native)) {
@@ -474,6 +482,13 @@ export class Sessions extends EventEmitter {
       ...(typeof event.permission_mode === 'string' ? { mode: event.permission_mode } : {}),
     });
     if (name === 'HelmSettings') { reply(null); return; }
+    // A terminal Claude's status line knows how full its context is; a
+    // driven one reports it from its replies instead.
+    if (name === 'HelmContext') {
+      reply(null);
+      this.#setContext(s, event.used, event.window);
+      return;
+    }
     if (name === 'HelmUsage') {
       reply(null);
       const unifiedWindows = {};
@@ -1911,10 +1926,7 @@ export class Sessions extends EventEmitter {
     // in it: kept on the record (written out when the turn ends, with the
     // rest) and sent to clients as a session update.
     if (e.type === 'context') {
-      if (e.used > 0 && e.window > 0 && (s.context?.used !== e.used || s.context?.window !== e.window)) {
-        s.context = { used: e.used, window: e.window, at: Date.now() };
-        if (this.#index.has(s.id)) this.emit('session', s);
-      }
+      this.#setContext(s, e.used, e.window);
       return;
     }
     if (e.type === 'status') {
