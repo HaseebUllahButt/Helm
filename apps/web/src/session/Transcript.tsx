@@ -7,6 +7,8 @@ import { Icon, toolKind } from '../Icon';
 import { userMessage } from './userMessage';
 import { plainError } from './problem';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
+import { ContextCard } from './ContextCard';
+import { parseContextUsage } from './contextUsage';
 
 /** The session is still working, so an open compaction is really running. */
 const Busy = createContext(false);
@@ -59,6 +61,8 @@ function TextItem({ item, commandOutput }: { item: Item; commandOutput?: boolean
   const live = item.status === 'streaming';
   const text = item.text;
   if (!text && !live) return null;
+  const context = commandOutput && !live ? parseContextUsage(text) : null;
+  if (context) return <ContextCard usage={context} />;
   return <Markdown text={text} live={live} className={`prose${commandOutput ? ' command-result' : ''}${live ? ' live' : ''}`} />;
 }
 

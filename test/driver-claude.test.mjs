@@ -646,6 +646,55 @@ test("Claude's record of a command it ran is a quiet answer, not a message or a 
   assert.equal(events.some((e) => e.type === 'input.consumed'), false);
 });
 
+test('a command Claude answers itself shows its answer under the command, not an empty turn', async (t) => {
+  let receive, exited;
+  const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; }, write() {},
+    end() { exited({ code: 0 }); }, detach() {}, kill() { exited({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: 'unused', cwd: '/tmp', procId: 'hosted',
+    procHost: { hasProc: () => true, procPipe: () => pipe } });
+  const events = [];
+  driver.on('event', (e) => events.push(e));
+  await driver.start();
+  t.after(() => driver.kill());
+  const say = (m) => receive(JSON.stringify(m) + '\n');
+  const synthetic = (text) => say({ type: 'assistant', parent_tool_use_id: null, uuid: `a-${events.length}`,
+    message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text }] } });
+  const result = (text) => say({ type: 'result', subtype: 'success', is_error: false, result: text, total_cost_usd: 0 });
+
+  // Recorded from Claude Code 2.1.296: the answer comes first, then the echo.
+  await driver.send('/context');
+  synthetic('## Context Usage\n\n**Tokens:** 28.3k / 383k (7%)');
+  say({ type: 'user', isReplay: true, parent_tool_use_id: null, uuid: 'echo-1',
+    message: { role: 'user', content: '<command-name>/context</command-name>\n  <command-message>context</command-message>\n  <command-args></command-args>' } });
+  result('## Context Usage');
+  assert.equal(events.some((e) => e.type === 'turn.start' && e.wake), false, 'not a turn Claude started by itself');
+  const start = events.find((e) => e.type === 'turn.start');
+  assert.equal(start.text, '/context');
+  const answer = events.find((e) => e.type === 'item.start');
+  assert.equal(answer.turnId, start.turnId);
+  assert.match(events.find((e) => e.type === 'item.delta').text, /^## Context Usage/);
+  assert.equal(events.filter((e) => e.type === 'turn.done').at(-1).turnId, start.turnId);
+
+  // Claude echoes /cost as /usage; the message is still the one sent.
+  events.length = 0;
+  await driver.send('/cost');
+  synthetic('Total cost: $0.0000');
+  say({ type: 'user', isReplay: true, parent_tool_use_id: null, uuid: 'echo-2',
+    message: { role: 'user', content: '<command-name>/usage</command-name><command-message>usage</command-message><command-args></command-args>' } });
+  result('Total cost: $0.0000');
+  assert.equal(events.find((e) => e.type === 'turn.start').text, '/cost');
+
+  // A command Claude refuses never echoes; its answer still has a turn.
+  events.length = 0;
+  await driver.send('/status');
+  synthetic("/status isn't available in this environment.");
+  result("/status isn't available in this environment.");
+  const refused = events.find((e) => e.type === 'turn.start');
+  assert.equal(refused?.text, '/status');
+  assert.equal(events.find((e) => e.type === 'item.delta').text, "/status isn't available in this environment.");
+  assert.equal(events.filter((e) => e.type === 'turn.done').at(-1).turnId, refused.turnId);
+});
+
 test('a slash command Claude echoes in its own markup reads as the command', async () => {
   const { localCommandRecord } = await import('../packages/connect/src/drivers/claude.js');
   assert.deepEqual(localCommandRecord('<command-name>/model</command-name>\n  <command-message>model</command-message>\n  <command-args>claude-opus-5-5</command-args>'),

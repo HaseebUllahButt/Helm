@@ -105,6 +105,14 @@ export class ClaudeDriver extends Driver {
   #inputs = new Map();
   /** Commands advertised by this exact Claude Code process at init. */
   #commands = [];
+  /**
+   * What a command Claude answers itself (/context, /cost, /model) printed,
+   * held until its turn opens: the answer arrives before the echo of the
+   * command that asked for it.
+   */
+  #commandOutput = [];
+  /** The last message sent as a new turn, for an answer that never echoes it. */
+  #lastSent = '';
   /** request_id -> resolve, for control requests we sent */
   #controls = new Map();
   #controlSeq = 0;
@@ -306,6 +314,7 @@ export class ClaudeDriver extends Driver {
 
   async send(text) {
     await this.start();
+    this.#lastSent = text;
     this.#write({
       type: 'user', session_id: '', parent_tool_use_id: null, uuid: randomUUID(),
       message: { role: 'user', content: [{ type: 'text', text }] },
@@ -370,6 +379,7 @@ export class ClaudeDriver extends Driver {
       content.push({ type: 'image', source: { type: 'base64', media_type: a.mime, data: a.data } });
     }
     if (!content.length) return this.send('(empty message)');
+    this.#lastSent = text ?? '';
     this.#write({
       type: 'user', session_id: '', parent_tool_use_id: null, uuid: randomUUID(),
       message: { role: 'user', content },
@@ -487,6 +497,13 @@ export class ClaudeDriver extends Driver {
   // ------------------------------------------------------------- the stream
 
   #onMessage(m) {
+    // A command Claude answers itself replies with a made-up assistant
+    // message and no stream. It is not work the CLI started by itself.
+    if (m.type === 'assistant' && !m.parent_tool_use_id && !m.error && m.message?.model === '<synthetic>' && !this.#inTurn) {
+      const text = resultText(m.message?.content).trim();
+      if (text) this.#commandOutput.push(text);
+      return;
+    }
     // Work the CLI starts by itself - a background task or a Monitor it set
     // up finishing - arrives with no message from us. It is a turn of its
     // own: folded into the last one, every wake-up closed that turn again and
@@ -585,6 +602,17 @@ export class ClaudeDriver extends Driver {
     }
   }
 
+  /** A held command answer, as the open turn's reply. */
+  #flushCommandOutput() {
+    const text = this.#commandOutput.join('\n\n');
+    this.#commandOutput = [];
+    if (!text || !this.#inTurn) return;
+    const id = `${this.#turnId}#answer`;
+    this.push('item.start', { id, turnId: this.#turnId, kind: 'text' });
+    this.push('item.delta', { id, text });
+    this.push('item.done', { id, status: 'ok' });
+  }
+
   /** An answer complete on arrival, beside whatever else is going on. */
   #commandCard(id, body) {
     const turnId = `command-${id}`;
@@ -619,7 +647,9 @@ export class ClaudeDriver extends Driver {
         if (!this.#inTurn && record.text) this.#commandCard(m.uuid ?? randomUUID(), record.text);
         return;
       }
-      if (record?.kind === 'command') text = record.text;
+      // Claude echoes some commands under another name (/cost as /usage).
+      // The words the owner sent are the ones their message is matched by.
+      if (record?.kind === 'command') text = !this.#inTurn && this.#lastSent.trim().startsWith('/') ? this.#lastSent.trim() : record.text;
       const input = this.#inputs.get(m.uuid);
       if (input) this.#inputs.delete(m.uuid);
       // A message written while a turn runs is read at the end of the step
@@ -634,7 +664,9 @@ export class ClaudeDriver extends Driver {
       // arrived after the turn ended runs as this one, under its ticket.
       this.#turnId = m.uuid;
       this.#inTurn = true;
+      this.#lastSent = '';
       this.push('turn.start', { turnId: m.uuid, text, ...(input?.inputId ? { inputId: input.inputId } : {}) });
+      this.#flushCommandOutput();
       return;
     }
     for (const block of m.message?.content ?? []) {
@@ -730,6 +762,15 @@ export class ClaudeDriver extends Driver {
 
   #onResult(m) {
     if (this.compacting) this.compactionEnded(m.is_error ? 'error' : 'ok');
+    // A command answered with no echo ("/status isn't available here"):
+    // its answer opens the turn under the words that asked for it.
+    if (this.#commandOutput.length && !this.#inTurn) {
+      this.#turnId = `command-${m.uuid ?? randomUUID()}`;
+      this.#inTurn = true;
+      this.push('turn.start', { turnId: this.#turnId, text: this.#lastSent });
+      this.#lastSent = '';
+    }
+    this.#flushCommandOutput();
     // A result outside any turn closes nothing that is open. A failure still
     // says so - the CLI can refuse a message before it echoes it - but with no
     // turn id, never the last turn's again; a success is that turn's repeated.

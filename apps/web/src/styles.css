@@ -750,6 +750,27 @@ pre.snippet {
 .command-result > p { white-space: pre-wrap; }
 /* What a command printed with nothing asked: one quiet line of text. */
 .turn.assistant.command-note .prose { color: var(--mutedfg); font-size: var(--t-body); }
+/* Claude's /context answer: one bar for how full the chat is. */
+.ctxcard { margin: 4px 0; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); font-size: var(--t-meta); }
+.ctx-head { display: flex; align-items: baseline; gap: 8px; }
+.ctx-head b { font-size: var(--t-body); font-weight: 600; color: var(--text); }
+.ctx-total { margin-left: auto; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.ctx-model { margin-top: 2px; color: var(--mutedfg); }
+.ctx-bar { display: flex; height: 10px; margin: 10px 0 8px; overflow: hidden; background: var(--muted); border: 1px solid var(--line); border-radius: 5px; }
+.ctx-bar i { display: block; height: 100%; min-width: 2px; }
+.ctx-bar i.reserved { margin-left: auto; background: repeating-linear-gradient(135deg, var(--line-2) 0 3px, transparent 3px 6px); }
+.ctx-legend { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.ctx-legend li { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.ctx-legend li.dim { color: var(--mutedfg); }
+.ctx-legend li > i { flex: none; width: 8px; height: 8px; border-radius: 2px; }
+.ctx-legend li > i.reserved { background: repeating-linear-gradient(135deg, var(--line-2) 0 2px, transparent 2px 4px); border: 1px solid var(--line-2); }
+.ctx-legend li > i.free { background: var(--muted); border: 1px solid var(--line-2); }
+.ctx-legend .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-legend .pct { width: 3.2em; text-align: right; }
+.ctx-more { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+.ctx-more > summary { cursor: pointer; color: var(--text-dim); }
+.ctx-more > summary .ctx-count { margin-left: 6px; color: var(--mutedfg); }
+.ctx-more .md { margin-top: 6px; }
 /* Before the markdown chunk lands, the same text as plain text. */
 .md.raw { white-space: pre-wrap; }
 
