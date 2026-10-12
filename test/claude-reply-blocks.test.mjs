@@ -31,3 +31,13 @@ test('every block of one Claude reply is kept: what it said and each call it mad
     ['assistant', 'Part 4 works.', ['Bash']],
   ]);
 });
+
+test("a command keeps what Claude said it was for, so the chat can say that instead", async () => {
+  const path = join(dir, 'described.jsonl');
+  writeFileSync(path, [
+    line('user', undefined, 'ship it'),
+    line('assistant', 'msg_3', [{ type: 'tool_use', name: 'Bash', input: { command: 'git commit -q -m x', description: 'Save the fix' } }]),
+  ].join('\n') + '\n');
+  const [, reply] = await messages({ engine: 'claude', path, sessionId: 'x', all: true });
+  assert.deepEqual(reply.tools[0], { name: 'Bash', input: 'git commit -q -m x', description: 'Save the fix' });
+});

@@ -3125,7 +3125,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .crumb .mark { width: 20px; height: 20px; border-radius: 6px; flex: none; }
 .crumb .mark svg { width: 12px; height: 12px; }
 .crumb-folder {
-  flex: 0 100 auto; min-width: 6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* A short folder takes only its own width; a long one gives way first. */
+  flex: 0 100 auto; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: var(--t-body); color: var(--mutedfg);
 }
 .crumb-sep { flex: none; color: var(--icon); font-size: var(--t-body); margin: 0 -1px; }

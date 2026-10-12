@@ -260,6 +260,10 @@ export function acceptImages(attachments) {
   return out;
 }
 
+/** A tool read from a CLI's own files: its one-line summary, plus what Claude said a command was for. */
+const externalInput = (tool) => (tool.name === 'Bash' && tool.description
+  ? { command: tool.input, description: tool.description } : tool.input);
+
 export class Sessions extends EventEmitter {
   #index = new Map();
   /** paneId -> what the runtime last told us about a pane we do not own */
@@ -2720,7 +2724,7 @@ export class Sessions extends EventEmitter {
         }
         for (const tool of (last.tools ?? []).slice(tail.tools ?? 0)) {
           const itemId = nextId();
-          append({ type: 'item.start', id: itemId, turnId: tail.turnId, kind: 'tool', name: tool.name, input: tool.input });
+          append({ type: 'item.start', id: itemId, turnId: tail.turnId, kind: 'tool', name: tool.name, input: externalInput(tool) });
           append({ type: 'item.done', id: itemId, turnId: tail.turnId, status: 'ok' });
         }
         tail.text = text;
@@ -2770,7 +2774,7 @@ export class Sessions extends EventEmitter {
       }
       for (const tool of message.tools ?? []) {
         const itemId = nextId();
-        append({ type: 'item.start', id: itemId, turnId, kind: 'tool', name: tool.name, input: tool.input });
+        append({ type: 'item.start', id: itemId, turnId, kind: 'tool', name: tool.name, input: externalInput(tool) });
         append({ type: 'item.done', id: itemId, turnId, status: 'ok' });
       }
       if (message.sourceId) s.externalTail = {

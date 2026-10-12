@@ -208,7 +208,9 @@ function blocks(content) {
         thinking = true;
         break;
       case 'tool_use':
-        tools.push({ name: b.name, input: summarise(b.input) });
+        // Claude says what each command is for; the chat shows that instead of the command.
+        tools.push({ name: b.name, input: summarise(b.input),
+          ...(typeof b.input?.description === 'string' && b.input.description.trim() ? { description: b.input.description.trim().slice(0, 160) } : {}) });
         break;
       case 'tool_result':
         // The result belongs to the call above it, not to a new turn.
