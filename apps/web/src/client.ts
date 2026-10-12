@@ -91,6 +91,8 @@ export interface Session {
   /** Claude Code's own subagents (its Agent/Task tool), read from its files; no Helm session behind them. */
   nativeCards?: NativeAgent[];
   recovery?: { kind: 'limited' | 'error' | 'interrupted' | 'restart'; message: string; at: number };
+  /** How full the conversation's context is after its latest reply (Claude, Codex). */
+  context?: { used: number; window: number; at: number };
   lastUsage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputIncludesCache?: boolean; at: number; model?: string };
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;

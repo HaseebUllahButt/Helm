@@ -463,3 +463,18 @@ test('Claude matches each read to its own message and ignores replays that are n
   exit({ code: 1 });
   assert.deepEqual(events.filter((event) => event.type === 'input.failed').map((event) => event.inputId), ['lost']);
 });
+
+test('how full the context is lands on the chat, reaches clients, and stays out of the transcript', async (t) => {
+  const { sessions, session, driver, events } = await setup(t, 'claude');
+  const updates = [];
+  sessions.on('session', (s) => updates.push(s.context));
+  driver.push('context', { used: 148_500, window: 383_000 });
+  driver.push('context', { used: 148_500, window: 383_000 });
+  driver.push('context', { used: 0, window: 383_000 });
+  assert.equal(sessions.get(session.id).context.used, 148_500);
+  assert.equal(sessions.get(session.id).context.window, 383_000);
+  assert.equal(updates.filter(Boolean).length, 1, 'a repeat of the same figure says nothing new');
+  assert.ok(!events().some((event) => event.type === 'context'));
+  driver.finish(); await tick();
+  assert.equal(sessions.get(session.id).context.used, 148_500);
+});

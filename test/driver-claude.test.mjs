@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
+import { rmSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fakeCli, collect } from './helpers.mjs';
 import { ClaudeDriver } from '../packages/connect/src/drivers/claude.js';
 
@@ -729,4 +731,67 @@ test('Claude compaction is one compact item, open from "compacting" until the CL
   const failed = log.of('item.done').find((e) => e.id === second.id);
   assert.equal(failed.status, 'error');
   assert.equal(failed.error, 'too long');
+});
+
+// What the conversation weighs is the last top-level reply, not the result's
+// sum over the turn; the size is the model's, unless the account's settings
+// compact sooner (what Claude's own /context counts against).
+async function contextFeed(t, { settings, modelUsage }) {
+  const home = mkdtempSync(join(tmpdir(), 'helm-claude-ctx-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  if (settings) writeFileSync(join(home, 'settings.json'), JSON.stringify(settings));
+  let receive, exited;
+  const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; }, write() {}, end() { exited({ code: 0 }); }, detach() {}, kill() { exited({ code: 0 }); } };
+  const driver = new ClaudeDriver({ cmd: 'unused', env: { CLAUDE_CONFIG_DIR: home }, cwd: '/tmp', mode: 'default',
+    engineSessionId: 'existing-conversation', procId: 'hosted', procHost: { hasProc: () => false, openProc: async () => {}, procPipe: () => pipe } });
+  await driver.start();
+  t.after(() => driver.kill());
+  const log = collect(driver);
+  const feed = (m) => receive(`${JSON.stringify(m)}\n`);
+  const reply = (usage, extra = {}) => feed({ type: 'assistant', parent_tool_use_id: null,
+    message: { model: 'claude-opus-5-5[1m]', content: [], usage }, ...extra });
+  const result = () => feed({ type: 'result', subtype: 'success', is_error: false, modelUsage, usage: { input_tokens: 999_999, output_tokens: 1 } });
+  return { log, reply, result };
+}
+
+test('Claude reports context from the last top-level reply, sized by the compaction window in settings', async (t) => {
+  const { log, reply, result } = await contextFeed(t, {
+    settings: { modelSettings: { 'claude-opus-5-5': { autoCompactWindow: 383_000 } } },
+    modelUsage: { 'claude-haiku-4-5': { contextWindow: 200_000 }, 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } },
+  });
+  reply({ input_tokens: 10, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 5_000, output_tokens: 500 });
+  assert.deepEqual(log.of('context'), [], 'no size is known before the first result');
+  // A helper's reply is not the conversation.
+  reply({ input_tokens: 1, output_tokens: 1 }, { parent_tool_use_id: 'toolu_helper' });
+  result();
+  assert.deepEqual(log.of('context'), [{ type: 'context', used: 105_510, window: 383_000 }]);
+  reply({ input_tokens: 20, cache_read_input_tokens: 140_000, cache_creation_input_tokens: 8_000, output_tokens: 480 });
+  assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 148_500, window: 383_000 });
+});
+
+test('Claude uses the model window when settings say nothing', async (t) => {
+  const { log, reply, result } = await contextFeed(t, { modelUsage: { 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } } });
+  reply({ input_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 20_000, output_tokens: 10 });
+  result();
+  assert.deepEqual(log.of('context'), [{ type: 'context', used: 20_015, window: 1_000_000 }]);
+});
+
+test('a larger window in settings never grows the model window, and a dated model id still matches', async (t) => {
+  const { log, reply, result } = await contextFeed(t, {
+    settings: { modelSettings: { 'claude-haiku-4-5': { autoCompactWindow: 500_000 } } },
+    modelUsage: { 'claude-haiku-4-5-20251001': { contextWindow: 200_000 } },
+  });
+  reply({ input_tokens: 1_000, output_tokens: 0 }, { message: { model: 'claude-haiku-4-5-20251001', content: [], usage: { input_tokens: 1_000, output_tokens: 0 } } });
+  result();
+  assert.deepEqual(log.of('context'), [{ type: 'context', used: 1_000, window: 200_000 }]);
+});
+
+test('a dated model id takes the compaction window written for its short name', async (t) => {
+  const { log, reply, result } = await contextFeed(t, {
+    settings: { modelSettings: { 'claude-haiku-4-5': { autoCompactWindow: 99_000 } } },
+    modelUsage: { 'claude-haiku-4-5-20251001': { contextWindow: 200_000 } },
+  });
+  reply({ input_tokens: 1_000, output_tokens: 0 }, { message: { model: 'claude-haiku-4-5-20251001', content: [], usage: { input_tokens: 1_000, output_tokens: 0 } } });
+  result();
+  assert.deepEqual(log.of('context'), [{ type: 'context', used: 1_000, window: 99_000 }]);
 });

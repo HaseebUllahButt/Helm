@@ -1276,9 +1276,14 @@ export class CodexDriver extends Driver {
       case 'turn/plan/updated':
         this.#plan(p);
         return;
-      case 'thread/tokenUsage/updated':
+      case 'thread/tokenUsage/updated': {
         this.#usage = p.tokenUsage;
+        // The latest call is what the conversation weighs right now.
+        const last = p.tokenUsage?.last, window = p.tokenUsage?.modelContextWindow;
+        const used = last?.totalTokens ?? ((last?.inputTokens ?? 0) + (last?.outputTokens ?? 0));
+        if (used > 0 && window > 0) this.push('context', { used, window });
         return;
+      }
       case 'turn/completed': {
         this.#turnStateRevision++;
         const t = p.turn ?? {};

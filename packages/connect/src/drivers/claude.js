@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { Driver, checkVersion, assertFolder } from './index.js';
 import { modeFor } from '../modes.js';
 import { nonAgentClaudeTask } from '../claude-tasks.js';
@@ -111,6 +114,12 @@ export class ClaudeDriver extends Driver {
    * command that asked for it.
    */
   #commandOutput = [];
+  /** How full the conversation is after the latest top-level reply, and the size it counts against. */
+  #contextUsed = null;
+  #contextWindow = null;
+  #contextModel = null;
+  /** The account's `modelSettings` from settings.json, read once. */
+  #modelSettings;
   /** The last message sent as a new turn, for an answer that never echoes it. */
   #lastSent = '';
   /** request_id -> resolve, for control requests we sent */
@@ -742,6 +751,15 @@ export class ClaudeDriver extends Driver {
 
   #onAssistant(m, parentId) {
     if (!parentId && m.uuid) this.#lastAssistant = m.uuid;
+    // The result's usage adds up the whole turn. What the conversation weighs
+    // is the latest top-level reply: all it read, plus what it wrote.
+    const u = m.message?.usage;
+    if (!parentId && u && m.message.model !== '<synthetic>') {
+      this.#contextUsed = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
+        + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0);
+      this.#contextModel = m.message.model;
+      this.#pushContext();
+    }
     if (m.error) this.push('error', { message: resultText(m.message?.content) || m.error, kind: m.error });
     for (const block of m.message?.content ?? []) {
       if (block.type === 'tool_use') {
@@ -760,7 +778,38 @@ export class ClaudeDriver extends Driver {
     }
   }
 
+  /** Tell the thread how full its context is, once the size is known. */
+  #pushContext() {
+    if (this.#contextUsed && this.#contextWindow) this.push('context', { used: this.#contextUsed, window: this.#contextWindow });
+  }
+
+  /**
+   * The size Claude counts the conversation against. A smaller compaction
+   * window in the account's settings is what its own /context shows, so it
+   * wins over the model's full window.
+   */
+  #windowFrom(m) {
+    // A helper on another model is listed too; ours is the one that replied.
+    const bare = (id) => String(id).toLowerCase().replace(/\[.*\]$/, '').replace(/-\d{8}$/, '');
+    const used = Object.entries(m.modelUsage ?? {}).filter(([, v]) => v?.contextWindow);
+    const [model, usage] = used.find(([id]) => this.#contextModel && bare(id) === bare(this.#contextModel)) ?? used[0] ?? [];
+    if (!usage) return;
+    this.#contextWindow = usage.contextWindow;
+    if (this.#modelSettings === undefined) {
+      try {
+        const dir = (this.env?.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || '~/.claude').replace(/^~(?=\/|$)/, homedir());
+        this.#modelSettings = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).modelSettings ?? null;
+      } catch { this.#modelSettings = null; }
+    }
+    // `claude-opus-5-5[1m]` and `claude-haiku-4-5-20251001` are the settings' `claude-opus-5-5` and `claude-haiku-4-5`.
+    const entry = Object.entries(this.#modelSettings ?? {}).find(([id]) => bare(id) === bare(model));
+    const compact = entry?.[1]?.autoCompactWindow;
+    if (compact > 0 && compact < this.#contextWindow) this.#contextWindow = compact;
+  }
+
   #onResult(m) {
+    this.#windowFrom(m);
+    this.#pushContext();
     if (this.compacting) this.compactionEnded(m.is_error ? 'error' : 'ok');
     // A command answered with no echo ("/status isn't available here"):
     // its answer opens the turn under the words that asked for it.

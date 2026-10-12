@@ -29,6 +29,7 @@ import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
 import { TaskReturn } from './TaskReturn';
 import { LimitsLine } from './LimitsLine';
+import { ContextMeter } from './ContextMeter';
 import { useAccountLimits } from './useAccountLimits';
 import { useChatKeys } from './chatKeys';
 import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenRate';
@@ -634,7 +635,7 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         onTranscribe={onTranscribe}
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}
         engine={engine} keys={false} waiting={!!pending} danger={mode?.danger} compacting={compacting || undefined}
-        foot={controls.chips} statusLine={account || limits.length > 0 ? <LimitsLine windows={limits} account={account} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages}
+        foot={controls.chips} statusLine={account || limits.length > 0 || session.context ? <LimitsLine windows={limits} account={account} context={session.context && <ContextMeter used={session.context.used} window={session.context.window} />} /> : undefined} canAttach={canAttach} preparing={preparingImages > 0 || loadingImages || savingImages || sendingImages}
         onAttach={onAttach} attachments={attachments} onRemoveAttachment={(i) => setAttachments(a => a.filter((_, j) => j !== i))}
         onAttachUnsupported={() => setError(`${engine} cannot be sent images in this session.`)}
         commands={commands}

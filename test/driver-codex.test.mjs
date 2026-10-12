@@ -33,6 +33,22 @@ test('Codex forwards native thread names without adopting another thread title',
   assert.deepEqual(log.of('title'), [{ type: 'title', title: 'Repair login' }]);
 });
 
+test('Codex reports how full the context is from the latest call, not the running total', () => {
+  const driver = new CodexDriver({ cmd: 'codex', env: {}, cwd: '/x', mode: 'ask' });
+  driver.threadId = 'ctx-thread';
+  const log = collect(driver);
+  const usage = (last, total) => ({ threadId: 'ctx-thread', turnId: 't', tokenUsage: { total, last, modelContextWindow: 258_400 } });
+  driver.onNotification('thread/tokenUsage/updated', usage({ totalTokens: 30_000 }, { totalTokens: 30_000 }));
+  driver.onNotification('thread/tokenUsage/updated', usage({ inputTokens: 59_000, outputTokens: 1_000 }, { totalTokens: 90_000 }));
+  // A helper thread's count is not this conversation's; a count with no size says nothing.
+  driver.onNotification('thread/tokenUsage/updated', { ...usage({ totalTokens: 5 }, {}), threadId: 'helper' });
+  driver.onNotification('thread/tokenUsage/updated', { threadId: 'ctx-thread', tokenUsage: { last: { totalTokens: 7 } } });
+  assert.deepEqual(log.of('context'), [
+    { type: 'context', used: 30_000, window: 258_400 },
+    { type: 'context', used: 60_000, window: 258_400 },
+  ]);
+});
+
 function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false } = {}) {
   const fake = fakeCli('codex', 'plain');
   let receive, exited;

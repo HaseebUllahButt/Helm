@@ -1907,6 +1907,16 @@ export class Sessions extends EventEmitter {
       this.emit('session', s);
       return;
     }
+    // How full the conversation is. It is a fact about the thread, not a line
+    // in it: kept on the record (written out when the turn ends, with the
+    // rest) and sent to clients as a session update.
+    if (e.type === 'context') {
+      if (e.used > 0 && e.window > 0 && (s.context?.used !== e.used || s.context?.window !== e.window)) {
+        s.context = { used: e.used, window: e.window, at: Date.now() };
+        if (this.#index.has(s.id)) this.emit('session', s);
+      }
+      return;
+    }
     if (e.type === 'status') {
       // A closed process is not a closed conversation: the next message
       // resumes it. Only an explicit kill removes the session.

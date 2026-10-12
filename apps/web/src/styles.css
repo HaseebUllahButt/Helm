@@ -2885,3 +2885,16 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .wrapup-chip:focus-visible { outline: 2px solid var(--sky); outline-offset: 1px; }
 .wrapup-more { color: var(--mutedfg); }
 .wrapup-part { white-space: nowrap; }
+
+/* ---- context meter ---- */
+.ctx-meter { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; flex: none; white-space: nowrap; color: var(--mutedfg); cursor: default; }
+.ctx-meter svg { display: block; flex: none; }
+.ctx-ring-bg, .ctx-ring { fill: none; stroke-width: 2; }
+.ctx-ring-bg { stroke: var(--line-2); }
+.ctx-ring { stroke: var(--primary-q); stroke-linecap: round; }
+.ctx-pct { color: var(--text-dim); font-weight: 550; font-variant-numeric: tabular-nums; }
+.ctx-detail { display: none; }
+.ctx-meter.warn .ctx-ring { stroke: var(--amber); } .ctx-meter.warn .ctx-pct { color: var(--amber-text); }
+.ctx-meter.bad .ctx-ring { stroke: var(--red); } .ctx-meter.bad .ctx-pct { color: var(--red); }
+/* Room on a wide screen for the numbers; a phone keeps the ring and the percent. */
+@media (min-width: 601px) { .ctx-detail { display: inline; } }
