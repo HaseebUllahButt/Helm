@@ -344,6 +344,13 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
           </span>
           <button className="iconbtn" onClick={onClose} aria-label="Close new chat" title="Close"><Icon name="close" size={16} /></button>
         </div>
+        {/* The same question an empty chat asks, one step at a time. */}
+        <h2 className="newchat-greeting">
+          {step === 'machine' ? 'Where should we build?'
+            : step === 'folder' ? <>What should we build on <b>{machine?.name}</b>?</>
+            : quick ? <>Which agent for a <b>quick chat</b>?</>
+            : <>Which agent in <b>{leaf(folder)}</b>?</>}
+        </h2>
         <input
           ref={input} className="palette-input" value={q} placeholder={placeholder} disabled={busy}
           autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}

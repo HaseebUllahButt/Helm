@@ -1510,7 +1510,7 @@ function Shell({ client, conn, onSignOut }: {
               && !(sessions[env.id] ?? []).some(known => known.id === s.id))}
             rememberedAt={env.online ? undefined : snap?.machines?.[env.id]?.at}
             onResume={(s) => resumeFound(env.id, s)} resuming={resuming}
-            onNewSession={() => push({ kind: 'new' })}
+            onNewSession={() => setNewChat({ envId: env.id })}
             onAddProject={() => push({ kind: 'browse' })}
             onIntegrations={() => push({ kind: 'integrations' })}
             onSendProject={(cwd) => push(cwd ? { kind: 'transfer', cwd } : { kind: 'transfer-browse' })}
@@ -2516,7 +2516,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
   const working = env.online ? mine.filter((s) => !attention(s) && runningThread(s)).sort(byRecent) : [];
   const workingIds = new Set(working.map((s) => s.id));
   const rest = mine.filter((s) => !attention(s) && !workingIds.has(s.id));
-  const recent = rest.filter((s) => !botThread(s)).sort(byRecent).slice(0, 3);
+  const recent = rest.filter((s) => !botThread(s)).sort(byRecent).slice(0, 5);
   const recentIds = new Set(recent.map((s) => s.id));
 
   // A thread belongs to a project by its folder - or by being in a worktree of it.
@@ -2529,6 +2529,8 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
       // Threads of this project already standing under "recent" above. They
       // are counted, or the header said 0 next to a thread you can see.
       above: recent.filter((s) => belongsTo(s, p)).length,
+      // When anything last happened here, for the note beside the name.
+      last: Math.max(0, ...rows.filter((s) => !s.archived && belongsTo(s, p)).map((s) => s.updatedAt ?? 0)),
     }))
     .filter(({ project: p, list, above }) =>
       !q || list.length + above > 0 || `${p.title} ${p.path}`.toLowerCase().includes(q));
@@ -2726,18 +2728,34 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           </div>
         )}
 
-        {/* One main action. Sending a project elsewhere is the rarer errand,
-            so it rides beside it rather than stacking a second banner. */}
-        <div className="actionrow">
-          <button className="action lead" disabled={!env.online} onClick={onNewSession}>
-            <span className="plus"><Icon name="plus" size={16} /></span>New session
+        {/* The machine's front door: a question and a wide box that starts a
+            chat, the way an empty chat looks. Sending a project and managing
+            connections are the rarer errands, so they sit under it, small. */}
+        <div className="home-hero">
+          <h2 className="home-title">
+            {env.online ? <>What should we build on <span className="home-machine">{env.name}</span>?</> : <><span className="home-machine">{env.name}</span> is offline</>}
+          </h2>
+          <p className={`home-state${env.online ? '' : ' down'}`}>
+            <i className={`mdot ${env.online ? 'on' : 'off'}`} />
+            {env.online ? 'online' : 'offline'}
+            {env.online && (blocked.length + working.length > 0) && ` · ${blocked.length + working.length} running`}
+            {env.online && (blocked.length > 0) && ` · ${blocked.length} need${blocked.length === 1 ? 's' : ''} you`}
+          </p>
+        </div>
+        <button className="home-compose" disabled={!env.online} onClick={onNewSession} aria-label="New chat" title={`New chat on ${env.name}`}>
+          <span className="plus"><Icon name="plus" size={16} /></span>
+          <span className="home-compose-text">New chat</span>
+          <span className="home-compose-hint">pick a folder and an agent</span>
+          <kbd className="home-compose-key">{/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl'} N</kbd>
+        </button>
+        <div className="home-quick">
+          <button className="linkish" disabled={!env.online} onClick={() => onSendProject()} title="Send a project to another machine" aria-label="Send a project">
+            <Icon name="transfer" size={15} /><span>Send a project</span>
           </button>
-          <button className="action second" disabled={!env.online} onClick={() => onSendProject()} title="Send a project to another machine" aria-label="Send a project">
-            <Icon name="transfer" size={16} /><span>Send a project</span>
+          <button className="linkish" disabled={!env.online} onClick={onIntegrations} title="Manage agent connections, skills and plugins">
+            <Icon name="tool" size={15} /><span>Connectors &amp; skills</span>
           </button>
         </div>
-
-        <button className="row" disabled={!env.online} onClick={onIntegrations}><span className="grow"><span className="rt">Connectors &amp; skills</span><span className="rm">Manage agent connections, skills and plugins</span></span></button>
 
         {searchable && (
           <div className="filterbar">
@@ -2777,7 +2795,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
         )}
         {working.length > 0 && (
           <div>
-            <div className="section">working</div>
+            <div className="section">running here</div>
             <div className="rows plain">{working.map(row)}</div>
           </div>
         )}
@@ -2787,13 +2805,17 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             <div className="rows plain">{recent.map(row)}</div>
           </div>
         )}
-        {projectFolds.map(({ project: p, list, above }) => (
+        {projectFolds.length > 0 && <div className="section">projects</div>}
+        {projectFolds.map(({ project: p, list, above, last }) => (
           <Fold
             key={p.path}
             kind="folder"
             title={p.title}
             count={list.length + above}
-            note={projectNote(p.path)}
+            // Two projects with the same name need their paths to be told
+            // apart; otherwise the useful thing to say is when it last moved.
+            note={projects.some((o) => o !== p && o.title === p.title) || !last ? projectNote(p.path) : ago(last)}
+            hint={p.path}
             openWhen={!!q}
             remember={`${env.id}:${p.path}`}
             showEmpty
@@ -2940,12 +2962,14 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
  * not you remember archiving it - and it stays open afterwards if you closed
  * it yourself, which is the one case where guessing would be rude.
  */
-function Fold({ title, count, note, kind, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, children }: {
+function Fold({ title, count, note, hint, kind, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, children }: {
   title: string; count: number; openWhen?: boolean; children: ReactNode;
   /** A project folder reads as a place, not as a category like "archived". */
   kind?: 'folder';
   /** A word beside the count - a machine name, the newest thread's age. */
   note?: string;
+  /** Shown on hover over the name. */
+  hint?: string;
   /** Groups that are the reason you opened the screen start open. */
   defaultOpen?: boolean;
   attention?: boolean;
@@ -2983,7 +3007,7 @@ function Fold({ title, count, note, kind, openWhen = false, defaultOpen = false,
         >
           <span className="caret"><Icon name="forward" size={13} /></span>
           {kind === 'folder' && <Icon name="folder" size={15} className="foldicon" />}
-          <span className="fold-title">{title}</span><span className="count">{count}</span>
+          <span className="fold-title" title={hint}>{title}</span>{count > 0 && <span className="count">{count}</span>}
           {note && <span className="note-inline">{note}</span>}
         </button>
         {actions && <span className="fold-actions">{actions}</span>}
@@ -3069,7 +3093,11 @@ function SessionRow({ s, onOpen, onRename, onArchive, onDelete, busy, selecting 
               {s.archived && <span className="tag">archived</span>}
             </span>
             <span className="rm">
-              {[eng.label, s.model, pathOf(s), money(s.costUsd)].filter(Boolean).join(' · ')}
+              {/* A thread waiting on you says what it is asking, which is
+                  the thing you would otherwise open it to find out. */}
+              {!offline && needsAttention(s) && s.ask?.text
+                ? s.ask.text
+                : [eng.label, s.model, pathOf(s), money(s.costUsd)].filter(Boolean).join(' · ')}
             </span>
           </span>
           {(s.pending ?? 0) > 1 && <span className="badge">{s.pending}</span>}
