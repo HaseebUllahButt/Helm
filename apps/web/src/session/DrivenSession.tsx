@@ -40,6 +40,8 @@ const ENGINE_LABEL: Record<string, string> = {
 };
 
 type Attachment = { name: string; mime: string; data: string; url: string };
+/** Words whose send failed after the composer had moved on, kept until sent or dismissed. */
+type FailedSend = { id: string; body: string; references: string[]; error: string; retrying?: boolean };
 
 /**
  * A headless agent session: the transcript built from helm's own events,
@@ -96,6 +98,9 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
     setReferencesRaw(next);
   }, []);
   const [referenceOptions, setReferenceOptions] = useState<{ id: string; title: string }[]>([]);
+  const [failedSends, setFailedSends] = useState<FailedSend[]>([]);
+  const failedSendSeq = useRef(0);
+  const retryingSends = useRef(new Set<string>());
   const team = useThreadTeam(client, env.id, session.id);
   // Claude's own subagents have no Helm session, so they ride on this one.
   const agentCount = team.length + (session.nativeCards?.length ?? 0);
@@ -274,8 +279,26 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
       if (editRevision.current === clearedAt) {
         setDraft(body);
         setReferences(sentReferences);
+      } else if (!atts.length) {
+        // The owner has typed since: keep the words on a card of their own
+        // rather than lose them. A slow failure may still have arrived.
+        failedSendSeq.current += 1;
+        const failed = { id: `failed-${failedSendSeq.current}`, body, references: sentReferences.map((item) => item.id), error: e.message };
+        setFailedSends((current) => [...current, failed]);
       }
     } finally { if (atts.length) setSendingImages(false); }
+  };
+  /** Sends exactly what failed - never whatever is in the composer now. */
+  const retryFailedSend = async (failed: FailedSend) => {
+    if (retryingSends.current.has(failed.id)) return;
+    retryingSends.current.add(failed.id);
+    setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, retrying: true } : item));
+    try {
+      await client.rpc(env.id, 'session.input', { id: session.id, data: failed.body, references: failed.references }, 70_000);
+      setFailedSends((current) => current.filter((item) => item.id !== failed.id));
+    } catch (e: any) {
+      setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, error: e.message, retrying: false } : item));
+    } finally { retryingSends.current.delete(failed.id); }
   };
   const send = async () => {
     const body = expandPastes(draft.trim());
@@ -589,6 +612,16 @@ export function DrivenSession({ client, env, session, conn, onBack, onClosed, on
         empty={session.alive === false ? 'This conversation resumes with your next message.' : undefined}
       />
 
+      {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
+        <strong>Send not confirmed</strong>
+        <p className="failed-send-text">{failed.body}</p>
+        <p>{failed.error} — check the conversation before retrying</p>
+      </div>
+        <span className="failed-send-actions">
+          <button disabled={failed.retrying} onClick={() => void retryFailedSend(failed)}>{failed.retrying ? 'Sending…' : 'Retry send'}</button>
+          <button disabled={failed.retrying} onClick={() => setFailedSends((current) => current.filter((item) => item.id !== failed.id))}>Dismiss</button>
+        </span>
+      </div>)}
       <Composer
         onTranscribe={onTranscribe}
         draft={draft} setDraft={setDraft} onSend={send} onStop={stop} working={working}

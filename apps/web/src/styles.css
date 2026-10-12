@@ -2533,6 +2533,9 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .thread-recovery strong { font-weight: 600; color: var(--text); }
 .thread-recovery p { margin: 0; overflow-wrap: anywhere; color: var(--mutedfg); line-height: 1.45; }
 .thread-recovery button { flex: none; width: auto; margin: 0; min-height: 34px; padding: 4px 12px; border-radius: 9px; background: var(--raised); border: 1px solid var(--line-2); font-size: var(--t-meta); font-weight: 550; }
+/* A send that failed after the owner typed on: the words, kept until sent or dismissed. */
+.thread-recovery .failed-send-text { color: var(--text); white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.failed-send-actions { flex: none; display: flex; gap: 6px; }
 
 /* The task stopped: docked above the message box like a question is. */
 .recovery {
