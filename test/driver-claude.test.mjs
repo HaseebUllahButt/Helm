@@ -321,6 +321,53 @@ test('reattaching Claude does not revive a background shell command as a helper'
   await driver.suspend();
 });
 
+test('passive Claude watches do not keep a finished chat working, but their tool result stays visible', async () => {
+  let receive;
+  const pipe = { onData: cb => { receive = cb; }, onExit: () => {}, detach: () => {} };
+  const { driver, log } = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => null, resumeEvents: () => [] });
+  await driver.start();
+  const frame = (m) => receive(JSON.stringify({ type: 'system', ...m }) + '\n');
+  for (const [id, fields] of Object.entries({
+    artifact: { task_type: 'monitor_ws', ambient: true },
+    monitor: { task_type: 'monitor_mcp' },
+    housekeeping: { task_type: 'other', skip_transcript: true },
+  })) {
+    frame({ subtype: 'task_started', task_id: id, tool_use_id: id, ...fields });
+    frame({ subtype: 'task_progress', task_id: id });
+    frame({ subtype: 'task_notification', task_id: id, status: 'stopped', summary: 'Watch stopped' });
+    // A late progress frame must not resurrect a stopped watch as a helper.
+    frame({ subtype: 'task_progress', task_id: id });
+  }
+  assert.equal(driver.status, 'idle');
+  assert.equal(log.of('subagent.status').length, 0);
+  assert.equal(log.of('item.done').length, 3);
+  assert.equal(log.of('item.update').find(e => e.id === 'artifact')?.agent.type, 'monitor_ws');
+  frame({ subtype: 'task_started', task_id: 'helper', tool_use_id: 'helper', task_type: 'local_agent' });
+  assert.deepEqual(log.of('subagent.status').map(e => [e.id, e.status]), [['helper', 'working']]);
+  await driver.suspend();
+});
+
+test('reattaching Claude keeps typed watches and legacy artifact subscriptions out of the helper team', async () => {
+  let receive;
+  const pipe = { onData: cb => { receive = cb; }, onExit: () => {}, detach: () => {} };
+  const { driver, log } = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => null, resumeEvents: () => [
+      { type: 'item.start', id: 'artifact', kind: 'tool', name: 'Artifact' },
+      { type: 'item.update', id: 'artifact', agent: { id: 'watch-old', status: 'running' } },
+      { type: 'item.update', id: 'monitor', agent: { id: 'watch-new', status: 'running', type: 'monitor_mcp' } },
+      { type: 'item.update', id: 'helper', agent: { id: 'agent-1', status: 'running', type: 'local_agent' } },
+    ] });
+  await driver.start();
+  const frame = (m) => receive(JSON.stringify({ type: 'system', ...m }) + '\n');
+  frame({ subtype: 'task_started', task_id: 'watch-old', tool_use_id: 'artifact' });
+  frame({ subtype: 'task_progress', task_id: 'watch-old' });
+  frame({ subtype: 'task_notification', task_id: 'watch-new', status: 'failed', summary: 'Disconnected' });
+  frame({ subtype: 'task_notification', task_id: 'agent-1', status: 'completed', summary: 'Done' });
+  assert.deepEqual(log.of('subagent.status').map(e => [e.id, e.status]), [['helper', 'working'], ['helper', 'idle']]);
+  await driver.suspend();
+});
+
 test('tool: a Bash call becomes a tool item with streamed input and its output; a Write asks permission', async () => {
   const { driver, log, fake } = make('tool');
   await driver.send('Use the Bash tool…');

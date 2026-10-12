@@ -9,6 +9,7 @@ import { HELM_DIR, expand, quickDir, isQuickDir } from './paths.js';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages, sessionSnapshot, sessionActivity } from './transcript.js';
 import { findSubagentsDir, nativeActive, nativeSubagent, nativeSubagents, nativeWorking, subagentsDir } from './native-subagents.js';
+import { nonAgentClaudeTask } from './claude-tasks.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
@@ -347,7 +348,7 @@ export class Sessions extends EventEmitter {
     // feature does not wait on - or cost - whatever the pty host is holding.
     this.procs = procHost ?? new TerminalHost({ socketPath: PROC_SOCKET_PATH, unit: 'helm-procs' });
     this.#load();
-    this.#dropShellAlarms();
+    this.#dropNonAgentTasks();
     // A daemon killed abruptly cannot answer its old hook sockets. Leave the
     // terminal's own prompt available, without showing an unanswerable card.
     for (const s of this.#index.values()) if (s.nativeCli) {
@@ -830,21 +831,20 @@ export class Sessions extends EventEmitter {
   }
 
   /**
-   * Older daemons counted a crashed background shell command as a failed
-   * child task, and that alarm stays on the thread's card until the chat
-   * ends. A command is not a child: drop those, keep real helpers.
+   * Older daemons counted commands and passive watches as helpers. Repair
+   * their saved working/failed counts without dropping actual helper work.
    */
-  #dropShellAlarms() {
+  #dropNonAgentTasks() {
     let changed = false;
     for (const s of this.#index.values()) {
-      const failed = Object.entries(s.nativeAgents ?? {}).filter(([, state]) => state === 'error');
-      if (!failed.length) continue;
+      if (s.engine !== 'claude' || !Object.keys(s.nativeAgents ?? {}).length) continue;
       let events;
       try { events = this.events.since(s.id, 0); } catch { continue; }
-      const commands = new Set(events.filter((e) => e.type === 'item.start' && (e.kind === 'command' || e.name === 'Bash')).map((e) => e.id));
-      const shells = failed.filter(([id]) => commands.has(id));
-      for (const [id] of shells) delete s.nativeAgents[id];
-      if (shells.length) { changed = true; this.#refreshTeam(s); }
+      const services = new Set(events.filter((e) => (e.type === 'item.start' && nonAgentClaudeTask(e))
+        || (e.type === 'item.update' && nonAgentClaudeTask(e.agent))).map((e) => e.id));
+      const removed = Object.keys(s.nativeAgents).filter((id) => services.has(id));
+      for (const id of removed) delete s.nativeAgents[id];
+      if (removed.length) { changed = true; this.#refreshTeam(s); }
     }
     if (changed) this.#save();
   }
