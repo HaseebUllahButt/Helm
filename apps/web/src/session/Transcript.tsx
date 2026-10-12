@@ -8,6 +8,7 @@ import { userMessage } from './userMessage';
 import { plainError } from './problem';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
 import { ContextCard } from './ContextCard';
+import { TodoCard, isTodoItem, latestTodoId } from './Todos';
 import { parseContextUsage } from './contextUsage';
 
 /** The session is still working, so an open compaction is really running. */
@@ -507,7 +508,9 @@ function ItemContent({ item, byParent, commandOutput }: { item: Item; byParent: 
     case 'text': return <TextItem item={item} commandOutput={commandOutput} />;
     case 'visual': return item.visual ? <VisualReply visual={item.visual} /> : null;
     case 'thinking': return <ThinkingItem item={item} />;
-    case 'tool': return isCompaction(item) ? <CompactItem item={item} /> : <ToolItem item={item} />;
+    case 'tool':
+      if (isTodoItem(item)) return <TodoCard item={item} />;
+      return isCompaction(item) ? <CompactItem item={item} /> : <ToolItem item={item} />;
     case 'command': return <CommandItem item={item} />;
     case 'edit': return <EditItem item={item} />;
     case 'subagent': return <SubagentItem item={item} byParent={byParent} />;
@@ -633,10 +636,14 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
           const nodes: ReactNode[] = [];
           // A compaction stands on its own line: it is about the whole
           // conversation, not one of the steps around it.
-          const quiet = (it: Item) => it.kind !== 'text' && it.kind !== 'error' && it.kind !== 'visual' && !isCompaction(it);
+          const quiet = (it: Item) => it.kind !== 'text' && it.kind !== 'error' && it.kind !== 'visual' && !isCompaction(it) && !isTodoItem(it);
+          // The to-do list is one card that ticks in place: only the newest
+          // write shows, under a key that outlives each rewrite.
+          const todoId = latestTodoId(roots);
           for (let i = 0; i < roots.length;) {
+            if (isTodoItem(roots[i]) && roots[i].id !== todoId) { i += 1; continue; }
             if (!quiet(roots[i])) {
-              nodes.push(<ItemView key={roots[i].id} item={roots[i]} byParent={byParent} commandOutput={commandOutput} />);
+              nodes.push(<ItemView key={roots[i].id === todoId ? `todos-${turn.id}` : roots[i].id} item={roots[i]} byParent={byParent} commandOutput={commandOutput} />);
               i += 1;
               continue;
             }

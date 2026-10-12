@@ -2831,3 +2831,42 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .idiff-more:hover { color: var(--text-dim); background: var(--hover); }
 :root[data-theme="light"] .idiff-row.add { background: color-mix(in srgb, var(--diff-add) 13%, transparent); }
 :root[data-theme="light"] .idiff-row.del { background: color-mix(in srgb, var(--diff-del) 11%, transparent); }
+
+/* ---- to-do card (idea 4) ---- */
+/* The agent's checklist: one calm card that ticks itself off in place. */
+.todos { margin: 8px 0; padding: 10px 12px 8px; border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--card); }
+.todos-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: var(--t-meta); }
+.todos-title { color: var(--text-dim); font-weight: 600; }
+.todos-count { color: var(--mutedfg); font-variant-numeric: tabular-nums; }
+.todos-bar { height: 3px; margin: 7px 0 6px; border-radius: 2px; background: var(--accent); overflow: hidden; }
+.todos-bar i { display: block; height: 100%; border-radius: 2px; background: var(--emerald); transition: width 0.4s var(--ease); }
+.todos-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.todo { display: flex; align-items: flex-start; gap: 9px; padding: 4px 6px; margin: 0 -6px; border-radius: 6px; font-size: var(--t-body); line-height: 1.45; color: var(--text-80); }
+.todo-box {
+  flex: none; width: 16px; height: 16px; margin-top: 2px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1.5px solid var(--icon); color: transparent; box-sizing: border-box;
+}
+.todo-box svg { display: block; }
+.todo-text { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.todo-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.todo.completed { color: var(--mutedfg); }
+.todo.completed .todo-text { text-decoration: line-through; text-decoration-color: var(--icon); opacity: .8; }
+.todo.completed .todo-box { border-color: var(--emerald); background: var(--emerald); color: var(--bg); }
+.todo.in_progress { color: var(--text); background: var(--accent); }
+.todo.in_progress .todo-box { border-color: var(--text-dim); border-top-color: transparent; animation: todo-spin 1.4s linear infinite; }
+.todo.in_progress .todo-text {
+  background-image: linear-gradient(to right, transparent, var(--text), transparent), linear-gradient(var(--text-80), var(--text-80));
+  background-size: 4.5rem 100%, 100% 100%; background-repeat: no-repeat; background-clip: text; -webkit-background-clip: text; color: transparent;
+  animation: shine 2.2s steps(30) infinite;
+}
+.todo.ticked .todo-box { animation: todo-tick 0.35s var(--ease); }
+.todo.ticked .todo-box svg { animation: todo-draw 0.35s var(--ease); }
+@keyframes todo-spin { to { transform: rotate(360deg); } }
+@keyframes todo-tick { from { transform: scale(0.6); } 60% { transform: scale(1.18); } to { transform: scale(1); } }
+@keyframes todo-draw { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .todos-bar i { transition: none; }
+  .todo.in_progress .todo-box { animation: none; border-top-color: var(--text-dim); }
+  .todo.in_progress .todo-text { animation: none; background: none; color: var(--text); }
+  .todo.ticked .todo-box, .todo.ticked .todo-box svg { animation: none; }
+}
