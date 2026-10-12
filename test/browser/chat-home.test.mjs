@@ -111,7 +111,7 @@ for (const width of [1280,390]) test(`an empty chat asks what to build and keeps
   await page.waitForTimeout(400);
   await shot(page,`empty-chat-${width}.png`);
 
-  await page.getByPlaceholder(/^Message/).fill('build me a thing');
+  await page.getByLabel(/^Message/).fill('build me a thing');
   await page.getByRole('button',{name:'send',exact:true}).click();
   await hero.waitFor({state:'detached'});
   await page.waitForTimeout(400);
