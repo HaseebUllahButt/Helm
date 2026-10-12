@@ -333,3 +333,16 @@ test('native status-line quotas arrive as limits without changing permission mod
     assert.deepEqual({mode:sessions.get('native-test').mode,status:sessions.get('native-test').status},before);
   } finally { await sessions.stop(); }
 });
+
+
+test('Claude takeover can select and leave dangerously-skip-permissions after the native footer confirms it',async()=>{
+  const host=new CycleHost();host.ring=['auto mode','bypass permissions','manual mode','accept edits','plan mode'];
+  const sessions=create(host);
+  try{
+    await sessions.hooks;
+    await sendHook('native-test',{hook_event_name:'SessionStart',permission_mode:'auto'});
+    assert.equal((await sessions.setMode('native-test','bypassPermissions')).session.mode,'bypassPermissions');
+    assert.equal(host.ring[host.at],'bypass permissions');
+    assert.equal((await sessions.setMode('native-test','default')).session.mode,'default');
+  } finally{await sessions.stop();}
+});

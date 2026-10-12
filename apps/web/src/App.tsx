@@ -4588,7 +4588,7 @@ function SessionView({ client, env, session, terminals = [], onSwitch, onNewTerm
       }
     });
     return () => { stale = true; catalog.stop(); off(); };
-  }, [client, env.id, session.id, session.profileId, session.nativeCli, session.engineModel]);
+  }, [client, env.id, session.id, session.profileId, session.nativeCli, session.engineModel, session.permissionControl]);
 
   const nativeCommand = async (command: string) => {
     if (settingBusy || sending) return;

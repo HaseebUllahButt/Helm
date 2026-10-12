@@ -1,3 +1,5 @@
+import { reportedMode } from './native-settings.js';
+import { piChatArgs, BASH_GUARD_MODES } from './pi-settings.js';
 import { nativeAccount } from './native-account.js';
 import { nativeCommands, nativeControlCommand, nativeSettingCommand } from './native-controls.js';
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdirSync, readlinkSync, rmSync } from 'node:fs';
@@ -371,7 +373,18 @@ export class Sessions extends EventEmitter {
     // An agent process that dies while no driver holds it still leaves the
     // record: close what it left open so the session stops reading as busy.
     this.procs.on('proc.exit', ({ id }) => this.#procGone(id));
-    this.nativeTerminals.on('data', (d) => this.emit('data', d));
+    const footers = new Map();
+    this.nativeTerminals.on('data', (d) => {
+      this.emit('data', d);
+      const s = this.#index.get(d.id);
+      if (!s?.nativeChat || s.engine !== 'claude') return;
+      let footer = footers.get(d.id);
+      if (!footer) footers.set(d.id, footer = new ModeFooter());
+      footer.mark(); footer.feed(d.text);
+      const mode = MODE_FROM_LABEL[footer.label()];
+      if (mode) this.#nativeSettings(s, { mode });
+    });
+    this.nativeTerminals.on('exit', ({ id }) => footers.delete(id));
     this.nativeTerminals.on('native.open', (s) => this.#adoptNative(s));
     this.nativeTerminals.on('hello', () => {
       for (const s of this.nativeTerminals.nativeSessions()) this.#adoptNative(s);
@@ -450,6 +463,17 @@ export class Sessions extends EventEmitter {
     const s = this.#index.get(native);
     if (!s?.nativeCli) return reply(null);
     const name = event.hook_event_name;
+    if (name === 'HelmSettings' && s.engine === 'pi') {
+      reply(null);
+      this.#nativeSettings(s, event);
+      return;
+    }
+    if (s.engine === 'claude') this.#nativeSettings(s, {
+      ...(typeof event.effort?.level === 'string' ? { effort: event.effort.level } : {}),
+      ...(typeof event.model === 'string' ? { model: event.model } : {}),
+      ...(typeof event.permission_mode === 'string' ? { mode: event.permission_mode } : {}),
+    });
+    if (name === 'HelmSettings') { reply(null); return; }
     if (name === 'HelmUsage') {
       reply(null);
       const unifiedWindows = {};
@@ -498,7 +522,7 @@ export class Sessions extends EventEmitter {
       if (typeof event.to_model === 'string' && event.to_model) {
         s.model = null;
         s.engineModel = event.to_model;
-        s.engineEffort = null;
+        s.engineEffort = event.effort?.level ?? null;
         this.#save();
         this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id) });
       }
@@ -759,11 +783,35 @@ export class Sessions extends EventEmitter {
       profileId: null, pty: true, nativeCli: true, shared: true,
       nativePid: meta.nativePid, nativeHome: meta.configHome,
       nativeChat: !!meta.nativeChat,
+      ...(meta.settings?.model ? { engineModel: meta.settings.model } : {}),
+      ...(meta.settings?.effort ? { engineEffort: meta.settings.effort } : {}),
+      ...(meta.settings?.mode ? { mode: meta.settings.mode } : {}),
       ...(meta.conversation ? { engineSessionId: meta.conversation } : {}),
       status: 'idle', createdAt: meta.createdAt, updatedAt: meta.createdAt };
     this.#index.set(meta.id, session);
     this.#save();
     this.emit('session', { ...wire(session), alive: true });
+  }
+
+  #nativeSettings(s, info) {
+    let changed = false;
+    for (const [source, target] of [['model', 'engineModel'], ['effort', 'engineEffort'], ['mode', 'mode'], ['permissionControl', 'permissionControl']]) {
+      if (!Object.hasOwn(info, source)) continue;
+      const value = info[source];
+      if (value !== null && (typeof value !== 'string' || value.length > 200)) continue;
+      if (s[target] !== value) { s[target] = value; changed = true; }
+      // Accepted provider settings outrank old choices in the tray.
+      if (source === 'model' || source === 'effort') {
+        if (s[source] != null) { s[source] = null; changed = true; }
+      }
+    }
+    if (typeof info.session_id === 'string' && s.engine === 'pi') {
+      if (s.engineSessionId !== info.session_id) { s.engineSessionId = info.session_id; changed = true; }
+      if (typeof info.transcript_path === 'string' && s.transcript !== info.transcript_path) { s.transcript = info.transcript_path; changed = true; }
+    }
+    if (!changed) return;
+    this.#save();
+    this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(s.id) });
   }
 
   isDriven(s) { return !!s?.driver; }
@@ -1009,6 +1057,9 @@ export class Sessions extends EventEmitter {
           s.externalPid = current.writerPid || null;
           s.transcript = current.transcript || s.transcript;
           s.updatedAt = current.updatedAt;
+          if (current.model) s.engineModel = current.model;
+          if (current.effort) s.engineEffort = current.effort;
+          if (current.mode) s.mode = current.mode;
         }
         const active = this.#externalActive(s);
         // This record is a read-only window onto another process until its
@@ -1042,8 +1093,12 @@ export class Sessions extends EventEmitter {
           if (current) {
             s.engineSessionId = current.id;
             s.transcript = current.transcript;
-            if (current.model) s.engineModel = current.model;
-            if (current.effort) s.engineEffort = current.effort;
+            // A live Pi extension is fresher than the append-only transcript.
+            if (!s.permissionControl) this.#nativeSettings(s, {
+              ...(current.model ? { model: current.model } : {}),
+              ...(current.effort ? { effort: current.effort } : {}),
+              ...(current.mode ? { mode: current.mode } : {}),
+            });
             const owners = claudeOwners?.get(current.id)?.filter((owner) => owned(owner.pid)) ?? [];
             s.status = claudeLiveStatus(owners) ?? current.status ?? s.status;
             s.turns = current.turns;
@@ -1081,7 +1136,7 @@ export class Sessions extends EventEmitter {
         // A runtime pane without a native ID can still represent this CLI.
         if (x.active && out.some((s) => s.paneId && s.alive && s.engine === x.engine && expand(s.cwd) === expand(x.cwd))) continue;
         out.push({ id, engine: x.engine, engineSessionId: x.id, account: x.account,
-          title: x.title, cwd: x.cwd, quick: isQuickDir(x.cwd) || undefined, profileId: x.account, model: x.model,
+          title: x.title, cwd: x.cwd, quick: isQuickDir(x.cwd) || undefined, profileId: x.account, model: x.model, engineModel: x.model, engineEffort: x.effort, mode: x.mode,
           status: x.status, turns: x.turns, alive: !!x.active, externalActive: !!x.active,
           adopted: true, archived: mark === 'archived', updatedAt: x.updatedAt });
       }
@@ -1720,7 +1775,10 @@ export class Sessions extends EventEmitter {
     };
     d = this.makeDriver(s.driver, {
       cmd: spec.cmd, env: spec.env, args: spec.args, cwd: s.cwd,
-      model: s.nativeSocket && !s.nativeManaged ? null : s.model, effort: s.nativeSocket && !s.nativeManaged ? null : s.effort, mode: s.mode, speed: s.nativeSocket && !s.nativeManaged ? null : s.speed,
+      model: s.nativeSocket && !s.nativeManaged ? null : s.model, effort: s.nativeSocket && !s.nativeManaged ? null : s.effort,
+      // A reported native policy is for display. Rejoining must not turn it
+      // into a policy override; the provider terminal owns that configuration.
+      mode: s.nativeSocket && !s.nativeManaged ? null : s.mode, speed: s.nativeSocket && !s.nativeManaged ? null : s.speed,
       engineSessionId: s.engineSessionId,
       nativeSocket: s.nativeSocket,
       unsent: !!s.unsent,
@@ -1756,11 +1814,18 @@ export class Sessions extends EventEmitter {
     // argument on the next launch.
     d.on('init', (info) => {
       if (!info) return;
-      const model = info.model ?? null;
-      const effort = info.effort ?? null;
-      if (model === s.engineModel && effort === s.engineEffort) return;
-      s.engineModel = model;
-      s.engineEffort = effort;
+      let changed = false;
+      for (const [key, target] of [['model', 'engineModel'], ['effort', 'engineEffort']]) {
+        // A partial init must not erase settings another provider event reported.
+        if (info[key] === undefined) continue;
+        if (s[target] !== info[key]) { s[target] = info[key]; changed = true; }
+        if (['pi', 'omp'].includes(s.engine) && s[key] != null && typeof info[key] === 'string' && s[key] !== info[key]) {
+          s[key] = info[key]; changed = true;
+        }
+      }
+      const mode = reportedMode(s.engine, info);
+      if (mode && s.mode !== mode) { s.mode = mode; changed = true; }
+      if (!changed) return;
       if (this.#index.has(s.id)) this.#save();
       this.emit('session', s);
     });
@@ -1835,7 +1900,7 @@ export class Sessions extends EventEmitter {
     // driver settings as the composer's pickers. Persist them here so every
     // connected client and the next resumed process sees the same choice.
     if (e.type === 'settings') {
-      for (const key of ['model', 'effort', 'mode', 'speed']) {
+      for (const key of ['model', 'effort', 'mode', 'speed', 'permissionControl']) {
         if (Object.hasOwn(e, key)) s[key] = e[key] || null;
       }
       if (this.#index.has(s.id)) this.#save();
@@ -2449,7 +2514,7 @@ export class Sessions extends EventEmitter {
         .find((m) => m.role === 'user')?.text ?? '';
       const resumed = resumeCommand(s.engine, proc.argv, s.engineSessionId, first);
       const nativeChat = s.engine === 'claude' && proc.env.HELM_NATIVE_CHAT !== '0';
-      const cmd = resumed.cmd, args = nativeChat ? claudeChatArgs(resumed.args, proc.cwd || expand(s.cwd)) : resumed.args;
+      const cmd = resumed.cmd, args = nativeChat ? claudeChatArgs(resumed.args, proc.cwd || expand(s.cwd)) : s.engine === 'pi' ? piChatArgs(resumed.args) : resumed.args;
       if (cancel.signal.aborted) throw new Error('cancelled');
       // Prepare the host before closing the original provider.
       if (!await this.nativeTerminals.ensure()) throw new Error('the shared terminal could not start');
@@ -2976,16 +3041,23 @@ export class Sessions extends EventEmitter {
     return this.#nativeWrite(s, command);
   }
 
-  async #nativeWrite(s, text, { control = true } = {}) {
+  async #nativeWrite(s, text, { control = true, confirmedMode = null } = {}) {
     const id = s.id;
     const work = (this.#nativeInputs.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
       if (!this.nativeTerminals.has(id)) throw new Error('This CLI is no longer running.');
       if ((control && s.status === 'blocked') || [...this.#hookAsks.values()].some(ask => ask.id === id)) throw new Error('Answer the CLI question first.');
       if (control && s.status === 'working') throw new Error('Wait until the CLI finishes its turn before changing settings.');
+      if (confirmedMode && s.mode === confirmedMode) return { ok: true, session: wire(s) };
       if (text != null) {
         await this.nativeTerminals.write(id, `\x1b[200~${text}\x1b[201~`);
         await new Promise(resolve => setTimeout(resolve, 60));
         await this.nativeTerminals.write(id, '\r');
+      }
+      if (confirmedMode) {
+        const end = Date.now() + 3500;
+        while (s.mode !== confirmedMode && this.nativeTerminals.has(id) && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 30));
+        if (s.mode !== confirmedMode) throw new Error('bash-guard did not report the requested state.');
+        return { ok: true, session: wire(s) };
       }
       return { ok: true, terminal: true, ...(text != null ? { command: text } : {}) };
     });
@@ -2997,12 +3069,17 @@ export class Sessions extends EventEmitter {
   async setMode(id, mode) {
     if (mode === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
     const s = this.get(id);
+    if (s.nativeCli && s.engine === 'pi') {
+      if (s.permissionControl !== 'bash-guard' || !BASH_GUARD_MODES.some(m => m.id === mode)) throw new Error('This Pi does not offer bash-guard controls.');
+      if (s.mode === mode) return { ok: true, session: wire(s) };
+      return this.#nativeWrite(s, '/bash-guard', { confirmedMode: mode });
+    }
     if (s.nativeChat && s.engine === 'claude') return this.#nativeMode(s, mode);
     if (!s.driver) throw new Error('not a headless session');
-    s.mode = mode;
-    this.#save();
     const d = this.#drivers.get(id);
     if (d) await d.setMode(mode);
+    s.mode = mode;
+    this.#save();
     this.emit('session', s);
     return { ok: true, session: s };
   }
@@ -3010,13 +3087,13 @@ export class Sessions extends EventEmitter {
   /** The permission mode a terminal Claude's footer shows, until a hook says it. */
   async #readNativeMode(id) {
     const s = this.#index.get(id);
-    if (!s?.nativeChat || s.mode || !this.nativeTerminals.has(id)) return;
+    if (!s?.nativeChat || !this.nativeTerminals.has(id)) return;
     const footer = new ModeFooter();
     try { footer.feed(await this.nativeTerminals.view(id)); }
     catch { return; }
     finally { if (!this.watching(id)) this.nativeTerminals.unview(id); }
     const mode = MODE_FROM_LABEL[footer.label()];
-    if (!mode || s.mode || this.#index.get(id) !== s) return;
+    if (!mode || s.mode === mode || this.#index.get(id) !== s) return;
     s.mode = mode;
     this.#save();
     this.emit('session', { ...wire(s), alive: this.nativeTerminals.has(id), ...pendingSummary(this.events.pending(id)) });
@@ -3109,7 +3186,7 @@ export class Sessions extends EventEmitter {
     const value = effort === 'auto' ? null : effort || null;
     const d = this.#drivers.get(id);
     if (d) await d.setEffort(value);
-    s.effort = value;
+    s.effort = d && ['pi', 'omp'].includes(s.engine) ? d.effort : value;
     if (d && s.engine === 'claude') s.engineEffort = value;
     this.#save();
     this.emit('session', s);
@@ -3133,6 +3210,11 @@ export class Sessions extends EventEmitter {
    * which beats anything a CLI subcommand can print. Null when the driver
    * is not up or reports nothing.
    */
+  async refreshNativeSettings(id) {
+    const s = this.get(id);
+    if (s.nativeChat && s.engine === 'claude') await this.#readNativeMode(id);
+  }
+
   catalog(id) {
     const d = this.#drivers.get(id);
     return d?.catalog?.() ?? null;
@@ -3162,7 +3244,7 @@ export class Sessions extends EventEmitter {
     const value = model || null;
     const d = this.#drivers.get(id);
     if (d) await d.setModel(value);
-    s.model = value;
+    s.model = d && ['pi', 'omp'].includes(s.engine) ? d.model : value;
     this.#save();
     this.emit('session', s);
     return { ok: true, session: s };

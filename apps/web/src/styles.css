@@ -1266,12 +1266,12 @@ pre.snippet {
   background: color-mix(in srgb, var(--amber) 9%, transparent);
 }
 .chip-pick.danger .cg { color: var(--amber-text); }
-/* A phone has room for the controls or for their names, not both. The icon
-   says which control it is; the sheet it opens marks what it is set to. */
+/* Keep the running settings visible on phones too. The row can scroll for
+   long provider model names instead of hiding every value behind an icon. */
 @media (max-width: 599px) {
-  .chip-pick { width: 36px; height: 36px; padding: 0; justify-content: center; }
-  .chip-pick .chip-label { display: none; }
-  .chip-pick .cg svg { width: 17px; height: 17px; }
+  .chip-pick { min-height: 36px; padding: 4px 8px; }
+  .chip-pick .chip-label { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+  .chip-pick .cg svg { width: 14px; height: 14px; }
 }
 /* Account usage has its own row beneath the controls, at every width. */
 .slab-status { margin: 0 10px; padding: 7px 0 9px; border-top: 1px solid var(--line); min-width: 0; }

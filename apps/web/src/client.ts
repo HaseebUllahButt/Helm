@@ -113,6 +113,7 @@ export interface Session {
   /** What the CLI said it actually started with, when nothing was picked. */
   engineModel?: string | null;
   engineEffort?: string | null;
+  permissionControl?: 'bash-guard' | 'none' | null;
   mode?: string | null;
   speed?: string | null;
   effort?: string | null;

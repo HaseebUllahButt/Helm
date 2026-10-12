@@ -12,6 +12,7 @@ import {
   MACHINE_KINDS, saveNetwork, watchNetwork,
 } from '@helm/protocol/network';
 import { createRuntime } from './runtime/index.js';
+import { BASH_GUARD_MODES } from './pi-settings.js';
 import { modesFor, defaultMode } from './modes.js';
 import { Sessions, wire } from './sessions.js';
 import { getProfiles, refreshProfiles, currentProfiles, materialize } from './profiles.js';
@@ -1507,6 +1508,7 @@ export class Daemon {
 
       case M.MODEL_LIST: {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
+        if (p.id) await this.sessions.refreshNativeSettings?.(p.id);
         const native = p.id ? this.sessions.get(p.id) : null;
         if (native?.nativeCli && !(native.nativeChat && native.engine === 'claude')) {
           let nativeEnv = null;
@@ -1519,7 +1521,7 @@ export class Daemon {
           const prefs = account ? modelPrefs(account) : null;
           const filtered = applyModelPrefs(catalog, prefs, { all: !!p.all });
           const hasEffort = nativeEffortChoices(native.engine) && !!(catalog.efforts?.length || Object.keys(catalog.effortsByModel ?? {}).length);
-          return { ...filtered, default: null, effort: null, defaultMode: null, modes: [], speeds: [], speedByModel: {},
+          return { ...filtered, default: null, effort: null, defaultMode: null, modes: native.permissionControl === 'bash-guard' ? BASH_GUARD_MODES : [], speeds: [], speedByModel: {},
             ...(!hasEffort ? { efforts: [], effortsByModel: {} } : {}),
             nativeControls: nativeControls(native.engine).filter(kind =>
               !(kind === 'model' && (filtered.models?.length || filtered.more?.length)) && !(kind === 'effort' && hasEffort)),
@@ -1589,7 +1591,7 @@ export class Daemon {
         // Starred models and the start defaults ride along, so the in-chat
         // picker can show and change both without a second round trip.
         return {
-          ...filtered, prefs, modes: engine?.driver ? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine),
+          ...filtered, prefs, modes: engine?.driver ? live?.modes ?? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine),
           favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile), account: accountKey(profile),
           effortFavs: pickerPrefs().favs[`${profile.engine}-effort`] ?? [],
         };

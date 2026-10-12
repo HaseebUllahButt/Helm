@@ -347,7 +347,7 @@ test('devin: an unadvertised Fusion effort maps to the advertised model and thou
   assert.equal(driver.catalog().current, FUSION_CANONICAL);
   assert.equal(driver.catalog().effort, 'medium');
   assert.deepEqual(driver.info, { model: FUSION_CANONICAL, effort: 'medium' });
-  assert.deepEqual(init, { model: FUSION_CANONICAL, effort: 'medium' });
+  assert.deepEqual(init, { model: FUSION_CANONICAL, effort: 'medium', mode: 'edit' });
   assert.deepEqual(log.of('error'), []);
   assert.ok(log.of('settings').some((e) => e.model === FUSION_CANONICAL));
   assert.ok(log.of('settings').some((e) => e.effort === 'medium'));

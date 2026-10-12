@@ -630,8 +630,8 @@ export class CodexDriver extends Driver {
       this.info = {
         model: this.model ?? this.#rolloutState.settings?.model ?? null,
         effort: this.effort ?? this.#rolloutState.settings?.effort ?? null,
-        approvalPolicy: this.#policy().approvalPolicy,
-        sandbox: this.#policy().sandbox,
+        approvalPolicy: this.nativeSocket ? this.#rolloutState.settings?.approvalPolicy : this.#policy().approvalPolicy,
+        sandbox: this.nativeSocket ? this.#rolloutState.settings?.sandboxPolicy : this.#policy().sandbox,
         cliVersion: this.#rolloutState.cliVersion,
       };
       this.#started = true;
@@ -676,8 +676,8 @@ export class CodexDriver extends Driver {
     this.info = {
       model: res.result.model ?? res.result.thread?.model ?? this.#rolloutState.settings?.model,
       effort: res.result.reasoningEffort ?? res.result.thread?.reasoningEffort ?? this.#rolloutState.settings?.effort,
-      approvalPolicy: res.result.approvalPolicy ?? approvalPolicy,
-      sandbox: res.result.sandbox ?? sandbox,
+      approvalPolicy: res.result.approvalPolicy ?? this.#rolloutState.settings?.approvalPolicy ?? (this.nativeSocket ? undefined : approvalPolicy),
+      sandbox: res.result.sandbox ?? this.#rolloutState.settings?.sandboxPolicy ?? (this.nativeSocket ? undefined : sandbox),
       cliVersion: res.result.thread?.cliVersion ?? this.#rolloutState.cliVersion,
     };
     this.#started = true;

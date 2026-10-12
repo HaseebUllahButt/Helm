@@ -1,3 +1,4 @@
+import { piChatArgs, BASH_GUARD_MODES } from '../pi-settings.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Driver, checkVersion, assertFolder, cliVersion, semverLess } from './index.js';
@@ -96,7 +97,8 @@ class PiRpcDriver extends Driver {
   }
 
   get args() {
-    const a = [...this.profileArgs, '--mode', 'rpc'];
+    const a = [...(this.engine === 'pi' ? piChatArgs(this.profileArgs) : this.profileArgs), '--mode', 'rpc'];
+    if (this.engine === 'pi' && this.mode === 'guard-off') a.push('--bash-guard-disabled');
     if (this.model) a.push('--model', this.model);
     if (this.effort) a.push('--thinking', this.effort);
     // Resume is an id, not a path - a path would create an empty session at
@@ -198,7 +200,8 @@ class PiRpcDriver extends Driver {
    */
   catalog() {
     const efforts = this.info?.efforts;
-    return efforts?.length ? { efforts, current: this.info.model ?? null } : null;
+    return { ...(efforts?.length ? { efforts } : {}), current: this.info?.model ?? null,
+      ...(this.permissionControl === 'bash-guard' ? { modes: BASH_GUARD_MODES } : {}) };
   }
 
   async availableCommands() {
@@ -328,13 +331,13 @@ class PiRpcDriver extends Driver {
       this.#requests.set(e.requestId, { id: e.requestId, method: e.dialogMethod });
       this.pending.set(e.requestId, e);
     }
-    this.emit('init', this.info ?? { model: this.model, effort: this.effort });
     // Whatever the process said while nobody listened is replayed first;
     // the state read lands after it. Then the agent's own word decides -
     // the record's remembered status may be stale either way.
     const state = await this.#call('get_state');
     if (!state?.success || !this.#pipe) return;
     const d = state.data ?? {};
+    this.#takeState(d);
     if (d.isStreaming || d.isCompacting) {
       this.#working = !!d.isStreaming || this.#working;
       this.push('status', { status: this.pending.size ? 'blocked' : 'working' });
@@ -489,29 +492,47 @@ class PiRpcDriver extends Driver {
     this.#write({ type: 'abort' });
   }
 
+  #takeState(d) {
+    const model = d.model?.provider && d.model?.id ? `${d.model.provider}/${d.model.id}` : d.model?.id;
+    this.info = { ...this.info, ...(model ? { model } : {}),
+      ...(d.thinkingLevel !== undefined ? { effort: d.thinkingLevel } : {}) };
+    this.emit('init', this.info);
+  }
+
+  async #refreshSettings() {
+    const state = await this.#call('get_state');
+    if (!state?.success) throw new Error(state?.error || 'Pi did not report its settings.');
+    this.#takeState(state.data ?? {});
+  }
+
   async setModel(model) {
-    this.model = model || null;
-    if (!this.#pipe || !model) return;
+    if (!this.#pipe || !model) { this.model = model || null; return; }
     const [provider, ...rest] = model.split('/');
     const r = rest.length
       ? await this.#call('set_model', { provider, modelId: rest.join('/') })
       : await this.#call('set_model', { modelId: model });
-    if (r && !r.success) {
-      this.push('error', { message: `${this.spec.label ?? this.engine} does not offer "${model}" here. (${r.error})`, kind: 'settings' });
-    }
+    if (!r?.success) throw new Error(r?.error || 'Pi did not confirm the model change.');
+    await this.#refreshSettings();
+    this.model = this.info?.model ?? model;
   }
 
   async setEffort(effort) {
-    this.effort = effort || null;
-    if (!this.#pipe || !effort) return;
+    if (!this.#pipe || !effort) { this.effort = effort || null; return; }
     const r = await this.#call('set_thinking_level', { level: effort });
-    if (r && !r.success) {
-      this.push('error', { message: `${this.spec.label ?? this.engine} does not offer effort "${effort}" here. (${r.error})`, kind: 'settings' });
-    }
+    if (!r?.success) throw new Error(r?.error || 'Pi did not confirm the thinking change.');
+    await this.#refreshSettings();
+    this.effort = this.info?.effort ?? effort;
   }
 
-  /** Pi has no permission modes - the engine either runs tools or not. */
-  async setMode(id) { this.mode = id; }
+  async setMode(id) {
+    if (this.permissionControl !== 'bash-guard' || !BASH_GUARD_MODES.some(m => m.id === id)) throw new Error('This Pi does not offer bash-guard controls.');
+    if (this.mode === id) return;
+    const r = await this.#call('prompt', { message: '/bash-guard' });
+    if (!r?.success) throw new Error(r?.error || 'bash-guard did not accept the command.');
+    const end = Date.now() + 3500;
+    while (this.mode !== id && this.#pipe && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 30));
+    if (this.mode !== id) throw new Error('bash-guard did not report the requested state.');
+  }
 
   /**
    * Compaction is a command, not a prompt: no agent cycle brackets it, so
@@ -737,6 +758,17 @@ class PiRpcDriver extends Driver {
         this.push('status', { status: 'blocked' });
         return;
       }
+      case 'setStatus':
+        if (m.statusKey === 'helm-settings') {
+          try {
+            const state = JSON.parse(m.statusText);
+            this.#takeState({ model: state.model ? { provider: state.model.split('/')[0], id: state.model.split('/').slice(1).join('/') } : undefined, thinkingLevel: state.effort });
+            this.permissionControl = state.permissionControl;
+            this.mode = state.mode;
+            this.push('settings', { permissionControl: state.permissionControl, mode: state.mode });
+          } catch { /* another extension's status is not a settings snapshot */ }
+        }
+        return;
       case 'notify':
         this.push('error', { message: m.message ?? 'notification', kind: 'notify' });
         return;
