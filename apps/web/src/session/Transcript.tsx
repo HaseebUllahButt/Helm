@@ -104,7 +104,7 @@ function ToolItem({ item }: { item: Item }) {
   const body = out || item.error;
   const head = (
     <>
-      <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}><ToolIcon name={item.name} /></span>
+      <span className={`aicon${item.status === 'error' ? ' bad' : item.status === 'ok' ? ' done' : ''}`}><ToolIcon name={item.name} /></span>
       <span className={`alabel${live ? ' shine' : ''}`}>
         <b>{item.name}</b>{summary && <> {summary}</>}
       </span>
@@ -202,6 +202,9 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
  * works, the line says what it is doing now; nothing it prints lands in the
  * conversation unless you ask for it.
  */
+/** How many steps of a live run stay on screen at once. */
+const LIVE_STEPS = 6;
+
 function ActivityGroup({ items, byParent, live: turnLive }: { items: Item[]; byParent: Map<string, Item[]>; live: boolean }) {
   const [open, setOpen] = useState(false);
   const requests = useContext(Requests);
@@ -217,6 +220,24 @@ function ActivityGroup({ items, byParent, live: turnLive }: { items: Item[]; byP
   const done = live ? items.filter((i) => i !== current) : items;
   const first = steps[0] ?? items[0];
   const span = spanOf(items);
+  // While it works, every step is its own line, as the CLI shows them - but
+  // only the newest few, so a long run stays readable. Opening the group
+  // (or tapping the "earlier" line) brings back the whole list.
+  if (live && !open) {
+    const hidden = Math.max(0, items.length - LIVE_STEPS);
+    return (
+      <div className="activity live">
+        {hidden > 0 && <button type="button" className="steps-earlier" aria-expanded={false} onClick={() => setOpen(true)}>+{hidden} earlier {hidden === 1 ? 'step' : 'steps'}</button>}
+        <div className="steps-live">
+          {items.slice(hidden).map((it) => <div key={it.id} className="live-step"><ItemView item={it} byParent={byParent} /></div>)}
+        </div>
+        {requests.review && asking.map(request => <button key={request.requestId} className="subagent-request"
+          onClick={() => requests.review?.(request.requestId)}>
+          {request.kind === 'question' ? 'Answer question' : 'Review request'} · {request.title}<Icon name="forward" size={13} />
+        </button>)}
+      </div>
+    );
+  }
   return (
     <div className={`activity${open ? ' open' : ''}${live ? ' live' : ''}`}>
       <button type="button" className="activity-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
@@ -250,17 +271,18 @@ function CommandItem({ item }: { item: Item }) {
   // a wall of its output is what made a conversation unreadable. While it
   // runs, its last few lines show it is alive.
   const [open, setOpen] = useState(false);
-  const shown = open ? lines : live ? lines.slice(-4) : [];
+  const shown = open ? lines : live ? lines.slice(-3) : [];
   return (
     <div className={`cmd${item.status === 'error' ? ' bad' : ''}`}>
       <button type="button" className="cmd-head" disabled={!lines.length} aria-expanded={lines.length ? open : undefined}
         onClick={() => setOpen((v) => !v)}>
-        <span className={`aicon${item.status === 'error' ? ' bad' : ''}`}><Icon name="run" size={15} /></span>
+        <span className={`aicon${item.status === 'error' ? ' bad' : !live && item.exitCode === 0 ? ' done' : ''}`}><Icon name="run" size={15} /></span>
         <code className={`cmd-line${live ? ' shine' : ''}`}>{item.command}</code>
         {item.status === 'declined' && <span className="ameta">declined</span>}
         {item.exitCode != null && item.exitCode !== 0 && <span className="ameta bad">exit {item.exitCode}</span>}
         {live && item.elapsed != null && item.elapsed > 2 && <span className="ameta">{Math.round(item.elapsed)}s</span>}
         {!live && lines.length > 0 && <span className="ameta">{lines.length} {lines.length === 1 ? 'line' : 'lines'}</span>}
+        {!live && item.exitCode === 0 && <span className="ameta ok" aria-label="succeeded"><Icon name="check" size={12} /></span>}
         {lines.length > 0 && !live && <span className={`achev${open ? ' open' : ''}`}><Icon name="forward" size={13} /></span>}
       </button>
       {shown.length > 0 && <pre className="cmd-out">{shown.join('\n')}</pre>}

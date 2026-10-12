@@ -2779,3 +2779,31 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .pipeline-account p { font-size: var(--t-micro); color: var(--mutedfg); margin: 7px 0; }
 
 .brain-entry { margin-block: 10px 16px; }
+
+/* ---- live steps (ideas 1/6/8) ---- */
+/* While the agent works, each step is its own line, as it starts. The
+   finished run folds back into one line (.activity-head). */
+.steps-live { display: flex; flex-direction: column; gap: 2px; }
+.steps-earlier {
+  display: block; width: 100%; padding: 2px 4px 4px 32px; border: 0; background: transparent;
+  font-size: var(--t-micro); color: var(--mutedfg); text-align: left; cursor: pointer;
+}
+.steps-earlier:hover { color: var(--text-dim); }
+.steps-live .cmd { margin: 3px 0; }
+
+/* Colour only on small things: a command's glyph is a step brighter than a
+   read's, and a command that worked gets a tiny check. Never a background. */
+.cmd .aicon { color: var(--text-dim); }
+.cmd .aicon.bad { color: var(--red); }
+.ameta.ok { display: inline-flex; align-items: center; color: var(--emerald); opacity: 0.8; margin-left: 2px; }
+.ameta.ok svg { display: block; }
+
+/* Motion: a new step eases in a few pixels, and a step that finishes settles
+   its glyph once. Soft, short, and gone for anyone who asked for less. */
+.live-step { animation: step-in 150ms var(--ease) both; }
+.steps-live .aicon.done svg { animation: step-settle 260ms var(--ease) both; }
+@keyframes step-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes step-settle { from { opacity: 0.45; transform: scale(1.18); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .live-step, .steps-live .aicon.done svg { animation: none; }
+}

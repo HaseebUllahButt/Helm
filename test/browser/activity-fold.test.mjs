@@ -33,6 +33,13 @@ before(async () => {
         step('h', { kind: 'command', command: 'npm run build', output: 'building chunk 1\\\\nbuilding chunk 2', status: 'streaming', doneAt: undefined }),
       ] }] : []),
     ]} />);
+    // A long live run: n finished reads, then a command that is still going.
+    window.renderLong = (n) => root.render(<Transcript status="working" loaded turns={[
+      { id: 't3', text: 'Look around', at: t0, items: [
+        ...Array.from({ length: n }, (_, i) => step('r' + i, { kind: 'tool', name: 'Read', input: { file_path: '/repo/src/file' + i + '.ts' }, output: 'x' })),
+        step('run', { kind: 'command', command: 'npm run lint', output: 'one\\ntwo\\nthree\\nfour\\nfive', status: 'streaming', doneAt: undefined }),
+      ] },
+    ]} />);
     window.renderHistory = (text, attachments = []) => root.render(<Transcript status="idle" loaded turns={[
       { id: 'saved-reply', text, at: t0, attachments, items: [], done: { status: 'ok' } },
       { id: 'saved-tool', text: '', at: t0 + 1, attachments: [], items: [
@@ -78,16 +85,54 @@ test('opening shows each step as a line; a command opens to its output, and both
   await page.locator('.cmd').first().waitFor({ state: 'detached' });
 });
 
-test('while it works the line says what it is doing now, and stays open if opened', async () => {
+test('while it works every step is its own line, and a command shows its last three lines', async () => {
   await page.evaluate(() => window.render(true));
-  const live = page.locator('.activity.live .activity-head');
+  const live = page.locator('.activity.live');
   await live.waitFor();
-  assert.match((await live.innerText()).replace(/\s+/g, ' '), /Running npm run build · Read 1 file so far/);
-  assert.equal(await page.getByText('building chunk 2').count(), 0);
-  await live.click();
+  assert.equal(await live.locator('.activity-head').count(), 0, 'no one-line summary while it works');
+  assert.equal(await live.locator('.live-step').count(), 2, 'the read and the command each have a line');
+  assert.match(await live.innerText(), /Read[\s\S]*README\.md[\s\S]*npm run build/);
   await page.getByText('building chunk 2').waitFor();
-  await page.evaluate(() => window.render(true));
+  assert.equal(await page.locator('.steps-earlier').count(), 0);
+  await page.evaluate(() => window.renderLong(8));
+  const cmd = page.locator('.activity.live .cmd');
+  await cmd.waitFor();
+  assert.equal(await page.locator('.activity.live .live-step').count(), 6, 'only the newest six stay');
+  assert.equal((await cmd.locator('.cmd-out').innerText()).trim().split('\n').join('|'), 'three|four|five');
+  const earlier = page.locator('.steps-earlier');
+  assert.equal((await earlier.innerText()).trim(), '+3 earlier steps');
+  await page.waitForTimeout(400);
+  if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, 'activity-live.png') });
+  await page.evaluate(() => window.renderLong(9));
+  assert.equal((await earlier.innerText()).trim(), '+4 earlier steps', 'the same group, not a new one');
+  assert.equal(await page.locator('.activity.live').count(), 1);
+});
+
+test('tapping the earlier line opens the whole run, and a re-render keeps it open', async () => {
+  await page.locator('.steps-earlier').click();
+  const head = page.locator('.activity.live .activity-head');
+  await head.waitFor();
+  assert.match((await head.innerText()).replace(/\s+/g, ' '), /Running npm run lint · Read 9 files so far/);
+  await page.evaluate(() => window.renderLong(9));
   assert.equal(await page.locator('.activity.live').getAttribute('class').then((c) => c.includes('open')), true, 'a re-render keeps it open');
+  assert.equal(await page.locator('.activity.live .steps-body > div').count(), 10);
+});
+
+test('when the run finishes it folds back into one closed line', async () => {
+  await page.evaluate(() => window.render(true));
+  await page.locator('.live-step').first().waitFor();
+  await page.evaluate(() => window.render(false));
+  await page.locator('.activity-head').first().waitFor();
+  assert.equal(await page.locator('.live-step').count(), 0);
+  assert.equal(await page.locator('.activity').count(), 1);
+});
+
+test('a command that worked gets a quiet check, one that failed does not', async () => {
+  await page.evaluate(() => window.render(false));
+  await page.locator('.activity-head').first().click();
+  const ok = page.locator('.cmd-head').filter({ hasText: 'npm test' });
+  assert.equal(await ok.locator('.ameta.ok').count(), 1);
+  assert.equal(await page.locator('.cmd-head').filter({ hasText: 'grep -rn' }).locator('.ameta.ok').count(), 0);
 });
 
 test('completed imported question replies display their answers, including from a saved cache', async () => {
