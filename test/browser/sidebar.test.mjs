@@ -605,7 +605,7 @@ for (const width of [1280, 390]) test(`every provider stays Running until idle a
   // The machine screen sorts the same threads the same way.
   await laptop.click();
   const main = page.locator('.main');
-  const working = main.locator('div.section', { hasText: /^working$/ }).locator('xpath=following-sibling::div[1]');
+  const working = main.locator('div.section', { hasText: /^running here$/ }).locator('xpath=following-sibling::div[1]');
   await working.locator('.rowx').first().waitFor();
   assert.equal(await working.locator('.rowx').count(), n * 3 + 1, 'machine screen counts the same running threads as the sidebar');
   assert.equal(await working.locator('.rowx').filter({ hasText: 'claude children' }).locator('.chip').textContent(), 'working');
@@ -701,7 +701,7 @@ for (const width of [1280, 390]) test(`an offline machine's last known work is n
   const main = page.locator('.main');
   const row = main.locator('.rowx').filter({ hasText: 'Was busy' });
   await row.waitFor();
-  assert.equal(await main.locator('div.section', { hasText: /^working$/ }).count(), 0, 'no working section on a machine that cannot answer');
+  assert.equal(await main.locator('div.section', { hasText: /^running here$/ }).count(), 0, 'no working section on a machine that cannot answer');
   assert.equal(await row.locator('.chip').textContent(), 'was working');
   await page.screenshot({ path: `/tmp/helm-offline-machine-${width}.png` });
 });

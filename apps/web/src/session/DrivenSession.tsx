@@ -27,6 +27,7 @@ import { ExternalSessionNotice } from './ExternalSessionNotice';
 import { QueueEdit } from './QueueEdit';
 import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
+import { EmptyChat, useDockLift } from './EmptyChat';
 import { TaskReturn } from './TaskReturn';
 import { LimitsLine } from './LimitsLine';
 import { ContextLimit } from './ContextLimit';
@@ -90,6 +91,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [preparingImages, setPreparingImages] = useState(0);
   const [sendingImages, setSendingImages] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** The first words are on their way: the greeting steps aside before the agent echoes them. */
+  const [sentFirst, setSentFirst] = useState(false);
   const [menu, setMenu] = useState<null | 'more'>(null);
   const [details, setDetails] = useState<DetailsTab | null>(reviewChildren ? 'agents' : null);
   useEffect(() => { if (reviewChildren) setDetails('agents'); }, [reviewChildren]);
@@ -263,6 +266,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     }
   };
   const sendText = async (body: string, atts: Attachment[], sentReferences = references) => {
+    setSentFirst(true);
     setReferences([]);
     if (!atts.length) setDraft('');
     if (atts.length) setSendingImages(true);
@@ -276,6 +280,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     }
     catch (e: any) {
       setError(e.message);
+      setSentFirst(false);
       // Only restore the failed send if the composer is still exactly in the
       // state produced by clearing it. A newer draft or attachment edit -
       // including one from another pending send - belongs to the owner and
@@ -432,6 +437,18 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     });
   };
 
+  // Double-clicking the title in the header renames it in place; the menu's
+  // "Rename thread" is the same thing for touch and keyboard.
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const finishRename = (save: boolean) => {
+    if (!renaming) return;
+    setRenaming(false);
+    const next = nameDraft.trim();
+    if (save && next) void rename(next);
+  };
+  const folder = !session.brain && !session.quick && session.cwd ? session.cwd.replace(/\/+$/, '').split('/').pop() || '~' : '';
+
   // "Ping me when it finishes": one ring, once, the next time the thread
   // settles. New sessions start enabled; the owner can silence this thread.
   const toggleNotify = () => call(async () => {
@@ -547,20 +564,50 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // you want to send a screenshot.
   const canAttach = options?.imagesByModel?.[modelNow] ?? options?.images ?? true;
 
+  // Nothing said yet: the composer sits mid-page under a greeting.
+  const firstMessage = log.loaded && !logError && transcriptTurns.length === 0 && queuedTurns.length === 0
+    && !sentFirst && !working && !pending && !session.external && session.alive !== false && failedSends.length === 0 && !session.recovery;
+  const dockAnchor = useDockLift(firstMessage);
+
   return (
     <>
       <div className="bar session-bar">
         <button className="iconbtn back" aria-label={parentThread && onOpenSession ? 'Back to parent thread' : 'Back'}
           onClick={parentThread && onOpenSession ? openParent : onBack}><BackIcon /></button>
         <div className="titles">
-          <h1>{session.title}</h1>
-          <span className="sub">
+          <div className="crumb">
             <EngineMark engine={session.engine} />
-            <Route machine={env.name} folder={session.brain ? undefined : session.cwd} quick={session.quick} />
+            {folder && <>
+              <span className="crumb-folder" title={session.cwd}>{folder}</span>
+              <span className="crumb-sep" aria-hidden="true">/</span>
+            </>}
+            {renaming ? (
+              <input
+                className="crumb-edit" aria-label="Thread name" value={nameDraft} maxLength={200}
+                autoFocus onFocus={(e) => e.currentTarget.select()}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onBlur={() => finishRename(true)}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return;
+                  if (e.key === 'Enter') { e.preventDefault(); finishRename(true); }
+                  else if (e.key === 'Escape') { e.preventDefault(); finishRename(false); }
+                }}
+              />
+            ) : (
+              <h1 className="crumb-title" title={session.title}
+                onDoubleClick={() => { setNameDraft(session.title); setRenaming(true); }}>{session.title}</h1>
+            )}
+            <button className="crumb-more" aria-label="Thread options" title="Thread options" aria-haspopup="menu" aria-expanded={menu === 'more'}
+              onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="down" size={14} /></button>
+          </div>
+          <span className="sub">
+            <Route machine={env.name} quick={session.quick} />
             {session.nativeCodex && <span> · Live CLI</span>}
             {[session.brain ? engine : '', money(session.costUsd)].filter(Boolean).map((part) => (
               <span key={part}><span className="sep"> · </span>{part}</span>
             ))}
+            {/* On a phone the folder leaves the title line to the title. */}
+            {folder && <span className="sub-folder" title={session.cwd}><span className="sep"> · </span>{folder}</span>}
             {log.loaded && (logError || (!env.online && syncing))
               ? <span className="offline" role="status"> · Saved chat · reconnecting…</span>
               : syncing && <span role="status"> · Syncing chat…</span>}
@@ -614,6 +661,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         original={session.parent} onOpenSession={onOpenMachineSession} />
       <ExternalSessionNotice session={session}
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
+      <span ref={dockAnchor} hidden />
+      {firstMessage && <EmptyChat cwd={session.cwd} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={modelNow} />}
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
         readVisual={readVisual}
@@ -621,7 +670,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
         onResend={resend} onWithdraw={withdraw}
         onBranch={session.engine === 'claude' && onOpenSession ? setBranching : undefined}
-        empty={session.alive === false ? 'This conversation resumes with your next message.' : undefined}
+        empty={session.alive === false ? 'This conversation resumes with your next message.' : sentFirst ? 'Waiting for the agent…' : undefined}
       />
 
       {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
