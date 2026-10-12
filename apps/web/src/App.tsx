@@ -4,6 +4,7 @@ import { reloadApp } from './reload';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Confirm, Sheet, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
+import { ThreadStatus, moodOf, isUnread, markSeen, useSeenVersion, wrappedUp } from './threadStatus';
 import { Palette, ShortcutsHelp, type PaletteItem } from './Palette';
 import { NewChat } from './NewChat';
 import { accountsFrom, loadPrefs, savePrefs, rememberFolder, recentFolders, type Account, type PickerPrefs } from './accounts';
@@ -1236,6 +1237,16 @@ function Shell({ client, conn, onSignOut }: {
     && settledThread(s)
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
   const doneIsSaved = doneNow.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));
+  useSeenVersion();
+  const unreadDone = doneNow.filter(({ s }) => isUnread(s)).length;
+  const isOpen = ({ env: e, s }: { env: Environment; s: Session }) => selected === e.id && view.kind === 'session' && view.session.id === s.id;
+  const homeRow = (x: { env: Environment; s: Session }, slim = false) => (
+    <HomeRow key={x.s.id} s={x.s} machine={x.env.name} slim={slim} selected={isOpen(x)} onOpen={() => openSession(x.env.id, x.s)} actions={threadActions(x.env, x.s)} />
+  );
+  // A chat you have open is a chat you have seen, including what it finishes while you watch.
+  const openId = view.kind === 'session' ? view.session.id : null;
+  const openStamp = everyone.find(({ s }) => s.id === openId)?.s;
+  useEffect(() => { if (openId) markSeen(openId); }, [openId, openStamp?.updatedAt, openStamp?.status]);
   const snoozeThread = (envId: string, s: Session, until: number) => {
     setSnooze(`${envId}:${s.id}`, until);
     setSnoozeUndo({ key: `${envId}:${s.id}`, title: s.title, until });
@@ -1337,20 +1348,24 @@ function Shell({ client, conn, onSignOut }: {
                 </button>}
             </div>
 
-            {blocked.map(({ env: e, s }) => (
-              <NeedCard
-                key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
-                onSnooze={(until) => snoozeThread(e.id, s, until)}
-              />
-            ))}
+            {blocked.length > 0 && (
+              <Fold shelf attention defaultOpen title="Needs you" count={blocked.length} remember="sidebar:needs">
+                {blocked.map(({ env: e, s }) => (
+                  <NeedCard
+                    key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
+                    onSnooze={(until) => snoozeThread(e.id, s, until)}
+                  />
+                ))}
+              </Fold>
+            )}
 
             {asleep.some(({ s }) => !runningThread(s)) && (
-              <Fold title="snoozed" count={asleep.filter(({ s }) => !runningThread(s)).length} remember="sidebar:snoozed">
+              <Fold shelf title="Snoozed" count={asleep.filter(({ s }) => !runningThread(s)).length} remember="sidebar:snoozed">
                 <div className="rows plain">
                   {asleep.filter(({ s }) => !runningThread(s)).map(({ env: e, s }) => (
                     <HomeRow
                       key={s.id} s={s} machine={e.name} onOpen={() => { setSnooze(`${e.id}:${s.id}`, null); openSession(e.id, s); }}
-                      note={snoozed[`${e.id}:${s.id}`] === NEVER_SNOOZE ? 'Snoozed · Never' : `back ${when(snoozed[`${e.id}:${s.id}`])}`}
+                      note={snoozed[`${e.id}:${s.id}`] === NEVER_SNOOZE ? 'Snoozed \u00b7 Never' : `back ${when(snoozed[`${e.id}:${s.id}`])}`}
                       actions={threadActions(e, s)}
                     />
                   ))}
@@ -1359,27 +1374,28 @@ function Shell({ client, conn, onSignOut }: {
             )}
 
             {runningNow.length > 0 && (
-              <>
-                <div className="section">running</div>
-                <div className="rows plain">
-                  {runningNow.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} actions={threadActions(e, s)} />
-                  ))}
-                </div>
-              </>
-            )}
-
-            {doneNow.length > 0 && (
-              <Fold title="done" count={doneNow.length} note={doneIsSaved ? 'saved' : undefined} remember="sidebar:done">
-                <div className="rows plain">
-                  {doneNow.map(({ env: e, s }) => (
-                    <HomeRow key={s.id} s={s} machine={e.name} selected={selected === e.id && view.kind === 'session' && view.session.id === s.id} onOpen={() => openSession(e.id, s)} actions={threadActions(e, s)} />
-                  ))}
-                </div>
+              <Fold
+                shelf defaultOpen title="Working" count={runningNow.length} remember="sidebar:working"
+                peek={runningNow.some(isOpen) ? <div className="rows plain">{runningNow.filter(isOpen).map((x) => homeRow(x))}</div> : undefined}
+              >
+                <div className="rows plain">{runningNow.map((x) => homeRow(x))}</div>
               </Fold>
             )}
 
-            <Fold title="machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
+            {doneNow.length > 0 && (
+              <Fold
+                shelf defaultOpen title="Settled" count={doneNow.length} remember="sidebar:settled"
+                note={unreadDone ? `${unreadDone} new` : doneIsSaved ? 'saved' : undefined} noteTone={unreadDone ? 'fresh' : undefined}
+                peek={doneNow.some(isOpen) ? <div className="rows plain">{doneNow.filter(isOpen).map((x) => homeRow(x, true))}</div> : undefined}
+              >
+                <PagedRows
+                  items={doneNow} isSelected={isOpen} row={(x) => homeRow(x, true)}
+                  first={SETTLED_FIRST} step={SETTLED_STEP}
+                />
+              </Fold>
+            )}
+
+            <Fold shelf title="Machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
               <div className="rows plain">
                 {envs.map((e) => {
                   const waiting = waitingCountOn(e);
@@ -2962,8 +2978,13 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
  * not you remember archiving it - and it stays open afterwards if you closed
  * it yourself, which is the one case where guessing would be rude.
  */
-function Fold({ title, count, note, hint, kind, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, children }: {
+function Fold({ title, count, note, noteTone, hint, kind, shelf = false, peek, openWhen = false, defaultOpen = false, attention = false, remember, showEmpty = false, actions, children }: {
   title: string; count: number; openWhen?: boolean; children: ReactNode;
+  /** The sidebar's way: sentence case, a hairline, and the count only once it is folded away. */
+  shelf?: boolean;
+  /** What stays on show when a shelf is folded - the chat you are in. */
+  peek?: ReactNode;
+  noteTone?: 'fresh';
   /** A project folder reads as a place, not as a category like "archived". */
   kind?: 'folder';
   /** A word beside the count - a machine name, the newest thread's age. */
@@ -3000,20 +3021,44 @@ function Fold({ title, count, note, hint, kind, openWhen = false, defaultOpen = 
   if (!count && !showEmpty) return null;
   return (
     <div className={`foldwrap${kind ? ` ${kind}` : ''}`}>
-      <div className={`section fold${open ? ' open' : ''}${attention ? ' attention' : ''}${kind ? ` ${kind}` : ''}`}>
+      <div className={`section fold${open ? ' open' : ''}${attention ? ' attention' : ''}${kind ? ` ${kind}` : ''}${shelf ? ' shelf' : ''}`}>
         <button
           className="fold-toggle" aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
         >
           <span className="caret"><Icon name="forward" size={13} /></span>
           {kind === 'folder' && <Icon name="folder" size={15} className="foldicon" />}
-          <span className="fold-title" title={hint}>{title}</span>{count > 0 && <span className="count">{count}</span>}
-          {note && <span className="note-inline">{note}</span>}
+          <span className="fold-title" title={hint}>{title}</span>
+          {count > 0 && (!shelf || !open || attention) && <span className="count">{count}</span>}
+          {note && <span className={`note-inline${noteTone ? ` ${noteTone}` : ''}`}>{note}</span>}
+          {shelf && <span className="shelf-rule" aria-hidden="true" />}
         </button>
         {actions && <span className="fold-actions">{actions}</span>}
       </div>
-      {open && children}
+      {open ? children : peek}
     </div>
+  );
+}
+
+const SETTLED_FIRST = 10;
+const SETTLED_STEP = 25;
+
+/** The first few rows, then "Show 25 more". The chat you are in is never left out. */
+function PagedRows<T extends { s: { id: string } }>({ items, isSelected, row, first, step }: {
+  items: T[]; isSelected: (x: T) => boolean; row: (x: T) => ReactNode; first: number; step: number;
+}) {
+  const [limit, setLimit] = useState(first);
+  const shown = items.filter((x, i) => i < limit || isSelected(x));
+  const left = items.length - Math.min(limit, items.length);
+  return (
+    <>
+      <div className="rows plain">{shown.map(row)}</div>
+      {left > 0 && (
+        <button type="button" className="shelf-more" onClick={() => setLimit((n) => n + step)}>
+          Show {Math.min(step, left)} more
+        </button>
+      )}
+    </>
   );
 }
 
@@ -3251,32 +3296,52 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
   );
 }
 
-/** One line of Home: the mark, the thread, where it runs, and what it is doing. */
-function HomeRow({ s, machine, onOpen, note, selected = false, actions }: {
+/**
+ * A chat in the sidebar. Title and what it is doing on the first line; where
+ * it runs, and the agent, on the second. A settled chat shrinks to one line.
+ */
+function HomeRow({ s, machine, onOpen, note, selected = false, slim = false, actions }: {
   s: Session; machine: string; onOpen: () => void; note?: string; selected?: boolean;
+  /** One line: the title and when it wrapped up. */
+  slim?: boolean;
   /** Rename, archive, delete - the same ⋯ the machine screen's rows have. */
   actions?: { onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void };
 }) {
   const now = useNow();
+  useSeenVersion();
   const eng = engineOf(s.engine);
+  const mood = moodOf(s, isUnread(s));
+  // Work going on in the background steps back; what wants you does not.
+  const recede = mood === 'working' && !selected;
+  const className = `row tall rowx tri-row mood-${mood}${slim ? ' slim' : ''}${selected ? ' active' : ''}${recede ? ' recede' : ''}`;
+  if (slim) {
+    return (
+      <div className={className}>
+        <button className={`rowmain thread-row tri slim${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
+          <span className="tri-title">{s.title}</span>
+          <span className="slim-when">{(() => { const w = wrappedUp(s.updatedAt, now); return <><span className="slim-pre">{w.lead}</span>{w.rest}</>; })()}</span>
+          {mood === 'unread' && <ThreadStatus s={s} mood={mood} now={now} />}
+          <EngineMark engine={eng.cls} className="tri-mark" />
+        </button>
+        {actions && <ThreadActions s={s} {...actions} />}
+      </div>
+    );
+  }
   return (
-    // Branch and age above the title; folder and status below it.
-    <div className={`row tall rowx tri-row${selected ? ' active' : ''}`}>
+    <div className={className}>
     <button className={`rowmain thread-row tri${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
       <span className="tri-top">
-        {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
-        <span className="tri-when">{note ?? (s.updatedAt ? waitingSince(s.updatedAt, now) : '')}</span>
+        <span className="tri-title">{s.title}</span>
+        <ThreadStatus s={s} mood={mood} now={now} />
       </span>
-      <span className="tri-title">{s.title}</span>
       <span className="tri-bot">
         <Icon name={s.quick ? 'bolt' : 'folder'} size={12} />
         <span className="tri-where">{[whereOf(s), machine, money(s.costUsd)].filter(Boolean).join(' · ')}</span>
+        {note && <span className="tri-note">{note}</span>}
+        {s.branch && <><Icon name="branch" size={12} /><span className="tri-branch">{s.branch}</span></>}
         <span className="tri-end">
-          {/* The age is already on the top line; the chip says only what. */}
-          {runningThread(s)
-            ? <StatusChip status={busyWord(s.status, s.compacting)} />
-            // Stopped by the owner part-way: finished with, but not finished.
-            : s.recovery?.kind === 'interrupted' ? <span className="chip exited">stopped</span>
+          {/* Stopped by the owner part-way: finished with, but not finished. */}
+          {s.recovery?.kind === 'interrupted' && mood !== 'working' ? <span className="chip exited">stopped</span>
             : unknownThread(s) ? <StatusChip status="unknown" />
             : s.externalActive || (s.shared && s.alive) ? <span className="chip">idle</span> : null}
           <EngineMark engine={eng.cls} className="tri-mark" />

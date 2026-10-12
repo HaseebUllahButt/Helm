@@ -2648,25 +2648,91 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .link-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .link-actions button { width: auto; margin: 0; }
 
-/* Sidebar thread rows, arranged as T3 Code does: where and when on top, the
-   title, then the branch with status and agent. Helm's own colours and type. */
+/* Sidebar chats, arranged as T3 Code's inbox does: title and what the chat is
+   doing on the first line, where it runs and which agent on the second. What
+   needs you is full strength; work in the background steps back. Helm's own
+   colours and type throughout. */
 .row.thread-row.tri, .rowx .rowmain.thread-row.tri { flex-direction: column; align-items: stretch; gap: 2px; min-height: 0; padding: 8px 10px 9px; }
 /* The sidebar row: its body is the button, the ⋯ sits beside it and shows on hover. */
 .row.rowx.tri-row { min-height: 0; }
 .row.rowx.tri-row .rowend { opacity: 0; }
 .row.rowx.tri-row:hover .rowend, .row.rowx.tri-row .rowend[aria-expanded="true"], .row.rowx.tri-row .rowend:focus-visible { opacity: 1; }
 @media (pointer: coarse) { .row.rowx.tri-row .rowend { opacity: 1; } }
+/* With a mouse the ⋯ needs only a small target, which gives the title and its status the width back. */
+@media (hover: hover) and (pointer: fine) { .row.rowx.tri-row .rowend { min-width: 26px; padding: 0 3px; margin-right: 3px; } }
 .tri-top, .tri-bot { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: var(--t-micro); color: var(--mutedfg); }
+.tri-top { gap: 10px; }
 .tri-top svg, .tri-bot svg { flex: none; opacity: .8; }
 .tri-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tri-when { margin-left: auto; flex: none; padding-left: 8px; font-variant-numeric: tabular-nums; }
-.tri-title { font-size: var(--t-body); font-weight: 500; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
+.tri-note { flex: none; color: var(--text-dim); white-space: nowrap; }
+.tri-bot .tri-where + svg { margin-left: 6px; }
+.tri-title { flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 500; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
 .row.thread-row.tri:hover .tri-title, .row.thread-row.tri.active .tri-title, .tri-row:hover .tri-title, .thread-row.tri.active .tri-title { color: var(--text); }
-.tri-branch { font-family: var(--mono); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tri-branch { font-family: var(--mono); font-size: 11px; min-width: 0; flex-shrink: 4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tri-end { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
 .tri-end .chip { font-size: 10.5px; padding: 0 6px; min-height: 18px; }
 .tri-mark.mark { width: 18px; height: 18px; border-radius: 5px; }
 .tri-mark.mark svg { width: 11px; height: 11px; }
+
+/* The status slot: one place, at the right of the first line. */
+.tstat { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; font-size: var(--t-micro); font-weight: 550; line-height: 1.35; font-variant-numeric: tabular-nums; }
+.tri-top .tstat svg, .tstat svg { opacity: 1; }
+.tstat.working { color: var(--sky); }
+.tstat.needs { color: var(--amber-text); font-weight: 650; }
+.tstat.failed { color: var(--red); }
+.tstat.unread { color: var(--emerald); }
+.tstat.quiet { color: var(--mutedfg); font-weight: 450; }
+.tspin { animation: tspin 1.6s linear infinite; }
+@keyframes tspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .tspin { animation: none; } }
+
+/* What wants you reads at full strength, in a heavier hand. */
+.tri-row.mood-needs .tri-title, .tri-row.mood-failed .tri-title, .tri-row.mood-unread .tri-title { color: var(--text); font-weight: 600; }
+/* Background work steps back until the pointer, focus or the chat itself asks. */
+.tri-row.recede { opacity: .7; transition: opacity 0.15s var(--ease); }
+.tri-row.recede:hover, .tri-row.recede:focus-within, .tri-row.recede:has(.rowend[aria-expanded="true"]) { opacity: 1; }
+/* A row with its menu open sits above the rows around it, even part-way through the fade. */
+.row.rowx.tri-row:has(.rowend[aria-expanded="true"]) { z-index: 5; }
+@media (prefers-reduced-motion: reduce) { .tri-row.recede { transition: none; } }
+
+/* Settled: one line - the title, when it wrapped up, the agent. */
+.row.rowx.tri-row.slim { min-height: 0; }
+.row.thread-row.tri.slim, .rowx .rowmain.thread-row.tri.slim { flex-direction: row; align-items: center; gap: 8px; padding: 7px 10px; min-height: 34px; }
+.tri-row.slim .tri-title { font-size: var(--t-body); font-weight: 450; }
+.slim-when { flex: none; font-size: var(--t-micro); color: var(--mutedfg); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tri-row.slim .tri-mark { filter: grayscale(1); opacity: .5; transition: opacity 0.15s var(--ease), filter 0.15s var(--ease); }
+.tri-row.slim:hover .tri-mark, .tri-row.slim.active .tri-mark, .tri-row.slim:focus-within .tri-mark { filter: none; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .tri-row.slim .tri-mark { transition: none; } }
+/* "wrapped up" is a lead-in the title gives way to: only when the row is wide enough for both. */
+.tri-row.slim { container-type: inline-size; }
+@container (max-width: 399px) { .slim-pre { display: none; } }
+
+/* Shelves: Needs you, Working, Settled. A title, a count when folded away
+   (or when it is the one to look at), and a hairline running out to the edge. */
+.section.fold.shelf {
+  margin: 16px 0 4px; padding: 0 4px; min-height: 26px;
+  font-size: 12.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--text-dim);
+}
+.section.fold.shelf:hover { color: var(--text); }
+.section.shelf .caret svg { width: 12px; height: 12px; }
+.section.shelf .fold-toggle { gap: 6px; align-items: center; min-height: 26px; }
+.section.shelf .count { font-size: var(--t-micro); color: var(--mutedfg); }
+.section.shelf .note-inline { font-size: var(--t-micro); }
+.section.shelf .note-inline.fresh { color: var(--emerald); font-weight: 550; }
+.shelf-rule { flex: 1; min-width: 12px; height: 1px; margin-left: 4px; background: var(--line); }
+.section.fold.shelf.attention { color: var(--amber-text); }
+.section.shelf.attention::before { display: none; }
+.section.shelf.attention .count {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--amber); color: var(--on-amber); font-weight: 650;
+}
+.section.shelf.attention .shelf-rule { background: color-mix(in srgb, var(--amber) 28%, transparent); }
+.shelf-more {
+  display: block; width: 100%; margin-top: 2px; padding: 7px 12px; text-align: left;
+  background: none; border: 0; border-radius: var(--radius-md); color: var(--mutedfg); font-size: var(--t-meta);
+}
+.shelf-more:hover { background: var(--hover); color: var(--text); }
+.foldwrap > .need:last-child { margin-bottom: 4px; }
 
 /* Accounts: one panel, a block per account with hairlines between - the
    name with its engine's mark and where it was read, each allowance as a
