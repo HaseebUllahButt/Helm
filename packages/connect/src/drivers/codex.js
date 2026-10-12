@@ -1273,6 +1273,9 @@ export class CodexDriver extends Driver {
       case 'item/fileChange/patchUpdated':
         this.push('item.update', { id: p.itemId, changes: this.#changes(p.changes) });
         return;
+      case 'turn/plan/updated':
+        this.#plan(p);
+        return;
       case 'thread/tokenUsage/updated':
         this.#usage = p.tokenUsage;
         return;
@@ -1284,6 +1287,8 @@ export class CodexDriver extends Driver {
         const last = this.#usage?.last;
         const finished = t.id ?? this.#turnId;
         this.#wake(finished);
+        // The to-do card has no item of its own to complete; the turn closes it.
+        if (this.#items.delete(`plan-${finished}`)) this.push('item.done', { id: `plan-${finished}`, status: 'ok' });
         // The same completion can be heard twice (replayed after a restart,
         // or after the thread was read): the turn is closed once.
         const shown = this.#shownTurns.get(finished) ?? finished;
@@ -1370,6 +1375,25 @@ export class CodexDriver extends Driver {
     this.#shownTurns.set(codexTurn, shown);
     if (log.some((e) => e.type === 'turn.start' && e.turnId === shown)) return;
     this.push('turn.start', { turnId: shown, text: '', wake: true });
+  }
+
+  /**
+   * Codex's to-do list, as one card that updates in place. It is written the
+   * way the ACP drivers write theirs, so the app draws both as one checklist.
+   */
+  #plan(p) {
+    const own = p.turnId ?? this.#turnId;
+    if (!own || !Array.isArray(p.plan)) return;
+    const turnId = this.#shownTurns.get(own) ?? own;
+    const id = `plan-${own}`;
+    const text = p.plan
+      .map((s) => `${s.status === 'completed' ? '☑' : s.status === 'inProgress' ? '▸' : '☐'} ${s.step}`)
+      .join('\n');
+    if (!this.#items.has(id)) {
+      this.#items.set(id, { kind: 'tool' });
+      this.push('item.start', { id, turnId, kind: 'tool', name: 'plan' });
+    }
+    this.push('item.update', { id, output: clip(text, 8000) });
   }
 
   #onItemStarted(item, turnId, parentId) {

@@ -501,6 +501,20 @@ test('simultaneous native Codex helpers keep separate request targets and settle
   assert.equal(log.of('turn.done').length, 0, 'a child completion never closes the parent turn');
 });
 
+test("Codex's plan is one to-do item that updates in place and closes with its turn", () => {
+  const driver = new CodexDriver({ cmd: 'unused', cwd: '/tmp', engineSessionId: 'parent' });
+  driver.threadId = 'parent';
+  const log = collect(driver);
+  const plan = (statuses) => driver.onNotification('turn/plan/updated', { threadId: 'parent', turnId: 'turn',
+    plan: ['Read the code', 'Fix it', 'Run tests'].map((step, i) => ({ step, status: statuses[i] })) });
+  plan(['inProgress', 'pending', 'pending']);
+  plan(['completed', 'completed', 'inProgress']);
+  assert.deepEqual(log.of('item.start').map(e => [e.id, e.kind, e.name]), [['plan-turn', 'tool', 'plan']]);
+  assert.equal(log.of('item.update').at(-1).output, '☑ Read the code\n☑ Fix it\n▸ Run tests');
+  driver.onNotification('turn/completed', { threadId: 'parent', turn: { id: 'turn', status: 'completed' } });
+  assert.deepEqual(log.of('item.done').find(e => e.id === 'plan-turn')?.status, 'ok');
+});
+
 test('subagent: spawn_agent is a card; the child thread\'s items nest under it', async () => {
   const { driver, log } = make('subagent');
   await driver.send('spawn a subagent');
