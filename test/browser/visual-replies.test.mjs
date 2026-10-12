@@ -57,7 +57,7 @@ async function open(t, width = 390) {
 
 test('a finished chat shows its interactive page on a phone, sandboxed and outside folded tool steps', async t => {
   const page = await open(t);
-  assert.equal(await page.getByText('Working…').count(), 0);
+  assert.equal(await page.locator('.working').count(), 0);
   assert.equal(await page.locator('.steps').count(), 0);
   assert.equal(await page.locator('.visual-frame').getAttribute('sandbox'), 'allow-scripts');
   assert.equal(await page.evaluate(() => document.body.dataset.compromised), undefined);
@@ -126,7 +126,7 @@ test('native CLI conversations load their saved visual from the correct remote m
   await page.getByRole('button', { name: 'Expand', exact: true }).waitFor({ state: 'visible' });
   await page.frameLocator('.visual-frame').getByText('Isolated').waitFor();
   assert.deepEqual(await page.evaluate(() => window.lastVisualRead), { env: 'remote', id: 'native1', ref: 'ref' });
-  assert.equal(await page.getByText('Working…').count(), 0);
+  assert.equal(await page.locator('.working').count(), 0);
 });
 
 test('the published clamp demo updates all sliders and geometry under the production CSP', async t => {

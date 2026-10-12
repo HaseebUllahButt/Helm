@@ -2,7 +2,7 @@ import { useCopySelection } from '../useCopySelection';
 import { createContext, useContext, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Markdown } from '../Markdown';
 import type { Change, Item, Turn, Permission } from './types';
-import { money, seconds } from '../format';
+import { seconds } from '../format';
 import { Icon, toolKind } from '../Icon';
 import { userMessage } from './userMessage';
 import { plainError } from './problem';
@@ -10,6 +10,7 @@ import { VisualReply, Visuals, type VisualReader } from './VisualReply';
 import { ContextCard } from './ContextCard';
 import { TodoCard, isTodoItem, latestTodoId } from './Todos';
 import { parseContextUsage } from './contextUsage';
+import { Reveal, WorkingLine, WrapUp } from './TurnPulse';
 
 /** The session is still working, so an open compaction is really running. */
 const Busy = createContext(false);
@@ -668,7 +669,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
         {tail && !d && working && !turn.items.some((it) => it.status === 'streaming' && (it.kind === 'text' || isCompaction(it))) && (
           blocked
             ? <div className="working quiet">Waiting for you</div>
-            : <div className="working"><span className="shine">Working…</span></div>
+            : <WorkingLine turn={turn} />
         )}
         {tail && d && (d.status === 'interrupted' ? <div className="turn-meta">stopped</div>
           : d.status === 'error' ? (
@@ -683,7 +684,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
               )}
             </div>
           )
-          : (d.durationMs || d.costUsd) ? <div className="turn-meta">{[seconds(d.durationMs), money(d.costUsd)].filter(Boolean).join(' · ')}</div> : null)}
+          : <WrapUp turn={turn} />)}
       </div>
     </>
   );
@@ -706,7 +707,13 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   const requestKey = pending.map(request => request.requestId).join('\0');
   // Text deltas clone the pending array too. Only changed requests should
   // invalidate every activity group in a long transcript.
-  const requests = useMemo(() => ({ pending, review: onReviewRequest, focusItem }), [requestKey, onReviewRequest, focusItem]);
+  // A file chip in a reply's wrap-up opens its step the way a review link
+  // does: same path as focusItem, so folded groups open and it scrolls there.
+  const [revealed, setRevealed] = useState<{ id: string; visit: number }>();
+  const reveal = useCallback((id: string) => setRevealed((r) => ({ id, visit: (r?.visit ?? 0) + 1 })), []);
+  useEffect(() => setRevealed(undefined), [focusItem]);
+  const shownItem = revealed ?? focusItem;
+  const requests = useMemo(() => ({ pending, review: onReviewRequest, focusItem: shownItem }), [requestKey, onReviewRequest, shownItem]);
   const box = useRef<HTMLDivElement>(null);
   useCopySelection(box);
   const stuck = useRef(true);
@@ -813,6 +820,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   return (
     <Busy.Provider value={working || status === 'starting'}>
     <Requests.Provider value={requests}>
+    <Reveal.Provider value={reveal}>
     <Visuals.Provider value={readVisual}>
     <div className="chat-wrap">
       <div className="chat" ref={box} onScroll={onScroll}>
@@ -842,6 +850,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
       {zoom && <Lightbox src={zoom.src} alt={zoom.alt} onClose={() => setZoom(null)} />}
     </div>
     </Visuals.Provider>
+    </Reveal.Provider>
     </Requests.Provider>
     </Busy.Provider>
   );

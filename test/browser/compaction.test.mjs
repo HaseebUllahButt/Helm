@@ -41,7 +41,7 @@ test('while compacting, the conversation and a counting bar over the composer sa
   await bar.waitFor();
   assert.match(await bar.innerText(), /Compacting conversation…\s*0:1\d/);
   assert.equal(await page.locator('.compaction.live').count(), 1);
-  assert.equal(await page.getByText('Working…').count(), 0, 'the compaction line replaces the generic pulse');
+  assert.equal(await page.locator('.working').count(), 0, 'the compaction line replaces the generic pulse');
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, 'compacting.png') });
 });
 
