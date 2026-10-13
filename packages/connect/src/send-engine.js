@@ -135,7 +135,7 @@ export class SendEngine {
           run.bridge = socket;
           if (header.length > end + 1) socket.unshift(header.subarray(end + 1));
           const target = r.job.target.machineId;
-          copyProxy(['--machine', target, '--target-folder', r.stage, '--', ...input.args], {
+          run.bridgeDone = copyProxy(['--machine', target, '--target-folder', r.stage, '--', ...input.args], {
             ...this.proxyDeps, network: this.net(), input: socket, output: socket, stderr: { write: text => { r.tail = ((r.tail ?? '') + text).slice(-8192); } },
             connections: this.reuseConnections ? this.connections : undefined, timing: this.timing, sendJob: r.intent, signal: run.abort.signal,
             onRoute: route => { r.job.route = route; this.update(r, true); },
@@ -237,6 +237,13 @@ export class SendEngine {
             child.stderr.on('data', c => { r.tail = ((r.tail ?? '') + c).slice(-8192); });
             child.once('error', reject); child.once('close', code => { run.abort.signal.removeEventListener('abort', abort); resolve(code); });
           });
+          // The folder sent last time was deleted over there: send it fresh.
+          if (code !== 0) await Promise.race([run.bridgeDone, new Promise(resolve => setTimeout(resolve, 2000))]).catch(() => {});
+          if (code !== 0 && r.intent.again && !r.receipt && /previous send destination is missing/.test(r.tail ?? '')) {
+            r.intent = { ...r.intent, again: false, defaultDestination: false }; r.job.again = false; r.tail = ''; run.bridge = null; run.bridgeDone = null;
+            this.update(r, true);
+            return this.perform(r, run);
+          }
           r.job.phase = 'finishing'; this.timing('rsync-closed', { jobId: r.job.id }); this.update(r, true);
           if (code !== 0 || !r.receipt) throw new Error(r.tail?.trim() || `Send stopped (rsync ${code}); retry to resume.`);
           const changedFiles = /Number of regular files transferred:\s*([\d,]+)/.exec(output), changedBytes = /Total transferred file size:\s*([\d,]+)/.exec(output);

@@ -63,6 +63,16 @@ test('encrypted tunnel publishes atomically, preserves modes/symlinks/env, and u
   } finally { await f.close(); }
 });
 
+test('a folder or file deleted over there since the last send is sent fresh, not refused', async () => {
+  const f=await fixture(); try {
+    const source=join(f.dir,'gone'); mkdirSync(source); writeFileSync(join(source,'data'),'one');
+    const first=await finished(f,source); rmSync(first.target.path,{recursive:true,force:true});
+    const again=await finished(f,source); assert.equal(again.target.path,first.target.path); assert.equal(again.again,false); assert.equal(readFileSync(join(again.target.path,'data'),'utf8'),'one');
+    const file=join(f.dir,'lone.txt'); writeFileSync(file,'x'); const sent=await finished(f,file); rmSync(sent.target.path);
+    const resent=await finished(f,file); assert.equal(resent.target.path,sent.target.path); assert.equal(readFileSync(resent.target.path,'utf8'),'x');
+  } finally { await f.close(); }
+});
+
 test('occupied default destinations select and remember a stable suffix; explicit file names and non-Git no-env work', async () => {
   const f=await fixture(); try {
     const source=join(f.dir,'occupied'); mkdirSync(source); writeFileSync(join(source,'data'),'sent'); writeFileSync(join(source,'.ENVrc'),'synthetic');
