@@ -6,7 +6,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Injected RPC keeps argument and result behavior testable without a live hub. */
 export async function runAgentCommand(command, args, { rpc, self, cwd = process.cwd(),
   parentId = process.env.HELM_SESSION_ID, callerThreadId = process.env.CODEX_THREAD_ID,
-  write = console.log, sleep = pause } = {}) {
+  ownAccount = process.env.HELM_PROFILE_ID, write = console.log, sleep = pause } = {}) {
   const { options, words } = parseAgentArgs(args, {
     values: command === 'delegate' ? ['model', 'mode', 'effort', 'parent', 'cwd', 'timeout'] : command === 'delegate-result' ? ['timeout'] : [],
     switches: command === 'agents' ? ['json', 'refresh'] : command === 'delegate' ? ['wait', 'json', 'worktree'] : ['wait', 'json'],
@@ -31,8 +31,11 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
   }
   let id;
   if (command === 'delegate') {
-    const [account, ...task] = words;
-    if (!account || !task.join(' ').trim()) throw new Error('helm delegate <account> [--model <id>] [--wait] [--json] -- "<task>"');
+    const [named, ...task] = words;
+    if (!named || !task.join(' ').trim()) throw new Error('helm delegate <account|same> [--model <id>] [--wait] [--json] -- "<task>"');
+    // `same` is the account this chat runs as, so a helper needs no lookup.
+    if (named === 'same' && !ownAccount) throw new Error('"same" works inside a Helm chat; name an account from helm agents');
+    const account = named === 'same' ? ownAccount : named;
     // `cheap` names the account's small model (helm agents shows it), so a
     // helper never has to guess which id is the inexpensive one.
     const cheap = options.model === 'cheap';

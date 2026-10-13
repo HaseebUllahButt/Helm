@@ -667,17 +667,31 @@ test('nesting is bounded and empty tasks fail before starting a CLI', async (t) 
   await assert.rejects(() => sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Four' }), /three levels/);
 });
 
+test('helm delegate same runs the helper on the account this chat runs as', async () => {
+  const calls = [];
+  const rpc = async (_self, method, params) => {
+    calls.push({ method, params });
+    if (method === M.AGENT_LIST) return { agents: [{ id: 'codex-main', engine: 'codex', available: true }, { id: 'claude-main', engine: 'claude', available: true }] };
+    if (method === M.SESSION_DELEGATE) return { session: { id: 'child', engine: 'claude', status: 'working' } };
+    throw new Error(method);
+  };
+  await runAgentCommand('delegate', ['same', '--json', '--', 'Look around'], { rpc, self: 'me', parentId: 'parent', ownAccount: 'claude-main', write: () => {} });
+  assert.equal(calls.find((c) => c.method === M.SESSION_DELEGATE).params.profileId, 'claude-main');
+  await assert.rejects(() => runAgentCommand('delegate', ['same', '--', 'x'], { rpc, self: 'me', parentId: null, ownAccount: '', write: () => {} }), /works inside a Helm chat/);
+});
+
 test('delegation instructions stay compact and independent of the account roster', () => {
   const note = delegationNote();
   assert.ok(note.length < 1600);
   assert.equal(delegationNote(profiles), note);
   assert.equal(delegationNote([]), note);
   assert.match(note, /Do the work yourself by default/);
-  assert.match(note, /own subagents/);
-  assert.match(note, /only when the owner asks for it or the work needs another CLI or account/);
+  assert.match(note, /start a Helm helper, not your CLI's own subagent tool/);
+  assert.match(note, /helm delegate same --wait --json/);
+  assert.match(note, /open, message and stop it/);
+  assert.match(note, /when the work needs another CLI or account/);
   assert.match(note, /--model cheap/);
   assert.match(note, /helm agents --json only when needed/);
-  assert.match(note, /helm delegate <account> --model <model> --wait --json/);
   assert.match(note, /helm run --heavy/);
   assert.match(note, /Inspect package scripts/);
   assert.match(note, /--cwd <folder>/);
