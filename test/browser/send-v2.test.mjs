@@ -53,7 +53,7 @@ before(async () => {
           const now=Date.now();
           const job={id:'job-'+(jobs.length+1),createdAt:now,updatedAt:now,finishedAt:null,
             source:{machineId:'source',name:source.name,path:params.path,kind:options.file?'file':'folder'},
-            target:{machineId:params.targetMachineId,name:targets.find(t=>t.machineId===params.targetMachineId).name,path:params.destination},
+            target:{machineId:params.targetMachineId,name:targets.find(t=>t.machineId===params.targetMachineId).name,path:params.destination || targets.find(t=>t.machineId===params.targetMachineId).destination},
             again:jobs.some(job=>job.phase==='done'),phase:'preparing',bytes:{total:null,sent:0},files:{total:null,sent:0},
             rate:null,eta:null,changed:null,route:null,error:null,left:[]};
           jobs.unshift(job);save();
@@ -84,7 +84,7 @@ before(async () => {
         </div></aside>
         <section className={'main'+(view==='send'?' showing':'')}>
           {activity.notices.map(job=><SendNotice key={job.id} job={job} onOpen={()=>{setJobId(job.id);setView('send');activity.store.dismiss(job.id)}} onDismiss={()=>activity.store.dismiss(job.id)} />)}
-          {view==='send'?<TransferView client={client} source={source} envs={[source,...targets.map(target=>({id:target.machineId,name:target.name,online:target.online,info:{}}))]} folder={options.path || (options.file?'~/video.mp4':'~/project')} jobId={jobId}
+          {view==='send'?<TransferView client={client} source={source} envs={[source,...targets.map(target=>({id:target.machineId,name:target.name,online:target.online,info:{}}))]} folder={options.path || (options.file?'~/video.mp4':'~/project')} jobId={jobId} session={options.task ? {id:'original',profileId:'codex'} : undefined}
             onBack={()=>setView('home')} onOpenSession={()=>{throw Error('Folder send started a session')}}
             onJob={job=>{setJobId(job.id);history.replaceState({jobId:job.id},'')}}
             onAgain={()=>{setJobId(undefined);history.replaceState({},'')}}
@@ -137,11 +137,14 @@ for (const size of sizes) {
       const action=page.getByRole('button',{name:'Send to VM',exact:true});
       await action.waitFor();
       await shot(page,'plan');
+      const heading = await page.locator('.send-destination .section .send-path').boundingBox();
+      const summary = await page.locator('.send-context').boundingBox();
+      assert.equal(heading.x, summary.x, 'destination heading aligns with the summary');
       assert.equal(await page.getByRole('button',{name:'Send to Home PC',exact:true}).count(),0);
       await page.getByRole('checkbox').uncheck();
       await begin(page);
       assert.deepEqual(await page.evaluate(()=>window.calls.find(call=>call.method==='send.start')),{
-        env:'source',method:'send.start',params:{path:'~/project',targetMachineId:'target',destination:'~/project',includeEnv:false}});
+        env:'source',method:'send.start',params:{path:'~/project',targetMachineId:'target',includeEnv:false}});
       await change(page,sendingPatch);
       await page.getByText('4 of 10 files · 200 B/s · 3s left',{exact:true}).waitFor();
       await shot(page,'progress');
@@ -152,6 +155,9 @@ for (const size of sizes) {
       await page.getByText('On VM in ~/project',{exact:true}).waitFor();
       await page.getByText('project is on VM · View',{exact:true}).waitFor();
       await shot(page,'done');
+      const note = await page.getByText('Files stay on Laptop.',{exact:true}).boundingBox();
+      const open = await page.getByRole('button',{name:'Open folder there',exact:true}).boundingBox();
+      assert.ok(open.y - (note.y + note.height) <= 20, 'receipt actions sit below the summary');
       await page.getByRole('button',{name:'Open folder there',exact:true}).click();
       assert.deepEqual(await page.evaluate(()=>window.openFolder),{machineId:'target',path:'~/project'});
       await page.getByRole('button',{name:'Start a chat there',exact:true}).click();
@@ -326,4 +332,29 @@ test('task options and files-only conversion preserve the chosen target and envi
     assert.equal(await page.getByRole('checkbox').isChecked(),false);
     assert.equal(await page.evaluate(()=>window.calls.some(call=>call.method==='send.start'||call.method==='task.send')),false);
   }finally{await page.cleanup();}
+});
+
+
+test('Send files only exits task mode into the durable engine without grants', async () => {
+  const page = await fixture(sizes[0], {task:true});
+  try {
+    await page.getByRole('button',{name:'Send files only',exact:true}).click();
+    await page.getByRole('button',{name:'Send to VM',exact:true}).waitFor();
+    await begin(page);
+    const calls = await page.evaluate(()=>window.calls);
+    assert.ok(calls.some(call=>call.method==='send.plan'));
+    assert.ok(calls.some(call=>call.method==='send.start'));
+    assert.equal(calls.some(call=>['transfer.invite','transfer.send','task.send'].includes(call.method)),false);
+    assert.equal('destination' in calls.find(call=>call.method==='send.start').params,false);
+  } finally {await page.cleanup();}
+});
+
+test('an older target warning stays visible on its completion receipt', async () => {
+  const page = await fixture(sizes[0]);
+  try {
+    await begin(page);
+    await change(page,{...donePatch,error:'Older target: atomic publication is unavailable.'});
+    await page.getByRole('button',{name:'Open folder there',exact:true}).waitFor();
+    await page.getByRole('status').filter({hasText:'Older target: atomic publication is unavailable.'}).waitFor();
+  } finally {await page.cleanup();}
 });

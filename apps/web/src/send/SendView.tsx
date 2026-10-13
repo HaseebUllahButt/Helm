@@ -101,7 +101,7 @@ export function SendView({ client, source, folder, jobId: initialJobId, onBack, 
     mutating.current = true; intent.current = { path: plan.path, target: target.machineId, at: Date.now() }; setBusy('start'); setError('');
     try {
       const { job } = await client.sendStart(source.id, { path: plan.path, targetMachineId: target.machineId,
-        destination: target.destination, includeEnv });
+        includeEnv });
       remember(job);
     } catch {
       // An unacknowledged start may already be running. Discover it; never automatically start a second job.
@@ -128,7 +128,7 @@ export function SendView({ client, source, folder, jobId: initialJobId, onBack, 
   return <>
     <div className="bar"><button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
       <div className="titles"><h1>{title}</h1><span className="sub">{source.name}</span></div></div>
-    <div className="scroll" ref={scroll}><div className="pad column send-view">
+    <div className="scroll" ref={scroll}><div className={`pad column send-view${job?.phase === 'done' ? ' send-receipt' : ''}`}>
       <div className="send-context"><h2 className="screen-title">{job ? sendName(job) : plan?.name ?? leaf(folder)}</h2>
         <p className="note send-path">{job?.source.path ?? folder}</p></div>
       {job ? <>
@@ -139,6 +139,7 @@ export function SendView({ client, source, folder, jobId: initialJobId, onBack, 
             : job.changed ? `${count(job.changed.files)} changed files · ${bytes(job.changed.bytes)}`
             : `${count(job.files.sent)} files · ${bytes(job.bytes.sent)}`}</p>
           <p className="note">Files stay on {job.source.name}.</p>
+          {job.error && <p className="note" role="status">{job.error}</p>}
           <div className="send-actions">
             {onOpenFolder && <button className="primary big" onClick={() => onOpenFolder(job.target.machineId,
               job.source.kind === 'file' ? parent(job.target.path) : job.target.path)}>Open folder there</button>}

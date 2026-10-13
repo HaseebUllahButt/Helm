@@ -3269,12 +3269,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .send-view { flex: 1; min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 16px; }
 .send-view p, .send-view h2 { margin: 0; }
 .send-context, .send-destination { display: flex; flex-direction: column; gap: 6px; }
-.send-destination .section { margin: 4px 0 0; }
+.send-destination .section { margin: 4px 0 0; padding: 0; }
 .send-path { overflow-wrap: anywhere; white-space: normal; }
 .send-progress { display: flex; flex-direction: column; gap: 12px; padding-block: 12px; }
 .send-progress-line { height: 3px; width: 100%; background: var(--line); overflow: hidden; }
 .send-progress-line > span { display: block; height: 100%; background: var(--primary-q); }
 .send-actions { display: flex; flex-direction: column; align-items: stretch; gap: 12px; margin-top: auto; padding-top: 20px; }
+.send-receipt .send-actions { margin-top: 0; padding-top: 0; }
 .send-actions .linkish, .send-stop { min-height: 44px; }
 .send-env { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: var(--t-meta); }
 .send-env input { flex: none; width: 18px; height: 18px; }
