@@ -23,6 +23,7 @@ const helm = (args, env = {}) => {
     HELM_DB: join(root, 'hub.sqlite'),
     HELM_SSH_DIR: join(root, 'ssh'),
     HELM_NO_SERVICE: '1',
+    HELM_PROCS_SOCKET: join(root, 'procs.sock'), HELM_TERMINALS_SOCKET: join(root, 'terminals.sock'),
   };
   delete childEnv.INVOCATION_ID;
   return spawnSync(process.execPath, [BIN, ...args], {
@@ -42,14 +43,16 @@ test('a dry run reports what a send would carry without a network or a grant', (
 
   const run = helm(['send', 'target', src, '--dry-run']);
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /1 file/);
-  assert.match(run.stdout, /--include-env/);
+  assert.match(run.stdout, /2 files/);
+  assert.match(run.stdout, /--no-env/);
   assert.equal(run.stdout.includes('cli-value'), false);
   assert.equal(run.stderr.includes('cli-value'), false);
   assert.equal(existsSync(join(HELM_DIR, 'network.json')), false);
   assert.equal(existsSync(join(HELM_DIR, 'code_x25519')), false);
   assert.equal(existsSync(join(HELM_DIR, 'code_ed25519')), false);
 
+  const withoutEnv = helm(['send', 'target', src, '--dry-run', '--no-env']);
+  assert.equal(withoutEnv.status, 0, withoutEnv.stderr); assert.match(withoutEnv.stdout, /1 file/); assert.match(withoutEnv.stdout, /excluded/);
   const withEnv = helm(['send', 'target', src, '--dry-run', '--include-env']);
   assert.equal(withEnv.status, 0, withEnv.stderr);
   assert.match(withEnv.stdout, /1 \.env file/);

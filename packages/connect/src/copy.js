@@ -130,6 +130,7 @@ export function copySpec(options, net = requireNetwork()) {
     if (!stat.isDirectory()) throw new Error('helm copy: a file list needs a source folder');
     excludes.unshift(`--files-from=${options.filesFrom}`, '--from0', '-r');
   }
+  if (options.filterFile) excludes.push('--from0', '--filter', `merge ${options.filterFile}`);
   const dryRun = options.dryRun ? ['-n'] : [];
   if (options.mode === 'ssh') {
     if (!NAME.test(peer.name ?? '')) throw new Error(`helm copy: ${peer.id} has no usable SSH name`);
@@ -151,9 +152,9 @@ export function copySpec(options, net = requireNetwork()) {
   }
   const bin = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
   const remote = [
-    quote(process.execPath), quote(bin), 'copy-proxy',
-    '--machine', quote(peer.id),
-    '--target-folder', quote(targetFolder),
+    rsyncQuote(process.execPath), rsyncQuote(bin), 'copy-proxy',
+    '--machine', rsyncQuote(peer.id),
+    '--target-folder', rsyncQuote(targetFolder),
     options.mode ? `--${options.mode}` : null,
     '--',
   ].filter(Boolean).join(' ');

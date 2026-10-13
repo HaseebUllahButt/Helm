@@ -1183,6 +1183,53 @@ async function sendTask() {
 }
 
 async function send() {
+  if (rest.includes('--grant')) return legacySend();
+  const positional = []; let destination, includeEnv = true, dryRun = false;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === '--no-env') { includeEnv = false; continue; }
+    if (arg === '--include-env') continue;
+    if (arg === '--dry-run') { dryRun = true; continue; }
+    if (arg === '--to' || arg === '--target-folder') {
+      if (destination !== undefined || !rest[i+1] || rest[i+1].startsWith('--')) die(`${arg} needs a value`);
+      destination = rest[++i]; continue;
+    }
+    if (arg.startsWith('-')) die(`helm send: unknown flag ${arg}`);
+    positional.push(arg);
+  }
+  if (positional.length > 2) die(`helm send: unexpected argument ${JSON.stringify(positional[2])}`);
+  if (positional.length < 1) die('usage: helm send <machine> <path> [--to <folder>] [--no-env]');
+  const path = resolve(expand(positional[1] ?? process.cwd()));
+  if (dryRun) {
+    const { scanSend } = await import('../src/send-plan.js');
+    const plan = await scanSend(path, { includeEnv });
+    console.log(`${plan.files} file${plan.files === 1 ? '' : 's'} · ${plan.bytes} bytes to ${positional[0]}:${destination ?? '~/' + plan.name}`);
+    console.log(`${plan.envFiles.length} .env file${plan.envFiles.length === 1 ? '' : 's'} ${includeEnv ? 'included; use --no-env to leave them here' : 'excluded'}`);
+    for (const item of plan.left) console.log(`  ${item.path}: ${item.why}`);
+    return;
+  }
+  const net = requireNetwork(), targetMachineId = machineId(positional[0]);
+  let { job } = await brainRpc(net.self, M.SEND_START, { path, targetMachineId, destination, includeEnv });
+  console.log(`Send ${job.id} to ${job.target.name}. Ctrl-C cancels; retry with send.retry {jobId}.`);
+  let cancelling = false;
+  const cancel = () => { cancelling = true; void brainRpc(net.self, M.SEND_CANCEL, { jobId: job.id }).catch(e => console.error(e.message)); };
+  process.once('SIGINT', cancel);
+  try {
+    while (['preparing', 'sending', 'finishing'].includes(job.phase)) {
+      const bytes = `${(job.bytes.sent / 1048576).toFixed(2)}/${job.bytes.total === null ? '?' : (job.bytes.total / 1048576).toFixed(2)} MiB`;
+      const progress = `${job.phase}: ${bytes}, ${job.files.sent}/${job.files.total ?? '?'} files, ${job.rate === null ? '?' : (job.rate / 1048576).toFixed(2)} MiB/s, ETA ${job.eta === null ? '?' : Math.ceil(job.eta) + 's'}`;
+      if (process.stdout.isTTY) process.stdout.write(`\r\x1b[K${progress}`); else console.log(progress);
+      await new Promise(r => setTimeout(r, 500));
+      ({ job } = await brainRpc(net.self, M.SEND_STATUS, { jobId: job.id }));
+    }
+    if (process.stdout.isTTY) console.log();
+    console.log(`${job.phase}: ${job.target.name}:${job.target.path} (${job.id})`);
+    if (job.error) console.error(job.error);
+    if (job.phase !== 'done') process.exitCode = cancelling ? 130 : 1;
+  } finally { process.removeListener('SIGINT', cancel); }
+}
+
+async function legacySend() {
   const {
     createCodeSnapshot, sealCodeSnapshot, signHandoffDigest, verifyHandoffSignature,
   } = await import('../src/code-transfer.js');

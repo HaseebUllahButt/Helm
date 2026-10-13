@@ -182,9 +182,9 @@ export class Handoffs {
     if (p.returnToSource !== undefined && (typeof p.returnToSource !== 'boolean' || typeof p.includeEnv !== 'boolean')) throw new Error('invalid task return options');
     if (p.restoreGit !== undefined && typeof p.restoreGit !== 'boolean') throw new Error('invalid restoreGit option');
     if (p.precopied !== undefined && p.precopied !== true) throw new Error('invalid precopied option');
-    // A copied-ahead project names an absolute folder and cannot ride back.
-    if (p.precopied && (typeof p.folder !== 'string' || !p.folder.startsWith('/') || p.returnToSource === true)) {
-      throw new Error('a copied-ahead handoff needs an absolute folder and no return');
+    // A copied-ahead project names an absolute folder. Returns checkpoint the committed code locally.
+    if (p.precopied && (typeof p.folder !== 'string' || !p.folder.startsWith('/'))) {
+      throw new Error('a copied-ahead handoff needs an absolute folder');
     }
     if (p.promptEnvelope !== undefined && (!p.promptEnvelope || typeof p.promptEnvelope !== 'object')) throw new Error('invalid encrypted task prompt');
     if (p.folder !== undefined && out.folder === null) throw new Error('invalid handoff folder');
@@ -316,7 +316,7 @@ export class Handoffs {
       }
       if (record.returnToSource && !record.checkpoint) {
         record.checkpoint = taskCheckpoint(join(`${this.file}.checkpoints`, p.handoffId),
-          openCodeSnapshot(p.envelope, p.handoffId));
+          p.precopied ? createCodeSnapshot(record.folder, { includeEnv: record.includeEnv }) : openCodeSnapshot(p.envelope, p.handoffId));
         this.#put(record);
       }
       if (!record.sessionId) {
