@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { T, M } from '@helm/protocol';
 import { DirectMesh } from './direct-mesh.js';
+import { REPEATABLE } from './hub-client.js';
 
 /**
  * How often each route to a machine is timed, when there is more than one.
@@ -30,15 +31,6 @@ const SWITCH_HOLD_MS = 30_000;
 /** How much one new sample moves the running estimate. */
 const SMOOTHING = 0.3;
 
-/**
- * Requests that only read, so asking again after a direct channel died
- * under them cannot do anything twice. Everything else that may have
- * arrived fails as uncertain rather than being sent again over a hub.
- */
-const READS = new Set([
-  M.PING, M.ENV_INFO, M.SESSION_LIST, M.SESSION_EVENTS, M.FS_LIST, M.FS_ROOTS, M.FS_SEARCH,
-  M.GIT_STATUS, M.GIT_GRAPH, M.GIT_DIFF, M.GIT_COMMIT, M.USAGE_REPORT, M.USAGE_LIMITS, M.NET_ROUTES,
-]);
 
 export class HubMesh {
   constructor(network, changed, event, signalEvent, { now = () => performance.now(), probeEvery = PROBE_EVERY_MS, direct = null } = {}) {
@@ -371,7 +363,10 @@ export class HubMesh {
   #callDirect(env, method, params, { sub, timeout }) {
     return this.direct.call(env, method, params, { sub, timeout }).catch((error) => {
       if (error.rpc) throw error;
-      if (!error.unsent && !(error.code === 'disconnected' && READS.has(method))) throw error;
+      // Asked again only when that is safe - the same list the CLI uses to
+      // try another hub (hub-client.js REPEATABLE): reads, and accepts that
+      // recognise a repeat themselves.
+      if (!error.unsent && !(error.code === 'disconnected' && REPEATABLE.has(method))) throw error;
       const link = this.route(env);
       if (!link) throw Object.assign(new Error('environment is not connected'), { code: 'offline' });
       return this.#request(link, env, method, params, { sub, timeout });

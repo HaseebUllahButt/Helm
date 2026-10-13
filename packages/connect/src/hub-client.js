@@ -104,7 +104,7 @@ export class HubConnection extends EventEmitter {
  * retried after uncertain delivery. Unknown methods default to one attempt,
  * so adding a new mutation cannot silently acquire replay semantics.
  */
-const REPEATABLE = new Set([
+export const REPEATABLE = new Set([
   M.ENV_INFO, M.PING, M.NET_ROUTES, M.SSH_INFO,
   M.FS_LIST, M.FS_ROOTS, M.FS_SEARCH, M.FS_INDEX, M.PROJECT_LIST,
   M.GIT_STATUS, M.GIT_GRAPH, M.GIT_DIFF, M.GIT_COMMIT, M.GIT_PR,
