@@ -160,9 +160,11 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
         // again, says how far it got and finally returns the running task.
         while (sent.status === 'copying') {
           const p = sent.progress;
+          const percent = p?.percent ?? (p?.total ? Math.min(100, Math.round(p.bytes / p.total * 100)) : null);
+          const rate = typeof p?.rate === 'number' ? `${bytes(p.rate)}/s` : p?.rate;
           setStep(p?.phase === 'pausing' ? 'pausing this task'
             : p?.phase === 'starting' ? `starting the agent on ${target.name}`
-            : `copying to ${target.name}: ${p?.percent ?? 0}%${p?.total ? ` of ${bytes(p.total)}` : ''}${p?.rate ? ` · ${p.rate}` : ''}`);
+            : `copying to ${target.name}: ${percent === null ? `${bytes(p?.bytes ?? 0)} sent` : `${percent}%`}${p?.total ? ` of ${bytes(p.total)}` : ''}${rate ? ` · ${rate}` : ''}`);
           await new Promise((resolve) => setTimeout(resolve, 1500));
           sent = await client.rpc<TaskTransferResult>(source.id, 'task.send', request, 360_000);
         }
@@ -176,29 +178,18 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
         setTaskResult(sent);
         return;
       }
-      setStep(`asking ${target.name} for a one-time invitation`);
-      const invite = await client.transferInvite(target.id, source.id);
-      setStep(`encrypting and sending to ${target.name}`);
-      const r = await client.transferSend(source.id, {
-        folder,
-        targetMachineId: target.id,
-        targetFolder: targetFolder.trim() || undefined,
-        includeEnv,
-        grant: invite.grant,
-        allowSkipped: needsAck && ack,
-      });
-      if (!r.sent && r.requiresAcknowledgement) {
-        setPreview((now) => now ? { ...now, preflight: r.preflight } : now);
-        setError('review what stays behind, then confirm it');
-        return;
-      }
-      setResult(r);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setBusy(false); setStep('');
     }
   };
+
+  // Leaving task mode must use the same source-owned job flow as project sends.
+  if (!task) return <SendView client={client} source={source} folder={folder}
+    preferredTargetId={targetId} initialIncludeEnv={includeEnv} onBack={onBack}
+    onJob={onJob} onAgain={onAgain} onOpenFolder={onOpenFolder} onStartChat={onStartChat}
+    onTask={({ targetMachineId, includeEnv }) => { setTargetId(targetMachineId); setIncludeEnv(includeEnv); setTask(true); }} />;
 
   const receipt = result?.receipt ?? null;
   const readiness = recheck ?? receipt?.readiness ?? null;
@@ -240,9 +231,6 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
       setBusy(false);
     }
   };
-
-  if ((session || initialTask) && !task) return <SendView client={client} source={source} folder={folder} onBack={onBack}
-    onJob={onJob} onAgain={onAgain} onOpenFolder={onOpenFolder} onStartChat={onStartChat} initialIncludeEnv={includeEnv} preferredTargetId={targetId} />;
 
   return (
     <>
@@ -355,7 +343,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
 
             {!session && <label className="check-row">
               <input type="checkbox" checked={task} disabled={busy || locked}
-                onChange={(event) => { setTask(event.target.checked); setIncludeEnv(event.target.checked); }} />
+                onChange={(event) => { setTask(event.target.checked); }} />
               <span>Send a task with this project<small>Start an agent on the destination and keep working there.</small></span>
             </label>}
             {task && <>

@@ -391,7 +391,7 @@ export interface TaskTransferResult {
   requiresAcknowledgement?: boolean;
   status?: 'running' | 'queued' | 'copying';
   /** A big project copying ahead of its task: how far it got. */
-  progress?: { phase: 'pausing' | 'copying' | 'starting'; folder: string; bytes: number; total: number; percent: number; rate?: string | null };
+  progress?: { phase: 'pausing' | 'copying' | 'starting' | SendJob['phase']; folder: string; bytes: number; total: number | null; percent?: number; rate?: number | string | null; files?: SendJob['files']; eta?: number | null; jobId?: string };
   handoffId?: string;
   targetMachineId?: string;
   targetName?: string;
