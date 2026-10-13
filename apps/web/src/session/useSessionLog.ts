@@ -200,6 +200,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
       try {
         const r = await client.rpc<History>(env, 'session.events', { id: sessionId, before: first }, 30_000);
         if (stopped || version !== windowVersion) return;
+        setError('');
         if (!r.events.length) { setEarlier(false); return; }
         first = r.firstSeq ?? r.events[0].seq;
         noteWindow(r.logFirst);
