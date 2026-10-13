@@ -27,6 +27,8 @@ import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
 import { Subagents } from './session/Subagents';
 import { NativeAgentView } from './session/NativeAgentView';
+import { StartingChatView } from './session/StartingChatView';
+import { beginChat, forgetChat, onStartingChat, type StartingChat } from './startingChats';
 import { plainProblem } from './session/problem';
 import { ExternalSessionNotice } from './session/ExternalSessionNotice';
 import { useSessionLog } from './session/useSessionLog';
@@ -342,7 +344,9 @@ type MainView =
   | { kind: 'media' }
   | { kind: 'session'; session: Session; reviewChildren?: number }
   // One of Claude Code's own subagents, opened from its chat; read only.
-  | { kind: 'native-agent'; parent: Session; agent: NativeAgent };
+  | { kind: 'native-agent'; parent: Session; agent: NativeAgent }
+  // A new chat whose agent is still starting; becomes the chat once it is.
+  | { kind: 'starting'; startId: string };
 
 /** A request answered elsewhere, or a session that just started waiting -
     the toast the sidebar cannot show while it is hidden behind a session. */
@@ -1061,6 +1065,26 @@ function Shell({ client, conn, onSignOut }: {
       v.kind === 'session' && v.session.id === s.id ? { ...v, session: { ...v.session, ...s, recovery: s.recovery } } : v)));
   };
   const push = (v: MainView) => navigate([...nav.current.stack, v]);
+
+  // A chat that was starting in the background is up: open it in place of
+  // its placeholder, or, if nobody is looking and nothing was written, let
+  // it go the way an unused chat does.
+  const chatStarted = useRef<(chat: StartingChat) => void>(() => {});
+  chatStarted.current = (chat) => {
+    if (chat.state !== 'started' || !chat.session) return;
+    const session = chat.session;
+    loadSessions(chat.envId);
+    const top = nav.current.stack.at(-1);
+    if (nav.current.selected === chat.envId && top?.kind === 'starting' && top.startId === chat.id) {
+      restate([...nav.current.stack.slice(0, -1), { kind: 'session', session }]);
+    } else if (!chat.message && !chat.draft.trim()) {
+      client.rpc<{ discarded: boolean }>(chat.envId, 'session.discard-empty', { id: session.id }, 10_000)
+        .then((r) => { if (r.discarded) setSessions((all) => ({ ...all, [chat.envId]: (all[chat.envId] ?? []).filter((s) => s.id !== session.id) })); })
+        .catch(() => { /* offline: the empty chat stays recoverable */ });
+    }
+    forgetChat(chat.id);
+  };
+  useEffect(() => onStartingChat((chat) => chatStarted.current(chat)), []);
   const back = () => {
     // One history entry per push, so any stack deeper than its root has
     // somewhere to pop to. At the root there is no such entry; there the ‹
@@ -1588,6 +1612,8 @@ function Shell({ client, conn, onSignOut }: {
           </Suspense>
         ) : view.kind === 'media' ? (
           <MediaView key={env.id} client={client} env={env} onBack={back} />
+        ) : view.kind === 'starting' ? (
+          <StartingChatView key={view.startId} client={client} env={env} startId={view.startId} onBack={back} />
         ) : view.kind === 'native-agent' ? (
           <NativeAgentView key={`${env.id}:${view.parent.id}:${view.agent.id}`} client={client} env={env} parent={view.parent} agent={view.agent} onBack={back} />
         ) : view.kind === 'settings' ? (
@@ -1726,7 +1752,7 @@ function Shell({ client, conn, onSignOut }: {
           client={client} envs={envs} envId={newChat.envId} initialFolder={newChat.folder} quick={newChat.quick} near={selected} engineOf={engineOf}
           onFolder={rememberChatFolder}
           onClose={() => setNewChat(null)}
-          onStarted={(envId, s) => { loadSessions(envId); navigate([{ kind: 'env' }, { kind: 'session', session: s }], envId); }}
+          onStarting={(info, run) => { const chat = beginChat(client, info, run); navigate([{ kind: 'env' }, { kind: 'starting', startId: chat.id }], info.envId); }}
         />
       )}
       {help && <ShortcutsHelp onClose={() => setHelp(false)} />}

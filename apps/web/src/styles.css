@@ -3263,6 +3263,20 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 }
 .native-foot b { color: var(--text); font-weight: 500; }
 .native-error { margin: 8px 16px 0; }
+/* A new chat while its agent starts. */
+.starting-note {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin: 8px 16px; color: var(--text-dim); font-size: 13px; text-align: center;
+}
+.starting-line { white-space: nowrap; }
+.starting-line svg { vertical-align: -1px; margin-right: 4px; }
+.starting-failed {
+  margin: 16px auto 0; padding: 12px 14px; max-width: 560px; width: calc(100% - 32px); box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: 12px; font-size: 14px;
+}
+.starting-failed p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.starting-actions { display: flex; gap: 8px; }
+.starting-actions button { width: auto; margin: 0; display: inline-flex; align-items: center; gap: 6px; }
 .crumb h1.crumb-title { cursor: default; }
 
 /* Send uses the same quiet rows and page measure as machine Home. */

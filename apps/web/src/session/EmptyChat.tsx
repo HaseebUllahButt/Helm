@@ -8,9 +8,11 @@ const folderName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
  * The first message sends the composer down to its usual dock (see
  * useDockLift) and this goes away.
  */
-export function EmptyChat({ cwd, quick, brain, machine, agent, model }: {
+export function EmptyChat({ cwd, quick, brain, machine, agent, model, note }: {
   cwd?: string; quick?: boolean; brain?: boolean;
   machine: string; agent: string; model?: string;
+  /** Said under the question instead of the model, such as that the agent is still starting. */
+  note?: React.ReactNode;
 }) {
   const folder = !quick && !brain && cwd ? folderName(cwd) : '';
   return (
@@ -20,7 +22,7 @@ export function EmptyChat({ cwd, quick, brain, machine, agent, model }: {
           ? <>What should we build in <span className="empty-chat-folder" title={cwd}>{folder}</span>?</>
           : quick ? 'What is on your mind?' : brain ? 'What should we work on?' : 'What should we build?'}
       </h2>
-      <p className="empty-chat-sub">{[machine, agent, model].filter(Boolean).join(' · ')}</p>
+      <p className="empty-chat-sub">{[machine, agent, model].filter(Boolean).join(' · ')}{note}</p>
     </div>
   );
 }

@@ -44,6 +44,7 @@ before(async () => {
             : {path:params.path,entries:[{name:'existing',path:params.path+'/existing',isDir:true}]};
           if(method==='project.list') return {projects:[]};
           if(method==='profile.list') return window.profileList ?? {profiles:[{id:'claude',engine:'claude',cmd:'claude'}]};
+          if(method==='session.start' && window.startGate) await window.startGate(params);
           if(method==='session.start') return {session:{...session,id:'fresh',cwd:params.quick?'/home/test/.helm/quick/fresh':params.cwd,quick:params.quick,nativeCli:false,pty:false}};
           return {};
         }};
@@ -147,6 +148,52 @@ async function folderStep(page) {
   return box;
 }
 const startCall = (page) => page.evaluate(()=>window.calls.find(c=>c.method==='session.start'));
+
+test('a new chat opens at once while its agent starts, and what you send then goes in when it is up',async t=>{
+  const page=await pageFor(t);
+  await page.evaluate(()=>{ window.startGate=()=>new Promise((ok,fail)=>{ window.release=ok; window.refuse=fail; }); });
+  await folderStep(page);
+  await page.getByRole('option').filter({hasText:'project'}).click();
+  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.keyboard.press('Enter');
+  // The picker is gone and the chat is there, saying it is starting.
+  await page.locator('.chip.working').filter({hasText:'starting'}).waitFor();
+  assert.equal(await page.getByRole('combobox',{name:'Which CLI?'}).count(),0);
+  assert.match(await page.locator('.session-bar').innerText(),/project/);
+  const box=page.getByRole('textbox',{name:/^Message /});
+  await box.fill('hello there');
+  await box.press('Enter');
+  await page.locator('.turn.user').filter({hasText:'hello there'}).waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.some(c=>c.method==='session.input')),false);
+  await page.evaluate(()=>window.release());
+  await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.input'));
+  const input=await page.evaluate(()=>window.calls.find(c=>c.method==='session.input'));
+  assert.deepEqual({env:input.env,id:input.params.id,data:input.params.data},{env:'vm',id:'fresh',data:'hello there'});
+  await page.locator('.chip.working').filter({hasText:'starting'}).waitFor({state:'detached'});
+  await page.locator('.main h1').filter({hasText:'Current chat'}).waitFor();
+});
+
+test('an agent that fails to start says why, keeps what you wrote, and can be tried again',async t=>{
+  const page=await pageFor(t);
+  await page.evaluate(()=>{ window.startGate=()=>new Promise((ok,fail)=>{ window.release=ok; window.refuse=fail; }); });
+  await folderStep(page);
+  await page.getByRole('option').filter({hasText:'project'}).click();
+  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.keyboard.press('Enter');
+  const box=page.getByRole('textbox',{name:/^Message /});
+  await box.fill('keep me');
+  await page.evaluate(()=>window.refuse(new Error('claude is not logged in')));
+  await page.getByRole('alert').filter({hasText:'claude is not logged in'}).waitFor();
+  assert.equal(await box.inputValue(),'keep me');
+  await page.getByRole('button',{name:'Try again'}).click();
+  await page.locator('.chip.working').filter({hasText:'starting'}).waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='session.start').length),2);
+  await page.evaluate(()=>window.release());
+  await page.locator('.main h1').filter({hasText:'Current chat'}).waitFor();
+  // Never sent, so it becomes the chat's own draft.
+  assert.equal(await page.evaluate(()=>localStorage.getItem('helm-draft:vm:fresh')),'keep me');
+  assert.equal(await page.evaluate(()=>window.calls.some(c=>c.method==='session.input')),false);
+});
 
 test('the folder step starts with a quick-chat row, and Enter on it skips the folder',async t=>{
   const page=await pageFor(t);

@@ -6,6 +6,7 @@ import type { Client, DirEntry, Environment, Session } from './client';
 import { watchAccounts } from './accountsCache';
 import { accountsFrom, loadPrefs, rememberFolder, savePrefs, type Account, type PickerPrefs } from './accounts';
 import { fetchFolders, loadFolders, rememberFolderMade, searchFolders, type FolderIndex } from './folderIndex';
+import type { StartInfo } from './startingChats';
 
 /**
  * A new chat without the mouse: machine, then folder, then CLI, in one box.
@@ -65,7 +66,7 @@ const checked = (at: number, now: number) => {
   return s < 10 ? 'just now' : s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`;
 };
 
-export function NewChat({ client, envs, envId, initialFolder, quick: startQuick = false, near, onFolder, onClose, onStarted, engineOf }: {
+export function NewChat({ client, envs, envId, initialFolder, quick: startQuick = false, near, onFolder, onClose, onStarting, engineOf }: {
   client: Client;
   envs: Environment[];
   /** Start on this machine's folder step instead of asking which machine. */
@@ -78,7 +79,8 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   near?: string | null;
   onFolder?: (envId: string, folder: string) => void;
   onClose: () => void;
-  onStarted: (envId: string, s: Session) => void;
+  /** The chat opens at once; `run` starts its agent in the background. */
+  onStarting: (info: StartInfo, run: () => Promise<Session>) => void;
   engineOf: (id?: string) => { label: string; cls: string };
 }) {
   // Esc puts away the "New folder" box first, the picker after.
@@ -256,17 +258,20 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       const prefs = loadPrefs();
       savePrefs({ ...prefs, [machine.id]: { ...prefs[machine.id], account: a.key } });
     }
-    try {
-      const r = await client.rpc<{ session: Session }>(machine.id, 'session.start', {
-        ...(quick ? { quick: true } : { cwd: folder }), profileId: a.profile.id,
-        model: a.prefs?.default || undefined,
-        effort: a.defaults?.effort || undefined,
-        mode: a.defaults?.mode && a.defaults.mode !== 'plan' ? a.defaults.mode : undefined,
-        speed: a.defaults?.speed || undefined,
-      }, 70_000);
-      onClose();
-      onStarted(machine.id, r.session);
-    } catch (e: any) { setError(e.message); setBusy(false); }
+    // The chat opens now and says it is starting; the agent comes up behind it.
+    const params = {
+      ...(quick ? { quick: true } : { cwd: folder }), profileId: a.profile.id,
+      model: a.prefs?.default || undefined,
+      effort: a.defaults?.effort || undefined,
+      mode: a.defaults?.mode && a.defaults.mode !== 'plan' ? a.defaults.mode : undefined,
+      speed: a.defaults?.speed || undefined,
+    };
+    const env = machine.id;
+    onClose();
+    onStarting(
+      { envId: env, title: quick ? 'Quick chat' : where(folder), folder: quick ? null : folder, account: a.account, engine: a.engine, agent: engineOf(a.engine).label },
+      () => client.rpc<{ session: Session }>(env, 'session.start', params, 70_000).then((r) => r.session),
+    );
   };
 
   const rows = useMemo((): Row[] => {
