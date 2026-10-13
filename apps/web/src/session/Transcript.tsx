@@ -40,7 +40,8 @@ function CompactItem({ item }: { item: Item }) {
   return <CompactionLine live={item.status === 'streaming' && busy} item={item} />;
 }
 
-const Requests = createContext<{ pending: Permission[]; review?: (id: string) => void; focusItem?: { id: string; visit: number } }>({ pending: [] });
+type ItemFocus = { id: string; visit: number; start?: boolean };
+const Requests = createContext<{ pending: Permission[]; review?: (id: string) => void; focusItem?: ItemFocus }>({ pending: [] });
 
 /**
  * The conversation, live.
@@ -511,7 +512,7 @@ function ItemView({ item, byParent, commandOutput, plain }: { item: Item; byPare
     }
     const details = element.querySelector('details');
     if (details) details.open = true;
-    element.scrollIntoView({ block: 'center' });
+    element.scrollIntoView({ block: focusItem.start ? 'start' : 'center' });
     element.focus({ preventScroll: true });
   }, [focusItem]);
   return (
@@ -781,7 +782,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   // invalidate every activity group in a long transcript.
   // A file chip in a reply's wrap-up opens its step the way a review link
   // does: same path as focusItem, so folded groups open and it scrolls there.
-  const [revealed, setRevealed] = useState<{ id: string; visit: number }>();
+  const [revealed, setRevealed] = useState<ItemFocus>();
   const reveal = useCallback((id: string) => setRevealed((r) => ({ id, visit: (r?.visit ?? 0) + 1 })), []);
   useEffect(() => setRevealed(undefined), [focusItem]);
   const shownItem = revealed ?? focusItem;
@@ -792,6 +793,19 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   // Away from the bottom: the "Latest" pill shows. `unread` only says there is something new down there.
   const [away, setAway] = useState(false);
   const [unread, setUnread] = useState(false);
+  // A manual history read should show what it fetched, including steps
+  // inside the current turn's fold. Its turn.start may already be present
+  // as a sparse anchor, so comparing only the first turn misses this case.
+  const historyRead = useRef<{ turns: Set<string>; items: Map<string, { text: string; command?: string; input?: Item['input'] }> } | undefined>(undefined);
+  const readEarlier = () => {
+    if (loadingEarlier || !onEarlier) return;
+    historyRead.current = {
+      turns: new Set(turns.map(turn => turn.id)),
+      items: new Map(turns.flatMap(turn => turn.items.map(item => [item.id, { text: item.text, command: item.command, input: item.input }] as const))),
+    };
+    stuck.current = false;
+    onEarlier();
+  };
   // Parent renders supply fresh closures. Keep the memoized turns' handlers
   // stable while dispatching to the latest actions, including during a send.
   const actions = useRef({ onResend, onWithdraw, onBranch });
@@ -825,6 +839,24 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     const first = turns[0]?.id;
     const prev = seen.current;
     seen.current = { h, first };
+    const read = historyRead.current;
+    if (read && !loadingEarlier) {
+      historyRead.current = undefined;
+      if (turns.findIndex(turn => read.turns.has(turn.id)) > 0) {
+        el.scrollTop = 0;
+        onScroll();
+        return;
+      }
+      const items = turns.flatMap(turn => turn.items);
+      const item = items.find(item => !read.items.has(item.id)) ?? items.find(item => {
+        const previous = read.items.get(item.id);
+        return previous && (item.text !== previous.text || item.command !== previous.command || (!previous.input && !!item.input));
+      });
+      if (item) {
+        setRevealed(previous => ({ id: item.id, visit: (previous?.visit ?? 0) + 1, start: true }));
+        return;
+      }
+    }
     if (stuck.current) el.scrollTop = h;
     else if (prev.first !== undefined && first !== prev.first) el.scrollTop += h - prev.h;
     else if (h > prev.h) setUnread(true);
@@ -909,7 +941,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
           {/* A chat opens on its last screenful, because that is what you came
               for; the rest of it is a tap away rather than a wait. */}
           {loaded && earlier && (
-            <button className="earlier" onClick={onEarlier} disabled={loadingEarlier}>
+            <button className="earlier" onClick={readEarlier} disabled={loadingEarlier}>
               {loadingEarlier ? 'reading…' : 'Earlier in this conversation'}
             </button>
           )}
