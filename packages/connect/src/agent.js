@@ -52,6 +52,7 @@ import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
 import { createGithubMonitor } from './github.js';
 import { agentCatalog, markShown, helmBrief } from './delegation.js';
+import { SendEngine } from './send-engine.js';
 import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
@@ -343,7 +344,12 @@ export class Daemon {
       rpc: (env, method, params, opts) =>
         hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
     });
+    this.sendEngine = new SendEngine({ network: () => loadNetwork() ?? this.net, presence: () => this.rosterState(),
+      rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
+      emit: payload => this.#emit(E.SEND_UPDATE, payload),
+    });
     this.taskTransfers = new TaskTransfers({
+      sendEngine: this.sendEngine,
       network: () => loadNetwork() ?? this.net,
       sessions: this.sessions,
       rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
@@ -552,6 +558,7 @@ export class Daemon {
     clearInterval(this.#wake);
     this.cliUpdates?.stop();
     this.taskTransfers?.stop();
+    await this.sendEngine?.stop();
     this.schedules?.stop();
     this.github?.stop();
     this.#stopWatch?.();
@@ -675,6 +682,7 @@ export class Daemon {
       sshPort: ssh.sshPort,
       codePubkey: code.codePubkey,
       codeSignPubkey: signing.codeSignPubkey,
+      sendV2: true,
     });
   }
 
@@ -997,6 +1005,7 @@ export class Daemon {
       // machine accepts one copied ahead of its handoff (bulk-transfer.js).
       home: homedir(),
       precopiedHandoff: true,
+      sendV2: true,
       platform: platform(),
       arch: arch(),
       release: release(),
@@ -1835,6 +1844,17 @@ export class Daemon {
       }
       case M.HANDOFF_ACCEPT:
         return this.handoffs.accept(p, caller);
+      case M.SEND_PLAN: return this.sendEngine.plan(p, caller);
+      case M.SEND_START: return this.sendEngine.start(p, caller);
+      case M.SEND_STATUS: return this.sendEngine.status(p, caller);
+      case M.SEND_LIST: return this.sendEngine.list(p, caller);
+      case M.SEND_CANCEL: return this.sendEngine.cancel(p, caller);
+      case M.SEND_RETRY: return this.sendEngine.retry(p, caller);
+      case M.SEND_RECEIPT: {
+        const net = loadNetwork() ?? this.net;
+        if (!net.machines?.[caller] || net.revoked?.[caller]) throw new Error('send receipts are for current source machines only');
+        return this.copyReceiver.sendReceiver.status(p.jobId, caller);
+      }
       case M.TASK_SEND:
         return this.taskTransfers.send(p, caller);
       case M.TASK_COLLECT:

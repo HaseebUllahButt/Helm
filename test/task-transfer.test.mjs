@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 const root = mkdtempSync(join(process.cwd(), '.helm-task-send-state-'));
-process.env.HELM_DIR = root;
+Object.assign(process.env, { HELM_DIR: root, HELM_DB: join(root, 'hub.sqlite'), HELM_SSH_DIR: join(root, 'ssh'), HELM_PROCS_SOCKET: join(root, 'procs.sock'), HELM_TERMINALS_SOCKET: join(root, 'terminals.sock') });
 const work = join(process.cwd(), `.helm-task-send-${process.pid}`);
 mkdirSync(work, { recursive: true });
 test.after(() => { rmSync(root, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); });
@@ -398,7 +398,7 @@ test('a copied-ahead handoff starts only beside the marker the source signed', a
   const back = { ...request, returnToSource: true };
   back.requestDigest = handoffRequestDigest(back);
   back.sourceSignature = signHandoffDigest(back.requestDigest);
-  await assert.rejects(() => handoffs.accept(back, sourceId), /no return/);
+  await assert.rejects(() => handoffs.accept(back, sourceId), /retry does not match/);
 });
 
 test('big tasks refuse occupied or uninspectable destinations, including older peers with folder-only listings', async () => {

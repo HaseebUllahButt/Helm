@@ -8,6 +8,7 @@ import { homedir } from 'node:os';
 import { T } from '@helm/protocol';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { codeKeyInfo, signHandoffDigest, verifyHandoffSignature } from './code-transfer.js';
+import { SendReceiver } from './send-receiver.js';
 import { TunnelSender, TunnelReceiver, TUNNEL_WINDOW, COPY_WINDOW } from './tunnel-flow.js';
 
 const MACHINE_ID = /^[a-f0-9]{1,64}$/;
@@ -68,6 +69,7 @@ export function copyRequestDigest(request) {
     serverArgs: request.serverArgs,
     epk: request.epk,
     salt: request.salt,
+    ...(request.sendJob ? { sendJob: request.sendJob } : {}),
   })).digest('hex');
 }
 
@@ -130,7 +132,7 @@ export function createCopyCipher(privateKey, remotePubkey, salt, copyId, side) {
   };
 }
 
-export function createCopyRequest(net, peer, targetFolder, serverArgs) {
+export function createCopyRequest(net, peer, targetFolder, serverArgs, sendJob) {
   if (!net || !MACHINE_ID.test(net.self ?? '')) {
     throw new Error('this machine is not in a network yet - run `helm up`');
   }
@@ -146,6 +148,7 @@ export function createCopyRequest(net, peer, targetFolder, serverArgs) {
   const ephemeral = generateKeyPairSync('x25519');
   const request = {
     v: 1,
+    ...(sendJob ? { sendJob } : {}),
     copyId,
     sourceMachineId: net.self,
     targetMachineId: peer.id,
@@ -163,8 +166,9 @@ export function createCopyRequest(net, peer, targetFolder, serverArgs) {
 }
 
 export class CopyReceiver {
-  constructor({ network, spawnProcess = spawn, keyInfo = codeKeyInfo, signer = signHandoffDigest } = {}) {
+  constructor({ network, spawnProcess = spawn, keyInfo = codeKeyInfo, signer = signHandoffDigest, sendReceiver = new SendReceiver() } = {}) {
     this.network = network;
+    this.sendReceiver = sendReceiver;
     this.spawnProcess = spawnProcess;
     this.keyInfo = keyInfo;
     this.signer = signer;
@@ -259,15 +263,18 @@ export class CopyReceiver {
     for (const stream of this.streams.values()) {
       if (stream.copyId === request.copyId) return fail('duplicate copy id', false);
     }
-    let child;
+    let child, sendProof;
     try {
+      if (request.sendJob) sendProof = this.sendReceiver.begin(request.sendJob, caller, request.targetFolder);
       // Home-relative targets arrive as relative paths, so rsync starts at home.
       child = this.spawnProcess('rsync', request.serverArgs, { shell: false, cwd: homedir(), stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (err) {
+      if (request.sendJob) this.sendReceiver.release(request.sendJob.id);
       return fail(`could not start rsync on this machine: ${err.message}`);
     }
     const stream = {
       key,
+      sendJob: request.sendJob, sendProof,
       link,
       sid: frame.sid,
       copyId: request.copyId,
@@ -310,6 +317,7 @@ export class CopyReceiver {
         window: COPY_WINDOW,
         copy: stream.cipher.seal({
           type: 'ready',
+          ...(stream.sendProof ? { send: stream.sendProof } : {}),
           requestDigest: stream.requestDigest,
           signature: this.signer(stream.requestDigest),
         }),
@@ -374,7 +382,12 @@ export class CopyReceiver {
     if (!this.streams.has(stream.key) || stream.exited) return;
     stream.exited = true;
     const sendExit = () => {
-      this.#send(stream, { type: 'exit', code: code ?? null, signal: signal ?? null });
+      let receipt;
+      if (stream.sendJob && code === 0) {
+        try { receipt = this.sendReceiver.commit(stream.sendJob.id, this.signer); }
+        catch (e) { this.#send(stream, { type: 'stderr', data: e.message }); code = 23; }
+      }
+      this.#send(stream, { type: 'exit', code: code ?? null, signal: signal ?? null, ...(receipt ? { receipt } : {}) });
       this.#teardown(stream, 'closed');
     };
     if (stream.ready && stream.sender && !stream.sender.stopped) stream.sender.finish(sendExit);
@@ -394,6 +407,7 @@ export class CopyReceiver {
     }
     if (notify && reason) refuse(stream.link, stream.sid, reason, permanent);
     if (stream.exited || child.exitCode != null || child.signalCode != null) {
+      if (stream.sendJob) this.sendReceiver.release(stream.sendJob.id);
       try { stream.release?.(); } catch {}
       return;
     }
@@ -402,6 +416,7 @@ export class CopyReceiver {
         clearTimeout(killer);
         clearTimeout(hard);
         this.closing.delete(stream.key);
+        if (stream.sendJob) this.sendReceiver.release(stream.sendJob.id);
         try { stream.release?.(); } catch {}
         resolve();
       };

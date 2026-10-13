@@ -89,6 +89,20 @@ export const rsyncPath = (target) => (target === '~' ? '.' : target.startsWith('
 
 const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
+// rsync parses -e itself: doubled quotes escape a quote inside a quoted word.
+// POSIX '\' escaping is only for the inner ProxyCommand, which /bin/sh parses.
+const rsyncQuote = value => `'${String(value).replace(/'/g, "''")}'`;
+export function copySshShell(peer, { node = process.execPath,
+  bin = fileURLToPath(new URL('../bin/helm.js', import.meta.url)),
+  key = KEY_FILE, knownHosts = join(HELM_DIR, 'known_hosts') } = {}) {
+  const proxy = `${quote(node)} ${quote(bin)} proxy %h %p`;
+  return ['ssh', '-F', '/dev/null', '-i', key, '-p', String(peer.sshPort ?? 22),
+    '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=30',
+    '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
+    '-o', 'StrictHostKeyChecking=accept-new', '-o', `UserKnownHostsFile=${knownHosts}`,
+    '-o', `ProxyCommand=${proxy}`].map(rsyncQuote).join(' ');
+}
+
 export function copySpec(options, net = requireNetwork()) {
   const peers = Object.values(net.machines ?? {})
     .filter((m) => m.name === options.machine || m.id === options.machine);
@@ -116,6 +130,7 @@ export function copySpec(options, net = requireNetwork()) {
     if (!stat.isDirectory()) throw new Error('helm copy: a file list needs a source folder');
     excludes.unshift(`--files-from=${options.filesFrom}`, '--from0', '-r');
   }
+  if (options.filterFile) excludes.push('--from0', '--filter', `merge ${options.filterFile}`);
   const dryRun = options.dryRun ? ['-n'] : [];
   if (options.mode === 'ssh') {
     if (!NAME.test(peer.name ?? '')) throw new Error(`helm copy: ${peer.id} has no usable SSH name`);
@@ -125,14 +140,7 @@ export function copySpec(options, net = requireNetwork()) {
     if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) {
       throw new Error(`helm copy: ${peer.name} has an invalid SSH port`);
     }
-    const knownHosts = join(HELM_DIR, 'known_hosts');
-    const bin = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
-    const proxy = `${quote(process.execPath)} ${quote(bin)} proxy %h %p`;
-    const ssh = ['ssh', '-F', '/dev/null', '-i', KEY_FILE, '-p', String(sshPort),
-      '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'ConnectTimeout=30',
-      '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
-      '-o', 'StrictHostKeyChecking=accept-new', '-o', `UserKnownHostsFile=${knownHosts}`,
-      '-o', `ProxyCommand=${proxy}`].map(quote).join(' ');
+    const ssh = copySshShell(peer);
     return {
       command: 'rsync',
       args: [...rsyncFlags, '-e', ssh, ...dryRun, ...excludes, '--', source, `${sshUser}@${peer.name}:${remotePath}/`],
@@ -144,9 +152,9 @@ export function copySpec(options, net = requireNetwork()) {
   }
   const bin = fileURLToPath(new URL('../bin/helm.js', import.meta.url));
   const remote = [
-    quote(process.execPath), quote(bin), 'copy-proxy',
-    '--machine', quote(peer.id),
-    '--target-folder', quote(targetFolder),
+    rsyncQuote(process.execPath), rsyncQuote(bin), 'copy-proxy',
+    '--machine', rsyncQuote(peer.id),
+    '--target-folder', rsyncQuote(targetFolder),
     options.mode ? `--${options.mode}` : null,
     '--',
   ].filter(Boolean).join(' ');
@@ -157,8 +165,11 @@ export function copySpec(options, net = requireNetwork()) {
   };
 }
 
-const runOnce = (spec, spawnProcess, stdout, stderr) => new Promise((resolveRun, rejectRun) => {
+const runOnce = (spec, spawnProcess, stdout, stderr, signal) => new Promise((resolveRun, rejectRun) => {
+  if (signal?.aborted) return rejectRun(new Error('copy cancelled'));
   const child = spawnProcess(spec.command, spec.args);
+  const abort = () => { try { if (child.pid && platform() !== 'win32') process.kill(-child.pid, 'SIGTERM'); else child.kill('SIGTERM'); } catch { child.kill('SIGTERM'); } };
+  signal?.addEventListener('abort', abort, { once: true });
   let tail = '';
   child.stdout.on('data', (chunk) => { try { stdout.write(chunk); } catch {} });
   child.stderr.on('data', (chunk) => {
@@ -166,7 +177,7 @@ const runOnce = (spec, spawnProcess, stdout, stderr) => new Promise((resolveRun,
     tail = (tail + chunk).slice(-STDERR_TAIL);
   });
   child.on('error', rejectRun);
-  child.on('close', (code, signal) => resolveRun({ code, signal, tail }));
+  child.on('close', (code, exitSignal) => { signal?.removeEventListener('abort', abort); resolveRun({ code, signal: exitSignal, tail }); });
 });
 
 /** Streaming compression and rsync's delta resume; no temporary ZIP or whole-tree buffer. */
@@ -185,7 +196,7 @@ export async function runCopy(options, deps = {}) {
   const checkRsync = deps.checkRsync ?? checkRsyncVersion;
   const spawnProcess = deps.spawnProcess ?? ((command, argv) => (platform() === 'win32'
     ? spawn(command, argv, { stdio: ['ignore', 'pipe', 'pipe'] })
-    : spawn('nice', ['-n', '10', command, ...argv], { stdio: ['ignore', 'pipe', 'pipe'] })));
+    : spawn('nice', ['-n', '10', command, ...argv], { stdio: ['ignore', 'pipe', 'pipe'], detached: true })));
   const release = beginTransferActivity();
   try {
     checkRsync();
@@ -194,7 +205,7 @@ export async function runCopy(options, deps = {}) {
     stdout.write('Includes hidden files; existing matching files may be replaced. No destination files are deleted.\n');
     const attempts = 1 + options.retries;
     for (let attempt = 0; attempt < attempts; attempt++) {
-      const { code, signal, tail } = await runOnce(spec, spawnProcess, stdout, stderr);
+      const { code, signal, tail } = await runOnce(spec, spawnProcess, stdout, stderr, deps.signal);
       if (code === 0) return 0;
       const at = tail.lastIndexOf(PERMANENT_MARK);
       const permanent = at !== -1

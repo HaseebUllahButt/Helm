@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, basename } from 'node:path';
 import { M } from '@helm/protocol';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { HELM_DIR, expand } from './paths.js';
@@ -23,8 +23,8 @@ const line = (value, max) => typeof value === 'string' && value.length > 0
   && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 
 export class TaskTransfers {
-  constructor({ network, sessions, rpc, enqueue, directory = join(HELM_DIR, 'outgoing-tasks'), copy = runCopy }) {
-    Object.assign(this, { network, sessions, rpc, enqueue, directory, copy });
+  constructor({ network, sessions, rpc, enqueue, directory = join(HELM_DIR, 'outgoing-tasks'), copy = runCopy, sendEngine }) {
+    Object.assign(this, { network, sessions, rpc, enqueue, directory, copy, sendEngine });
     this.inflight = new Map();
     // Big projects copy in the background; asking again with the same
     // handoff id reads how far the copy got instead of waiting on it.
@@ -109,6 +109,7 @@ export class TaskTransfers {
       }
       const mode = delegationMode(account.engine, source?.mode, intent.mode,
         account.defaultMode, source?.engine ?? account.engine);
+      if (this.sendEngine) return this.#startBulk(net, target, params, intent, fingerprint, null, { account, source, mode });
       let snapshot;
       try { snapshot = createCodeSnapshot(intent.folder, { includeEnv: intent.includeEnv }); } catch (error) {
         if (!tooBig(error)) throw error;
@@ -213,6 +214,14 @@ export class TaskTransfers {
    */
   async #startBulk(net, target, params, intent, fingerprint, record, found = {}) {
     let { account, source, mode } = found;
+    if (!record && this.sendEngine) {
+      const history = source ? await this.sessions.history(source.id, { tail: 500, limit: 500 }) : null;
+      record = { fingerprint, bulk: { phase: 'copying', folder: intent.targetFolder || null,
+        account: { engine: account.engine }, mode, sourceId: source?.id ?? null, rootName: basename(resolve(expand(intent.folder))), engine: true },
+        context: history ? readThread(history.events, { limit: 80 }).join('\n').slice(-24_000) : '',
+        preflight: { files: null, bytes: null, envFiles: [], skipped: 0, skippedEntries: [], omittedEntries: 0, requiresAcknowledgement: false, warnings: [] } };
+      this.#save(params.handoffId, record);
+    }
     if (!record) {
       const info = await this.rpc(target.id, M.ENV_INFO, {}, { timeout: 20_000 });
       if (!info?.home || info.precopiedHandoff !== true) {
@@ -288,11 +297,46 @@ export class TaskTransfers {
       if (p) Object.assign(job.progress, { bytes: p.bytes, percent: p.percent, rate: p.rate });
       return true;
     } };
-    const plan = bulkPlan(intent.folder, { includeEnv: intent.includeEnv });
+    const plan = bulk.engine ? null : bulkPlan(intent.folder, { includeEnv: intent.includeEnv });
     let markerDir;
     try {
       if (bulk.phase === 'copying') {
         job.progress.phase = 'copying';
+        if (bulk.engine) {
+          if (!bulk.jobId) {
+            // Return baselines are local state only; code always travels over SendEngine.
+            if (intent.returnToSource) {
+              try {
+                const baseline = createCodeSnapshot(intent.folder, { includeEnv: intent.includeEnv });
+                record.sourceFolder = resolve(expand(intent.folder)); record.baseline = snapshotBaseline(baseline);
+                record.checkpoint = taskCheckpoint(join(this.directory, `${params.handoffId}.git-checkpoints`), baseline);
+                record.baselineEnvelope = sealCodeSnapshot(baseline, codeKeyInfo().codePubkey, params.handoffId);
+              } catch (error) { if (!tooBig(error)) throw error; record.preflight.warnings.push({ code: 'return-unavailable', message: 'Automatic return is unavailable for this project size; changes remain on the target.' }); }
+            }
+            const marker = bulkMarker({ handoffId: params.handoffId, sourceMachineId: net.self,
+              plan: { rootName: bulk.rootName, files: null, bytes: null, git: existsSync(join(resolve(expand(intent.folder)), '.git')) ? {} : null } });
+            bulk.markerDigest = marker.digest;
+            const { job: send } = this.sendEngine.start({ path: intent.folder, targetMachineId: target.id,
+              destination: intent.targetFolder || undefined, includeEnv: intent.includeEnv,
+              marker: { handoffId: params.handoffId, body: marker.body, git: marker.parent === '.git' } }, net.self);
+            bulk.jobId = send.id; this.#save(params.handoffId, record);
+          } else {
+            const { job: send } = this.sendEngine.status({ jobId: bulk.jobId }, net.self);
+            if (['failed', 'interrupted', 'cancelled'].includes(send.phase)) this.sendEngine.retry({ jobId: bulk.jobId }, net.self);
+          }
+          const timer = setInterval(() => {
+            const { job: send } = this.sendEngine.status({ jobId: bulk.jobId }, net.self);
+            job.progress = { phase: send.phase, folder: send.target.path, bytes: send.bytes.sent, total: send.bytes.total,
+              files: send.files, rate: send.rate, eta: send.eta, jobId: send.id };
+          }, 250); timer.unref?.();
+          let send;
+          try { send = await this.sendEngine.wait(bulk.jobId); } finally { clearInterval(timer); }
+          if (send.phase !== 'done') throw new Error(send.error || `Send ${send.phase}`);
+          if (send.error) { record.preflight.warnings.push({ code: 'legacy-send', message: send.error + (record.baseline ? ' Automatic return is unavailable on this older target.' : '') }); record.baseline = null; }
+          bulk.folder = send.target.path; bulk.files = send.files.total; bulk.bytes = send.bytes.total;
+          record.preflight.files = send.files.total; record.preflight.bytes = send.bytes.total;
+          Object.assign(bulk, { phase: 'copied', copiedAt: Date.now(), error: null }); this.#save(params.handoffId, record);
+        } else {
         await this.copy({ machine: target.id, source: plan.root, targetFolder: bulk.folder,
           filesFrom: plan.listFile, excludes: plan.excludes, retries: 5 },
         { network: net, stdout: progress, stderr: quiet });
@@ -302,6 +346,7 @@ export class TaskTransfers {
           { network: net, stdout: quiet, stderr: quiet });
         Object.assign(bulk, { phase: 'copied', markerDigest: marker.digest, copiedAt: Date.now(), error: null });
         this.#save(params.handoffId, record);
+        }
       }
     } finally {
       discardPlan(plan);
@@ -317,7 +362,7 @@ export class TaskTransfers {
       restoreGit: false, precopied: true,
       // A baseline of hundreds of megabytes cannot ride back the way small
       // tasks do; the work stays on the target, in git, for the owner to pull.
-      returnToSource: false, includeEnv: intent.includeEnv,
+      returnToSource: bulk.engine ? !!record.baseline : false, includeEnv: intent.includeEnv,
       title: (source?.title || intent.prompt.trim().split('\n')[0] || bulk.rootName).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 120),
       prompt: [
         `Continue this task on ${target.name ?? target.id} in the current working directory (${bulk.folder}).`,
@@ -377,7 +422,7 @@ export class TaskTransfers {
     if (!caller || net.revoked?.[caller] || !(caller === net.self || net.devices?.[caller])) throw new Error('task status is for this machine or a paired device only');
     if (!ID.test(params?.handoffId ?? '')) throw new Error('invalid handoff id');
     const record = JSON.parse(readFileSync(join(this.directory, `${params.handoffId}.json`), 'utf8'));
-    return { handoffId: params.handoffId, returnToSource: record.request.returnToSource === true,
+    return { handoffId: params.handoffId, returnToSource: record.request?.returnToSource === true,
       return: record.return ?? { status: 'waiting', error: record.returnError } };
   }
 
@@ -405,7 +450,7 @@ export class TaskTransfers {
   async #collect(id, retry) {
     const file = join(this.directory, `${id}.json`);
     const record = JSON.parse(readFileSync(file, 'utf8'));
-    if (!record.request.returnToSource || !record.baseline) return;
+    if (!record.request?.returnToSource || !record.baseline) return;
     if (!retry && ['returned', 'conflict'].includes(record.return?.status) && record.return.acknowledged) return;
     const net = this.network();
     const targetId = record.request.targetMachineId;
