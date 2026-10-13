@@ -96,7 +96,7 @@ test('a machine on an older Helm never gets a channel and keeps the hub', async 
   assert.equal(mesh.supportsDirect('remote'), false);
   const [row] = mesh.table();
   assert.deepEqual(row.direct, { state: 'unsupported', ms: null, used: false });
-  assert.match(routeLines({ machines: [{ ...row, name: 'vm' }] })[0], /\n\s+direct: its Helm is too old, hub only/);
+  assert.match(routeLines({ machines: [{ ...row, name: 'vm' }] })[0], /\n\s+direct: not offered there \(older Helm, or switched off\), hub only/);
   assert.equal(hub.sent.filter(f => f.t === T.HUB_SIGNAL).length, 0);
   mesh.stop();
 });

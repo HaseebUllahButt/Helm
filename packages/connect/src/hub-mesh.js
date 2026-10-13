@@ -441,7 +441,7 @@ export function routeLines(report) {
       : d.state === 'open' ? `direct ${ms(d.ms) || 'not timed yet'}, not faster so not used`
         : d.state === 'connecting' ? 'direct: connecting'
           : d.state === 'retrying' ? 'direct: could not connect, trying again'
-            : d.state === 'unsupported' ? 'direct: its Helm is too old, hub only'
+            : d.state === 'unsupported' ? 'direct: not offered there (older Helm, or switched off), hub only'
               : null;
     return `  ${name}  ${hub}` +
       (others.length ? `${pad}also: ${others.join(', ')}` : '') +
