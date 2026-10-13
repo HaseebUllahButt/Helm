@@ -138,7 +138,8 @@ test('Send Project shows origin before sending and in the receipt, including set
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
-    import { TransferView } from './apps/web/src/Transfer';
+    // Keep the legacy origin/readiness regression; v2 carries the complete repository.
+    import { TaskTransferView as TransferView } from './apps/web/src/Transfer';
     const root = createRoot(document.getElementById('root'));
     const remote = 'git@github.com:owner/project.git';
     const preflight = {files:1,bytes:10,envFiles:[],skipped:0,skippedEntries:[],warnings:[],requiresAcknowledgement:false};
