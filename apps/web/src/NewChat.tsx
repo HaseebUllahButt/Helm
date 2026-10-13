@@ -123,15 +123,17 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   // CLI step.
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [picker, setPicker] = useState<(PickerPrefs & { onMachine: boolean }) | null>(null);
+  const [viewHidden, setViewHidden] = useState(false);
+  const hiddenCount = (accounts ?? []).filter(account => picker?.hidden?.includes(account.key)).length;
 
-  const go = (next: Step) => { setStep(next); setQ(''); setAt(0); setError(''); input.current?.focus(); };
+  const go = (next: Step) => { setStep(next); setViewHidden(false); setQ(''); setAt(0); setError(''); input.current?.focus(); };
 
   // What a machine offers is asked for the moment it is chosen, so the
   // folder list and the CLI list are usually there before they are needed.
   useEffect(() => {
     if (!machine) return;
     let stale = false;
-    setHome(null); setAccounts(null); setPicker(null); setOpened(new Set()); setInside({}); setAnchor(null);
+    setHome(null); setAccounts(null); setPicker(null); setViewHidden(false); setOpened(new Set()); setInside({}); setAnchor(null);
     setIndex(null); setCreating(null);
     client.rpc<{ entries: DirEntry[] }>(machine.id, 'fs.list', { path: '~' })
       .then((r) => { if (!stale) setHome(r.entries); }).catch((e) => { if (!stale) { setHome([]); setError(e.message); } });
@@ -310,7 +312,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       return out;
     }
     const hidden = new Set(picker?.hidden ?? []);
-    const shown = (accounts ?? []).filter((a) => !hidden.has(a.key));
+    const shown = (accounts ?? []).filter((a) => hidden.has(a.key) === viewHidden);
     const twins = new Set(shown.map((a) => `${a.engine}|${a.account}`).filter((k, i, all) => all.indexOf(k) !== i));
     // The machine's chosen default first, then the last one used, so Enter
     // straight away starts what you would have picked.
@@ -318,11 +320,12 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     const ordered = first ? [first, ...shown.filter((a) => a !== first)] : shown;
     return ordered.map((a): Row => ({
       id: a.key, engine: a.engine, title: engineOf(a.engine).label,
+      group: viewHidden ? 'Hidden CLIs' : undefined,
       sub: twins.has(`${a.engine}|${a.account}`) ? `${a.account} (${a.profile.id})` : a.account,
       tag: a.key === picker?.agent ? 'default' : a.key === picker?.last ? 'last used' : undefined,
       pick: () => void start(a),
     })).filter((r) => matches(r, query));
-  }, [step, envs, machine, query, opened, inside, searching, hits, home, accounts, picker, folder, quick, anchor, busy]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, envs, machine, query, opened, inside, searching, hits, home, accounts, picker, viewHidden, folder, quick, anchor, busy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Where "New folder" puts it: inside the folder the cursor is on when that
   // one is open, beside it otherwise.
@@ -447,7 +450,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
           {!busy && loading && !rows.length && <div className="empty quiet">{step === 'cli' ? 'looking for CLIs…' : 'looking…'}</div>}
           {!busy && !loading && !rows.length && (
             <div className="empty quiet">
-              {step === 'machine' ? 'No machine matches.' : step === 'folder' ? (searching ? 'No folder matches.' : 'No folders here.') : 'No CLI matches.'}
+              {step === 'machine' ? 'No machine matches.' : step === 'folder' ? (searching ? 'No folder matches.' : 'No folders here.') : viewHidden ? 'No hidden CLI matches.' : 'No CLI matches.'}
             </div>
           )}
           {!busy && rows.map((row, i) => {
@@ -490,6 +493,15 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
           })}
           {error && <div className="error">{error}</div>}
         </div>
+        {step === 'cli' && (hiddenCount > 0 || viewHidden) && (
+          <div className="newchat-bar">
+            <button type="button" className="newchat-new" disabled={busy} aria-pressed={viewHidden}
+              onClick={() => { setViewHidden(value => !value); setAt(0); input.current?.focus(); }}>
+              <Icon name={viewHidden ? 'back' : 'more'} size={15} />
+              {viewHidden ? 'Back to shown CLIs' : `Show hidden CLIs (${hiddenCount})`}
+            </button>
+          </div>
+        )}
         {step === 'folder' && machine && (creating ? (
           <form className="newchat-bar creating" onSubmit={(e) => { e.preventDefault(); void makeFolder(creating.parent, creating.name); }}>
             <span className="pglyph"><Icon name="plus" size={15} /></span>

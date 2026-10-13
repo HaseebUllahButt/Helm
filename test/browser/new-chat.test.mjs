@@ -43,7 +43,7 @@ before(async () => {
             ? {path:'/home/test',entries:[{name:'project',path:'/work/project',isDir:true}]}
             : {path:params.path,entries:[{name:'existing',path:params.path+'/existing',isDir:true}]};
           if(method==='project.list') return {projects:[]};
-          if(method==='profile.list') return {profiles:[{id:'claude',engine:'claude',cmd:'claude'}]};
+          if(method==='profile.list') return window.profileList ?? {profiles:[{id:'claude',engine:'claude',cmd:'claude'}]};
           if(method==='session.start') return {session:{...session,id:'fresh',cwd:params.quick?'/home/test/.helm/quick/fresh':params.cwd,quick:params.quick,nativeCli:false,pty:false}};
           return {};
         }};
@@ -336,4 +336,86 @@ test('New folder is always offered below the list, and on each folder row as a +
   assert.deepEqual(mkdir,[{path:'/work/project/existing',name:'deeper'}]);
   await startPickedChat(page,{envId:'vm',folder:'/work/project/existing/deeper'});
   void box;
+});
+
+async function hiddenPicker(page, { local = false, all = false } = {}) {
+  await page.evaluate(({ local, all }) => {
+    const hidden = all ? ['visible', 'hidden-personal', 'hidden-other'] : ['hidden-personal', 'hidden-other'];
+    window.profileList = {
+      profiles: [
+        { id: 'codex', engine: 'codex', cmd: 'codex', account: 'visible' },
+        { id: 'claude-personal', engine: 'claude', cmd: 'claude', account: 'hidden-personal', env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' }, defaults: { effort: 'high', mode: 'auto' } },
+        { id: 'grok', engine: 'grok', cmd: 'grok', account: 'hidden-other' },
+      ],
+      ...(local ? {} : { picker: { hidden, last: 'visible', agent: 'visible' } }),
+    };
+    if (local) localStorage.setItem('helm.prefs', JSON.stringify({ vm: { hidden, account: 'visible' } }));
+  }, { local, all });
+  await page.keyboard.press('Control+Shift+n');
+  await page.getByRole('combobox', { name: 'Which CLI?' }).waitFor();
+  await page.getByRole('button', { name: /^Show hidden CLIs/ }).waitFor();
+}
+
+for (const width of [1280, 390]) test(`hidden CLIs can be used once without unhiding them at ${width}px`, async t => {
+  const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
+  await page.setViewportSize({ width, height: 844 });
+  await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
+  await hiddenPicker(page);
+  assert.equal(await page.getByRole('option').count(), 1);
+  await page.getByRole('button', { name: 'Show hidden CLIs (2)', exact: true }).click();
+  await page.getByText('Hidden CLIs', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('option').count(), 2);
+  assert.equal(await page.getByRole('option').filter({ hasText: 'Codex' }).count(), 0);
+  const chosen = page.getByRole('option').filter({ hasText: 'personal' });
+  const geometry = await chosen.boundingBox();
+  assert.ok(geometry && geometry.x >= 0 && geometry.x + geometry.width <= width, 'hidden choices fit the picker');
+  if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.HELM_TEST_SCREENSHOT_DIR}/hidden-cli-${width}.png` });
+  await chosen.click();
+  await page.waitForFunction(() => window.calls.some(call => call.method === 'session.start'));
+  const call = await startCall(page);
+  assert.equal(call.env, 'vm');
+  assert.equal(call.params.profileId, 'claude-personal');
+  assert.equal(call.params.effort, 'high');
+  assert.equal(call.params.mode, 'auto');
+  assert.equal(call.params.cwd, '/work/project');
+  const changes = await page.evaluate(() => window.calls.filter(call => call.method === 'picker.prefs').map(call => call.params));
+  assert.deepEqual(changes, [{ last: 'hidden-personal' }]);
+  await page.keyboard.press('Control+Shift+n');
+  await page.getByRole('button', { name: 'Show hidden CLIs (2)', exact: true }).waitFor();
+  assert.equal(await page.getByRole('option').filter({ hasText: 'personal' }).count(), 0, 'a fresh picker returns to shown CLIs');
+});
+
+test('the hidden view keeps the search and supports keyboard launch', async t => {
+  const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
+  await hiddenPicker(page);
+  const input = page.getByRole('combobox', { name: 'Which CLI?' });
+  await input.fill('grok');
+  await page.getByText('No CLI matches.', { exact: true }).waitFor();
+  const toggle = page.getByRole('button', { name: 'Show hidden CLIs (2)', exact: true });
+  await toggle.focus();
+  await toggle.press('Enter');
+  assert.equal(await input.inputValue(), 'grok');
+  assert.equal(await input.evaluate(el => el === document.activeElement), true);
+  await page.getByRole('option').filter({ hasText: 'Grok' }).waitFor();
+  await input.fill('');
+  await input.press('ArrowDown');
+  assert.match(await page.getByRole('option', { selected: true }).innerText(), /Grok/);
+  await input.press('Enter');
+  await page.waitForFunction(() => window.calls.some(call => call.method === 'session.start'));
+  assert.equal((await startCall(page)).params.profileId, 'grok');
+});
+
+test('all-hidden and legacy local preferences still offer a way to use a hidden CLI', async t => {
+  const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
+  await hiddenPicker(page, { local: true, all: true });
+  assert.equal(await page.getByRole('option').count(), 0);
+  await page.getByRole('button', { name: 'Show hidden CLIs (3)', exact: true }).click();
+  assert.equal(await page.getByRole('option').count(), 3);
+  await page.getByRole('button', { name: 'Back to shown CLIs', exact: true }).click();
+  assert.equal(await page.getByRole('option').count(), 0);
+  await page.getByRole('button', { name: 'Show hidden CLIs (3)', exact: true }).click();
+  await page.getByRole('option').filter({ hasText: 'Grok' }).click();
+  await page.waitForFunction(() => window.calls.some(call => call.method === 'session.start'));
+  assert.equal((await startCall(page)).params.profileId, 'grok');
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.prefs')).vm.hidden), ['visible', 'hidden-personal', 'hidden-other']);
 });
