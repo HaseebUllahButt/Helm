@@ -36,6 +36,8 @@ import { EngineMark } from './EngineMark';
 import { NotificationToast } from './NotificationToast';
 import { MachineUpdateNotice } from './MachineUpdateNotice';
 import { PublicLinks } from './PublicLinks';
+import { sendAction, sending, useSends } from './send/store';
+import { SendActivity, SendNotice } from './send/SendActivity';
 import { DictationKey } from './DictationKey';
 import { BackIcon, Icon, toolKind } from './Icon';
 import { Route } from './Route';
@@ -45,7 +47,7 @@ import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brai
 import { brainHost } from '@helm/protocol/brain-host';
 import {
   Client, login, validMachineName, MACHINE_NAME_RULE, LOOPBACK_HOST, isCleartext, CLEARTEXT_NOTE,
-  type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type NativeControl, type ModelPrefs, type ModelNote,
+  type Environment, type Profile, type Session, type SendJob, type DirEntry, type Message, type ModelList, type NativeControl, type ModelPrefs, type ModelNote,
   type InventorySession, type Device, type Project, type MediaRoot, type MediaEntry, type NativeAgent,
 } from './client';
 import { money, bytes, busyWord, needsAttention, runningThread, settledThread, unknownThread, listedThread } from './format';
@@ -321,7 +323,7 @@ type MainView =
   | { kind: 'new'; path?: string }
   | { kind: 'browse'; path?: string }
   | { kind: 'transfer-browse'; path?: string }
-  | { kind: 'transfer'; cwd: string; session?: Session }
+  | { kind: 'transfer'; cwd: string; session?: Session; jobId?: string }
   | { kind: 'verify'; path: string }
   // `quick`: a chat with no folder; `cwd` is then unused.
   | { kind: 'start'; cwd: string; quick?: boolean }
@@ -382,9 +384,12 @@ function Shell({ client, conn, onSignOut }: {
   const [cached] = useState(() => loadWorkspace(scope));
   const [envs, setEnvs] = useState<Environment[]>(() => cached.environments.map(e => ({ ...e, online: false })));
   const [sessions, setSessions] = useState<Record<string, Session[]>>(cached.sessions);
-  const [selected, setSelected] = useState<string | null>(cached.view?.envId ?? null);
-  const [stack, setStack] = useState<MainView[]>(() => cached.view
-    ? [{ kind: 'env' }, { kind: 'session', session: cached.view.session }] : [{ kind: 'env' }]);
+  const [savedSend] = useState(() => history.state?.helm && history.state.stack?.at(-1)?.kind === 'transfer'
+    && history.state.stack.at(-1).jobId ? history.state : null);
+  const [selected, setSelected] = useState<string | null>(savedSend?.selected ?? cached.view?.envId ?? null);
+  const [stack, setStack] = useState<MainView[]>(() => savedSend?.stack ?? (cached.view
+    ? [{ kind: 'env' }, { kind: 'session', session: cached.view.session }] : [{ kind: 'env' }]));
+  const sends = useSends(client, envs);
   const liveEnvsSeen = useRef(false);
   const liveListsSeen = useRef(new Set<string>());
   const sessionRequests = useRef(new Set<string>());
@@ -397,7 +402,7 @@ function Shell({ client, conn, onSignOut }: {
       if (!liveEnvsSeen.current) setEnvs(value.environments.map(e => ({ ...e, online: false })));
       setSessions(current => ({ ...Object.fromEntries(Object.entries(value.sessions)
         .filter(([id]) => !liveListsSeen.current.has(id))), ...current }));
-      if (!cached.view && value.view && !location.hash && nav.current.depth === 0 && nav.current.stack.length === 1) {
+      if (!savedSend && !cached.view && value.view && !location.hash && nav.current.depth === 0 && nav.current.stack.length === 1) {
         restate([{ kind: 'env' }, { kind: 'session', session: value.view.session }], value.view.envId);
       }
     });
@@ -1321,6 +1326,11 @@ function Shell({ client, conn, onSignOut }: {
 
         <div className="scroll">
           <div className="side-pad">
+            {!showMain && sends.notices.slice(-1).map(job => <SendNotice key={job.id} job={job}
+              onDismiss={() => sends.store.dismiss(job.id)} onOpen={() => {
+                sends.store.dismiss(job.id);
+                navigate([{ kind: 'env' }, { kind: 'transfer', cwd: job.source.path, jobId: job.id }], job.source.machineId);
+              }} />)}
             {status === 'offline' && (
               <div className="banner error">
                 No machine answered for a while. Check the VM, or that this phone has internet.
@@ -1413,6 +1423,10 @@ function Shell({ client, conn, onSignOut }: {
               </Fold>
             )}
 
+            <SendActivity jobs={sends.jobs} onOpen={(job) => navigate([
+              { kind: 'env' }, { kind: 'transfer', cwd: job.source.path, jobId: job.id },
+            ], job.source.machineId)} />
+
             <Fold shelf title="Machines" count={envs.length} defaultOpen remember="sidebar:machines" showEmpty>
               <div className="rows plain">
                 {envs.map((e) => {
@@ -1457,6 +1471,18 @@ function Shell({ client, conn, onSignOut }: {
       </aside>
 
       <section className={`main${showMain ? ' showing' : ''}`}>
+        {sends.notices.slice(-1).map(job => <SendNotice key={job.id} job={job}
+          onDismiss={() => sends.store.dismiss(job.id)} onOpen={() => {
+            sends.store.dismiss(job.id);
+            navigate([{ kind: 'env' }, { kind: 'transfer', cwd: job.source.path, jobId: job.id }], job.source.machineId);
+          }} />)}
+        {view.kind !== 'transfer' && sends.jobs.some(sending) && <div className="send-mobile-status">
+          <button className="linkish" onClick={() => {
+            const job = sends.jobs.find(sending)!;
+            navigate([{ kind: 'env' }, { kind: 'transfer', cwd: job.source.path, jobId: job.id }], job.source.machineId);
+          }}>{sends.jobs.filter(sending).length > 1 ? `${sends.jobs.filter(sending).length} sends in progress`
+            : `Sending to ${sends.jobs.find(sending)!.target.name} · View`}</button>
+        </div>}
         <MachineUpdateNotice envs={envs} onOpen={() => push({ kind: 'updates' })} />
         {view.kind === 'app-settings' ? (
           <SettingsView
@@ -1538,6 +1564,7 @@ function Shell({ client, conn, onSignOut }: {
           <EnvView
             key={env.id}
             client={client} env={env} wide={wide} onBack={back}
+            sendJobs={sends.jobs} sendTarget={envs.find(e => e.id !== env.id && e.name.toLowerCase() === 'vm')?.name ?? envs.find(e => e.id !== env.id && e.online)?.name}
             sessions={(sessions[env.id] ?? []).filter(listedThread)} reload={reloadEnv}
             isSnoozed={(s) => snoozedNow(env.id, s.id)}
             remembered={env.online ? undefined : snap?.machines?.[env.id]?.sessions.filter((s) => listedThread(s)
@@ -1582,7 +1609,7 @@ function Shell({ client, conn, onSignOut }: {
         ) : view.kind === 'browse' ? (
           <Browse
             client={client} env={env} path={view.path} onBack={back}
-            title="Add project" action="Add this project"
+            title="Add project" action="Add this project" onSend={(cwd) => push({ kind: 'transfer', cwd })}
             onInto={(path) => push({ kind: 'browse', path })}
             onPick={async (cwd) => {
               await client.rpc<{ project: Project }>(env.id, 'project.save', { path: cwd }, 20_000);
@@ -1592,14 +1619,19 @@ function Shell({ client, conn, onSignOut }: {
         ) : view.kind === 'transfer-browse' ? (
           <Browse
             client={client} env={env} path={view.path} onBack={back}
-            title="Send a project" action="Choose this folder"
+            title="Send" action="Send this folder" sendFiles
             onInto={(path) => push({ kind: 'transfer-browse', path })}
             onPick={(cwd) => push({ kind: 'transfer', cwd })}
           />
         ) : view.kind === 'transfer' ? (
           <Suspense fallback={<ViewLoading title="Send a project" onBack={back} />}>
             <TransferView
-              client={client} source={env} envs={envs} folder={view.cwd} session={view.session} onBack={back}
+              key={`${env.id}:${view.cwd}`}
+              client={client} source={env} envs={envs} folder={view.cwd} session={view.session} jobId={view.jobId} onBack={back}
+              onJob={(job) => restate([...nav.current.stack.slice(0, -1), { kind: 'transfer', cwd: job.source.path, jobId: job.id }])}
+              onAgain={() => restate([...nav.current.stack.slice(0, -1), { kind: 'transfer', cwd: view.cwd }])}
+              onOpenFolder={(targetId, path) => navigate([{ kind: 'env' }, { kind: 'browse', path }], targetId)}
+              onStartChat={(targetId, path) => navigate([{ kind: 'env' }, { kind: 'start', cwd: path }], targetId)}
               onOpenSession={(targetId, session) => navigate([
                 { kind: 'env' }, { kind: 'session', session },
               ], targetId)}
@@ -1629,7 +1661,9 @@ function Shell({ client, conn, onSignOut }: {
           <DrivenSession
             key={`${env.id}:${view.session.id}`}
             client={client} env={env} machines={envs} conn={conn} onTranscribe={transcribeVia(env.id)} reviewChildren={view.reviewChildren}
-            onSendTask={view.session.quick ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
+            onSendTask={view.session.quick || view.session.external || view.session.brain || view.session.engine === 'shell'
+              ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
+            onSendFolder={view.session.quick || !view.session.cwd ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd })}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
@@ -1644,7 +1678,9 @@ function Shell({ client, conn, onSignOut }: {
           <SessionView
             key={`${env.id}:${view.session.id}`}
             client={client} env={env} machines={envs} onTranscribe={transcribeVia(env.id)}
-            onSendTask={view.session.quick ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
+            onSendTask={view.session.quick || view.session.external || view.session.brain || view.session.engine === 'shell'
+              ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
+            onSendFolder={view.session.quick || !view.session.cwd ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd })}
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             terminals={(sessions[env.id] ?? []).filter(ownTerminal).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))}
             onSwitch={(s) => restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: s }])}
@@ -2413,8 +2449,8 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   );
 }
 
-function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming, isSnoozed = () => false }: {
-  client: Client; env: Environment; wide: boolean; sessions: Session[];
+function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming, isSnoozed = () => false, sendJobs = [], sendTarget }: {
+  client: Client; env: Environment; wide: boolean; sessions: Session[]; sendJobs?: SendJob[]; sendTarget?: string;
   isSnoozed?: (session: Session) => boolean;
   /** What this machine last said it was running, while it cannot be asked. */
   remembered?: Session[]; rememberedAt?: number;
@@ -2859,7 +2895,7 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
             showEmpty
             actions={(
               <ProjectActions
-                title={p.title} online={env.online}
+                title={p.title} online={env.online} sendLabel={sendAction(sendJobs, env.id, p.path, sendTarget)}
                 onStart={() => onStart(p.path)}
                 onSend={() => onSendProject(p.path)}
                 onCheck={() => onCheckProject(p.path)}
@@ -3084,8 +3120,8 @@ function PagedRows<T extends { s: { id: string } }>({ items, isSelected, row, fi
   );
 }
 
-function ProjectActions({ title, online, onStart, onSend, onCheck, onRename, onRemove }: {
-  title: string; online: boolean; onStart: () => void; onSend: () => void; onCheck: () => void;
+function ProjectActions({ title, online, sendLabel = 'Send', onStart, onSend, onCheck, onRename, onRemove }: {
+  title: string; online: boolean; sendLabel?: string; onStart: () => void; onSend: () => void; onCheck: () => void;
   onRename: () => void; onRemove: () => void;
 }) {
   const [menu, setMenu] = useState(false);
@@ -3104,7 +3140,7 @@ function ProjectActions({ title, online, onStart, onSend, onCheck, onRename, onR
       ><Icon name="more" size={16} /></button>
       {menu && (
         <div className="menu">
-          <button disabled={!online} onClick={() => { setMenu(false); onSend(); }}>Send project</button>
+          <button disabled={!online} onClick={() => { setMenu(false); onSend(); }}>{sendLabel}</button>
           <button disabled={!online} onClick={() => { setMenu(false); onCheck(); }}>Check setup</button>
           <button onClick={() => { setMenu(false); onRename(); }}>Rename project</button>
           <button className="destructive" onClick={() => { setMenu(false); onRemove(); }}>Remove project</button>
@@ -4124,13 +4160,15 @@ export function ModelPrefsView({ client, env, account, onBack }: {
 
 // ----------------------------------------------------------------- browsing
 
-function Browse({ client, env, path, title = 'Where?', action = 'Start here', onBack, onInto, onPick, onQuick }: {
-  client: Client; env: Environment; path?: string; title?: string; action?: string;
+function Browse({ client, env, path, title = 'Where?', action = 'Start here', onBack, onInto, onPick, onQuick, sendFiles = false, onSend }: {
+  client: Client; env: Environment; path?: string; title?: string; action?: string; sendFiles?: boolean; onSend?: (path: string) => void;
   onBack: () => void; onInto: (p: string) => void; onPick: (p: string) => void | Promise<void>;
   /** Offered on the way in: a chat that needs no folder at all. */
   onQuick?: () => void;
 }) {
   const [entries, setEntries] = useState<DirEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [sendPath, setSendPath] = useState('');
   const [here, setHere] = useState(path ?? '~');
   const [error, setError] = useState('');
   const [picking, setPicking] = useState(false);
@@ -4154,15 +4192,15 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
   };
 
   const load = useCallback(() => {
-    setError('');
+    setError(''); setLoading(true);
     client.rpc(env.id, 'fs.list', { path: path ?? '~' })
       .then((r: any) => { setEntries(r.entries); setHere(r.path); })
-      .catch((e) => setError(e.message));
-  }, [client, env.id, path]);
+      .catch((e) => setError(e.message)).finally(() => setLoading(false));
+  }, [client, env.id, path, sendFiles]);
 
   useEffect(() => { load(); }, [load]);
   // The agent step comes next; ask for its list while the folder is chosen.
-  useEffect(() => { prefetchAccounts(client, env.id); }, [client, env.id]);
+  useEffect(() => { if (!sendFiles) prefetchAccounts(client, env.id); }, [client, env.id, sendFiles]);
 
   // The machine indexes its folders once, so a query answered from memory
   // costs a debounce and a round trip rather than a disk walk per letter.
@@ -4195,10 +4233,17 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
         <div className="titles"><h1>{title}</h1><span className="sub"><Route machine={env.name} folder={here} full /></span></div>
       </div>
       <div className="scroll"><div className="pad column">
-        <button className="primary big" disabled={picking} onClick={() => pick(here)}>
-          {picking ? 'working…' : action}
+        <button className="primary big" disabled={picking || loading || !!error} onClick={() => pick(here)}>
+          {picking ? 'working…' : loading ? 'Loading folders…' : action}
         </button>
 
+        {sendFiles && <details className="send-details"><summary>Use a file or folder path</summary>
+          <div className="inline-form"><input aria-label="File or folder on this machine" placeholder={`${here}/name`} value={sendPath}
+            autoCapitalize="off" autoCorrect="off" onChange={event => setSendPath(event.target.value)}
+            onKeyDown={event => { if (event.key === 'Enter' && sendPath.trim()) void pick(sendPath.trim()); }} />
+            <button className="linkish" disabled={picking || !sendPath.trim()} onClick={() => void pick(sendPath.trim())}>Use this path</button></div>
+        </details>}
+        {onSend && <button className="linkish" disabled={loading || !!error} onClick={() => onSend(here)}>Send this folder</button>}
         <div className="filterbar">
           <input
             className="sheetfilter grow" value={query}
@@ -4260,9 +4305,9 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
 
             <div className="section">
               folders<span className="spacer" />
-              <button className="linkish" onClick={() => setCreating((v) => !v)}>
+              {!sendFiles && <button className="linkish" onClick={() => setCreating((v) => !v)}>
                 {creating ? 'Cancel' : 'New folder'}
-              </button>
+              </button>}
             </div>
 
             {creating && (
@@ -4277,18 +4322,26 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
             )}
 
             <div className="rows">
-              {entries.map((e) => (
+              {entries.map((e) => sendFiles ? (
+                <div key={e.path} className="row rowx">
+                  <button className="rowmain" onClick={() => pick(e.path)}>
+                    <span className={`glyph${e.isRepo ? ' repo' : ''}`}><Icon name={e.isRepo ? 'repo' : 'folder'} size={16} /></span>
+                    <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
+                  </button>
+                  <button className="rowend" aria-label={`Browse ${e.name}`} onClick={() => onInto(e.path)}><Icon name="forward" size={15} /></button>
+                </div>
+              ) : (
                 <button key={e.path} className="row" onClick={() => onInto(e.path)}>
                   <span className={`glyph${e.isRepo ? ' repo' : ''}`}><Icon name={e.isRepo ? 'repo' : 'folder'} size={16} /></span>
                   <span className="grow"><span className="rt"><span className="rt-text">{e.name}</span></span></span>
                   <span className="chev"><Icon name="forward" size={15} /></span>
                 </button>
               ))}
-              {!entries.length && !error && <div className="empty quiet">no subfolders</div>}
+              {loading ? <div className="empty quiet" role="status">Loading folders…</div> : !entries.length && !error && <div className="empty quiet">no subfolders</div>}
             </div>
           </>
         )}
-        {error && <div className="error">{error}</div>}
+        {error && <><div className="error">{error}</div><button className="linkish" onClick={load}>Retry</button></>}
       </div></div>
     </>
   );
@@ -4673,11 +4726,11 @@ function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask, onOpenNative }: {
+function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask, onSendFolder, onOpenNative }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account. */
   machines?: Environment[];
-  onSendTask?: () => void;
+  onSendTask?: () => void; onSendFolder?: () => void;
   onOpenNative?: (agent: NativeAgent) => void;
   /** This machine's open terminals, for the tabs above one. */
   terminals?: Session[];
@@ -5006,6 +5059,7 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
         {menu && (isShell ? (
           <div className="menu" onClick={() => setMenu(false)}>
             <button onClick={() => setNaming(true)}>Rename terminal</button>
+            {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
             <button className="destructive" onClick={() => setKilling(true)}>Close terminal</button>
           </div>
         ) : (
@@ -5015,6 +5069,7 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
               <button disabled={settingBusy || sending || status === 'blocked' || !env.online} onClick={() => void nativeCommand('/permissions')}>Claude permissions</button>
               <button disabled={settingBusy || sending || status === 'blocked' || !env.online} onClick={() => void nativeCommand('/config')}>Claude settings</button>
             </>}
+            {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
             {!isExternal && onSendTask && <button disabled={!env.online} onClick={onSendTask}>Send task to another machine</button>}
             <button onClick={archive}>{session.archived ? 'Unarchive thread' : 'Archive thread'}</button>
             <button className="destructive" onClick={() => setKilling(true)}>{session.nativeCli ? 'End session' : 'Delete thread'}</button>

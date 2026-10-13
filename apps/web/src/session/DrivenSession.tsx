@@ -51,7 +51,7 @@ type FailedSend = { id: string; body: string; references: string[]; error: strin
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
-export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onOpenMachineSession, onOpenNative, reviewChildren }: {
+export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onSendFolder, onOpenMachineSession, onOpenNative, reviewChildren }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account and so apply on all of them. */
   machines?: Environment[];
@@ -69,6 +69,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   /** Open one of Claude Code's own subagents as a read-only chat. */
   onOpenNative?: (agent: NativeAgent) => void;
   onSendTask?: () => void;
+  onSendFolder?: () => void;
   onOpenMachineSession?: (machineId: string, session: Session) => void;
 }) {
   const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
@@ -655,6 +656,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         {menu === 'more' && (
           <div className="menu" onClick={() => setMenu(null)}>
             <button onClick={() => { setMenu(null); setAsk('rename'); }}>Rename thread</button>
+            {onSendFolder && <button disabled={!env.online} onClick={onSendFolder}>Send folder</button>}
             {!session.brain && onSendTask && !session.external && (
               <button disabled={!env.online} onClick={onSendTask}>Send to another machine</button>
             )}

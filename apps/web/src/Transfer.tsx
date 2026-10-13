@@ -7,6 +7,8 @@ import { bytes } from './format';
 import { BackIcon, Icon } from './Icon';
 import { Route } from './Route';
 import { TaskReturn } from './session/TaskReturn';
+import { SendView } from './send/SendView';
+import type { SendJob } from './client';
 import type { TaskReturnState } from './client';
 
 const leaf = (p: string) => p.replace(/\/+$/, '').split('/').pop() || p;
@@ -35,23 +37,30 @@ function Readiness({ readiness }: { readiness: TransferReadiness }) {
   );
 }
 
-export function TransferView({ client, source, envs, folder, session, onBack, onOpenSession }: {
-  client: Client;
-  source: Environment;
-  envs: Environment[];
-  folder: string;
-  session?: Session;
-  onBack: () => void;
-  onOpenSession: (envId: string, session: Session) => void;
-}) {
-  const [targetId, setTargetId] = useState('');
+type TransferProps = {
+  client: Client; source: Environment; envs: Environment[]; folder: string; session?: Session; jobId?: string; initialTask?: boolean; initialTargetId?: string; initialIncludeEnv?: boolean;
+  onBack: () => void; onOpenSession: (envId: string, session: Session) => void;
+  onJob?: (job: SendJob) => void; onAgain?: () => void;
+  onOpenFolder?: (machineId: string, path: string) => void;
+  onStartChat?: (machineId: string, path: string) => void;
+};
+export function TransferView(props: TransferProps) {
+  const [taskIntent, setTaskIntent] = useState<{ targetMachineId: string; includeEnv: boolean } | null>(null);
+  return props.session || taskIntent ? <TaskTransferView {...props} initialTask
+    initialTargetId={taskIntent?.targetMachineId} initialIncludeEnv={taskIntent?.includeEnv} />
+    : <SendView {...props} onTask={setTaskIntent} />;
+}
+
+/** Task continuation still uses task.send; its folder copy is owned by the v2 engine. */
+export function TaskTransferView({ client, source, envs, folder, session, onBack, onOpenSession, onJob, onAgain, onOpenFolder, onStartChat, initialTask, initialTargetId, initialIncludeEnv }: TransferProps) {
+  const [targetId, setTargetId] = useState(initialTargetId ?? '');
   const [locked, setLocked] = useState(false);
   const targets = useMemo(
     () => envs.filter((e) => e.id !== source.id && (e.online || (locked && e.id === targetId))),
     [envs, source.id, locked, targetId],
   );
-  const [includeEnv, setIncludeEnv] = useState(!!session);
-  const [task, setTask] = useState(!!session);
+  const [includeEnv, setIncludeEnv] = useState(initialIncludeEnv ?? !!session);
+  const [task, setTask] = useState(!!session || !!initialTask);
   const [prompt, setPrompt] = useState('');
   const [agents, setAgents] = useState<{ id: string; label: string; available: boolean; models?: string[]; defaultModel?: string | null }[]>([]);
   const [profileId, setProfileId] = useState('');
@@ -73,7 +82,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!targets.some((t) => t.id === targetId)) setTargetId(targets[0]?.id ?? '');
+    if (!targets.some((t) => t.id === targetId)) setTargetId(targets.find(t => t.name.toLowerCase() === 'vm')?.id ?? targets[0]?.id ?? '');
   }, [targets, targetId]);
   const target = targets.find((t) => t.id === targetId) ?? null;
 
@@ -232,6 +241,9 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
     }
   };
 
+  if ((session || initialTask) && !task) return <SendView client={client} source={source} folder={folder} onBack={onBack}
+    onJob={onJob} onAgain={onAgain} onOpenFolder={onOpenFolder} onStartChat={onStartChat} initialIncludeEnv={includeEnv} preferredTargetId={targetId} />;
+
   return (
     <>
       <div className="bar">
@@ -353,6 +365,7 @@ export function TransferView({ client, source, envs, folder, session, onBack, on
                   onChange={(event) => setPrompt(event.target.value)} />
               </label></div>
               {session && <p className="note">Sending pauses this thread, copies its current files and recent conversation, and starts a continuation on the destination.</p>}
+              {session && <button className="linkish" disabled={busy || locked} onClick={() => setTask(false)}>Send files only</button>}
             </>}
             {!task && preview?.git?.remote && <div className="field">
               <label className="field-label">Git origin
