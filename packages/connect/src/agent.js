@@ -32,6 +32,7 @@ import { UsageReader, foldBuckets } from '@helm/usage';
 import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub, directCaller } from './peer.js';
+import { allowDirectSignal } from './direct-auth.js';
 import { lanAddresses } from './net-addr.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
@@ -348,8 +349,9 @@ export class Daemon {
         onTunnelClose: (link) => this.copyReceiver?.dropLink(link),
         // Every request on a direct channel is checked as a hub checks the
         // ones it forwards: against who the hub introduced, never who the
-        // request says it is from.
-        authorize: (device, frame) => directCaller(loadNetwork() ?? this.net, device, frame.sub),
+        // request says it is from. Machine offers first prove that identity
+        // with their pinned signing key in onFrame below.
+        authorize: (device, frame) => directCaller(loadNetwork() ?? this.net, device, frame.sub, loadSettings()?.directRoutes !== false),
         // Machines open channels to ask questions; they hear events through
         // their hubs. Only phones and browsers want them sent direct.
         events: (device) => !Object.hasOwn((loadNetwork() ?? this.net).machines ?? {}, device),
@@ -500,7 +502,8 @@ export class Daemon {
       this.net = net;
       for (const link of this.#links.values()) link.offered = false;
       this.broadcastFrame(T.ROSTER, { hash: rosterHash(net) });
-      this.peers?.dropRevoked(net.revoked);
+      if (net.revoked?.[net.self]) this.peers?.stop();
+      else this.peers?.dropRevoked(net.revoked);
       this.copyReceiver?.dropRevoked(net.revoked);
       this.mesh?.dropRevoked(net.revoked);
     });
@@ -691,7 +694,8 @@ export class Daemon {
       // A direct WebRTC channel is authenticated once, when the hub makes the
       // introduction. Revocation has to reach it too, or a removed phone
       // keeps a working side door to this machine.
-      this.peers?.dropRevoked(net.revoked);
+      if (net.revoked?.[net.self]) this.peers?.stop();
+      else this.peers?.dropRevoked(net.revoked);
       this.copyReceiver?.dropRevoked(net.revoked);
       this.mesh?.dropRevoked(net.revoked);
     }
@@ -1007,7 +1011,7 @@ export class Daemon {
     // Direct channels to other machines, with the hubs as the backup. Off
     // with `"directRoutes": false` in ~/.helm/config.json.
     this.mesh = new HubMesh(loadNetwork, hub.meshChanged, hub.meshEvent, hub.meshSignal,
-      { direct: loadSettings()?.directRoutes !== false });
+      { direct: loadSettings()?.directRoutes === false ? false : { enabled: () => loadSettings()?.directRoutes !== false } });
     hub.attachMesh(this.mesh);
   }
 
@@ -1113,7 +1117,7 @@ export class Daemon {
       // Answers requests from other machines over a direct channel, checking
       // each one as a hub would (direct-mesh.js). Older machines leave this
       // out, and are only ever asked through a hub.
-      directRpc: 1,
+      ...(loadSettings()?.directRoutes === false ? {} : { directRpc: 1 }),
       platform: platform(),
       arch: arch(),
       release: release(),
@@ -1212,6 +1216,7 @@ export class Daemon {
       }
 
       case T.SIGNAL:
+        if (!allowDirectSignal(loadNetwork() ?? this.net, msg.device, msg.payload, loadSettings()?.directRoutes !== false)) return;
         return this.peers.signal(msg.peer, msg.payload, link, msg.device);
 
       case T.ROSTER: {

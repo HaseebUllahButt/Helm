@@ -7,6 +7,7 @@ import { startRelay } from '@helm/relay';
 import { T } from '@helm/protocol';
 import { Link } from '../../packages/connect/src/agent.js';
 import { PeerHub, directCaller } from '../../packages/connect/src/peer.js';
+import { allowDirectSignal } from '../../packages/connect/src/direct-auth.js';
 
 let hub;
 let link;
@@ -42,7 +43,9 @@ const daemon = {
     if (frame.t === T.PING) return source.send(T.PONG);
     if (frame.t === T.SIGNAL) {
       // An older machine has no direct answer for other machines at all.
-      if (!old) await peers.signal(frame.peer, frame.payload, source, frame.device).catch(() => {});
+      if (!old && allowDirectSignal(loadNetwork(), frame.device, frame.payload)) {
+        await peers.signal(frame.peer, frame.payload, source, frame.device).catch(() => {});
+      }
       return;
     }
     if (frame.t !== T.RPC) return;

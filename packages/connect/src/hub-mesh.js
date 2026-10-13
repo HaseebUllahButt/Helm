@@ -316,7 +316,8 @@ export class HubMesh {
    */
   #mayGoDirect(network, sub) {
     return sub === network.self
-      || (typeof sub === 'string' && Object.hasOwn(network.devices ?? {}, sub) && !network.revoked?.[sub]);
+      || (typeof sub === 'string' && !Object.hasOwn(network.machines ?? {}, sub)
+        && Object.hasOwn(network.devices ?? {}, sub) && !network.revoked?.[sub]);
   }
 
   /** Close the channels of machines taken out of the network. */

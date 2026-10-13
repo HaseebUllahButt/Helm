@@ -21,8 +21,9 @@ import { directPeer } from './direct-rpc.js';
  * used only when it is measured faster.
  *
  * Nothing here decides who may ask what. The other machine checks every
- * request against the identity the hub vouched for when it introduced this
- * channel (peer.js directCaller), the same check a hub makes.
+ * request against the introduced identity (peer.js directCaller). Machine
+ * offers also prove possession of the roster's signing key (direct-auth.js),
+ * since an older hub can introduce a machine in a name the sender chose.
  */
 const CONNECT_TIMEOUT_MS = 15_000;
 const PING_TIMEOUT_MS = 10_000;
@@ -42,9 +43,10 @@ export class DirectMesh {
    * @param {(peer) => void} o.forget             tell the hubs a signalling id is done
    * @param {(env) => boolean} o.supports         whether that machine's Helm answers direct channels
    * @param {(env) => void} [o.changed]           a channel opened, closed or was timed
+   * @param {() => boolean} [o.enabled]          the live off switch
    */
-  constructor({ network, signal, forget = () => {}, supports, changed = () => {}, now = () => performance.now(), makePeer = directPeer }) {
-    Object.assign(this, { network, sendSignal: signal, forget, supports, changed, now, makePeer });
+  constructor({ network, signal, forget = () => {}, supports, changed = () => {}, now = () => performance.now(), makePeer = directPeer, enabled = () => true }) {
+    Object.assign(this, { network, sendSignal: signal, forget, supports, changed, now, makePeer, enabled });
     this.channels = new Map(); // env -> channel
     this.waits = new Map();    // env -> { failures, retryAt }
     this.used = new Map();     // env -> when a request last wanted a channel
@@ -58,7 +60,7 @@ export class DirectMesh {
 
   #usable(env) {
     const net = this.network();
-    return !!net?.self && env !== net.self && Object.hasOwn(net.machines ?? {}, env)
+    return this.enabled() && !!net?.self && env !== net.self && Object.hasOwn(net.machines ?? {}, env)
       && !net.revoked?.[env] && !net.revoked?.[net.self];
   }
 
@@ -73,6 +75,7 @@ export class DirectMesh {
     this.channels.set(env, channel);
     try {
       channel.peer = this.makePeer({
+        env,
         signal: (payload) => this.sendSignal(env, channel.id, payload),
         onMessage: (message) => this.#message(channel, message),
         onClose: () => this.#closed(channel),
@@ -138,7 +141,7 @@ export class DirectMesh {
   }
 
   isOpen(env) {
-    return this.channels.get(env)?.state === 'open';
+    return this.#usable(env) && this.channels.get(env)?.state === 'open';
   }
 
   /**
@@ -148,7 +151,7 @@ export class DirectMesh {
    */
   estimate(env) {
     const channel = this.channels.get(env);
-    if (channel?.state !== 'open' || channel.ms == null) return null;
+    if (!this.#usable(env) || channel?.state !== 'open' || channel.ms == null) return null;
     const waiting = channel.probing != null ? this.now() - channel.probing : 0;
     return { ms: Math.max(channel.ms, waiting), known: true };
   }
@@ -159,7 +162,7 @@ export class DirectMesh {
    */
   call(env, method, params, { sub, timeout = 130_000 } = {}) {
     const channel = this.channels.get(env);
-    if (channel?.state !== 'open') {
+    if (!this.#usable(env) || channel?.state !== 'open') {
       return Promise.reject(Object.assign(new Error('no direct channel'), { code: 'disconnected', unsent: true }));
     }
     return new Promise((resolve, reject) => {
@@ -168,6 +171,10 @@ export class DirectMesh {
       request.timer = setTimeout(() => {
         channel.pending.delete(id);
         reject(Object.assign(new Error('remote request timed out; delivery may be uncertain'), { code: 'timeout', uncertain: true }));
+        // The send may still be queued or waiting on backpressure. Closing
+        // prevents an expired write from being dispatched later, and releases
+        // every other pending request on this stalled channel.
+        if (this.channels.get(env) === channel) this.#drop(env);
       }, timeout);
       request.timer.unref?.();
       channel.pending.set(id, request);
@@ -227,12 +234,16 @@ export class DirectMesh {
       if (revoked[env] || (self && revoked[self])) {
         this.used.delete(env);
         this.#drop(env);
+        this.waits.delete(env);
       }
     }
+    for (const env of this.waits.keys()) if (revoked[env] || revoked[self]) this.waits.delete(env);
+    for (const env of this.used.keys()) if (revoked[env] || revoked[self]) this.used.delete(env);
   }
 
   /** What `helm status` says about the direct channel to one machine. */
   status(env) {
+    if (!this.enabled()) return { state: 'off', ms: null };
     const channel = this.channels.get(env);
     if (channel) return { state: channel.state, ms: channel.ms == null ? null : Math.round(channel.ms) };
     if (!this.supports(env)) return { state: 'unsupported', ms: null };

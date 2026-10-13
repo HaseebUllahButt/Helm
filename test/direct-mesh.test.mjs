@@ -246,6 +246,7 @@ test('a direct request is checked against who the hub introduced, not what it sa
   assert.equal(directCaller(net, 'a', 'phone'), 'phone');
   // It may not speak for another machine, a revoked device, or a stranger.
   assert.throws(() => directCaller(net, 'a', 'c'), { code: 'forbidden' });
+  assert.throws(() => directCaller({ ...net, devices: { ...net.devices, c: {} } }, 'a', 'c'), { code: 'forbidden' });
   assert.throws(() => directCaller(net, 'a', 'gone'), { code: 'forbidden' });
   assert.throws(() => directCaller(net, 'a', 'nobody'), { code: 'forbidden' });
   // A phone's own channel cannot claim to be anyone else.
@@ -254,4 +255,31 @@ test('a direct request is checked against who the hub introduced, not what it sa
   // A revoked caller is refused on the very next request.
   assert.throws(() => directCaller(net, 'old', undefined), { code: 'forbidden' });
   assert.throws(() => directCaller({ ...net, revoked: { b: true } }, 'a', undefined), { code: 'forbidden' });
+  assert.throws(() => directCaller(net, 'stranger', undefined), { code: 'forbidden' });
+  assert.throws(() => directCaller(net, 'a', undefined, false), { code: 'forbidden' });
+  assert.equal(directCaller(net, 'phone', undefined, false), 'phone');
+});
+
+test('losing every hub presence fails offline even with an open direct channel', async () => {
+  const { mesh, hub, timed } = fixture();
+  const peer = await timed(5, 600);
+  mesh.receive(hub, { t: T.HUB_STATE, machines: [] });
+  const before = peer.sent.length;
+  assert.equal(mesh.direct.isOpen('remote'), true);
+  await assert.rejects(mesh.call('remote', 'session.input', {}), { code: 'offline' });
+  assert.equal(peer.sent.length, before);
+  mesh.stop();
+});
+
+test('revocation clears failed-channel backoff bookkeeping', async () => {
+  const { mesh, network, peers, timed } = fixture();
+  const peer = await timed(5, 600);
+  peer.die();
+  assert.equal(mesh.direct.waits.size, 1);
+  network.revoked.remote = true;
+  mesh.dropRevoked(network.revoked);
+  assert.equal(mesh.direct.waits.size, 0);
+  assert.equal(mesh.direct.used.size, 0);
+  assert.equal(peers.made.length, 1);
+  mesh.stop();
 });

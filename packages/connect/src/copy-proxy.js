@@ -327,6 +327,7 @@ export async function copyProxy(args, deps = {}) {
     const { request, cipher } = freshRequest();
     const transport = { onFrame: null, onClose: null, send: null, close: null };
     const pc = peerFactory({
+      env: peer.id,
       signal: (payload) => {
         try { ws.send(JSON.stringify({ t: T.SIGNAL, env: peer.id, payload })); } catch {}
       },

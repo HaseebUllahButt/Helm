@@ -94,13 +94,16 @@ const forbidden = (message) => Object.assign(new Error(message), { code: 'forbid
  * for another machine this way at all, which is narrower than the hub; the
  * sending side never asks it to (hub-mesh.js keeps those calls on a hub).
  */
-export function directCaller(net, device, sub) {
+export function directCaller(net, device, sub, enabled = true) {
   if (!net || typeof device !== 'string' || !device || net.revoked?.[device] || net.revoked?.[net.self]) {
     throw forbidden('this direct channel is no longer allowed');
   }
+  if (!(Object.hasOwn(net.machines ?? {}, device) || Object.hasOwn(net.devices ?? {}, device))
+      || (!enabled && Object.hasOwn(net.machines ?? {}, device))) throw forbidden('this direct channel is no longer allowed');
   if (sub === undefined || sub === null || sub === device) return device;
   if (!Object.hasOwn(net.machines ?? {}, device)) throw forbidden('only a machine may pass on a request');
-  if (typeof sub !== 'string' || !Object.hasOwn(net.devices ?? {}, sub) || net.revoked?.[sub]) {
+  if (typeof sub !== 'string' || Object.hasOwn(net.machines ?? {}, sub)
+      || !Object.hasOwn(net.devices ?? {}, sub) || net.revoked?.[sub]) {
     throw forbidden('invalid forwarded request');
   }
   return sub;
@@ -146,6 +149,7 @@ export class PeerHub {
 
     if (!peer) return;
     if (payload.negotiation && payload.negotiation !== peer.negotiation) return;
+    if ((device && peer.device && device !== peer.device) || (link && peer.link && link !== peer.link)) return;
     if (link) peer.link = link;
     // Which device this channel belongs to, so a revocation can find it.
     if (device) peer.device = device;
@@ -254,6 +258,7 @@ export class PeerHub {
   async #onMessage(peer, raw) {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
     if (TUNNEL_TYPES.has(msg.t)) {
       if (!this.onTunnel) {
         if (msg.t === 'tunnel.open') {
@@ -267,7 +272,16 @@ export class PeerHub {
     if (msg.t !== 'rpc') return;
 
     const reply = (body) => {
-      return sendBuffered(peer.channel, JSON.stringify({ t: 'rpcResult', ...body }));
+      // Persistent channels can have many large replies in flight. Keep
+      // each fragmented frame together: interleaving more than eight would
+      // evict still-live assemblies at the caller and silently lose replies.
+      const frame = JSON.stringify({ t: 'rpcResult', ...body });
+      const run = (peer.sendChain ?? Promise.resolve()).then(() => sendBuffered(peer.channel, frame));
+      peer.sendChain = run.catch(() => {});
+      return run.then(ok => {
+        if (!ok) this.drop(peer.id, peer);
+        return ok;
+      }, error => { this.drop(peer.id, peer); throw error; });
     };
 
     try {

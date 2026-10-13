@@ -17,6 +17,7 @@ const { T } = await import('@helm/protocol');
 const { Link } = await import('../packages/connect/src/agent.js');
 const { HubMesh, routeLines } = await import('../packages/connect/src/hub-mesh.js');
 const { cleanup } = await import('node-datachannel');
+const { codeSigningInfo } = await import('../packages/connect/src/code-transfer.js');
 test.after(() => { cleanup(); rmSync(root, { recursive: true, force: true }); });
 
 async function until(check, ms = 15_000) {
@@ -39,6 +40,7 @@ const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
  */
 test('requests go direct when the channel is up and faster, and the hub takes over safely', { timeout: 90_000 }, async (context) => {
   const network = N.createNetwork({ name: 'local', port: 8787 });
+  network.machines[network.self].codeSignPubkey = codeSigningInfo().codeSignPubkey;
   const far = 'aabbcc112233';
   const old = 'ddeeff445566';
   for (const [id, name] of [[far, 'vm'], [old, 'oldpc'], ['c0ffee000000', 'third']]) {

@@ -1,10 +1,12 @@
 import { RTCPeerConnection } from 'node-datachannel/polyfill';
 import { randomBytes } from 'node:crypto';
+import { loadNetwork } from '@helm/protocol/network';
+import { signDirectOffer } from './direct-auth.js';
 
 const CHUNK = 16_000;
 const MAX_FRAME = 64 * 1024 * 1024;
 
-export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000 }) {
+export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000, env }) {
   const pc = new RTCPeerConnection({ iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
@@ -70,7 +72,7 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000 }
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     if (!closed) {
-      signal({ type: 'offer', sdp: pc.localDescription.sdp, negotiation });
+      signal(signDirectOffer(loadNetwork(), env, { type: 'offer', sdp: pc.localDescription.sdp, negotiation }));
       offerSent = true;
       for (const candidate of localCandidates.splice(0)) signal({ type: 'candidate', candidate, negotiation });
     }
@@ -153,7 +155,7 @@ export function directRpc({ signal, frame, timeout = 240_000, connectTimeout = 3
     };
     try {
       const candidate = makePeer({
-        signal, connectTimeout,
+        signal, connectTimeout, env: frame.env,
         onMessage: (message) => {
           if (settled || attempt !== generation || message?.t !== 'rpcResult' || message.id !== frame.id) return;
           if (message.ok) finish(null, message.result);
