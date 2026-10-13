@@ -251,6 +251,8 @@ export function createShareRoute({ online, callEnv, openTcp }) {
     let stream;
     try { stream = await openTcp(share.env, share.port); }
     catch { refuse(502, 'Bad Gateway'); return true; }
+    // The visitor can leave while the machine is still opening its port.
+    if (socket.destroyed) { stream.destroy(); return true; }
     const headers = upstreamHeaders(req, share);
     headers.Connection = 'Upgrade';
     headers.Upgrade = req.headers.upgrade || 'websocket';

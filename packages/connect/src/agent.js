@@ -44,7 +44,7 @@ import { transcribe, canTranscribe, setGroqKey } from './voice.js';
 import { codeKeyInfo, codeSigningInfo, answerCodeKeyProof } from './code-transfer.js';
 import { Handoffs } from './handoffs.js';
 import { TaskTransfers } from './task-transfer.js';
-import { TunnelSender, TunnelReceiver } from './tunnel-flow.js';
+import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { CliUpdater } from './cli-updates.js';
 import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted } from './update.js';
@@ -151,6 +151,10 @@ export class Link {
     if (this.#ws?.readyState === WebSocket.OPEN) {
       this.#ws.send(JSON.stringify({ t, ...extra }));
     }
+  }
+
+  get tunnelWritable() {
+    return this.#ws?.readyState === WebSocket.OPEN && this.#ws.bufferedAmount < TUNNEL_SOCKET_LIMIT;
   }
 
   async #open() {
@@ -1272,7 +1276,8 @@ export class Daemon {
         tunnel.receiver = new TunnelReceiver(sock,
           bytes => link.send(T.TUNNEL_ACK, { sid, bytes }), err => end(err.message));
         tunnel.sender = new TunnelSender(sock,
-          chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }), err => end(err.message));
+          chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }), err => end(err.message),
+          { canSend: () => link.tunnelWritable !== false });
       } else {
         sock.on('data', chunk => link.send(T.TUNNEL_DATA, { sid, data: chunk.toString('base64') }));
       }
