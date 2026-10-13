@@ -3294,3 +3294,42 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 
 .send-view button.primary { max-width: 100%; min-height: 44px; overflow-wrap: anywhere; }
 .send-notice .grow { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+
+/* New chat: a + on each folder row, shown on hover and on the row the
+   cursor is on, and a bar under the list that always offers a new folder
+   where the cursor is, plus how fresh the machine's folder list is. */
+.newchat-add {
+  flex: none; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--mutedfg); border-radius: 7px; opacity: 0;
+}
+.newchat-row:hover .newchat-add, .newchat-row:has(.palette-row.on) .newchat-add, .newchat-add:focus-visible { opacity: 1; }
+.newchat-add:hover { background: var(--hover); color: var(--text); }
+@media (pointer: coarse) { .newchat-row:has(.palette-row.on) .newchat-add { opacity: 1; } .newchat-add { width: 40px; height: 40px; } }
+.newchat-bar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 12px; border-top: 1px solid var(--line);
+  font-size: 13px; color: var(--mutedfg); min-width: 0;
+}
+.newchat-new {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 10px; border-radius: 8px;
+  color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.newchat-new:hover { background: var(--hover); }
+.newchat-new b, .newchat-where b { font-weight: 600; }
+.newchat-index { margin-left: auto; white-space: nowrap; font-size: 12px; }
+.newchat-refresh { flex: none; }
+.newchat-refresh:disabled svg { animation: tspin 0.9s linear infinite; }
+.newchat-bar.creating { gap: 10px; align-items: flex-end; }
+.newchat-bar.creating .pglyph { margin-bottom: 4px; }
+.newchat-bar.creating button.primary, .newchat-bar.creating button.ghost {
+  flex: none; width: auto; margin: 0; min-height: 36px; padding: 7px 14px;
+}
+.newchat-create { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.newchat-where { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.newchat-create input { width: 100%; min-width: 0; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 14px; }
+.newchat-create input:focus { outline: none; border-color: var(--primary); }
+@media (max-width: 520px) {
+  .newchat-index { display: none; }
+  .newchat-bar.creating { flex-wrap: wrap; }
+  .newchat-bar.creating .newchat-create { flex-basis: calc(100% - 40px); }
+  .newchat-bar.creating button.primary, .newchat-bar.creating button.ghost { flex: 1; }
+}

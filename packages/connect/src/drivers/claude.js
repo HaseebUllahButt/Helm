@@ -565,7 +565,15 @@ export class ClaudeDriver extends Driver {
       }
       return;
     }
-    if (m.subtype === 'compact_boundary') return this.compactionEnded('ok');
+    if (m.subtype === 'compact_boundary') {
+      // The ring drops to the summary's size now, not after the next reply:
+      // Claude says what is left in `post_tokens`.
+      const meta = m.compact_metadata ?? m.compactMetadata ?? {};
+      const post = Number(meta.post_tokens ?? meta.postTokens);
+      if (post > 0) { this.#contextUsed = post; this.#pushContext(); }
+      else if (this.#contextWindow) { this.#contextUsed = null; this.push('context', { used: 0, window: this.#contextWindow, compacted: true }); }
+      return this.compactionEnded('ok');
+    }
     // Task lifecycle frames. `tool_use_id` is the spawn card; `task_id` is
     // what progress and completion frames key off.
     if (m.subtype === 'task_started') {

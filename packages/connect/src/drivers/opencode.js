@@ -52,6 +52,10 @@ export class Opencode2Driver extends AcpDriver {
       args: () => ['acp'],
       acpMode: (m) => modeFor('opencode2', m)?.acp ?? null,
       effortId: 'effort',
+      // session/load replays every past message only for Helm to drop them;
+      // resume picks the conversation up without the replay. Builds without
+      // it fall back to session/load.
+      resumeVerb: 'session/resume',
     }, opts);
   }
 }

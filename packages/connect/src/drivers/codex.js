@@ -1285,6 +1285,9 @@ export class CodexDriver extends Driver {
         // auto-compact limit lives in config.toml), so no model/full: the
         // app shows the meter without the menu.
         if (used > 0 && window > 0) this.push('context', { used, window });
+        // Right after a compaction Codex reports an empty last call: the old
+        // size is gone and the new one is known only after the next reply.
+        else if (last && window > 0 && p.tokenUsage?.total?.totalTokens > 0) this.push('context', { used: 0, window, compacted: true });
         return;
       }
       case 'turn/completed': {

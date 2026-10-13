@@ -29,6 +29,8 @@ before(async () => {
           if(method==='model.list') return {models:[],modes:[]};
           if(method==='git.status') return {repo:true,files:[]};
           if(method==='fs.search') return {results:[]};
+          // A machine that sends its folder list: searched on the device.
+          if(method==='fs.index' && window.folders) return window.folders(params);
           // The machine's own checks on a folder name (fs.js makeDir).
           if(method==='fs.mkdir') {
             if(params.name.includes('/')) throw new Error('folder name cannot contain a path separator');
@@ -282,4 +284,56 @@ for (const width of [1280,390]) test(`a quick chat says "quick chat" where the f
   await bar.getByRole('button',{name:'more'}).click();
   assert.equal(await page.getByRole('button',{name:'Send to another machine'}).count(),0);
   assert.equal(await page.getByRole('button',{name:'Rename thread'}).count(),1);
+});
+
+test('with the machine\'s folder list, typing searches on the device and shows how fresh it is',async t=>{
+  const page=await pageFor(t);
+  await page.evaluate(()=>{
+    window.folders=(params)=>({stamp:'s1',at:Date.now()-30_000,count:4,building:false,
+      ...(params.since==='s1' && !params.refresh ? {unchanged:true} : {names:['dev','helm','intercept','notes'],parents:[-1,0,0,2],repos:[1]})});
+  });
+  const box=await folderStep(page);
+  await page.locator('.newchat-index').filter({hasText:'4 folders · checked 30s ago'}).waitFor();
+  await box.fill('inter');
+  await page.getByRole('option').filter({hasText:'~/dev/intercept'}).first().waitFor();
+  await box.fill('inter notes');
+  await page.getByRole('option').filter({hasText:'~/dev/intercept/notes'}).waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='fs.search').length),0,'never asks per keystroke');
+  // The refresh button makes the machine look at its disk again.
+  await page.getByRole('button',{name:'Look for new folders now'}).click();
+  await page.waitForFunction(()=>window.calls.some(c=>c.method==='fs.index' && c.params.refresh===true));
+});
+
+test('New folder is always offered below the list, and on each folder row as a +',async t=>{
+  const page=await pageFor(t);
+  await page.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
+  const box=await folderStep(page);
+  // Nothing typed, cursor nowhere: home.
+  await page.getByRole('button',{name:/^New folder in home$/}).click();
+  const name=page.getByRole('textbox',{name:/New folder name, in ~/});
+  await name.fill('scratch');
+  if (process.env.HELM_TEST_SCREENSHOT_DIR) for (const width of [1280,390]) {
+    await page.setViewportSize({width,height:844});
+    await page.screenshot({path:`${process.env.HELM_TEST_SCREENSHOT_DIR}/new-chat-create-${width}.png`});
+  }
+  await page.setViewportSize({width:1280,height:900});
+  // Esc puts it away without making anything.
+  await name.press('Escape');
+  await page.getByRole('button',{name:/^New folder in home$/}).waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='fs.mkdir').length),0);
+  // The + on a folder row aims inside that folder, even deep in the tree.
+  await page.getByRole('option').filter({hasText:/^project$/}).hover();
+  await page.getByRole('button',{name:'New folder inside project'}).click();
+  await page.getByRole('option').filter({hasText:/^existing$/}).waitFor();
+  await page.getByRole('option').filter({hasText:/^existing$/}).hover();
+  await page.getByRole('button',{name:'New folder inside existing'}).click();
+  const deep=page.getByRole('textbox',{name:'New folder name, in /work/project/existing'});
+  await deep.fill('deeper');
+  if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({path:`${process.env.HELM_TEST_SCREENSHOT_DIR}/new-chat-create-deep.png`});
+  await deep.press('Enter');
+  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  const mkdir=await page.evaluate(()=>window.calls.filter(c=>c.method==='fs.mkdir').map(c=>c.params));
+  assert.deepEqual(mkdir,[{path:'/work/project/existing',name:'deeper'}]);
+  await startPickedChat(page,{envId:'vm',folder:'/work/project/existing/deeper'});
+  void box;
 });

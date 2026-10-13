@@ -39,7 +39,7 @@ export function ContextLimit({ client, env, machines, session }: {
     document.addEventListener('keydown', esc);
     return () => document.removeEventListener('keydown', esc);
   }, [open]);
-  if (!editable) return <ContextMeter used={ctx.used} window={ctx.window} />;
+  if (!editable) return <ContextMeter used={ctx.used} window={ctx.window} compacted={ctx.compacted} />;
 
   const full = ctx.full && ctx.full >= ctx.window ? ctx.full : undefined;
   const isFull = full ? ctx.window >= full : false;
@@ -89,7 +89,7 @@ export function ContextLimit({ client, env, machines, session }: {
   );
   return (
     <span className="ctx-slot" ref={slot}>
-      <ContextMeter used={ctx.used} window={ctx.window} open={open} onPress={() => { setDown((slot.current?.getBoundingClientRect().top ?? 999) < 360); setOpen((v) => !v); setNote(null); }} />
+      <ContextMeter used={ctx.used} window={ctx.window} compacted={ctx.compacted} open={open} onPress={() => { setDown((slot.current?.getBoundingClientRect().top ?? 999) < 360); setOpen((v) => !v); setNote(null); }} />
       {open && (
         <div className={`menu ctx-menu${down ? ' down' : ''}`} role="menu" aria-label="Compact at">
           <div className="ctx-menu-title">Compact at</div>
