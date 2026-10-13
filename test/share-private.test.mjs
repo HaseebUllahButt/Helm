@@ -270,6 +270,25 @@ test('helm forward lets a tunnel go when the browser gives up early, and when it
   assert.equal(slow.tunnels.size, 0, 'tunnel left open after close');
 });
 
+test('helm forward lets each tunnel go when the browser finishes first', async (t) => {
+  // The app keeps its connection open (HTTP/1.1); the browser is the one to
+  // close once it has the page. Nobody answers that close, so a bridge that
+  // waited for one held a hub socket open per page load, forever.
+  let open = 0;
+  const counted = (...args) => { open++; return bridge(...args).finally(() => { open--; }); };
+  const fwd = await startForward(N.loadNetwork(), { target: MACHINE, port: APP, localPort: 0, hubs: [`http://127.0.0.1:${PORT}`], open: counted });
+  t.after(() => fwd.close());
+  for (let i = 0; i < 3; i++) {
+    const s = tcpConnect({ host: '127.0.0.1', port: fwd.port });
+    s.on('error', () => {});
+    s.write(`GET /first-${i} HTTP/1.1\r\nHost: x\r\n\r\n`);
+    await new Promise((r) => s.once('data', r));
+    s.end();
+  }
+  await new Promise((r) => setTimeout(r, 2600));
+  assert.equal(open, 0, 'tunnels still open after the browser finished');
+});
+
 test('a landing path never carries what a Location header cannot', () => {
   assert.equal(S.safeSharePath('/inside?a=1'), '/inside?a=1');
   for (const bad of ['//evil', '/\\evil', '/x\r\nSet-Cookie: a=b', '/x\u0001y', 'https://evil', '']) assert.equal(S.safeSharePath(bad), '/');

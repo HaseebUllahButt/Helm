@@ -56,6 +56,7 @@ export function bridge(hub, token, host, port, {
     let settled = false;
     let sender, receiver;
     let release;
+    let linger = null;
     const timer = setTimeout(() => shutdown(new Error('tunnel open timed out')), timeout);
     const drain = () => { if (!settled) ws.resume(); };
     const send = (chunk) => {
@@ -68,20 +69,33 @@ export function bridge(hub, token, host, port, {
     let ended = false;
     const end = () => {
       ended = true;
-      const close = () => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: T.TUNNEL_CLOSE, sid })); };
+      const close = () => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: T.TUNNEL_CLOSE, sid }));
+        // A close is the whole tunnel, both ways, and nobody answers it: the
+        // hub forgets the stream and the far machine drops its socket. Waiting
+        // for a reply kept one hub socket open per finished connection, for
+        // as long as `helm forward` ran. Bytes already on their way get a
+        // moment to land; then this side is done too.
+        linger = setTimeout(() => shutdown(), 2000);
+      };
       if (sender) sender.finish(close); else close();
     };
     // The input torn down without ending first (a browser that gave up before
     // the tunnel was ready, `helm forward` stopping): nothing waits for a
     // tail, so the tunnel goes now. A socket that ended before the tunnel was
     // ready never fires 'end' for us; this is the only word of it.
-    const gone = () => { if (!ended) shutdown(new Error('connection closed')); };
+    // Torn down after it ended, too: nothing is left to deliver a tail to.
+    const gone = () => {
+      if (!ended) shutdown(new Error('connection closed'));
+      else if (output.destroyed) shutdown();
+    };
     input.once('close', gone);
     if (input.destroyed) process.nextTick(gone);
     const shutdown = (err) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(linger);
       release?.();
       input.pause();
       sender?.stop();
