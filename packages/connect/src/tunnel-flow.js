@@ -63,11 +63,14 @@ export class TunnelSender {
     }
     if (!this.pending?.length) {
       this.pending = null;
-      if (this.finishing && this.sent === this.acknowledged) {
+      // A write accepted while the input was paused still sits in its buffer.
+      // Finishing is not done until that tail has been read, sent and acked.
+      const drained = !this.input.readableLength || this.input.destroyed;
+      if (this.finishing && drained && this.sent === this.acknowledged) {
         const done = this.finishing;
         this.stop();
         done();
-      } else if (!this.finishing && this.sent - this.acknowledged < this.window) this.input.resume();
+      } else if ((!this.finishing || !drained) && this.sent - this.acknowledged < this.window) this.input.resume();
     }
   }
 

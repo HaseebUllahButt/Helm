@@ -113,6 +113,30 @@ test('closing openTcp flushes the last write before releasing its tunnel', { tim
   assert.equal(received, TUNNEL_WINDOW + 123);
 });
 
+test('ending openTcp keeps a small write that landed while the sender was paused', { timeout: 5000 }, async t => {
+  const f = await setup(); t.after(() => f.close());
+  let received = 0;
+  const server = tcpServer(sock => {
+    sock.on('data', chunk => { received += chunk.length; });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  process.env.HELM_SSH_PORT = String(server.address().port);
+  for (const size of [TUNNEL_WINDOW + 5, 3 * TUNNEL_CHUNK]) {
+    const stream = await f.layer.openTcp('sharer', server.address().port);
+    stream.resume();
+    received = 0;
+    // The first write fills the credit window (or trips the two-frame yield),
+    // so the second one waits inside the stream when end() arrives.
+    stream.write(Buffer.alloc(size, 120));
+    stream.write(Buffer.alloc(7, 121));
+    stream.end();
+    await once(stream, 'close');
+    await until(() => f.appSockets.size === 0 && !hasActiveTransfers());
+    await until(() => received === size + 7);
+  }
+});
+
 test('aborting an upload with a blocked write releases its pending callbacks', { timeout: 5000 }, async t => {
   const f = await setup({ uploadDelay: 500 }); t.after(() => f.close());
   const stream = await f.layer.openTcp('sharer', process.env.HELM_SSH_PORT);

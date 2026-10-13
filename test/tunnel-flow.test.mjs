@@ -77,6 +77,23 @@ test('a closing sender flushes a tail that is waiting for credit before closing 
   assert.equal(closed, true);
 });
 
+test('a closing sender still sends a write that arrived while its input was paused', async () => {
+  const input = new PassThrough(); let closed = false; let sent = 0;
+  const sender = new TunnelSender(input, c => { sent += c.length; }, assert.fail);
+  input.write(Buffer.alloc(TUNNEL_WINDOW + 123));
+  await tick();
+  // The window is full, so this lands in the paused input's buffer.
+  input.write(Buffer.alloc(7));
+  sender.finish(() => { closed = true; });
+  sender.ack(TUNNEL_WINDOW);
+  sender.ack(TUNNEL_WINDOW + 123);
+  assert.equal(closed, false, 'the buffered tail has not been sent yet');
+  await tick();
+  assert.equal(sent, TUNNEL_WINDOW + 130);
+  sender.ack(TUNNEL_WINDOW + 130);
+  assert.equal(closed, true);
+});
+
 test('a closing tunnel cannot wait forever for an acknowledgement that never arrives', async () => {
   const input = new PassThrough();
   let failed;
