@@ -70,7 +70,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
   const savedDefaults = agent?.subagentDefaults ?? catalog?.subagentDefaults ?? {};
   // What this machine starts the account on, the same as a new chat.
   const fallbackModel = catalog?.default || agent?.defaultModel || '';
-  const selectedModel = model === null ? savedDefaults.model || fallbackModel : model || fallbackModel;
+  const selectedModel = model || savedDefaults.model || fallbackModel;
   const belongsHere = (session: Session) => !session.archived && session.delegation?.parentId === parent.id;
   const children = sessions.filter(belongsHere);
   const active = children.filter((child) => ACTIVE.includes(stateOf(child))).sort((left, right) =>
@@ -107,7 +107,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     if (kind === 'model') {
       setModel(id);
       // A thinking level the new model does not offer is not kept.
-      const levels = options?.effortsByModel?.[id || fallbackModel] ?? options?.efforts ?? [];
+      const levels = options?.effortsByModel?.[id] ?? options?.efforts ?? [];
       if (effort && !levels.includes(effort)) setEffort('');
     } else if (kind === 'effort') setEffort(id);
     else if (kind === 'mode') setMode(id);
@@ -127,9 +127,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
       return updated;
     });
   };
-  const controls = Controls({ options, session: picked, busy, onPick: pick, ...prefs, onDefault, defaultsFor: 'subagents',
-    modelFallback: { id: '', label: `Default on ${env.name}`, hint: fallbackModel ? options?.labels?.[fallbackModel] ?? fallbackModel : 'the CLI picks',
-      active: model === '' || model === null && !savedDefaults.model } });
+  const controls = Controls({ options, session: picked, busy, onPick: pick, ...prefs, onDefault, defaultsFor: 'subagents' });
   const accountName = (candidate: CliAgent) => candidate.label || candidate.id;
 
   useEffect(() => {
@@ -250,7 +248,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     setBusy(true); setError(null);
     try {
       const { session } = await client.rpc<{ session: Session }>(env.id, 'session.delegate', {
-        id: parent.id, profileId: account, model: model === null ? undefined : selectedModel || undefined,
+        id: parent.id, profileId: account, model: model || undefined,
         ...(effort ? { effort } : {}), mode: mode || undefined, task: task.trim(),
       }, 70_000);
       setTask(''); setComposing(false); setChoosingAccount(false); controls.close();
@@ -435,7 +433,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
             footer={<button type="button" className="moderow more" disabled={loading} onClick={() => void loadAgents(true)}>
               <span className="grow"><span className="rt">{loading ? 'Looking again…' : 'Look for accounts again'}</span></span></button>} />
             : controls.sheet}
-          <p className="delegation-inherit note">{model ? 'Model chosen for this task.' : model === null && savedDefaults.model
+          <p className="delegation-inherit note">{model ? 'Model chosen for this task.' : savedDefaults.model
             ? 'Using your subagent default.' : `Using the default on ${env.name}.`}</p>
           {agent && !agent.modes.length && <p className="note">This CLI controls its own permissions.</p>}
           {errorBox('form')}

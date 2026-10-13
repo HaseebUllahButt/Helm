@@ -121,9 +121,10 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       assert.equal(await view.evaluate(()=>window.calls.filter(c=>c.method==='session.delegate').length),0);
       await view.evaluate(()=>window.releaseCatalog());
       await view.getByRole('button',{name:/^model:/}).click();
-      await view.getByRole('option',{name:/^Default on Laptop/}).waitFor();
-      assert.equal(await view.getByRole('option',{name:/^Default on Laptop/}).getAttribute('aria-selected'),'true');
-      assert.equal(await view.getByRole('option',{name:/^Inherit/}).count(),0);
+      // Model names only, the machine's default for the account already chosen.
+      await view.getByRole('option',{name:'normal-model',exact:true}).waitFor();
+      assert.equal(await view.getByRole('option',{name:'normal-model',exact:true}).getAttribute('aria-selected'),'true');
+      assert.equal(await view.getByRole('option',{name:/Default on|Inherit/}).count(),0);
       await view.getByRole('button',{name:'close',exact:true}).click();
       await view.getByRole('button',{name:/^thinking:/}).waitFor();
       await view.getByRole('button',{name:/^model:/}).click();
@@ -145,15 +146,15 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       await view.getByRole('button',{name:/^model:/}).click();
       await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
       await view.evaluate(()=>{window.failSave=true;});
-      await view.getByRole('button',{name:'Use Default on Laptop by default for subagents'}).click();
+      await view.getByRole('button',{name:'Use normal-model by default for subagents'}).click();
       await view.getByRole('alert').filter({hasText:'Could not save helper default'}).waitFor();
       await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
       await view.evaluate(()=>{window.failSave=false;});
-      await view.getByRole('button',{name:'Use Default on Laptop by default for subagents'}).click();
-      await view.getByRole('button',{name:'Default on Laptop is the default for subagents'}).waitFor();
+      await view.getByRole('button',{name:'Use normal-model by default for subagents'}).click();
+      await view.getByRole('button',{name:'normal-model is the default for subagents'}).waitFor();
       await view.getByRole('button',{name:'Use Helper Model by default for subagents'}).click();
       await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
-      await view.getByRole('option',{name:/^Default on Laptop/}).click();
+      await view.getByRole('option',{name:'normal-model',exact:true}).click();
       await view.getByRole('button',{name:/^thinking:/}).click();
       await view.getByRole('button',{name:'Use high by default for subagents'}).click();
       await view.getByRole('button',{name:'high is the default for subagents'}).waitFor();

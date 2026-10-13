@@ -23,7 +23,7 @@ export interface Choice {
  * The sheet docks in the same slot a permission prompt uses, because that is
  * where your eyes already are.
  */
-export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs, onDefault, onNewsSeen, onNativeControl, modelFallback, defaultsFor = 'new chats' }: {
+export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs, onDefault, onNewsSeen, onNativeControl, defaultsFor = 'new chats' }: {
   options: ModelList | null;
   onNativeControl?: (kind: NativeControl) => void;
   session: Session;
@@ -37,17 +37,10 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
   onDefault?: (kind: Kind, id: string) => Promise<void> | void;
   /** The owner saw the "new model" note; it need not show again. */
   onNewsSeen?: () => void;
-  modelFallback?: Choice & { active: boolean };
   defaultsFor?: string;
 }) {
   const [open, setOpen] = useState<Kind | null>(null);
   const groups = groupsFor(options, session);
-  const modelGroup = groups.find((group) => group.kind === 'model');
-  if (modelFallback && modelGroup) {
-    modelGroup.choices.unshift(modelFallback);
-    if (modelFallback.active) modelGroup.current = modelFallback.id;
-    modelGroup.saved = options?.prefs?.default ?? modelFallback.id;
-  }
   const group = groups.find((g) => g.kind === open);
   const model = session.model || session.engineModel || options?.default || '';
   const effortFavs = (options?.effortFavs ?? []).flatMap((entry) => {
