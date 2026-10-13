@@ -8,16 +8,19 @@ import { hubCredential, allEndpoints } from '@helm/protocol/network';
  * The CLI talking to machines: one RPC through whichever hub answers.
  *
  * A machine's own hub on loopback is tried first - it is the fastest route
- * and the most likely to be up - then every address the roster knows.
+ * and the most likely to be up, and it picks the quickest way on from there
+ * - then the target machine's own addresses, which reach it with no hub in
+ * between, then every other address the roster knows.
  */
-export function hubUrls(net) {
-  return [`http://127.0.0.1:${net.port ?? 8787}`, ...allEndpoints(net)];
+export function hubUrls(net, env) {
+  const own = env && env !== net.self ? net.machines?.[env]?.endpoints ?? [] : [];
+  return [...new Set([`http://127.0.0.1:${net.port ?? 8787}`, ...own, ...allEndpoints(net)])];
 }
 
 /** A controller connection, sharing the daemon's provider rather than spawning one. */
 export async function connectHub(net, env, { timeout = 20_000 } = {}) {
   const failures = [];
-  for (const hub of [...new Set(hubUrls(net))]) {
+  for (const hub of hubUrls(net, env)) {
     for (const path of ['/helm/ws', '/ws']) {
       let connection;
       try {
@@ -107,7 +110,7 @@ export async function hubRpc(net, env, method, params = {}, { timeout = 20_000, 
   const failures = [];
   const deadline = Date.now() + budget;
   const once = NON_REPEATABLE.has(method);
-  for (const hub of hubUrls(net)) {
+  for (const hub of hubUrls(net, env)) {
     if (Date.now() >= deadline) break;
     try {
       return await rpcVia(hub, net, env, method, params, timeout, { direct, onRoute, deadline, once });

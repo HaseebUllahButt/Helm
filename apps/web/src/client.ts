@@ -885,14 +885,27 @@ export class Client {
     this.presencePoll = null;
   }
 
+  /**
+   * Move to another hub for more reach, or for the same reach clearly
+   * faster - the same rule the machines use between themselves: under 70%
+   * of the current hub's time and at least 20ms quicker, and not within 30
+   * seconds of the last move, so one slow answer never makes it flap.
+   */
   private upgradeHub(reached: Reached[], version: number, hub: string) {
     if (this.closed || !this.connected || version !== this.connectVersion || this.relay !== hub) return;
     const current = reached.find(candidate => candidate.base === hub);
-    const best = reached[0];
-    if (!current || !best || best.base === hub || best.reach <= current.reach) return;
+    if (!current) return;
+    const faster = reached.filter(c => c.reach === current.reach && c.base !== hub
+      && c.elapsed < current.elapsed * 0.7 && current.elapsed - c.elapsed > 20)
+      .sort((a, b) => a.elapsed - b.elapsed)[0];
+    const best = reached[0]?.reach > current.reach ? reached[0]
+      : faster && Date.now() - this.hubMovedAt >= 30_000 ? faster : null;
+    if (!best || best.base === hub) return;
+    this.hubMovedAt = Date.now();
     this.backoff = 500;
     void this.connect(best.base).catch(() => {});
   }
+  private hubMovedAt = 0;
 
   private refreshReachability() {
     if (this.closed || !this.connected || this.reachCheck || document.hidden) return;

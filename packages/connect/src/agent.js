@@ -33,6 +33,7 @@ import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
 import { PeerHub } from './peer.js';
 import { lanAddresses } from './net-addr.js';
+import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
 import { listShares, addShare, removeShare, publicShare } from './shares.js';
 import { publicHosts } from '@helm/protocol/share';
@@ -88,12 +89,17 @@ export class Link {
   #beat = null;
   #waiting = false;
   #retryTimer = null;
+  #pingAt = null;
 
-  constructor(daemon, url) {
+  constructor(daemon, url, { hintFor } = {}) {
     this.daemon = daemon;
     this.url = url;
     this.id = url;
     this.connected = false;
+    this.rtt = null;
+    // Set when this address came from a machine announcing itself on the
+    // local network rather than from the roster: whose hub it should be.
+    this.hintFor = hintFor ?? null;
   }
 
   start() { this.#open().catch(() => this.#retry()); return this; }
@@ -140,12 +146,32 @@ export class Link {
         return;
       }
       this.#waiting = true;
-      this.send(T.PING);
+      this.#ping();
     }, HEARTBEAT_MS);
     this.#beat.unref?.();
+    // One straight away, so a fresh link has a round-trip time to show
+    // rather than a blank for the first twenty seconds.
+    this.#ping();
   }
 
-  onPong() { this.#waiting = false; }
+  #ping() {
+    this.#pingAt = performance.now();
+    this.send(T.PING);
+  }
+
+  /**
+   * The heartbeat doubles as a cheap measure of how far away this hub is:
+   * `rtt` is a running average of ping to pong, in milliseconds. It is the
+   * first leg only - `helm status` shows it next to the full trip the mesh
+   * times through this hub to each machine.
+   */
+  onPong() {
+    this.#waiting = false;
+    if (this.#pingAt == null) return;
+    const sample = performance.now() - this.#pingAt;
+    this.#pingAt = null;
+    this.rtt = this.rtt == null ? sample : this.rtt + 0.3 * (sample - this.rtt);
+  }
 
   send(t, extra = {}) {
     if (this.#ws?.readyState === WebSocket.OPEN) {
@@ -447,6 +473,16 @@ export class Daemon {
     this.#brainTimer.unref?.();
 
     await this.#tick();
+    // Listen for machines on the same network, and say we are here. Started
+    // after the first tick so the roster links go out first; an address
+    // heard here only adds a link, it never replaces one that works.
+    this.lan = new LanDiscovery({
+      network: () => loadNetwork() ?? this.net,
+      port: this.port,
+      announce: this.advertiseLan,
+      onChange: () => this.#reconcileLinks(),
+    });
+    this.lan.start().catch((err) => console.error('[helm] local network discovery:', err?.message || err));
     // Start the fingerprint exchange the moment our roster changes instead of
     // at the next tick: a removal typed on this machine reaches the hubs in a
     // second, not up to fifteen. The tick below remains the net under it.
@@ -562,6 +598,7 @@ export class Daemon {
     this.schedules?.stop();
     this.github?.stop();
     this.#stopWatch?.();
+    this.lan?.stop();
     for (const link of this.#links.values()) link.stop();
     this.mesh?.stop();
     // A locally terminated tunnel is a live socket even after every hub link
@@ -613,8 +650,23 @@ export class Daemon {
     for (const url of allEndpoints(net)) {
       if (!mine.has(url) && !urls.includes(url)) urls.push(url);
     }
-    return urls;
+    this.#hintOwners = new Map();
+    if (!this.lan?.active) return urls;
+    const plan = withHeardAddresses({
+      urls, net, self: this.id, mine,
+      connected: (url) => !!this.#links.get(url)?.connected,
+      // A hint link that is up stays up, even if an announcement or two was lost.
+      heard: [
+        ...[...this.#links.values()].filter((l) => l.hintFor && l.connected).map((l) => ({ url: l.url, id: l.hintFor })),
+        ...this.lan.list(),
+      ],
+    });
+    this.#hintOwners = plan.owners;
+    return plan.urls;
   }
+
+  /** Hinted address -> the machine that announced it, for this round's links. */
+  #hintOwners = new Map();
 
   async #tick() {
     if (this.#stopped) return;
@@ -650,7 +702,7 @@ export class Daemon {
     }
     for (const url of want) {
       if (this.#links.has(url)) continue;
-      this.#links.set(url, new Link(this, url).start());
+      this.#links.set(url, new Link(this, url, { hintFor: this.#hintOwners.get(url) }).start());
     }
   }
 
@@ -880,6 +932,10 @@ export class Daemon {
     const net = loadNetwork();
     if (net) link.send(T.ROSTER, { roster: rosterOf(net) });
     if (!local) this.mesh?.up(link);
+    // One way into each machine's hub: whichever of a heard address and the
+    // roster's came up first, the other is dropped now rather than at the
+    // next tick, before the two can take turns superseding each other.
+    if (this.lan?.active && !local) this.#reconcileLinks();
     // Nudge the hub to redistribute SSH keys now that we are attached. Our
     // identity travelled in the roster above; the hub does not write it.
     sshInfo().then((ssh) => link.send(T.SSH_INFO_REPORT, ssh)).catch(() => {});
@@ -895,6 +951,34 @@ export class Daemon {
     this.usage ??= new UsageReader({ indexPath: join(HELM_DIR, 'usage-index.json') });
     const profiles = await currentProfiles();
     return this.usage.buckets(profiles, { rebuild });
+  }
+
+  /**
+   * How this machine reaches every other one right now: which hub, whether
+   * it is the machine's own, and the measured round trip - plus what the
+   * local network discovery has heard. What `helm status` prints.
+   */
+  routes() {
+    const net = loadNetwork() ?? this.net;
+    const name = (id) => net.machines?.[id]?.name ?? id;
+    // A machine that dialled into this machine's own hub is reached on that
+    // socket, before any other hub is asked; the closest thing to its round
+    // trip is our own heartbeat to its hub, when we hold a link there too.
+    const attached = [...(this.localOnline?.keys() ?? [])].filter((id) => id !== this.id && !net.revoked?.[id])
+      .map((env) => {
+        const mine = this.live.find((l) => l.hintFor === env || (net.machines?.[env]?.endpoints ?? []).includes(l.url));
+        return { env, attached: true, url: null, own: true, ms: null, hubMs: mine?.rtt == null ? null : Math.round(mine.rtt), others: [] };
+      });
+    const table = [...attached, ...(this.mesh?.table() ?? []).filter((r) => !this.localOnline?.has(r.env))];
+    const reached = new Set(table.map((r) => r.env));
+    return {
+      machines: [
+        ...table.map((r) => ({ ...r, name: name(r.env) })),
+        ...Object.keys(net.machines ?? {}).filter((id) => id !== this.id && !net.revoked?.[id] && !reached.has(id))
+          .map((env) => ({ env, name: name(env), url: null })),
+      ],
+      lan: this.lan?.status() ?? { on: false, reason: 'not started', heard: [] },
+    };
   }
 
   /** The hubs we can actually talk to right now. */
@@ -1891,6 +1975,7 @@ export class Daemon {
         return this.transfers.accept(p, caller);
 
       case M.PING:            return { t: Date.now() };
+      case M.NET_ROUTES:      return this.routes();
 
       case M.SSH_INFO:        return sshInfo();
 
