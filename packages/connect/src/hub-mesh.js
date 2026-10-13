@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { T, M } from '@helm/protocol';
+import { DirectMesh } from './direct-mesh.js';
 
 /**
  * How often each route to a machine is timed, when there is more than one.
@@ -29,8 +30,18 @@ const SWITCH_HOLD_MS = 30_000;
 /** How much one new sample moves the running estimate. */
 const SMOOTHING = 0.3;
 
+/**
+ * Requests that only read, so asking again after a direct channel died
+ * under them cannot do anything twice. Everything else that may have
+ * arrived fails as uncertain rather than being sent again over a hub.
+ */
+const READS = new Set([
+  M.PING, M.ENV_INFO, M.SESSION_LIST, M.SESSION_EVENTS, M.FS_LIST, M.FS_ROOTS, M.FS_SEARCH,
+  M.GIT_STATUS, M.GIT_GRAPH, M.GIT_DIFF, M.GIT_COMMIT, M.USAGE_REPORT, M.USAGE_LIMITS, M.NET_ROUTES,
+]);
+
 export class HubMesh {
-  constructor(network, changed, event, signalEvent, { now = () => performance.now(), probeEvery = PROBE_EVERY_MS } = {}) {
+  constructor(network, changed, event, signalEvent, { now = () => performance.now(), probeEvery = PROBE_EVERY_MS, direct = null } = {}) {
     this.network = network;
     this.changed = changed;
     this.event = event;
@@ -46,6 +57,21 @@ export class HubMesh {
     // machine id -> { link, since }: the route new requests take.
     this.routes = new Map();
     this.timer = null;
+    // Direct channels to the machines behind these hubs, opened when we
+    // first talk to one (direct-mesh.js). `direct` is true, or the WebRTC
+    // peer maker for tests; off, every request takes a hub as before.
+    this.direct = direct ? new DirectMesh({
+      network, now: this.now,
+      signal: (env, peer, payload) => this.signal(env, peer, payload, network()?.self),
+      forget: (peer) => this.forgetPeer(peer),
+      supports: (env) => this.supportsDirect(env),
+      // A channel just came up: time the hub route too, so the two can be
+      // compared within a second rather than at the next round.
+      changed: (env) => { if (this.direct?.isOpen(env)) for (const link of this.#candidates(env)) this.probe(link, env); },
+      ...(typeof direct === 'object' ? direct : {}),
+    }) : null;
+    // machine id -> { on, since }: whether new requests take the channel.
+    this.directUse = new Map();
   }
 
   up(link) {
@@ -98,7 +124,8 @@ export class HubMesh {
     if (frame.t === T.HUB_SIGNAL) {
       const route = this.signals.get(`${frame.peer}:${frame.env}`);
       if (route?.link === link && this.machines().has(frame.env)
-          && [T.SIGNAL, T.SIGNAL_READY].includes(frame.kind)) this.signalEvent?.(frame);
+          && [T.SIGNAL, T.SIGNAL_READY].includes(frame.kind)
+          && !this.direct?.receive(frame)) this.signalEvent?.(frame);
       return true;
     }
     if (frame.t === T.HUB_STATE && Array.isArray(frame.machines)) {
@@ -218,7 +245,7 @@ export class HubMesh {
   probe(link, env) {
     const network = this.network();
     if (!link.connected || env === network?.self || !Object.hasOwn(network?.machines ?? {}, env) || network.revoked?.[env]) return;
-    if (this.#candidates(env).length < 2) return;
+    if (this.#candidates(env).length < 2 && !this.direct?.isOpen(env)) return;
     const slots = this.timing.get(link);
     if (!slots) return;
     const slot = slots.get(env) ?? { ms: null, probing: null };
@@ -244,6 +271,66 @@ export class HubMesh {
     for (const [link, machines] of this.links) {
       for (const env of machines.keys()) this.probe(link, env);
     }
+    this.direct?.tick();
+  }
+
+  /**
+   * Whether that machine's Helm takes direct channels from machines. Read
+   * from what it told its hubs when it attached; an older Helm says nothing
+   * and every request to it keeps going through a hub.
+   */
+  supportsDirect(env) {
+    for (const [link, machines] of this.links) {
+      if (link.connected && machines.get(env)?.info?.directRpc === 1) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether new requests to this machine take the direct channel rather
+   * than `link`, the hub route. The same rule as moving between hubs - a
+   * clear win, measured, and not more than once every 30 seconds - because
+   * a direct path is not automatically a short one: it can cross the same
+   * VPN the hub does. A channel that is down or not yet timed is not used.
+   */
+  #preferDirect(env, link) {
+    const state = this.directUse.get(env) ?? { on: false, since: -Infinity };
+    const direct = this.direct?.estimate(env);
+    if (!direct?.known) {
+      if (state.on) this.directUse.set(env, { on: false, since: this.now() });
+      return false;
+    }
+    const hub = this.estimate(link, env);
+    const settled = this.now() - state.since >= SWITCH_HOLD_MS;
+    if (hub?.known && settled) {
+      const faster = (a, b) => a.ms < b.ms * SWITCH_RATIO && b.ms - a.ms > SWITCH_MIN_GAIN_MS;
+      if (!state.on && faster(direct, hub)) {
+        this.directUse.set(env, { on: true, since: this.now() });
+        return true;
+      }
+      if (state.on && faster(hub, direct)) {
+        this.directUse.set(env, { on: false, since: this.now() });
+        return false;
+      }
+    }
+    return state.on;
+  }
+
+  /**
+   * A request may go direct when this machine is asking for itself or for a
+   * phone or browser attached to it - the two cases the other machine
+   * accepts on a channel (peer.js directCaller). A call this hub passes on
+   * for another machine stays on a hub, where that is allowed.
+   */
+  #mayGoDirect(network, sub) {
+    return sub === network.self
+      || (typeof sub === 'string' && Object.hasOwn(network.devices ?? {}, sub) && !network.revoked?.[sub]);
+  }
+
+  /** Close the channels of machines taken out of the network. */
+  dropRevoked(revoked) {
+    this.direct?.dropRevoked(revoked);
+    for (const env of Object.keys(revoked ?? {})) this.directUse.delete(env);
   }
 
   /** Which way each reachable machine is reached, and how long it takes. */
@@ -256,7 +343,9 @@ export class HubMesh {
         ms: this.estimate(candidate, env)?.known ? Math.round(this.estimate(candidate, env).ms) : null,
         hubMs: typeof candidate.rtt === 'number' ? Math.round(candidate.rtt) : null,
       });
-      return { env, ...via(link), others: this.#candidates(env).filter((c) => c !== link).map(via) };
+      const row = { env, ...via(link), others: this.#candidates(env).filter((c) => c !== link).map(via) };
+      if (this.direct) row.direct = { ...this.direct.status(env), used: this.#preferDirect(env, link) };
+      return row;
     });
   }
 
@@ -265,7 +354,28 @@ export class HubMesh {
     if (!Object.hasOwn(network?.machines ?? {}, env) || network.revoked?.[env]) return Promise.reject(new Error('unknown machine'));
     const link = this.route(env);
     if (!link) return Promise.reject(Object.assign(new Error('environment is not connected'), { code: 'offline' }));
-    return this.#request(link, env, method, params, { sub: sub ?? network.self, timeout });
+    const asker = sub ?? network.self;
+    if (this.direct && this.#mayGoDirect(network, asker)) {
+      this.direct.want(env);
+      if (this.#preferDirect(env, link)) return this.#callDirect(env, method, params, { sub: asker, timeout });
+    }
+    return this.#request(link, env, method, params, { sub: asker, timeout });
+  }
+
+  /**
+   * One request over the direct channel, with the hub as the backup. It
+   * moves to a hub only when it certainly never left, or when it only
+   * reads; a write that may have arrived fails as uncertain, exactly as one
+   * lost on a hub link does, and is never sent a second time.
+   */
+  #callDirect(env, method, params, { sub, timeout }) {
+    return this.direct.call(env, method, params, { sub, timeout }).catch((error) => {
+      if (error.rpc) throw error;
+      if (!error.unsent && !(error.code === 'disconnected' && READS.has(method))) throw error;
+      const link = this.route(env);
+      if (!link) throw Object.assign(new Error('environment is not connected'), { code: 'offline' });
+      return this.#request(link, env, method, params, { sub, timeout });
+    });
   }
 
   #request(link, env, method, params, { sub, timeout }) {
@@ -307,6 +417,7 @@ export class HubMesh {
   stop() {
     clearInterval(this.timer);
     this.timer = null;
+    this.direct?.stop();
     for (const link of [...this.links.keys()]) this.down(link);
   }
 }
@@ -324,9 +435,21 @@ export function routeLines(report) {
     if (m.attached) return `  ${name}  connected straight to this machine${m.hubMs != null ? ` (${ms(m.hubMs)} to its hub)` : ''}`;
     if (!m.url) return `  ${name}  not reachable right now`;
     const time = m.ms != null ? ms(m.ms) : m.hubMs != null ? `${ms(m.hubMs)} to the hub, not timed through it` : 'not timed yet';
+    const hub = `${m.own ? 'via its own hub' : 'through'} ${m.url}  ${time}`;
     const others = (m.others ?? []).map((o) => `${o.url}${o.ms != null ? ` ${ms(o.ms)}` : ''}`);
-    return `  ${name}  ${m.own ? 'via its own hub' : 'through'} ${m.url}  ${time}` +
-      (others.length ? `\n  ${' '.repeat(width)}  also: ${others.join(', ')}` : '');
+    const pad = `\n  ${' '.repeat(width)}  `;
+    const d = m.direct;
+    // Direct and in use: that is the route, and the hub is the backup.
+    if (d?.used) return `  ${name}  direct  ${ms(d.ms)}${pad}backup: ${hub}${others.length ? `${pad}also: ${others.join(', ')}` : ''}`;
+    const note = !d ? null
+      : d.state === 'open' ? `direct ${ms(d.ms) || 'not timed yet'}, not faster so not used`
+        : d.state === 'connecting' ? 'direct: connecting'
+          : d.state === 'retrying' ? 'direct: could not connect, trying again'
+            : d.state === 'unsupported' ? 'direct: its Helm is too old, hub only'
+              : null;
+    return `  ${name}  ${hub}` +
+      (others.length ? `${pad}also: ${others.join(', ')}` : '') +
+      (note ? `${pad}${note}` : '');
   });
   const lan = report.lan;
   const names = new Map((report.machines ?? []).map((m) => [m.env, m.name]));

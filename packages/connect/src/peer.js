@@ -79,6 +79,33 @@ async function sendBuffered(channel, frame) {
 
 const TUNNEL_TYPES = new Set(['tunnel.open', 'tunnel.ack', 'tunnel.data', 'tunnel.close']);
 
+const forbidden = (message) => Object.assign(new Error(message), { code: 'forbidden' });
+
+/**
+ * Who a request on a direct channel is from, checked on every request the
+ * way a hub checks every request it forwards.
+ *
+ * `device` is the channel's identity: the member the hub vouched for when it
+ * introduced the two sides, never anything the channel itself says. A
+ * request may name someone else in `sub` only when the channel belongs to a
+ * machine passing on a call from a phone or browser attached to it - exactly
+ * what that machine may do with a hub's `hubRpc`, and with the same checks:
+ * both must be current members and neither revoked. A machine cannot speak
+ * for another machine this way at all, which is narrower than the hub; the
+ * sending side never asks it to (hub-mesh.js keeps those calls on a hub).
+ */
+export function directCaller(net, device, sub) {
+  if (!net || typeof device !== 'string' || !device || net.revoked?.[device] || net.revoked?.[net.self]) {
+    throw forbidden('this direct channel is no longer allowed');
+  }
+  if (sub === undefined || sub === null || sub === device) return device;
+  if (!Object.hasOwn(net.machines ?? {}, device)) throw forbidden('only a machine may pass on a request');
+  if (typeof sub !== 'string' || !Object.hasOwn(net.devices ?? {}, sub) || net.revoked?.[sub]) {
+    throw forbidden('invalid forwarded request');
+  }
+  return sub;
+}
+
 export class PeerHub {
   #peers = new Map();
   #transportSeq = 0;
@@ -87,11 +114,16 @@ export class PeerHub {
    * @param {(peer: string, payload: object, link?: object) => void} sendSignal  post a signalling blob back
    * @param {(method: string, params: object, caller?: string) => Promise<any>} dispatch  the daemon's RPC handler
    */
-  constructor(sendSignal, dispatch, { onTunnel = null, onTunnelClose = null } = {}) {
+  constructor(sendSignal, dispatch, { onTunnel = null, onTunnelClose = null, authorize = null, events = null } = {}) {
     this.sendSignal = sendSignal;
     this.dispatch = dispatch;
     this.onTunnel = onTunnel;
     this.onTunnelClose = onTunnelClose;
+    // (device, frame) -> the caller to dispatch as, or throws. See directCaller.
+    this.authorize = authorize;
+    // (device) -> whether live events go down this channel. Another machine
+    // opens one only to ask questions; it hears events through its hubs.
+    this.events = events;
   }
 
   /**
@@ -239,7 +271,8 @@ export class PeerHub {
     };
 
     try {
-      await reply({ id: msg.id, ok: true, result: await this.dispatch(msg.method, msg.params ?? {}, peer.device) });
+      const caller = this.authorize ? this.authorize(peer.device, msg) : peer.device;
+      await reply({ id: msg.id, ok: true, result: await this.dispatch(msg.method, msg.params ?? {}, caller) });
     } catch (err) {
       await reply({
         id: msg.id, ok: false,
@@ -252,6 +285,7 @@ export class PeerHub {
   broadcast(kind, payload, eid) {
     const frame = JSON.stringify({ t: 'event', kind, payload, eid });
     for (const peer of this.#peers.values()) {
+      if (this.events && !this.events(peer.device)) continue;
       sendFrame(peer.channel, frame);
     }
   }

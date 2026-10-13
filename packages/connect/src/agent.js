@@ -31,7 +31,7 @@ import { inventory, scratchFolder } from './inventory.js';
 import { UsageReader, foldBuckets } from '@helm/usage';
 import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
-import { PeerHub } from './peer.js';
+import { PeerHub, directCaller } from './peer.js';
 import { lanAddresses } from './net-addr.js';
 import { LanDiscovery, withHeardAddresses } from './lan-discovery.js';
 import { describe as describeAsk, describeDone, askPreview } from './notify.js';
@@ -346,6 +346,13 @@ export class Daemon {
       {
         onTunnel: (link, frame, caller) => this.#directTunnel(link, frame, caller),
         onTunnelClose: (link) => this.copyReceiver?.dropLink(link),
+        // Every request on a direct channel is checked as a hub checks the
+        // ones it forwards: against who the hub introduced, never who the
+        // request says it is from.
+        authorize: (device, frame) => directCaller(loadNetwork() ?? this.net, device, frame.sub),
+        // Machines open channels to ask questions; they hear events through
+        // their hubs. Only phones and browsers want them sent direct.
+        events: (device) => !Object.hasOwn((loadNetwork() ?? this.net).machines ?? {}, device),
       }
     );
 
@@ -495,6 +502,7 @@ export class Daemon {
       this.broadcastFrame(T.ROSTER, { hash: rosterHash(net) });
       this.peers?.dropRevoked(net.revoked);
       this.copyReceiver?.dropRevoked(net.revoked);
+      this.mesh?.dropRevoked(net.revoked);
     });
     this.#reconcile = setInterval(
       () => this.#tick().catch((err) =>
@@ -685,6 +693,7 @@ export class Daemon {
       // keeps a working side door to this machine.
       this.peers?.dropRevoked(net.revoked);
       this.copyReceiver?.dropRevoked(net.revoked);
+      this.mesh?.dropRevoked(net.revoked);
     }
 
     this.#reconcileLinks();
@@ -995,7 +1004,10 @@ export class Daemon {
 
   attachHub(hub) {
     this.localOnline = hub.online;
-    this.mesh = new HubMesh(loadNetwork, hub.meshChanged, hub.meshEvent, hub.meshSignal);
+    // Direct channels to other machines, with the hubs as the backup. Off
+    // with `"directRoutes": false` in ~/.helm/config.json.
+    this.mesh = new HubMesh(loadNetwork, hub.meshChanged, hub.meshEvent, hub.meshSignal,
+      { direct: loadSettings()?.directRoutes !== false });
     hub.attachMesh(this.mesh);
   }
 
@@ -1098,6 +1110,10 @@ export class Daemon {
       home: homedir(),
       precopiedHandoff: true,
       sendV2: true,
+      // Answers requests from other machines over a direct channel, checking
+      // each one as a hub would (direct-mesh.js). Older machines leave this
+      // out, and are only ever asked through a hub.
+      directRpc: 1,
       platform: platform(),
       arch: arch(),
       release: release(),

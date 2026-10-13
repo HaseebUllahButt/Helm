@@ -39,7 +39,11 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000 }
           || typeof message.gid !== 'string' || message.gid.length > 100) return;
       let entry = fragments.get(message.gid);
       if (!entry) {
-        if (fragments.size >= 8) return;
+        // A channel kept open between machines sees many large replies over
+        // its life. One the sender gave up on halfway never completes, so the
+        // oldest half-built frame makes room rather than the newest being
+        // refused - refusing would fail every large reply after eight such.
+        if (fragments.size >= 8) fragments.delete(fragments.keys().next().value);
         entry = { parts: new Array(message.n), got: 0 };
         fragments.set(message.gid, entry);
       }
@@ -73,7 +77,9 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000 }
   };
   start().catch((error) => finish(error));
 
-  const sendBuffered = async (serialized) => {
+  // `unsent` on a failure means not one byte of this frame left: the caller
+  // may send it another way without any chance of it running twice.
+  const sendBuffered = async (serialized, onStart) => {
     const count = Math.ceil(serialized.length / CHUNK);
     const gid = randomBytes(12).toString('hex');
     for (let index = 0; index < count; index++) {
@@ -81,8 +87,9 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000 }
       while (!closed && channel.readyState === 'open' && channel.bufferedAmount > 512 * 1024 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
-      if (closed || channel.readyState !== 'open') throw new Error('direct channel closed');
-      if (Date.now() >= deadline) throw new Error('direct channel backpressure did not drain');
+      if (closed || channel.readyState !== 'open') throw Object.assign(new Error('direct channel closed'), { unsent: index === 0 });
+      if (Date.now() >= deadline) throw Object.assign(new Error('direct channel backpressure did not drain'), { unsent: index === 0 });
+      if (index === 0) onStart?.();
       channel.send(count === 1 ? serialized : JSON.stringify({
         t: 'dc-chunk', gid, i: index, n: count,
         data: serialized.slice(index * CHUNK, (index + 1) * CHUNK),
@@ -92,12 +99,13 @@ export function directPeer({ signal, onMessage, onClose, connectTimeout = 5000 }
   return {
     ready,
     close: () => finish(new Error('direct channel closed')),
-    send(frame) {
+    send(frame, onStart) {
+      const unsent = (message) => Promise.reject(Object.assign(new Error(message), { unsent: true }));
       let serialized;
-      try { serialized = JSON.stringify(frame); } catch { return Promise.reject(new Error('unserializable direct frame')); }
-      if (typeof serialized !== 'string') return Promise.reject(new Error('unserializable direct frame'));
-      if (serialized.length > MAX_FRAME) return Promise.reject(new Error('direct frame exceeds size limit'));
-      const run = sendChain.then(() => sendBuffered(serialized));
+      try { serialized = JSON.stringify(frame); } catch { return unsent('unserializable direct frame'); }
+      if (typeof serialized !== 'string') return unsent('unserializable direct frame');
+      if (serialized.length > MAX_FRAME) return unsent('direct frame exceeds size limit');
+      const run = sendChain.then(() => sendBuffered(serialized, onStart));
       sendChain = run.catch(() => {});
       return run;
     },
