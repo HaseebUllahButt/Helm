@@ -1,14 +1,16 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdirSync, chmodSync, rmSync } from 'node:fs';
+import { mkdirSync, chmodSync, rmSync, lstatSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { M } from '@helm/protocol';
-import { HELM_DIR } from './paths.js';
+import { HELM_DIR, expand } from './paths.js';
 import { scanSend } from './send-plan.js';
 import { records, saveRecord } from './send-journal.js';
 import { copyProxy, CopyConnections } from './copy-proxy.js';
+import { sendReceiptDigest } from './send-receiver.js';
+import { verifyHandoffSignature } from './code-transfer.js';
 import { runCopy, rsyncPath } from './copy.js';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 const ACTIVE = new Set(['preparing', 'sending', 'finishing']);
@@ -25,8 +27,8 @@ function abortable(work, signal) {
 }
 
 export class SendEngine {
-  constructor({ network, rpc, emit = () => {}, directory = join(HELM_DIR, 'send-jobs'), copy = runCopy, spawnProcess = spawn, proxyDeps = {}, timing = () => {}, reuseConnections = true }) {
-    Object.assign(this, { network, rpc, emit, directory, copy, spawnProcess, proxyDeps, timing, reuseConnections });
+  constructor({ network, rpc, emit = () => {}, directory = join(HELM_DIR, 'send-jobs'), copy = runCopy, spawnProcess = spawn, proxyDeps = {}, timing = () => {}, reuseConnections = true, presence = () => null }) {
+    Object.assign(this, { network, rpc, emit, directory, copy, spawnProcess, proxyDeps, timing, reuseConnections, presence });
     this.bridgeSockets = new Set();
     this.jobs = new Map(); this.running = new Map(); this.capabilities = new Map(); this.connections = new CopyConnections();
     this.socket = join(directory, `tunnel-${process.pid}-${randomBytes(3).toString('hex')}.sock`);
@@ -60,30 +62,45 @@ export class SendEngine {
   prior(path, target) { return [...this.jobs.values()].filter(r => r.job.source.path === path && r.job.target.machineId === target && r.job.phase === 'done').sort((a,b) => b.job.updatedAt - a.job.updatedAt)[0]; }
   async plan(params, caller) {
     this.authorize(caller); const p = await scanSend(params.path); const net = this.net();
+    const state = this.presence();
     const targets = Object.values(net.machines).filter(m => m.id !== net.self && !net.revoked?.[m.id]).map(m => {
       const old = this.prior(p.path, m.id);
-      return { machineId: m.id, name: m.name, online: m.online !== false, destination: old?.job.target.path ?? `~/${p.name}`, sentBefore: old ? { at: old.job.finishedAt, jobId: old.job.id } : null };
+      return { machineId: m.id, name: m.name, online: state?.[m.id]?.online ?? m.online !== false, destination: old?.job.target.path ?? `~/${p.name}`, sentBefore: old ? { at: old.job.finishedAt, jobId: old.job.id } : null };
     });
     const last = [...this.jobs.values()].filter(r => r.job.source.path === p.path).sort((a,b) => b.job.createdAt - a.job.createdAt)[0];
-    return { path: p.path, name: p.name, kind: p.kind, git: p.git, files: p.files, bytes: p.bytes, envFiles: p.envFiles, left: p.left, targets, defaultTarget: params.targetMachineId ?? last?.job.target.machineId ?? targets.find(t => t.name === 'VM')?.machineId ?? targets.find(t => t.online)?.machineId ?? null };
+    return { path: p.path, name: p.name, kind: p.kind, git: p.git, files: p.files, bytes: p.bytes, envFiles: p.envFiles, left: p.left, targets, defaultTarget: params.targetMachineId ?? (targets.some(t => t.machineId === last?.job.target.machineId) ? last.job.target.machineId : null) ?? targets.find(t => t.name === 'VM')?.machineId ?? targets.find(t => t.online)?.machineId ?? null };
   }
   start(params, caller) {
     this.authorize(caller); const net = this.net(), peer = net.machines?.[params.targetMachineId];
     if (!peer || peer.id === net.self || net.revoked?.[peer.id]) throw new Error('choose another current machine');
     if (typeof params.path !== 'string' || !params.path) throw new Error('send needs a source path');
+    const path = resolve(expand(params.path)), old = this.prior(path, peer.id);
+    const destination = params.destination ?? old?.job.target.path ?? `~/${basename(path)}`;
+    let kind = 'folder'; try { if (lstatSync(path).isFile()) kind = 'file'; } catch {}
     const id = randomBytes(12).toString('hex'), now = Date.now();
     const r = { options: { ...params, includeEnv: params.includeEnv !== false }, job: {
-      id, createdAt: now, updatedAt: now, finishedAt: null, source: { machineId: net.self, name: net.machines[net.self]?.name, path: params.path, kind: 'folder' },
-      target: { machineId: peer.id, name: peer.name, path: params.destination ?? null }, again: false, phase: 'preparing', bytes: { total: null, sent: 0 }, files: { total: null, sent: 0 }, rate: null, eta: null, changed: null, route: null, error: null, left: [] } };
+      id, createdAt: now, updatedAt: now, finishedAt: null, source: { machineId: net.self, name: net.machines[net.self]?.name, path, kind },
+      target: { machineId: peer.id, name: peer.name, path: destination }, again: !!old && old.job.target.path === destination, phase: 'preparing', bytes: { total: null, sent: 0 }, files: { total: null, sent: 0 }, rate: null, eta: null, changed: null, route: null, error: null, left: [] } };
     this.jobs.set(id, r); this.update(r, true); this.launch(r);
     return { job: structuredClone(r.job) };
   }
   status({ jobId }, caller) { this.authorize(caller); return { job: structuredClone(this.get(jobId).job) }; }
   list({ limit = 50 } = {}, caller) { this.authorize(caller); if (!Number.isInteger(limit) || limit < 1) throw new Error('invalid job limit'); return { jobs: [...this.jobs.values()].map(r => r.job).sort((a,b) => Number(ACTIVE.has(b.phase)) - Number(ACTIVE.has(a.phase)) || b.createdAt - a.createdAt).slice(0, limit).map(j => structuredClone(j)) }; }
+  acceptReceipt(r, receipt) {
+    const n = this.net();
+    const intentDigest = createHash('sha256').update(JSON.stringify({ ...r.intent, source: n.self })).digest('hex');
+    if (receipt.jobId !== r.job.id || receipt.sourceMachineId !== n.self || receipt.intentDigest !== intentDigest
+      || !verifyHandoffSignature(n.machines[r.job.target.machineId].codeSignPubkey, sendReceiptDigest(receipt), receipt.signature)) throw new Error('receiver commit receipt did not verify');
+    r.receipt = receipt; r.job.target.path = receipt.folder; this.update(r, true);
+  }
   async cancel({ jobId }, caller) {
     this.authorize(caller); const r = this.get(jobId); if (r.job.phase === 'done') return { job: structuredClone(r.job) };
     const running = this.running.get(jobId);
     if (running) { running.cancelled = true; running.abort.abort(); running.child?.kill('SIGTERM'); await running.work; }
+    if (r.attempted && r.intent && !r.receipt) {
+      try { const response = await this.rpc(r.job.target.machineId, M.SEND_RECEIPT, { jobId }, { timeout: 3000, budget: 3000 }); if (response.receipt) this.acceptReceipt(r, response.receipt); } catch {}
+    }
+    if (r.receipt) { r.job.phase = 'done'; r.job.error = null; r.job.finishedAt = r.receipt.at; r.job.bytes.sent = r.job.bytes.total ?? r.job.bytes.sent; r.job.files.sent = r.job.files.total ?? r.job.files.sent; this.update(r, true); }
     if (r.job.phase !== 'done') { r.job.phase = 'cancelled'; r.job.finishedAt = Date.now(); r.job.error = null; this.update(r, true); }
     return { job: structuredClone(r.job) };
   }
@@ -126,7 +143,7 @@ export class SendEngine {
               if (!proof.send) throw new Error('target did not confirm Send v2');
               r.job.target.path = proof.send.destination; this.update(r, true);
             },
-            onReceipt: receipt => { r.receipt = receipt; this.update(r, true); },
+            onReceipt: receipt => this.acceptReceipt(r, receipt),
           }).then(code => { run.bridgeCode = code; socket.end(); }, () => socket.destroy());
         } catch { socket.destroy(); }
       };
@@ -156,7 +173,8 @@ export class SendEngine {
         r.intent = { id: r.job.id, destination, kind: plan.kind, name: plan.name, again: r.job.again, defaultDestination: !r.options.destination && !old, ...(r.options.marker ? { marker: r.options.marker } : {}) };
       }
       r.stage = r.intent.kind === 'folder' && r.intent.again ? r.intent.destination : `${r.intent.destination}.helm-partial-${r.job.id}`;
-      for (const [id, other] of this.running) if (id !== r.job.id && this.jobs.get(id).stage === r.stage) throw new Error('another send is using this destination; retry when it finishes');
+      run.destinationKey = `${r.job.target.machineId}:${r.intent.destination}`;
+      for (const [id, other] of this.running) if (id !== r.job.id && other.destinationKey === run.destinationKey) throw new Error('another send is using this destination; retry when it finishes');
       if (info.sendV2 !== true) {
         if (r.options.marker && info.precopiedHandoff !== true) throw new Error('target cannot receive copied task code; update Helm there');
         r.job.error = 'Older target: using helm copy; atomic publication and durable receiver receipts are unavailable.';
@@ -190,14 +208,14 @@ export class SendEngine {
         // A lost exit/receipt is recovered without replaying an already published job.
         if (r.receipt) { r.job.target.path = r.receipt.folder; }
         else if (r.attempted) {
-          try { const result = await this.rpc(r.job.target.machineId, M.SEND_RECEIPT, { jobId: r.job.id }, { direct: true }); if (result.receipt) { r.receipt = result.receipt; r.job.target.path = result.receipt.folder; } }
+          try { const result = await this.rpc(r.job.target.machineId, M.SEND_RECEIPT, { jobId: r.job.id }, { direct: true }); if (result.receipt) this.acceptReceipt(r, result.receipt); }
           catch (e) { if (!/no send receipt/.test(e.message)) throw e; }
         }
         if (!r.receipt) {
           r.attempted = true;
           await this.ensureServer(); r.job.phase = 'sending'; this.update(r, true);
           const remote = [process.execPath, fileURLToPath(new URL('./send-proxy.js', import.meta.url)), this.socket, r.job.id].map(quote).join(' ');
-          const flags = ['-a', '--no-owner', '--no-group', '--protect-args', '--mkpath', '--compress', '--compress-level=1', '--compress-choice=zstd', '--checksum-choice=xxh128', '--skip-compress=3g2/3gp/7z/avi/bz2/gif/gz/ico/jpeg/jpg/lz/lz4/mp3/mp4/mov/ogg/pdf/png/rar/webm/webp/xz/zip/zst', `--partial-dir=.helm-partial-${r.job.id}`, '--fsync', '--delete-delay', '--info=progress2', '--outbuf=L', '--stats', '--timeout=120'];
+          const flags = ['-a', '--no-owner', '--no-group', '--protect-args', '--mkpath', '--compress', '--compress-level=1', '--compress-choice=zstd', '--checksum-choice=xxh128', '--skip-compress=3g2/3gp/7z/avi/bz2/gif/gz/ico/jpeg/jpg/lz/lz4/mp3/mp4/mov/ogg/pdf/png/rar/webm/webp/xz/zip/zst', `--partial-dir=.helm-partial-${r.job.id}`, '--delete-delay', '--info=progress2', '--outbuf=L', '--stats', '--timeout=120'];
           if (r.intent.again) flags.push('--delay-updates');
           if (plan.filterFile) flags.push('--from0', '--filter', `merge ${plan.filterFile}`, '--delete-excluded');
           for (const pattern of plan.excludes) flags.push('--exclude', pattern);

@@ -344,7 +344,7 @@ export class Daemon {
       rpc: (env, method, params, opts) =>
         hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
     });
-    this.sendEngine = new SendEngine({ network: () => loadNetwork() ?? this.net,
+    this.sendEngine = new SendEngine({ network: () => loadNetwork() ?? this.net, presence: () => this.rosterState(),
       rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
       emit: payload => this.#emit(E.SEND_UPDATE, payload),
     });

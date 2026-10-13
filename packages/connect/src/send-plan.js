@@ -34,6 +34,7 @@ export async function scanSend(path, { includeEnv = true, filterFile } = {}) {
   const add = async (full, p, inGit = false) => {
     const s = await lstat(full);
     if (s.isDirectory()) {
+      if (allowed && !inGit && p && allowed.has(p)) throw new Error(`Git submodule ${p} needs a standalone copy; refusing to omit its files`);
       if (!inGit && BULK_SKIP_DIRS.includes(basename(p)) && !allowed) { leave(p, 'dependency or cache folder'); return; }
       for (const entry of await readdir(full)) await add(join(full, entry), p ? `${p}/${entry}` : entry, inGit || p === '.git');
       return;

@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 
 const ID = /^[a-f0-9]{24}$/;
 const digest = data => createHash('sha256').update(JSON.stringify(data)).digest('hex');
+export const sendReceiptDigest = receipt => digest({ jobId: receipt.jobId, folder: receipt.folder, at: receipt.at, sourceMachineId: receipt.sourceMachineId, intentDigest: receipt.intentDigest });
 const present = path => { try { lstatSync(path); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } };
 
 /** Receiver reservation/publication is part of the existing signed copy handshake. */
@@ -60,7 +61,7 @@ export class SendReceiver {
     this.jobs.set(meta.id, r); this.active.set(meta.id, r); saveRecord(this.file(r.id), r);
     return { destination: r.destination, id: r.id };
   }
-  commit(id) {
+  commit(id, signer) {
     const r = this.active.get(id);
     if (!r) throw new Error('send reservation is missing');
     const { meta } = r;
@@ -71,7 +72,8 @@ export class SendReceiver {
       for (const path of [join(r.stage, parent), dir]) if (present(path) && lstatSync(path).isSymbolicLink()) throw new Error('task marker directory is a symlink');
       mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, `${meta.marker.handoffId}.json`), meta.marker.body, { mode: 0o600 });
     }
-    r.receipt = { jobId: id, folder: r.destination, at: Date.now() };
+    r.receipt = { jobId: id, folder: r.destination, at: Date.now(), sourceMachineId: r.source, intentDigest: r.fingerprint };
+    if (signer) r.receipt.signature = signer(sendReceiptDigest(r.receipt));
     r.phase = 'publishing'; saveRecord(this.file(id), r);
     if (!meta.again && present(r.destination)) throw new Error('destination appeared during send; refusing to overwrite it');
     if (!(meta.kind === 'folder' && meta.again)) {

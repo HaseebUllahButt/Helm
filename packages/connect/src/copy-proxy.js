@@ -229,7 +229,8 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
         try { stderr.write(String(packet.data).slice(0, 4 * 1024)); } catch {}
       } else if (packet.type === 'exit') {
         timing('receiver-exit');
-        if (packet.receipt) onReceipt?.(packet.receipt);
+        try { if (packet.receipt) onReceipt?.(packet.receipt); }
+        catch (err) { return fail(err); }
         let code;
         if (Number.isInteger(packet.code) && packet.code >= 0 && packet.code <= 255) {
           code = packet.code;

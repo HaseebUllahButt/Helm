@@ -384,7 +384,7 @@ export class CopyReceiver {
     const sendExit = () => {
       let receipt;
       if (stream.sendJob && code === 0) {
-        try { receipt = this.sendReceiver.commit(stream.sendJob.id); }
+        try { receipt = this.sendReceiver.commit(stream.sendJob.id, this.signer); }
         catch (e) { this.#send(stream, { type: 'stderr', data: e.message }); code = 23; }
       }
       this.#send(stream, { type: 'exit', code: code ?? null, signal: signal ?? null, ...(receipt ? { receipt } : {}) });
@@ -396,7 +396,6 @@ export class CopyReceiver {
 
   #teardown(stream, reason, notify = true, permanent = false) {
     if (!this.streams.delete(stream.key)) return;
-    if (stream.sendJob) this.sendReceiver.release(stream.sendJob.id);
     try { stream.sender?.stop(); } catch {}
     try { stream.receiver?.stop(); } catch {}
     const child = stream.child;
@@ -408,6 +407,7 @@ export class CopyReceiver {
     }
     if (notify && reason) refuse(stream.link, stream.sid, reason, permanent);
     if (stream.exited || child.exitCode != null || child.signalCode != null) {
+      if (stream.sendJob) this.sendReceiver.release(stream.sendJob.id);
       try { stream.release?.(); } catch {}
       return;
     }
@@ -416,6 +416,7 @@ export class CopyReceiver {
         clearTimeout(killer);
         clearTimeout(hard);
         this.closing.delete(stream.key);
+        if (stream.sendJob) this.sendReceiver.release(stream.sendJob.id);
         try { stream.release?.(); } catch {}
         resolve();
       };
