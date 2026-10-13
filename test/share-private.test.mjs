@@ -248,6 +248,33 @@ test('helm forward carries a local port to the machine, and only to shared ports
   assert.match(refused?.message ?? '', /port not allowed/);
 });
 
+test('helm forward lets a tunnel go when the browser gives up early, and when it stops', async (t) => {
+  // A machine slow to answer: the browser has gone before the tunnel is up.
+  const SLOW = 'ee44ff55aa66';
+  const slow = await fakeMachine(SLOW, [{ name: 'slow', port: APP }], { readyDelay: 150 });
+  t.after(() => slow.close());
+  const hubs = [`http://127.0.0.1:${PORT}`];
+  const fwd = await startForward(N.loadNetwork(), { target: SLOW, port: APP, localPort: 0, hubs });
+  const dial = () => new Promise((resolve) => { const s = tcpConnect({ host: '127.0.0.1', port: fwd.port }); s.on('error', () => {}); s.on('connect', () => resolve(s)); });
+  for (let i = 0; i < 3; i++) (await dial()).destroy();
+  await new Promise((r) => setTimeout(r, 600));
+  assert.equal(slow.tunnels.size, 0, 'tunnels left open by browsers that gave up');
+
+  // A live one is cut when the forward stops (Ctrl+C), not left to the far app.
+  const s = await dial();
+  s.write('GET / HTTP/1.1\r\nHost: x\r\n\r\n');
+  await new Promise((r) => s.once('data', r));
+  assert.equal(slow.tunnels.size, 1);
+  await fwd.close();
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(slow.tunnels.size, 0, 'tunnel left open after close');
+});
+
+test('a landing path never carries what a Location header cannot', () => {
+  assert.equal(S.safeSharePath('/inside?a=1'), '/inside?a=1');
+  for (const bad of ['//evil', '/\\evil', '/x\r\nSet-Cookie: a=b', '/x\u0001y', 'https://evil', '']) assert.equal(S.safeSharePath(bad), '/');
+});
+
 test('helm forward takes the next free port unless one was asked for', async (t) => {
   const busy = createServer();
   await new Promise((r) => busy.listen(0, '127.0.0.1', r));
@@ -260,7 +287,7 @@ test('helm forward takes the next free port unless one was asked for', async (t)
 });
 
 /** A machine on the hub: answers share.list, dials only its shared ports. */
-async function fakeMachine(id, list) {
+async function fakeMachine(id, list, { readyDelay = 0 } = {}) {
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/helm/ws?name=sharer`, {
     headers: { authorization: `Bearer ${mintToken(net.key, { net: net.id, sub: id, role: 'machine' })}` },
   });
@@ -275,7 +302,7 @@ async function fakeMachine(id, list) {
       if (!list.some((s) => s.port === msg.port)) return send({ t: T.TUNNEL_CLOSE, sid: msg.sid, reason: 'port not allowed' });
       const sock = tcpConnect({ host: '127.0.0.1', port: msg.port });
       tunnels.set(msg.sid, sock);
-      sock.on('connect', () => send({ t: T.TUNNEL_READY, sid: msg.sid }));
+      sock.on('connect', () => setTimeout(() => send({ t: T.TUNNEL_READY, sid: msg.sid }), readyDelay));
       sock.on('data', (c) => send({ t: T.TUNNEL_DATA, sid: msg.sid, data: c.toString('base64') }));
       const end = () => { if (tunnels.delete(msg.sid)) send({ t: T.TUNNEL_CLOSE, sid: msg.sid }); };
       sock.on('close', end);
@@ -293,5 +320,6 @@ async function fakeMachine(id, list) {
   });
   await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
   await welcomed;
+  ws.tunnels = tunnels;
   return ws;
 }

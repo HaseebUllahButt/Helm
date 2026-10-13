@@ -140,5 +140,6 @@ export function checkMemberCookie(net, value, { name, host, now = Date.now() }) 
 /** A path on the link to land on afterwards; anything else is the front page. */
 export const safeSharePath = (next) => {
   const v = String(next ?? '');
-  return v.startsWith('/') && !v.startsWith('//') && !v.startsWith('/\\') && !/[\r\n]/.test(v) && v.length < 2048 ? v : '/';
+  // No control characters: a Location header cannot carry them.
+  return v.startsWith('/') && !v.startsWith('//') && !v.startsWith('/\\') && !/[\x00-\x1f\x7f]/.test(v) && v.length < 2048 ? v : '/';
 };

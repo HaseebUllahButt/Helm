@@ -65,10 +65,19 @@ export function bridge(hub, token, host, port, {
         else if (!settled) input.resume();
       });
     };
+    let ended = false;
     const end = () => {
+      ended = true;
       const close = () => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: T.TUNNEL_CLOSE, sid })); };
       if (sender) sender.finish(close); else close();
     };
+    // The input torn down without ending first (a browser that gave up before
+    // the tunnel was ready, `helm forward` stopping): nothing waits for a
+    // tail, so the tunnel goes now. A socket that ended before the tunnel was
+    // ready never fires 'end' for us; this is the only word of it.
+    const gone = () => { if (!ended) shutdown(new Error('connection closed')); };
+    input.once('close', gone);
+    if (input.destroyed) process.nextTick(gone);
     const shutdown = (err) => {
       if (settled) return;
       settled = true;
@@ -79,6 +88,7 @@ export function bridge(hub, token, host, port, {
       receiver?.stop();
       input.off('data', send);
       input.off('end', end);
+      input.off('close', gone);
       input.off('error', shutdown);
       output.off('drain', drain);
       output.off('error', shutdown);

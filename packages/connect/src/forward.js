@@ -40,9 +40,10 @@ export async function startForward(net, {
     const failures = [];
     for (const hub of order) {
       for (const path of ['/helm/ws', '/ws']) {
-        if (sock.destroyed) return;
         try {
-          await open(hub, await credential(net, hub), target, port, { path, input: sock, output: sock });
+          const token = await credential(net, hub);
+          if (sock.destroyed) return;
+          await open(hub, token, target, port, { path, input: sock, output: sock });
           preferred = hub;
           sock.end();
           return;

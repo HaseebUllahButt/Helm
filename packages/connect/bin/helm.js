@@ -1687,10 +1687,14 @@ async function shareCmd() {
   const members = !!flagOf('private');
   if (members && flagOf('password') !== undefined) die('a private link opens only for your own Helm devices; it takes no password');
   // An older machine would read "private" as nothing and make the link
-  // public, so ask first whether it knows the word.
-  if (members && target !== net.self) {
+  // public, so ask first whether it knows the word. This machine too: the
+  // list is written here, but it is the running daemon (maybe older than
+  // this command) that hands it to hubs, and an older one hands private
+  // links to every hub.
+  if (members) {
     const known = await hubRpc(net, target, M.SHARE_LIST, {}, { timeout: 15_000 }).catch(() => null);
-    if (!known?.features?.includes('private')) die(`${where} runs an older Helm that cannot make private links; update it first`);
+    if (!known) die(`could not reach ${where}'s Helm through a hub to check that it can make private links; is it running?`);
+    if (!known.features?.includes('private')) die(`${where} runs an older Helm that cannot make private links; update it first`);
   }
   let password = flagOf('password');
   // `--password` with nothing after it: make one up and say what it is.
