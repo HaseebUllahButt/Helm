@@ -581,6 +581,7 @@ function machineRecord(id, their, ceiling) {
   // Ed25519 half of the same identity - same shape, same checks, pinned the
   // same way in mergeRoster.
   keep(out, 'codeSignPubkey', codePubkeyOf(their.codeSignPubkey));
+  keep(out, 'sendV2', typeof their.sendV2 === 'boolean' ? their.sendV2 : null);
   keep(out, 'sshUser', text(their.sshUser, 32) && sshUsers.test(their.sshUser) ? their.sshUser : null);
   keep(out, 'sshPort', Number.isInteger(their.sshPort) && their.sshPort > 0 && their.sshPort < 65536
     ? their.sshPort : null);

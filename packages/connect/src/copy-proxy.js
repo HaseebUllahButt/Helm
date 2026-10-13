@@ -99,24 +99,24 @@ function connectSocket(url, token, ms) {
   });
 }
 
-function socketTransport(ws) {
+export function socketTransport(ws, keep = false) {
   const transport = {
     onFrame: null,
     onClose: null,
     send: (t, extra = {}) => ws.send(JSON.stringify({ t, ...extra })),
-    close: () => { try { ws.close(); } catch {} },
+    close: () => { ws.off('message', message); ws.off('close', closed); ws.off('error', closed); if (!keep) { try { ws.close(); } catch {} } },
   };
-  ws.on('message', (raw) => {
+  const message = (raw) => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
     transport.onFrame?.(msg);
-  });
-  ws.on('close', () => transport.onClose?.());
-  ws.on('error', () => transport.onClose?.());
+  };
+  const closed = () => transport.onClose?.();
+  ws.on('message', message); ws.on('close', closed); ws.on('error', closed);
   return transport;
 }
 
-function runSession(transport, { request, cipher, sid, peer, input, output, stderr, readyMs, extra, onReady }) {
+function runSession(transport, { request, cipher, sid, peer, input, output, stderr, readyMs, extra, onReady, onProof, onReceipt, signal, timing = () => {} }) {
   return new Promise((resolve, reject) => {
     let ready = false;
     let finished = false;
@@ -128,6 +128,8 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
 
     function cleanup() {
       clearTimeout(readyTimer);
+      signal?.removeEventListener('abort', aborted);
+      try { Promise.resolve(transport.send(T.TUNNEL_CLOSE, { sid, reason: 'closed' })).catch(() => {}); } catch {}
       try { sender?.stop(); } catch {}
       try { receiver?.stop(); } catch {}
       try { release?.(); } catch {}
@@ -137,6 +139,8 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
       output.removeListener?.('error', onStreamError);
       try { transport.close(); } catch {}
     }
+    const aborted = () => fail(new Error('send cancelled'));
+    signal?.addEventListener('abort', aborted, { once: true });
     function fail(err) {
       if (finished) return;
       finished = true;
@@ -190,11 +194,13 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
               || !verifyHandoffSignature(peer.codeSignPubkey, proof.requestDigest, proof.signature)) {
             throw new Error('bad proof');
           }
+          onProof?.(proof);
         } catch {
           return fail(Object.assign(new Error(
             'the target did not prove it holds its signing key - refusing to send data',
           ), { permanent: true }));
         }
+        timing('signed-ready');
         ready = true;
         try { onReady?.(); } catch {}
         clearTimeout(readyTimer);
@@ -222,6 +228,8 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
       else if (packet.type === 'stderr') {
         try { stderr.write(String(packet.data).slice(0, 4 * 1024)); } catch {}
       } else if (packet.type === 'exit') {
+        timing('receiver-exit');
+        if (packet.receipt) onReceipt?.(packet.receipt);
         let code;
         if (Number.isInteger(packet.code) && packet.code >= 0 && packet.code <= 255) {
           code = packet.code;
@@ -236,6 +244,7 @@ function runSession(transport, { request, cipher, sid, peer, input, output, stde
         fail(new Error('unexpected copy packet'));
       }
     };
+    if (signal?.aborted) { fail(new Error('send cancelled')); return; }
     transport.onClose = () => fail(new Error(ready
       ? 'copy transport closed mid-transfer'
       : 'the link closed before the target answered'));
@@ -283,12 +292,14 @@ export async function copyProxy(args, deps = {}) {
   const iceMs = deps.iceTimeout ?? ICE_MS;
   const budgetMs = deps.connectBudget ?? CONNECT_BUDGET_MS;
   const started = Date.now();
+  const timing = (step, details = {}) => deps.timing?.(step, { elapsedMs: Date.now() - started, ...details });
+  timing('route-start');
   const remaining = () => budgetMs - (Date.now() - started);
   const bounded = (ms) => Math.max(1, Math.min(ms, remaining()));
   const newSid = () => `c${randomBytes(8).toString('hex')}`;
   const freshRequest = () => {
     try {
-      return createCopyRequest(net, peer, parsed.targetFolder, parsed.serverArgs);
+      return createCopyRequest(net, peer, parsed.targetFolder, parsed.serverArgs, deps.sendJob);
     } catch (err) {
       err.permanent = true;
       throw err;
@@ -297,15 +308,17 @@ export async function copyProxy(args, deps = {}) {
   let iceTried = false;
 
   async function openWs(base) {
-    const connect = async (path) => {
-      const token = await credential(net, base, { timeout: bounded(HELLO_MS) });
-      return await openSocket(`${base.replace(/\/+$/, '')}${path}?role=client`, token, bounded(HANDSHAKE_MS));
-    };
-    try {
-      return await connect('/helm/ws');
-    } catch (err) {
-      if (err?.status === 404 || err?.status === 405) return await connect('/ws');
+    const fresh = () => connect('/helm/ws').catch(async (err) => {
+      if (err?.status === 404 || err?.status === 405) return connect('/ws');
       throw err;
+    });
+    return deps.connections ? deps.connections.open(base, fresh) : fresh();
+    async function connect(path) {
+      timing('credential-start', { base });
+      const token = await credential(net, base, { timeout: bounded(HELLO_MS) });
+      timing('credential-ready', { base });
+      const ws = await openSocket(`${base.replace(/\/+$/, '')}${path}?role=client`, token, bounded(HANDSHAKE_MS));
+      timing('socket-ready', { base }); return ws;
     }
   }
 
@@ -350,7 +363,7 @@ export async function copyProxy(args, deps = {}) {
     try {
       return await runSession(transport, {
         request, cipher, sid: newSid(), peer, input, output, stderr,
-        readyMs: bounded(readyMs),
+        readyMs: bounded(readyMs), onProof: deps.onProof, onReceipt: deps.onReceipt, signal: deps.signal, timing,
         onReady: () => { clearBudget(); say(`Direct WebRTC: ${peer.name ?? peer.id}`); },
       });
     } finally {
@@ -363,14 +376,14 @@ export async function copyProxy(args, deps = {}) {
       const ws = await openWs(route.endpoint);
       try {
         const { request, cipher } = freshRequest();
-        return await runSession(socketTransport(ws), {
+        return await runSession(socketTransport(ws, !!deps.connections), {
           request, cipher, sid: newSid(), peer, input, output, stderr,
-          readyMs: bounded(readyMs),
+          readyMs: bounded(readyMs), onProof: deps.onProof, onReceipt: deps.onReceipt, signal: deps.signal, timing,
           extra: { targetOnly: true },
-          onReady: () => { clearBudget(); say(`Direct device connection: ${route.endpoint}`); },
+          onReady: () => { clearBudget(); deps.connections?.remember(peer.id, route); deps.onRoute?.('direct'); say(`Direct device connection: ${route.endpoint}`); },
         });
       } finally {
-        try { ws.close(); } catch {}
+        try { if (!deps.connections) ws.close(); } catch {}
       }
     }
     // --direct permits a single bounded ICE attempt; after it has run there
@@ -389,18 +402,18 @@ export async function copyProxy(args, deps = {}) {
         }
       }
       const { request, cipher } = freshRequest();
-      return await runSession(socketTransport(ws), {
+      return await runSession(socketTransport(ws, !!deps.connections), {
         request, cipher, sid: newSid(), peer, input, output, stderr,
-        readyMs: bounded(readyMs),
+        readyMs: bounded(readyMs), onProof: deps.onProof, onReceipt: deps.onReceipt, signal: deps.signal, timing,
         onReady: () => {
-          clearBudget();
+          clearBudget(); deps.connections?.remember(peer.id, route); deps.onRoute?.('relay');
           say(parsed.mode === 'relay'
             ? `Relay: ${route.hub}`
             : `Relay fallback: ${route.hub} (direct connection unavailable)`);
         },
       });
     } finally {
-      try { ws.close(); } catch {}
+      try { if (!deps.connections) ws.close(); } catch {}
     }
   }
 
@@ -418,6 +431,8 @@ export async function copyProxy(args, deps = {}) {
     }
     for (const hub of hubs) routes.push({ kind: 'signal', hub });
 
+    const warm = deps.connections?.route(peer.id);
+    if (warm) { const i = routes.findIndex(r => JSON.stringify(r) === JSON.stringify(warm)); if (i >= 0) routes.splice(i, 1); routes.unshift(warm); }
     let lastError = null;
     const budgetDead = new Promise((_, reject) => {
       budgetTimer = setTimeout(() => {
@@ -449,4 +464,23 @@ export async function copyProxy(args, deps = {}) {
     try { input.pause?.(); } catch {}
     return 12;
   }
+}
+
+/** Daemon-owned authenticated sockets, multiplexed by copy sid. Fresh AEAD keys per stream. */
+export class CopyConnections {
+  constructor() { this.sockets = new Map(); this.routes = new Map(); }
+  route(id) { return this.routes.get(id); }
+  remember(id, route) { this.routes.set(id, route); }
+  async open(base, connect) {
+    let pending = this.sockets.get(base);
+    if (!pending) {
+      pending = connect(); this.sockets.set(base, pending);
+      pending.then(ws => {
+        ws.setMaxListeners(64);
+        ws.once('close', () => { if (this.sockets.get(base) === pending) this.sockets.delete(base); });
+      }, () => { if (this.sockets.get(base) === pending) this.sockets.delete(base); });
+    }
+    return pending;
+  }
+  close() { for (const pending of this.sockets.values()) pending.then(ws => ws.close(), () => {}); this.sockets.clear(); }
 }

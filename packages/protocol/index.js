@@ -241,6 +241,13 @@ export const M = {
   TASK_STATUS: 'task.status',
   TASK_RETRY_RETURN: 'task.retry-return',
 
+  SEND_PLAN: 'send.plan',
+  SEND_START: 'send.start',
+  SEND_STATUS: 'send.status',
+  SEND_LIST: 'send.list',
+  SEND_CANCEL: 'send.cancel',
+  SEND_RETRY: 'send.retry',
+  SEND_RECEIPT: 'send.receipt', // machine-only recovery of a lost commit receipt
   TRANSFER_RECEIVE: 'transfer.receive',
   // The controller-driven path: preview on the source, invite on the target,
   // then one signed send from source to target. The device sees choices and
@@ -286,6 +293,7 @@ export const M = {
 // -------------------------------------------------------------- event kinds
 
 export const E = {
+  SEND_UPDATE: 'send.update', // { job } source-owned durable send progress
   GIT_MONITOR: 'git.monitor',      // { id, snapshot, watching } background GitHub watch update
   // Terminal output, pushed while a viewer is attached.
   //
