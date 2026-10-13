@@ -287,6 +287,10 @@ export const M = {
   // A round trip that does nothing, for measuring what one costs. The
   // terminal needs to know: how it draws depends on how far away you are.
   PING: 'ping',                    // {} -> { t }
+  // How this machine reaches the others: per machine the hub used, whether
+  // it is that machine's own, and the measured round trip. An older daemon
+  // answers unknown_method.
+  NET_ROUTES: 'net.routes',        // {} -> { machines[], lan }
 
   SSH_INFO: 'ssh.info',            // {} -> { pubkey, sshUser, sshPort }
 };

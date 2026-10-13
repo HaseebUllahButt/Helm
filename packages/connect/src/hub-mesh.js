@@ -1,8 +1,36 @@
 import { randomUUID } from 'node:crypto';
-import { T } from '@helm/protocol';
+import { performance } from 'node:perf_hooks';
+import { T, M } from '@helm/protocol';
+
+/**
+ * How often each route to a machine is timed, when there is more than one.
+ *
+ * A route is one round trip: this machine, a hub, the machine behind it, and
+ * back. Several hubs usually know a machine - its own, the VM's, anyone else
+ * it dials - and they are not alike: the laptop's link to the VM crosses a
+ * VPN that adds ~600ms, while the laptop's own hub on the same wifi answers
+ * in ~3ms. Timing the whole trip, not just the first hop, is what makes
+ * those comparable: a hub that answers fast is no use if its own link to
+ * the machine is the slow one.
+ */
+const PROBE_EVERY_MS = 20_000;
+const PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * Moving to another route has to be a clear win, and rare. One slow sample
+ * behind a big transfer must not send the next request somewhere else and
+ * back again: the new route has to be under 70% of the old one *and* at
+ * least 20ms quicker, and a route is kept at least 30 seconds once chosen.
+ */
+const SWITCH_RATIO = 0.7;
+const SWITCH_MIN_GAIN_MS = 20;
+const SWITCH_HOLD_MS = 30_000;
+
+/** How much one new sample moves the running estimate. */
+const SMOOTHING = 0.3;
 
 export class HubMesh {
-  constructor(network, changed, event, signalEvent) {
+  constructor(network, changed, event, signalEvent, { now = () => performance.now(), probeEvery = PROBE_EVERY_MS } = {}) {
     this.network = network;
     this.changed = changed;
     this.event = event;
@@ -11,15 +39,31 @@ export class HubMesh {
     this.links = new Map();
     this.pending = new Map();
     this.subscriptions = [];
+    this.now = now;
+    this.probeEvery = probeEvery;
+    // link -> machine id -> { ms, probing }: the round trip through that hub.
+    this.timing = new Map();
+    // machine id -> { link, since }: the route new requests take.
+    this.routes = new Map();
+    this.timer = null;
   }
 
   up(link) {
     this.links.set(link, new Map());
+    this.timing.set(link, new Map());
     link.send(T.HUB_WATCH, { envs: this.subscriptions });
+    if (!this.timer && this.probeEvery > 0) {
+      this.timer = setInterval(() => this.probeAll(), this.probeEvery);
+      this.timer.unref?.();
+    }
   }
 
   down(link) {
     this.links.delete(link);
+    this.timing.delete(link);
+    for (const [env, route] of this.routes) {
+      if (route.link === link) this.routes.delete(env);
+    }
     for (const [key, route] of this.signals) {
       if (route.link === link) this.signals.delete(key);
     }
@@ -58,7 +102,15 @@ export class HubMesh {
       return true;
     }
     if (frame.t === T.HUB_STATE && Array.isArray(frame.machines)) {
+      const before = this.links.get(link);
       this.links.set(link, new Map(frame.machines.filter(machine => typeof machine?.id === 'string').map(machine => [machine.id, machine])));
+      // A machine newly seen through this hub may now have a second route.
+      // Time every route to it straight away, so the choice is made on
+      // numbers within a second rather than at the next round.
+      for (const id of this.links.get(link).keys()) {
+        if (before.has(id)) continue;
+        for (const candidate of this.#candidates(id)) this.probe(candidate, id);
+      }
       this.changed();
       return true;
     }
@@ -77,11 +129,146 @@ export class HubMesh {
     return true;
   }
 
+  /**
+   * Is this hub the machine's own? Its address is one the machine publishes,
+   * or one it announced on the local network and that hub then showed it
+   * attached. Its own hub reaches it on loopback; any other hub adds a leg.
+   */
+  ownHub(link, env) {
+    if (link.hintFor === env) return true;
+    return !!link.url && (this.network()?.machines?.[env]?.endpoints ?? []).includes(link.url);
+  }
+
+  /**
+   * The round trip through one hub to one machine, as far as we know it. A
+   * probe still out counts as at least as long as it has been out: a route
+   * that has gone quiet for two seconds is not a 3ms route any more.
+   */
+  estimate(link, env) {
+    const slot = this.timing.get(link)?.get(env);
+    if (!slot) return null;
+    const waiting = slot.probing != null ? this.now() - slot.probing : 0;
+    if (slot.ms == null) return waiting > 0 ? { ms: waiting, known: false } : null;
+    return { ms: Math.max(slot.ms, waiting), known: true };
+  }
+
+  #candidates(env) {
+    return [...this.links].filter(([link, machines]) => link.connected && machines.has(env)).map(([link]) => link);
+  }
+
+  /**
+   * Fastest measured first; then, among routes not timed yet, the
+   * machine's own hub before a third party; then the order links came up,
+   * which is how this always chose before there were numbers.
+   */
+  #rank(env, links) {
+    const key = (link) => {
+      const e = this.estimate(link, env);
+      return [e?.known ? e.ms : Infinity, this.ownHub(link, env) ? 0 : 1];
+    };
+    return links.map((link, index) => ({ link, index, key: key(link) }))
+      .sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1] || a.index - b.index)
+      .map(({ link }) => link);
+  }
+
+  #clearlyBetter(env, next, current) {
+    const a = this.estimate(next, env);
+    const b = this.estimate(current, env);
+    if (!a?.known) return false;
+    // Nothing known about the current route: only its own hub is worth
+    // moving for, since that is one leg fewer whatever the numbers say.
+    if (!b) return this.ownHub(next, env) && !this.ownHub(current, env);
+    return a.ms < b.ms * SWITCH_RATIO && b.ms - a.ms > SWITCH_MIN_GAIN_MS;
+  }
+
+  /**
+   * The link new requests to this machine go through. Requests already sent
+   * stay on the link they went out on: a write whose fate is unknown is never
+   * sent again another way, so moving only ever affects what comes next.
+   */
+  route(env) {
+    const candidates = this.#candidates(env);
+    if (!candidates.length) { this.routes.delete(env); return null; }
+    const best = this.#rank(env, candidates)[0];
+    const current = this.routes.get(env);
+    if (!current || !candidates.includes(current.link)) {
+      // The first choice, or the old route is gone. The machine's own hub
+      // goes first unless another is already measured clearly faster - the
+      // first timing back must not beat one that simply has not answered
+      // yet. No hold to respect, so a real measurement can still correct
+      // this guess at once.
+      const own = candidates.find((link) => this.ownHub(link, env));
+      const first = own && best !== own && !this.#clearlyBetter(env, best, own) ? own : best;
+      this.routes.set(env, { link: first, since: -Infinity });
+      return first;
+    }
+    if (best !== current.link && this.now() - current.since >= SWITCH_HOLD_MS
+        && this.#clearlyBetter(env, best, current.link)) {
+      this.routes.set(env, { link: best, since: this.now() });
+      return best;
+    }
+    return current.link;
+  }
+
+  /**
+   * Time the trip to one machine through one hub, with a `ping` the machine
+   * has always answered - so a hub or daemon from before this change is
+   * measured like any other. Only worth doing when there is a choice.
+   */
+  probe(link, env) {
+    const network = this.network();
+    if (!link.connected || env === network?.self || !Object.hasOwn(network?.machines ?? {}, env) || network.revoked?.[env]) return;
+    if (this.#candidates(env).length < 2) return;
+    const slots = this.timing.get(link);
+    if (!slots) return;
+    const slot = slots.get(env) ?? { ms: null, probing: null };
+    if (slot.probing != null) return;
+    slots.set(env, slot);
+    const started = this.now();
+    slot.probing = started;
+    const record = (ms) => {
+      slot.ms = slot.ms == null ? ms : slot.ms + SMOOTHING * (ms - slot.ms);
+    };
+    this.#request(link, env, M.PING, {}, { sub: network.self, timeout: PROBE_TIMEOUT_MS })
+      .then(() => record(this.now() - started),
+        // Too slow to answer at all is the slowest there is; a hub saying the
+        // machine is not with it any more is not a time.
+        (error) => { if (error.code === 'timeout') record(PROBE_TIMEOUT_MS); })
+      .finally(() => {
+        slot.probing = null;
+        if (this.links.has(link)) this.route(env);
+      });
+  }
+
+  probeAll() {
+    for (const [link, machines] of this.links) {
+      for (const env of machines.keys()) this.probe(link, env);
+    }
+  }
+
+  /** Which way each reachable machine is reached, and how long it takes. */
+  table() {
+    return [...this.machines().keys()].map((env) => {
+      const link = this.route(env);
+      const via = (candidate) => ({
+        url: candidate.url ?? null,
+        own: this.ownHub(candidate, env),
+        ms: this.estimate(candidate, env)?.known ? Math.round(this.estimate(candidate, env).ms) : null,
+        hubMs: typeof candidate.rtt === 'number' ? Math.round(candidate.rtt) : null,
+      });
+      return { env, ...via(link), others: this.#candidates(env).filter((c) => c !== link).map(via) };
+    });
+  }
+
   call(env, method, params, { sub, timeout = 130_000 } = {}) {
     const network = this.network();
     if (!Object.hasOwn(network?.machines ?? {}, env) || network.revoked?.[env]) return Promise.reject(new Error('unknown machine'));
-    const link = [...this.links].find(([candidate, machines]) => candidate.connected && machines.has(env))?.[0];
+    const link = this.route(env);
     if (!link) return Promise.reject(Object.assign(new Error('environment is not connected'), { code: 'offline' }));
+    return this.#request(link, env, method, params, { sub: sub ?? network.self, timeout });
+  }
+
+  #request(link, env, method, params, { sub, timeout }) {
     return new Promise((resolve, reject) => {
       const id = `mesh-${randomUUID()}`;
       const timer = setTimeout(() => {
@@ -90,7 +277,7 @@ export class HubMesh {
       }, timeout);
       timer.unref?.();
       this.pending.set(id, { link, resolve, reject, timer });
-      link.send(T.HUB_RPC, { id, env, method, params, sub: sub ?? network.self });
+      link.send(T.HUB_RPC, { id, env, method, params, sub });
     });
   }
 
@@ -99,7 +286,7 @@ export class HubMesh {
     const key = `${peer}:${env}`;
     let route = this.signals.get(key);
     if (!route || payload?.type === 'offer') {
-      const link = [...this.links].find(([candidate, machines]) => candidate.connected && machines.has(env))?.[0];
+      const link = this.route(env);
       if (!link) return;
       route = { link, peer, env };
       this.signals.set(key, route);
@@ -118,6 +305,33 @@ export class HubMesh {
   }
 
   stop() {
+    clearInterval(this.timer);
+    this.timer = null;
     for (const link of [...this.links.keys()]) this.down(link);
   }
+}
+
+/**
+ * `helm status`'s account of how each machine is reached, one line each.
+ * Times are whole round trips through that hub to the machine and back; a
+ * hub's own ping is shown only when that is all there is.
+ */
+export function routeLines(report) {
+  const ms = (n) => (n == null ? '' : `${n}ms`);
+  const width = Math.max(8, ...(report.machines ?? []).map((m) => String(m.name).length));
+  const lines = (report.machines ?? []).map((m) => {
+    const name = String(m.name).padEnd(width);
+    if (m.attached) return `  ${name}  connected straight to this machine${m.hubMs != null ? ` (${ms(m.hubMs)} to its hub)` : ''}`;
+    if (!m.url) return `  ${name}  not reachable right now`;
+    const time = m.ms != null ? ms(m.ms) : m.hubMs != null ? `${ms(m.hubMs)} to the hub, not timed through it` : 'not timed yet';
+    const others = (m.others ?? []).map((o) => `${o.url}${o.ms != null ? ` ${ms(o.ms)}` : ''}`);
+    return `  ${name}  ${m.own ? 'via its own hub' : 'through'} ${m.url}  ${time}` +
+      (others.length ? `\n  ${' '.repeat(width)}  also: ${others.join(', ')}` : '');
+  });
+  const lan = report.lan;
+  const names = new Map((report.machines ?? []).map((m) => [m.env, m.name]));
+  lines.push(lan?.on
+    ? `  local network: listening${lan.heard?.length ? `; heard ${lan.heard.map((h) => `${names.get(h.id) ?? h.id} at ${h.url}`).join(', ')}` : ', nobody heard yet'}`
+    : `  local network: off${lan?.reason ? ` (${lan.reason})` : ''}`);
+  return lines;
 }

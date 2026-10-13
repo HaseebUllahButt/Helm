@@ -7,7 +7,7 @@ import { transform } from 'esbuild';
 const source = readFileSync(new URL('../apps/web/src/client.ts', import.meta.url), 'utf8');
 const { code } = await transform(source, { loader: 'ts', format: 'cjs', target: 'node22' });
 
-function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, socket = 'open', socketDelay = 1, pong = true, location } = {}) {
+function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, machineIds = {}, socket = 'open', socketDelay = 1, pong = true, location } = {}) {
   let now = 0, serial = 0;
   const timers = new Map(), sockets = [], peers = [], events = [], requests = [], windows = new Map(), documents = new Map();
   const timer = (fn, delay = 0, interval = 0) => {
@@ -78,7 +78,7 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
       const finish = () => {
         const status = statuses[base] ?? 200;
         resolve({ status, ok: status === 200, json: async () => url.endsWith('/api/read')
-          ? { result: { fresh: true } } : { machines: Array.from({ length: reaches[base] ?? 1 }, (_, index) => ({ id: `machine-${index}`, online: true })), endpoints: [] } });
+          ? { result: { fresh: true } } : { machines: (machineIds[base] ?? Array.from({ length: reaches[base] ?? 1 }, (_, index) => `machine-${index}`)).map(id => ({ id, online: true })), endpoints: [] } });
       };
       if (delay !== Infinity) timer(finish, delay);
       init?.signal?.addEventListener('abort', () => reject(Error('aborted')), { once: true });
@@ -665,5 +665,51 @@ test('HTTPS read failover never sends the token to a mixed-content HTTP endpoint
   const request = h.client.rpc('machine', 'session.events'); await h.advance(10);
   assert.equal((await request).fresh, true);
   assert.deepEqual(h.requests.map(r => r.url), ['https://old/api/read', 'https://good/api/read']);
+  h.client.close();
+});
+
+
+test('a faster hub with equal reach must still reach the machines in the current hub', async () => {
+  const h = harness({ endpoints: ['http://local'], delays: { 'http://local': 100, 'http://other': 1 },
+    machineIds: { 'http://local': ['vm'], 'http://other': ['unrelated'] } });
+  h.start(); await h.advance(200);
+  h.client.subscribe('vm');
+  await h.advance(30000);
+  h.client.learn(['http://local', 'http://other']);
+  await h.advance(16000);
+  assert.equal(h.client.relay, 'http://local', 'equal counts must not hide the active terminal machine');
+  h.client.close();
+});
+
+
+test('a faster hub with the same machines restores subscriptions and drains pending writes', async () => {
+  const delays = { 'http://local': 100, 'http://other': 1 };
+  const h = harness({ endpoints: ['http://local'], delays });
+  h.start(); await h.advance(200);
+  h.client.subscribe('vm');
+  await h.advance(30100);
+  const old = h.sockets[0];
+  const write = h.client.rpc('vm', 'session.input', { data: 'once' });
+  const frame = old.frames.at(-1);
+  h.client.learn(['http://local', 'http://other']);
+  await h.advance(200);
+  assert.equal(h.client.relay, 'http://other');
+  const replacement = h.sockets.at(-1);
+  assert.ok(replacement.frames.some(f => f.t === 'subscribe' && f.env === 'vm'));
+  assert.equal(old.readyState, 1);
+  replacement.message({ t: 'event', env: 'vm', kind: 'session.data', payload: { id: 'terminal', text: 'new output' } });
+  assert.ok(h.events.some(e => e.kind === 'session.data' && e.payload.text === 'new output'));
+  old.message({ t: 'rpcResult', id: frame.id, ok: true, result: 'accepted' });
+  assert.equal(await write, 'accepted');
+  assert.equal(old.readyState, 3);
+  assert.equal(h.sockets.flatMap(s => s.frames).filter(f => f.method === 'session.input').length, 1);
+
+  // A reversal within thirty seconds must not flap the connection.
+  delays['http://local'] = 1;
+  delays['http://other'] = 100;
+  await h.advance(15100);
+  assert.equal(h.client.relay, 'http://other');
+  await h.advance(30000);
+  assert.equal(h.client.relay, 'http://local');
   h.client.close();
 });

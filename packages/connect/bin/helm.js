@@ -2070,6 +2070,20 @@ try {
       }
       const peers = allEndpoints(net).filter((e) => !(me?.endpoints ?? []).includes(e));
       if (peers.length) console.log(`other hubs:   ${peers.join(' ')}`);
+
+      // Which way each machine is reached from here, and how long a round
+      // trip takes - asked of this machine's running daemon, which is the
+      // one choosing.
+      try {
+        const report = await hubRpc(net, net.self, M.NET_ROUTES, {}, { timeout: 5000, budget: 8000 });
+        const { routeLines } = await import('../src/hub-mesh.js');
+        console.log('routes:');
+        for (const line of routeLines(report)) console.log(line);
+      } catch (err) {
+        console.log(err.code === 'unknown_method' || /unknown method/.test(err.message)
+          ? 'routes:   the Helm running here is too old to say - update it'
+          : 'routes:   Helm is not running here, so nothing is being routed');
+      }
       try {
         const { createRuntime } = await import('../src/runtime/index.js');
         const rt = await createRuntime();

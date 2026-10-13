@@ -9,8 +9,32 @@ export function lanAddresses() {
       if (a.family !== 'IPv4' || a.internal) continue;
       // Docker and friends advertise addresses nothing else can route to.
       if (/^(docker|br-|veth|virbr|tun|tap)/.test(name)) continue;
-      out.push({ name, address: a.address });
+      out.push({ name, address: a.address, netmask: a.netmask });
     }
+  }
+  return out;
+}
+
+/** A private address - the kind a home or office network hands out. */
+export const isPrivateV4 = (address) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(String(address));
+
+/**
+ * The broadcast address of each private network we sit on: 192.168.1.255
+ * for 192.168.1.9/24. Sending there reaches every machine on that network
+ * and nothing past its router. The all-ones 255.255.255.255 would go out
+ * whichever interface the default route names - with a VPN up, the tunnel.
+ */
+export function broadcastAddresses(addrs = lanAddresses()) {
+  const out = [];
+  for (const { address, netmask } of addrs) {
+    if (!isPrivateV4(address) || !netmask) continue;
+    const ip = address.split('.').map(Number);
+    const mask = netmask.split('.').map(Number);
+    if (ip.length !== 4 || mask.length !== 4 || mask.some((n) => !(n >= 0 && n <= 255))) continue;
+    // A /31 or /32 has no one else on it to tell.
+    if (mask[3] >= 254) continue;
+    const broadcast = ip.map((n, i) => (n | (~mask[i] & 255))).join('.');
+    if (!out.includes(broadcast)) out.push(broadcast);
   }
   return out;
 }
@@ -39,7 +63,7 @@ const run = (cmd, args) => new Promise((resolve) => {
  * means "no opinion", never "broken".
  */
 export async function lanIsRoutable() {
-  const lan = lanAddresses().find((a) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a.address));
+  const lan = lanAddresses().find((a) => isPrivateV4(a.address));
   if (!lan) return null;
   // Something else in our own subnet: the .1 is nearly always the gateway,
   // and we only care which interface the kernel would send it out of.

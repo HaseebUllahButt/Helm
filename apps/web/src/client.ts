@@ -545,7 +545,7 @@ const reachableFromHere = (base: string) =>
   !base.startsWith('http://');
 
 /** A hub that answered: where it is, how much of the network it can see. */
-interface Reached { base: string; reach: number; elapsed: number }
+interface Reached { base: string; reach: number; elapsed: number; machines: Set<string> }
 
 interface ProbeResult {
   best: string | null;
@@ -592,9 +592,11 @@ function startProbes(endpoints: string[], token: string, timeout: number, onReac
       answered.add(base);
       if (!res.ok) return;
       const body = await res.json();
+      const machines = new Set<string>((body.machines ?? []).filter((m: Environment) => m.online).map((m: Environment) => m.id));
       up.push({
         base,
-        reach: (body.machines ?? []).filter((m: Environment) => m.online).length,
+        reach: machines.size,
+        machines,
         elapsed: performance.now() - started,
       });
       first();
@@ -885,14 +887,30 @@ export class Client {
     this.presencePoll = null;
   }
 
+  /**
+   * Move to another hub for more reach, or for the same reach clearly
+   * faster - the same rule the machines use between themselves: under 70%
+   * of the current hub's time and at least 20ms quicker, and not within 30
+   * seconds of the last move, so one slow answer never makes it flap.
+   */
   private upgradeHub(reached: Reached[], version: number, hub: string) {
     if (this.closed || !this.connected || version !== this.connectVersion || this.relay !== hub) return;
     const current = reached.find(candidate => candidate.base === hub);
-    const best = reached[0];
-    if (!current || !best || best.base === hub || best.reach <= current.reach) return;
+    if (!current) return;
+    // Equal counts can describe disjoint machines. Preserve every route we
+    // have now, including the one carrying an open terminal.
+    const eligible = reached.filter(c => [...current.machines].every(id => c.machines.has(id)));
+    const faster = eligible.filter(c => c.reach === current.reach && c.base !== hub
+      && c.elapsed < current.elapsed * 0.7 && current.elapsed - c.elapsed > 20)
+      .sort((a, b) => a.elapsed - b.elapsed)[0];
+    const broader = eligible.find(c => c.reach > current.reach);
+    const best = broader ?? (faster && Date.now() - this.hubMovedAt >= 30_000 ? faster : null);
+    if (!best || best.base === hub) return;
+    this.hubMovedAt = Date.now();
     this.backoff = 500;
     void this.connect(best.base).catch(() => {});
   }
+  private hubMovedAt = 0;
 
   private refreshReachability() {
     if (this.closed || !this.connected || this.reachCheck || document.hidden) return;

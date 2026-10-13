@@ -55,7 +55,8 @@ test('link loss withdraws routes, rejects uncertain writes without replay, and a
   const rejection = assert.rejects(result, /delivery may be uncertain/);
   mesh.down(link);
   await rejection;
-  assert.equal(alternate.sent.filter(frame => frame.t === T.HUB_RPC).length, 0);
+  // Route timing pings may go both ways; the write itself must not.
+  assert.equal(alternate.sent.filter(frame => frame.t === T.HUB_RPC && frame.method === 'session.input').length, 0);
   const next = mesh.call('remote', 'session.list', {});
   const request = alternate.sent.at(-1);
   mesh.receive(alternate, { t: T.RPC_RESULT, id: request.id, ok: true, result: [] });
