@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
-import { Duplex } from 'node:stream';
+import { Duplex, PassThrough, Writable } from 'node:stream';
+import { TunnelSender, TunnelReceiver, TUNNEL_CHUNK, TUNNEL_SOCKET_LIMIT } from '../../../packages/connect/src/tunnel-flow.js';
 import { T, E, M, PROTOCOL_VERSION } from '@helm/protocol';
 import { foldBuckets } from '@helm/usage';
 import { q, now, newId } from './db.js';
@@ -695,15 +696,17 @@ export function createWsLayer() {
     const fromTarget = from === tun.target;
     const dest = fromTarget ? tun.initiator : tun.target;
     const sid = fromTarget ? tun.initiatorSid : relaySid;
+    // Remove it before delivery: an in-process stream can close in response.
+    if (msg.t === T.TUNNEL_CLOSE) forgetTunnel(relaySid, tun);
     send(dest, msg.t, { ...msg, sid });
+  }
 
-    if (msg.t === T.TUNNEL_CLOSE) {
-      tun.release();
-      tunnels.delete(relaySid);
-      tun.initiator.sidMap?.delete(tun.initiatorSid);
-      tun.initiator.tunnelSids?.delete(relaySid);
-      tun.target.tunnelSids?.delete(relaySid);
-    }
+  function forgetTunnel(sid, tun) {
+    tun.release();
+    tunnels.delete(sid);
+    tun.initiator.sidMap?.delete(tun.initiatorSid);
+    tun.initiator.tunnelSids?.delete(sid);
+    tun.target.tunnelSids?.delete(sid);
   }
 
   function dropTunnelsFor(sock) {
@@ -712,10 +715,8 @@ export function createWsLayer() {
       if (!tun) continue;
       const other = tun.initiator === sock ? tun.target : tun.initiator;
       const otherSid = other === tun.initiator ? tun.initiatorSid : sid;
+      forgetTunnel(sid, tun);
       send(other, T.TUNNEL_CLOSE, { sid: otherSid, reason: 'peer disconnected' });
-      tun.initiator.sidMap?.delete(tun.initiatorSid);
-      tun.release();
-      tunnels.delete(sid);
     }
   }
 
@@ -908,8 +909,11 @@ export function createWsLayer() {
   });
 
   const stop = () => {
-    for (const tunnel of tunnels.values()) tunnel.release();
-    tunnels.clear();
+    for (const [sid, tunnel] of tunnels) {
+      forgetTunnel(sid, tunnel);
+      send(tunnel.target, T.TUNNEL_CLOSE, { sid, reason: 'hub stopped' });
+      send(tunnel.initiator, T.TUNNEL_CLOSE, { sid: tunnel.initiatorSid, reason: 'hub stopped' });
+    }
     clearInterval(heartbeat);
     clearInterval(redeliver);
     stopWatch();
@@ -978,12 +982,63 @@ export function createWsLayer() {
     return new Promise((resolve, reject) => {
       const sid = newId(8);
       let opened = false;
+      let ended = false;
+      let sender, receiver, input, output, readDone, writeDone, finishDone;
       const stream = new Duplex({
+        highWaterMark: TUNNEL_CHUNK,
+        allowHalfOpen: false,
         write(chunk, _enc, cb) {
-          routeTunnel(inner, { t: T.TUNNEL_DATA, sid, data: chunk.toString('base64') });
-          cb();
+          const done = err => {
+            if (writeDone !== done) return;
+            writeDone = null;
+            cb(err);
+          };
+          writeDone = done;
+          if (ended) return done(new Error('tunnel closed'));
+          if (sender) input.write(chunk, done);
+          else {
+            routeTunnel(inner, { t: T.TUNNEL_DATA, sid, data: chunk.toString('base64') });
+            done();
+          }
         },
-        read() {},
+        read() {
+          const done = readDone;
+          readDone = null;
+          done?.();
+        },
+        final(cb) {
+          const done = err => {
+            if (finishDone !== done) return;
+            finishDone = null;
+            cb(err);
+          };
+          finishDone = done;
+          const close = () => {
+            ended = true;
+            receiver?.stop();
+            routeTunnel(inner, { t: T.TUNNEL_CLOSE, sid });
+            stream.push(null);
+            done();
+          };
+          if (sender) sender.finish(close); else close();
+        },
+        destroy(err, cb) {
+          ended = true;
+          inner.streamWaiters.delete(sid);
+          clearTimeout(timer);
+          sender?.stop();
+          receiver?.stop();
+          input?.destroy();
+          output?.destroy();
+          readDone = null;
+          // Destroying a paused Transform does not complete its held write.
+          // Release our callbacks too, without waiting for another read.
+          const closed = err ?? new Error('tunnel closed');
+          writeDone?.(closed);
+          finishDone?.(closed);
+          routeTunnel(inner, { t: T.TUNNEL_CLOSE, sid });
+          cb(err);
+        },
       });
       // http.ClientRequest drives these on its socket; over a tunnel they
       // are no-ops, but the calls have to land somewhere. setTimeout must
@@ -995,35 +1050,57 @@ export function createWsLayer() {
       stream.unref = () => stream;
 
       const fail = (err) => {
-        inner.streamWaiters.delete(sid);
-        routeTunnel(inner, { t: T.TUNNEL_CLOSE, sid });
-        if (opened) stream.destroy(err); else reject(err);
+        if (!opened) { reject(err); stream.destroy(); }
+        else stream.destroy(err);
       };
       const timer = setTimeout(() => fail(new Error('tunnel timed out')), timeout);
       timer.unref?.();
 
       inner.streamWaiters.set(sid, (t, msg) => {
-        if (t === T.TUNNEL_READY) {
+        if (t === T.TUNNEL_READY && !opened) {
           opened = true;
           clearTimeout(timer);
+          if (msg.flow === 1) {
+            input = new PassThrough({ highWaterMark: TUNNEL_CHUNK });
+            // A push that fills the readable side holds credit until _read
+            // asks for more. Pausing one visitor must not pause the hub ws.
+            output = new Writable({ highWaterMark: TUNNEL_CHUNK, write(chunk, _enc, cb) {
+              readDone = cb;
+              if (stream.push(chunk)) { readDone = null; cb(); }
+            } });
+            input.on('error', fail);
+            output.on('error', fail);
+            receiver = new TunnelReceiver(output,
+              bytes => routeTunnel(inner, { t: T.TUNNEL_ACK, sid, bytes }), fail);
+            sender = new TunnelSender(input,
+              chunk => routeTunnel(inner, { t: T.TUNNEL_DATA, sid, data: chunk.toString('base64') }), fail,
+              { canSend: () => {
+                const target = tunnels.get(inner.sidMap.get(sid))?.target;
+                return target?.readyState === 1 && (target.bufferedAmount ?? 0) < TUNNEL_SOCKET_LIMIT;
+              } });
+          }
           resolve(stream);
-        } else if (t === T.TUNNEL_DATA) {
-          stream.push(Buffer.from(msg.data, 'base64'));
+        } else if (t === T.TUNNEL_ACK) {
+          sender?.ack(msg.bytes);
+        } else if (t === T.TUNNEL_DATA && opened) {
+          if (receiver) receiver.write(msg.data);
+          else stream.push(Buffer.from(msg.data, 'base64'));
         } else if (t === T.TUNNEL_CLOSE) {
           inner.streamWaiters.delete(sid);
           clearTimeout(timer);
-          if (opened) { stream.push(null); }
+          if (opened && (!msg.reason || msg.reason === 'closed')
+              && !(sender && (sender.sent !== sender.acknowledged || sender.pending?.length
+                || input.readableLength || input.writableLength || stream.writableLength))) {
+            ended = true;
+            sender?.stop();
+            receiver?.stop();
+            stream.push(null);
+          }
           else fail(new Error(msg.reason === 'offline' ? 'environment is not connected' : `tunnel closed: ${msg.reason ?? 'closed'}`));
         }
       });
 
-      stream.once('close', () => {
-        inner.streamWaiters.delete(sid);
-        clearTimeout(timer);
-        routeTunnel(inner, { t: T.TUNNEL_CLOSE, sid });
-      });
-
-      routeTunnel(inner, { t: T.TUNNEL_OPEN, env, sid, port });
+      routeTunnel(inner, { t: T.TUNNEL_OPEN, env, sid, port, flow: 1 });
     });
   }
 
