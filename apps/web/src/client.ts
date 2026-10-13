@@ -311,6 +311,29 @@ export const cacheSaved = (t: Pick<UsageTotals, 'cacheSavedUsd' | 'cacheWritePre
 
 export interface DirEntry { name: string; path: string; isRepo: boolean; skip: boolean }
 
+/** Send v2: the source daemon owns the job, destination and retry identity. */
+export interface SendPlan {
+  path: string; name: string; kind: 'folder' | 'file';
+  git: { branch: string; dirty: boolean } | null;
+  files: number; bytes: number; estimate?: boolean;
+  envFiles: string[]; left: { path: string; why: string }[];
+  targets: { machineId: string; name: string; online: boolean; destination: string;
+    sentBefore: { at: number | string; jobId: string } | null }[];
+  defaultTarget: string | null;
+}
+export interface SendJob {
+  id: string; createdAt: number | string; updatedAt: number | string; finishedAt: number | string | null;
+  source: { machineId: string; name: string; path: string; kind: 'folder' | 'file' };
+  target: { machineId: string; name: string; path: string };
+  again: boolean;
+  phase: 'preparing' | 'sending' | 'finishing' | 'done' | 'failed' | 'cancelled' | 'interrupted';
+  bytes: { total: number | null; sent: number }; files: { total: number | null; sent: number };
+  rate: number | null; eta: number | null;
+  changed: { files: number; bytes: number } | null;
+  route: 'direct' | 'relay' | null; error: string | null;
+  left: { path: string; why: string }[];
+}
+
 /** What a send will carry - and what it deliberately will not. */
 export interface TransferSkipped { path: string; reason: string }
 export interface TransferWarning { code: string; path?: string; message: string }
@@ -1272,6 +1295,17 @@ export class Client {
   transferPreview(env: string, folder: string, includeEnv = false) {
     return this.rpc<TransferPreview>(env, 'transfer.preview', { folder, includeEnv }, 120_000);
   }
+
+  sendPlan(env: string, path: string, targetMachineId?: string) {
+    return this.rpc<SendPlan>(env, 'send.plan', { path, targetMachineId }, 120_000);
+  }
+  sendStart(env: string, params: { path: string; targetMachineId: string; destination?: string; includeEnv?: boolean }) {
+    return this.rpc<{ job: SendJob }>(env, 'send.start', params, 30_000);
+  }
+  sendList(env: string, limit = 30) { return this.rpc<{ jobs: SendJob[] }>(env, 'send.list', { limit }); }
+  sendStatus(env: string, jobId: string) { return this.rpc<{ job: SendJob }>(env, 'send.status', { jobId }); }
+  sendCancel(env: string, jobId: string) { return this.rpc<{ job: SendJob }>(env, 'send.cancel', { jobId }); }
+  sendRetry(env: string, jobId: string) { return this.rpc<{ job: SendJob }>(env, 'send.retry', { jobId }); }
 
   /** Ask the target for the one-time invitation this send will be bound to. */
   transferInvite(env: string, sourceMachineId: string) {
