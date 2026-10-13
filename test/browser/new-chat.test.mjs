@@ -63,13 +63,13 @@ before(async () => {
 });
 after(async()=>browser?.close());
 
-async function pageFor(t, saved) {
-  const page = await browser.newPage({viewport:{width:1280,height:900}});
+async function pageFor(t, saved, options = {}) {
+  const page = await browser.newPage({viewport:{width:1280,height:900}, ...options});
   t.after(()=>page.close());
   const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   t.after(()=>assert.deepEqual(errors,[]));
-  await page.route('http://helm-test/**',route=>route.fulfill({contentType:'text/html',body:'<div id="root"></div>'}));
+  await page.route('http://helm-test/**',route=>route.fulfill({contentType:'text/html',body:'<meta name="viewport" content="width=device-width, initial-scale=1"><div id="root"></div>'}));
   await page.goto('http://helm-test/');
   if(saved) await page.evaluate(saved=>localStorage.setItem('helm.last-folder:network:device',JSON.stringify(saved)),saved);
   await page.addScriptTag({content:script});
@@ -400,7 +400,7 @@ async function hiddenPicker(page, { local = false, all = false } = {}) {
   }, { local, all });
   await page.keyboard.press('Control+Shift+n');
   await page.getByRole('combobox', { name: 'Which CLI?' }).waitFor();
-  await page.getByRole('button', { name: /^Show hidden CLIs/ }).waitFor();
+  await page.getByRole('option', { name: /^Show \d+ hidden CLIs/ }).waitFor();
 }
 
 for (const width of [1280, 390]) test(`hidden CLIs can be used once without unhiding them at ${width}px`, async t => {
@@ -408,10 +408,17 @@ for (const width of [1280, 390]) test(`hidden CLIs can be used once without unhi
   await page.setViewportSize({ width, height: 844 });
   await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
   await hiddenPicker(page);
-  assert.equal(await page.getByRole('option').count(), 1);
-  await page.getByRole('button', { name: 'Show hidden CLIs (2)', exact: true }).click();
-  await page.getByText('Hidden CLIs', { exact: true }).waitFor();
   assert.equal(await page.getByRole('option').count(), 2);
+  assert.equal(await page.locator('.newchat-bar').count(), 0);
+  if (process.env.HELM_TEST_SCREENSHOT_DIR) {
+    await page.screenshot({ path: `${process.env.HELM_TEST_SCREENSHOT_DIR}/shown-cli-${width}.png` });
+    await page.evaluate(() => document.documentElement.dataset.theme = 'light');
+    await page.screenshot({ path: `${process.env.HELM_TEST_SCREENSHOT_DIR}/shown-cli-light-${width}.png` });
+    await page.evaluate(() => delete document.documentElement.dataset.theme);
+  }
+  await page.getByRole('option', { name: 'Show 2 hidden CLIs', exact: true }).click();
+  await page.getByText('Hidden CLIs', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('option').count(), 3);
   assert.equal(await page.getByRole('option').filter({ hasText: 'Codex' }).count(), 0);
   const chosen = page.getByRole('option').filter({ hasText: 'personal' });
   const geometry = await chosen.boundingBox();
@@ -426,9 +433,9 @@ for (const width of [1280, 390]) test(`hidden CLIs can be used once without unhi
   assert.equal(call.params.mode, 'auto');
   assert.equal(call.params.cwd, '/work/project');
   const changes = await page.evaluate(() => window.calls.filter(call => call.method === 'picker.prefs').map(call => call.params));
-  assert.deepEqual(changes, [{ last: 'hidden-personal' }]);
+  assert.deepEqual(changes, []);
   await page.keyboard.press('Control+Shift+n');
-  await page.getByRole('button', { name: 'Show hidden CLIs (2)', exact: true }).waitFor();
+  await page.getByRole('option', { name: 'Show 2 hidden CLIs', exact: true }).waitFor();
   assert.equal(await page.getByRole('option').filter({ hasText: 'personal' }).count(), 0, 'a fresh picker returns to shown CLIs');
 });
 
@@ -437,17 +444,18 @@ test('the hidden view keeps the search and supports keyboard launch', async t =>
   await hiddenPicker(page);
   const input = page.getByRole('combobox', { name: 'Which CLI?' });
   await input.fill('grok');
-  await page.getByText('No CLI matches.', { exact: true }).waitFor();
-  const toggle = page.getByRole('button', { name: 'Show hidden CLIs (2)', exact: true });
-  await toggle.focus();
-  await toggle.press('Enter');
-  assert.equal(await input.inputValue(), 'grok');
-  assert.equal(await input.evaluate(el => el === document.activeElement), true);
-  await page.getByRole('option').filter({ hasText: 'Grok' }).waitFor();
-  await input.fill('');
-  await input.press('ArrowDown');
-  assert.match(await page.getByRole('option', { selected: true }).innerText(), /Grok/);
+  const toggle = page.getByRole('option', { name: 'Show 1 hidden match', exact: true, selected: true });
+  await toggle.waitFor();
+  assert.equal(await page.getByText('No CLI matches.', { exact: true }).count(), 0);
   await input.press('Enter');
+  const hiddenInput = page.getByRole('combobox', { name: 'Which hidden CLI?' });
+  assert.equal(await hiddenInput.inputValue(), 'grok');
+  assert.equal(await hiddenInput.evaluate(el => el === document.activeElement), true);
+  await page.getByRole('option').filter({ hasText: 'Grok' }).waitFor();
+  await hiddenInput.fill('');
+  await hiddenInput.press('ArrowDown');
+  assert.match(await page.getByRole('option', { selected: true }).innerText(), /Grok/);
+  await hiddenInput.press('Enter');
   await page.waitForFunction(() => window.calls.some(call => call.method === 'session.start'));
   assert.equal((await startCall(page)).params.profileId, 'grok');
 });
@@ -455,14 +463,83 @@ test('the hidden view keeps the search and supports keyboard launch', async t =>
 test('all-hidden and legacy local preferences still offer a way to use a hidden CLI', async t => {
   const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
   await hiddenPicker(page, { local: true, all: true });
-  assert.equal(await page.getByRole('option').count(), 0);
-  await page.getByRole('button', { name: 'Show hidden CLIs (3)', exact: true }).click();
-  assert.equal(await page.getByRole('option').count(), 3);
-  await page.getByRole('button', { name: 'Back to shown CLIs', exact: true }).click();
-  assert.equal(await page.getByRole('option').count(), 0);
-  await page.getByRole('button', { name: 'Show hidden CLIs (3)', exact: true }).click();
+  assert.equal(await page.getByRole('option').count(), 1);
+  await page.getByRole('option', { name: 'Show 3 hidden CLIs', exact: true }).click();
+  assert.equal(await page.getByRole('option').count(), 4);
+  await page.getByRole('option', { name: 'Back to shown CLIs', exact: true }).click();
+  assert.equal(await page.getByRole('option').count(), 1);
+  await page.getByRole('option', { name: 'Show 3 hidden CLIs', exact: true }).click();
   await page.getByRole('option').filter({ hasText: 'Grok' }).click();
   await page.waitForFunction(() => window.calls.some(call => call.method === 'session.start'));
   assert.equal((await startCall(page)).params.profileId, 'grok');
-  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.prefs')).vm.hidden), ['visible', 'hidden-personal', 'hidden-other']);
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('helm.prefs')).vm), { hidden: ['visible', 'hidden-personal', 'hidden-other'], account: 'visible' });
+});
+
+test('arrows reach the quiet row and Backspace returns through hidden, shown, then folders', async t => {
+  const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
+  await hiddenPicker(page);
+  const input = page.getByRole('combobox', { name: 'Which CLI?' });
+  assert.match(await page.getByRole('option', { selected: true }).innerText(), /Codex/);
+  await input.press('ArrowDown');
+  const toggle = page.getByRole('option', { name: 'Show 2 hidden CLIs', selected: true });
+  await toggle.waitFor();
+  assert.equal(await input.getAttribute('aria-activedescendant'), await toggle.getAttribute('id'));
+  await input.press('Enter');
+  const hidden = page.getByRole('combobox', { name: 'Which hidden CLI?' });
+  await hidden.press('ArrowUp');
+  await page.getByRole('option', { name: 'Back to shown CLIs', selected: true }).waitFor();
+  await hidden.press('Enter');
+  await input.press('ArrowUp');
+  await input.press('Enter');
+  await hidden.press('Backspace');
+  await input.waitFor();
+  assert.match(await page.getByRole('option', { selected: true }).innerText(), /Codex/);
+  await input.press('Backspace');
+  await page.getByRole('combobox', { name: 'Which folder on vm?' }).waitFor();
+  assert.equal(await page.evaluate(() => window.calls.some(call => call.method === 'session.start')), false);
+});
+
+test('search counts hidden matches and keeps a return row when the hidden list is empty', async t => {
+  const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
+  await hiddenPicker(page);
+  const input = page.getByRole('combobox', { name: 'Which CLI?' });
+  await input.fill('o');
+  await page.getByRole('option', { name: 'Show 2 hidden matches' }).waitFor();
+  await input.fill('missing');
+  await page.getByText('No CLI matches.', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('option').count(), 0);
+  await input.fill('claude');
+  await page.getByRole('option', { name: 'Show 1 hidden match' }).click();
+  const hidden = page.getByRole('combobox', { name: 'Which hidden CLI?' });
+  await hidden.fill('missing');
+  await page.getByText('No hidden CLI matches.', { exact: true }).waitFor();
+  await page.getByRole('option', { name: 'Back to shown CLIs' }).click();
+  assert.equal(await input.inputValue(), 'missing');
+  await page.getByText('No CLI matches.', { exact: true }).waitFor();
+});
+
+test('Enter still launches the shown default and remembers it', async t => {
+  const page = await pageFor(t, { envId: 'vm', folder: '/work/project' });
+  await hiddenPicker(page);
+  await page.getByRole('combobox', { name: 'Which CLI?' }).press('Enter');
+  await page.waitForFunction(() => window.calls.some(call => call.method === 'session.start'));
+  assert.equal((await startCall(page)).params.profileId, 'codex');
+  assert.deepEqual(await page.evaluate(() => window.calls.filter(call => call.method === 'picker.prefs').map(call => call.params)), [{ last: 'visible' }]);
+});
+
+test('the quiet row has a mobile tap target and pointer selection changes its appearance', async t => {
+  const page = await pageFor(t, { envId: 'vm', folder: '/work/project' }, { isMobile: true, hasTouch: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
+  await hiddenPicker(page);
+  const toggle = page.getByRole('option', { name: 'Show 2 hidden CLIs' });
+  const before = await toggle.evaluate(el => getComputedStyle(el).backgroundColor);
+  await toggle.hover();
+  assert.equal(await toggle.getAttribute('aria-selected'), 'true');
+  assert.notEqual(await toggle.evaluate(el => getComputedStyle(el).backgroundColor), before);
+  const geometry = await toggle.boundingBox();
+  assert.ok(geometry && geometry.height >= 44, 'touch row is at least 44px tall');
+  assert.ok(geometry.x >= 0 && geometry.x + geometry.width <= 390, 'touch row fits the viewport');
+  assert.equal(await page.locator('.palette-foot').isVisible(), false);
+  if (process.env.HELM_TEST_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.HELM_TEST_SCREENSHOT_DIR}/quiet-cli-touch.png` });
 });

@@ -34,6 +34,7 @@ type Step = 'machine' | 'folder' | 'cli';
 
 const QUICK_ROW = ':quick';
 const NEW_ROW = ':new-folder';
+const HIDDEN_ROW = ':hidden-clis';
 const MOD = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
 
 interface Row {
@@ -42,7 +43,8 @@ interface Row {
   sub?: string;
   group?: string;
   engine?: string;
-  icon?: 'machine' | 'folder' | 'repo' | 'bolt' | 'plus';
+  icon?: 'machine' | 'folder' | 'repo' | 'bolt' | 'plus' | 'back';
+  quiet?: boolean;
   tag?: string;
   disabled?: boolean;
   /** A folder: how deep in the tree, and whether it is opened. */
@@ -126,7 +128,6 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [picker, setPicker] = useState<(PickerPrefs & { onMachine: boolean }) | null>(null);
   const [viewHidden, setViewHidden] = useState(false);
-  const hiddenCount = (accounts ?? []).filter(account => picker?.hidden?.includes(account.key)).length;
 
   const go = (next: Step) => { setStep(next); setViewHidden(false); setQ(''); setAt(0); setError(''); input.current?.focus(); };
 
@@ -253,10 +254,12 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     if (!machine || busy) return;
     setBusy(true); setError('');
     if (!quick) rememberFolder(machine.id, folder);
-    if (picker?.onMachine) client.rpc(machine.id, 'picker.prefs', { last: a.key }, 15_000).catch(() => { /* only a default */ });
-    else {
-      const prefs = loadPrefs();
-      savePrefs({ ...prefs, [machine.id]: { ...prefs[machine.id], account: a.key } });
+    if (!viewHidden) {
+      if (picker?.onMachine) client.rpc(machine.id, 'picker.prefs', { last: a.key }, 15_000).catch(() => { /* only a default */ });
+      else {
+        const prefs = loadPrefs();
+        savePrefs({ ...prefs, [machine.id]: { ...prefs[machine.id], account: a.key } });
+      }
     }
     // The chat opens now and says it is starting; the agent comes up behind it.
     const params = {
@@ -317,19 +320,31 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       return out;
     }
     const hidden = new Set(picker?.hidden ?? []);
-    const shown = (accounts ?? []).filter((a) => hidden.has(a.key) === viewHidden);
-    const twins = new Set(shown.map((a) => `${a.engine}|${a.account}`).filter((k, i, all) => all.indexOf(k) !== i));
-    // The machine's chosen default first, then the last one used, so Enter
-    // straight away starts what you would have picked.
-    const first = shown.find((a) => a.key === picker?.agent) ?? shown.find((a) => a.key === picker?.last);
-    const ordered = first ? [first, ...shown.filter((a) => a !== first)] : shown;
-    return ordered.map((a): Row => ({
-      id: a.key, engine: a.engine, title: engineOf(a.engine).label,
-      group: viewHidden ? 'Hidden CLIs' : undefined,
-      sub: twins.has(`${a.engine}|${a.account}`) ? `${a.account} (${a.profile.id})` : a.account,
-      tag: a.key === picker?.agent ? 'default' : a.key === picker?.last ? 'last used' : undefined,
-      pick: () => void start(a),
-    })).filter((r) => matches(r, query));
+    const cliRows = (hiddenView: boolean) => {
+      const shown = (accounts ?? []).filter((a) => hidden.has(a.key) === hiddenView);
+      const twins = new Set(shown.map((a) => `${a.engine}|${a.account}`).filter((k, i, all) => all.indexOf(k) !== i));
+      // The machine's chosen default first, then the last one used, so Enter
+      // straight away starts what you would have picked.
+      const first = shown.find((a) => a.key === picker?.agent) ?? shown.find((a) => a.key === picker?.last);
+      const ordered = first ? [first, ...shown.filter((a) => a !== first)] : shown;
+      return ordered.map((a): Row => ({
+        id: a.key, engine: a.engine, title: engineOf(a.engine).label,
+        group: hiddenView ? 'Hidden CLIs' : undefined,
+        sub: twins.has(`${a.engine}|${a.account}`) ? `${a.account} (${a.profile.id})` : a.account,
+        tag: a.key === picker?.agent ? 'default' : a.key === picker?.last ? 'last used' : undefined,
+        pick: () => void start(a),
+      })).filter((r) => matches(r, query));
+    };
+    const hiddenRows = cliRows(true);
+    const out = viewHidden ? hiddenRows : cliRows(false);
+    if (viewHidden || hiddenRows.length) out.push({
+      id: HIDDEN_ROW, quiet: true, icon: viewHidden ? 'back' : undefined,
+      title: viewHidden ? 'Back to shown CLIs' : query
+        ? `Show ${hiddenRows.length} hidden ${hiddenRows.length === 1 ? 'match' : 'matches'}`
+        : `Show ${hiddenRows.length} hidden ${hiddenRows.length === 1 ? 'CLI' : 'CLIs'}`,
+      pick: () => { setViewHidden(value => !value); setAt(0); input.current?.focus(); },
+    });
+    return out;
   }, [step, envs, machine, query, opened, inside, searching, hits, home, accounts, picker, viewHidden, folder, quick, anchor, busy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Where "New folder" puts it: inside the folder the cursor is on when that
@@ -377,6 +392,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   };
   const back = () => {
     setError('');
+    if (step === 'cli' && viewHidden) { setViewHidden(false); setAt(0); return; }
     if (step === 'cli') { go('folder'); setQuick(false); setQ(folderSpot.current.q); returning.current = folderSpot.current.id; }
     else if (step === 'folder') go('machine');
   };
@@ -400,7 +416,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     : step === 'cli' ? accounts === null : false;
   const placeholder = step === 'machine' ? 'Which machine?'
     : step === 'folder' ? `Which folder on ${machine?.name}?`
-    : 'Which CLI?';
+    : viewHidden ? 'Which hidden CLI?' : 'Which CLI?';
 
   return (
     <div className="modal-back palette-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -453,7 +469,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
         <div className="palette-list" ref={list} role="listbox" id={listId} aria-label={placeholder}>
           {busy && <div className="empty quiet">{step === 'folder' ? `Making ${newPath}…` : quick ? `Starting ${rows[selected]?.title} as a quick chat…` : `Starting ${rows[selected]?.title} in ${leaf(folder)}…`}</div>}
           {!busy && loading && !rows.length && <div className="empty quiet">{step === 'cli' ? 'looking for CLIs…' : 'looking…'}</div>}
-          {!busy && !loading && !rows.length && (
+          {!busy && !loading && (!rows.length || (viewHidden && rows.every(row => row.quiet))) && (
             <div className="empty quiet">
               {step === 'machine' ? 'No machine matches.' : step === 'folder' ? (searching ? 'No folder matches.' : 'No folders here.') : viewHidden ? 'No hidden CLI matches.' : 'No CLI matches.'}
             </div>
@@ -476,10 +492,11 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                     role="option" id={`${listId}-${i}`} tabIndex={-1} aria-selected={i === selected}
                     aria-disabled={row.disabled || undefined} disabled={row.disabled}
                     aria-expanded={row.folder && !row.disabled ? row.folder.open : undefined}
-                    className={`palette-row${i === selected ? ' on' : ''}`}
+                    className={`palette-row${row.quiet ? ' quiet' : ''}${i === selected ? ' on' : ''}`}
                     onMouseMove={() => { if (i !== selected) point(i); }} onClick={() => row.pick()}
                   >
-                    {row.engine ? <EngineMark engine={engineOf(row.engine).cls} />
+                    {row.quiet ? <span className="newchat-quiet-glyph">{row.icon && <Icon name={row.icon} size={14} />}</span>
+                      : row.engine ? <EngineMark engine={engineOf(row.engine).cls} />
                       : !row.disabled && <span className="pglyph"><Icon name={row.icon ?? 'folder'} size={15} /></span>}
                     <span className="grow">
                       <span className="palette-title">{row.title}{row.tag && <span className="tag">{row.tag}</span>}</span>
@@ -498,15 +515,6 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
           })}
           {error && <div className="error">{error}</div>}
         </div>
-        {step === 'cli' && (hiddenCount > 0 || viewHidden) && (
-          <div className="newchat-bar">
-            <button type="button" className="newchat-new" disabled={busy} aria-pressed={viewHidden}
-              onClick={() => { setViewHidden(value => !value); setAt(0); input.current?.focus(); }}>
-              <Icon name={viewHidden ? 'back' : 'more'} size={15} />
-              {viewHidden ? 'Back to shown CLIs' : `Show hidden CLIs (${hiddenCount})`}
-            </button>
-          </div>
-        )}
         {step === 'folder' && machine && (creating ? (
           <form className="newchat-bar creating" onSubmit={(e) => { e.preventDefault(); void makeFolder(creating.parent, creating.name); }}>
             <span className="pglyph"><Icon name="plus" size={15} /></span>
@@ -536,7 +544,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
         ))}
         <div className="palette-foot">
           <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
-          <span><kbd>Enter</kbd> {step === 'cli' ? 'start' : 'choose'}</span>
+          <span><kbd>Enter</kbd> {step === 'cli' && !rows[selected]?.quiet ? 'start' : 'choose'}</span>
           {step === 'folder' && <span><kbd>→</kbd><kbd>←</kbd> open, close</span>}
           {step === 'folder' && <span><kbd>{MOD}</kbd><kbd>Enter</kbd> quick chat</span>}
           {step === 'folder' && query && <span><kbd>{MOD}</kbd><kbd>Shift</kbd><kbd>Enter</kbd> new folder</span>}

@@ -2304,6 +2304,11 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .newchat-row.tree .palette-row:disabled .palette-title { color: var(--mutedfg); font-weight: 450; }
 .newchat .palette-title .tag { margin-left: 8px; }
 .newchat .palette-list .error { margin: 8px 12px; }
+.newchat .palette-row.quiet { min-height: 36px; padding: 6px 12px; margin-top: 2px; color: var(--mutedfg); }
+.newchat .palette-row.quiet .palette-title { font-size: var(--t-meta); font-weight: 450; color: inherit; }
+.newchat .palette-row.quiet.on, .newchat .palette-row.quiet:hover { background: var(--select); color: var(--text); }
+.newchat-quiet-glyph { width: 26px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
+@media (pointer: coarse) { .newchat .palette-row.quiet { min-height: 44px; } }
 .home-search kbd { font-size: 10.5px; padding: 1px 5px; }
 
 /* A branch rail identifies the account and model behind every delegated task. */
