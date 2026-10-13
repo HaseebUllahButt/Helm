@@ -4,7 +4,7 @@ import { reloadApp } from './reload';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Confirm, Sheet, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
-import { ThreadStatus, moodOf, isUnread, markSeen, useSeenVersion, wrappedUp } from './threadStatus';
+import { ThreadStatus, moodOf, isUnread, markSeen, seenHere, useSeenVersion, wrappedUp } from './threadStatus';
 import { Palette, ShortcutsHelp, type PaletteItem } from './Palette';
 import { NewChat } from './NewChat';
 import { accountsFrom, loadPrefs, savePrefs, rememberFolder, recentFolders, type Account, type PickerPrefs } from './accounts';
@@ -1250,6 +1250,18 @@ function Shell({ client, conn, onSignOut }: {
   useEffect(() => {
     if (openId && selected && markSeen(openId)) client.rpc(selected, 'session.seen', { id: openId }).catch(() => { /* an older machine: this device still knows */ });
   }, [openId, openStamp?.updatedAt, openStamp?.status]);
+  // Chats this device opened before its machine kept the look: hand each
+  // over once, so a chat read here stops showing as new everywhere else.
+  const handedOver = useRef(new Set<string>());
+  const doneKey = doneNow.map(({ s }) => `${s.id}:${s.updatedAt}:${s.seenAt}`).join();
+  useEffect(() => {
+    for (const { env: machine, s } of doneNow) {
+      if (!machine.online || handedOver.current.has(s.id) || (s.seenAt ?? 0) >= (s.updatedAt ?? 0)) continue;
+      if (seenHere(s.id) < (s.updatedAt ?? 0)) continue;
+      handedOver.current.add(s.id);
+      client.rpc(machine.id, 'session.seen', { id: s.id }).catch(() => { /* an older machine: this device still knows */ });
+    }
+  }, [doneKey]);
   const snoozeThread = (envId: string, s: Session, until: number) => {
     setSnooze(`${envId}:${s.id}`, until);
     setSnoozeUndo({ key: `${envId}:${s.id}`, title: s.title, until });

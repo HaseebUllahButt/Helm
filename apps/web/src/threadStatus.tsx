@@ -77,6 +77,9 @@ export function markSeen(id: string, at = Date.now()): boolean {
   return true;
 }
 
+/** When this device last looked at the thread; 0 when it never did. */
+export const seenHere = (id: string) => readSeen().at[id] ?? 0;
+
 /** Re-render when something was marked seen. */
 export function useSeenVersion() {
   return useSyncExternalStore(
