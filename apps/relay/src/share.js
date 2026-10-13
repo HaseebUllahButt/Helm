@@ -2,6 +2,7 @@ import http from 'node:http';
 import { loadNetwork } from '@helm/protocol/network';
 import {
   checkSharePassword, shareCookie, checkShareCookie, publicHosts,
+  checkShareGrant, memberCookie, checkMemberCookie, safeSharePath, MEMBER_TTL_MS, GRANT_TTL_MS,
 } from '@helm/protocol/share';
 
 /**
@@ -16,9 +17,22 @@ import {
  *
  * A share with a password gets a small sign-in page first; the cookie that
  * page sets is checked here and never reaches the shared app.
+ *
+ * A private share opens only for the network's own devices. The link is a
+ * different origin from the Helm app, so it cannot read the app's sign-in:
+ * a visitor is sent to the app, which (signed in) gets a one-use grant from
+ * a hub and posts it back to /.helm-share/enter here. That swaps it for a
+ * cookie naming the member, re-checked against the roster on every request,
+ * so removing a device closes its links at once.
  */
 
 const COOKIE = '__Host-helm-share';
+const MEMBER = '__Host-helm-member';
+// "This browser has been in before": lets a returning member skip the
+// private page and go straight to the app when their pass runs out. It
+// proves nothing; a stranger without it sees the plain page.
+const SEEN = '__Host-helm-member-seen';
+const OURS = [COOKIE, MEMBER, SEEN];
 const COOKIE_DAYS = 30;
 const CACHE_MS = 5000;
 const MISS_MS = 2000;
@@ -45,7 +59,7 @@ function page(res, status, title, body, extra = {}) {
 h1{font-size:19px;margin:0 0 6px;letter-spacing:-.01em}p{margin:0 0 18px;color:var(--dim)}
 input{width:100%;font:inherit;padding:11px 13px;border-radius:11px;border:1px solid var(--line);background:transparent;color:inherit;margin-bottom:12px}
 input:focus{outline:2px solid var(--acc);outline-offset:-1px}
-button{width:100%;font:inherit;font-weight:600;padding:11px;border:0;border-radius:11px;background:var(--acc);color:var(--on);cursor:pointer}
+button,a.b{display:block;width:100%;font:inherit;font-weight:600;padding:11px;border:0;border-radius:11px;background:var(--acc);color:var(--on);cursor:pointer;text-align:center;text-decoration:none}
 .e{color:var(--bad);font-size:14px;margin:-4px 0 12px}.f{margin-top:18px;font-size:12px;color:var(--dim);text-align:center}
 </style><div class="c">${body}<div class="f">Shared with Helm</div></div></html>`);
 }
@@ -65,9 +79,10 @@ function cookies(header) {
   return out;
 }
 
-/** The Cookie header minus ours: the shared app has no business seeing it. */
+/** The Cookie header minus ours: the shared app has no business seeing them. */
 function withoutOurCookie(header) {
-  const kept = String(header || '').split(';').map((p) => p.trim()).filter((p) => p && !p.startsWith(`${COOKIE}=`));
+  const kept = String(header || '').split(';').map((p) => p.trim())
+    .filter((p) => p && !OURS.some((c) => p.startsWith(`${c}=`)));
   return kept.length ? kept.join('; ') : null;
 }
 
@@ -92,7 +107,8 @@ export function createShareRoute({ online, callEnv, openTcp }) {
     const map = new Map();
     await Promise.all([...online.keys()].map(async (env) => {
       try {
-        const { shares } = await callEnv(env, 'share.list', { forHub: true }, { timeout: 4000 });
+        // `members`: this hub keeps private links private, so it may see them.
+        const { shares } = await callEnv(env, 'share.list', { forHub: true, members: true }, { timeout: 4000 });
         for (const s of shares ?? []) if (!map.has(s.name)) map.set(s.name, { ...s, env });
       } catch { /* an older daemon, or one that is going away */ }
     }));
@@ -135,20 +151,81 @@ export function createShareRoute({ online, callEnv, openTcp }) {
     return agent;
   }
 
-  /** `mockups` from mockups.130-210-33-163.sslip.io, if that is one of ours. */
-  function nameFor(req) {
+  /**
+   * `{ name: 'mockups', base: '130-210-33-163.sslip.io' }` from
+   * mockups.130-210-33-163.sslip.io, if that is one of ours.
+   */
+  function linkOf(req) {
     const host = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '');
     const bases = [...publicHosts(loadNetwork()), ...(process.env.HELM_SHARE_DOMAIN ? [process.env.HELM_SHARE_DOMAIN] : [])];
     for (const base of bases) {
       if (!host.endsWith(`.${base}`)) continue;
       const label = host.slice(0, -base.length - 1);
-      if (label && !label.includes('.')) return label;
+      if (label && !label.includes('.')) return { name: label, base };
     }
     return null;
   }
+  const nameFor = (req) => linkOf(req)?.name ?? null;
 
-  const unlocked = (req, share) =>
-    !share.lock || checkShareCookie(cookies(req.headers.cookie)[COOKIE], share.name, share.lock);
+  /** Who may in: a password share wants its cookie, a private one a member's. */
+  function unlocked(req, share, base) {
+    if (share.private) {
+      return !!checkMemberCookie(loadNetwork(), cookies(req.headers.cookie)[MEMBER], { name: share.name, host: base });
+    }
+    return !share.lock || checkShareCookie(cookies(req.headers.cookie)[COOKIE], share.name, share.lock);
+  }
+
+  /**
+   * Where the Helm app is, to sign a visitor in: this hub's own https
+   * address if the link is under it, else the first one the network has.
+   * The fragment never reaches a server, so it stays out of every log.
+   */
+  function appHop(base, name, next) {
+    const hosts = publicHosts(loadNetwork());
+    const app = hosts.includes(base) ? base : hosts[0];
+    if (!app) return null;
+    const hash = new URLSearchParams({ share: name, host: base, next: safeSharePath(next) });
+    return `https://${app}/#${hash}`;
+  }
+
+  const privatePage = (res, share, base, next, why = '') => {
+    const hop = appHop(base, share.name, next);
+    page(res, 401, `${share.name} - private`, `
+<h1>Private to your Helm</h1><p>Only devices signed in to the Helm that shares <b>${esc(share.name)}</b> can open it.</p>
+${why ? `<div class="e">${esc(why)}</div>` : ''}${hop ? `<a class="b" href="${esc(hop)}">Sign in with Helm</a>` : ''}`);
+  };
+
+  // Grants spent here, until they would have expired anyway: one use each.
+  const spent = new Map(); // jti -> expires
+  function spend(jti, expires) {
+    const now = Date.now();
+    if (spent.size > 4096) for (const [k, e] of spent) if (e <= now) spent.delete(k);
+    if (spent.has(jti) || spent.size > 8192) return false;
+    spent.set(jti, Math.min(expires, now + GRANT_TTL_MS));
+    return true;
+  }
+
+  /** The app's grant, swapped for this link's own cookie. */
+  async function enter(req, res, share, base) {
+    let form;
+    try { form = await readForm(req); } catch { return privatePage(res, share, base, '/', 'That did not arrive. Try again.'); }
+    const next = safeSharePath(form.get('next'));
+    const net = loadNetwork();
+    const grant = checkShareGrant(net, form.get('grant'), { name: share.name, host: base });
+    if (!grant || !spend(grant.j, grant.e)) {
+      return privatePage(res, share, base, next, 'That sign-in ran out or was already used. Try again.');
+    }
+    const expiresAt = Date.now() + MEMBER_TTL_MS;
+    const value = memberCookie(net, { name: share.name, host: base, sub: grant.s, expiresAt });
+    res.writeHead(303, {
+      location: next, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
+      'set-cookie': [
+        `${MEMBER}=${value}; Path=/; Max-Age=${Math.floor(MEMBER_TTL_MS / 1000)}; HttpOnly; Secure; SameSite=Lax`,
+        `${SEEN}=1; Path=/; Max-Age=${30 * 86400}; HttpOnly; Secure; SameSite=Lax`,
+      ],
+    });
+    res.end();
+  }
 
   /** The request as the shared app should see it. */
   function upstreamHeaders(req, share) {
@@ -200,7 +277,7 @@ export function createShareRoute({ online, callEnv, openTcp }) {
 
   /** Handle a request if it is for a share. Returns false when it is not. */
   async function route(req, res) {
-    const name = nameFor(req);
+    const { name, base } = linkOf(req) ?? {};
     if (!name) return false;
     const share = await lookup(name);
     if (!share) {
@@ -213,10 +290,25 @@ export function createShareRoute({ online, callEnv, openTcp }) {
       else signIn(res, share.name, '/');
       return true;
     }
-    if (!unlocked(req, share)) {
+    if (share.private && path.startsWith('/.helm-share/enter')) {
+      if (req.method === 'POST') await enter(req, res, share, base);
+      else privatePage(res, share, base, '/');
+      return true;
+    }
+    if (!unlocked(req, share, base)) {
       // A page load gets the sign-in; anything else (a fetch, an image) just
       // a plain refusal, which is what a script can understand.
-      if (req.method === 'GET' && /text\/html/.test(req.headers.accept || '')) signIn(res, share.name, path);
+      const pageLoad = req.method === 'GET' && /text\/html/.test(req.headers.accept || '');
+      if (share.private) {
+        // A member who has been in before goes straight back to the app for
+        // a fresh pass; nobody else is sent anywhere.
+        const hop = pageLoad && cookies(req.headers.cookie)[SEEN] ? appHop(base, share.name, path) : null;
+        if (hop) { res.writeHead(303, { location: hop, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end(); }
+        else if (pageLoad) privatePage(res, share, base, path);
+        else { res.writeHead(401, { 'content-type': 'text/plain' }); res.end('private to its Helm'); }
+        return true;
+      }
+      if (pageLoad) signIn(res, share.name, path);
       else { res.writeHead(401, { 'content-type': 'text/plain' }); res.end('password required'); }
       return true;
     }
@@ -242,12 +334,12 @@ export function createShareRoute({ online, callEnv, openTcp }) {
 
   /** A websocket (live reload, a chat app) on a share: piped as raw bytes. */
   async function upgrade(req, socket, head) {
-    const name = nameFor(req);
+    const { name, base } = linkOf(req) ?? {};
     if (!name) return false;
     const refuse = (code, text) => { socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`); socket.destroy(); };
     const share = await lookup(name);
     if (!share) { refuse(404, 'Not Found'); return true; }
-    if (!unlocked(req, share)) { refuse(401, 'Unauthorized'); return true; }
+    if (!unlocked(req, share, base)) { refuse(401, 'Unauthorized'); return true; }
     let stream;
     try { stream = await openTcp(share.env, share.port); }
     catch { refuse(502, 'Bad Gateway'); return true; }

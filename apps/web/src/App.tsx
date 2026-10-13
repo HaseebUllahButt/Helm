@@ -1,6 +1,7 @@
 import { useCopySelection } from './useCopySelection';
 import { useDismiss } from './useDismiss';
 import { reloadApp } from './reload';
+import { openPrivateLink } from './privateLink';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Confirm, Sheet, TextPrompt } from './Modal';
 import { useNow, waitingSince } from './useNow';
@@ -78,6 +79,56 @@ function pairingTarget(value: string): PairingTarget | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * `#share=<name>&host=<host>&next=<path>`: a private link sent this browser
+ * here to sign in (see apps/relay/src/share.js). Nothing secret is in it.
+ */
+type ShareHopTarget = { name: string; host: string; next: string };
+function shareHopTarget(): ShareHopTarget | null {
+  const p = new URLSearchParams(location.hash.replace(/^#\/?/, ''));
+  const name = p.get('share'), host = p.get('host');
+  return name && host ? { name, host, next: p.get('next') || '/' } : null;
+}
+
+/**
+ * Signed in, on the way to a private link: get a pass and go. The hub that
+ * served this page is asked first - it built the way here, so it knows how -
+ * and this device's own hub after it.
+ */
+function ShareHop({ client, target, onDone }: { client: Client; target: ShareHopTarget; onDone: () => void }) {
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let last: any;
+      for (const base of [location.origin, undefined]) {
+        try {
+          const pass = await client.shareGrant(target, base);
+          if (cancelled) return;
+          // Back from the link should land in Helm, not bounce out again.
+          history.replaceState(null, '', location.pathname + location.search);
+          openPrivateLink(pass);
+          return;
+        } catch (err) { last = err; }
+      }
+      if (!cancelled) setError(last?.message || 'could not open it');
+    })();
+    return () => { cancelled = true; };
+  }, [client, target]);
+  return (
+    <div className="auth">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <img src="/icon.svg" alt="" />
+          <h1>helm</h1>
+          <p>{error ? `Could not open ${target.name}: ${error}` : `opening ${target.name}…`}</p>
+        </div>
+        {error && <button className="primary" onClick={onDone}>go to Helm</button>}
+      </div>
+    </div>
+  );
 }
 
 /** Desktop gets both panes at once; a phone shows one at a time. */
@@ -304,12 +355,16 @@ export function App() {
   }, [auth]);
 
   const signOut = () => { forgetWorkspace(workspaceScope(auth?.token)); clearAuth(); setAuth(null); setClient(null); };
+  const [shareHop, setShareHop] = useState(shareHopTarget);
+  const leaveShareHop = () => { history.replaceState(null, '', location.pathname + location.search); setShareHop(null); };
 
   if (auth === undefined) return null;
   if (!auth) {
-    return <Login notice={notice} onDone={(a) => { setNotice(''); saveAuth(a); setAuth(a); }} />;
+    const why = shareHop ? `${shareHop.name} is private to your Helm. Pair this device to open it.` : '';
+    return <Login notice={notice || why} onDone={(a) => { setNotice(''); saveAuth(a); setAuth(a); }} />;
   }
   if (!client) return null;
+  if (shareHop) return <ShareHop client={client} target={shareHop} onDone={leaveShareHop} />;
   return <Shell key={workspaceScope(auth.token)} client={client} conn={conn} onSignOut={signOut} />;
 }
 
@@ -1786,7 +1841,7 @@ function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) => void 
 
   const finish = (auth: Auth) => {
     // Shell consumes navigation links after sign-in; discard only auth hashes.
-    if (location.hash && !/^#open=[^/]+\/.+$/.test(location.hash) && location.hash !== '#devices') {
+    if (location.hash && !/^#open=[^/]+\/.+$/.test(location.hash) && location.hash !== '#devices' && !shareHopTarget()) {
       history.replaceState(null, '', location.pathname + location.search);
     }
     onDone(auth);

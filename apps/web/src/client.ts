@@ -1712,6 +1712,16 @@ export class Client {
     return res.json();
   }
 
+  /**
+   * A one-use pass into a private link, from the hub at `base` (this
+   * client's hub by default). The answer says where to post it.
+   */
+  shareGrant(params: { name: string; host: string; next?: string }, base = this.relay) {
+    return this.httpAt<{ action: string; grant: string; next: string }>(base, '/api/share/grant', {
+      method: 'POST', body: JSON.stringify(params),
+    });
+  }
+
   network() {
     return this.http<{
       id: string; self: string; you: string;
