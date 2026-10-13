@@ -503,8 +503,16 @@ export class Sessions extends EventEmitter {
    * a person, and when it is done.
    */
   /** How full a conversation is: kept on its record, sent to clients as a session update. */
-  #setContext(s, used, window, model, full) {
-    if (!(used > 0) || !(window > 0)) return false;
+  #setContext(s, used, window, model, full, compacted = false) {
+    if (!(window > 0)) return false;
+    // Compacted with the new size not yet known: the ring empties and says so.
+    if (compacted && !(used > 0)) {
+      if (!s.context || s.context.compacted) return false;
+      s.context = { ...s.context, used: 0, window, compacted: true, at: Date.now() };
+      if (this.#index.has(s.id)) this.emit('session', s);
+      return true;
+    }
+    if (!(used > 0)) return false;
     // `full` is the model's whole window: the menu's "Full" option, and what "Compact at" can never exceed.
     full = full > 0 ? full : undefined;
     model = typeof model === 'string' && model ? model : undefined;
@@ -2025,7 +2033,7 @@ export class Sessions extends EventEmitter {
     // in it: kept on the record (written out when the turn ends, with the
     // rest) and sent to clients as a session update.
     if (e.type === 'context') {
-      this.#setContext(s, e.used, e.window, e.model, e.full);
+      this.#setContext(s, e.used, e.window, e.model, e.full, e.compacted === true);
       return;
     }
     if (e.type === 'status') {

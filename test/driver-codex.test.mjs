@@ -47,6 +47,9 @@ test('Codex reports how full the context is from the latest call, not the runnin
     { type: 'context', used: 30_000, window: 258_400 },
     { type: 'context', used: 60_000, window: 258_400 },
   ]);
+  // After a compaction the latest call is empty: the ring says compacted.
+  driver.onNotification('thread/tokenUsage/updated', usage({ totalTokens: 0, inputTokens: 0, outputTokens: 0 }, { totalTokens: 90_000 }));
+  assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 0, window: 258_400, compacted: true });
 });
 
 function adoptedCodex(t, { thread, afterRead, error, unsupportedTurns = false } = {}) {
