@@ -392,6 +392,8 @@ type MainView =
   | { kind: 'start'; cwd: string; quick?: boolean }
   | { kind: 'settings' }
   | { kind: 'network-settings' }
+  // Every machine's public and private links (`helm share`) in one list.
+  | { kind: 'links' }
   // Which helm each machine runs, and updating them from here.
   | { kind: 'updates' }
   | { kind: 'models'; account: Account }
@@ -929,6 +931,7 @@ function Shell({ client, conn, onSignOut }: {
     go('a:devices', 'Devices & pairing', 'phone key link', [{ kind: 'app-settings' }, { kind: 'devices' }]);
     go('a:cost', 'What it has cost', 'usage tokens spend', [{ kind: 'usage' }]);
     go('a:defaults', 'CLI defaults', 'model thinking permissions', [{ kind: 'app-settings' }, { kind: 'network-settings' }]);
+    go('a:links', 'Public links', 'share spin private forward port', [{ kind: 'app-settings' }, { kind: 'links' }]);
     for (const t of ['light', 'dark', 'system'] as Theme[]) {
       items.push({
         id: `theme:${t}`, group: 'action', title: `Theme: ${t[0].toUpperCase()}${t.slice(1)}`, keywords: 'appearance colour',
@@ -1368,7 +1371,8 @@ function Shell({ client, conn, onSignOut }: {
   // and what devices hold keys, and the settings they live under, belong to
   // no machine either.
   const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'devices'
-    || view.kind === 'network-settings' || view.kind === 'app-settings' || view.kind === 'updates';
+    || view.kind === 'network-settings' || view.kind === 'app-settings' || view.kind === 'updates'
+    || view.kind === 'links';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -1585,6 +1589,8 @@ function Shell({ client, conn, onSignOut }: {
           <Suspense fallback={<ViewLoading title="Updates" onBack={back} />}>
             <UpdatesView client={client} envs={envs} onBack={back} onRefresh={loadEnvs} onOpenSession={openSession} />
           </Suspense>
+        ) : view.kind === 'links' ? (
+          <LinksView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'network-settings' ? (
           <NetworkSettings
             client={client} envs={envs} onBack={back}
@@ -3870,6 +3876,10 @@ function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }: {
             <span className="grow"><span className="rt">CLI defaults</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
           </button>
+          <button className="row" onClick={() => onOpen({ kind: 'links' })}>
+            <span className="grow"><span className="rt">Public links</span></span>
+            <span className="chev"><Icon name="forward" size={15} /></span>
+          </button>
           <button className="row" onClick={() => onOpen({ kind: 'usage' })}>
             <span className="grow"><span className="rt">Usage & cost</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>
@@ -3905,6 +3915,34 @@ function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }: {
             <span className="grow"><span className="rt">Unpair this device</span></span>
           </button>
         </div>
+      </div></div>
+    </>
+  );
+}
+
+/**
+ * Every machine's links in one place. They live on the machine that serves
+ * them, so this is each machine's own list, one after another - the same
+ * list its own settings show.
+ */
+function LinksView({ client, envs, onBack }: { client: Client; envs: Environment[]; onBack: () => void }) {
+  return (
+    <>
+      <div className="bar">
+        <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
+        <div className="titles"><h1>Public links</h1><span className="sub">all machines</span></div>
+      </div>
+      <div className="scroll"><div className="pad column">
+        <p className="note">
+          A link shows something running on one of your machines. It ends by itself after 3 hours unless it was kept.
+          A private one opens only on devices signed in to your Helm.
+        </p>
+        {envs.map((env) => (
+          <div key={env.id}>
+            <div className="section">{env.name}</div>
+            <PublicLinks client={client} env={env} />
+          </div>
+        ))}
       </div></div>
     </>
   );
