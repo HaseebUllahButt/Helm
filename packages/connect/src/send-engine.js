@@ -215,9 +215,14 @@ export class SendEngine {
           r.attempted = true;
           await this.ensureServer(); r.job.phase = 'sending'; this.update(r, true);
           const remote = [process.execPath, fileURLToPath(new URL('./send-proxy.js', import.meta.url)), this.socket, r.job.id].map(quote).join(' ');
-          const flags = ['-a', '--no-owner', '--no-group', '--protect-args', '--mkpath', '--compress', '--compress-level=1', '--compress-choice=zstd', '--checksum-choice=xxh128', '--skip-compress=3g2/3gp/7z/avi/bz2/gif/gz/ico/jpeg/jpg/lz/lz4/mp3/mp4/mov/ogg/pdf/png/rar/webm/webp/xz/zip/zst', `--partial-dir=.helm-partial-${r.job.id}`, '--delete-delay', '--info=progress2', '--outbuf=L', '--stats', '--timeout=120'];
+          const flags = ['-a', '--no-owner', '--no-group', '--protect-args', '--mkpath', '--compress', '--compress-level=1', '--compress-choice=zstd', '--checksum-choice=xxh128', '--skip-compress=3g2/3gp/7z/avi/bz2/gif/gz/ico/jpeg/jpg/lz/lz4/mp3/mp4/mov/ogg/pdf/png/rar/webm/webp/xz/zip/zst', `--partial-dir=.helm-partial-${r.job.id}`, '--info=progress2', '--outbuf=L', '--stats', '--timeout=120'];
+          // A folder sent again lands straight in the real folder, where the
+          // other machine has its own files (installs, builds, agent work).
+          // Only a private stage may be pruned to match the source.
+          const own = r.stage !== r.intent.destination;
+          if (own) flags.push('--delete-delay');
           if (r.intent.again) flags.push('--delay-updates');
-          if (plan.filterFile) flags.push('--from0', '--filter', `merge ${plan.filterFile}`, '--delete-excluded');
+          if (plan.filterFile) flags.push('--from0', '--filter', `merge ${plan.filterFile}`, ...(own ? ['--delete-excluded'] : []));
           for (const pattern of plan.excludes) flags.push('--exclude', pattern);
           let output = '', start = Date.now();
           const code = await new Promise((resolve, reject) => {

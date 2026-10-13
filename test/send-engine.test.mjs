@@ -52,8 +52,10 @@ test('encrypted tunnel publishes atomically, preserves modes/symlinks/env, and u
     assert.equal(readFileSync(join(initial.target.path,'.env'),'utf8'),'synthetic'); assert.equal(statSync(join(initial.target.path,'app')).mode&0o777,0o751);
     assert.equal(readdirSync(initial.target.path).includes('broken'),true);
     const unchanged=await finished(f,source); assert.equal(unchanged.target.path,initial.target.path); assert.equal(unchanged.again,true); assert.equal(unchanged.changed.files,0);
+    mkdirSync(join(initial.target.path,'node_modules')); writeFileSync(join(initial.target.path,'node_modules','dep'),'installed there'); writeFileSync(join(initial.target.path,'notes.md'),'agent work');
     writeFileSync(join(source,'app'),'second edit');
     const delta=await finished(f,source); assert.equal(delta.changed.files,1); assert.equal(readFileSync(join(delta.target.path,'app'),'utf8'),'second edit');
+    assert.equal(readFileSync(join(delta.target.path,'node_modules','dep'),'utf8'),'installed there'); assert.equal(readFileSync(join(delta.target.path,'notes.md'),'utf8'),'agent work');
     assert.deepEqual(f.metrics(),{opens:1,credentials:1});
     await new Promise(r=>setTimeout(r,300));
     assert.ok(f.events.some(e=>e.job.phase==='done'));
@@ -93,7 +95,8 @@ test('Git history, staged/dirty/untracked files travel; ignored caches and exclu
     writeFileSync(join(source,'tracked'),'dirty'); writeFileSync(join(source,'new'),'new'); writeFileSync(join(source,'.env.local'),'synthetic'); mkdirSync(join(source,'cache')); writeFileSync(join(source,'cache','ignored'),'ignored');
     const plan=await f.engine.plan({path:source},'phone'); assert.equal(plan.git.dirty,true); assert.equal(plan.defaultTarget,'bb22'); assert.deepEqual(plan.envFiles,['.env.local']);
     const first=await finished(f,source); assert.equal(existsSync(join(first.target.path,'.git','HEAD')),true); assert.equal(existsSync(join(first.target.path,'cache')),false);
-    const excluded=await finished(f,source,{includeEnv:false}); assert.equal(existsSync(join(excluded.target.path,'.env.local')),false);
+    writeFileSync(join(source,'.env.local'),'changed secret');
+    const excluded=await finished(f,source,{includeEnv:false}); assert.equal(readFileSync(join(excluded.target.path,'.env.local'),'utf8'),'synthetic');
     assert.equal(execFileSync('git',['-C',excluded.target.path,'rev-parse','HEAD'],{encoding:'utf8'}).toString().trim(),execFileSync('git',['-C',source,'rev-parse','HEAD']).toString().trim());
   } finally { await f.close(); }
 });
