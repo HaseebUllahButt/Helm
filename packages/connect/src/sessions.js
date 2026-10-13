@@ -1034,6 +1034,13 @@ export class Sessions extends EventEmitter {
   // ------------------------------------------------------------------- verbs
 
   async list({ includeDelegations = false, parentId = null, includeDetected = false } = {}) {
+    // One chat's helpers are Helm-driven sessions in the index: answer them
+    // straight from it, without the process and history scans a full list
+    // needs, so the Subagents panel opens at once.
+    if (parentId) {
+      const children = [...this.#index.values()].filter((s) => !s.archived && s.delegation?.parentId === parentId);
+      if (children.every((s) => s.driver && !s.external)) return this.#shape(children.map((s) => this.#drivenRow(s)), { parentId });
+    }
     // The runtime is the authority on what is still alive; our index only
     // remembers which of those panes are ours.
     const live = await this.runtime.listLive();
@@ -1103,7 +1110,7 @@ export class Sessions extends EventEmitter {
         continue;
       }
       if (s.driver) {
-        out.push({ ...wire(s), archived: !!s.archived, alive: s.nativeSocket ? !!this.#drivers.get(s.id)?.nativeConnected : this.#drivers.has(s.id), adopted: false, ...pendingSummary(this.events.pending(s.id)) });
+        out.push(this.#drivenRow(s));
         continue;
       }
       if (s.pty) {
@@ -1176,6 +1183,16 @@ export class Sessions extends EventEmitter {
     for (const s of this.#index.values()) {
       if (s.engine === 'claude' && !s.archived && !this.#native.has(s.id)) void this.#refreshNative(s);
     }
+    return this.#shape(out, { parentId, includeDelegations });
+  }
+
+  /** A Helm-driven session as a list row. */
+  #drivenRow(s) {
+    return { ...wire(s), archived: !!s.archived, alive: s.nativeSocket ? !!this.#drivers.get(s.id)?.nativeConnected : this.#drivers.has(s.id), adopted: false, ...pendingSummary(this.events.pending(s.id)) };
+  }
+
+  /** Filter, decorate and order list rows. */
+  #shape(out, { parentId = null, includeDelegations = false } = {}) {
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);

@@ -163,6 +163,18 @@ test('helpers are offered the accounts new chats show: one row per account, hidd
     'the plainest alias, a signed-in one when the plainest is signed out, nothing hidden');
 });
 
+test("a chat's helper list answers from the index, without scanning processes or history", async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'codex-main', task: 'Check the list' });
+  drivers.get(child.id).finish();
+  sessions.runtime.listLive = async () => { throw new Error('the helper list should not scan processes'); };
+  const listed = await sessions.list({ parentId: parent.id });
+  assert.deepEqual(listed.map((s) => s.id), [child.id]);
+  assert.equal(listed[0].alive, true);
+  assert.equal(listed[0].delegation.parentId, parent.id);
+});
+
 test('Codex delegates to Claude with the selected model, folder, lineage and durable result', async (t) => {
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
