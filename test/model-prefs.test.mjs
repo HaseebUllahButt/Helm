@@ -10,6 +10,12 @@ import { join } from 'node:path';
 // Aliases of one login share the entry because the key is the account, not
 // the profile.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-model-prefs-'));
+process.env.HELM_NO_SERVICE = '1';
+process.env.HELM_DB = join(process.env.HELM_DIR, 'hub.sqlite');
+process.env.HELM_SSH_DIR = join(process.env.HELM_DIR, 'ssh');
+process.env.HELM_PROCS_SOCKET = join(process.env.HELM_DIR, 'procs.sock');
+process.env.HELM_TERMINALS_SOCKET = join(process.env.HELM_DIR, 'terminals.sock');
+process.env.HELM_NATIVE_SOCKET = join(process.env.HELM_DIR, 'native.sock');
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 
 writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
@@ -20,6 +26,30 @@ writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({
     { id: 'dv', label: 'Devin', engine: 'devin', cmd: 'devin', args: [], env: { XDG_CONFIG_HOME: '~/.config' }, envFrom: ['DEVIN_TOKEN'], source: 'alias' },
   ],
 }));
+
+test('subagent defaults persist per account without changing normal defaults', async t => {
+  const { saveSubagentPrefs, subagentPrefs, saveStartPrefs, startPrefs, saveModelPrefs, modelPrefs } = await import('../packages/connect/src/settings.js');
+  const { getProfiles } = await import('../packages/connect/src/profiles.js');
+  const [profile, alias] = await getProfiles();
+  const normalModel = modelPrefs(profile), normalStart = startPrefs(profile);
+  t.after(() => {
+    saveSubagentPrefs(profile, { model: null, effort: null, mode: null });
+    saveModelPrefs(profile, normalModel ?? {});
+    saveStartPrefs(profile, normalStart ?? {});
+  });
+  saveModelPrefs(profile, { default: 'normal-model', approved: ['normal-model'] });
+  saveStartPrefs(profile, { effort: 'low', mode: 'edit' });
+  assert.deepEqual(subagentPrefs(profile), {});
+  saveSubagentPrefs(profile, { model: ' helper-model ', effort: 'high', ignored: 'no' });
+  assert.deepEqual(subagentPrefs(alias), { model: 'helper-model', effort: 'high' });
+  saveSubagentPrefs(alias, { mode: 'ask' });
+  assert.deepEqual(subagentPrefs(profile), { model: 'helper-model', effort: 'high', mode: 'ask' });
+  assert.equal(modelPrefs(profile).default, 'normal-model');
+  assert.deepEqual(startPrefs(profile), { effort: 'low', mode: 'edit' });
+  saveSubagentPrefs(profile, { model: null });
+  assert.deepEqual(subagentPrefs(profile), { effort: 'high', mode: 'ask' });
+  assert.throws(() => saveSubagentPrefs(profile, { mode: 'plan' }), /plan mode is not supported/);
+});
 
 class StubRuntime extends EventEmitter {
   async read() { return { text: '' }; }
@@ -119,11 +149,12 @@ test('applyModelPrefs trims the picker but keeps the tail in reach', async () =>
   assert.equal(applyModelPrefs(list, null), list);
 });
 
-test('a new session starts with the account default; a pick always wins', async () => {
+test('a new session starts with the account default; a pick always wins', async t => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { saveModelPrefs } = await import('../packages/connect/src/settings.js');
   const { getProfiles } = await import('../packages/connect/src/profiles.js');
   const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  t.after(() => sessions.stop());
   const [oc, , dv] = await getProfiles();
 
   saveModelPrefs(oc, { default: 'zen/kimi', approved: ['zen/kimi'] });
@@ -138,11 +169,12 @@ test('a new session starts with the account default; a pick always wins', async 
   assert.equal(s3.model, null, 'an account with no prefs starts as before');
 });
 
-test('a new session uses machine-held CLI defaults and starts notifications on', async () => {
+test('a new session uses machine-held CLI defaults and starts notifications on', async t => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { saveStartPrefs } = await import('../packages/connect/src/settings.js');
   const { getProfiles } = await import('../packages/connect/src/profiles.js');
   const sessions = new Sessions(new StubRuntime(), { makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  t.after(() => sessions.stop());
   const [oc] = await getProfiles();
   saveStartPrefs(oc, { effort: 'high', mode: 'edit', speed: 'fast' });
   assert.throws(() => saveStartPrefs(oc, { mode: 'plan' }), /plan mode is not supported/);

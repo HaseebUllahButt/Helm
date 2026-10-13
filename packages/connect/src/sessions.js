@@ -16,7 +16,7 @@ import { ENGINES, isInteractiveProc } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
 import { optionArgs, peekModels, followNewModels } from './models.js';
-import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
+import { modelPrefs, startPrefs, subagentPrefs, saveModelPrefs, accountKey } from './settings.js';
 import { EventLog, activeTurnFromEvents, EVENT_KEEP } from './events.js';
 import { ClaudeDriver, permissionCard } from './drivers/claude.js';
 import { CodexDriver, canInspectExternalCodex, codexTurnOutcome, nativeCodexThreads, nativeCodexSocket } from './drivers/codex.js';
@@ -1483,7 +1483,12 @@ export class Sessions extends EventEmitter {
     }
     const auth = (await authStatuses([profile])).get(profile.id);
     if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
-    const selectedMode = delegationMode(profile.engine, parent?.mode, mode, startPrefs(profile)?.mode, parent?.engine);
+    // Model IDs belong to their provider. Same-provider helpers follow the
+    // parent's selected/reported model unless the caller chose an override.
+    const defaults = subagentPrefs(profile);
+    model ||= defaults.model || (profile.engine === parent?.engine ? parent.model || parent.engineModel || undefined : undefined);
+    effort ||= defaults.effort;
+    const selectedMode = delegationMode(profile.engine, parent?.mode, mode, defaults.mode || startPrefs(profile)?.mode, parent?.engine);
     const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
       ...(checkout ? { worktree: checkout } : {}) };
     const child = await this.start({ cwd: folder, profileId, model, effort, mode: selectedMode,

@@ -1,7 +1,7 @@
 import { ENGINES } from './engines.js';
 import { materialize } from './profiles.js';
 import { listModels } from './models.js';
-import { modelPrefs, startPrefs, accountKey } from './settings.js';
+import { modelPrefs, startPrefs, subagentPrefs, accountKey } from './settings.js';
 import { modesFor, defaultMode } from './modes.js';
 import { credentialScan } from './credentials.js';
 import { fold } from './brain.js';
@@ -14,6 +14,7 @@ export async function agentCatalog(profiles, statuses, { models = true, credenti
     const account = createHash('sha256').update(accountKey(p)).digest('hex').slice(0, 16);
     const row = { id: p.id, label: p.label, engine: p.engine, account, auth,
       available: auth !== 'unauthenticated', modes: modesFor(p.engine),
+      defaults: startPrefs(p), subagentDefaults: subagentPrefs(p),
       defaultMode: startPrefs(p)?.mode === 'plan' ? defaultMode(p.engine) : startPrefs(p)?.mode ?? defaultMode(p.engine) };
     if (credentials) row.credentials = credentialScan(p);
     if (!models || !row.available) return row;

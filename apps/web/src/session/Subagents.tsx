@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Client, type CliAgent, type Environment, type ModelList, type Session, type DelegationResult, type NativeAgent, type NativeAgentDetail } from '../client';
+import { Client, type CliAgent, type Environment, type ModelList, type Session, type DelegationResult, type NativeAgent, type NativeAgentDetail, type SubagentDefaults } from '../client';
 import { loadModels, saveModels } from '../modelCache';
+import { followModelRefresh } from '../modelRefresh';
 import { ChoiceSheet, Controls, trayPrefs, type Kind } from './Controls';
 import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
@@ -28,8 +29,8 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
   const [agents, setAgents] = useState<CliAgent[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [listed, setListed] = useState(false);
-  const [account, setAccount] = useState('');
-  const [model, setModel] = useState('');
+  const [account, setAccount] = useState(parent.profileId ?? '');
+  const [model, setModel] = useState<string | null>(null);
   const [mode, setMode] = useState('');
   const [effort, setEffort] = useState('');
   const [catalog, setCatalog] = useState<ModelList | null>(null);
@@ -55,6 +56,10 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
   const fail = (at: string) => (failure: any) => setError({ text: failure?.message || String(failure), at });
   const bump = () => setRevision((count) => count + 1);
   const agent = agents.find((candidate) => candidate.id === account);
+  const inheritedModel = agent?.engine === parent.engine ? parent.model || parent.engineModel || '' : '';
+  const savedDefaults = agent?.subagentDefaults ?? catalog?.subagentDefaults ?? {};
+  const fallbackModel = inheritedModel || catalog?.default || agent?.defaultModel || '';
+  const selectedModel = model === null ? savedDefaults.model || fallbackModel : model || fallbackModel;
   const belongsHere = (session: Session) => !session.archived && session.delegation?.parentId === parent.id;
   const children = sessions.filter(belongsHere);
   const active = children.filter((child) => ACTIVE.includes(stateOf(child))).sort((left, right) =>
@@ -73,14 +78,17 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
   // list for the chosen account: its models, favorites and defaults. What
   // the account list carried paints first, the machine's answer replaces it.
   const options: ModelList | null = agent ? {
-    default: agent.defaultModel ?? null, models: agent.models ?? [], labels: agent.labels,
+    default: agent.defaultModel ?? null, models: agent.models ?? (inheritedModel ? [inheritedModel] : []), labels: agent.labels,
     ...catalog,
+    prefs: { ...catalog?.prefs, default: savedDefaults.model ?? null, approved: catalog?.prefs?.approved ?? [] },
+    defaults: { ...(catalog?.defaults ?? agent.defaults), ...savedDefaults },
+    effort: savedDefaults.effort || catalog?.defaults?.effort || agent.defaults?.effort || catalog?.effort,
     // A helper's permissions are the account's, narrowed for a read-only
     // parent, and it never plans first. Its speed is not a choice here.
-    modes, defaultMode: agent.defaultMode && agent.defaultMode !== 'plan' ? agent.defaultMode : null,
+    modes, defaultMode: modes.find((m) => m.id === (savedDefaults.mode || catalog?.defaults?.mode || agent.defaultMode))?.id ?? modes[0]?.id ?? null,
     speeds: [], speedByModel: {},
   } : null;
-  const picked = { engine: agent?.engine ?? '', profileId: account, model, effort, mode } as Session;
+  const picked = { engine: agent?.engine ?? '', profileId: account, model: selectedModel, effort, mode } as Session;
   const prefs = trayPrefs({ client, env: env.id, engine: agent?.engine ?? '', profileId: account || null,
     options, setOptions: (update) => setCatalog((now) => update(now ?? options)),
     setError: (text) => setError(text ? { text, at: 'form' } : null) });
@@ -88,12 +96,29 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     if (kind === 'model') {
       setModel(id);
       // A thinking level the new model does not offer is not kept.
-      const levels = options?.effortsByModel?.[id] ?? options?.efforts ?? [];
+      const levels = options?.effortsByModel?.[id || fallbackModel] ?? options?.efforts ?? [];
       if (effort && !levels.includes(effort)) setEffort('');
     } else if (kind === 'effort') setEffort(id);
     else if (kind === 'mode') setMode(id);
   };
-  const controls = Controls({ options, session: picked, busy, onPick: pick, ...prefs });
+  const onDefault = async (kind: Kind, value: string) => {
+    if (!agent || kind === 'speed') return;
+    setError(null);
+    const result = await client.rpc<{ subagentDefaults: SubagentDefaults }>(env.id, 'profile.defaults', {
+      profileId: account, scope: 'subagent', [kind]: value || null,
+    }, 15_000);
+    setAgents((all) => all.map((candidate) => candidate.id === account || agent.account && candidate.account === agent.account
+      ? { ...candidate, subagentDefaults: result.subagentDefaults } : candidate));
+    setCatalog((now) => {
+      if (!now) return now;
+      const updated = { ...now, subagentDefaults: result.subagentDefaults };
+      void saveModels(env.id, account, updated);
+      return updated;
+    });
+  };
+  const controls = Controls({ options, session: picked, busy, onPick: pick, ...prefs, onDefault, defaultsFor: 'subagents',
+    modelFallback: { id: '', label: inheritedModel ? 'Inherit parent model' : 'Use account default', hint: fallbackModel || 'Use the CLI default',
+      active: model === '' || model === null && !savedDefaults.model } });
   const accountName = (candidate: CliAgent) => candidate.label || candidate.id;
 
   useEffect(() => {
@@ -134,28 +159,34 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
   const loadAgents = async (refresh = false) => {
     setLoading(true); setError(null);
     try {
-      const listing = await client.rpc<{ agents: CliAgent[] }>(env.id, 'agent.list', { refresh }, 60_000);
+      // Account discovery must not enumerate every installed CLI's models.
+      // Only the chosen account needs a catalog, loaded independently below.
+      const listing = await client.rpc<{ agents: CliAgent[] }>(env.id, 'agent.list', { refresh, models: false }, 60_000);
       setAgents(listing.agents);
       setAccount((current) => listing.agents.some((candidate) => candidate.id === current && candidate.available)
-        ? current : (listing.agents.find((candidate) => candidate.available)?.id ?? ''));
+        ? current : (listing.agents.find((candidate) => candidate.id === parent.profileId && candidate.available)?.id
+          ?? listing.agents.find((candidate) => candidate.available && candidate.engine === parent.engine)?.id
+          ?? listing.agents.find((candidate) => candidate.available)?.id ?? ''));
     } catch (failure: any) { fail('form')(failure); }
     finally { setLoading(false); }
   };
   useEffect(() => { if (!nativeOnly) void loadAgents(); }, [client, env.id, nativeOnly]);
-  useEffect(() => { setModel(''); setMode(''); setEffort(''); }, [account]);
+  useEffect(() => { setModel(null); setMode(''); setEffort(''); }, [account]);
   // The chosen account's catalogue, from this machine.
   useEffect(() => {
     setCatalog(null);
     if (!account || nativeOnly) return;
     let stale = false;
     loadModels(env.id, account).then((cached) => { if (!stale && cached) setCatalog((now) => now ?? cached); });
-    client.rpc<ModelList>(env.id, 'model.list', { profileId: account }, 30_000)
-      .then((list) => {
-        if (stale || !Array.isArray(list?.models)) return;
+    const refresh = followModelRefresh(
+      () => client.rpc<ModelList>(env.id, 'model.list', { profileId: account }, 30_000),
+      (list) => {
+        if (!Array.isArray(list?.models)) return;
         setCatalog(list); void saveModels(env.id, account, list);
-      })
-      .catch(() => { /* the account's own short list still shows */ });
-    return () => { stale = true; };
+      },
+      () => { /* the cached list or parent's model still shows */ },
+    );
+    return () => { stale = true; refresh.stop(); };
   }, [client, env.id, account, nativeOnly]);
 
   useEffect(() => {
@@ -207,7 +238,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     setBusy(true); setError(null);
     try {
       const { session } = await client.rpc<{ session: Session }>(env.id, 'session.delegate', {
-        id: parent.id, profileId: account, model: model || undefined,
+        id: parent.id, profileId: account, model: model === null ? undefined : selectedModel || undefined,
         ...(effort ? { effort } : {}), mode: mode || undefined, task: task.trim(),
       }, 70_000);
       setTask(''); setComposing(false); setChoosingAccount(false); controls.close();
@@ -392,6 +423,8 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
             footer={<button type="button" className="moderow more" disabled={loading} onClick={() => void loadAgents(true)}>
               <span className="grow"><span className="rt">{loading ? 'Looking again…' : 'Look for accounts again'}</span></span></button>} />
             : controls.sheet}
+          <p className="delegation-inherit note">{model ? 'Model chosen for this task.' : model === null && savedDefaults.model
+            ? 'Using your subagent default.' : inheritedModel ? 'Using the parent’s model.' : 'Using this account’s defaults.'}</p>
           {agent && !agent.modes.length && <p className="note">This CLI controls its own permissions.</p>}
           {errorBox('form')}
           <div className="delegation-start">

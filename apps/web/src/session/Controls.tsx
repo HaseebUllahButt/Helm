@@ -23,7 +23,7 @@ export interface Choice {
  * The sheet docks in the same slot a permission prompt uses, because that is
  * where your eyes already are.
  */
-export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs, onDefault, onNewsSeen, onNativeControl }: {
+export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs, onDefault, onNewsSeen, onNativeControl, modelFallback, defaultsFor = 'new chats' }: {
   options: ModelList | null;
   onNativeControl?: (kind: NativeControl) => void;
   session: Session;
@@ -37,9 +37,17 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
   onDefault?: (kind: Kind, id: string) => Promise<void> | void;
   /** The owner saw the "new model" note; it need not show again. */
   onNewsSeen?: () => void;
+  modelFallback?: Choice & { active: boolean };
+  defaultsFor?: string;
 }) {
   const [open, setOpen] = useState<Kind | null>(null);
   const groups = groupsFor(options, session);
+  const modelGroup = groups.find((group) => group.kind === 'model');
+  if (modelFallback && modelGroup) {
+    modelGroup.choices.unshift(modelFallback);
+    if (modelFallback.active) modelGroup.current = modelFallback.id;
+    modelGroup.saved = options?.prefs?.default ?? modelFallback.id;
+  }
   const group = groups.find((g) => g.kind === open);
   const model = session.model || session.engineModel || options?.default || '';
   const effortFavs = (options?.effortFavs ?? []).flatMap((entry) => {
@@ -85,7 +93,7 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
     chips: (
       <span className="chips">
         {groups.map((g) => (
-          <button
+          <button type="button"
             key={g.kind}
             className={`chip-pick${open === g.kind ? ' on' : ''}${g.danger ? ' danger' : ''}`}
             title={`${g.title}: ${g.currentLabel}`} aria-label={`${g.title}: ${g.currentLabel}`}
@@ -108,7 +116,7 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
           const glyph: IconName = kind === 'model' ? 'model' : kind === 'effort' ? 'effort' : kind === 'mode' ? 'shield' : kind === 'speed' ? 'bolt' : 'terminal';
           const value = kind === 'model' ? session.engineModel : kind === 'effort' ? session.engineEffort : kind === 'mode' ? session.mode : null;
           const label = kind === 'model' && value ? shortModel(value, options?.labels, session.engine) : value || title;
-          return <button key={`native:${kind}`} className="chip-pick" disabled={busy}
+          return <button type="button" key={`native:${kind}`} className="chip-pick" disabled={busy}
             title={`Open ${title} in the CLI`} aria-label={`${title}: ${value ? `${label}; ` : ''}open CLI picker`}
             onClick={() => onNativeControl?.(kind)}><i className={`cg ${kind}`}><Icon name={glyph} size={13} /></i><span className="chip-label">{label}</span></button>;
         })}
@@ -129,6 +137,7 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
         favs={group.kind === 'model' ? options?.favs : group.kind === 'effort' && options?.effortFavs !== undefined ? effortFavs : undefined}
         onFavs={group.kind === 'model' ? onFavs : group.kind === 'effort' && onEffortFavs ? (next) => onEffortFavs(model, next) : undefined}
         onDefault={onDefault && group.saved !== undefined ? (id) => onDefault(group.kind, id) : undefined}
+        defaultsFor={defaultsFor}
         news={group.kind === 'model' ? options?.news : undefined}
         onNewsSeen={group.kind === 'model' ? onNewsSeen : undefined}
         onClose={() => setOpen(null)}
@@ -323,7 +332,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
  */
 const favsOf = (key: string): string[] => { try { return JSON.parse(localStorage.getItem(`helm.favmodels:${key}`) || '[]'); } catch { return []; } };
 
-export function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, searchable, favKey, favs: shared, onFavs, onDefault, news, onNewsSeen, onPick, onClose, footer }: {
+export function ChoiceSheet({ title, note, choices, more = [], current, saved, busy, searchable, favKey, favs: shared, onFavs, onDefault, news, onNewsSeen, onPick, onClose, footer, defaultsFor = 'new chats' }: {
   title: string; note?: string; choices: Choice[]; more?: Choice[]; current: string;
   /** A long list gets a search box even when nothing is folded away. */
   searchable?: boolean;
@@ -339,6 +348,7 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
   onNewsSeen?: () => void;
   /** A quiet line under the rows, for an action that is not a choice. */
   footer?: ReactNode;
+  defaultsFor?: string;
 }) {
   // Seeing the sheet is seeing the note: closing it, any way, retires it.
   const latest = useRef({ news, onNewsSeen });
@@ -386,7 +396,7 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
     const on = c.id === current;
     const armed = arming === c.id;
     const button = (
-      <button
+      <button type="button"
         key={c.id || 'default'} role="option" aria-selected={on} disabled={busy}
         className={`moderow${on ? ' on' : ''}${c.danger ? ' danger' : ''}${armed ? ' armed' : ''}`}
         onClick={() => choose(c)}
@@ -409,10 +419,10 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
             aria-label={`Favorite ${c.label}`} onChange={() => toggleFav(c.id)} />
           <Icon name={fav ? 'star-on' : 'star'} size={17} />
         </label>}
-        {onDefault && <button
+        {onDefault && <button type="button"
           className={`picker-default${isDefault ? ' on' : ''}`} aria-pressed={isDefault}
-          aria-label={isDefault ? `${c.label} is the default for new chats` : `Use ${c.label} by default for new chats`}
-          title={isDefault ? 'Default for new chats' : 'Set as default for new chats'}
+          aria-label={isDefault ? `${c.label} is the default for ${defaultsFor}` : `Use ${c.label} by default for ${defaultsFor}`}
+          title={isDefault ? `Default for ${defaultsFor}` : `Set as default for ${defaultsFor}`}
           disabled={saving !== null}
           aria-busy={saving === c.id}
           onClick={(e) => { e.stopPropagation(); void makeDefault(c.id); }}
@@ -467,11 +477,11 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
     <div className="modesheet" role="listbox" aria-label={title} ref={sheet} onKeyDown={onKey}>
       <div className="modesheet-head">
         <span>{title}</span>
-        <button className="x" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button>
+        <button type="button" className="x" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button>
       </div>
       {note && <div className="modesheet-note">{note}</div>}
       {!!news?.length && <ModelNews news={news} onSeen={onNewsSeen} />}
-      {onDefault && <div className="modesheet-legend">Defaults apply to new chats{favKey && <span><Icon name="star" size={13} /> favorites only</span>}</div>}
+      {onDefault && <div className="modesheet-legend">Defaults apply to {defaultsFor}{favKey && <span><Icon name="star" size={13} /> favorites only</span>}</div>}
       {search && (
         <input
           ref={filter} aria-label={`Search ${title}`}
@@ -485,7 +495,7 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
       {favorites.length > 0 && main.length > 0 && <div className="modesheet-label">all</div>}
       {main.map(row)}
       {rest.length > 0 && (q || expanded ? rest.map(row) : (
-        <button className="moderow more" onClick={() => setExpanded(true)}>
+        <button type="button" className="moderow more" onClick={() => setExpanded(true)}>
           <span className="grow">
             <span className="rt">{rest.length} more</span>
             <span className="rm">everything else the account offers</span>
@@ -510,7 +520,7 @@ function ModelNews({ news, onSeen }: { news: ModelNote[]; onSeen?: () => void })
   return (
     <div className="model-news" role="status">
       <span className="grow">{newsLines(news).map((l) => <span key={l}>{l}</span>)}</span>
-      {onSeen && <button onClick={onSeen}>OK</button>}
+      {onSeen && <button type="button" onClick={onSeen}>OK</button>}
     </div>
   );
 }

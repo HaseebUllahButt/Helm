@@ -38,7 +38,7 @@ export function migrateProfileSettings(previous, next) {
     if (!old) continue;
     const before = accountKey(old), after = accountKey(profile);
     if (before === after) continue;
-    for (const section of ['models', 'starts', 'modelWatch']) {
+    for (const section of ['models', 'starts', 'subagentStarts', 'modelWatch']) {
       if (cfg[section]?.[before] && !Object.hasOwn(cfg[section], after)) {
         cfg[section][after] = { ...cfg[section][before] };
         changed = true;
@@ -65,6 +65,31 @@ export function startPrefs(profile, cfg = loadSettings()) {
     if (typeof p[key] === 'string' && p[key].trim()) out[key] = p[key].trim();
   }
   return Object.keys(out).length ? out : null;
+}
+
+/** Overrides for helpers; absent fields keep the parent/account defaults. */
+export function subagentPrefs(profile, cfg = loadSettings()) {
+  const stored = cfg?.subagentStarts?.[accountKey(profile)] ?? {};
+  return Object.fromEntries(['model', 'effort', 'mode'].flatMap((key) =>
+    typeof stored[key] === 'string' && stored[key].trim() ? [[key, stored[key].trim()]] : []));
+}
+
+/** Partial edits keep other helper defaults and never change normal chats. */
+export function saveSubagentPrefs(profile, values = {}) {
+  const cfg = loadSettings();
+  const next = subagentPrefs(profile, cfg);
+  for (const key of ['model', 'effort', 'mode']) {
+    if (!Object.hasOwn(values, key)) continue;
+    const value = typeof values[key] === 'string' ? values[key].trim() : '';
+    if (key === 'mode' && value === 'plan') throw new Error('plan mode is not supported for subagents');
+    if (value) next[key] = value; else delete next[key];
+  }
+  cfg.subagentStarts ??= {};
+  const key = accountKey(profile);
+  if (Object.keys(next).length) cfg.subagentStarts[key] = next;
+  else delete cfg.subagentStarts[key];
+  writeSettings(cfg);
+  return next;
 }
 
 /** Replace the non-model start defaults for one account. */

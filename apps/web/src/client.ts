@@ -173,6 +173,8 @@ export interface CliAgent {
   models?: string[]; labels?: Record<string, string>; defaultModel?: string | null;
   modes: Mode[];
   defaultMode?: string | null;
+  defaults?: ModelList['defaults'];
+  subagentDefaults?: SubagentDefaults;
 }
 
 export interface DelegationResult {
@@ -201,6 +203,7 @@ export interface InventorySession {
 /** A permission mode an engine offers, in words; the daemon knows the flags. */
 export interface Mode { id: string; label: string; short?: string; hint?: string; danger?: boolean }
 export type NativeControl = 'model' | 'effort' | 'mode' | 'speed' | 'settings';
+export interface SubagentDefaults { model?: string; effort?: string; mode?: string }
 
 export interface ModelList {
   /** Controls provided by the running terminal CLI's own dialogs. */
@@ -236,6 +239,7 @@ export interface ModelList {
   effortFavs?: string[];
   /** What a new chat on this account starts with, besides the model. */
   defaults?: { effort?: string; mode?: string; speed?: string } | null;
+  subagentDefaults?: SubagentDefaults;
   /** The account key the machine files this account's defaults under. */
   account?: string;
   /** The account a terminal chat runs as, when the chat itself does not name one. */

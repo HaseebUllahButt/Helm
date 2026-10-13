@@ -2322,7 +2322,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-new:hover { background: var(--hover); color: var(--text); }
 .delegation-form { display: grid; gap: 10px; margin: 0; padding: 14px; border: 1px solid var(--line-2); border-radius: var(--radius-xl); background: var(--card); }
 .delegation-form > label { font-size: var(--t-meta); font-weight: 550; color: var(--text-dim); }
-.delegation-form input, .delegation-form select, .delegation-form textarea { width: 100%; min-width: 0; margin: 0; padding: 9px 10px; }
+.delegation-form > textarea { width: 100%; min-width: 0; margin: 0; padding: 9px 10px; }
 .delegation-form textarea { resize: vertical; }
 .delegation-form .error { margin: 0; }
 .delegation-config {
@@ -3243,5 +3243,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   border-radius: var(--radius); border-bottom: 1px solid var(--line-2); box-shadow: none;
 }
 .delegation-chip-rest .chips { display: contents; }
+.delegation-inherit { margin: 0; font-size: var(--t-micro); }
 .chip-pick.account .mark { width: auto; height: auto; padding: 0; background: none; border-radius: 0; }
 .chip-pick.account .mark svg { width: 13px; height: 13px; }

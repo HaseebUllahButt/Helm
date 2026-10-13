@@ -59,6 +59,104 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
+test('the parent picker is ready before model discovery; helper defaults and overrides stay separate', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Subagents } from './apps/web/src/session/Subagents';
+    const root = createRoot(document.getElementById('root'));
+    const parent = {id:'parent',title:'Dispatch',cwd:'/project',engine:'codex',profileId:'parent-account',model:'parent-model',status:'working'};
+    let defaults = {}, favorites = ['helper-model'], generation = 0;
+    const catalog = () => ({default:'normal-model',models:['parent-model','helper-model','normal-model','m1','m2','m3','m4'],
+      labels:{'parent-model':'Parent Model','helper-model':'Helper Model'},favs:favorites,efforts:['low','high'],effort:'low',
+      defaults:{effort:'low',mode:'ask'},subagentDefaults:defaults,modes:[{id:'ask',label:'Ask before acting'}]});
+    let first = true;
+    const client = {on:()=>()=>{},rpc:async(env,method,params)=>{
+      (window.calls ??= []).push({method,params});
+      if(method==='session.list') return {sessions:[]};
+      if(method==='agent.list') return {agents:[
+        {id:'other',engine:'claude',label:'Other account',available:true,auth:'authenticated',modes:[]},
+        {id:'parent-account',engine:'codex',label:'Parent account',available:true,auth:'authenticated',modes:[{id:'ask',label:'Ask before acting'}],defaults:{effort:'low',mode:'ask'},subagentDefaults:defaults}
+      ]};
+      if(method==='model.list') {
+        if(first) {first=false; return new Promise(resolve=>window.releaseCatalog=()=>resolve({...catalog(),refreshing:true,models:['parent-model']}));}
+        return catalog();
+      }
+      if(method==='profile.defaults') {
+        if(window.failSave) throw new Error('Could not save helper default');
+        defaults={...defaults};
+        for(const key of ['model','effort','mode']) if(key in params) {if(params[key]) defaults[key]=params[key]; else delete defaults[key];}
+        return {subagentDefaults:defaults};
+      }
+      if(method==='picker.prefs') {favorites=params.favs.codex;return {ok:true};}
+      if(method==='session.delegate') return {session:{...parent,id:'child',model:params.model||defaults.model||parent.model,
+        delegation:{parentId:'parent',task:params.task,status:'done'},status:'idle'}};
+      if(method==='session.delegation-result') return {complete:true,status:'done',output:'Finished.'};
+      return {ok:true};
+    }};
+    window.mount=()=>root.render(<Subagents key={++generation} client={client} env={{id:'dispatch-test',name:'Laptop',online:true,info:{}}}
+      parent={parent} onClose={()=>root.render(null)} />);
+    window.mount();
+  `, resolveDir:process.cwd(),loader:'tsx' },bundle:true,write:false,format:'iife',jsx:'automatic'});
+  for (const width of [1280,390]) {
+    const view = await browser.newPage({viewport:{width,height:844}});
+    view.setDefaultTimeout(10_000);
+    try {
+      await view.route('http://helm-dispatch-test/**', route => route.fulfill({contentType:'text/html',body:'<div id="root"></div>'}));
+      await view.goto('http://helm-dispatch-test/');
+      await view.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
+      await view.addScriptTag({content:bundle.outputFiles[0].text});
+      await view.getByRole('button',{name:'CLI account: Parent account'}).waitFor();
+      await view.getByLabel('Task',{exact:true}).fill('Inspect this task');
+      await view.getByRole('button',{name:/^model:/}).click();
+      await view.getByRole('option',{name:/^Inherit parent model/}).waitFor();
+      assert.equal(await view.getByRole('option',{name:/^Inherit parent model/}).getAttribute('aria-selected'),'true');
+      assert.equal(await view.evaluate(()=>window.calls.find(c=>c.method==='agent.list').params.models),false);
+      assert.equal(await view.getByRole('button',{name:'Start subagent'}).isEnabled(),true);
+      await view.getByRole('button',{name:'close',exact:true}).click();
+      assert.equal(await view.evaluate(()=>window.calls.filter(c=>c.method==='session.delegate').length),0);
+      await view.evaluate(()=>window.releaseCatalog());
+      await view.getByRole('button',{name:/^thinking:/}).waitFor();
+      await view.getByRole('button',{name:/^model:/}).click();
+      await view.getByRole('checkbox',{name:'Favorite Helper Model'}).waitFor();
+      await view.getByRole('checkbox',{name:'Favorite Helper Model'}).uncheck();
+      await view.getByRole('checkbox',{name:'Favorite Helper Model'}).check();
+      await view.getByRole('button',{name:'Use Helper Model by default for subagents'}).click();
+      await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
+      assert.equal(await view.evaluate(()=>window.calls.filter(c=>c.method==='model.prefs').length),0);
+      assert.equal(await view.evaluate(()=>window.calls.filter(c=>c.method==='session.delegate').length),0);
+      await view.getByLabel('Search model').fill('Helper');
+      await view.getByRole('option',{name:'Helper Model',exact:true}).waitFor();
+      await view.getByLabel('Search model').fill('');
+      await capture(view, 'dispatch-models-'+width+'.png');
+      assert.ok(await view.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+      await view.getByRole('button',{name:'Close subagents'}).click();
+      await view.evaluate(()=>window.mount());
+      await view.getByRole('button',{name:'model: model'}).waitFor();
+      await view.getByRole('button',{name:/^model:/}).click();
+      await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
+      await view.evaluate(()=>{window.failSave=true;});
+      await view.getByRole('button',{name:'Use Inherit parent model by default for subagents'}).click();
+      await view.getByRole('alert').filter({hasText:'Could not save helper default'}).waitFor();
+      await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
+      await view.evaluate(()=>{window.failSave=false;});
+      await view.getByRole('button',{name:'Use Inherit parent model by default for subagents'}).click();
+      await view.getByRole('button',{name:'Inherit parent model is the default for subagents'}).waitFor();
+      await view.getByRole('button',{name:'Use Helper Model by default for subagents'}).click();
+      await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
+      await view.getByRole('option',{name:/^Inherit parent model/}).click();
+      await view.getByRole('button',{name:/^thinking:/}).click();
+      await view.getByRole('button',{name:'Use high by default for subagents'}).click();
+      await view.getByRole('button',{name:'high is the default for subagents'}).waitFor();
+      await view.getByRole('button',{name:'close',exact:true}).click();
+      await view.getByLabel('Task',{exact:true}).fill('Launch on parent model');
+      await view.getByRole('button',{name:'Start subagent'}).click();
+      assert.deepEqual(await view.evaluate(()=>JSON.parse(JSON.stringify(window.calls.find(c=>c.method==='session.delegate').params))),
+        {id:'parent',profileId:'parent-account',model:'parent-model',task:'Launch on parent model'});
+    } finally { await view.close(); }
+  }
+});
+
 test('main task click opens the full child conversation and Back returns to its parent', async () => {
   const bundle = await build({ stdin: { contents: `
     import React, { useState } from 'react';

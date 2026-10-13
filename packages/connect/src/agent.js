@@ -23,7 +23,7 @@ import { readProcess } from './takeover.js';
 import { usableProfiles, authStatuses } from './auth.js';
 import { listCommands } from './commands.js';
 import { contextLimit } from './context-limit.js';
-import { accountKey, modelPrefs, modelWatch, dismissModelNews, saveModelPrefs, startPrefs, saveStartPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject, cliAutoUpdate, saveCliAutoUpdate } from './settings.js';
+import { accountKey, modelPrefs, modelWatch, dismissModelNews, saveModelPrefs, startPrefs, saveStartPrefs, subagentPrefs, saveSubagentPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject, cliAutoUpdate, saveCliAutoUpdate } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
@@ -1521,6 +1521,7 @@ export class Daemon {
       case M.PROFILE_DEFAULTS: {
         const profile = (await getProfiles()).find((x) => x.id === p.profileId);
         if (!profile) throw new Error(`unknown profile: ${p.profileId}`);
+        if (p.scope === 'subagent') return { ok: true, subagentDefaults: saveSubagentPrefs(profile, p) };
         return { ok: true, defaults: saveStartPrefs(profile, p) };
       }
 
@@ -1613,7 +1614,7 @@ export class Daemon {
         // picker can show and change both without a second round trip.
         return {
           ...filtered, prefs, modes: engine?.driver ? live?.modes ?? modesFor(profile.engine) : [], defaultMode: defaultMode(profile.engine),
-          favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile), account: accountKey(profile),
+          favs: pickerPrefs().favs[profile.engine] ?? [], defaults: startPrefs(profile), subagentDefaults: subagentPrefs(profile), account: accountKey(profile),
           ...modelWatch(profile),
           effortFavs: pickerPrefs().favs[`${profile.engine}-effort`] ?? [],
         };

@@ -12,6 +12,10 @@ import { randomUUID } from 'node:crypto';
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-delegation-'));
 process.env.HELM_NO_SERVICE = '1';
 process.env.HELM_SSH_DIR = join(process.env.HELM_DIR, 'ssh');
+process.env.HELM_DB = join(process.env.HELM_DIR, 'hub.sqlite');
+process.env.HELM_PROCS_SOCKET = join(process.env.HELM_DIR, 'procs.sock');
+process.env.HELM_TERMINALS_SOCKET = join(process.env.HELM_DIR, 'terminals.sock');
+process.env.HELM_NATIVE_SOCKET = join(process.env.HELM_DIR, 'native.sock');
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
 const profiles = [
   { id: 'codex-main', label: 'Codex personal', engine: 'codex', cmd: process.execPath, source: 'custom' },
@@ -114,6 +118,35 @@ test('credential diagnostics preserve current modes and never publish token valu
     assert.match(lines.join('\n'), /OPENAI_API_KEY/);
     assert.doesNotMatch(lines.join('\n'), /diagnostic-secret/);
   }
+});
+
+test('helpers inherit only their provider parent model; explicit and saved defaults win', async t => {
+  const { saveSubagentPrefs } = await import('../packages/connect/src/settings.js');
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main', model: 'parent-model' });
+  const launch = async (profileId, extra = {}) => {
+    const { session } = await sessions.delegate({ id: parent.id, profileId, task: 'Inspect the task', ...extra });
+    drivers.get(session.id).finish();
+    return session;
+  };
+  const inherited = await launch('codex-main');
+  assert.equal(inherited.model, 'parent-model');
+  assert.equal(inherited.delegation.requestedModel, 'parent-model');
+  assert.notEqual((await launch('claude-main')).model, 'parent-model');
+  assert.equal((await launch('codex-main', { model: 'override-model' })).model, 'override-model');
+  parent.model = null;
+  parent.engineModel = 'provider-reported-model';
+  assert.equal((await launch('codex-main')).model, 'provider-reported-model');
+  saveSubagentPrefs(profiles[0], { model: 'helper-default', effort: 'high' });
+  t.after(() => saveSubagentPrefs(profiles[0], { model: null, effort: null }));
+  const saved = await launch('codex-main');
+  assert.equal(saved.model, 'helper-default');
+  assert.equal(saved.effort, 'high');
+  const explicit = await launch('codex-main', { model: 'explicit', effort: 'low' });
+  assert.equal(explicit.model, 'explicit');
+  assert.equal(explicit.effort, 'low');
+  saveSubagentPrefs(profiles[0], { model: null });
+  assert.equal((await launch('codex-main')).model, 'provider-reported-model');
 });
 
 test('Codex delegates to Claude with the selected model, folder, lineage and durable result', async (t) => {
@@ -548,6 +581,9 @@ test('a refused model or permission mode fails before the task is sent', async (
 });
 
 test('a read-only parent stays read only across CLIs and cannot request a bypass', async (t) => {
+  const { saveSubagentPrefs } = await import('../packages/connect/src/settings.js');
+  saveSubagentPrefs(profiles[0], { mode: 'full' });
+  t.after(() => saveSubagentPrefs(profiles[0], { mode: null }));
   const { sessions } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main', mode: 'readonly' });
   const { session } = await sessions.delegate({ id: parent.id, profileId: 'codex-main', task: 'Inspect' });
@@ -801,6 +837,14 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
   const daemon = new Daemon({ name: 'test-box', port });
   daemon.sessions = sessions;
+  await daemon.dispatch(M.PROFILE_DEFAULTS, { profileId: 'claude-main', scope: 'subagent', model: 'sonnet', effort: 'high' });
+  const helperOptions = await daemon.dispatch(M.MODEL_LIST, { profileId: 'claude-main' });
+  assert.deepEqual(helperOptions.subagentDefaults, { model: 'sonnet', effort: 'high' });
+  assert.equal(helperOptions.default, 'opus', 'helper defaults leave the normal picker unchanged');
+  const lightweight = await daemon.dispatch(M.AGENT_LIST, { models: false });
+  assert.deepEqual(lightweight.agents.find(a => a.id === 'claude-main').subagentDefaults, { model: 'sonnet', effort: 'high' });
+  assert.equal(lightweight.agents.some(a => a.models), false, 'account lookup does not enumerate model catalogs');
+  await daemon.dispatch(M.PROFILE_DEFAULTS, { profileId: 'claude-main', scope: 'subagent', model: null, effort: null });
   const env = new WebSocket(`ws://127.0.0.1:${port}/ws?role=self`, { headers: { authorization: `Bearer ${N.machineToken(net)}` } });
   env.on('message', async (raw) => {
     const msg = JSON.parse(raw);
