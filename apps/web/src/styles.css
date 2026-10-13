@@ -3254,3 +3254,32 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-inherit { margin: 0; font-size: var(--t-micro); }
 .chip-pick.account .mark { width: auto; height: auto; padding: 0; background: none; border-radius: 0; }
 .chip-pick.account .mark svg { width: 13px; height: 13px; }
+
+/* Send uses the same quiet rows and page measure as machine Home. */
+.send-view { flex: 1; min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 16px; }
+.send-view p, .send-view h2 { margin: 0; }
+.send-context, .send-destination { display: flex; flex-direction: column; gap: 6px; }
+.send-destination .section { margin: 4px 0 0; }
+.send-path { overflow-wrap: anywhere; white-space: normal; }
+.send-progress { display: flex; flex-direction: column; gap: 12px; padding-block: 12px; }
+.send-progress-line { height: 3px; width: 100%; background: var(--line); overflow: hidden; }
+.send-progress-line > span { display: block; height: 100%; background: var(--primary-q); }
+.send-actions { display: flex; flex-direction: column; align-items: stretch; gap: 12px; margin-top: auto; padding-top: 20px; }
+.send-actions .linkish, .send-stop { min-height: 44px; }
+.send-env { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: var(--t-meta); }
+.send-env input { flex: none; width: 18px; height: 18px; }
+.send-details summary { min-height: 44px; display: list-item; align-content: center; cursor: pointer; color: var(--mutedfg); font-size: var(--t-meta); }
+.send-activity .section { margin-top: 14px; }
+.send-notice { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.send-notice .grow { min-width: 0; text-align: left; overflow-wrap: anywhere; white-space: normal; }
+.send-view .send-destination .row .rt { white-space: normal; overflow-wrap: anywhere; }
+.send-mobile-status { padding: 4px 14px; background: var(--bg); }
+.send-mobile-status button { min-height: 44px; text-align: left; }
+@media (min-width: 900px) { .send-mobile-status { display: none; } }
+.send-context .screen-title { overflow-wrap: anywhere; }
+.send-destination .section { font-size: var(--t-body); text-transform: none; letter-spacing: 0; color: var(--text); }
+.send-destination .section .send-path { min-width: 0; }
+.send-destination .section .linkish { flex: none; min-height: 44px; }
+
+.send-view button.primary { max-width: 100%; min-height: 44px; overflow-wrap: anywhere; }
+.send-notice .grow { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }

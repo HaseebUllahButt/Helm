@@ -21,6 +21,7 @@ export class SendStore {
   private busy = new Set<string>();
   private listed = new Set<string>();
   private seen: Set<string>;
+  private pending: Set<string>;
   private key: string;
   private timer?: ReturnType<typeof setInterval>;
   private off?: () => void;
@@ -29,6 +30,8 @@ export class SendStore {
     this.key = `helm.send-notified:${workspaceScope(client.token)}`;
     try { this.seen = new Set(JSON.parse(localStorage.getItem(this.key) || '[]')); }
     catch { this.seen = new Set(); }
+    try { this.pending = new Set(JSON.parse(localStorage.getItem(this.key + ':active') || '[]')); }
+    catch { this.pending = new Set(); }
   }
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -42,10 +45,15 @@ export class SendStore {
     const previous = this.snapshot.jobs.find(item => item.id === job.id && item.source.machineId === job.source.machineId);
     if (previous && sendTime(previous.updatedAt) > sendTime(job.updatedAt)) return;
     // Equal snapshots from status/list must not announce completion twice.
+    const wasPending = this.pending.has(job.id);
+    if (sending(job)) this.pending.add(job.id); else this.pending.delete(job.id);
+    if (wasPending !== this.pending.has(job.id)) {
+      try { localStorage.setItem(this.key + ':active', JSON.stringify([...this.pending])); } catch { /* storage unavailable */ }
+    }
     let notices = this.snapshot.notices;
     if (job.phase === 'done' && !this.seen.has(job.id)) {
       this.remember(job.id);
-      if (notify) notices = [...notices, job];
+      if (notify || wasPending) notices = [...notices, job];
     }
     const jobs = this.snapshot.jobs.filter(item => !(item.id === job.id && item.source.machineId === job.source.machineId));
     jobs.push(job);
