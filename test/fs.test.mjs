@@ -114,3 +114,35 @@ test('list counts ordinary and hidden files even though the picker lists only fo
   assert.deepEqual(listing.entries, []);
   assert.equal(listing.entryCount, 2);
 });
+
+test('a device gets the whole index as a tree, and only again once it changes', async () => {
+  mkdirSync(join(HOME, '.config/chromium/Default/IndexedDB/deep'), { recursive: true });
+  const fsApi = await import('../packages/connect/src/fs.js?index');
+  const paths = (r) => r.names.map((_, i) => { const out = []; for (let j = i; j >= 0; j = r.parents[j]) out.unshift(r.names[j]); return `~/${out.join('/')}`; });
+  const first = await fsApi.folderIndex({ refresh: true });
+  const all = paths(first);
+  assert.ok(all.includes('~/dev/helm'));
+  assert.ok(first.repos.map((i) => all[i]).includes('~/dev/helm'));
+  assert.equal(first.count, all.length);
+  // Browser profiles under ~/.config stop two levels down.
+  assert.ok(all.includes('~/.config/chromium/Default'));
+  assert.ok(!all.some((p) => p.startsWith('~/.config/chromium/Default/')));
+  // Unchanged: just the stamp back.
+  const again = await fsApi.folderIndex({ since: first.stamp });
+  assert.equal(again.unchanged, true);
+  assert.equal(again.names, undefined);
+
+  // A folder made in a terminal shows once the machine looks again...
+  mkdirSync(join(HOME, 'dev/made-outside'));
+  const looked = await fsApi.folderIndex({ since: first.stamp, refresh: true });
+  assert.notEqual(looked.stamp, first.stamp);
+  assert.ok(paths(looked).includes('~/dev/made-outside'));
+  // ...and browsing a folder notices what came and went there, at once.
+  mkdirSync(join(HOME, 'dev/made-later'));
+  rmSync(join(HOME, 'dev/made-outside'), { recursive: true });
+  await fsApi.list(join(HOME, 'dev'));
+  const browsed = paths(await fsApi.folderIndex({ since: looked.stamp }));
+  assert.ok(browsed.includes('~/dev/made-later'));
+  assert.ok(!browsed.includes('~/dev/made-outside'));
+  assert.deepEqual((await fsApi.search('made-later')).results.map((d) => d.path), ['~/dev/made-later']);
+});

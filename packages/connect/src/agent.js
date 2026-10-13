@@ -1434,6 +1434,7 @@ export class Daemon {
       case M.FS_ROOTS:  return fsApi.roots();
       case M.FS_MKDIR:  return fsApi.makeDir(p);
       case M.FS_SEARCH: return fsApi.search(p.query);
+      case M.FS_INDEX:  return fsApi.folderIndex({ since: typeof p.since === 'string' ? p.since : null, refresh: p.refresh === true });
 
       case M.PROJECT_LIST: {
         const byPath = new Map(listProjects().map((x) => [x.path, x]));

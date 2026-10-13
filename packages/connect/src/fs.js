@@ -1,6 +1,7 @@
 import { readdir, stat, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { HOME, HELM_DIR, expand, collapse } from './paths.js';
 
 const SKIP = new Set([
@@ -26,6 +27,7 @@ export async function list(path = HOME) {
   entries.sort(
     (a, b) => Number(b.isRepo) - Number(a.isRepo) || a.name.localeCompare(b.name)
   );
+  noticeListing(dir, entries);
   return {
     path: collapse(dir),
     parent: dir === '/' ? null : collapse(dirname(dir)),
@@ -56,9 +58,7 @@ export async function makeDir({ path, name }) {
   // A folder made through the picker should be searchable at once, not after
   // the index's next scheduled walk.
   if (indexAt) {
-    const entry = { name: clean, path: collapse(full), repo: false };
-    indexDirs.push(entry);
-    if (building) additions.push(entry);
+    addToIndex({ name: clean, path: collapse(full), repo: false });
     await saveIndex();
   }
   return { path: collapse(full) };
@@ -110,8 +110,16 @@ export async function roots() {
  * nor indexed at all, because "node_modules" is a name nobody searches for
  * to pick a place to work.
  */
-const INDEX_TTL = 10 * 60_000;
+// A walk of a dev machine's home takes about half a second, so it is cheap
+// to redo whenever a picker asks and the last one is a minute old: a folder
+// made in a terminal shows up the next time the picker opens.
+const INDEX_TTL = 60_000;
+// How long a picker waits on that walk before answering from the last one.
+const INDEX_WAIT_MS = 3000;
 const INDEX_DEPTH = 10;
+// ~/.config holds browser profiles thousands of cache folders deep; nobody
+// starts a project in one. ~/.config/nvim/lua is as deep as it is useful.
+const CONFIG_DEPTH = 2;
 const INDEX_MAX = 60_000;
 const INDEX_WORKERS = 16;
 
@@ -135,6 +143,7 @@ function restoreIndex() {
           && typeof d.repo === 'boolean')) return;
     indexDirs = cache.dirs;
     indexAt = cache.at;
+    stamp = null;
   }).catch(() => {});
 }
 
@@ -152,6 +161,7 @@ function saveIndex() {
 async function buildIndex() {
   const out = [];
   const queue = [[HOME, 0]];
+  const config = join(HOME, '.config');
   // Start each batch with actual work for every worker. Starting 16 loops
   // with only HOME queued made 15 exit before HOME's first readdir returned.
   while (queue.length && out.length < INDEX_MAX) {
@@ -167,7 +177,9 @@ async function buildIndex() {
         const repo = await stat(join(full, '.git')).then(() => true, () => false);
         if (out.length >= INDEX_MAX) return;
         out.push({ name: d.name, path: collapse(full), repo });
-        if (depth < INDEX_DEPTH) queue.push([full, depth + 1]);
+        if (depth >= INDEX_DEPTH) continue;
+        if ((full === config || full.startsWith(config + '/')) && full.split('/').length - config.split('/').length >= CONFIG_DEPTH) continue;
+        queue.push([full, depth + 1]);
       }
     }));
   }
@@ -179,15 +191,16 @@ async function buildIndex() {
  * finds it stale or absent; the rebuild itself happens once, in the
  * background, shared by however many callers ask while it runs.
  */
-export async function warmIndex() {
+export async function warmIndex({ force = false } = {}) {
   await restoreIndex();
-  if (!building && (Date.now() - indexAt > INDEX_TTL)) {
+  if (!building && (force || Date.now() - indexAt > INDEX_TTL)) {
     additions = [];
     building = buildIndex()
       .then(async (dirs) => {
         const known = new Set(dirs.map((d) => d.path));
         indexDirs = [...dirs, ...additions.filter((d) => !known.has(d.path))];
         indexAt = Date.now();
+        stamp = null;
         await saveIndex();
       })
       .catch(() => { /* a half-read tree still beats refusing to search */ })
@@ -224,4 +237,69 @@ export async function search(query, { limit = 30 } = {}) {
   }
   scored.sort((a, b) => a.score - b.score || a.path.length - b.path.length || a.path.localeCompare(b.path));
   return { results: scored.slice(0, Math.max(1, Math.min(limit, 100))), indexed: indexDirs.length };
+}
+
+/** A folder Helm has seen appear: searchable now, not after the next walk. */
+function addToIndex(entry) {
+  if (indexDirs.some((d) => d.path === entry.path)) return false;
+  indexDirs.push(entry);
+  if (building) additions.push(entry);
+  stamp = null;
+  return true;
+}
+
+/**
+ * Browsing a folder is a free look at what is in it: folders made or
+ * removed since the last walk are put right in the index at once.
+ */
+function noticeListing(dir, entries) {
+  if (!indexAt) return;
+  const at = collapse(dir);
+  if (at !== '~' && !at.startsWith('~/')) return;
+  const prefix = at === '~' ? '~/' : `${at}/`;
+  const here = new Set(entries.filter((e) => !e.skip).map((e) => e.path));
+  let changed = false;
+  // Only direct children are compared; what is below a removed folder goes too.
+  const gone = new Set(indexDirs.filter((d) => d.path.startsWith(prefix) && !d.path.slice(prefix.length).includes('/') && !here.has(d.path)
+    && !(d.name.startsWith('.') && d.name !== '.config')).map((d) => d.path));
+  if (gone.size) {
+    indexDirs = indexDirs.filter((d) => !gone.has(d.path) && ![...gone].some((g) => d.path.startsWith(`${g}/`)));
+    stamp = null; changed = true;
+  }
+  for (const e of entries) if (!e.skip && addToIndex({ name: e.name, path: e.path, repo: e.isRepo })) changed = true;
+  if (changed) void saveIndex();
+}
+
+let stamp = null;
+const stampOf = () => stamp ??= createHash('sha1').update(indexDirs.map((d) => `${d.repo ? '+' : ''}${d.path}`).join('\n')).digest('hex').slice(0, 16);
+
+/**
+ * The whole index, for a device to search as you type without asking the
+ * machine each time. Folders are sent as a tree - each a name and the index
+ * of the folder it is in (-1 for home) - which is a fraction of the size of
+ * their paths. `since` is the stamp the device already holds: an unchanged
+ * index answers with just the stamp. A stale index is walked again first,
+ * waited on briefly, so opening a picker sees the folders as they are now.
+ */
+export async function folderIndex({ since = null, refresh = false } = {}) {
+  await restoreIndex();
+  const walk = warmIndex({ force: refresh });
+  if (walk) await Promise.race([walk, new Promise((r) => setTimeout(r, INDEX_WAIT_MS).unref?.())]);
+  const head = { stamp: stampOf(), at: indexAt, count: indexDirs.length, building: !!building };
+  if (since && since === head.stamp) return { ...head, unchanged: true };
+  const position = new Map();
+  const names = [], parents = [], repos = [];
+  // Parents before children: the walk is breadth first, and later additions
+  // are appended, but a removed-then-readded parent could land after its
+  // children, so order by depth to be sure.
+  const ordered = [...indexDirs].sort((a, b) => a.path.split('/').length - b.path.split('/').length);
+  for (const d of ordered) {
+    const parent = d.path.slice(0, d.path.lastIndexOf('/'));
+    const p = parent === '~' ? -1 : position.get(parent);
+    if (p === undefined) continue; // its parent fell out of the index
+    position.set(d.path, names.length);
+    if (d.repo) repos.push(names.length);
+    names.push(d.name); parents.push(p);
+  }
+  return { ...head, names, parents, repos };
 }

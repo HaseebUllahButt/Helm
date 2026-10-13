@@ -137,6 +137,7 @@ export const M = {
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }
   FS_SEARCH: 'fs.search',          // { query } -> { results[], indexed }  every dir under ~, indexed
+  FS_INDEX: 'fs.index',            // { since?, refresh? } -> { stamp, at, count, building, unchanged? | names[], parents[], repos[] }
   PROJECT_LIST: 'project.list',
   PROJECT_SAVE: 'project.save',
   PROJECT_REMOVE: 'project.remove',
