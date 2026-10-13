@@ -3811,16 +3811,11 @@ export class Sessions extends EventEmitter {
       // must never become the thread's title.
       if (!raw && !clean.trimStart().startsWith('/')) this.#prompted(s, clean);
       // Claude and Codex take helm's brief as standing instructions instead
-      // (see #driver); only CLIs without that channel get it in the message.
-      if (!raw && !clean.trimStart().startsWith('/') && !s.delegationIntroduced && this.delegationBrief
-        && !DRIVERS[s.driver]?.takesInstructions) {
-        const note = this.delegationBrief();
-        if (note) {
-          clean = `${note}\n\n${clean}`;
-          s.delegationIntroduced = true;
-          this.#save();
-        }
-      }
+      // (see #driver); CLIs without that channel get it in front of the
+      // message - added as it goes out (#promptOf), never saved as what the
+      // owner typed, so their bubble shows only their own words.
+      const introduce = !raw && !clean.trimStart().startsWith('/') && !!this.delegationBrief
+        && !DRIVERS[s.driver]?.takesInstructions;
       if (brainLine) clean = `${brainLine}\n\n${clean}`;
 
       const turnId = requestedTurnId
@@ -3837,13 +3832,14 @@ export class Sessions extends EventEmitter {
       let busy = !sideband && (this.#sending.has(s.id) || this.#settling.has(s.id) || s.status === 'working' || s.status === 'blocked');
       const commandText = compact != null ? `/compact${compact ? ` ${compact}` : ''}` : clean;
       if (s.stoppedAt || stopGeneration !== (s.stopGeneration ?? 0) || !this.#index.has(id)) throw new Error('message cancelled because the thread was stopped');
-      const item = { turnId, text: commandText, images, compact, delivery, references, referenceContext, stopGeneration };
+      const item = { turnId, text: commandText, images, compact, delivery, references, referenceContext, stopGeneration, introduce };
       // This event is both the optimistic chat bubble and the durable queue
       // ticket. Persist it before starting/resuming a driver, so a daemon
       // restart can recover a message accepted during that await.
       const event = this.events.append(id, {
         type: 'turn.start', turnId, text: commandText, queued: busy,
         delivery, references, referenceContext,
+        ...(introduce ? { introduce: true } : {}),
         ...(sideband ? { local: true } : {}),
         ...(compact != null ? { compact } : {}),
         attachments: images.map((a) => this.events.putAttachment(id, a)),
@@ -3975,7 +3971,7 @@ export class Sessions extends EventEmitter {
       if (item.images.length) await d.start?.();
       if (s.stoppedAt || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0)) || !this.#index.has(s.id)) throw new Error('message cancelled because the thread was stopped');
       const returnedContext = !item.text.trimStart().startsWith('/') ? s.taskReturnContext : null;
-      const request = item.referenceContext ? `${item.text}\n\n${item.referenceContext}` : item.text;
+      const request = this.#promptOf(s, d, item);
       const prompt = returnedContext
         ? `This task ran on another machine and its finished changes have returned to this project. Here is the result for context:\n${returnedContext}\n\nCurrent user request:\n${request}`
         : request;
@@ -4072,6 +4068,28 @@ export class Sessions extends EventEmitter {
   }
 
   /** Remember a message sent as a new turn until its echo names it. */
+  /**
+   * What a queued message says to the CLI: the owner's words, any files they
+   * pointed at, and - the first time this CLI conversation hears from Helm -
+   * Helm's brief in front, in tags so it reads as instructions rather than
+   * as the owner talking. Tracked per CLI conversation, not per chat: one
+   * that could not be resumed and started over has never been told.
+   */
+  #promptOf(s, d, item) {
+    const request = item.referenceContext ? `${item.text}\n\n${item.referenceContext}` : item.text;
+    if (!item.introduce || item.text.trimStart().startsWith('/')) return request;
+    const conversation = d?.engineSessionId ?? s.engineSessionId ?? null;
+    // Chats told before this was tracked per conversation.
+    if (s.delegationIntroduced && s.introducedTo === undefined) s.introducedTo = s.engineSessionId ?? null;
+    if (s.introducedTo !== undefined && s.introducedTo === conversation) return request;
+    const note = this.delegationBrief?.();
+    if (!note) return request;
+    s.introducedTo = conversation;
+    s.delegationIntroduced = true;
+    this.#save();
+    return `<helm_instructions>\n${note}\n</helm_instructions>\n\n<user_request>\n${request}\n</user_request>`;
+  }
+
   #expectEcho(s, driver, item, text) {
     const awaiting = this.#awaitingEcho.get(s.id) ?? [];
     const entry = { turnId: item.turnId, text: text.trim(), driver };
@@ -4327,7 +4345,7 @@ export class Sessions extends EventEmitter {
     const after = new Set(q.slice(index + 1).map((entry) => entry.turnId));
     q.splice(index, 1);
     if (!q.length) this.#outbox.delete(s.id);
-    const prompt = item.referenceContext ? `${item.text}\n\n${item.referenceContext}` : item.text;
+    const prompt = this.#promptOf(s, d, item);
     const steered = this.#steered.get(s.id) ?? [];
     const entry = { turnId: item.turnId, text: prompt };
     steered.push(entry);
@@ -4780,6 +4798,7 @@ export class Sessions extends EventEmitter {
           delivery: e.delivery ?? 'auto',
           references: e.references ?? [],
           referenceContext: e.referenceContext,
+          introduce: e.introduce === true,
           stopGeneration: s.stopGeneration ?? 0,
         });
         continue;
