@@ -545,7 +545,7 @@ const reachableFromHere = (base: string) =>
   !base.startsWith('http://');
 
 /** A hub that answered: where it is, how much of the network it can see. */
-interface Reached { base: string; reach: number; elapsed: number }
+interface Reached { base: string; reach: number; elapsed: number; machines: Set<string> }
 
 interface ProbeResult {
   best: string | null;
@@ -592,9 +592,11 @@ function startProbes(endpoints: string[], token: string, timeout: number, onReac
       answered.add(base);
       if (!res.ok) return;
       const body = await res.json();
+      const machines = new Set<string>((body.machines ?? []).filter((m: Environment) => m.online).map((m: Environment) => m.id));
       up.push({
         base,
-        reach: (body.machines ?? []).filter((m: Environment) => m.online).length,
+        reach: machines.size,
+        machines,
         elapsed: performance.now() - started,
       });
       first();
@@ -895,11 +897,14 @@ export class Client {
     if (this.closed || !this.connected || version !== this.connectVersion || this.relay !== hub) return;
     const current = reached.find(candidate => candidate.base === hub);
     if (!current) return;
-    const faster = reached.filter(c => c.reach === current.reach && c.base !== hub
+    // Equal counts can describe disjoint machines. Preserve every route we
+    // have now, including the one carrying an open terminal.
+    const eligible = reached.filter(c => [...current.machines].every(id => c.machines.has(id)));
+    const faster = eligible.filter(c => c.reach === current.reach && c.base !== hub
       && c.elapsed < current.elapsed * 0.7 && current.elapsed - c.elapsed > 20)
       .sort((a, b) => a.elapsed - b.elapsed)[0];
-    const best = reached[0]?.reach > current.reach ? reached[0]
-      : faster && Date.now() - this.hubMovedAt >= 30_000 ? faster : null;
+    const broader = eligible.find(c => c.reach > current.reach);
+    const best = broader ?? (faster && Date.now() - this.hubMovedAt >= 30_000 ? faster : null);
     if (!best || best.base === hub) return;
     this.hubMovedAt = Date.now();
     this.backoff = 500;

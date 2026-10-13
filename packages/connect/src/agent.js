@@ -651,15 +651,14 @@ export class Daemon {
       if (!mine.has(url) && !urls.includes(url)) urls.push(url);
     }
     this.#hintOwners = new Map();
-    if (!this.lan?.active) return urls;
     const plan = withHeardAddresses({
       urls, net, self: this.id, mine,
       connected: (url) => !!this.#links.get(url)?.connected,
       // A hint link that is up stays up, even if an announcement or two was lost.
-      heard: [
+      heard: this.lan?.active ? [
         ...[...this.#links.values()].filter((l) => l.hintFor && l.connected).map((l) => ({ url: l.url, id: l.hintFor })),
         ...this.lan.list(),
-      ],
+      ] : [],
     });
     this.#hintOwners = plan.owners;
     return plan.urls;
@@ -935,7 +934,7 @@ export class Daemon {
     // One way into each machine's hub: whichever of a heard address and the
     // roster's came up first, the other is dropped now rather than at the
     // next tick, before the two can take turns superseding each other.
-    if (this.lan?.active && !local) this.#reconcileLinks();
+    if (!local) this.#reconcileLinks();
     // Nudge the hub to redistribute SSH keys now that we are attached. Our
     // identity travelled in the roster above; the hub does not write it.
     sshInfo().then((ssh) => link.send(T.SSH_INFO_REPORT, ssh)).catch(() => {});

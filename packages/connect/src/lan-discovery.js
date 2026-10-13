@@ -25,8 +25,8 @@ import { broadcastAddresses, isPrivateV4, lanIsRoutable } from './net-addr.js';
  * key, rotated every ten minutes, so a stranger on a cafe wifi learns
  * nothing it could follow you with - and the address it points to still has
  * to pass the usual hub handshake, which proves the network key before this
- * machine says anything. A forged or replayed announcement costs one failed
- * dial and gains nothing.
+ * machine says anything. A replay may admit a bounded number of dial candidates;
+ * the handshake never releases a credential to a hub without the key.
  *
  * Off with `"lanDiscovery": false` in ~/.helm/config.json.
  */
@@ -39,6 +39,7 @@ const HINT_TTL_MS = 100_000;
 const TAG_PERIOD_MS = 10 * 60_000;
 const ROUTE_CHECK_MS = 5 * 60_000;
 const MAX_HINTS = 32;
+const MAX_HINTS_PER_MACHINE = 2;
 const LABEL = 'lan-announce';
 
 export function announceTag(net, id, period) {
@@ -72,20 +73,33 @@ export function lanDiscoveryEnabled(cfg = loadSettings(), env = process.env) {
  * for each heard address kept, the machine it should belong to.
  */
 export function withHeardAddresses({ urls, net, self, mine = new Set(), heard, connected }) {
-  const out = [...urls];
+  const out = [...new Set(urls)];
   const owners = new Map();
-  for (const { url, id } of heard) {
-    if (id === self || mine.has(url) || out.includes(url) || owners.has(url)) continue;
-    const listed = net.machines?.[id]?.endpoints;
-    if (!listed || net.revoked?.[id]) continue;
-    if (listed.some(connected)) continue;
-    if ([...owners].some(([other, owner]) => owner === id && connected(other))) continue;
-    owners.set(url, id);
-    out.push(url);
+  const machineFor = new Map();
+  for (const [id, machine] of Object.entries(net.machines ?? {})) {
+    if (id === self || net.revoked?.[id]) continue;
+    for (const url of machine.endpoints ?? []) machineFor.set(url, id);
   }
-  const onHint = new Set([...owners].filter(([url]) => connected(url)).map(([, id]) => id));
-  const stale = new Set([...onHint].flatMap((id) => net.machines?.[id]?.endpoints ?? []));
-  return { urls: out.filter((url) => owners.has(url) || !stale.has(url)), owners };
+  for (const { url, id } of heard) {
+    if (id === self || mine.has(url) || net.revoked?.[id]) continue;
+    const listed = net.machines?.[id]?.endpoints;
+    if (!listed) continue;
+    // A replay cannot relabel an address already owned by the roster.
+    if (machineFor.has(url) && machineFor.get(url) !== id) continue;
+    machineFor.set(url, id);
+    if (!listed.includes(url)) owners.set(url, id);
+    if (!out.includes(url)) out.push(url);
+  }
+  // Group roster addresses too: a heard address can become a roster address
+  // on the very next gossip round, and a machine can publish several NICs.
+  const live = new Map();
+  for (const url of out) {
+    const id = machineFor.get(url);
+    if (id && connected(url) && !live.has(id)) live.set(id, url);
+  }
+  const keep = out.filter(url => !live.has(machineFor.get(url)) || live.get(machineFor.get(url)) === url);
+  for (const url of owners.keys()) if (!keep.includes(url)) owners.delete(url);
+  return { urls: keep, owners };
 }
 
 export class LanDiscovery {
@@ -251,14 +265,19 @@ export class LanDiscovery {
     // The address is where the datagram came from, never what it says.
     const url = `http://${rinfo.address}:${port}`;
     const known = this.hints.get(url);
-    // Re-inserted so the map stays oldest-heard first for the cap below.
-    this.hints.delete(url);
+    if (known) {
+      if (known.id === id) known.seen = this.now();
+      return;
+    }
+    // A tag can be replayed with arbitrary source addresses and ports. Keep
+    // admitted hints until expiry instead of evicting them on each packet:
+    // otherwise a bounded map still starts unbounded in-flight handshakes.
+    if (this.hints.size >= MAX_HINTS
+        || [...this.hints.values()].filter(hint => hint.id === id).length >= MAX_HINTS_PER_MACHINE) return;
     this.hints.set(url, { id, seen: this.now() });
-    if (known?.id === id) return;
     // Someone new: answer them directly so they need not wait a round to
     // hear about us. They answer us only once in turn, for the same reason.
     this.#announce({ address: rinfo.address, port: rinfo.port });
-    while (this.hints.size > MAX_HINTS) this.hints.delete(this.hints.keys().next().value);
     this.onChange();
   }
 

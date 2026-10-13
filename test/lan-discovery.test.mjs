@@ -189,3 +189,41 @@ test('a heard address is dialled only while the roster\'s way into that machine 
   });
   assert.ok(!plan.urls.includes('http://10.0.0.9:8787'));
 });
+
+
+test('a heard link stays unique after roster gossip lists it alongside another interface', () => {
+  const first = 'http://192.168.1.9:8787';
+  const second = 'http://10.0.0.9:8787';
+  const net = { machines: { laptop: { endpoints: [second, first] } }, revoked: {} };
+  const plan = withHeardAddresses({
+    urls: [second, first], net, self: 'vm',
+    heard: [{ url: first, id: 'laptop' }], connected: url => url === first,
+  });
+  assert.deepEqual(plan.urls, [first], 'the other interface must not evict the working socket');
+});
+
+test('multiple roster addresses also keep only one live link without discovery', () => {
+  const net = { machines: { laptop: { endpoints: ['a', 'b'] } }, revoked: {} };
+  const plan = withHeardAddresses({ urls: ['a', 'b'], net, self: 'vm', heard: [], connected: url => url === 'a' });
+  assert.deepEqual(plan.urls, ['a']);
+});
+
+test('replayed tags cannot churn dial candidates by changing the advertised port', async t => {
+  const pa = await freePort();
+  const a = node('laptop', 18787, pa, pa, { announce: false });
+  await a.lan.start();
+  t.after(() => a.lan.stop());
+  const s = dgram.createSocket('udp4');
+  t.after(() => s.close());
+  const tag = announceTag(roster('homepc'), 'homepc', Math.floor(Date.now() / 600_000));
+  const send = port => new Promise(resolve => s.send(Buffer.from(JSON.stringify({ helm: 'lan', v: 1, tag, port })), pa, '127.0.0.1', resolve));
+  await send(10000);
+  await until(() => a.lan.list().length === 1);
+  for (let i = 1; i <= 100; i++) {
+    await send(10000 + i);
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.ok(a.changes.length <= 2, `one replay produced ${a.changes.length} dial-plan changes`);
+  assert.ok(a.lan.list().some(h => h.url === 'http://127.0.0.1:10000'), 'do not evict the original hint');
+});

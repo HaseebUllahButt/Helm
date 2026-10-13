@@ -212,3 +212,20 @@ test('a message that never left still goes through the next hub', async (t) => {
   assert.deepEqual(await hubRpc(net, 'peer', M.SESSION_INPUT, { id: 's1', data: 'hello' }, { timeout: 2000 }), { reached: true });
   assert.deepEqual(live.calls, [M.SESSION_INPUT]);
 });
+
+
+test('uncertain key presses, process starts, forks and unknown writes never use a second route', async t => {
+  const N = await import('@helm/protocol/network');
+  const { M } = await import('@helm/protocol');
+  const { hubRpc } = await import('../packages/connect/src/hub-client.js');
+  const net = { ...N.loadNetwork() };
+  const silent = await fakeHub(t, net, { answer: false });
+  const live = await fakeHub(t, net, { answer: true });
+  net.port = silent.port;
+  net.machines = { peer: { endpoints: [live.url] } };
+  for (const method of [M.SESSION_KEYS, M.EXEC_START, M.SESSION_FORK, 'future.write']) {
+    await assert.rejects(hubRpc(net, 'peer', method, {}, { timeout: 30 }), err => err.uncertain);
+  }
+  assert.deepEqual(silent.calls, [M.SESSION_KEYS, M.EXEC_START, M.SESSION_FORK, 'future.write']);
+  assert.deepEqual(live.calls, []);
+});

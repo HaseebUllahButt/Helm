@@ -100,16 +100,34 @@ export class HubConnection extends EventEmitter {
 }
 
 /**
- * Calls that would happen twice if a second hub were asked after the first
- * may already have passed them on: a message typed into a session, a new
- * session or helper, a task handed over, a machine's role changed.
+ * Only known reads and operations with durable duplicate protection may be
+ * retried after uncertain delivery. Unknown methods default to one attempt,
+ * so adding a new mutation cannot silently acquire replay semantics.
  */
-export const NON_REPEATABLE = new Set([M.SESSION_INPUT, M.SESSION_START, M.SESSION_DELEGATE, M.TASK_SEND, M.MACHINE_SET_KIND]);
+const REPEATABLE = new Set([
+  M.ENV_INFO, M.PING, M.NET_ROUTES, M.SSH_INFO,
+  M.FS_LIST, M.FS_ROOTS, M.FS_SEARCH, M.FS_INDEX, M.PROJECT_LIST,
+  M.GIT_STATUS, M.GIT_GRAPH, M.GIT_DIFF, M.GIT_COMMIT, M.GIT_PR,
+  M.GIT_MONITOR, M.GIT_JOBS, M.GIT_ACCOUNTS,
+  M.PROFILE_LIST, M.AGENT_LIST, M.MODEL_LIST, M.INTEGRATIONS_LIST,
+  M.SESSION_LIST, M.SESSION_MESSAGES, M.SESSION_EVENTS, M.SESSION_VISUAL,
+  M.SESSION_COMMANDS, M.SESSION_INVENTORY, M.SESSION_NATIVE_AGENT,
+  M.SESSION_WATCH, M.SESSION_UNWATCH, M.DIGEST_LIST,
+  M.EXEC_READ, M.BRAIN_DIGEST, M.BRAIN_SNAPSHOT,
+  M.SCHEDULE_LIST, M.USAGE_LIMITS, M.USAGE_REPORT, M.USAGE_BUCKETS,
+  M.CODE_KEY, M.HANDOFF_STATUS, M.TASK_STATUS,
+  M.SEND_PLAN, M.SEND_STATUS, M.SEND_LIST, M.SEND_RECEIPT,
+  M.TRANSFER_PREVIEW, M.TRANSFER_VERIFY, M.DISPATCH_STATUS,
+  M.SHARE_LIST, M.MEDIA_INFO, M.MEDIA_ROOTS, M.MEDIA_LIST, M.MEDIA_TICKET,
+  // These accepts check their durable handoff/transfer identity themselves.
+  M.HANDOFF_ACCEPT, M.TRANSFER_ACCEPT,
+]);
+export const NON_REPEATABLE = new Set(Object.values(M).filter(method => !REPEATABLE.has(method)));
 
 export async function hubRpc(net, env, method, params = {}, { timeout = 20_000, budget = Infinity, direct = false, onRoute } = {}) {
   const failures = [];
   const deadline = Date.now() + budget;
-  const once = NON_REPEATABLE.has(method);
+  const once = !REPEATABLE.has(method);
   for (const hub of hubUrls(net, env)) {
     if (Date.now() >= deadline) break;
     try {
