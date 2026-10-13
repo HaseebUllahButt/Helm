@@ -123,7 +123,7 @@ test('Send task includes env, keeps a retry identity, and opens the destination 
     assert.equal(await page.getByLabel('Include .env files').isDisabled(),true);
     assert.equal(await page.getByLabel('Instructions for continuing').isDisabled(),true);
     await page.getByRole('button',{name:'Retry to VM',exact:true}).click();
-    await page.getByText('copying to VM: 40% of 1.0 KB · 200 B/s',{exact:true}).waitFor();
+    await page.getByText('copying to VM: 40% of 1000 B · 200 B/s',{exact:true}).waitFor();
     await page.getByText('Running on VM',{exact:true}).waitFor();
     const attempts = await page.evaluate(()=>window.attempts);
     assert.equal(attempts.length,3);

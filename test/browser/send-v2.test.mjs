@@ -179,7 +179,9 @@ for (const size of sizes) {
       await page.getByText('2 changed files · 120 B',{exact:true}).waitFor();
       await shot(page,'again-progress');
       const starts=await page.evaluate(()=>window.calls.filter(call=>call.method==='send.start'));
-      assert.equal(starts.length,2);assert.equal(starts[0].params.destination,starts[1].params.destination);
+      assert.equal(starts.length,2);
+      const destinations=await page.evaluate(()=>window.jobs().map(job=>job.target.path));
+      assert.deepEqual(destinations,['~/project','~/project']);
       await change(page,{...donePatch,bytes:{total:0,sent:0},files:{total:0,sent:0},changed:{files:0,bytes:0}},true,'job-2');
       await page.getByText('Already up to date.',{exact:true}).waitFor();
     } finally {await page.cleanup();}

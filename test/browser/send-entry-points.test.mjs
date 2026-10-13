@@ -36,7 +36,7 @@ before(async()=>{
           envFiles:[],left:[],targets:[{machineId:'target',name:'VM',online:true,destination:'~/project',sentBefore:jobs.some(job=>job.phase==='done')?{at:Date.now(),jobId:'job'}:null}],defaultTarget:'target'};
         if(method==='send.start'){
           const now=Date.now();const job={id:'job',createdAt:now,updatedAt:now,finishedAt:null,
-            source:{machineId:'source',name:'Laptop',path:params.path,kind:'folder'},target:{machineId:'target',name:'VM',path:params.destination},
+            source:{machineId:'source',name:'Laptop',path:params.path,kind:'folder'},target:{machineId:'target',name:'VM',path:params.destination ?? '~/project'},
             again:false,phase:'sending',bytes:{total:20,sent:10},files:{total:5,sent:2},rate:10,eta:1,changed:null,route:null,error:null,left:[]};
           jobs=[job];localStorage.setItem('jobs',JSON.stringify(jobs));return {job};}
         if(method==='fs.list')return {path:params.path==='~'?'~':params.path,entries:[{name:'project',path:'~/dev/project',isRepo:true}]};
