@@ -88,6 +88,8 @@ export interface Session {
   alive?: boolean;
   createdAt?: number;
   updatedAt?: number;
+  /** When the owner last opened it, on any device; the machine keeps it. */
+  seenAt?: number;
   queueOrder?: string[];
   /** Delegated children's states, plus native subagents; a card only adds to `working`. */
   team?: { working: number; blocked: number; failed: number };

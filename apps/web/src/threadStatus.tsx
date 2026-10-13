@@ -11,6 +11,8 @@ import { waitingSince } from './useNow';
 
 type Thread = {
   id: string; status?: string; compacting?: unknown; updatedAt?: number; turns?: number; alive?: boolean;
+  /** When the owner last looked, on any device - the machine keeps it. */
+  seenAt?: number;
   team?: { working?: number; blocked?: number; failed?: number };
   recovery?: { kind?: string } | null;
 };
@@ -58,16 +60,21 @@ function writeSeen() {
   try { localStorage.setItem(SEEN_KEY, JSON.stringify(seen)); } catch { /* full or blocked: the check just returns next visit */ }
 }
 
-/** The owner has looked at this thread as it is now. */
-export function markSeen(id: string, at = Date.now()) {
+/**
+ * The owner has looked at this thread as it is now. This device answers at
+ * once; the machine is told too (by the caller), so the others follow.
+ * False when this device already had it as seen.
+ */
+export function markSeen(id: string, at = Date.now()): boolean {
   const state = readSeen();
-  if ((state.at[id] ?? 0) >= at) return;
+  if ((state.at[id] ?? 0) >= at) return false;
   state.at[id] = at;
   const cutoff = Date.now() - KEEP_MS;
   for (const key of Object.keys(state.at)) if (state.at[key] < cutoff) delete state.at[key];
   writeSeen();
   version += 1;
   watchers.forEach((fn) => fn());
+  return true;
 }
 
 /** Re-render when something was marked seen. */
@@ -84,7 +91,7 @@ export function isUnread(s: Thread): boolean {
   if (!s.updatedAt || (s.turns ?? 0) < 1) return false;
   if (s.status !== 'idle' && s.status !== 'done') return false;
   const state = readSeen();
-  return s.updatedAt > Math.max(state.since, state.at[s.id] ?? 0);
+  return s.updatedAt > Math.max(state.since, state.at[s.id] ?? 0, s.seenAt ?? 0);
 }
 
 // ------------------------------------------------------------- turn clock

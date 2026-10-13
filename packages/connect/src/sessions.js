@@ -153,6 +153,8 @@ const missingClaudeConversation = (error, sessionId) => {
  * so what the owner does with one is kept beside the sessions as a mark.
  */
 const EXTERNAL = /^(pane:|found:)/;
+/** A look at a chat Helm did not start is forgotten after this long. */
+const SEEN_KEEP_MS = 30 * 86_400_000;
 
 /**
  * What a session looks like on the wire: everything but helm's own notes.
@@ -280,6 +282,8 @@ export class Sessions extends EventEmitter {
   #watching = new Map();
   /** external id -> 'archived' | 'removed', for rows helm does not own */
   #marks = new Map();
+  /** When the owner last looked at a chat Helm did not start (pane:, found:). */
+  #seen = new Map();
   /** When a row was removed, so new activity in its CLI can bring it back. */
   #removedAt = new Map();
   /**
@@ -899,6 +903,7 @@ export class Sessions extends EventEmitter {
         this.#index.set(s.id, s);
       }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
+      for (const [id, at] of Object.entries(raw.seen || {})) if (Number.isFinite(at)) this.#seen.set(id, at);
       for (const [id, at] of Object.entries(raw.removedAt || {})) this.#removedAt.set(id, at);
     } catch { /* a corrupt index must not stop the daemon booting */ }
   }
@@ -931,6 +936,7 @@ export class Sessions extends EventEmitter {
         // Subagent cards are re-read from Claude's files, never remembered.
         sessions: [...this.#index.values()].map(({ nativeCards, ...s }) => s),
         external: Object.fromEntries(this.#marks),
+        seen: Object.fromEntries(this.#seen),
         removedAt: Object.fromEntries(this.#removedAt),
       }, null, 2),
       { mode: 0o600 }
@@ -1162,7 +1168,7 @@ export class Sessions extends EventEmitter {
         out.push({ id, engine: x.engine, engineSessionId: x.id, account: x.account,
           title: x.title, cwd: x.cwd, quick: isQuickDir(x.cwd) || undefined, profileId: x.account, model: x.model, engineModel: x.model, engineEffort: x.effort, mode: x.mode,
           status: x.status, turns: x.turns, alive: !!x.active, externalActive: !!x.active,
-          adopted: true, archived: mark === 'archived', updatedAt: x.updatedAt });
+          adopted: true, archived: mark === 'archived', updatedAt: x.updatedAt, seenAt: this.#seen.get(id) });
       }
     }
     // A Claude session's own subagents are found once here, then followed
@@ -4492,6 +4498,29 @@ export class Sessions extends EventEmitter {
    * Whether this thread should announce completed turns. Driven sessions are
    * born on; the owner can silence an individual thread from its header.
    */
+  /**
+   * The owner looked at this chat, on whichever device. Kept on the machine,
+   * not in that browser, so "finished, not opened yet" clears everywhere.
+   * The machine's own clock stamps it: it is the clock that wrote updatedAt.
+   */
+  markSeen(id) {
+    const at = Date.now();
+    const s = this.#index.get(id);
+    if (s) {
+      s.seenAt = at;
+      this.#save();
+      this.emit('session', s);
+      return { ok: true, seenAt: at };
+    }
+    if (!EXTERNAL.test(id)) throw new Error(`unknown session: ${id}`);
+    this.#seen.set(id, at);
+    const cutoff = at - SEEN_KEEP_MS;
+    for (const [key, when] of this.#seen) if (when < cutoff) this.#seen.delete(key);
+    this.#save();
+    this.emit('session', { id, adopted: true, seenAt: at });
+    return { ok: true, seenAt: at };
+  }
+
   setNotifyDone(id, on = true) {
     const s = this.get(id);
     s.notifyDone = !!on;

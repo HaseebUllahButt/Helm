@@ -1246,7 +1246,10 @@ function Shell({ client, conn, onSignOut }: {
   // A chat you have open is a chat you have seen, including what it finishes while you watch.
   const openId = view.kind === 'session' ? view.session.id : null;
   const openStamp = everyone.find(({ s }) => s.id === openId)?.s;
-  useEffect(() => { if (openId) markSeen(openId); }, [openId, openStamp?.updatedAt, openStamp?.status]);
+  // The machine keeps the look too, so the tick clears on every device.
+  useEffect(() => {
+    if (openId && selected && markSeen(openId)) client.rpc(selected, 'session.seen', { id: openId }).catch(() => { /* an older machine: this device still knows */ });
+  }, [openId, openStamp?.updatedAt, openStamp?.status]);
   const snoozeThread = (envId: string, s: Session, until: number) => {
     setSnooze(`${envId}:${s.id}`, until);
     setSnoozeUndo({ key: `${envId}:${s.id}`, title: s.title, until });

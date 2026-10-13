@@ -135,6 +135,30 @@ for (const width of [1280, 390]) test(`chats sit on shelves with a status at the
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll');
 });
 
+test('a chat opened on another device shows no green check here, and opening one here tells the machine', async t => {
+  const { page, boot } = await pageFor(t, { width: 1280, height: 900 });
+  await boot();
+  await page.evaluate(() => {
+    const now = Date.now(), min = 60000;
+    localStorage.setItem('helm-seen:v1', JSON.stringify({ since: now - 60 * min, at: {} }));
+    const make = (title, more) => ({ id: title, title, cwd: '/home/me/helm', engine: 'claude', profileId: 'claude', driver: 'claude',
+      turns: 3, status: 'idle', alive: true, ...more });
+    window.seen = [];
+    window.mount(window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [
+      make('Read on the phone', { updatedAt: now - 5 * min, seenAt: now - 2 * min }),
+      make('Not read anywhere', { updatedAt: now - 4 * min }),
+    ] }, 'http://helm-test', { 'session.seen': () => { window.seen.push(true); return { ok: true }; } }));
+  });
+  const settled = shelf(page, 'Settled');
+  await settled.waitFor();
+  assert.equal(await settled.locator('.tri-row').filter({ hasText: 'Read on the phone' }).locator('.tstat.unread').count(), 0);
+  const unread = settled.locator('.tri-row').filter({ hasText: 'Not read anywhere' });
+  assert.equal(await unread.locator('.tstat.unread').count(), 1);
+  await unread.locator('.thread-row').click();
+  await unread.locator('.tstat.unread').waitFor({ state: 'detached' });
+  await page.waitForFunction(() => window.seen.length > 0);
+});
+
 test('the row menu still opens above its neighbours on a stepped-back working row', async t => {
   const { page, boot } = await pageFor(t, { width: 1280, height: 900 });
   await boot();

@@ -1665,6 +1665,7 @@ export class Daemon {
       case M.SESSION_DISCARD_EMPTY: return this.sessions.discardEmpty(p.id);
       case M.SESSION_TITLE:   return this.sessions.rename(p.id, p.title);
       case M.SESSION_ARCHIVE: return this.sessions.archive(p.id, p.archived !== false);
+      case M.SESSION_SEEN:    return this.sessions.markSeen(p.id);
       case M.SESSION_FORK: return { session: await this.sessions.fork(p.id, p.turnId) };
 
       // Headless agent sessions.

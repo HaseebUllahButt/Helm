@@ -100,7 +100,8 @@ export function helmBrief(net) {
 - Run something on another machine: helm exec <machine> --cwd <absolute-path> -- <command> [args]. This uses Helm's managed connection; prefer it to SSH. For pipelines use -- sh -lc '<script>'. Add --heavy for tests/builds; pass environment explicitly with --env NAME=value. If it says the command may have started, never rerun it: read it with helm exec-status <machine> <command-id> --wait, or stop it with helm exec-cancel <machine> <command-id>.
 - Copy files there: helm copy <machine> <file-or-folder> [--target-folder <path>] (default: the same place; ~ is that machine's home).
 - Which machines are on and what is running where: helm digest. Read a session: helm thread <id>. Message it: helm say <id> <text>.
-- Start an agent on another machine: helm spawn <machine> <folder> <account> <task>.]
+- Start an agent on another machine: helm spawn <machine> <folder> <account> <task>.
+- Show the owner something running on a port (a dev server, a page, a preview) from anywhere, phone included: helm share <port> [--name <name>] [--password] prints a public https link. helm share list shows the links; helm share stop <name> ends one when it is no longer needed.]
 ${delegationNote()}\n${visualNote()}`;
 }
 
