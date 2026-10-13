@@ -69,7 +69,8 @@ const usage = () => {
   helm machines                     machines in this network
   helm redesignate [machine] <kind> what a machine is for: pc, vm or nas
   helm nas [machine] [add|remove <folder>]   what a nas shares
-  helm share <port> [--name <n>] [--password [pw]]
+  helm share <port> [--name <n>] [--password [pw]] [--for <hours>] [--keep]
+    a short-lived link: ends after 3 hours unless --keep
                                   a public https link to a port here, served by your VM
   helm share list | stop <name>   what is shared, and stopping it
   helm share setup                once, on the VM: let it serve the links
@@ -1627,7 +1628,7 @@ async function shareCmd() {
   const net = requireNetwork();
   const shareLib = await import('@helm/protocol/share');
   const local = await import('../src/shares.js');
-  const args = rest.filter((a, i) => !a.startsWith('--') && !['--name', '--password', '--on'].includes(rest[i - 1]));
+  const args = rest.filter((a, i) => !a.startsWith('--') && !['--name', '--password', '--on', '--for'].includes(rest[i - 1]));
   const verb = /^\d+$/.test(args[0] ?? '') ? 'add' : (args.shift() ?? 'list');
   const on = strFlag('on');
   const target = on ? machineId(on) : net.self;
@@ -1662,7 +1663,10 @@ async function shareCmd() {
     const all = rows.flat();
     if (!all.length) { console.log('\n  nothing shared.  helm share <port> [--name <name>] [--password <pw>]\n'); return; }
     console.log('');
-    for (const x of all) console.log(`  ${link(x.name)}  ->  ${x.machine}:${x.port}${x.password ? '  (password)' : ''}`);
+    for (const x of all) {
+      const left = x.expiresAt ? `  ends in ${Math.max(1, Math.round((x.expiresAt - Date.now()) / 60_000))} min` : '  kept';
+      console.log(`  ${link(x.name)}  ->  ${x.machine}:${x.port}${x.password ? '  (password)' : ''}${left}`);
+    }
     console.log('');
     return;
   }
@@ -1675,7 +1679,7 @@ async function shareCmd() {
     return;
   }
 
-  if (verb !== 'add') die('usage: helm share <port> [--name <name>] [--password [pw]] [--on <machine>] | list | stop <name> | setup');
+  if (verb !== 'add') die('usage: helm share <port> [--name <name>] [--password [pw]] [--for <hours>] [--keep] [--on <machine>] | list | stop <name> | setup');
   const port = Number(args[0]);
   let password = flagOf('password');
   // `--password` with nothing after it: make one up and say what it is.
@@ -1689,9 +1693,15 @@ async function shareCmd() {
       .then(({ shares }) => shares.some((x) => x.name === name.toLowerCase()) ? m.name : null).catch(() => null)))).find(Boolean);
     if (clash) die(`"${name}" is already shared from ${clash}; pick another name`);
   }
-  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, replace: true });
+  // Links end after 3 hours unless --keep says otherwise; --for <hours> picks another length.
+  const keep = !!flagOf('keep');
+  const hours = Number(strFlag('for'));
+  if (strFlag('for') !== undefined && !(hours > 0)) die('--for takes a number of hours, e.g. --for 8');
+  const ttlMs = hours > 0 ? hours * 3_600_000 : undefined;
+  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true });
   const url = link(share.name);
-  console.log(`\n  ${url}\n  -> ${where}, port ${share.port}${share.password ? `\n  password: ${password}` : ''}`);
+  const ends = share.expiresAt ? `ends ${new Date(share.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (add --keep to keep it)` : 'kept until you stop it';
+  console.log(`\n  ${url}\n  -> ${where}, port ${share.port}, ${ends}${share.password ? `\n  password: ${password}` : ''}`);
   if (!host) { console.log('\n  No machine in this network has a public https address, so nobody can open it yet.\n'); return; }
   // The first visit is when the certificate is made; do it now, so the
   // person you send it to does not wait - and so a problem shows up here.

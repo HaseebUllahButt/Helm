@@ -186,7 +186,7 @@ test('a machine opens tunnels only to ports it shared, and hides hashes from mem
   assert.ok(sent.some((f) => f.t === T.TUNNEL_READY));
 
   const member = await d.dispatch(M.SHARE_LIST, { forHub: true }, 'phone-id');
-  assert.deepEqual(Object.keys(member.shares[0]).sort(), ['createdAt', 'name', 'password', 'port', 'url']);
+  assert.deepEqual(Object.keys(member.shares[0]).sort(), ['createdAt', 'expiresAt', 'name', 'password', 'port', 'url']);
   const forHub = await d.dispatch(M.SHARE_LIST, { forHub: true });
   assert.ok(forHub.shares[0].lock.hash);
 

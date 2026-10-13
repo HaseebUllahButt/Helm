@@ -13,10 +13,18 @@ import { shareName, randomShareName, hashSharePassword, NAME_RULE } from '@helm/
  */
 const FILE = () => join(HELM_DIR, 'shares.json');
 
-export function listShares() {
+/**
+ * A link is short-lived unless asked to keep it: it ends on its own after
+ * this long. Only `keep` makes one stay.
+ */
+export const DEFAULT_TTL_MS = 3 * 60 * 60 * 1000;
+
+export function listShares(now = Date.now()) {
   try {
     const list = JSON.parse(readFileSync(FILE(), 'utf8'));
-    return Array.isArray(list) ? list.filter((s) => shareName(s?.name) && Number.isInteger(s?.port)) : [];
+    return Array.isArray(list)
+      ? list.filter((s) => shareName(s?.name) && Number.isInteger(s?.port) && (s.expiresAt == null || s.expiresAt > now))
+      : [];
   } catch { return []; }
 }
 
@@ -26,14 +34,20 @@ function save(list) {
   renameSync(tmp, FILE());
 }
 
-/** Add or replace a share. The password, if any, is only kept as a hash. */
-export function addShare({ name, port, password } = {}) {
+/**
+ * Add or replace a share. The password, if any, is only kept as a hash.
+ * It ends after DEFAULT_TTL_MS unless `keep` is set; `ttlMs` sets another length.
+ */
+export function addShare({ name, port, password, keep, ttlMs } = {}) {
   const wanted = Number(port);
   if (!Number.isInteger(wanted) || wanted < 1 || wanted > 65535) throw new Error('give the local port to share, e.g. 3000');
   const picked = name == null || name === '' ? randomShareName() : shareName(name);
   if (!picked) throw new Error(`a link name is ${NAME_RULE}`);
+  const now = Date.now();
+  const length = Number(ttlMs) > 0 ? Number(ttlMs) : DEFAULT_TTL_MS;
   const share = {
-    name: picked, port: wanted, createdAt: Date.now(),
+    name: picked, port: wanted, createdAt: now,
+    ...(keep ? {} : { expiresAt: now + length }),
     ...(password ? { lock: hashSharePassword(password) } : {}),
   };
   save([...listShares().filter((s) => s.name !== picked), share]);

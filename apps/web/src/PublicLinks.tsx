@@ -2,7 +2,14 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import type { Client, Environment } from './client';
 import { Icon } from './Icon';
 
-interface Share { name: string; port: number; password: boolean; url: string | null; createdAt: number }
+interface Share { name: string; port: number; password: boolean; url: string | null; createdAt: number; expiresAt?: number }
+
+/** "ends in 2h 10m", or "kept" for a link that stays until stopped. */
+const endsIn = (s: Share) => {
+  if (!s.expiresAt) return 'kept until stopped';
+  const mins = Math.max(1, Math.round((s.expiresAt - Date.now()) / 60_000));
+  return mins >= 60 ? `ends in ${Math.floor(mins / 60)}h ${mins % 60}m` : `ends in ${mins} min`;
+};
 
 /**
  * Public links from this machine (`helm share`): something running on one
@@ -58,7 +65,7 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
             <div key={s.name} className="row tall link-row">
               <span className="grow">
                 <span className="rt">{s.url ? s.url.replace(/^https:\/\//, '') : s.name}</span>
-                <span className="rm">port {s.port}{s.password ? ' · password' : ' · open to anyone with the link'}</span>
+                <span className="rm">port {s.port}{s.password ? ' · password' : ' · open to anyone with the link'} · {endsIn(s)}</span>
               </span>
               {s.url && <button className="ghost" onClick={() => copy(s.url!)}>{copied === s.url ? 'Copied' : 'Copy'}</button>}
               {s.url && <a className="iconbtn" href={s.url} target="_blank" rel="noreferrer" aria-label={`Open ${s.name}`}><Icon name="forward" size={15} /></a>}
