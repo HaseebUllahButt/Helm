@@ -4,9 +4,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSyn
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { parseCopyArgs, copySpec, copyTarget, rsyncPath } from '../packages/connect/src/copy.js';
+
 
 const root = mkdtempSync(join(tmpdir(), 'helm-copy-'));
+Object.assign(process.env, { HELM_DIR: join(root,'state'), HELM_DB: join(root,'hub.sqlite'), HELM_SSH_DIR: join(root,'ssh'), HELM_PROCS_SOCKET: join(root,'procs.sock'), HELM_TERMINALS_SOCKET: join(root,'terminals.sock') });
+const { parseCopyArgs, copySpec, copyTarget, rsyncPath, copySshShell } = await import('../packages/connect/src/copy.js');
 test.after(() => rmSync(root, { force: true, recursive: true }));
 const net = { self: 'a', machines: { b: { id: 'b', name: 'target', sshUser: 'tester' } }, revoked: {} };
 
@@ -72,4 +74,19 @@ test('streamed full copy preserves hidden files, symlinks and modes; repeat copi
   result = run(); assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Number of regular files transferred: 0/);
   assert.equal(readFileSync(join(dest, 'keep'), 'utf8'), 'unrelated');
+});
+
+
+test('rsync and OpenSSH launch the exact ProxyCommand with spaces and apostrophes', () => {
+  const folder = join(root, "proxy ' path"); mkdirSync(folder);
+  const node = join(folder, "node ' executable"); symlinkSync(process.execPath, node);
+  const marker = join(root, 'proxy-launched.json');
+  const bin = join(folder, "helm ' entry.mjs");
+  writeFileSync(bin, `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)));`);
+  const spec = copySpec({ machine:'target', source:root, excludes:[], mode:'ssh', targetFolder:'/unused' }, net);
+  spec.args[spec.args.indexOf('-e')+1] = copySshShell(net.machines.b, { node, bin, key:join(root,'no-key'), knownHosts:join(root,'hosts') });
+  const result = spawnSync('rsync', spec.args, {encoding:'utf8',timeout:5000});
+  assert.notEqual(result.status,0, 'the fixture deliberately provides no SSH server');
+  assert.deepEqual(JSON.parse(readFileSync(marker,'utf8')), ['proxy','target','22']);
+  assert.doesNotMatch(result.stderr,/node.*No such file|Syntax error/);
 });
