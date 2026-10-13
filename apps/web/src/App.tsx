@@ -102,18 +102,25 @@ function ShareHop({ client, target, onDone }: { client: Client; target: ShareHop
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let last: any;
-      for (const base of [location.origin, undefined]) {
-        try {
-          const pass = await client.shareGrant(target, base);
-          if (cancelled) return;
-          // Back from the link should land in Helm, not bounce out again.
-          history.replaceState(null, '', location.pathname + location.search);
-          openPrivateLink(pass);
-          return;
-        } catch (err) { last = err; }
+      const failures: string[] = [];
+      // Three rounds a second apart: the first visit once came back refused
+      // and the very next one went through, so one answer is not the last word.
+      for (let round = 0; round < 3 && !cancelled; round++) {
+        if (round) await new Promise((r) => setTimeout(r, 1000));
+        for (const base of [location.origin, undefined]) {
+          try {
+            const pass = await client.shareGrant(target, base);
+            if (cancelled) return;
+            // Back from the link should land in Helm, not bounce out again.
+            history.replaceState(null, '', location.pathname + location.search);
+            openPrivateLink(pass);
+            return;
+          } catch (err: any) {
+            failures.push(`${base ? new URL(base).host : 'this device\u2019s hub'}: ${err?.message || 'no answer'}`);
+          }
+        }
       }
-      if (!cancelled) setError(last?.message || 'could not open it');
+      if (!cancelled) setError([...new Set(failures)].join('; ') || 'could not open it');
     })();
     return () => { cancelled = true; };
   }, [client, target]);
