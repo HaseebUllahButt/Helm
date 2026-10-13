@@ -3,6 +3,22 @@ import type { Client, Mode, ModelList, ModelNote, Session, NativeControl } from 
 import { Icon, type IconName } from '../Icon';
 import { modelRing, nextInRing } from './chatKeys';
 
+/**
+ * Mark a sideways-scrolling row while something is still out of sight past
+ * its right edge, so the CSS can fade that edge instead of cutting a chip.
+ */
+const watchedRows = new WeakSet<HTMLElement>();
+function fadeWhenCut(row: HTMLElement | null) {
+  if (!row || watchedRows.has(row)) return;
+  watchedRows.add(row);
+  const check = () => row.toggleAttribute('data-more', row.scrollLeft + row.clientWidth < row.scrollWidth - 1);
+  row.addEventListener('scroll', check, { passive: true });
+  const watch = new ResizeObserver(check);
+  watch.observe(row);
+  new MutationObserver(check).observe(row, { childList: true, subtree: true, characterData: true });
+  check();
+}
+
 /** One thing you can change while the agent is running. */
 export interface Choice {
   id: string;
@@ -84,7 +100,7 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
     /** Fold whatever sheet is open: another picker beside these took the slot. */
     close: () => setOpen(null),
     chips: (
-      <span className="chips">
+      <span className="chips" ref={fadeWhenCut}>
         {groups.map((g) => (
           <button type="button"
             key={g.kind}

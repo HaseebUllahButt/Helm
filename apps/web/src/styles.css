@@ -1243,6 +1243,8 @@ pre.snippet {
   overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
 }
 .chips::-webkit-scrollbar { display: none; }
+/* More chips than fit: the last one fades out rather than being cut by the edge. */
+.chips[data-more] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
 .chip-pick {
   display: inline-flex; align-items: center; gap: 5px; width: auto; margin: 0; flex: none;
   padding: 4px 10px 4px 8px; font-size: var(--t-meta); line-height: 1.5; border-radius: 999px;
@@ -1262,9 +1264,10 @@ pre.snippet {
 /* Keep the running settings visible on phones too. The row can scroll for
    long provider model names instead of hiding every value behind an icon. */
 @media (max-width: 599px) {
-  .chip-pick { min-height: 36px; padding: 4px 8px; }
+  .chip-pick { min-height: 36px; padding: 4px 10px; }
   .chip-pick .chip-label { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
-  .chip-pick .cg svg { width: 14px; height: 14px; }
+  /* The words alone, so model, thinking and permissions fit beside the send button. */
+  .chip-pick:has(.chip-label) .cg { display: none; }
 }
 /* Account usage has its own row beneath the controls, at every width. */
 .slab-status { margin: 0 14px; padding: 8px 0 2px; min-width: 0; }
@@ -2658,8 +2661,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .row.rowx.tri-row .rowend { opacity: 0; }
 .row.rowx.tri-row:hover .rowend, .row.rowx.tri-row .rowend[aria-expanded="true"], .row.rowx.tri-row .rowend:focus-visible { opacity: 1; }
 @media (pointer: coarse) { .row.rowx.tri-row .rowend { opacity: 1; } }
-/* With a mouse the ⋯ needs only a small target, which gives the title and its status the width back. */
-@media (hover: hover) and (pointer: fine) { .row.rowx.tri-row .rowend { min-width: 26px; padding: 0 3px; margin-right: 3px; } }
+/* With a mouse the ⋯ holds no column of its own: it shows in the agent
+   mark's place on hover, and the title has the whole width the rest of the time. */
+@media (hover: hover) and (pointer: fine) {
+  .row.rowx.tri-row .rowend { position: absolute; right: 6px; bottom: 6px; height: 24px; min-width: 24px; padding: 0 3px; }
+  .row.rowx.tri-row.slim .rowend { bottom: auto; top: 50%; transform: translateY(-50%); }
+  .row.rowx.tri-row:is(:hover, :has(.rowend[aria-expanded="true"]), :has(.rowend:focus-visible)) .tri-mark { opacity: 0; }
+}
 .tri-top, .tri-bot { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: var(--t-micro); color: var(--mutedfg); }
 .tri-top { gap: 10px; }
 .tri-top svg, .tri-bot svg { flex: none; opacity: .8; }

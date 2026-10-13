@@ -222,7 +222,7 @@ test('files can be marked viewed, and a failed diff can be retried', async () =>
 
 test('a clean folder and an unreachable history each say what is going on', async () => {
   await page.evaluate(()=>{window.graphFails = 1;window.showGit('clean')});
-  assert.equal(await page.getByRole('tab',{name:'Graph',exact:true}).getAttribute('aria-selected'),'true');
+  await page.getByRole('tab',{name:'Graph',exact:true,selected:true}).waitFor();
   assert.equal(await page.getByRole('tab',{name:'Changes',exact:true}).count(),1,'no zero count on a clean folder');
   await page.getByText('Could not load Git history').waitFor();
   await page.getByText('git is busy').waitFor();
