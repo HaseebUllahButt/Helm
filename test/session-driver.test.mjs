@@ -1253,9 +1253,11 @@ test('work helm did not start can be filed away or struck off', async () => {
 
   // A thread read out of a CLI's own history has no record and no process:
   // "delete" means stop listing it, and nothing else.
-  assert.deepEqual(sessions.marks(), {});
+  // (Chats deleted earlier in this file left their CLI copies struck off.)
+  const before = sessions.marks();
+  assert.equal(before['found:claude:abc123'], undefined);
   await sessions.kill('found:claude:abc123');
-  assert.deepEqual(sessions.marks(), { 'found:claude:abc123': 'removed' });
+  assert.deepEqual(sessions.marks(), { ...before, 'found:claude:abc123': 'removed' });
   sessions.archive('found:codex:def456', true);
   assert.equal(sessions.marks()['found:codex:def456'], 'archived');
 

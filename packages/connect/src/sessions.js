@@ -1214,7 +1214,9 @@ export class Sessions extends EventEmitter {
       for (const x of detected) {
         const id = `found:${x.engine}:${x.id}`;
         const mark = this.#marks.get(id);
-        if (mark === 'removed' || known.has(`${x.engine}:${x.id}`) || this.isDelegatedConversation(x.engine, x.id)) continue;
+        // Removed stays removed - unless it was used again in a terminal since.
+        const reused = mark === 'removed' && this.#removedAt.get(id) && x.updatedAt > this.#removedAt.get(id) + 60_000;
+        if ((mark === 'removed' && !reused) || known.has(`${x.engine}:${x.id}`) || this.isDelegatedConversation(x.engine, x.id)) continue;
         // A test's chat under /tmp is not one the owner had.
         if (scratchFolder(x.cwd)) continue;
         // A runtime pane without a native ID can still represent this CLI.
@@ -4480,9 +4482,13 @@ export class Sessions extends EventEmitter {
     // CLI's own transcript is its data, not helm's, and stays where it is.
     if (id.startsWith('found:')) return this.#mark(id, 'removed');
     const s = this.get(id);
-    if (s.nativeSocket) {
-      this.#marks.set(`found:codex:${s.engineSessionId}`, 'removed');
-      this.#removedAt.set(`found:codex:${s.engineSessionId}`, Date.now());
+    // The CLI keeps its own copy of the conversation, which the history scan
+    // would list again as a chat Helm did not start - a deleted chat (a quick
+    // one most of all) coming straight back. Deleting it here deletes that row
+    // too. An outside chat Helm only watched is left listable.
+    if (s.engineSessionId && !s.external) {
+      this.#marks.set(`found:${s.engine}:${s.engineSessionId}`, 'removed');
+      this.#removedAt.set(`found:${s.engine}:${s.engineSessionId}`, Date.now());
     }
     if (s.external) {
       // Close only Helm's monitor. The external CLI and its transcript are

@@ -268,7 +268,7 @@ test('what the driver reported and what the files say about one subagent make on
   driver.push('subagent.status', { id: 'toolu_hooked', status: 'working' });
   await sessions.nativeAgent(parent.id, 'quiet');
   assert.deepEqual(parent.nativeAgents, { toolu_hooked: 'working' }, 'the driver map is kept as it was');
-  assert.deepEqual(parent.nativeCards.map((a) => [a.id, a.status]), [['hooked', 'working'], ['quiet', 'working'], ['over', 'done']]);
+  assert.deepEqual(parent.nativeCards.map((a) => [a.id, a.status]), [['hooked', 'working'], ['over', 'done'], ['quiet', 'working']], 'started together: in name order, every time');
   assert.deepEqual(parent.team, { working: 2, blocked: 0, failed: 0 }, 'one subagent, counted once');
   assert.equal(sessions.hasActiveDelegations(parent.id), true);
 

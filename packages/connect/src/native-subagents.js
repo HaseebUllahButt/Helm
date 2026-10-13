@@ -215,7 +215,7 @@ export async function nativeSubagents(dir, { now = Date.now(), limit = MAX_AGENT
   for (const { id, info } of files.sort((a, b) => b.info.mtimeMs - a.info.mtimeMs).slice(0, limit)) {
     try { found.push(entry(id, await readAgent(dir, id, info), now, false)); } catch { /* vanished or unreadable */ }
   }
-  return found.sort((a, b) => a.startedAt - b.startedAt);
+  return found.sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
 }
 
 /** One subagent with its result and a short activity tail, or null. */
