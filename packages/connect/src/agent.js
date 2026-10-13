@@ -344,7 +344,7 @@ export class Daemon {
       rpc: (env, method, params, opts) =>
         hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
     });
-    this.sendEngine = new SendEngine({ network: () => loadNetwork() ?? this.net, presence: () => this.rosterState(),
+    this.sendEngine = new SendEngine({ network: () => loadNetwork() ?? this.net, presence: () => this.sendPresence(),
       rpc: (env, method, params, opts) => hubRpc(loadNetwork() ?? this.net, env, method, params, opts),
       emit: payload => this.#emit(E.SEND_UPDATE, payload),
     });
@@ -902,7 +902,16 @@ export class Daemon {
     return [...this.#links.values()].filter((l) => l.connected);
   }
 
+  // Send availability follows live hub routes; brain snapshots can be stale or absent.
+  sendPresence() {
+    if (!this.localOnline) return this.rosterState();
+    const reached = new Set([...this.localOnline.keys(), ...(this.mesh?.machines().keys() ?? [])]);
+    const net = loadNetwork() ?? this.net;
+    return Object.fromEntries(Object.keys(net.machines ?? {}).map(id => [id, { online: reached.has(id) }]));
+  }
+
   attachHub(hub) {
+    this.localOnline = hub.online;
     this.mesh = new HubMesh(loadNetwork, hub.meshChanged, hub.meshEvent, hub.meshSignal);
     hub.attachMesh(this.mesh);
   }

@@ -264,3 +264,30 @@ test('planning uses cached presence and a remembered target without hashing file
     assert.equal(plan.defaultTarget,'bb22');const done=await finished(f,source);const again=await f.engine.plan({path:source},'phone');assert.deepEqual(again.targets[0].sentBefore,{at:done.finishedAt,jobId:done.id});assert.equal(again.targets[0].destination,done.target.path);
   }finally {await f.close();}
 });
+
+test('daemon send planning follows a live hub connection without a brain snapshot, including disconnects', async () => {
+  const { createNetwork, describeSelf, machineToken } = await import('@helm/protocol/network');
+  const { startRelay } = await import('@helm/relay');
+  const { Daemon } = await import('../packages/connect/src/agent.js');
+  const dir = join(root, 'presence-daemon'); mkdirSync(dir); writeFileSync(join(dir, 'hello'), 'synthetic');
+  rmSync(join(process.env.HELM_DIR, 'snapshot.json'), { force: true });
+  const net = createNetwork({ name: 'Laptop' });
+  const target = 'bbbbbbbbbbbb';
+  net.machines[target] = { id: target, name: 'VM', addedAt: Date.now(), updatedAt: Date.now(), endpoints: [] };
+  describeSelf(net, { endpoints: ['http://127.0.0.1:1'] });
+  const hub = await startRelay({ port: 0, host: '127.0.0.1', dbFile: join(dir, 'hub.sqlite') });
+  const daemon = new Daemon({ advertiseLan: false }); daemon.attachHub(hub);
+  const engine = new SendEngine({ network: net, directory: join(dir, 'jobs'), presence: () => daemon.sendPresence() });
+  let ws;
+  try {
+    assert.equal(existsSync(join(process.env.HELM_DIR, 'snapshot.json')), false);
+    const plan = () => engine.plan({ path: dir }, net.self);
+    assert.equal((await plan()).targets.find(t => t.machineId === target).online, false);
+    ws = new WebSocket(`ws://127.0.0.1:${hub.server.address().port}/ws`, { headers: { authorization: `Bearer ${machineToken({ ...net, self: target })}` } });
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    assert.equal((await plan()).targets.find(t => t.machineId === target).online, true);
+    await new Promise(resolve => { ws.once('close', resolve); ws.close(); });
+    for (let i = 0; i < 50 && hub.online.has(target); i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal((await plan()).targets.find(t => t.machineId === target).online, false);
+  } finally { ws?.terminate(); await engine.stop(); daemon.mesh.stop(); await daemon.copyReceiver.stop(); hub.stop(); }
+});
