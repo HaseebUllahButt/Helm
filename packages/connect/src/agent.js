@@ -51,7 +51,7 @@ import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommit
 import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
 import { createGithubMonitor } from './github.js';
-import { agentCatalog, helmBrief } from './delegation.js';
+import { agentCatalog, markShown, helmBrief } from './delegation.js';
 import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
@@ -1514,7 +1514,8 @@ export class Daemon {
       case M.AGENT_LIST: {
         const profiles = p.refresh ? (await refreshProfiles()).profiles : await currentProfiles();
         const statuses = await authStatuses(profiles, { refresh: !!p.refresh });
-        this.cliAgents = await agentCatalog(profiles, statuses, { models: p.models !== false, credentials: true });
+        this.cliAgents = markShown(await agentCatalog(profiles, statuses, { models: p.models !== false, credentials: true }),
+          profiles, pickerPrefs().hidden);
         return { agents: this.cliAgents };
       }
 

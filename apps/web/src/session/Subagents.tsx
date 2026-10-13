@@ -16,6 +16,16 @@ const STATUS: Record<string, string> = {
 };
 const ACTIVE = ['blocked', 'working', 'starting'];
 const stateOf = (task: Session) => task.delegation?.status || task.status;
+/**
+ * The accounts new chats offer on this machine, plus the one this chat runs
+ * as in place of its account's usual row. An older machine does not say
+ * which those are, so it offers all of them.
+ */
+const offeredOf = (agents: CliAgent[], profileId?: string | null) => {
+  if (!agents.some((candidate) => 'shown' in candidate)) return agents;
+  const own = agents.find((candidate) => candidate.id === profileId && candidate.available);
+  return agents.filter((candidate) => candidate === own || candidate.shown && candidate.account !== own?.account);
+};
 
 /**
  * Account → model → task, then a live branch list beside the parent thread.
@@ -55,10 +65,11 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
   const ref = useDialog(() => { if (!busy) onClose(); }, !embedded);
   const fail = (at: string) => (failure: any) => setError({ text: failure?.message || String(failure), at });
   const bump = () => setRevision((count) => count + 1);
-  const agent = agents.find((candidate) => candidate.id === account);
-  const inheritedModel = agent?.engine === parent.engine ? parent.model || parent.engineModel || '' : '';
+  const offered = offeredOf(agents, parent.profileId);
+  const agent = offered.find((candidate) => candidate.id === account);
   const savedDefaults = agent?.subagentDefaults ?? catalog?.subagentDefaults ?? {};
-  const fallbackModel = inheritedModel || catalog?.default || agent?.defaultModel || '';
+  // What this machine starts the account on, the same as a new chat.
+  const fallbackModel = catalog?.default || agent?.defaultModel || '';
   const selectedModel = model === null ? savedDefaults.model || fallbackModel : model || fallbackModel;
   const belongsHere = (session: Session) => !session.archived && session.delegation?.parentId === parent.id;
   const children = sessions.filter(belongsHere);
@@ -78,7 +89,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
   // list for the chosen account: its models, favorites and defaults. What
   // the account list carried paints first, the machine's answer replaces it.
   const options: ModelList | null = agent ? {
-    default: agent.defaultModel ?? null, models: agent.models ?? (inheritedModel ? [inheritedModel] : []), labels: agent.labels,
+    default: agent.defaultModel ?? null, models: agent.models ?? [], labels: agent.labels,
     ...catalog,
     prefs: { ...catalog?.prefs, default: savedDefaults.model ?? null, approved: catalog?.prefs?.approved ?? [] },
     defaults: { ...(catalog?.defaults ?? agent.defaults), ...savedDefaults },
@@ -117,7 +128,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     });
   };
   const controls = Controls({ options, session: picked, busy, onPick: pick, ...prefs, onDefault, defaultsFor: 'subagents',
-    modelFallback: { id: '', label: inheritedModel ? 'Inherit parent model' : 'Use account default', hint: fallbackModel || 'Use the CLI default',
+    modelFallback: { id: '', label: `Default on ${env.name}`, hint: fallbackModel ? options?.labels?.[fallbackModel] ?? fallbackModel : 'the CLI picks',
       active: model === '' || model === null && !savedDefaults.model } });
   const accountName = (candidate: CliAgent) => candidate.label || candidate.id;
 
@@ -163,10 +174,11 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
       // Only the chosen account needs a catalog, loaded independently below.
       const listing = await client.rpc<{ agents: CliAgent[] }>(env.id, 'agent.list', { refresh, models: false }, 60_000);
       setAgents(listing.agents);
-      setAccount((current) => listing.agents.some((candidate) => candidate.id === current && candidate.available)
-        ? current : (listing.agents.find((candidate) => candidate.id === parent.profileId && candidate.available)?.id
-          ?? listing.agents.find((candidate) => candidate.available && candidate.engine === parent.engine)?.id
-          ?? listing.agents.find((candidate) => candidate.available)?.id ?? ''));
+      const offer = offeredOf(listing.agents, parent.profileId);
+      setAccount((current) => offer.some((candidate) => candidate.id === current && candidate.available)
+        ? current : (offer.find((candidate) => candidate.id === parent.profileId && candidate.available)?.id
+          ?? offer.find((candidate) => candidate.available && candidate.engine === parent.engine)?.id
+          ?? offer.find((candidate) => candidate.available)?.id ?? ''));
     } catch (failure: any) { fail('form')(failure); }
     finally { setLoading(false); }
   };
@@ -416,15 +428,15 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
             </span>
           </div>
           {choosingAccount ? <ChoiceSheet title={`CLI account on ${env.name}`} current={account} busy={busy}
-            choices={agents.map((candidate) => ({ id: candidate.id, label: `${accountName(candidate)} · ${candidate.engine}`,
+            choices={offered.map((candidate) => ({ id: candidate.id, label: `${accountName(candidate)} · ${candidate.engine}`,
               hint: candidate.auth === 'authenticated' ? 'signed in' : candidate.auth === 'unauthenticated' ? 'signed out' : 'sign-in not checked' }))}
-            onPick={(id) => { setChoosingAccount(false); if (agents.find((candidate) => candidate.id === id)?.available) setAccount(id); }}
+            onPick={(id) => { setChoosingAccount(false); if (offered.find((candidate) => candidate.id === id)?.available) setAccount(id); }}
             onClose={() => setChoosingAccount(false)}
             footer={<button type="button" className="moderow more" disabled={loading} onClick={() => void loadAgents(true)}>
               <span className="grow"><span className="rt">{loading ? 'Looking again…' : 'Look for accounts again'}</span></span></button>} />
             : controls.sheet}
           <p className="delegation-inherit note">{model ? 'Model chosen for this task.' : model === null && savedDefaults.model
-            ? 'Using your subagent default.' : inheritedModel ? 'Using the parent’s model.' : 'Using this account’s defaults.'}</p>
+            ? 'Using your subagent default.' : `Using the default on ${env.name}.`}</p>
           {agent && !agent.modes.length && <p className="note">This CLI controls its own permissions.</p>}
           {errorBox('form')}
           <div className="delegation-start">

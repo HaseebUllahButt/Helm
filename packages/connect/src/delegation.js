@@ -33,6 +33,28 @@ export async function agentCatalog(profiles, statuses, { models = true, credenti
 }
 
 /**
+ * Mark the rows the new-chat picker shows on this machine: one per account,
+ * its plainest signed-in alias, and none for an account hidden there. A
+ * helper is offered that same short list, not every alias the shell defines.
+ */
+export function markShown(agents, profiles, hidden = []) {
+  const off = new Set(hidden);
+  const byId = new Map(profiles.map((p) => [p.id, p]));
+  const best = new Map();
+  for (const row of agents) {
+    const p = byId.get(row.id);
+    if (!p || !row.available) continue;
+    const key = accountKey(p);
+    if (off.has(key)) continue;
+    const now = best.get(key);
+    if (!now || (p.args ?? []).length < (byId.get(now.id).args ?? []).length) best.set(key, row);
+  }
+  const picked = new Set(best.values());
+  for (const row of agents) row.shown = picked.has(row);
+  return agents;
+}
+
+/**
  * The account's cheapest capable model, for mechanical helper work. Lists
  * come newest first (models.js), so the first match is the current small
  * model, not a retired one. Null when the catalog has no small tier - the

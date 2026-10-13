@@ -1483,10 +1483,11 @@ export class Sessions extends EventEmitter {
     }
     const auth = (await authStatuses([profile])).get(profile.id);
     if (auth === 'unauthenticated') throw new Error(`${profile.id} is signed out; log in through its CLI first`);
-    // Model IDs belong to their provider. Same-provider helpers follow the
-    // parent's selected/reported model unless the caller chose an override.
+    // A helper starts on the model chosen for it, else the helper default,
+    // else what this machine starts the account on (start() below) - never
+    // the parent's model, which is the parent's choice, not the account's.
     const defaults = subagentPrefs(profile);
-    model ||= defaults.model || (profile.engine === parent?.engine ? parent.model || parent.engineModel || undefined : undefined);
+    model ||= defaults.model || undefined;
     effort ||= defaults.effort;
     const selectedMode = delegationMode(profile.engine, parent?.mode, mode, defaults.mode || startPrefs(profile)?.mode, parent?.engine);
     const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',

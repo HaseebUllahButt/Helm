@@ -75,8 +75,11 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       (window.calls ??= []).push({method,params});
       if(method==='session.list') return {sessions:[]};
       if(method==='agent.list') return {agents:[
-        {id:'other',engine:'claude',label:'Other account',available:true,auth:'authenticated',modes:[]},
-        {id:'parent-account',engine:'codex',label:'Parent account',available:true,auth:'authenticated',modes:[{id:'ask',label:'Ask before acting'}],defaults:{effort:'low',mode:'ask'},subagentDefaults:defaults}
+        {id:'other',engine:'claude',account:'a1',label:'Other account',available:true,auth:'authenticated',modes:[],shown:true},
+        {id:'other-alias',engine:'claude',account:'a1',label:'Other alias',available:true,auth:'authenticated',modes:[],shown:false},
+        {id:'hidden-one',engine:'grok',account:'a3',label:'Hidden account',available:true,auth:'authenticated',modes:[],shown:false},
+        {id:'parent-plain',engine:'codex',account:'a2',label:'Parent plain alias',available:true,auth:'authenticated',modes:[],shown:true},
+        {id:'parent-account',engine:'codex',account:'a2',label:'Parent account',available:true,auth:'authenticated',modes:[{id:'ask',label:'Ask before acting'}],defaults:{effort:'low',mode:'ask'},subagentDefaults:defaults,shown:false}
       ]};
       if(method==='model.list') {
         if(first) {first=false; return new Promise(resolve=>window.releaseCatalog=()=>resolve({...catalog(),refreshing:true,models:['parent-model']}));}
@@ -108,14 +111,20 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       await view.addScriptTag({content:bundle.outputFiles[0].text});
       await view.getByRole('button',{name:'CLI account: Parent account'}).waitFor();
       await view.getByLabel('Task',{exact:true}).fill('Inspect this task');
-      await view.getByRole('button',{name:/^model:/}).click();
-      await view.getByRole('option',{name:/^Inherit parent model/}).waitFor();
-      assert.equal(await view.getByRole('option',{name:/^Inherit parent model/}).getAttribute('aria-selected'),'true');
       assert.equal(await view.evaluate(()=>window.calls.find(c=>c.method==='agent.list').params.models),false);
       assert.equal(await view.getByRole('button',{name:'Start subagent'}).isEnabled(),true);
+      // Only what new chats offer here, with this chat's own alias in place of its account's usual row.
+      await view.getByRole('button',{name:'CLI account: Parent account'}).click();
+      assert.deepEqual(await view.getByRole('option').evaluateAll(rows=>rows.map(row=>row.textContent.split(' · ')[0])),
+        ['Other account','Parent account']);
       await view.getByRole('button',{name:'close',exact:true}).click();
       assert.equal(await view.evaluate(()=>window.calls.filter(c=>c.method==='session.delegate').length),0);
       await view.evaluate(()=>window.releaseCatalog());
+      await view.getByRole('button',{name:/^model:/}).click();
+      await view.getByRole('option',{name:/^Default on Laptop/}).waitFor();
+      assert.equal(await view.getByRole('option',{name:/^Default on Laptop/}).getAttribute('aria-selected'),'true');
+      assert.equal(await view.getByRole('option',{name:/^Inherit/}).count(),0);
+      await view.getByRole('button',{name:'close',exact:true}).click();
       await view.getByRole('button',{name:/^thinking:/}).waitFor();
       await view.getByRole('button',{name:/^model:/}).click();
       await view.getByRole('checkbox',{name:'Favorite Helper Model'}).waitFor();
@@ -136,23 +145,23 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       await view.getByRole('button',{name:/^model:/}).click();
       await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
       await view.evaluate(()=>{window.failSave=true;});
-      await view.getByRole('button',{name:'Use Inherit parent model by default for subagents'}).click();
+      await view.getByRole('button',{name:'Use Default on Laptop by default for subagents'}).click();
       await view.getByRole('alert').filter({hasText:'Could not save helper default'}).waitFor();
       await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
       await view.evaluate(()=>{window.failSave=false;});
-      await view.getByRole('button',{name:'Use Inherit parent model by default for subagents'}).click();
-      await view.getByRole('button',{name:'Inherit parent model is the default for subagents'}).waitFor();
+      await view.getByRole('button',{name:'Use Default on Laptop by default for subagents'}).click();
+      await view.getByRole('button',{name:'Default on Laptop is the default for subagents'}).waitFor();
       await view.getByRole('button',{name:'Use Helper Model by default for subagents'}).click();
       await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
-      await view.getByRole('option',{name:/^Inherit parent model/}).click();
+      await view.getByRole('option',{name:/^Default on Laptop/}).click();
       await view.getByRole('button',{name:/^thinking:/}).click();
       await view.getByRole('button',{name:'Use high by default for subagents'}).click();
       await view.getByRole('button',{name:'high is the default for subagents'}).waitFor();
       await view.getByRole('button',{name:'close',exact:true}).click();
-      await view.getByLabel('Task',{exact:true}).fill('Launch on parent model');
+      await view.getByLabel('Task',{exact:true}).fill('Launch on the machine default');
       await view.getByRole('button',{name:'Start subagent'}).click();
       assert.deepEqual(await view.evaluate(()=>JSON.parse(JSON.stringify(window.calls.find(c=>c.method==='session.delegate').params))),
-        {id:'parent',profileId:'parent-account',model:'parent-model',task:'Launch on parent model'});
+        {id:'parent',profileId:'parent-account',model:'normal-model',task:'Launch on the machine default'});
     } finally { await view.close(); }
   }
 });

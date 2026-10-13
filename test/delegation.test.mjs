@@ -120,8 +120,8 @@ test('credential diagnostics preserve current modes and never publish token valu
   }
 });
 
-test('helpers inherit only their provider parent model; explicit and saved defaults win', async t => {
-  const { saveSubagentPrefs } = await import('../packages/connect/src/settings.js');
+test('a helper starts on the machine default for its account, never the parent model; explicit and saved helper defaults win', async t => {
+  const { saveSubagentPrefs, saveModelPrefs } = await import('../packages/connect/src/settings.js');
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main', model: 'parent-model' });
   const launch = async (profileId, extra = {}) => {
@@ -129,14 +129,13 @@ test('helpers inherit only their provider parent model; explicit and saved defau
     drivers.get(session.id).finish();
     return session;
   };
-  const inherited = await launch('codex-main');
-  assert.equal(inherited.model, 'parent-model');
-  assert.equal(inherited.delegation.requestedModel, 'parent-model');
-  assert.notEqual((await launch('claude-main')).model, 'parent-model');
+  const plain = await launch('codex-main');
+  assert.notEqual(plain.model, 'parent-model');
+  assert.equal(plain.delegation.requestedModel, null);
+  saveModelPrefs(profiles[0], { default: 'machine-default' });
+  t.after(() => saveModelPrefs(profiles[0], { default: null }));
+  assert.equal((await launch('codex-main')).model, 'machine-default');
   assert.equal((await launch('codex-main', { model: 'override-model' })).model, 'override-model');
-  parent.model = null;
-  parent.engineModel = 'provider-reported-model';
-  assert.equal((await launch('codex-main')).model, 'provider-reported-model');
   saveSubagentPrefs(profiles[0], { model: 'helper-default', effort: 'high' });
   t.after(() => saveSubagentPrefs(profiles[0], { model: null, effort: null }));
   const saved = await launch('codex-main');
@@ -146,7 +145,22 @@ test('helpers inherit only their provider parent model; explicit and saved defau
   assert.equal(explicit.model, 'explicit');
   assert.equal(explicit.effort, 'low');
   saveSubagentPrefs(profiles[0], { model: null });
-  assert.equal((await launch('codex-main')).model, 'provider-reported-model');
+  assert.equal((await launch('codex-main')).model, 'machine-default');
+});
+
+test('helpers are offered the accounts new chats show: one row per account, hidden ones left out', async () => {
+  const { markShown } = await import('../packages/connect/src/delegation.js');
+  const list = [
+    { id: 'codex', engine: 'codex', cmd: 'codex' },
+    { id: 'codexx', engine: 'codex', cmd: 'codex', args: ['--yolo'] },
+    { id: 'claude-p', engine: 'claude', cmd: 'claude', env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' } },
+    { id: 'claudea', engine: 'claude', cmd: 'claude', args: ['--x'], env: { CLAUDE_CONFIG_DIR: '~/.claude-personal' } },
+    { id: 'grok', engine: 'grok', cmd: 'grok' },
+  ];
+  const rows = list.map((p) => ({ id: p.id, available: p.id !== 'claude-p' }));
+  markShown(rows, list, ['grok||']);
+  assert.deepEqual(rows.filter((r) => r.shown).map((r) => r.id), ['codex', 'claudea'],
+    'the plainest alias, a signed-in one when the plainest is signed out, nothing hidden');
 });
 
 test('Codex delegates to Claude with the selected model, folder, lineage and durable result', async (t) => {

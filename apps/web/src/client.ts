@@ -175,6 +175,8 @@ export interface CliAgent {
   defaultMode?: string | null;
   defaults?: ModelList['defaults'];
   subagentDefaults?: SubagentDefaults;
+  /** One row per account the new-chat picker shows; absent from older machines. */
+  shown?: boolean;
 }
 
 export interface DelegationResult {
