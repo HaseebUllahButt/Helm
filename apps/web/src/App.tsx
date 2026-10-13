@@ -26,6 +26,7 @@ import { loadDraft, saveDraft } from './draftStore';
 import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
 import { Subagents } from './session/Subagents';
+import { NativeAgentView } from './session/NativeAgentView';
 import { plainProblem } from './session/problem';
 import { ExternalSessionNotice } from './session/ExternalSessionNotice';
 import { useSessionLog } from './session/useSessionLog';
@@ -45,7 +46,7 @@ import { brainHost } from '@helm/protocol/brain-host';
 import {
   Client, login, validMachineName, MACHINE_NAME_RULE, LOOPBACK_HOST, isCleartext, CLEARTEXT_NOTE,
   type Environment, type Profile, type Session, type DirEntry, type Message, type ModelList, type NativeControl, type ModelPrefs, type ModelNote,
-  type InventorySession, type Device, type Project, type MediaRoot, type MediaEntry,
+  type InventorySession, type Device, type Project, type MediaRoot, type MediaEntry, type NativeAgent,
 } from './client';
 import { money, bytes, busyWord, needsAttention, runningThread, settledThread, unknownThread, listedThread } from './format';
 import { loadModels, saveModels } from './modelCache';
@@ -337,7 +338,9 @@ type MainView =
   | { kind: 'app-settings' }
   // The media a nas shares, browsed and played - only ever offered on one.
   | { kind: 'media' }
-  | { kind: 'session'; session: Session; reviewChildren?: number };
+  | { kind: 'session'; session: Session; reviewChildren?: number }
+  // One of Claude Code's own subagents, opened from its chat; read only.
+  | { kind: 'native-agent'; parent: Session; agent: NativeAgent };
 
 /** A request answered elsewhere, or a session that just started waiting -
     the toast the sidebar cannot show while it is hidden behind a session. */
@@ -1558,6 +1561,8 @@ function Shell({ client, conn, onSignOut }: {
           </Suspense>
         ) : view.kind === 'media' ? (
           <MediaView key={env.id} client={client} env={env} onBack={back} />
+        ) : view.kind === 'native-agent' ? (
+          <NativeAgentView key={`${env.id}:${view.parent.id}:${view.agent.id}`} client={client} env={env} parent={view.parent} agent={view.agent} onBack={back} />
         ) : view.kind === 'settings' ? (
           <EnvSettings
             client={client} env={env} onBack={back}
@@ -1629,6 +1634,7 @@ function Shell({ client, conn, onSignOut }: {
             onBack={back}
             onSettings={() => navigate([{ kind: 'brain' }], env.id)}
             onOpenSession={(s) => openRelatedSession(env.id, s)}
+            onOpenNative={(agent) => push({ kind: 'native-agent', parent: view.session, agent })}
             onOpenMachineSession={openSession}
             onClosed={() => { if (view.session.brain) dropBrain(env.id); loadSessions(env.id); back(); }}
             onArchived={() => { loadSessions(env.id); back(); }}
@@ -1642,6 +1648,7 @@ function Shell({ client, conn, onSignOut }: {
             session={(sessions[env.id] ?? []).find((s) => s.id === view.session.id) ?? view.session}
             terminals={(sessions[env.id] ?? []).filter(ownTerminal).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))}
             onSwitch={(s) => restate([...nav.current.stack.slice(0, -1), { kind: 'session', session: s }])}
+            onOpenNative={(agent) => push({ kind: 'native-agent', parent: view.session, agent })}
             onNewTerminal={async () => {
               const r = await client.rpc<{ session: Session }>(env.id, 'session.start', { cwd: '~', profileId: 'shell' }, 45_000);
               loadSessions(env.id);
@@ -4666,11 +4673,12 @@ function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask }: {
+function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask, onOpenNative }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account. */
   machines?: Environment[];
   onSendTask?: () => void;
+  onOpenNative?: (agent: NativeAgent) => void;
   /** This machine's open terminals, for the tabs above one. */
   terminals?: Session[];
   onSwitch?: (s: Session) => void;
@@ -5014,7 +5022,8 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
         ))}
       </div>
 
-      {agentsOpen && <Subagents nativeOnly client={client} env={env} parent={session} onClose={() => setAgentsOpen(false)} />}
+      {agentsOpen && <Subagents nativeOnly client={client} env={env} parent={session} onClose={() => setAgentsOpen(false)}
+        onOpenNative={onOpenNative ? (agent) => { setAgentsOpen(false); onOpenNative(agent); } : undefined} />}
 
       {/* Every open terminal on this machine, one tap apart. */}
       {isShell && terminals.length > 1 && (

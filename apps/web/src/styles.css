@@ -3254,3 +3254,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-inherit { margin: 0; font-size: var(--t-micro); }
 .chip-pick.account .mark { width: auto; height: auto; padding: 0; background: none; border-radius: 0; }
 .chip-pick.account .mark svg { width: 13px; height: 13px; }
+
+/* A Claude Code subagent opened as a chat: read only, so a quiet line
+   stands where the composer would be. */
+.native-foot {
+  margin: 0; padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line); color: var(--text-dim); font-size: 13px; text-align: center;
+}
+.native-foot b { color: var(--text); font-weight: 500; }
+.native-error { margin: 8px 16px 0; }
+.crumb h1.crumb-title { cursor: default; }

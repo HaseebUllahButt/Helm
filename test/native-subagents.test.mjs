@@ -212,6 +212,18 @@ test('the team counts native subagents beside delegated children, once each', as
   assert.equal(parent.team.working, 2);
   assert.equal(updates.length, 1);
 
+  // Opened as a chat: the whole conversation, drawn from its own file.
+  const full = await sessions.nativeAgent(parent.id, 'live', { full: true });
+  assert.equal(full.more, false);
+  assert.deepEqual(full.events.map((e) => [e.seq, e.type, e.kind ?? e.text ?? e.name]), [
+    [1, 'turn.start', 'Dig'], [2, 'item.start', 'tool'], [3, 'item.done', undefined],
+  ], 'a working subagent leaves its turn open');
+  assert.equal(full.events[1].name, 'Bash');
+  const done = await sessions.nativeAgent(parent.id, 'over', { full: true });
+  assert.deepEqual(done.events.map((e) => e.type), ['turn.start', 'item.start', 'item.delta', 'item.done', 'turn.done']);
+  assert.equal(done.events[2].text, 'Done.');
+  assert.equal(updates.length, 1, 'reading it whole changes nothing');
+
   // Delegated children still list as Helm sessions, untouched.
   const listed = await sessions.list({ parentId: parent.id });
   assert.deepEqual(listed.map((s) => s.id), [child.id]);

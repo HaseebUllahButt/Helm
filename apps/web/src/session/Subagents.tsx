@@ -32,8 +32,10 @@ const offeredOf = (agents: CliAgent[], profileId?: string | null) => {
  * `nativeOnly` is for a terminal thread Helm cannot delegate from: just the
  * Claude Code subagents it ran, with no task form.
  */
-export function Subagents({ client, env, parent, onClose, onOpen, embedded = false, reviewAttention = false, onNativeAttention, nativeOnly = false }: {
+export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, embedded = false, reviewAttention = false, onNativeAttention, nativeOnly = false }: {
   client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (session: Session) => void;
+  /** Open one of Claude Code's own subagents as a read-only chat. */
+  onOpenNative?: (agent: NativeAgent) => void;
   embedded?: boolean; reviewAttention?: boolean; onNativeAttention?: () => void; nativeOnly?: boolean;
 }) {
   const [agents, setAgents] = useState<CliAgent[]>([]);
@@ -369,8 +371,9 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
     const detail = open && nativeDetail?.id === agent.id ? nativeDetail : null;
     return <li key={key} className={`delegation-branch native${open ? ' selected' : ''}`}>
       <div className="delegation-row">
-        <button type="button" className="delegation-task" title="Started by Claude Code itself; read only"
-          aria-expanded={open} aria-controls={`task-detail-${key}`} onClick={toggle}>
+        <button type="button" className="delegation-task" title={onOpenNative ? 'Open subagent conversation (read only)' : 'Started by Claude Code itself; read only'}
+          aria-expanded={onOpenNative ? undefined : open} aria-controls={onOpenNative ? undefined : `task-detail-${key}`}
+          onClick={() => onOpenNative ? onOpenNative(agent) : toggle()}>
           <EngineMark engine="claude" />
           <span className="grow"><b>{agent.title}</b>
             <small><span className="native-badge">native</span>{[agent.agentType || 'subagent', agent.model || 'Claude default', agent.branch].filter(Boolean).join(' · ')}</small></span>
@@ -390,6 +393,9 @@ export function Subagents({ client, env, parent, onClose, onOpen, embedded = fal
           <summary>Recent activity</summary>
           <ol>{detail.activity.map((line, index) => <li key={index}>{line}</li>)}</ol>
         </details>}
+        {onOpenNative && <div className="delegation-actions">
+          <button type="button" className="ghost" onClick={() => onOpenNative(agent)}>Open conversation</button>
+        </div>}
         <p className="note">Claude Code started this subagent inside the chat. Helm shows it here but cannot message or stop it.</p>
         {errorBox(`native:${agent.id}`)}
       </div>}

@@ -1,6 +1,6 @@
 import { useDismiss } from '../useDismiss';
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
-import { Client, type Environment, type Session, type ModelList } from '../client';
+import { Client, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
 import { useNow, waitingSince } from '../useNow';
 import { Composer } from './Composer';
 import { looksLikeImage, prepareImage } from './image';
@@ -51,7 +51,7 @@ type FailedSend = { id: string; body: string; references: string[]; error: strin
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
-export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onOpenMachineSession, reviewChildren }: {
+export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onOpenMachineSession, onOpenNative, reviewChildren }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account and so apply on all of them. */
   machines?: Environment[];
@@ -66,6 +66,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   onSettings?: () => void;
   /** Open a branch, subagent, or its parent conversation. */
   onOpenSession?: (s: Session) => void;
+  /** Open one of Claude Code's own subagents as a read-only chat. */
+  onOpenNative?: (agent: NativeAgent) => void;
   onSendTask?: () => void;
   onOpenMachineSession?: (machineId: string, session: Session) => void;
 }) {
@@ -741,7 +743,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       </Composer>
 
       {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} onTab={setDetails} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
-        onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined} />}
+        onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined}
+        onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
       {editingQueue && <QueueEdit turn={editingQueue} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSave={async (text, attachments) => {
         if (await queueAction(editingQueue, 'session.queue-edit', { text, attachments })) setEditingQueue(null);
       }} />}

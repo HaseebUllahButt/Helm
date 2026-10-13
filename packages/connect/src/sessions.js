@@ -266,6 +266,45 @@ export function acceptImages(attachments) {
 const externalInput = (tool) => (tool.name === 'Bash' && tool.description
   ? { command: tool.input, description: tool.description } : tool.input);
 
+// The newest messages a native subagent's window shows; a long run is
+// thousands, and the end is what the owner opened it for.
+const NATIVE_MESSAGES = 600;
+const NATIVE_BYTES = 400_000;
+
+/**
+ * Messages read from a CLI's own files as the events a chat is drawn from,
+ * numbered from 1. `open` leaves the last turn running.
+ */
+export function transcriptEvents(messages, { open = false } = {}) {
+  const events = [];
+  let seq = 0, turnId = null, n = 0;
+  const push = (event) => events.push({ ...event, seq: ++seq });
+  const close = () => { if (turnId) push({ type: 'turn.done', turnId, status: 'ok' }); turnId = null; };
+  for (const m of messages) {
+    const at = Date.parse(m.at ?? '') || undefined;
+    if (m.role === 'user') {
+      close();
+      turnId = `native-${++n}`;
+      push({ type: 'turn.start', turnId, text: m.text ?? '', at });
+      continue;
+    }
+    if (!turnId) { turnId = `native-${++n}`; push({ type: 'turn.start', turnId, text: '', at }); }
+    if (m.text) {
+      const id = `native-${++n}`;
+      push({ type: 'item.start', id, turnId, kind: 'text' });
+      push({ type: 'item.delta', id, turnId, text: m.text });
+      push({ type: 'item.done', id, turnId, status: 'ok' });
+    }
+    for (const tool of m.tools ?? []) {
+      const id = `native-${++n}`;
+      push({ type: 'item.start', id, turnId, kind: 'tool', name: tool.name, input: externalInput(tool) });
+      push({ type: 'item.done', id, turnId, status: 'ok' });
+    }
+  }
+  if (!open) close();
+  return events;
+}
+
 export class Sessions extends EventEmitter {
   #index = new Map();
   /** paneId -> what the runtime last told us about a pane we do not own */
@@ -1320,15 +1359,27 @@ export class Sessions extends EventEmitter {
   }
 
   /** One of a Claude session's own subagents, with its result and recent activity. */
-  async nativeAgent(id, agentId) {
+  async nativeAgent(id, agentId, { full = false } = {}) {
     const s = this.get(id);
     if (s.engine !== 'claude') throw new Error('only Claude Code sessions have native subagents');
     await this.#refreshNative(s, { force: true });
     const card = s.nativeCards?.find((a) => a.id === agentId);
     if (!card) throw new Error('no such subagent');
-    const agent = await nativeSubagent(this.#native.get(s.id)?.dir, agentId);
+    const dir = this.#native.get(s.id)?.dir;
+    const agent = await nativeSubagent(dir, agentId);
     if (!agent) throw new Error('no such subagent');
-    return { agent: { ...agent, status: card.status } };
+    if (!full) return { agent: { ...agent, status: card.status } };
+    // The whole conversation, drawn like any chat: a read-only window onto
+    // the file Claude writes, re-read each time it is asked for.
+    const found = await readMessages({ engine: 'claude', path: join(dir, `agent-${agentId}.jsonl`), all: true, sidechain: true });
+    let from = found.length, bytes = 0;
+    while (from > 0 && found.length - from < NATIVE_MESSAGES) {
+      bytes += JSON.stringify(found[from - 1]).length;
+      if (bytes > NATIVE_BYTES && from < found.length) break;
+      from--;
+    }
+    const events = transcriptEvents(found.slice(from), { open: card.status === 'working' });
+    return { agent: { ...agent, status: card.status }, events, more: from > 0 };
   }
 
   /** Provider history must not rediscover a hidden task as an ordinary chat. */

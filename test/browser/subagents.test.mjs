@@ -650,3 +650,76 @@ test('a terminal thread lists its native subagents without a task form', async (
     assert.equal(await view.evaluate(() => window.calls.some(c => c.method === 'agent.list')), false);
   } finally { await view.close(); }
 });
+
+test('a native subagent opens as a read-only chat of its whole conversation', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React, { useState } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { Subagents } from './apps/web/src/session/Subagents';
+    import { NativeAgentView } from './apps/web/src/session/NativeAgentView';
+    const env = { id:'local', name:'Laptop', online:true, info:{} };
+    const card = { id:'c1', native:true, title:'Map the code', agentType:'Explore', model:'claude-opus-test', status:'working',
+      startedAt:1, updatedAt:2, branch:null, toolUseId:null, last:'Grep: needle' };
+    const parent = { id:'parent', title:'Fix the login bug', cwd:'/project', engine:'claude', status:'working', nativeCards:[card] };
+    let reads = 0;
+    const events = () => {
+      const out = [
+        { seq:1, type:'turn.start', turnId:'native-1', text:'Find where the login form is checked.' },
+        { seq:2, type:'item.start', turnId:'native-1', id:'native-2', kind:'text' },
+        { seq:3, type:'item.delta', turnId:'native-1', id:'native-2', text:'Looking through the **form code**.' },
+        { seq:4, type:'item.done', turnId:'native-1', id:'native-2', status:'ok' },
+        { seq:5, type:'item.start', turnId:'native-1', id:'native-3', kind:'tool', name:'Grep', input:'needle' },
+        { seq:6, type:'item.done', turnId:'native-1', id:'native-3', status:'ok' },
+      ];
+      if (reads > 1) out.push(
+        { seq:7, type:'item.start', turnId:'native-1', id:'native-4', kind:'text' },
+        { seq:8, type:'item.delta', turnId:'native-1', id:'native-4', text:'It is checked in auth.js line 40.' },
+        { seq:9, type:'item.done', turnId:'native-1', id:'native-4', status:'ok' },
+        { seq:10, type:'turn.done', turnId:'native-1', status:'ok' });
+      return out;
+    };
+    const client = {
+      on: () => () => {},
+      rpc: async (envId, method, params) => {
+        (window.calls ??= []).push({ method, params });
+        if (method === 'session.list') return { sessions:[] };
+        if (method === 'session.native-agent') {
+          reads++;
+          const status = reads > 1 ? 'done' : 'working';
+          return { agent:{ ...card, status, updatedAt:reads, result:'', activity:[], task:'', worktree:null }, events:events(), more:false };
+        }
+        return { ok:true };
+      },
+    };
+    function App() {
+      const [open, setOpen] = useState(null);
+      return open ? <div className="main showing" style={{display:'flex',flexDirection:'column',height:'100vh'}}><NativeAgentView client={client} env={env} parent={parent} agent={open} onBack={() => setOpen(null)} /></div>
+        : <Subagents nativeOnly client={client} env={env} parent={parent} onClose={()=>{}} onOpenNative={setOpen} />;
+    }
+    createRoot(document.getElementById('root')).render(<App />);
+  `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true, write:false, format:'iife', jsx:'automatic' });
+  for (const width of [1280, 390]) {
+    const view = await browser.newPage({ viewport:{width,height:844} });
+    view.setDefaultTimeout(10_000);
+    try {
+      await view.setContent('<div id="root"></div>');
+      await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
+      await view.addScriptTag({ content:bundle.outputFiles[0].text });
+      // Its title opens it, the way a Helm task's title opens that chat.
+      await view.getByRole('button', {name:/Map the code/}).click();
+      await view.getByRole('heading', {name:'Map the code'}).waitFor();
+      await view.getByText('Find where the login form is checked.').waitFor();
+      await view.locator('strong').filter({hasText:'form code'}).waitFor();
+      assert.ok(await view.evaluate(() => window.calls.some(c => c.method === 'session.native-agent' && c.params.full === true && c.params.agentId === 'c1')));
+      // Still working, so it is read again until it settles.
+      await view.getByText('It is checked in auth.js line 40.').waitFor();
+      await view.locator('.sub').filter({hasText:/^Finished · Explore · claude-opus-test$/}).waitFor();
+      // Read only: no composer, and a line saying where to steer it.
+      assert.equal(await view.locator('textarea').count(), 0);
+      await view.locator('.native-foot').filter({hasText:'Fix the login bug'}).waitFor();
+      await capture(view, `native-chat-${width}.png`);
+      await view.getByRole('button', {name:'Back', exact:true}).click();
+      await view.getByRole('button', {name:/Map the code/}).waitFor();
+    } finally { await view.close(); }
+  }
+});

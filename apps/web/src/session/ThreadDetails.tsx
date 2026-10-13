@@ -1,4 +1,4 @@
-import { Client, type Environment, type Session } from '../client';
+import { Client, type Environment, type Session, type NativeAgent } from '../client';
 import { useDialog } from '../useDialog';
 import { Icon } from '../Icon';
 import { Subagents } from './Subagents';
@@ -7,10 +7,10 @@ import { Schedules } from './Schedules';
 
 export type DetailsTab = 'agents' | 'changes' | 'schedules';
 
-export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit, onClose, onOpen, reviewAttention = false, onNativeAttention }: {
+export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit, onClose, onOpen, onOpenNative, reviewAttention = false, onNativeAttention }: {
   client: Client; env: Environment; session: Session; tab: DetailsTab; onTab: (tab: DetailsTab) => void;
   git: GitStatus | null; reloadGit: () => void; onClose: () => void;
-  onOpen?: (session: Session) => void; reviewAttention?: boolean; onNativeAttention?: () => void;
+  onOpen?: (session: Session) => void; onOpenNative?: (agent: NativeAgent) => void; reviewAttention?: boolean; onNativeAttention?: () => void;
 }) {
   const ref = useDialog(onClose);
   const all: { id: DetailsTab; label: string }[] = [{ id: 'changes', label: 'Git' }, { id: 'agents', label: 'Agents' }, { id: 'schedules', label: 'Schedules' }];
@@ -44,7 +44,7 @@ export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit
           }}>{item.label}</button>)}
       </div>
       <div className="details-content" role="tabpanel" id="details-content" aria-labelledby={`details-${tab}`}>
-        {tab === 'agents' && <Subagents embedded onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} />}
+        {tab === 'agents' && <Subagents embedded onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} onOpenNative={onOpenNative} />}
         {tab === 'changes' && <p className="note">No Git repository available for this thread.</p>}
         {tab === 'schedules' && <Schedules client={client} env={env} session={session} />}
       </div>

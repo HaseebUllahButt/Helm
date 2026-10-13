@@ -473,11 +473,13 @@ function combine(a, b) {
   return { ...b, text: clip(text), tools: snapshot ? b.tools : [...a.tools, ...b.tools], thinking: a.thinking || b.thinking, at: a.at };
 }
 
-async function claudeMessages(path, { all = false } = {}) {
+async function claudeMessages(path, { all = false, sidechain = false } = {}) {
   const found = [];
   await readLines(path, (rec) => {
     if (rec.type !== 'user' && rec.type !== 'assistant') return;
-    if (rec.isSidechain) return; // a subagent's transcript, not this conversation
+    // A subagent's lines, not this conversation's - unless the file is the
+    // subagent's own transcript, where every line is one.
+    if (!!rec.isSidechain !== sidechain) return;
     const msg = rec.message;
     if (!msg) return;
 
@@ -824,11 +826,11 @@ export function databaseMessages(engine, path, sessionId, opts) {
 }
 
 /** Read a transcript as a list of messages, oldest first. */
-export async function messages({ engine, path, sessionId, limit = 120, all = false }) {
+export async function messages({ engine, path, sessionId, limit = 120, all = false, sidechain = false }) {
   if (!path || !existsSync(path)) return [];
   let found = [];
   if (engine === 'codex') found = await codexMessages(path, { all });
-  else if (engine === 'claude') found = await claudeMessages(path, { all });
+  else if (engine === 'claude') found = await claudeMessages(path, { all, sidechain });
   // The database engines read synchronously, and a long Devin chat is
   // hundreds of MB of stored snapshots - about a second of a frozen daemon
   // for the default window, nine for the whole history. Off the thread.
