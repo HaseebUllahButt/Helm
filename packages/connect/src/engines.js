@@ -170,19 +170,6 @@ export const ENGINES = {
       nonInteractiveFlags: ['-p', '--print', '--mode'],
     },
   },
-  rovo: {
-    id: 'rovo',
-    label: 'Rovo Dev',
-    bin: 'rovo',
-    defaultHome: '~/.rovodev',
-    resumeArgs: (id) => ['--restore', id],
-    // `rovo acp` is a verified ACP endpoint (drivers/rovo.js).
-    driver: 'rovo',
-    proc: {
-      names: ['rovo'],
-      nonInteractiveSub: ['acp', 'login', 'auth'],
-    },
-  },
   agy: {
     id: 'agy',
     label: 'Antigravity CLI',

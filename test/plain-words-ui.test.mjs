@@ -75,7 +75,7 @@ const place = (s) => needsAttention(s) ? 'needs you' : runningThread(s) ? 'runni
   : unknownThread(s) ? 'status unavailable' : 'neither';
 
 test('every provider is Running while busy, Needs you when blocked, and Done only when idle', () => {
-  for (const engine of ['devin', 'opencode', 'opencode2', 'agy', 'antigravity', 'pi', 'omp', 'cursor', 'grok', 'codex', 'claude', 'rovo', 'gemini', 'kimi', 'muse']) {
+  for (const engine of ['devin', 'opencode', 'opencode2', 'agy', 'antigravity', 'pi', 'omp', 'cursor', 'grok', 'codex', 'claude', 'gemini', 'kimi', 'muse']) {
     assert.ok(PROVIDERS.includes(engine), `${engine} is checked`);
   }
   for (const engine of PROVIDERS) {

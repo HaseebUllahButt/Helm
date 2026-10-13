@@ -26,7 +26,7 @@ async function until(fn, ms = 10000) {
 }
 
 test('normal interactive commands integrate; scripts, auth, app-server and desktop retain their provider path', () => {
-  for (const [engine, args] of [['claude', []], ['claude', ['--model', 'fable']], ['claude', ['--resume', 'native-id']], ['codex', ['--yolo']], ['codex', ['resume', 'native-id']], ...['pi', 'omp', 'devin', 'opencode', 'opencode2', 'grok', 'cursor', 'rovo', 'agy', 'gemini', 'kimi', 'muse'].map(engine => [engine, []])]) {
+  for (const [engine, args] of [['claude', []], ['claude', ['--model', 'fable']], ['claude', ['--resume', 'native-id']], ['codex', ['--yolo']], ['codex', ['resume', 'native-id']], ...['pi', 'omp', 'devin', 'opencode', 'opencode2', 'grok', 'cursor', 'agy', 'gemini', 'kimi', 'muse'].map(engine => [engine, []])]) {
     assert.equal(interactiveLaunch(engine, args, {}, true), true);
   }
   for (const [engine, args] of [['claude', ['-p', 'hello']], ['claude', ['auth', 'status']], ['claude', ['--desktop']], ['codex', ['app-server', '--stdio']], ['codex', ['exec', 'hello']], ['codex', ['login']], ['codex', ['cloud', 'list']], ['codex', ['--version']], ['codex', ['-V']], ['pi', ['--mode', 'rpc']], ['omp', ['--mode', 'json']], ['opencode', ['acp']], ['opencode2', ['run', 'hello']], ['devin', ['acp']], ['grok', ['agent', 'stdio']], ['gemini', ['--experimental-acp']], ['cursor', ['--print=hello']], ['muse', ['login']], ['shell', []]]) {

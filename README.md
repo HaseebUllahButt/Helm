@@ -306,7 +306,7 @@ Helm's chat interface and in Codex's terminal. Local desktop threads are covered
 when that app uses the same reachable daemon and exposes direct input.
 
 For Claude Code and the other supported terminal CLIs (Pi, OMP, Devin,
-OpenCode 1/2, Grok, Cursor, Rovo, Antigravity CLI, Gemini, Kimi and Muse),
+OpenCode 1/2, Grok, Cursor, Antigravity CLI, Gemini, Kimi and Muse),
 Helm puts a small launcher for each installed command in `~/.helm/bin` and
 adds that folder to the front of PATH in your shell's startup file (bash, zsh
 or fish). Nothing of the CLI's own is replaced: each launcher finds the real

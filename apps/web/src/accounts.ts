@@ -29,7 +29,7 @@ export function accountsFrom(profiles: Profile[]): Account[] {
     // daemon computes the same key, which is what its model prefs index by.
     const key = p.account ?? [p.engine, home ?? '', [...(p.envFrom ?? [])].sort().join(',')].join('|');
     const leaf = home?.split('/').pop() ?? '';
-    const suffix = leaf.replace(/^\.?(claude|codex|opencode2|opencode|devin|config|grok|cursor|rovodev|gemini|kimi-code|kimi|muse|omp|pi|agent)-?/, '');
+    const suffix = leaf.replace(/^\.?(claude|codex|opencode2|opencode|devin|config|grok|cursor|gemini|kimi-code|kimi|muse|omp|pi|agent)-?/, '');
     const existing = by.get(key);
     if (existing) {
       existing.aliases.push(p.id);
@@ -47,7 +47,7 @@ export function accountsFrom(profiles: Profile[]): Account[] {
       profile: p, aliases: [p.id], prefs: p.prefs, defaults: p.defaults,
     });
   }
-  const order = ['claude', 'codex', 'opencode', 'opencode2', 'devin', 'grok', 'cursor', 'pi', 'omp', 'rovo', 'antigravity', 'agy', 'gemini', 'kimi', 'muse'];
+  const order = ['claude', 'codex', 'opencode', 'opencode2', 'devin', 'grok', 'cursor', 'pi', 'omp', 'antigravity', 'agy', 'gemini', 'kimi', 'muse'];
   const rank = (e: string) => { const i = order.indexOf(e); return i < 0 ? order.length : i; };
   return [...by.values()].sort((a, b) =>
     (rank(a.engine) - rank(b.engine)) || a.account.localeCompare(b.account));

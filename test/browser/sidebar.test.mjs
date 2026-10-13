@@ -526,7 +526,7 @@ test('opening the online brain validates the VM provider before entering the con
 });
 
 const PROVIDERS = ['devin', 'opencode', 'opencode2', 'agy', 'antigravity', 'pi', 'omp', 'cursor', 'grok', 'codex', 'claude',
-  'rovo', 'gemini', 'kimi', 'muse'];
+  'gemini', 'kimi', 'muse'];
 
 for (const width of [1280, 390]) test(`every provider stays Running until idle and only idle reaches Done at ${width}px`, async testContext => {
   const { page, boot } = await pageFor(testContext, { width, height: 900 });

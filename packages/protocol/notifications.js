@@ -1,7 +1,7 @@
 /** Short labels shared by push previews and the in-app notification. */
 const labels = {
   codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', opencode2: 'OpenCode 2',
-  devin: 'Devin', grok: 'Grok', cursor: 'Cursor', pi: 'Pi', omp: 'OMP', rovo: 'Rovo Dev',
+  devin: 'Devin', grok: 'Grok', cursor: 'Cursor', pi: 'Pi', omp: 'OMP',
   agy: 'Antigravity', antigravity: 'Antigravity', gemini: 'Gemini', kimi: 'Kimi', muse: 'Muse',
 };
 export const agentLabel = (engine) => labels[engine] || 'Your agent';

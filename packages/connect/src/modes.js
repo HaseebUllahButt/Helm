@@ -82,7 +82,6 @@ export const MODES = {
   // Pi and OMP run their tools without asking; approval lives in extension
   // dialogs, which arrive as permission requests whatever helm calls it -
   // so they carry no entry and the app shows no mode picker for them.
-  // Rovo's ACP surface has no verified mode vocabulary yet either.
 };
 
 export const modesFor = (engine) => MODES[engine] ?? [];

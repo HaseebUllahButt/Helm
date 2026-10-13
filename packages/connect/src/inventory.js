@@ -81,7 +81,7 @@ function procs() {
   const list = processList();
   // Linux reads descriptors cheaply for everything; on macOS lsof is asked
   // only about processes that look like one of the CLIs.
-  const names = /claude|codex|opencode|devin|grok|cursor|pi|omp|muse|gemini|kimi|rovo|agy|antigravity/;
+  const names = /claude|codex|opencode|devin|grok|cursor|pi|omp|muse|gemini|kimi|agy|antigravity/;
   const candidates = process.platform === 'linux' ? list.map((p) => p.pid)
     : list.filter(({ argv }) => names.test(argv.slice(0, 3).join(' '))).map((p) => p.pid);
   const files = new Map();

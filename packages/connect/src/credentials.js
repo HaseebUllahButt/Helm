@@ -181,7 +181,6 @@ const ENV_TOKENS = {
   grok: ['XAI_API_KEY', 'GROK_API_KEY'],
   cursor: ['CURSOR_API_KEY'],
   kimi: ['MOONSHOT_API_KEY', 'KIMI_API_KEY'],
-  rovo: ['ATLASSIAN_API_TOKEN', 'ROVO_API_KEY'],
 };
 
 export const CREDENTIAL_ENV_NAMES = [...new Set(Object.values(ENV_TOKENS).flat())];

@@ -38,7 +38,7 @@ import { addSample, streamedChars, tokensPerSecond, type Sample } from './tokenR
 
 const ENGINE_LABEL: Record<string, string> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'opencode', opencode2: 'OpenCode 2', devin: 'Devin',
-  grok: 'Grok', cursor: 'Cursor', pi: 'Pi', omp: 'OMP', rovo: 'Rovo Dev',
+  grok: 'Grok', cursor: 'Cursor', pi: 'Pi', omp: 'OMP',
   agy: 'Antigravity CLI', antigravity: 'Antigravity', gemini: 'Gemini', kimi: 'Kimi', muse: 'Muse',
 };
 

@@ -105,7 +105,6 @@ const ENGINE: Record<string, { label: string; cls: string }> = {
   cursor:   { label: 'Cursor',      cls: 'cursor' },
   pi:       { label: 'Pi',          cls: 'pi' },
   omp:      { label: 'OMP',         cls: 'omp' },
-  rovo:     { label: 'Rovo Dev',    cls: 'rovo' },
   agy:      { label: 'Antigravity CLI', cls: 'agy' },
   antigravity: { label: 'Antigravity', cls: 'agy' },
   gemini:   { label: 'Gemini',      cls: 'gemini' },
@@ -4700,7 +4699,7 @@ function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
         {accounts?.length === 0 && (
           <div className="empty quiet">
             no agents on {env.name}
-            <div className="note" style={{ marginTop: 6 }}>install an agent CLI there - claude, codex, opencode, devin, grok, cursor, pi, omp, rovo and more - and run <code>helm profiles --refresh</code></div>
+            <div className="note" style={{ marginTop: 6 }}>install an agent CLI there - claude, codex, opencode, devin, grok, cursor, pi, omp and more - and run <code>helm profiles --refresh</code></div>
           </div>
         )}
 

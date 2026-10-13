@@ -49,7 +49,7 @@ before(async () => {
 });
 after(async()=>browser?.close());
 
-for(const engine of ['claude','codex','opencode','opencode2','devin','grok','cursor','pi','omp','rovo','agy','antigravity']){
+for(const engine of ['claude','codex','opencode','opencode2','devin','grok','cursor','pi','omp','agy','antigravity']){
   test(`${engine} chat uses shared model, thinking and permission tray with account preferences`,async t=>{
     const page=await browser.newPage({viewport:{width:390,height:844}});t.after(()=>page.close());page.setDefaultTimeout(6000);
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
