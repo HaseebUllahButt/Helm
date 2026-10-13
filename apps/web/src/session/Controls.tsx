@@ -270,10 +270,11 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
     });
   }
 
-  // Only the levels this model actually offers.
-  const offeredEfforts = options.effortsByModel?.[model] ?? options.efforts ?? [];
+  // Only concrete thinking levels. Some CLIs include a `default` reset
+  // sentinel in their catalog; it is not another level to pick or favorite.
+  const offeredEfforts = (options.effortsByModel?.[model] ?? options.efforts ?? []).filter((e) => e !== 'default');
   const reportedEffort = session.effort || session.engineEffort;
-  const efforts = reportedEffort && !offeredEfforts.includes(reportedEffort) ? [reportedEffort, ...offeredEfforts] : offeredEfforts;
+  const efforts = reportedEffort && reportedEffort !== 'default' && !offeredEfforts.includes(reportedEffort) ? [reportedEffort, ...offeredEfforts] : offeredEfforts;
   if (offeredEfforts.length) {
     const effort = [session.effort, session.engineEffort, options.effort].find((value) => value && efforts.includes(value)) || '';
     out.push({
