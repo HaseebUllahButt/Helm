@@ -69,11 +69,14 @@ const usage = () => {
   helm machines                     machines in this network
   helm redesignate [machine] <kind> what a machine is for: pc, vm or nas
   helm nas [machine] [add|remove <folder>]   what a nas shares
-  helm share <port> [--name <n>] [--password [pw]] [--for <hours>] [--keep]
+  helm share <port> [--name <n>] [--password [pw]] [--private] [--for <hours>] [--keep]
     a short-lived link: ends after 3 hours unless --keep
                                   a public https link to a port here, served by your VM
+    --private                     only devices signed in to your Helm can open it
   helm share list | stop <name>   what is shared, and stopping it
   helm share setup                once, on the VM: let it serve the links
+  helm forward <machine> <port> [--local <port>]
+                                  open a port another machine shared on this one's localhost
   helm remove <id>                  remove a controller or machine, permanently
   helm leave                        remove this machine from its network
 
@@ -1665,7 +1668,7 @@ async function shareCmd() {
     console.log('');
     for (const x of all) {
       const left = x.expiresAt ? `  ends in ${Math.max(1, Math.round((x.expiresAt - Date.now()) / 60_000))} min` : '  kept';
-      console.log(`  ${link(x.name)}  ->  ${x.machine}:${x.port}${x.password ? '  (password)' : ''}${left}`);
+      console.log(`  ${link(x.name)}  ->  ${x.machine}:${x.port}${x.private ? '  (private)' : x.password ? '  (password)' : ''}${left}`);
     }
     console.log('');
     return;
@@ -1679,8 +1682,20 @@ async function shareCmd() {
     return;
   }
 
-  if (verb !== 'add') die('usage: helm share <port> [--name <name>] [--password [pw]] [--for <hours>] [--keep] [--on <machine>] | list | stop <name> | setup');
+  if (verb !== 'add') die('usage: helm share <port> [--name <name>] [--password [pw]] [--private] [--for <hours>] [--keep] [--on <machine>] | list | stop <name> | setup');
   const port = Number(args[0]);
+  const members = !!flagOf('private');
+  if (members && flagOf('password') !== undefined) die('a private link opens only for your own Helm devices; it takes no password');
+  // An older machine would read "private" as nothing and make the link
+  // public, so ask first whether it knows the word. This machine too: the
+  // list is written here, but it is the running daemon (maybe older than
+  // this command) that hands it to hubs, and an older one hands private
+  // links to every hub.
+  if (members) {
+    const known = await hubRpc(net, target, M.SHARE_LIST, {}, { timeout: 15_000 }).catch(() => null);
+    if (!known) die(`could not reach ${where}'s Helm through a hub to check that it can make private links; is it running?`);
+    if (!known.features?.includes('private')) die(`${where} runs an older Helm that cannot make private links; update it first`);
+  }
   let password = flagOf('password');
   // `--password` with nothing after it: make one up and say what it is.
   if (password === true) password = shareLib.randomShareName() + shareLib.randomShareName();
@@ -1698,10 +1713,14 @@ async function shareCmd() {
   const hours = Number(strFlag('for'));
   if (strFlag('for') !== undefined && !(hours > 0)) die('--for takes a number of hours, e.g. --for 8');
   const ttlMs = hours > 0 ? hours * 3_600_000 : undefined;
-  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true });
+  const { share } = await call(M.SHARE_ADD, { name, port, password: typeof password === 'string' ? password : undefined, keep, ttlMs, replace: true, ...(members ? { private: true } : {}) });
   const url = link(share.name);
   const ends = share.expiresAt ? `ends ${new Date(share.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (add --keep to keep it)` : 'kept until you stop it';
   console.log(`\n  ${url}\n  -> ${where}, port ${share.port}, ${ends}${share.password ? `\n  password: ${password}` : ''}`);
+  if (share.private) {
+    const machine = net.machines[target]?.name ?? 'this-machine';
+    console.log(`  private: only devices signed in to your Helm can open it\n  from another of your machines: helm forward ${machine} ${share.port}`);
+  }
   if (!host) { console.log('\n  No machine in this network has a public https address, so nobody can open it yet.\n'); return; }
   // The first visit is when the certificate is made; do it now, so the
   // person you send it to does not wait - and so a problem shows up here.
@@ -1712,6 +1731,46 @@ async function shareCmd() {
   } catch (err) {
     console.log(`\n  Saved, but the link did not answer yet (${err.cause?.code || err.message}).\n  If this is new, run \`helm share setup\` once on your VM.\n`);
   }
+}
+
+/**
+ * `helm forward <machine> <port> [--local <port>]` - a port another machine
+ * shared, on this machine's localhost, until Ctrl+C. See src/forward.js.
+ */
+async function forwardCmd() {
+  const net = requireNetwork();
+  const args = rest.filter((a, i) => !a.startsWith('--') && rest[i - 1] !== '--local');
+  const usage = 'usage: helm forward <machine> <port> [--local <port>]';
+  if (args.length < 2) die(usage);
+  const target = machineId(args[0]);
+  const where = net.machines[target]?.name ?? args[0];
+  const port = Number(args[1]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) die(usage);
+  const wanted = strFlag('local');
+  const localPort = wanted === undefined ? port : Number(wanted);
+  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) die('--local takes a port, e.g. --local 3001');
+  if (target === net.self) die(`that is this machine; open http://localhost:${port}`);
+  // Only what that machine shared on purpose. It checks again itself on
+  // every connection; asking here just gives a clear answer up front.
+  let shared;
+  try { ({ shares: shared } = await hubRpc(net, target, M.SHARE_LIST, {}, { timeout: 15_000 })); }
+  catch (err) { die(`could not ask ${where} what it shares: ${err.message}`); }
+  if (!shared?.some((s) => s.port === port)) {
+    die(`${where} is not sharing port ${port}.\n  share it there first: helm share ${port} --private --on ${where}`);
+  }
+  const { startForward } = await import('../src/forward.js');
+  let refusedOnce = false;
+  const fwd = await startForward(net, {
+    target, port, localPort, exact: wanted !== undefined,
+    onRefused: () => { if (!refusedOnce) { refusedOnce = true; console.log(`\n  ${where} stopped sharing port ${port}; new connections are refused.`); } },
+    onError: (err) => console.error(`  ${err.message}`),
+  }).catch((err) => die(err.code === 'EADDRINUSE' ? `port ${localPort} is already in use here; pick another with --local` : err.message));
+  console.log(`\n  http://localhost:${fwd.port}  ->  ${where}, port ${port}\n  Ctrl+C stops it.\n`);
+  await new Promise((resolve) => {
+    const stop = () => { fwd.close().then(resolve); };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+  });
 }
 
 async function nasCmd() {
@@ -1910,6 +1969,10 @@ try {
 
     case 'share':
       await shareCmd();
+      break;
+
+    case 'forward':
+      await forwardCmd();
       break;
 
     case 'remove':

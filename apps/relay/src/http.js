@@ -581,6 +581,27 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
       });
     }
 
+    // A pass into one private link (`helm share --private`), for the browser
+    // this signed-in app runs in. The link is another origin and cannot see
+    // the app's sign-in, so the app posts this to the link, which swaps it
+    // for a cookie of its own. Good once, for a minute, for this member, this
+    // name and this host. The address it goes to is worked out here from the
+    // network's own hosts: a pass is entry, and must never be handed to a
+    // page someone else named.
+    if (path === '/api/share/grant' && req.method === 'POST') {
+      const { shareName, publicHosts, mintShareGrant, safeSharePath } = await import('@helm/protocol/share');
+      const body = await readBody(req, 8192).catch(() => ({}));
+      const name = shareName(body?.name);
+      const host = String(body?.host ?? '').toLowerCase();
+      const hosts = [...publicHosts(net), ...(process.env.HELM_SHARE_DOMAIN ? [process.env.HELM_SHARE_DOMAIN] : [])];
+      if (!name || !hosts.includes(host)) return json(res, 400, { error: 'not a link of this network' });
+      return json(res, 200, {
+        action: `https://${name}.${host}/.helm-share/enter`,
+        grant: mintShareGrant(net, { name, host, sub: claims.sub }),
+        next: safeSharePath(body?.next),
+      });
+    }
+
     // Gossip. A peer posts its roster and gets ours back, so one exchange
     // reconciles both directions.
     //

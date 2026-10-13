@@ -2676,6 +2676,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .link-form { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 .link-form label { display: grid; gap: 4px; font-size: var(--t-micro); color: var(--mutedfg); }
 .link-form .field { margin: 0; }
+.link-form .link-private { margin: 0; padding: 4px 0; width: 100%; text-align: left; background: none; border: 0; }
 .link-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .link-actions button { width: auto; margin: 0; }
 

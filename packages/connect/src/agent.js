@@ -1512,8 +1512,12 @@ export class Daemon {
       // a round trip here. Apps get `publicShare`, without it.
       case M.SHARE_LIST: {
         const shares = listShares();
-        // Only a hub's own call (no member behind it) gets the hashes.
-        return { shares: p.forHub && !caller ? shares : shares.map(this.#shareView) };
+        // Only a hub's own call (no member behind it) gets the hashes. A
+        // private link goes only to a hub that says it can keep one private:
+        // an older hub would not know the flag and serve it to anyone.
+        if (p.forHub && !caller) return { shares: p.members ? shares : shares.filter((s) => !s.private) };
+        // `features` tells the app and CLI this machine can make private links.
+        return { shares: shares.map(this.#shareView), features: ['private'] };
       }
       case M.SHARE_ADD: {
         const taken = (p.replace ? [] : listShares()).find((x) => x.name === String(p.name ?? '').toLowerCase());

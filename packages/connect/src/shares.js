@@ -37,18 +37,22 @@ function save(list) {
 /**
  * Add or replace a share. The password, if any, is only kept as a hash.
  * It ends after DEFAULT_TTL_MS unless `keep` is set; `ttlMs` sets another length.
+ * A `private` one opens only for this network's own signed-in devices, and
+ * takes no password: knowing a password is not being one of them.
  */
-export function addShare({ name, port, password, keep, ttlMs } = {}) {
+export function addShare({ name, port, password, keep, ttlMs, private: members } = {}) {
   const wanted = Number(port);
   if (!Number.isInteger(wanted) || wanted < 1 || wanted > 65535) throw new Error('give the local port to share, e.g. 3000');
   const picked = name == null || name === '' ? randomShareName() : shareName(name);
   if (!picked) throw new Error(`a link name is ${NAME_RULE}`);
+  if (members && password) throw new Error('a private link opens only for your own Helm devices; it takes no password');
   const now = Date.now();
   const length = Number(ttlMs) > 0 ? Number(ttlMs) : DEFAULT_TTL_MS;
   const share = {
     name: picked, port: wanted, createdAt: now,
     ...(keep ? {} : { expiresAt: now + length }),
     ...(password ? { lock: hashSharePassword(password) } : {}),
+    ...(members ? { private: true } : {}),
   };
   save([...listShares().filter((s) => s.name !== picked), share]);
   return share;
