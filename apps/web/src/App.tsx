@@ -4967,7 +4967,7 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
     if (settingBusy || sending) return;
     setSettingBusy(true); setError('');
     try {
-      await client.rpc(env.id, 'session.input', { id: session.id, data: command }, 70_000);
+      await client.input(env.id, { id: session.id, data: command });
       setNativeNotice(command);
     } catch (e: any) { setError(e.message); }
     finally { setSettingBusy(false); }
@@ -5090,8 +5090,8 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
     }
     setSending(true); setError('');
     try {
-      const result = await client.rpc<{ terminal?: boolean }>(env.id, 'session.input', { id: session.id, data: body + '\n',
-        ...(attachments.length ? { attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) } : {}) }, 70_000);
+      const result = await client.input(env.id, { id: session.id, data: body + '\n',
+        ...(attachments.length ? { attachments: attachments.map(image => ({ filename: image.name, mime: image.mime, data: image.data })) } : {}) });
       setDraft(current => current === body ? '' : current);
       await setImages(current => current.filter(image => !attachments.includes(image)));
       if (session.nativeChat && (result?.terminal || body.trimStart().startsWith('/'))) setNativeNotice(body.trim());

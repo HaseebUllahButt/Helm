@@ -77,7 +77,7 @@ function attempt(client: Client, chat: StartingChat) {
       chat.session = session;
       // In before the chat opens, so it opens on the message rather than
       // empty for a moment. If it cannot go in, it waits in the box instead.
-      const send = (data: string) => client.rpc(chat.envId, 'session.input', { id: session.id, data }, 70_000)
+      const send = (data: string) => client.input(chat.envId, { id: session.id, data })
         .catch(() => { chat.draft = [data, chat.draft].filter(Boolean).join('\n\n'); });
       const first = chat.message;
       if (first) await send(first);

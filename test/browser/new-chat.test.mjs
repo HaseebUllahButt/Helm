@@ -18,7 +18,7 @@ before(async () => {
       const quick = {id:'quickone',title:'Quick question',cwd:'/home/test/.helm/quick/quickone',quick:true,engine:'claude',
         profileId:'claude',driver:'claude',alive:true,status:'working',turns:1,updatedAt:Date.now()-60000};
       window.calls = [];
-      const client = {token,relay:'http://helm-test',
+      const client = {input:(env,params)=>client.rpc(env,'session.input',params),token,relay:'http://helm-test',
         environments:async()=>({environments:envs}), on:()=>()=>{}, subscribe:()=>{}, watchLatency:()=>()=>{},
         openDirect:async()=>{}, route:async()=>null,
         rpc:async(env,method,params)=>{

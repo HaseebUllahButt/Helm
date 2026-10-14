@@ -50,7 +50,7 @@ before(async () => {
       command:{events:withTodos(list),status:'blocked',pending:[cmd]},
     };
     window.scene='idle';
-    const client={on:()=>()=>{},subscribe:()=>{},rpc:async(e,method,params)=>{
+    const client={input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},subscribe:()=>{},rpc:async(e,method,params)=>{
       (window.calls??=[]).push({method,params});
       const s=scenes[window.scene];
       if(method==='session.list')return {sessions:[session,other]};

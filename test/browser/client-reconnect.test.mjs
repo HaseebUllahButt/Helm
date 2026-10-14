@@ -45,7 +45,7 @@ async function hub(context, reach = 1) {
     socket.on('message', raw => {
       const frame = JSON.parse(raw);
       if (frame.t === 'ping') socket.send(JSON.stringify({ t: 'pong' }));
-      if (frame.t === 'rpc') state.calls.push({ socket, frame });
+      if (frame.t === 'rpc') { state.calls.push({ socket, frame }); state.onRpc?.({ socket, frame }); }
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -81,6 +81,40 @@ test('real browser reconnect skips a six-second HTTP discovery delay', async con
   assert.ok(elapsed < 3000);
   context.diagnostic(`Reconnected in ${elapsed}ms with HTTP discovery delayed 6000ms`);
   assert.equal(home.sockets.length, 2);
+  await page.evaluate(() => window.client.close());
+});
+
+test('a real browser keeps one delivery ID when the daemon accepts a message but its reply is lost', async context => {
+  const home = await hub(context);
+  const receipts = new Map();
+  let accepted = 0;
+  home.onRpc = ({ socket, frame }) => {
+    assert.equal(frame.method, 'session.deliver');
+    if (!receipts.has(frame.params.messageId)) {
+      accepted++;
+      receipts.set(frame.params.messageId, { ok: true });
+      socket.terminate(); // the next connection stands in for the new daemon
+    } else socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: receipts.get(frame.params.messageId) }));
+  };
+  const page = await pageFor(context, home);
+  await page.evaluate(() => { window.result = window.client.input('laptop', { id: 'helper', data: 'change of plan' }, 10_000); });
+  assert.deepEqual(await page.evaluate(() => window.result), { ok: true });
+  assert.equal(accepted, 1);
+  assert.ok(home.calls.length >= 2);
+  assert.equal(new Set(home.calls.map(call => call.frame.params.messageId)).size, 1);
+  await page.evaluate(() => window.client.close());
+});
+
+test('a browser message started during reconnect waits and is delivered after the connection returns', async context => {
+  const home = await hub(context);
+  home.onRpc = ({ socket, frame }) => socket.send(JSON.stringify({ t: 'rpcResult', id: frame.id, ok: true, result: { ok: true } }));
+  const page = await pageFor(context, home);
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  assert.equal(await page.evaluate(() => window.client.connected), false);
+  await page.evaluate(() => { window.result = window.client.input('laptop', { id: 'helper', data: 'stop the old plan' }, 10_000); });
+  assert.deepEqual(await page.evaluate(() => window.result), { ok: true });
+  assert.equal(home.calls.length, 1);
+  assert.equal(home.calls[0].frame.method, 'session.deliver');
   await page.evaluate(() => window.client.close());
 });
 

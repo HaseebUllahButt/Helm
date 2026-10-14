@@ -14,6 +14,7 @@ import { HELM_DIR, expand } from '../src/paths.js';
 import { M, CONTROLLER_WORDS, CONTROLLER_REFUSAL } from '@helm/protocol';
 import { brainHost } from '@helm/protocol/brain-host';
 import { hubRpc, hubBroadcastRpc, mergeQueueReceipts } from '../src/hub-client.js';
+import { reliableInput } from '@helm/protocol/reliable-input';
 import {
   render, shortId, readThread, readSnapshot, writeSnapshot, mergeSnapshot, findNetworkSession,
 } from '../src/brain.js';
@@ -940,7 +941,8 @@ async function say() {
   const text = words.join(' ');
   if (!text) die('what should it say? `helm say <id> <text>`');
   const { env, machine, session } = await findSession(id);
-  await brainRpc(env, M.SESSION_INPUT, { id: session.id, data: text });
+  await reliableInput((method, params, timeout) => hubRpc(requireNetwork(), env, method, params,
+    { timeout, budget: timeout }), { id: session.id, data: text }, { onRetry: () => waitingFor(machine) });
   console.log(`sent to ${machine} ${shortId(session.id)} (${session.title})`);
 }
 

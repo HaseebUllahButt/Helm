@@ -45,7 +45,7 @@ before(async () => {
         sessions[env].push(session);
         for (const listener of listeners) listener(env,'session.update',{session});
       };
-      const client = {token,relay:'http://helm-test',
+      const client = {input:(env,params)=>client.rpc(env,'session.input',params),token,relay:'http://helm-test',
         environments:async()=>({environments:envs}),
         on:listener=>{listeners.add(listener);return()=>listeners.delete(listener)},
         subscribe:()=>{},watchLatency:()=>()=>{},openDirect:async()=>{},route:async()=>null,

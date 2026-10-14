@@ -196,6 +196,20 @@ test('a repeatable RPC that timed out on one hub is asked again through the next
   assert.deepEqual(live.calls, ['session.list']);
 });
 
+test('a stalled first address cannot consume the finite budget before a healthy address is tried', async t => {
+  const N = await import('@helm/protocol/network');
+  const { hubRpc } = await import('../packages/connect/src/hub-client.js');
+  const net = { ...N.loadNetwork() };
+  const stalled = createServer(() => {});
+  await new Promise(resolve => stalled.listen(0, '127.0.0.1', resolve));
+  t.after(() => { stalled.closeAllConnections(); stalled.close(); });
+  const live = await fakeHub(t, net, { answer: true });
+  net.port = stalled.address().port;
+  net.machines = { peer: { endpoints: [live.url] } };
+  assert.deepEqual(await hubRpc(net, 'peer', 'session.list', {}, { timeout: 5000, budget: 1000 }), { reached: true });
+  assert.deepEqual(live.calls, ['session.list']);
+});
+
 test('a message that went out and was never answered is not sent again through another hub', async (t) => {
   const N = await import('@helm/protocol/network');
   const { M } = await import('@helm/protocol');

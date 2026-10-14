@@ -18,6 +18,7 @@ import { loadedChat, startedEmpty } from '../startingChats';
 import { useDraftImages } from './useDraftImages';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
 import { messageDelivery } from '@helm/protocol/message-delivery';
+import { newMessageId, retryableDelivery } from '@helm/protocol/reliable-input';
 import { money, busyStatus } from '../format';
 import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
@@ -46,7 +47,8 @@ const ENGINE_LABEL: Record<string, string> = {
 
 type Attachment = { name: string; mime: string; data: string; url: string };
 /** Words whose send failed after the composer had moved on, kept until sent or dismissed. */
-type FailedSend = { id: string; body: string; references: string[]; error: string; retrying?: boolean };
+type FailedSend = { id: string; messageId: string; body: string; references: string[]; error: string; retrying?: boolean };
+const rejectedDelivery = (error: { code?: string }) => !!error.code && !retryableDelivery(error);
 
 /**
  * A headless agent session: the transcript built from helm's own events,
@@ -120,6 +122,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const [failedSends, setFailedSends] = useState<FailedSend[]>([]);
   const failedSendSeq = useRef(0);
   const retryingSends = useRef(new Set<string>());
+  const retryDeliveryIds = useRef(new Map<string, string>());
   const team = useThreadTeam(client, env.id, session.id);
   // The CLI's own subagents have no Helm session, so they ride on this one.
   const agentCount = team.length + (session.nativeCards?.length ?? 0);
@@ -289,19 +292,26 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     }
   };
   const sendText = async (body: string, atts: Attachment[], sentReferences = references) => {
+    const fingerprint = JSON.stringify([env.id, session.id, body, atts.map(a => [a.name, a.mime, a.data]), sentReferences.map(item => item.id)]);
+    const messageId = retryDeliveryIds.current.get(fingerprint) ?? newMessageId();
     setSentFirst(true);
     setReferences([]);
     if (!atts.length) setDraft('');
     if (atts.length) setSendingImages(true);
     const clearedAt = editRevision.current;
     try {
-      await client.rpc(env.id, 'session.input', { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 70_000);
+      await client.input(env.id, { id: session.id, data: body, references: sentReferences.map((item) => item.id), attachments: atts.map(a => ({ filename: a.name, mime: a.mime, data: a.data })) }, 120_000, messageId);
+      retryDeliveryIds.current.delete(fingerprint);
       if (atts.length) {
         if (editRevision.current === clearedAt) setDraft('');
         await setAttachments(current => current.filter(image => !atts.includes(image)));
       }
     }
     catch (e: any) {
+      // An explicit rejection can start a new attempt on the owner's next
+      // send. An unknown result must retain its original identity.
+      const retryId = rejectedDelivery(e) ? newMessageId() : messageId;
+      retryDeliveryIds.current.set(fingerprint, retryId);
       setError(e.message);
       setSentFirst(false);
       // Only restore the failed send if the composer is still exactly in the
@@ -315,7 +325,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         // The owner has typed since: keep the words on a card of their own
         // rather than lose them. A slow failure may still have arrived.
         failedSendSeq.current += 1;
-        const failed = { id: `failed-${failedSendSeq.current}`, body, references: sentReferences.map((item) => item.id), error: e.message };
+        const failed = { id: `failed-${failedSendSeq.current}`, messageId: retryId, body, references: sentReferences.map((item) => item.id), error: e.message };
         setFailedSends((current) => [...current, failed]);
       }
     } finally { if (atts.length) setSendingImages(false); }
@@ -326,10 +336,17 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     retryingSends.current.add(failed.id);
     setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, retrying: true } : item));
     try {
-      await client.rpc(env.id, 'session.input', { id: session.id, data: failed.body, references: failed.references }, 70_000);
+      await client.input(env.id, { id: session.id, data: failed.body, references: failed.references }, 120_000, failed.messageId);
+      for (const [fingerprint, messageId] of retryDeliveryIds.current) {
+        if (messageId === failed.messageId) retryDeliveryIds.current.delete(fingerprint);
+      }
       setFailedSends((current) => current.filter((item) => item.id !== failed.id));
     } catch (e: any) {
-      setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, error: e.message, retrying: false } : item));
+      const messageId = rejectedDelivery(e) ? newMessageId() : failed.messageId;
+      for (const [fingerprint, previous] of retryDeliveryIds.current) {
+        if (previous === failed.messageId) retryDeliveryIds.current.set(fingerprint, messageId);
+      }
+      setFailedSends((current) => current.map((item) => item.id === failed.id ? { ...item, messageId, error: e.message, retrying: false } : item));
     } finally { retryingSends.current.delete(failed.id); }
   };
   const send = async () => {

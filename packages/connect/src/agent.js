@@ -62,6 +62,7 @@ import { ExecutionJobs } from './execution.js';
 import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { InputDelivery } from './input-delivery.js';
 
 const RECONNECT_MIN = 250;
 const RECONNECT_MAX = 5000;
@@ -421,6 +422,7 @@ export class Daemon {
     );
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
+    this.inputDelivery = new InputDelivery(this.sessions, { log: m => console.error(`[helm] ${m}`) });
     if (brainHost((loadNetwork() ?? this.net).machines)?.id !== this.id) this.sessions.retireBrains();
     this.github = createGithubMonitor({
       context: gitq.githubContext, watchFile: join(HELM_DIR, 'github-watches.json'),
@@ -477,10 +479,10 @@ export class Daemon {
     // are still running. Ask which before resuming: `resume` reads the
     // surviving-proc list to know which open turns are still live rather
     // than interrupted.
-    this.sessions.adoptTerminals()
+    this.sessionRecovery = this.sessions.adoptTerminals()
       .catch(() => {})
       .then(() => this.sessions.resume())
-      .then(() => { if (!this.#stopped) { this.schedules?.start(); this.sessions.startLimitRecovery(); } })
+      .then(() => { if (!this.#stopped) { this.inputDelivery.resume(); this.schedules?.start(); this.sessions.startLimitRecovery(); } })
       .catch((error) => console.error(`[helm] session recovery: ${error.message}`));
     // Caches worth having warm, none worth being late for: they start once
     // the links are up. Re-reading the shell's aliases blocks for a moment,
@@ -666,6 +668,7 @@ export class Daemon {
   async stop() {
     if (this.#stopped) return;
     this.#stopped = true;
+    this.inputDelivery?.stop();
     await this.executions.stop();
     await this.browsers?.stop();
     clearInterval(this.#brainTimer);
@@ -1891,6 +1894,10 @@ export class Daemon {
       case M.SESSION_CONNECT: return { session: await this.sessions.connect(p.id) };
       case M.SESSION_DETACH:  return this.sessions.detach(p.id, p.watcher);
       case M.SESSION_RESIZE:  return this.sessions.resize(p.id, p.cols, p.rows);
+      case M.SESSION_DELIVER:
+        await this.sessionRecovery;
+        this.inputDelivery ??= new InputDelivery(this.sessions);
+        return this.inputDelivery.deliver(p, caller);
       case M.SESSION_INPUT:   return this.sessions.input(p.id, p.data, { raw: p.raw, attachments: p.attachments, delivery: p.delivery, references: p.references });
       case M.SESSION_KEYS:    await this.sessions.keys(p.id, p.keys); return { ok: true };
       case M.SESSION_MESSAGES: return this.sessions.messages(p.id, { limit: p.limit });

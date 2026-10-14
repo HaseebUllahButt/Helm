@@ -13,6 +13,8 @@
  * is up, and the hub carries the call when it is not.
  */
 
+import { reliableInput } from '@helm/protocol/reliable-input';
+
 export type Status = 'idle' | 'working' | 'blocked' | 'done' | 'shell' | 'exited' | 'unknown';
 
 export interface Environment {
@@ -1362,6 +1364,11 @@ export class Client {
     return this.rpc<TransferReadiness>(env, 'transfer.verify', { folder }, 60_000);
   }
 
+  input(env: string, params: any, timeout = 120_000, messageId?: string): Promise<any> {
+    return reliableInput((method: string, request: any, wait: number) => this.rpc(env, method, request, wait),
+      params, { timeout, ...(messageId ? { messageId } : {}) });
+  }
+
   rpc<T = any>(env: string, method: string, params: any = {}, timeout = 30_000): Promise<T> {
     if (this.closed) return Promise.reject(new Error('client closed'));
     const peer = this.peers.get(env);
@@ -1373,7 +1380,7 @@ export class Client {
     // Image uploads can fill the data channel's send buffer while its
     // synchronous chunk loop is still running. Use the hub for these writes
     // when connected, choosing the route before sending any prompt bytes.
-    const imageUpload = ['session.input', 'session.queue-edit'].includes(method)
+    const imageUpload = ['session.input', 'session.deliver', 'session.queue-edit'].includes(method)
       && params.attachments?.some((image: { data?: string }) => (image.data?.length ?? 0) > DC_CHUNK_AT);
     const direct = peer?.ready && peer.channel.readyState === 'open'
       && !((settingsWrite || imageUpload) && this.connected);
@@ -1541,7 +1548,7 @@ export class Client {
       if (this.readDurations.size > 128) this.readDurations.delete(this.readDurations.keys().next().value!);
     }
     this.pending.delete(msg.id);
-    msg.ok ? pending.resolve(msg.result) : pending.reject(new Error(msg.error?.message ?? 'failed'));
+    msg.ok ? pending.resolve(msg.result) : pending.reject(Object.assign(new Error(msg.error?.message ?? 'failed'), { code: msg.error?.code }));
     // Retire the unresponsive peer after its fallback succeeds, so the next
     // chat does not pay the same hedge delay again.
     if (msg.ok && route !== 'direct' && pending.hedged && pending.env && pending.direct) {

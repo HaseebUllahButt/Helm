@@ -2,10 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { transform } from 'esbuild';
+import { build } from 'esbuild';
 
 const source = readFileSync(new URL('../apps/web/src/client.ts', import.meta.url), 'utf8');
-const { code } = await transform(source, { loader: 'ts', format: 'cjs', target: 'node22' });
+const bundle = await build({ stdin: { contents: source, resolveDir: new URL('../apps/web/src/', import.meta.url).pathname,
+  loader: 'ts' }, bundle: true, write: false, format: 'cjs', target: 'node22' });
+const code = bundle.outputFiles[0].text;
 
 function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reaches = {}, machineIds = {}, socket = 'open', socketDelay = 1, pong = true, location } = {}) {
   let now = 0, serial = 0;

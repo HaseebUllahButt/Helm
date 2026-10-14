@@ -174,6 +174,7 @@ export const M = {
   SESSION_CONNECT: 'session.connect', // { id } -> { session }  share one managed provider with CLI and app
   SESSION_DETACH: 'session.detach',// { id }
   SESSION_INPUT: 'session.input',  // { id, data }
+  SESSION_DELIVER: 'session.deliver', // { id, messageId, data, attachments?, references?, delivery? } durable, retryable
   SESSION_RESIZE: 'session.resize',// { id, cols, rows }
   SESSION_KILL: 'session.kill',    // { id }
   SESSION_DISCARD_EMPTY: 'session.discard-empty', // { id } -> { discarded }  safe navigation cleanup

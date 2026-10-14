@@ -11,8 +11,8 @@ before(async () => {
     stdin: { contents: `
       import React from 'react'; import { createRoot } from 'react-dom/client';
       import { DrivenSession } from './apps/web/src/session/DrivenSession';
-      window.sends=[]; window.answers=[];
-      const client={on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
+      window.sends=[]; window.answers=[]; window.deliveryIds=[];
+      const client={input:(env,params,_timeout,messageId)=>{window.deliveryIds.push(messageId);return client.rpc(env,'session.input',params);},on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
         if(method==='session.messages')return {messages:[],status:'idle'};
         if(method==='session.events')return {events:[],pending:[],last:0,session:{status:'idle'}};
         if(method==='model.list')return {models:[],default:null};
@@ -67,6 +67,7 @@ test('a failed send after the owner typed on is kept on a card, retried as sent,
 
   await card.getByRole('button', { name: 'Retry send' }).click();
   await p.waitForFunction(() => window.sends.length === 3);
+  assert.equal(await p.evaluate(() => new Set(window.deliveryIds).size), 1, 'all retries retain the first message identity');
   await p.evaluate(() => window.answers[2].resolve({ ok: true }));
   await card.waitFor({ state: 'detached' });
   assert.equal(await box.inputValue(), 'typed while waiting');
@@ -93,4 +94,31 @@ test('a failed send with an untouched composer still goes back into it, with no 
   await p.evaluate(() => window.answers[0].reject(new Error('nope')));
   await p.waitForFunction(() => document.querySelector('textarea').value === 'only message');
   assert.equal(await p.locator('.failed-send').count(), 0);
+});
+
+test('explicit rejections allow a new attempt, while unknown results keep their identity until confirmed', async t => {
+  const p = await browser.newPage(); t.after(() => p.close());
+  p.setDefaultTimeout(5000);
+  await p.route('http://helm.test/**', r => r.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
+  await p.goto('http://helm.test/'); await p.addScriptTag({ content: script });
+  const box = p.locator('textarea');
+  const send = () => p.getByRole('button', { name: 'send', exact: true }).click();
+  await box.fill('repeat these words'); await send();
+  await p.waitForFunction(() => window.sends.length === 1);
+  await p.evaluate(() => window.answers[0].reject(Object.assign(new Error('provider rejected it'), { code: 'provider_busy' })));
+  await p.waitForFunction(() => document.querySelector('textarea').value === 'repeat these words');
+  await send(); await p.waitForFunction(() => window.sends.length === 2);
+  assert.notEqual(...await p.evaluate(() => window.deliveryIds.slice(0, 2)), 'a rejected request can make a fresh attempt');
+  await box.fill('a newer draft');
+  await p.evaluate(() => window.answers[1].reject(new Error('unknown result')));
+  const card = p.locator('.failed-send'); await card.waitFor();
+  await card.getByRole('button', { name: 'Retry send' }).click();
+  await p.waitForFunction(() => window.sends.length === 3);
+  assert.equal(...await p.evaluate(() => window.deliveryIds.slice(1, 3)), 'an uncertain retry retains its ID');
+  await p.evaluate(() => window.answers[2].resolve({ ok: true }));
+  await card.waitFor({ state: 'detached' });
+  await box.fill('repeat these words'); await send();
+  await p.waitForFunction(() => window.sends.length === 4);
+  assert.notEqual(...await p.evaluate(() => [window.deliveryIds[2], window.deliveryIds[3]]), 'a later intentional repeat is a new message');
+  await p.evaluate(() => window.answers[3].resolve({ ok: true }));
 });

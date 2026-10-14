@@ -11,7 +11,7 @@ before(async () => {
     import { useSessionLog } from './apps/web/src/session/useSessionLog';
     import { saveCached } from './apps/web/src/session/logCache';
     const listeners=new Set();
-    const client={subscribe:()=>{},on:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},rpc:window.rpc};
+    const client={input:(env,params)=>client.rpc(env,'session.input',params),subscribe:()=>{},on:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},rpc:window.rpc};
     const root=createRoot(document.getElementById('root'));
     function Chat({id}) { const state=useSessionLog(client,'machine',id); window.state=state;
       return <pre>{JSON.stringify(state.log)}</pre>; }

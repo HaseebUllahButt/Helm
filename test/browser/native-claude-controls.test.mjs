@@ -13,7 +13,7 @@ before(async () => {
       window.calls = []; window.fail = false;
       const listeners = new Set();
       window.emit = (kind, payload) => listeners.forEach(fn => fn('laptop', kind, payload));
-      const client = { on: fn => { listeners.add(fn); return () => listeners.delete(fn); }, subscribe: () => () => {}, rpc: async (env, method, params) => {
+      const client = {input:(env,params)=>client.rpc(env,'session.input',params), on: fn => { listeners.add(fn); return () => listeners.delete(fn); }, subscribe: () => () => {}, rpc: async (env, method, params) => {
         if (method === 'session.messages') return { messages: [{role:'assistant',text:'Existing conversation',tools:[]}], status: window.sessionStatus || 'idle' };
         if (method === 'session.events') { window.eventsRead = true; return {events:[], pending:[],last:0}; }
         if (method === 'session.watch') return {last:0};

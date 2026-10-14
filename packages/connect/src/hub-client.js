@@ -121,6 +121,7 @@ export const REPEATABLE = new Set([
   M.SHARE_LIST, M.MEDIA_INFO, M.MEDIA_ROOTS, M.MEDIA_LIST, M.MEDIA_TICKET,
   // These accepts check their durable handoff/transfer identity themselves.
   M.HANDOFF_ACCEPT, M.TRANSFER_ACCEPT,
+  M.SESSION_DELIVER,
 ]);
 export const NON_REPEATABLE = new Set(Object.values(M).filter(method => !REPEATABLE.has(method)));
 
@@ -128,10 +129,15 @@ export async function hubRpc(net, env, method, params = {}, { timeout = 20_000, 
   const failures = [];
   const deadline = Date.now() + budget;
   const once = !REPEATABLE.has(method);
-  for (const hub of hubUrls(net, env)) {
+  const urls = hubUrls(net, env);
+  for (const [index, hub] of urls.entries()) {
     if (Date.now() >= deadline) break;
+    // A finite lookup budget belongs to all routes, including authentication
+    // and the legacy path. Leave each remaining address a fair opportunity.
+    const routeDeadline = once || !Number.isFinite(deadline) ? deadline
+      : Date.now() + Math.max(1, Math.floor((deadline - Date.now()) / (urls.length - index)));
     try {
-      return await rpcVia(hub, net, env, method, params, timeout, { direct, onRoute, deadline, once });
+      return await rpcVia(hub, net, env, method, params, timeout, { direct, onRoute, deadline: routeDeadline, once });
     } catch (err) {
       // Sent and then lost: the machine may have it already. Asking another
       // hub could do it twice, so the person checks before trying again.
