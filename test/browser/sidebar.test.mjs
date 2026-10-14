@@ -17,6 +17,7 @@ before(async () => {
     window.scope = workspace.workspaceScope(token);
     window.workspace = workspace;
     window.makeClient = (envs, sessions, relay='http://helm-test', extra={}) => ({token, relay,
+      input(env, params) { return this.rpc(env, 'session.input', params); },
       environments: async () => ({ environments: envs }),
       on: () => () => {}, subscribe: () => {}, watchLatency: () => () => {},
       openDirect: async () => {}, route: async () => null,
@@ -77,6 +78,7 @@ async function pageFor(testContext, viewport, options = {}) {
   const context = await browser.newContext({ viewport, ...options });
   testContext.after(() => context.close());
   const page = await context.newPage();
+  page.setDefaultTimeout(5000);
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.route('http://helm-test/**', route => route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
   await page.goto('http://helm-test/');
@@ -646,6 +648,9 @@ test('a list read before a live update cannot undo it', async testContext => {
       Object.assign(thread, more);
       for (const listener of listeners) listener('vm', 'session.update', { session: { ...thread } });
     };
+    // Known status changes are drawn from their update without fetching
+    // the whole list. Request inventory explicitly to exercise a stale read.
+    window.refreshList = () => { for (const listener of listeners) listener('vm', 'session.update', {}); };
     window.mount(client);
   });
   const sidebar = page.locator('.sidebar');
@@ -653,10 +658,10 @@ test('a list read before a live update cannot undo it', async testContext => {
   const done = sidebar.locator('.foldwrap').filter({ has: page.locator('.fold-title', { hasText: /^Settled$/ }) });
   await done.locator('.tri-row').first().waitFor();
   // A list goes out while the thread is idle and takes a while to come back.
-  await page.evaluate(() => { window.hold = true; window.push({ title: 'Racing thread' }); });
+  await page.evaluate(() => { window.hold = true; window.refreshList(); });
   await page.waitForFunction(() => window.lists.length === 1);
   // The thread starts a turn before that old list arrives.
-  await page.evaluate(() => window.push({ status: 'working' }));
+  await page.evaluate(() => { window.push({ status: 'working' }); window.refreshList(); });
   await running.getByText('Racing thread', { exact: true }).waitFor();
   await page.waitForTimeout(600);
   await page.evaluate(() => window.lists.shift()());
@@ -669,7 +674,7 @@ test('a list read before a live update cannot undo it', async testContext => {
   await page.waitForTimeout(100);
   assert.equal(await running.getByText('Racing thread', { exact: true }).count(), 1);
   // The same holds the other way: a finished turn is not put back in Running.
-  await page.evaluate(() => window.push({ title: 'Racing thread' }));
+  await page.evaluate(() => window.refreshList());
   await page.waitForFunction(() => window.lists.length === 1);
   await page.evaluate(() => window.push({ status: 'idle' }));
   await done.locator('.tri-row').first().waitFor();
