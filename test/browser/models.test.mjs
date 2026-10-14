@@ -66,7 +66,10 @@ test('favorite stars never select a model or change its default; explicit defaul
         modes:[{id:'ask',label:'Ask'},{id:'yolo',label:'YOLO',danger:true}], defaultMode:'ask',
         defaults:{effort:'xhigh', mode:'ask',speed:'fast'}, favs:['a'], effortFavs:[] });
       const controls = Controls({ options, session,
-        onPick:(kind,id)=>{ window.picks = (window.picks ?? 0)+1; setSession(s=>({...s,[kind]:id})); },
+        // Model changes return the provider's accepted effort in a real chat.
+        // The picker itself preserves reported settings until that response.
+        onPick:(kind,id)=>{ window.picks = (window.picks ?? 0)+1; setSession(s=>({...s,[kind]:id,
+          ...(kind==='model' ? {effort:id==='b' ? 'low' : id==='c' ? '' : s.effort} : {})})); },
         onFavs:favs=>setOptions(o=>({...o,favs})),
         onEffortFavs:(model,levels)=>setOptions(o=>({...o,effortFavs:levels.map(level=>JSON.stringify([model,level]))})),
         onDefault:async(kind,id)=>{

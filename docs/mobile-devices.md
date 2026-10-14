@@ -1,6 +1,6 @@
 # Testing mobile apps through Helm
 
-Open **Devices** on the machine hosting your Android device/emulator or iOS
+Open **Mobile testing** on the machine hosting your Android device/emulator or iOS
 simulator. The **Devices** control in a thread opens the same viewer alongside
 that agent. Choose **View** for a running device, or **Start & view** for an
 existing stopped emulator/simulator. Tap or drag the image to send touch input;
