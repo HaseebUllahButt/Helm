@@ -29,7 +29,7 @@ const PER_ENGINE = 40;
  * line can still be large - codex writes its entire system prompt into the
  * first record - so we grow the read until we have what we need.
  */
-async function headLines(path, wanted = 1, cap = 1 << 20) {
+async function headLines(path, wanted = 1, cap = 1 << 20, info = {}) {
   const fh = await open(path, 'r');
   try {
     let size = 64 << 10;
@@ -40,6 +40,7 @@ async function headLines(path, wanted = 1, cap = 1 << 20) {
       const lines = text.split('\n');
       // The final fragment is only complete if we stopped on a newline.
       if (lines.length > wanted || bytesRead < size || size >= cap) {
+        info.filled = bytesRead === size;
         return lines.slice(0, Math.max(wanted, lines.length - 1));
       }
       size = Math.min(size * 4, cap);
@@ -47,6 +48,26 @@ async function headLines(path, wanted = 1, cap = 1 << 20) {
   } finally {
     await fh.close();
   }
+}
+
+/**
+ * headLines, parsed, and remembered. Every chat list asks for the opening
+ * lines of a few hundred histories, and a history only ever grows at its end:
+ * re-reading and re-parsing those openings (Codex puts its whole system
+ * prompt in the first) was most of a pass. A read that filled its buffer
+ * cannot change while the file is the same file and does not shrink; a short
+ * file is read again once it changes size.
+ */
+const heads = new Map();
+async function headRecords(path, wanted) {
+  const st = await stat(path);
+  const key = `${path}\0${wanted}`, file = `${st.dev}:${st.ino}`, hit = heads.get(key);
+  if (hit && hit.file === file && (hit.filled ? st.size >= hit.size : st.size === hit.size)) return hit.records;
+  const info = {};
+  const records = (await headLines(path, wanted, undefined, info)).map(parse);
+  heads.delete(key); heads.set(key, { file, size: st.size, filled: info.filled, records });
+  if (heads.size > 4096) heads.delete(heads.keys().next().value);
+  return records;
 }
 
 /**
@@ -79,11 +100,11 @@ let procSnap = null;
 function procs() {
   if (procSnap) return procSnap;
   const list = processList();
-  // Linux reads descriptors cheaply for everything; on macOS lsof is asked
-  // only about processes that look like one of the CLIs.
+  // Only processes that look like one of the CLIs. Reading every descriptor
+  // of every process (a browser alone holds hundreds) was most of a chat
+  // list pass on Linux too, not only for lsof on macOS.
   const names = /claude|codex|opencode|devin|grok|cursor|pi|omp|muse|gemini|kimi|agy|antigravity/;
-  const candidates = process.platform === 'linux' ? list.map((p) => p.pid)
-    : list.filter(({ argv }) => names.test(argv.slice(0, 3).join(' '))).map((p) => p.pid);
+  const candidates = list.filter(({ argv }) => names.test(argv.slice(0, 3).join(' '))).map((p) => p.pid);
   const files = new Map();
   for (const f of openFiles(candidates, (path) => /\.(jsonl|db)$/.test(path))) {
     if (f.write && !files.has(f.path)) files.set(f.path, f.pid);
@@ -175,7 +196,7 @@ async function codex(home, account) {
   const out = [];
   for (const f of files) {
     try {
-      const meta = parse((await headLines(f.path, 1))[0]);
+      const meta = (await headRecords(f.path, 1))[0];
       if (meta?.type !== 'session_meta') continue;
       const p = meta.payload ?? {};
       // Codex native children write their own rollouts too. SessionSource
@@ -224,8 +245,7 @@ async function claude(home, account) {
 
     // Claude records the working directory and the opening message on the
     // first real turn; the leading lines are session bookkeeping.
-    for (const line of await headLines(f.path, 24)) {
-      const r = parse(line);
+    for (const r of await headRecords(f.path, 24)) {
       if (!r) continue;
       if (r.summary) title ||= String(r.summary);
       if (r.type !== 'user') continue;
@@ -421,7 +441,18 @@ function opencode(home, account, engine = 'opencode') {
  * the owner switched, and every reply names the model that wrote it. The
  * latest of either wins, written the way pi takes it (`provider/id`).
  */
+const piSeen = new Map();
 async function piSettings(path) {
+  // Remembered until the history changes: it is read whole on every pass.
+  let stamp = '';
+  try { const st = await stat(path); stamp = `${st.size}:${st.mtimeMs}`; } catch { /* read below says so */ }
+  const hit = piSeen.get(path);
+  if (stamp && hit?.stamp === stamp) return hit.value;
+  const value = await readPiSettings(path);
+  if (stamp) { piSeen.delete(path); piSeen.set(path, { stamp, value }); if (piSeen.size > 1024) piSeen.delete(piSeen.keys().next().value); }
+  return value;
+}
+async function readPiSettings(path) {
   let model;
   let effort;
   const take = (r) => {
@@ -461,8 +492,7 @@ async function piFamily(engine, home, account) {
     try {
       let meta = null;
       let title = '';
-      for (const line of await headLines(f.path, 40)) {
-        const r = parse(line);
+      for (const r of await headRecords(f.path, 40)) {
         if (!r) continue;
         if (r.type === 'session') meta = r;
         else if (r.type === 'title' && r.title) title ||= String(r.title);
@@ -754,8 +784,7 @@ async function muse(home, account) {
     try {
       let cwd = null;
       let title = '';
-      for (const line of await headLines(f.path, 30)) {
-        const r = parse(line);
+      for (const r of await headRecords(f.path, 30)) {
         if (!r) continue;
         const rec = r.record ?? r;
         cwd ??= rec.cwd ?? rec.workdir ?? rec.working_directory ?? rec.root;

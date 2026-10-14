@@ -297,13 +297,15 @@ test('Codex rollout state restores status fields before another model turn', asy
 });
 
 test('an active external Claude thread is monitored and status does not take ownership', async () => {
+  // Named like the real CLI: inventory only looks at the open files of
+  // processes that look like one.
   const writer = spawn(process.execPath, ['--input-type=module', '-e', `
     import { openSync } from 'node:fs';
     openSync(${JSON.stringify(claudeTranscript)}, 'a');
     process.on('SIGTERM', () => process.exit(0));
     console.log('ready');
     setInterval(() => {}, 1000);
-  `], { stdio: ['ignore', 'pipe', 'inherit'] });
+  `], { argv0: 'claude', stdio: ['ignore', 'pipe', 'inherit'] });
   await once(writer.stdout, 'data');
   try {
     const { inventory } = await import('../packages/connect/src/inventory.js');

@@ -333,3 +333,22 @@ test('a Claude chat helm started is named for what the owner typed, not helm\'s 
   const rows = await inventory([{ id: 'claudex', engine: 'claude', env: { CLAUDE_CONFIG_DIR: home } }]);
   assert.equal(rows.find((r) => r.cwd === '/work/app')?.title, 'Fix the settings icon');
 });
+
+test('a remembered chat opening still sees a first message written after the last look', async () => {
+  const { appendFileSync } = await import('node:fs');
+  const home = mkdtempSync(join(tmpdir(), 'helm-claude-home-'));
+  const dir = join(home, 'projects', '-work-new');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, '22222222-2222-4222-8222-222222222222.jsonl');
+  writeFileSync(file, JSON.stringify({ type: 'summary', leafUuid: 'x' }) + '\n');
+  const { inventory } = await import('../packages/connect/src/inventory.js');
+  const profile = [{ id: 'claudey', engine: 'claude', env: { CLAUDE_CONFIG_DIR: home } }];
+  assert.equal((await inventory(profile)).length, 0, 'no first message yet, so no chat');
+  appendFileSync(file, JSON.stringify({ type: 'user', cwd: '/work/new', message: { role: 'user', content: 'Ship the logo' } }) + '\n');
+  assert.equal((await inventory(profile)).find((r) => r.cwd === '/work/new')?.title, 'Ship the logo');
+  // A long history keeps its opening once read, however much it grows.
+  appendFileSync(file, Array.from({ length: 2000 }, (_, i) => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'x'.repeat(40) + i } })).join('\n') + '\n');
+  assert.equal((await inventory(profile)).find((r) => r.cwd === '/work/new')?.title, 'Ship the logo');
+  appendFileSync(file, JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'more' } }) + '\n');
+  assert.equal((await inventory(profile)).find((r) => r.cwd === '/work/new')?.title, 'Ship the logo');
+});
