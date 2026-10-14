@@ -727,6 +727,9 @@ test('--worktree gives the child its own checkout on a helm/ branch, named after
   assert.notEqual(child.cwd, repo);
   assert.ok(existsSync(join(child.cwd, 'a.txt')), 'the checkout has the files');
   await assert.rejects(() => sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Nope', worktree: true }), /not a git repository/);
+  await assert.rejects(() => sessions.delegate({ id: parent.id, profileId: 'claude-main', mode: 'full', task: 'Refused task', worktree: true }), /invalid subagent mode/);
+  assert.ok(!existsSync(`${repo}-refused-task`), 'a refused request leaves no checkout behind');
+  assert.doesNotMatch(run('branch', '--list', 'helm/refused-task').toString(), /refused-task/);
 });
 
 test('the CLI sends its own folder only when no parent chat decides it', async () => {

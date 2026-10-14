@@ -1733,15 +1733,6 @@ export class Sessions extends EventEmitter {
     // parent's checkout); otherwise the child works where its parent does.
     let folder = cwd ?? parent?.cwd;
     if (typeof folder !== 'string' || !folder.trim()) throw new Error('delegation needs a working folder');
-    // `--worktree`: the child gets its own checkout of the same repository
-    // on a new helm/ branch, so several helpers can edit at once without
-    // writing over each other, and the parent merges what it wants back.
-    // Made before anything else so a repo that is not one fails cleanly.
-    let checkout = null;
-    if (worktree) {
-      checkout = await addWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
-      folder = checkout.path;
-    }
     let depth = 1, ancestor = parent;
     while (ancestor?.delegation) {
       if (++depth > 3) throw new Error('subagents can nest at most three levels');
@@ -1761,6 +1752,15 @@ export class Sessions extends EventEmitter {
     model ||= defaults.model || undefined;
     effort ||= defaults.effort;
     const selectedMode = delegationMode(profile.engine, parent?.mode, mode, defaults.mode || startPrefs(profile)?.mode, parent?.engine);
+    // `--worktree`: the child gets its own checkout of the same repository
+    // on a new helm/ branch, so several helpers can edit at once without
+    // writing over each other, and the parent merges what it wants back.
+    // Made after every check above, so a refused request leaves no checkout.
+    let checkout = null;
+    if (worktree) {
+      checkout = await addWorktree(folder, clip(String(task).trim().split('\n')[0], 40));
+      folder = checkout.path;
+    }
     const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
       ...(checkout ? { worktree: checkout } : {}) };
     const child = await this.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
