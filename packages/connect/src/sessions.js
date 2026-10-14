@@ -310,6 +310,12 @@ export function transcriptEvents(messages, { open = false } = {}) {
 }
 
 export class Sessions extends EventEmitter {
+  // Session updates can arrive after archive from provider and recovery tasks.
+  // Apply the same helper visibility rule as list() to every published update.
+  emit(kind, ...args) {
+    if (kind === 'session' && args[0]?.delegations) args[0] = { ...args[0], delegations: this.#visibleDelegations(args[0]) };
+    return super.emit(kind, ...args);
+  }
   #index = new Map();
   /** paneId -> what the runtime last told us about a pane we do not own */
   #adopted = new Map();
@@ -1321,7 +1327,7 @@ export class Sessions extends EventEmitter {
       return team;
     }, { working: native.filter(state => state === 'working').length + unreported,
       blocked: native.filter(state => state === 'blocked').length, failed: native.filter(state => state === 'error').length });
-    this.emit('session', { ...parent, ...(parent.delegations ? { delegations: this.#visibleDelegations(parent) } : {}) });
+    this.emit('session', parent);
     if (parent.delegation) this.#updateTeam(parent);
   }
 
