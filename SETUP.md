@@ -60,6 +60,21 @@ sudo journalctl -u caddy -n 50
 Also open the `/api/health` path under the address Helm printed. Do not report
 success until it returns HTTP 200.
 
+On Linux, Helm enables and saves TCP packet-size recovery when it has root or
+passwordless sudo access. This lets a connection recover when a Wi-Fi, campus,
+or VPN route silently drops larger packets. It checks again every two minutes
+and preserves an existing stronger recovery setting. Tests never change this
+system setting.
+
+If `helm status` reports that packet recovery needs setup, run:
+
+```bash
+helm network-repair
+```
+
+This may ask for your sudo password. The repair takes effect without restarting
+Helm and survives reboot; background services never ask for a password.
+
 ## 4. Return the link
 
 If a fresh controller link is needed, run:

@@ -54,6 +54,7 @@ const usage = () => {
 
   helm join <CODE> <home-url> --foreground   ...run in this terminal instead
   helm status                        show the network and runtime
+  helm network-repair                enable persistent TCP packet-size recovery on Linux
 
   helm up [--port N] [--tunnel]      run in the foreground
   helm up --tunnel --domain <d>     permanent public link (needs a free ngrok account)
@@ -2101,6 +2102,15 @@ try {
       break;
     }
 
+    case 'network-repair': {
+      const { ensureTcpRecovery } = await import('../src/network-recovery.js');
+      const recovery = await ensureTcpRecovery({ interactive: true });
+      if (!recovery.supported) console.log('TCP packet-size recovery is not available on this system.');
+      else if (recovery.repair) die(`Could not enable packet-size recovery: ${recovery.reason}`);
+      else console.log('TCP packet-size recovery is enabled and saved for reboot.');
+      break;
+    }
+
     case 'status': {
       const net = loadNetwork();
       if (!net) { console.log('not in a network - run `helm up`'); break; }
@@ -2139,6 +2149,11 @@ try {
       // one choosing.
       try {
         const report = await hubRpc(net, net.self, M.NET_ROUTES, {}, { timeout: 5000, budget: 8000 });
+        if (report.recovery?.supported) {
+          console.log(report.recovery.repair
+            ? `packet recovery: needs setup - run ${report.recovery.repair}`
+            : 'packet recovery: enabled, saved for reboot');
+        }
         const { routeLines } = await import('../src/hub-mesh.js');
         console.log('routes:');
         for (const line of routeLines(report)) console.log(line);

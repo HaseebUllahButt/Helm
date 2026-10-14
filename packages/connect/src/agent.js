@@ -58,6 +58,7 @@ import { SendEngine } from './send-engine.js';
 import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
+import { ensureTcpRecovery } from './network-recovery.js';
 
 const RECONNECT_MIN = 250;
 const RECONNECT_MAX = 5000;
@@ -337,6 +338,7 @@ export class Daemon {
   }
 
   async start() {
+    await this.#checkNetworkRecovery();
     // What every link reports about this machine starts being worked out now,
     // beside the wait for herdr, instead of after it - see describe().
     this.#versionP = currentVersion().catch(() => null);
@@ -682,8 +684,22 @@ export class Daemon {
   /** Hinted address -> the machine that announced it, for this round's links. */
   #hintOwners = new Map();
 
+  #networkRecoveryAt = -Infinity;
+  networkRecovery = null;
+
+  async #checkNetworkRecovery() {
+    if (Date.now() - this.#networkRecoveryAt < SYNC_EVERY_MS) return;
+    this.#networkRecoveryAt = Date.now();
+    const previous = this.networkRecovery;
+    this.networkRecovery = await ensureTcpRecovery();
+    if (this.networkRecovery.repair && (!previous?.repair || previous.reason !== this.networkRecovery.reason)) {
+      console.warn(`[helm] packet-size recovery needs setup: ${this.networkRecovery.reason} Run helm network-repair.`);
+    }
+  }
+
   async #tick() {
     if (this.#stopped) return;
+    void this.#checkNetworkRecovery().catch(error => console.warn('[helm] packet-size recovery:', error.message));
     await this.#publishSelf();
 
     // Offer a fingerprint of what we know on every cycle. It is what makes a
@@ -988,6 +1004,7 @@ export class Daemon {
     const table = [...attached, ...(this.mesh?.table() ?? []).filter((r) => !this.localOnline?.has(r.env))];
     const reached = new Set(table.map((r) => r.env));
     return {
+      recovery: this.networkRecovery,
       machines: [
         ...table.map((r) => ({ ...r, name: name(r.env) })),
         ...Object.keys(net.machines ?? {}).filter((id) => id !== this.id && !net.revoked?.[id] && !reached.has(id))

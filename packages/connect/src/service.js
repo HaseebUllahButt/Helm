@@ -6,6 +6,7 @@ import { platform, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { delimiter } from 'node:path';
 import { HOME } from './paths.js';
+import { ensureTcpRecovery } from './network-recovery.js';
 
 const exec = promisify(execFile);
 const AGENT_UNIT = 'helm-agent.service';
@@ -45,6 +46,8 @@ export async function installService({ mode = 'agent', args = [] } = {}) {
     console.log('(skipping service install: HELM_NO_SERVICE=1)');
     return { installed: false };
   }
+  const recovery = await ensureTcpRecovery();
+  if (recovery.repair) console.warn(`  packet-size recovery needs setup: run ${recovery.repair}`);
   if (platform() === 'darwin') {
     const searchPath = [join(HOME, '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH].filter(Boolean).join(':');
     const logs = join(HOME, 'Library/Logs/helm');
