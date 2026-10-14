@@ -3,15 +3,24 @@ import { resolve } from 'node:path';
 import { parseAgentArgs } from './delegation.js';
 
 export async function runBrowserCommand(args, { rpc, self, findSession, env = process.env, print = console.log } = {}) {
-  const { words, options } = parseAgentArgs(args, { values: ['session', 'engine', 'output', 'budget'], switches: ['full-page'] });
+  const { words, options } = parseAgentArgs(args, { values: ['session', 'engine', 'output', 'budget'], switches: ['full-page', 'default', 'clear-default'] });
   const [command = 'tabs', tabId, source] = words;
-  if (['help', '--help'].includes(command)) { print('helm browser open <url> [--engine chromium|bowser] | tabs | look <tab> | act <tab> <JSON> | flows | run <tab> <name> key=value ... | screenshot <tab> --output <path> | close <tab> [--session <thread>]'); return; }
+  if (['help', '--help'].includes(command)) { print('helm browser open <url> [--engine chromium|bowser] | tabs | look <tab> | act <tab> <JSON> | flows | run <tab> <name> key=value ... | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default [--session <thread>]'); return; }
   const sessionId = options.session || env.HELM_SESSION_ID || env.HELM_NATIVE_SESSION;
   if (!sessionId) throw new Error('run browser commands in a Helm chat, or pass --session <thread>');
   const target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
   const id = target.session.id;
   let result;
-  if (command === 'tabs') result = await rpc(target.env, 'browser.list', { id });
+  if (command === 'profiles') result = await rpc(target.env, 'browser.profiles', { id });
+  else if (command === 'logins') {
+    if (options['clear-default']) { if (tabId || options.default) throw new Error('use --clear-default by itself'); result = await rpc(target.env, 'browser.loginDefault', { id, profileKey: null }); }
+    else {
+      const profileKey = words.slice(1).join(' '); if (!profileKey) throw new Error('choose a profile from helm browser profiles');
+      result = await rpc(target.env, 'browser.importLogins', { id, profileKey }, 60000);
+      if (options.default) result = { ...result, ...(await rpc(target.env, 'browser.loginDefault', { id, profileKey })) };
+    }
+  }
+  else if (command === 'tabs') result = await rpc(target.env, 'browser.list', { id });
   else if (command === 'flows') result = await rpc(target.env, 'browser.flows', { id });
   else if (command === 'run') {
     const values = Object.fromEntries(words.slice(3).map(value => { const at = value.indexOf('='); if (at < 1) throw new Error('flow parameters use key=value'); return [value.slice(0, at), value.slice(at + 1)]; }));
