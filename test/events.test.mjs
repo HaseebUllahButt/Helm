@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventLog } from '../packages/connect/src/events.js';
@@ -366,5 +366,51 @@ test('the live turn is read from disk once per change and shares the cache with 
     reader.append('a1', { type: 'turn.done', turnId: 't2', status: 'ok' });
     assert.equal(reader.activeTurn('a1'), null);
     assert.equal(reader.activeTurn('none'), null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a trimmed log is not written again each time it is opened', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-trimmed-'));
+  try {
+    const log = new EventLog(dir);
+    log.append('s', { type: 'turn.start', turnId: 't1', text: 'long task' });
+    log.append('s', { type: 'item.start', id: 'reply', turnId: 't1', kind: 'text' });
+    for (let i = 0; i < 2100; i++) log.append('s', { type: 'item.delta', id: 'reply', text: 'x' });
+    new EventLog(dir).since('s');
+    const file = join(dir, 's.jsonl');
+    const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean).length;
+    assert.ok(lines > 2000, 'the tail keeps the turn and item it belongs to');
+    const old = new Date('2020-01-01T00:00:00Z');
+    utimesSync(file, old, old);
+    assert.equal(new EventLog(dir).since('s').length, lines);
+    assert.equal(statSync(file).mtimeMs, old.getTime(), 'nothing was dropped, so nothing was written');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a glance at a cold log gives a restart what opening it would', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-glance-'));
+  try {
+    const log = new EventLog(dir);
+    log.append('s', { type: 'turn.start', turnId: 'local-q', text: 'later please', queued: true });
+    log.append('s', { type: 'turn.start', turnId: 't1', text: 'long task' });
+    log.append('s', { type: 'item.start', id: 'reply', turnId: 't1', kind: 'text' });
+    log.append('s', { type: 'permission.request', requestId: 'old', kind: 'command', title: 'answered' });
+    log.append('s', { type: 'permission.resolved', requestId: 'old', decision: 'allow' });
+    for (let i = 0; i < 2100; i++) log.append('s', { type: 'item.delta', id: 'reply', turnId: 't1', text: 'x' });
+    log.append('s', { type: 'permission.request', requestId: 'open', kind: 'command', title: 'waiting' });
+    // Grown past KEEP and not yet trimmed, as a busy thread's log is at restart.
+    const glanced = new EventLog(dir).glance('s');
+    const opened = new EventLog(dir);
+    const plain = (events) => JSON.parse(JSON.stringify(events));
+    assert.deepEqual(plain(glanced.turns), plain(opened.tail('s', 0).filter((e) => e.type.startsWith('turn.'))));
+    assert.equal(glanced.seq, opened.last('s'));
+    assert.deepEqual(glanced.pending.map((p) => p.requestId), ['open']);
+    assert.deepEqual(opened.pending('s').map((p) => p.requestId), ['open']);
+    // Now trimmed by that open, and read cold again.
+    const cold = new EventLog(dir);
+    assert.deepEqual(cold.pending('s').map((p) => p.requestId), ['open']);
+    assert.equal(cold.last('s'), opened.last('s'));
+    assert.deepEqual(cold.glance('s').turns.map((e) => e.turnId), ['local-q', 't1']);
+    assert.equal(cold.since('s').length, opened.since('s').length);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

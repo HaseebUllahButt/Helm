@@ -160,6 +160,40 @@ test('provider error metadata survives in the recovery record without replaying 
   assert.equal(driver.sent.length, 1);
 });
 
+test('a restart closes a stopped chat\'s question and turn without reading its whole log', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const directory = join(process.env.HELM_DIR, 'events-glance-restart');
+  // Every whole-log read on start is a parse of up to 2000 events; with
+  // hundreds of chats that held the session list for seconds.
+  class CountingLog extends EventLog {
+    whole = 0;
+    tail(id, n) { if (!(n > 0)) this.whole++; return super.tail(id, n); }
+  }
+  const options = (events) => ({
+    events,
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => false }),
+    makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }),
+  });
+  const original = new Sessions(new StubRuntime(), options(new EventLog(directory)));
+  const session = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  const idle = await original.start({ cwd: '/tmp', profileId: 'claudea' });
+  await original.input(session.id, 'Work');
+  FakeDriver.made.find((d) => d.env?.HELM_SESSION_ID === session.id).ask();
+  const events = new CountingLog(directory);
+  const restarted = new Sessions(new StubRuntime(), options(events));
+  await restarted.resume();
+  assert.equal(events.whole, 0);
+  const log = events.tail(session.id, 0);
+  assert.ok(log.some((e) => e.type === 'permission.resolved' && e.requestId === 'r1' && e.decision === 'cancelled'));
+  assert.ok(log.some((e) => e.type === 'turn.done' && e.turnId === 't1' && e.status === 'interrupted'));
+  assert.equal(restarted.get(session.id).status, 'idle');
+  assert.equal(restarted.get(session.id).lastSeq, log.at(-1).seq);
+  assert.equal(restarted.get(idle.id).lastSeq, events.last(idle.id));
+  assert.deepEqual(events.pending(session.id), []);
+  for (const id of [session.id, idle.id]) { await restarted.kill(id); await original.kill(id).catch(() => {}); }
+});
+
 test('queue order, edited text and reference snapshots survive a daemon restart', async () => {
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const { EventLog } = await import('../packages/connect/src/events.js');

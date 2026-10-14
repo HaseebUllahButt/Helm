@@ -19,13 +19,24 @@ export const looksSecret = (name, value) =>
 
 // ---------------------------------------------------------------- binaries
 
-async function which(bin) {
+/**
+ * Where each of several commands lives, asked of one login shell. A shell
+ * per name meant hundreds of login shells for a shell with many aliases:
+ * eight seconds and as much CPU on every start and every rediscovery.
+ */
+async function whichAll(bins) {
+  const names = [...new Set(bins.filter(Boolean))];
+  const found = new Map();
+  if (!names.length) return found;
   try {
-    const { stdout } = await exec('sh', ['-lc', `command -v ${bin}`]);
-    return stdout.trim() || null;
-  } catch {
-    return null;
-  }
+    // Tagged, so whatever the login scripts print cannot shift the answers.
+    const { stdout } = await exec('sh', ['-lc', 'for b do printf "helm-which\\t%s\\t%s\\n" "$b" "$(command -v -- "$b")"; done', 'sh', ...names], { maxBuffer: 4 << 20 });
+    for (const line of stdout.split('\n')) {
+      const [tag, name, path] = line.split('\t');
+      if (tag === 'helm-which' && path?.trim()) found.set(name, path.trim());
+    }
+  } catch { /* no shell to ask: nothing found */ }
+  return found;
 }
 
 /**
@@ -312,26 +323,25 @@ export async function discoverProfiles() {
     }
   };
 
-  // 1. Engines actually installed on this box. One `command -v` each, asked
-  // at once - they are the same question, not four. An engine may ship under
+  // 1. Engines actually installed on this box. One `command -v` for all of
+  // them - they are the same question, not four. An engine may ship under
   // an older name (cursor-agent used to be `agent`), so probe its altBins.
   const installed = {};
-  const paths = await Promise.all(
-    Object.values(ENGINES).map(async (e) => {
-      // A managed engine ships no PATH binary; it is "installed" when the
-      // runtime helm downloaded is in place (antigravity's ACP agent).
-      if (e.managed) {
-        const install = antigravityInstall();
-        return install ? { bin: install.exe, path: install.exe } : null;
-      }
-      if (!e.bin) return null;
-      for (const bin of [e.bin, ...(e.altBins ?? [])]) {
-        const path = await which(bin);
-        if (path) return { bin, path };
-      }
-      return null;
-    })
-  );
+  const where = await whichAll(Object.values(ENGINES).flatMap((e) => (e.managed || !e.bin ? [] : [e.bin, ...(e.altBins ?? [])])));
+  const paths = Object.values(ENGINES).map((e) => {
+    // A managed engine ships no PATH binary; it is "installed" when the
+    // runtime helm downloaded is in place (antigravity's ACP agent).
+    if (e.managed) {
+      const install = antigravityInstall();
+      return install ? { bin: install.exe, path: install.exe } : null;
+    }
+    if (!e.bin) return null;
+    for (const bin of [e.bin, ...(e.altBins ?? [])]) {
+      const path = where.get(bin);
+      if (path) return { bin, path };
+    }
+    return null;
+  });
   for (const [i, engine] of Object.values(ENGINES).entries()) {
     const hit = paths[i];
     if (!hit) continue;
@@ -392,14 +402,16 @@ export async function discoverProfiles() {
 export async function discoverAliasProfiles(symbols, installed) {
   const profiles = [];
   const secrets = {};
-  for (const name of symbols.keys()) {
-    const resolved = resolve(name, symbols);
-    if (!resolved) continue;
+  const all = [...symbols.keys()].map((name) => [name, resolve(name, symbols)]).filter(([, resolved]) => resolved);
+  // Not an engine itself: maybe a script that launches one. Every bare
+  // command name is looked up at once.
+  const where = await whichAll(all.map(([, resolved]) => resolved.argv[0])
+    .filter((cmd) => !engineForCommand(cmd) && !cmd.includes('/')));
+  for (const [name, resolved] of all) {
     let engineId = engineForCommand(resolved.argv[0]);
-    // Not an engine itself: maybe a script that launches one.
     let wraps = null;
     if (!engineId) {
-      const path = resolved.argv[0].includes('/') ? expand(resolved.argv[0]) : await which(resolved.argv[0]);
+      const path = resolved.argv[0].includes('/') ? expand(resolved.argv[0]) : where.get(resolved.argv[0]) ?? null;
       engineId = path ? wrappedEngine(path) : null;
       // Keep the script's full path: the daemon's PATH may not reach it.
       if (engineId) { wraps = engineId; resolved.argv[0] = collapse(path); }

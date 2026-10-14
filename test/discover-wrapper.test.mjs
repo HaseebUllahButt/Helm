@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { wrappedEngine } from '../packages/connect/src/discover.js';
+import { discoverAliasProfiles, wrappedEngine } from '../packages/connect/src/discover.js';
 
 const script = (body) => {
   const path = join(mkdtempSync(join(tmpdir(), 'helm-wrap-')), 'wrapper');
@@ -41,4 +41,27 @@ test('scripts that launch no engine, and non-scripts, are not accounts', () => {
   assert.equal(wrappedEngine(script('#!/bin/sh\nagy models\n')), null);
   assert.equal(wrappedEngine(script('\x7fELF binary')), null);
   assert.equal(wrappedEngine('/definitely/not/here'), null);
+});
+
+test('every alias is looked up in one login shell, not one shell each', async () => {
+  // A shell with hundreds of aliases started hundreds of login shells on
+  // every daemon start: eight seconds of CPU before anything else.
+  const dir = mkdtempSync(join(tmpdir(), 'helm-which-'));
+  const calls = join(dir, 'calls');
+  writeFileSync(join(dir, 'sh'), `#!/bin/bash\necho run >> '${calls}'\nexec /bin/sh "$@"\n`);
+  chmodSync(join(dir, 'sh'), 0o755);
+  writeFileSync(join(dir, 'my-claude'), '#!/bin/sh\nexec claude "$@"\n');
+  chmodSync(join(dir, 'my-claude'), 0o755);
+  const symbols = new Map(Array.from({ length: 20 }, (_, i) => [`a${i}`, { kind: 'alias', body: `tool${i} --x` }]));
+  symbols.set('mine', { kind: 'alias', body: 'my-claude --fast' });
+  const path = process.env.PATH;
+  process.env.PATH = `${dir}:${path}`;
+  try {
+    const { profiles } = await discoverAliasProfiles(symbols, { claude: 'claude' });
+    assert.deepEqual(profiles.map((p) => [p.id, p.engine, p.wraps, p.args]), [['mine', 'claude', 'claude', ['--fast']]]);
+    assert.equal(readFileSync(calls, 'utf8').split('\n').filter(Boolean).length, 1);
+  } finally {
+    process.env.PATH = path;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -180,6 +180,12 @@ export const wire = ({ promptSample, unsent, transcript, externalHome, externalL
   ...(typeof s.title === 'string' && /\[(?:Image|Pasted text) #/.test(s.title) ? { title: bareTitle(s.title) || s.title } : {}),
 });
 
+/** A helper's newest finished turn, from its recent events; local status cards do not count. */
+const lastTaskResult = (tail) => {
+  const cards = new Set(tail.filter((event) => event.type === 'turn.start' && event.local === true).map((event) => event.turnId));
+  return tail.findLast((event) => event.type === 'turn.done' && !String(event.turnId).startsWith('local-') && !cards.has(event.turnId)) ?? null;
+};
+
 /**
  * What the driver last reported for one of Claude's own subagent cards:
  * `nativeAgents` is keyed by the tool call that started it.
@@ -5517,14 +5523,16 @@ export class Sessions extends EventEmitter {
       // The process that asked died with the previous daemon; a prompt it
       // left open cannot be answered any more, so close it out here rather
       // than show a phone a question nobody can act on.
-      for (const p of this.events.pending(s.id)) {
+      // Only its turns and questions matter here, and most threads have
+      // neither open: glancing at them leaves the rest of each log unread.
+      const seen = this.events.glance(s.id);
+      for (const p of seen.pending) {
         this.events.append(s.id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
       }
       // The active turn died with the old daemon. Unsent queued tickets are
       // different: `#restoreOpenTurns` puts them back into the outbox rather
       // than closing them as though the agent had already seen them.
-      const tail = this.events.tail(s.id, 0);
-      this.#restoreOpenTurns(s, tail, false);
+      this.#restoreOpenTurns(s, seen.turns, false);
       // The process a failed reconnect was about is gone; so is the mark.
       // Anything it was doing is settled just above, as "restart" if need be.
       if (this.#unreachable(s)) { delete s.recovery; s.queuePaused = false; }
@@ -5548,9 +5556,9 @@ export class Sessions extends EventEmitter {
     for (const child of this.#index.values()) {
       if (!child.delegation) continue;
       this.#updateTeam(child);
-      const tail = this.events.tail(child.id, 500);
-      const cards = new Set(tail.filter((event) => event.type === 'turn.start' && event.local === true).map((event) => event.turnId));
-      const completed = tail.findLast((event) => event.type === 'turn.done' && !String(event.turnId).startsWith('local-') && !cards.has(event.turnId));
+      // Seqs are contiguous in a log's tail, so these are its last 500 events' turns.
+      const { seq, turns } = this.events.glance(child.id);
+      const completed = lastTaskResult(turns.filter((event) => event.seq > seq - 500));
       if (completed && !this.hasActiveDelegations(child.id) && !['working', 'blocked', 'starting'].includes(child.status)) {
         void this.#notifyParent(child, completed);
       }
