@@ -186,6 +186,8 @@ export interface LogState {
   last: number;
   loaded: boolean;
   limits?: any;
+  /** Copied-in turns left off screen; their replies go with them. */
+  hidden?: Set<string>;
 }
 
 export const emptyLog = (): LogState => ({ turns: [], pending: [], status: 'idle', last: 0, loaded: false });
@@ -198,6 +200,22 @@ const findItem = (turns: Turn[], id: string, revision: number): Item | undefined
     if (it) { turns[i].revision = revision; return it; }
   }
   return undefined;
+};
+
+/** What Codex sends ahead of the owner's words and stores as a user message. */
+const CODEX_CONTEXT = /^(?:<environment_context>|<user_instructions>|<permissions instructions>|<skills_instructions>|# AGENTS\.md instructions for )/;
+
+/**
+ * A turn copied in from the CLI's own file that is not a message to show:
+ * Codex's instructions, or a copy of a message still being answered live
+ * (older daemons copied a chat's file in while showing it live, leaving the
+ * message twice and the live reply above the copy).
+ */
+const hiddenCopy = (turns: Turn[], e: HelmEvent): boolean => {
+  if (!e.imported) return false;
+  const text = String(e.text ?? '').trim();
+  if (CODEX_CONTEXT.test(text)) return true;
+  return !!text && turns.some((t) => !t.done && !t.queued && t.text.trim() === text);
 };
 
 const turnFor = (turns: Turn[], turnId?: string): Turn | undefined =>
@@ -227,6 +245,7 @@ export function apply(state: LogState, e: HelmEvent): void {
   switch (e.type) {
     case 'turn.start': {
       const id = e.turnId ?? String(e.seq);
+      if (hiddenCopy(state.turns, e)) { (state.hidden ??= new Set()).add(id); return; }
       // helm posts the owner's message the moment it is sent, so it shows
       // at once instead of when the agent gets round to echoing it - a
       // message queued behind a running turn can wait minutes for that.
@@ -285,6 +304,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       return;
     }
     case 'item.start': {
+      if (state.hidden?.has(e.turnId)) return;
       const turn = turnFor(state.turns, e.turnId);
       if (!turn) return;
       if (turn.items.some((x) => x.id === e.id)) return;
@@ -381,6 +401,7 @@ export function apply(state: LogState, e: HelmEvent): void {
       // last turn marked the reply still running as finished, and a message
       // typed into it then had no turn to sit inside and stuck to the bottom.
       if (e.turnId?.startsWith('local-') && !state.turns.some((t) => t.id === e.turnId)) return;
+      if (state.hidden?.has(e.turnId)) return;
       const turn = turnFor(state.turns, e.turnId);
       // An older daemon closed withdrawn and stop-cleared tickets with an
       // interrupted turn.done on the `local-` turn. The message was never

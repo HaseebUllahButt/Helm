@@ -17,6 +17,8 @@ import { ENGINES } from './engines.js';
  */
 
 const MAX_TEXT = 8000;
+/** What Codex sends ahead of the owner's words and stores as a user message. */
+const CODEX_CONTEXT = /^(?:<environment_context>|<user_instructions>|<permissions instructions>|<skills_instructions>|# AGENTS\.md instructions for )/;
 
 // ------------------------------------------------------------------ locating
 
@@ -297,8 +299,9 @@ async function codexMessages(path, { all = false } = {}) {
       .replace(/<image name=[^\n>]*? path="[^"\n]+"\s*>\s*<\/image>/g, '')
       .trim().replace(/^(?:\[Image #\d+\]\s*)+/, '') : rawText;
     if (!text && !tools.length && !attachments.length) return;
-    // Codex prepends a machine-readable context block to the first turn.
-    if (p.role === 'user' && text.startsWith('<environment_context>')) return;
+    // Codex records the context it sends - the folder's AGENTS.md, the
+    // machine's details - as user messages. The owner never typed them.
+    if (p.role === 'user' && CODEX_CONTEXT.test(text)) return;
     out.push({ role: p.role, text: clip(text), tools, at: rec.timestamp, sourceId: p.id ?? rec.id,
       ...(attachments.length ? { attachments, rawText: clip(rawText) } : {}),
     });

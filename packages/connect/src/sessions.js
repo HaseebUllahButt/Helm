@@ -40,7 +40,7 @@ import { hostedProcId } from './hosted-process.js';
 import { priceBucket } from '@helm/usage/pricing';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
 import { openFiles, processArgv, processCwd } from './procinfo.js';
-import { GREETING, bareTitle, informative, promptTitle } from './titles.js';
+import { GREETING, PLACEHOLDER, bareTitle, informative, promptTitle } from './titles.js';
 import { askPreview } from './notify.js';
 import { claudeChatArgs, startHookServer } from './claude-hooks.js';
 import { gitBranch } from './git-head.js';
@@ -808,7 +808,14 @@ export class Sessions extends EventEmitter {
             this.#save();
             this.emit('session', { ...wire(s), alive: true });
           }
-          if (first || gainedTranscript) await this.#importExternalTranscript(s);
+          // A chat Helm started already shows every turn live. Copying the
+          // CLI's file in when it first appears put each message on screen
+          // twice, below the live reply, with Codex's instructions as a
+          // message of their own: only move the reading point past it.
+          const live = !first && gainedTranscript
+            && this.events.tail(s.id, 0).some((e) => e.type === 'turn.start' && !e.imported);
+          if (live) await this.#skipExternalTranscript(s);
+          else if (first || gainedTranscript) await this.#importExternalTranscript(s);
           {
             try {
               const d = await this.#driver(s);
@@ -2329,6 +2336,7 @@ export class Sessions extends EventEmitter {
   #titled(s, title, by) {
     const clean = String(title ?? '').replace(/\s+/g, ' ').trim();
     if (!clean) return;
+    if (by !== 'user' && PLACEHOLDER.test(clean)) return;
     if (by === 'agent') {
       // An ACP agent's first name for a session is a copy of the prompt, and
       // it keeps reporting one - so "hi" three prompts in would otherwise
@@ -2740,6 +2748,19 @@ export class Sessions extends EventEmitter {
     const work = this.#readExternalTranscript(s);
     this.#imports.set(s, work);
     try { return await work; } finally { this.#imports.delete(s); }
+  }
+
+  /** Mark the CLI's history as already shown, without copying any of it. */
+  async #skipExternalTranscript(s) {
+    if (!s.transcript) return;
+    const messages = await readMessages({
+      engine: s.engine, path: s.transcript, sessionId: s.engineSessionId, all: true,
+    }).catch(() => null);
+    if (!messages) return;
+    s.externalImported = messages.length;
+    s.externalImagesVersion = 1;
+    s.externalTail = null;
+    if (this.#index.has(s.id)) this.#save();
   }
 
   async #readExternalTranscript(s) {

@@ -1,6 +1,12 @@
 /** Naming fallbacks for engines that do not generate their own session name. */
 export const GREETING = /^(hi+|hey+|hello+|yo|sup|hiya|howdy|test(ing)?|ping|ok(ay)?|thanks?( you)?|good (morning|afternoon|evening))[.\s!?,]*$/i;
 
+/**
+ * The name a blank document or tab carries. A pasted doc opens with its
+ * title line, and "Untitled" names nothing.
+ */
+export const PLACEHOLDER = /^(?:untitled|new (?:chat|tab|document|doc|note|page|file|thread))(?:[\s-]+(?:document|doc|spreadsheet|presentation|note|page|file|chat))?(?:[\s#-]*\d+)?[.:]?$/i;
+
 /** Find the request, skipping greetings and the context wrappers CLIs prepend. */
 /**
  * A title is what the owner said. "[Image #1]" and "[Pasted text #2 +40
@@ -17,7 +23,7 @@ export function informative(text) {
   );
   for (const raw of body.split('\n')) {
     let line = raw.trim().replace(/^#{1,6}\s+/, '').replace(/^(?:[-*]|\d+[.)])\s+/, '');
-    if (!line || GREETING.test(line) || /^<[^>]+>$/.test(line) || /^```/.test(line)) continue;
+    if (!line || GREETING.test(line) || PLACEHOLDER.test(line) || /^<[^>]+>$/.test(line) || /^```/.test(line)) continue;
     // Headers introduce the actual request on the following line.
     if (/^(?:(?:please\s+)?(?:help me with|do)\s+)?(?:the following|instructions|task|request|context)\s*:?$/i.test(line)) continue;
     line = line
