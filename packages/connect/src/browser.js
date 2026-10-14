@@ -38,10 +38,11 @@ export class BowserBridge {
       child.stdin.on?.('error', error => { if (this.child === child) this.stop(error); });
     }
     const requestId = ++this.sequence;
+    const child = this.child;
     const result = await new Promise((resolveCall, reject) => {
       const timer = setTimeout(() => { this.pending.delete(requestId); reject(new Error('Bowser action timed out; inspect the browser before retrying')); }, 45000); timer.unref?.();
       this.pending.set(requestId, { resolve: resolveCall, reject, timer });
-      try { this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: requestId, method: 'tools/call', params: { name, arguments: args } }) + '\n', error => { if (error) this.stop(error); }); }
+      try { child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: requestId, method: 'tools/call', params: { name, arguments: args } }) + '\n', error => { if (error && this.child === child) this.stop(error); }); }
       catch (error) { this.stop(error); }
     });
     if (result?.isError) throw new Error(result.content?.filter(p => p.type === 'text').map(p => p.text).join('\n') || 'Bowser action failed');
@@ -178,7 +179,10 @@ export class BrowserManager {
     const epoch = expectedEpoch ?? tab.controlEpoch ?? 0;
     // A modal dialog blocks the browser action that created it. Answering
     // must bypass that queue while retaining the same ownership check.
-    if (action?.kind === 'dialog') { this.checkControl(tab, action, actor, epoch); tab.lastUsed = this.now(); return this.perform(tab, action, actor, epoch); }
+    if (action?.kind === 'dialog') {
+      if (actor === 'agent' && ['read', 'readonly', 'plan'].includes(this.owner(sessionId).mode)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
+      this.checkControl(tab, action, actor, epoch); tab.lastUsed = this.now(); return this.perform(tab, action, actor, epoch);
+    }
     const previous = this.serial.get(tab.id) || Promise.resolve();
     const deadline = Date.now() + this.actionTimeoutMs;
     let started = false, timer;

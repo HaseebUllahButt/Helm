@@ -128,6 +128,7 @@ test('a read-only agent can inspect a tab but cannot mutate it through browser C
   const manager = new BrowserManager({ session: sid => ({ id: sid, mode: 'readonly' }) });
   manager.tabs.set('tab', { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], console: [], viewers: new Map() });
   await assert.rejects(manager.run('one', 'tab', { kind: 'type', text: 'no' }), /read-only/);
+  await assert.rejects(manager.run('one', 'tab', { kind: 'dialog', accept: true }), /read-only/);
   await assert.rejects(manager.run('one', 'tab', { kind: 'batch', actions: [{ kind: 'evaluate', script: '1' }] }), /read-only/);
   assert.deepEqual(await manager.run('one', 'tab', { kind: 'console' }), { entries: [] }); await manager.stop();
 });

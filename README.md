@@ -33,6 +33,17 @@ computer → directory → session
 Sessions show which computer, directory, CLI, and account they use. A blocked
 session moves to the top.
 
+Threads include a shared [browser](docs/browser-use.md) for agent actions and
+live owner control, and [mobile testing](docs/mobile-devices.md) for installed
+Android devices/emulators and iOS simulators. Both start their tools only when
+needed. Supported idle Claude/Codex threads offer [Edit from here](docs/rewind.md),
+with optional file restore in an exclusive Git worktree.
+
+Thread schedules can run at a fixed time, on an interval, or from an authenticated
+webhook, including starting a fresh thread. Usage-limit recovery offers an opt-in
+to continue automatically at the provider's reset time. GitHub watches can wake
+an idle agent for PR review and check changes.
+
 ## GitHub pull requests, checks and deployments
 
 Open a thread's **Git → CI / CD** tab for its PR reviews and merge status,

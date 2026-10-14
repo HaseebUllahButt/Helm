@@ -51,4 +51,4 @@ Validation lives in `test/rewind.test.mjs`, including real Claude/Codex driver
 JSON-RPC/control-protocol processes, actual Git worktree restoration, injected
 partial file and publication failures, recovery journals, workspace locks, and
 stale client reducers. Tests configure temporary Helm state and sockets before
-importing Helm modules. Browser verification is handled by the parent task.
+importing Helm modules.

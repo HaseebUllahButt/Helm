@@ -26,7 +26,7 @@ const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { CodexDriver } = await import('../packages/connect/src/drivers/codex.js');
 class Runtime extends EventEmitter { async listLive() { return new Map(); } }
 class OfflineHost extends EventEmitter { async ensure() { return false; } has() { return false; } hasProc() { return false; } nativeSessions() { return []; } detach() {} }
-const createSessions = () => new Sessions(new Runtime(), { terminals: new OfflineHost(), nativeHost: new OfflineHost(), procHost: new OfflineHost() });
+const createSessions = () => new Sessions(new Runtime(), { terminals: new OfflineHost(), nativeHost: new OfflineHost(), procHost: new OfflineHost(), nativeDiscovery: true });
 const http = createServer();
 const wsServer = new WebSocketServer({ server: http });
 const seen = [];
