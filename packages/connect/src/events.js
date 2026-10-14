@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, renameSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, renameSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
@@ -478,6 +478,34 @@ export class EventLog {
     return n > 0 && events.length > n ? events.slice(-n) : events;
   }
 
+  /** id -> { stamp, value } for derive(): one line per thread, kept until the thread changes. */
+  #derived = new Map();
+
+  /**
+   * One value computed from a thread's newest n events, remembered until the
+   * thread changes. The digest asks this of every thread on the machine; going
+   * through #open for each pushed the threads agents were actively writing to
+   * out of the parsed cache, so every event they then sent re-read and
+   * re-parsed their whole log, and a busy machine sat at full CPU. A log not
+   * already open is read here without being cached or compacted.
+   */
+  derive(id, fn, n = 400) {
+    const log = this.#logs.get(id);
+    let stamp = log ? `seq:${log.seq}:${log.first}` : 'none';
+    if (!log) { try { const st = statSync(this.#file(id)); stamp = `file:${st.size}:${st.mtimeMs}`; } catch {} }
+    const hit = this.#derived.get(id);
+    if (hit?.stamp === stamp) return hit.value;
+    let events = log?.events ?? [];
+    if (!log && stamp !== 'none') {
+      const lines = readFileSync(this.#file(id), 'utf8').split('\n').filter(Boolean).slice(-n);
+      events = [];
+      for (const line of lines) { try { events.push(JSON.parse(line)); } catch { /* a torn last line */ } }
+    }
+    const value = fn(n > 0 && events.length > n ? events.slice(-n) : events);
+    this.#derived.set(id, { stamp, value });
+    return value;
+  }
+
   last(id) { return this.#open(id).seq; }
 
   /** Publish a new history in one rename; attachments remain for recovery. */
@@ -569,6 +597,7 @@ export class EventLog {
 
   remove(id) {
     this.#logs.delete(id);
+    this.#derived.delete(id);
     this.#pending.delete(id);
     rmSync(this.#file(id), { force: true });
     rmSync(this.#attDir(id), { force: true, recursive: true });

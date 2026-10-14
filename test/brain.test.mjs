@@ -158,6 +158,27 @@ test('localDigest reads each session line out of the real event log', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('the digest line is read from disk once and kept until the thread changes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-brain-derive-'));
+  try {
+    const writer = new EventLog(dir);
+    writer.append('b1', { type: 'turn.start', turnId: 't1', text: 'renew the cert' });
+    writer.append('b1', { type: 'item.start', id: 'i1', kind: 'tool', turnId: 't1', name: 'Bash' });
+    writer.append('b1', { type: 'item.update', id: 'i1', input: { command: 'certbot renew' } });
+    // A fresh reader has nothing parsed yet, like a daemon with more threads than its cache.
+    const reader = new EventLog(dir);
+    let reads = 0; const line = (events) => { reads += 1; return lastLine(events); };
+    assert.equal(reader.derive('b1', line), 'running: Bash(certbot renew)');
+    assert.equal(reader.derive('b1', line), 'running: Bash(certbot renew)');
+    assert.equal(reads, 1, 'an unchanged thread is not read again');
+    writer.append('b1', { type: 'item.start', id: 'i2', kind: 'tool', turnId: 't1', name: 'Read' });
+    writer.append('b1', { type: 'item.update', id: 'i2', input: { file_path: '/etc/hosts' } });
+    assert.match(reader.derive('b1', line), /Read/, 'a thread that changed on disk is read again');
+    assert.equal(reads, 2);
+    assert.equal(reader.derive('missing', line), null, 'a thread with no log gives no line');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a pane helm did not start contributes no event line', () => {
   let asked = 0;
   const events = { since: () => { asked += 1; return []; } };

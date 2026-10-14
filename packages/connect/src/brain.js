@@ -239,7 +239,7 @@ export function localDigest(sessions, events, now = Date.now()) {
   // digest, for every session, bought nothing.
   const lineOf = (s) => {
     if (String(s.id).startsWith('pane:') || String(s.id).startsWith('found:')) return null;
-    try { return lastLine(events.tail?.(s.id, 400) ?? events.since(s.id, 0) ?? []); } catch { return null; }
+    try { return events.derive ? events.derive(s.id, lastLine) : lastLine(events.tail?.(s.id, 400) ?? events.since(s.id, 0) ?? []); } catch { return null; }
   };
   // A thread's helpers ride along under it, nested, so a team started on a
   // machine nobody is watching still shows who is working on what. Finished
