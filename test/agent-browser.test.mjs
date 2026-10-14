@@ -72,7 +72,7 @@ test('real browser isolation, batched actions, uploads, owner control and restar
   assert.equal((await manager.run('one', first.tab.id, { kind: 'evaluate', script: 'document.querySelector("output").textContent' })).value, 'Helm');
   assert.equal((await manager.run('two', second.tab.id, { kind: 'evaluate', script: 'localStorage.getItem("private")' })).value, null);
   await manager.run('one', first.tab.id, { kind: 'upload', selector: '#upload', uploads: [{ name: 'note.txt', data: Buffer.from('private upload').toString('base64') }] });
-  assert.match((await manager.run('one', first.tab.id, { kind: 'evaluate', script: 'document.querySelector("#upload").files[0].name' })).value, /note.txt$/);
+  assert.equal((await manager.run('one', first.tab.id, { kind: 'evaluate', script: 'document.querySelector("#upload").files[0].name' })).value, 'note.txt');
   await assert.rejects(manager.run('one', first.tab.id, { kind: 'upload', selector: '#upload', uploads: [{ name: 'bad', data: 'not base64!' }] }), /upload data/);
   await manager.control('one', first.tab.id, 'phone', true); await assert.rejects(manager.run('one', first.tab.id, { kind: 'type', text: 'oops' }), /control/); await manager.control('one', first.tab.id, 'phone', false);
   await assert.rejects(manager.run('one', second.tab.id, { kind: 'look' }), /not found/);

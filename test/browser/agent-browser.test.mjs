@@ -41,6 +41,7 @@ test('browser viewer on phone and desktop: takeover, typing, upload and releasin
     await page.locator('input[type=file]').setInputFiles({ name: 'attachment.txt', mimeType: 'text/plain', buffer: Buffer.from('Uploaded through Helm') });
     await manager.tabs.get(opened.tab.id).page.waitForFunction(() => document.getElementById('upload').files.length === 1);
     assert.equal(await manager.tabs.get(opened.tab.id).page.locator('#upload').evaluate(el => el.files.length), 1);
+    assert.equal(await manager.tabs.get(opened.tab.id).page.locator('#upload').evaluate(el => el.files[0].name), 'attachment.txt');
     if (process.env.HELM_TEST_SCREENSHOT_DIR) { await mkdir(process.env.HELM_TEST_SCREENSHOT_DIR, { recursive: true }); await page.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, `browser-${width}.png`), fullPage: true }); }
     await page.getByRole('button', { name: 'Release control' }).click(); await page.getByRole('button', { name: 'Take control' }).waitFor();
     await page.evaluate(() => document.getElementById('root').remove()); await page.close();
