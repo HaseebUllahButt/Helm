@@ -71,6 +71,13 @@ const DELEGATION_IDLE_MS = 30_000;
 const UNHOMED_DELEGATION_MS = 24 * 60 * 60_000;
 // How often one Claude session's own subagent folder is re-listed at most.
 const NATIVE_POLL_MS = 2_000;
+// One reader per engine, so the event log can keep each one's answer until
+// the thread changes instead of re-reading the whole thread every poll.
+const LOG_SUBAGENTS = new Map();
+const logSubagents = (engine) => {
+  if (!LOG_SUBAGENTS.has(engine)) LOG_SUBAGENTS.set(engine, (events) => eventSubagents(events, { engine }));
+  return LOG_SUBAGENTS.get(engine);
+};
 
 /** engine id -> its headless driver class; ENGINES[id].driver names one. */
 export const DRIVERS = {
@@ -1253,9 +1260,10 @@ export class Sessions extends EventEmitter {
       }
     }
     // A session's own subagents are found once here, then followed by the
-    // poll; the first read lands as a session event, not a wait.
+    // poll; the first read lands as a session event, not a wait. One at a
+    // time: just after a start that is every chat on the machine at once.
     for (const s of this.#index.values()) {
-      if (this.#hasNative(s) && !s.archived && !this.#native.has(s.id)) void this.#refreshNative(s);
+      if (this.#hasNative(s) && !s.archived && !this.#native.has(s.id)) this.#firstNativeRead(s);
     }
     return this.#shape(out, { parentId, includeDelegations });
   }
@@ -1339,6 +1347,24 @@ export class Sessions extends EventEmitter {
 
   /** Whether Helm can find this session's own subagents: from its CLI's records, or from what its log saw start. */
   #hasNative(s) { return SUBAGENT_ENGINES.has(s.engine) || !!s.spawned; }
+
+  #firstReads = new Set();
+  #firstReading = false;
+  #firstNativeRead(s) {
+    this.#firstReads.add(s.id);
+    if (this.#firstReading) return;
+    this.#firstReading = true;
+    void (async () => {
+      try {
+        for (const id of this.#firstReads) {
+          this.#firstReads.delete(id);
+          const live = this.#index.get(id);
+          if (live && !this.#native.has(id)) await this.#refreshNative(live);
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      } finally { this.#firstReading = false; }
+    })();
+  }
 
   /**
    * What the driver last reported for one subagent card: `nativeAgents` is
@@ -1424,10 +1450,10 @@ export class Sessions extends EventEmitter {
       if (s.spawned) {
         const byId = new Map(agents.map((agent) => [agent.id, agent]));
         const byTool = new Map(agents.filter((agent) => agent.toolUseId).map((agent) => [agent.toolUseId, agent]));
-        for (const card of eventSubagents(this.events.tail(s.id, 0), { engine: s.engine })) {
+        for (const card of this.events.derive(s.id, logSubagents(s.engine), 0)) {
           const stored = byTool.get(card.id) ?? (card.threadId && byId.get(card.threadId));
           if (stored) { stored.toolUseId ??= card.id; continue; }
-          agents.push(card);
+          agents.push({ ...card });
         }
       }
       agents.sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));

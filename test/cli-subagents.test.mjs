@@ -213,3 +213,18 @@ test('a CLI with no readable records still shows the helpers its chat started, r
   ]);
   await assert.rejects(sessions.messageNative(parent.id, 'sub1', 'More'), /cannot pass messages/);
 });
+
+test('finding the helpers a chat started does not re-read its whole log each time', async (t) => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: workdir, profileId: 'devin-main' });
+  await sessions.input(parent.id, 'Split the work');
+  const driver = drivers.get(parent.id);
+  driver.push('item.start', { id: 'sub1', kind: 'subagent', turnId: 't1', name: 'run_subagent', input: { description: 'Read the parser', prompt: 'Read the parser and report' } });
+  driver.push('item.done', { id: 'sub1', status: 'ok', output: 'Fine.' });
+  driver.finish();
+  const tail = sessions.events.tail.bind(sessions.events);
+  const whole = [];
+  sessions.events.tail = (id, n) => { if (n === 0) whole.push(id); return tail(id, n); };
+  for (let i = 0; i < 3; i++) assert.equal((await sessions.nativeAgent(parent.id, 'sub1')).agent.title, 'Read the parser');
+  assert.deepEqual(whole, []);
+});
