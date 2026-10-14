@@ -3,15 +3,24 @@ import { resolve } from 'node:path';
 import { parseAgentArgs } from './delegation.js';
 
 export async function runBrowserCommand(args, { rpc, self, findSession, env = process.env, print = console.log } = {}) {
-  const { words, options } = parseAgentArgs(args, { values: ['session', 'engine', 'output', 'budget'], switches: ['full-page'] });
+  const { words, options } = parseAgentArgs(args, { values: ['session', 'engine', 'output', 'budget'], switches: ['full-page', 'default', 'clear-default'] });
   const [command = 'tabs', tabId, source] = words;
-  if (['help', '--help'].includes(command)) { print('helm browser open <url> [--engine chromium|bowser] | tabs | look <tab> | act <tab> <JSON> | screenshot <tab> --output <path> | close <tab> [--session <thread>]'); return; }
+  if (['help', '--help'].includes(command)) { print('helm browser open <url> [--engine chromium|bowser] | tabs | look <tab> | act <tab> <JSON> | screenshot <tab> --output <path> | close <tab> | profiles | logins <profile> [--default] | logins --clear-default [--session <thread>]'); return; }
   const sessionId = options.session || env.HELM_SESSION_ID || env.HELM_NATIVE_SESSION;
   if (!sessionId) throw new Error('run browser commands in a Helm chat, or pass --session <thread>');
   const target = options.session ? await findSession(sessionId) : { env: self(), session: { id: sessionId } };
   const id = target.session.id;
   let result;
-  if (command === 'tabs') result = await rpc(target.env, 'browser.list', { id });
+  if (command === 'profiles') result = await rpc(target.env, 'browser.profiles', { id });
+  else if (command === 'logins') {
+    if (options['clear-default']) { if (tabId || options.default) throw new Error('use --clear-default by itself'); result = await rpc(target.env, 'browser.loginDefault', { id, profileKey: null }); }
+    else {
+      const profileKey = words.slice(1).join(' '); if (!profileKey) throw new Error('choose a profile from helm browser profiles');
+      result = await rpc(target.env, 'browser.importLogins', { id, profileKey }, 60000);
+      if (options.default) result = { ...result, ...(await rpc(target.env, 'browser.loginDefault', { id, profileKey })) };
+    }
+  }
+  else if (command === 'tabs') result = await rpc(target.env, 'browser.list', { id });
   else if (command === 'open') result = await rpc(target.env, 'browser.open', { id, url: tabId || 'about:blank', engine: options.engine || 'chromium' }, 30000);
   else if (command === 'close') result = await rpc(target.env, 'browser.close', { id, tabId });
   else if (['look', 'act', 'screenshot'].includes(command)) {

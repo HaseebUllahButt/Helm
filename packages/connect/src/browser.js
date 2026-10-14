@@ -1,9 +1,10 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
-import { readFile, writeFile, rm, chmod, stat } from 'node:fs/promises';
+import { readFile, writeFile, rm, chmod, stat, rename } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { spawn } from 'node:child_process';
 import { HELM_DIR } from './paths.js';
+import * as browserLogins from './browser-logins.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -58,8 +59,8 @@ export class BowserBridge {
 
 /** Lazy, shared Chromium. No browser imports/processes or screenshot work while unused. */
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, bowser = new BowserBridge(), idleMs = 10 * 60000, actionTimeoutMs = 45000 } = {}) {
-    this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.bowser = bowser; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, bowser = new BowserBridge(), idleMs = 10 * 60000, actionTimeoutMs = 45000, logins = browserLogins } = {}) {
+    this.logins = logins; this.loginImports = new Map(); this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.bowser = bowser; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
   }
   async start() {
     if (!this.starting) this.starting = (async () => {
@@ -83,20 +84,59 @@ export class BrowserManager {
     const session = this.session(sessionId); if (!session) throw new Error('thread not found');
     return session;
   }
-  async context(sessionId) {
+  async context(sessionId, loginSeed) {
+    this.owner(sessionId);
     if (this.contexts.has(sessionId)) return this.contexts.get(sessionId);
     const browser = await this.start();
     // Concurrent open requests must not create two contexts for one thread.
     if (this.contexts.has(sessionId)) return this.contexts.get(sessionId);
     const pending = (async () => {
-      let storageState; try { storageState = JSON.parse(await readFile(join(this.directory, sessionId, 'storage.json'), 'utf8')); } catch {}
+      let storageState, seed, hasStorage = true;
+      try { storageState = JSON.parse(await readFile(join(this.directory, sessionId, 'storage.json'), 'utf8')); } catch (error) { hasStorage = error.code !== 'ENOENT'; }
+      if (!hasStorage) {
+        seed = loginSeed;
+        if (!seed) { const choice = await this.loginDefault(sessionId); if (choice.profileKey) seed = await this.logins.readLogins(choice.profileKey); }
+        if (seed) { if (!seed.cookies.length && seed.failed) throw new Error(seed.warnings?.[0] || 'Could not copy the default browser logins.'); storageState = { cookies: seed.cookies, origins: [] }; }
+      }
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, acceptDownloads: true, ...(storageState ? { storageState } : {}) });
       context.setDefaultTimeout(10000); context.setDefaultNavigationTimeout(15000);
       context.on('page', page => this.register(sessionId, page));
+      try { if (seed) await this.saveContext(sessionId, context); } catch (error) { await context.close(); throw error; }
       return context;
     })();
     this.contexts.set(sessionId, pending);
     try { return await pending; } catch (error) { this.contexts.delete(sessionId); throw error; }
+  }
+  async profiles(sessionId) { this.owner(sessionId); return { profiles: await this.logins.listProfiles() }; }
+  async loginDefault(sessionId, profileKey) {
+    this.owner(sessionId); const file = join(this.directory, 'logins.json');
+    if (profileKey === null) { await rm(file, { force: true }); return { profileKey: null }; }
+    if (profileKey !== undefined) {
+      const profile = await this.logins.resolveProfile(profileKey); if (!profile.readable) throw new Error(profile.reason);
+      mkdirSync(this.directory, { recursive: true, mode: 0o700 }); await chmod(this.directory, 0o700);
+      await this.writePrivate(file, { profileKey: profile.key }); return { profileKey: profile.key };
+    }
+    try { const choice = JSON.parse(await readFile(file, 'utf8')); return { profileKey: typeof choice.profileKey === 'string' ? choice.profileKey : null }; } catch { return { profileKey: null }; }
+  }
+  async importLogins(sessionId, profileKey) {
+    this.owner(sessionId);
+    const pending = (this.loginImports.get(sessionId) || Promise.resolve()).catch(() => {}).then(async () => {
+      const result = await this.logins.readLogins(profileKey, { refresh: true });
+      if (!result.cookies.length && result.failed) throw new Error(result.warnings?.[0] || 'Could not copy logins from this profile.');
+      const context = await this.context(sessionId, result); try { await context.addCookies(result.cookies); } catch { throw new Error('Could not copy these cookies into Chromium. Update Chromium and try again.'); } await this.save(sessionId);
+      return { cookies: result.cookies.length, sites: result.sites, failed: result.failed, profile: result.profile };
+    });
+    this.loginImports.set(sessionId, pending);
+    try { return await pending; } finally { if (this.loginImports.get(sessionId) === pending) this.loginImports.delete(sessionId); }
+  }
+  async writePrivate(file, value) {
+    const partial = `${file}.${id()}.tmp`;
+    try { await writeFile(partial, JSON.stringify(value), { mode: 0o600, flag: 'wx' }); await rename(partial, file); }
+    finally { await rm(partial, { force: true }); }
+  }
+  async saveContext(sessionId, context) {
+    const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); await chmod(this.directory, 0o700); await chmod(folder, 0o700);
+    await this.writePrivate(join(folder, 'storage.json'), await context.storageState({ indexedDB: true }));
   }
   register(sessionId, page) {
     const existing = [...this.tabs.values()].find(t => t.page === page); if (existing) return existing;
@@ -379,7 +419,7 @@ export class BrowserManager {
     await this.save(sessionId).catch(() => {}); this.contexts.delete(sessionId); await context.close();
     if (!this.contexts.size) await this.shutdownBrowser();
   }
-  async save(sessionId) { const context = await this.contexts.get(sessionId); if (!context) return; const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); const file = join(folder, 'storage.json'); await context.storageState({ path: file, indexedDB: true }); await chmod(file, 0o600); }
+  async save(sessionId) { const context = await this.contexts.get(sessionId); if (context) await this.saveContext(sessionId, context); }
   async close(sessionId, tabId) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (this.serial.has(tab.id)) throw new Error('wait for the current browser action to finish'); await this.save(sessionId); await this.clearStream(tab); if (tab.page) { tab.explicitClose = true; await tab.page.close(); } else { this.tabs.delete(tab.id); this.bowser.stop(); } await this.persistTabs(sessionId); if (![...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) { const context = await this.contexts.get(sessionId); this.contexts.delete(sessionId); await context?.close(); } if (!this.contexts.size) await this.shutdownBrowser(); return { ok: true }; }
   async download(sessionId, tabId, downloadId) { await this.recover(sessionId); const tab = this.get(sessionId, tabId), record = tab.downloads.find(d => d.id === downloadId && d.status === 'ready'); if (!record) throw new Error('download is not ready'); if ((await stat(record.path)).size > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); const bytes = await readFile(record.path); if (bytes.length > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); return { name: record.name, data: bytes.toString('base64') }; }
   async sweep() {
@@ -399,4 +439,4 @@ export class BrowserManager {
   async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } for (const tab of this.tabs.values()) await this.clearStream(tab); this.bowser.stop(); await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
 }
 
-export function browserNote() { return '[Helm browser: Agents and the owner can use the same browser tabs. Run helm browser open <url> inside this chat (isolated Chromium), or --engine bowser to reuse Bowser Computer Use on machines where installed. helm browser tabs lists your tabs. helm browser look <tab> returns text and numbered elements without screenshots. helm browser act <tab> \'{"kind":"click","ref":1}\' drives them; use kind batch with actions for several steps. Other kinds: navigate/url, type/text/ref, key/key, scroll/dy, hover/ref, select/ref/value, upload/ref/files (host paths), evaluate/script, wait/selector, resize/width/height, dialog/accept, console, network, back, forward, reload. helm browser screenshot <tab> --output <path> captures when visuals matter; close <tab> releases it. Browser tabs run on this machine: localhost reaches your dev servers. Use text views and batch actions to keep context small. The owner can view tabs and take control from Thread details → Browser; wait if they have control. Respect the request when browsing authenticated sites.]'; }
+export function browserNote() { return '[Helm browser: Agents and the owner can use the same browser tabs. Run helm browser open <url> inside this chat (isolated Chromium), or --engine bowser to reuse Bowser Computer Use on machines where installed. helm browser tabs lists your tabs. helm browser look <tab> returns text and numbered elements without screenshots. helm browser act <tab> \'{"kind":"click","ref":1}\' drives them; use kind batch with actions for several steps. Other kinds: navigate/url, type/text/ref, key/key, scroll/dy, hover/ref, select/ref/value, upload/ref/files (host paths), evaluate/script, wait/selector, resize/width/height, dialog/accept, console, network, back, forward, reload. helm browser screenshot <tab> --output <path> captures when visuals matter; close <tab> releases it. Browser tabs run on this machine: localhost reaches your dev servers. Use text views and batch actions to keep context small. The owner can view tabs and take control from Thread details → Browser; wait if they have control. When a site needs a login, suggest that the owner copy their browser profile logins using Logins in the viewer instead of asking for passwords. Respect the request when browsing authenticated sites.]'; }

@@ -57,11 +57,34 @@ downloads a browser during daemon startup.
 
 ## Logins
 
-The standard browser keeps login state separately for each thread. Sign in
-through its viewer and the thread can reuse that session after storage is
-saved. It currently has no button to import a complete existing Chrome/Edge
-profile. Playwright authentication state contains cookies and web storage,
-which is a smaller format than a full browser profile.
+Choose **Logins** in the browser toolbar to copy cookies from a Chromium,
+Chrome, Brave, Edge or Vivaldi profile on the thread’s machine. Pick a profile,
+then **Use in this chat**. **Refresh** reads it again. Only cookies come across;
+history, passwords, extensions, caches and source-profile site storage stay
+behind. Sites that also need local storage or device-bound tokens may still
+ask you to sign in through the viewer.
+
+**Use for all new chats** also saves that profile choice on this machine. New
+chat browsers read its latest cookies; chats with saved browser storage keep
+their own state. **Clear default** removes the choice without signing existing
+chats out. Cookies are saved only in each chat’s private storage file; the
+machine default file contains just the profile key. Imported cookies stay in
+memory for at most ten minutes between reads; Refresh bypasses that cache.
+
+```sh
+helm browser profiles
+helm browser logins "chromium:Profile 3"
+helm browser logins "Work" --default
+helm browser logins --clear-default
+```
+
+Profile names or directories work too; if a name matches several profiles,
+Helm lists the choices. Output contains only profile labels and counts.
+Linux supports basic, libsecret and KWallet cookie keys, using the browser’s
+password-store flag where present. Unlock the matching keyring if cookies
+cannot be copied. macOS keychain support is best effort. Windows profiles are
+listed, but importing their app-bound encrypted logins is unavailable.
+Copying needs Node’s SQLite support (Node 22.16 or newer).
 
 ## Bowser Computer Use
 
