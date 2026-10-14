@@ -642,7 +642,7 @@ export class Daemon {
       try {
         const r = id === this.id
           ? { name: this.name, projects: listProjects(), ...(await this.sessions.digest()) }
-          : await hubRpc(net, id, M.BRAIN_DIGEST, {}, { timeout: 8000 });
+          : await hubRpc(net, id, M.BRAIN_DIGEST, {}, { timeout: 8000, budget: 6000 });
         fresh[id] = { name: r.name ?? net.machines[id]?.name ?? id, sessions: r.sessions ?? [], projects: r.projects ?? [] };
       } catch { /* offline, or too old to know the method: keep what we had */ }
     }));

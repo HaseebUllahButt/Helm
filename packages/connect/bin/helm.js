@@ -872,7 +872,9 @@ async function gather() {
   const fresh = {};
   await Promise.all(Object.keys(net.machines ?? {}).map(async (id) => {
     try {
-      const r = await hubRpc(net, id, M.BRAIN_DIGEST, {}, { timeout: 8000 });
+      // An offline machine has several dead addresses; trying each for the
+      // full 8 s made the whole digest wait 20 s for nothing.
+      const r = await hubRpc(net, id, M.BRAIN_DIGEST, {}, { timeout: 8000, budget: 6000 });
       fresh[id] = { name: r.name ?? net.machines[id]?.name ?? id, sessions: r.sessions ?? [], projects: r.projects ?? [] };
     } catch { /* offline: the snapshot keeps what it had, dated */ }
   }));
