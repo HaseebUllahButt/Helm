@@ -10,7 +10,7 @@ process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-agent-browser-'));
 process.env.HELM_NO_SERVICE = '1';
 for (const [key, file] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(process.env.HELM_DIR, file);
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-const { BrowserManager, BowserBridge } = await import('../packages/connect/src/browser.js');
+const { BrowserManager, BowserBridge, BROWSER_PREVIEWS } = await import('../packages/connect/src/browser.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
 const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
 
@@ -174,6 +174,116 @@ test('CLI resolves explicitly selected remote thread and writes returned screens
   const calls = [], out = join(process.env.HELM_DIR, 'capture.jpg');
   await runBrowserCommand(['screenshot', 'tab', '--session', 'remote', '--output', out], { findSession: async () => ({ env: 'laptop', session: { id: 'remote' } }), rpc: async (...args) => { calls.push(args); return { image: 'data:image/jpeg;base64,aGVsbG8=' }; }, print: () => {} });
   assert.equal(calls[0][0], 'laptop'); assert.equal(calls[0][2].id, 'remote'); assert.equal(readFileSync(out, 'utf8'), 'hello');
+});
+
+const streamPage = (acks = []) => {
+  const cdp = new EventEmitter(); cdp.detach = async () => {}; cdp.send = async (method, params) => { if (method === 'Page.screencastFrameAck') acks.push(params.sessionId); };
+  const page = { u: 'http://x/1', url() { return this.u; }, viewportSize: () => ({ width: 1280, height: 800 }), title: async () => 'Title', mouse: { click: async () => {}, move: async () => {} }, goto: async function (u) { this.u = u; }, evaluate: async function () { return { title: 'Title', url: this.u, text: '', elements: [] }; }, context: () => ({ newCDPSession: async () => cdp }) };
+  return { cdp, page };
+};
+const paint = (cdp, data, sessionId) => cdp.emit('Page.screencastFrame', { data, sessionId });
+const tick = ms => new Promise(resolve => setTimeout(resolve, ms));
+const fakeTab = (page, extra = {}) => ({ id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], lastUsed: Date.now(), sequence: 0, console: [], network: [], ...extra });
+
+test('frame long poll answers at once when a newer frame exists, waits for a paint, and gives up at its cap', async () => {
+  const { cdp, page } = streamPage(), manager = new BrowserManager({ session: sid => ({ id: sid }) }), tab = fakeTab(page); manager.tabs.set('tab', tab);
+  // Nothing painted yet: the request is held until the cap, then answers without an image.
+  let started = Date.now(); const idle = await manager.frame('one', 'tab', { viewer: 'a', waitMs: 80 });
+  assert.equal(idle.image, undefined); assert.ok(Date.now() - started >= 70); assert.ok(idle.waited >= 70);
+  // A paint during the wait releases the request with that frame.
+  started = Date.now(); const held = manager.frame('one', 'tab', { viewer: 'a', since: idle.sequence, waitMs: 1500 });
+  await tick(30); assert.equal(tab.waiters.size, 1); paint(cdp, 'first', 1);
+  const woke = await held; assert.equal(woke.image, 'data:image/jpeg;base64,first'); assert.ok(Date.now() - started < 600); assert.equal(tab.waiters.size, 0);
+  // A frame the viewer has not seen yet comes back immediately, without a wait.
+  paint(cdp, 'second', 2); started = Date.now();
+  const now = await manager.frame('one', 'tab', { viewer: 'a', since: woke.sequence, waitMs: 1500 });
+  assert.equal(now.image, 'data:image/jpeg;base64,second'); assert.equal(now.waited, undefined); assert.ok(Date.now() - started < 300);
+  // Several viewers waiting on one tab all wake on the same paint.
+  const both = Promise.all([manager.frame('one', 'tab', { viewer: 'a', since: now.sequence, waitMs: 1500 }), manager.frame('one', 'tab', { viewer: 'b', since: now.sequence, waitMs: 1500 })]);
+  await tick(30); assert.equal(tab.waiters.size, 2); paint(cdp, 'third', 3);
+  assert.deepEqual((await both).map(r => r.image), ['data:image/jpeg;base64,third', 'data:image/jpeg;base64,third']);
+  // Text viewers never wait, and the cap is bounded.
+  started = Date.now(); assert.equal((await manager.frame('one', 'tab', { viewer: 't', preview: 'text', waitMs: 1500 })).waited, undefined); assert.ok(Date.now() - started < 300);
+  await assert.rejects(manager.frame('one', 'tab', { viewer: 'a', waitMs: 60000 }), /expected integer/);
+  await manager.stop();
+});
+
+test('a waiting frame request is released by unwatch, by stream teardown and by stopping', async () => {
+  const { cdp, page } = streamPage(), manager = new BrowserManager({ session: sid => ({ id: sid }) }), tab = fakeTab(page); manager.tabs.set('tab', tab);
+  await manager.frame('one', 'tab', { viewer: 'a', waitMs: 10 }); paint(cdp, 'x', 1);
+  const seen = (await manager.frame('one', 'tab', { viewer: 'a' })).sequence;
+  const hold = async () => { const started = Date.now(), held = manager.frame('one', 'tab', { viewer: 'a', since: seen, waitMs: 1500 }); await tick(30); assert.equal(tab.waiters.size, 1); return async () => { await held; assert.ok(Date.now() - started < 600, 'released well before the 1.5s cap'); assert.equal(tab.waiters.size, 0); }; };
+  let done = await hold(); await manager.unwatch('one', 'tab', 'a'); await done();
+  done = await hold(); await manager.clearStream(tab); await done();
+  done = await hold(); await manager.stop(); await done();
+});
+
+test('the owner’s input lets the next paints through without waiting for the pacing delay', async () => {
+  const acks = [], { cdp, page } = streamPage(acks), manager = new BrowserManager({ session: sid => ({ id: sid }) }), tab = fakeTab(page); manager.tabs.set('tab', tab);
+  await manager.frame('one', 'tab', { viewer: 'owner', preview: 'low' }); await manager.control('one', 'tab', 'owner', true);
+  paint(cdp, 'a', 11); assert.deepEqual(acks, [], 'low-data pacing holds the acknowledgement for a second');
+  await manager.run('one', 'tab', { kind: 'click', x: 5, y: 5 }, 'owner');
+  assert.deepEqual(acks, [11], 'the waiting acknowledgement was sent by the input');
+  paint(cdp, 'b', 12); assert.deepEqual(acks, [11, 12], 'a paint right after the input is acknowledged at once');
+  await tick(450); paint(cdp, 'c', 13); assert.deepEqual(acks, [11, 12], 'pacing returns after the short window');
+  await manager.stop();
+});
+
+test('smooth preview is the fastest tier and a slower viewer still sets the stream', async () => {
+  const { page } = streamPage(), manager = new BrowserManager({ session: sid => ({ id: sid }) }), tab = fakeTab(page); manager.tabs.set('tab', tab);
+  assert.equal((await manager.frame('one', 'tab', { viewer: 'lan', preview: 'smooth' })).preview, 'smooth');
+  assert.ok(BROWSER_PREVIEWS.smooth.interval < BROWSER_PREVIEWS.full.interval && BROWSER_PREVIEWS.smooth.interval <= 40);
+  assert.equal((await manager.frame('one', 'tab', { viewer: 'far', preview: 'full' })).preview, 'full');
+  await manager.stop();
+});
+
+test('tab list writes are coalesced after busy bursts but never lost on navigation, close or stop', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json'), { page } = streamPage(); let closed = 0;
+  const context = { storageState: async ({ path }) => writeFileSync(path, '{}'), close: async () => { closed++; } };
+  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); let writes = 0; const write = manager.persistTabs.bind(manager);
+  manager.persistTabs = async sid => { writes++; return write(sid); };
+  page.close = async () => { manager.tabs.delete('tab'); };
+  manager.recovered.set('one', Promise.resolve()); manager.contexts.set('one', Promise.resolve(context));
+  const tab = fakeTab(page); manager.tabs.set('tab', tab);
+  for (let i = 0; i < 8; i++) await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 });
+  assert.equal(writes, 0, 'a burst of clicks writes nothing yet'); assert.equal(existsSync(file), false);
+  await tick(1150); assert.equal(writes, 1, 'one write for the whole burst'); assert.equal(JSON.parse(readFileSync(file, 'utf8'))[0].url, 'http://x/1');
+  await manager.run('one', 'tab', { kind: 'navigate', url: 'http://x/2' }); assert.equal(writes, 2, 'navigation writes at once'); assert.equal(JSON.parse(readFileSync(file, 'utf8'))[0].url, 'http://x/2');
+  await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 }); page.u = 'http://x/3'; assert.equal(writes, 2); assert.equal(manager.persistTimers.size, 1);
+  await manager.stop(); assert.equal(JSON.parse(readFileSync(file, 'utf8'))[0].url, 'http://x/3', 'stop writes what the timer was still holding'); assert.equal(manager.persistTimers.size, 0);
+  // Closing the last tab writes the empty list at once and cancels any held write.
+  manager.stopping = false; manager.tabs.set('tab', tab); manager.contexts.set('one', Promise.resolve(context)); manager.recovered.set('one', Promise.resolve());
+  await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 }); assert.equal(manager.persistTimers.size, 1);
+  await manager.close('one', 'tab'); assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), []); assert.equal(manager.persistTimers.size, 0); assert.equal(closed, 1);
+  await tick(1150); assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), [], 'a cancelled write does not run later');
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('a crashed browser does not let a held write erase the saved tab list', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json'), { page } = streamPage();
+  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.recovered.set('one', Promise.resolve());
+  const tab = fakeTab(page); manager.tabs.set('tab', tab);
+  await manager.persistTabs('one'); await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 });
+  manager.tabs.delete('tab'); // what the disconnect handler does
+  await tick(1150); assert.equal(JSON.parse(readFileSync(file, 'utf8')).length, 1, 'the earlier list survives for recovery');
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('Playwright’s own browser is tried first; a pinned path wins; the system browser is the fallback', async () => {
+  const { chromium } = await import('playwright'), real = chromium.launch, calls = [], browser = new EventEmitter(); browser.isConnected = () => true; browser.close = async () => {};
+  const saved = { HELM_CHROMIUM_PATH: process.env.HELM_CHROMIUM_PATH, HELM_TEST_CHROMIUM: process.env.HELM_TEST_CHROMIUM };
+  const run = async (env, launch) => {
+    for (const key of Object.keys(saved)) delete process.env[key]; Object.assign(process.env, env); calls.length = 0; chromium.launch = async options => { calls.push(options.executablePath); return launch(options); };
+    const manager = new BrowserManager({ session: sid => ({ id: sid }) });
+    try { await manager.start(); } catch (error) { return error; } finally { await manager.stop(); }
+  };
+  try {
+    await run({ HELM_CHROMIUM_PATH: '/pinned/chrome' }, () => browser); assert.deepEqual(calls, ['/pinned/chrome']);
+    await run({}, () => browser); assert.deepEqual(calls, [undefined], 'no path is forced, so Playwright picks its headless shell');
+    const system = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
+    const error = await run({}, options => { if (!options.executablePath) throw new Error('Executable doesn\'t exist'); return browser; });
+    if (system) { assert.equal(error, undefined); assert.deepEqual(calls, [undefined, system]); } else assert.match(error.message, /could not start/);
+  } finally { chromium.launch = real; for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 });
 
 test('real browser isolation, batched actions, uploads, owner control and restart restore', { timeout: 60000 }, async t => {

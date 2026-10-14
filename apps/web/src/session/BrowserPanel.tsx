@@ -3,7 +3,7 @@ import type { Client, Environment, Session } from '../client';
 import BrowserLogins from './BrowserLogins';
 import { useDialog } from '../useDialog';
 import { Icon } from '../Icon';
-import { previewForLink, previewDelay, previewLease, type BrowserPreview, type ConnectionHint } from './browserPreview';
+import { previewForLink, previewWait, previewDelay, previewLease, type BrowserPreview, type ConnectionHint } from './browserPreview';
 
 type Tab = { id: string; engine: string; title: string; url: string; viewport: { width: number; height: number }; control: string | null; controlEpoch: number; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[] };
 const keys: Record<string, string> = { Control: 'Control', Meta: 'Meta', ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight', ' ': 'Space' };
@@ -30,17 +30,17 @@ export default function BrowserPanel({ client, env, session }: { client: Client;
   useEffect(() => { if (tab?.url) setAddress(tab.url === 'about:blank' ? '' : tab.url); }, [chosen, tab?.url]);
   useEffect(() => {
     if (!chosen) { setImage(''); return; }
-    let alive = true, timer: ReturnType<typeof setTimeout>;
+    let alive = true, oldServer = false, timer: ReturnType<typeof setTimeout>;
     sequence.current = -1; setImage(''); setPageText('');
     const poll = async () => {
       if (!alive) return;
-      let elapsed = 0;
-      const mode = previewChoice.current === 'auto' ? autoPreview.current.mode : previewChoice.current;
+      let elapsed = 0, held = false;
+      const wanted = previewChoice.current === 'auto' ? autoPreview.current.mode : previewChoice.current, mode = wanted === 'smooth' && oldServer ? 'full' : wanted;
       if (!document.hidden) {
         try {
           const started = performance.now();
-          const result = await call<{ tab: Tab; sequence: number; image?: string; preview?: BrowserPreview }>('frame', { tabId: chosen, viewer: viewer.current, since: sequence.current, preview: mode, leaseMs: previewLease(autoPreview.current.elapsed) });
-          elapsed = performance.now() - started;
+          const result = await call<{ tab: Tab; sequence: number; image?: string; preview?: BrowserPreview; waited?: number }>('frame', { tabId: chosen, viewer: viewer.current, since: sequence.current, preview: mode, waitMs: previewWait(mode), leaseMs: previewLease(autoPreview.current.elapsed) });
+          held = result.waited !== undefined; elapsed = Math.max(1, performance.now() - started - (result.waited || 0));
           if (!alive) return;
           if (result.image) { const decoded = new Image(); decoded.src = result.image; await decoded.decode(); if (!alive) return; setImage(result.image); }
           sequence.current = mode === 'text' ? -1 : result.sequence; setEffectivePreview(result.preview || mode);
@@ -48,13 +48,13 @@ export default function BrowserPanel({ client, env, session }: { client: Client;
           if (adaptive.samples.length >= 2) {
             const average = adaptive.samples.reduce((sum, value) => sum + value, 0) / adaptive.samples.length;
             const next = previewForLink(average, innerWidth < 600, connectionHint());
-            const rank = { low: 0, balanced: 1, full: 2, text: 0 };
+            const rank = { low: 0, balanced: 1, full: 2, smooth: 3, text: 0 };
             if (next !== adaptive.mode && (rank[next] < rank[adaptive.mode] || Date.now() - adaptive.changedAt > 15000)) { adaptive.mode = next; adaptive.changedAt = Date.now(); }
           }
           setTabs(current => { const previous = current.find(t => t.id === result.tab.id); return JSON.stringify(previous) === JSON.stringify(result.tab) ? current : current.map(t => t.id === result.tab.id ? result.tab : t); });
-        } catch (e: any) { if (alive) { setError(e.message); if (/tab not found|thread not found/i.test(e.message)) await refresh().catch(() => {}); } }
+        } catch (e: any) { if (alive && mode === 'smooth' && /invalid browser preview/.test(e.message)) oldServer = true; else if (alive) { setError(e.message); if (/tab not found|thread not found/i.test(e.message)) await refresh().catch(() => {}); } }
       }
-      if (alive) timer = setTimeout(poll, document.hidden ? 2000 : previewDelay(mode, elapsed));
+      if (alive) timer = setTimeout(poll, document.hidden ? 2000 : previewDelay(mode, elapsed, held));
     };
     void poll();
     return () => { alive = false; clearTimeout(timer); void call('unwatch', { tabId: chosen, viewer: viewer.current }).catch(() => {}); };
