@@ -46,6 +46,11 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     let writer: ReturnType<typeof setTimeout> | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let cacheHeadStart: ReturnType<typeof setTimeout> | undefined;
+    // The head-start read while it is on its way, and whether the device's
+    // own copy has been read yet: whichever finishes second must not ask for
+    // the same window again.
+    let headStart: Promise<History | null> | null = null;
+    let cacheRead = false;
     const buffered = new Map<number, HelmEvent>();
     const watchId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setState(log); setError(''); setSyncing(true); setEarlier(false); setLoadingEarlier(false);
@@ -178,21 +183,30 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     // must not hold a healthy network hostage. The first useful snapshot
     // initializes the log; a late disk read can never replace fresh history.
     cacheHeadStart = setTimeout(() => {
-      void client.rpc<History>(env, 'session.events', { id: sessionId, tail: TAIL }, 20_000)
-        .then(snapshot => {
-          if (stopped || initialized) return;
-          initialized = true;
-          void refresh(snapshot);
-        }).catch(() => {});
+      const asked = headStart = client.rpc<History>(env, 'session.events', { id: sessionId, tail: TAIL }, 20_000)
+        .catch(() => null);
+      void asked.then(snapshot => {
+        if (headStart === asked) headStart = null;
+        if (stopped || initialized) return;
+        // Failed: an empty device copy that was waiting on this asks itself.
+        if (!snapshot) { if (cacheRead) { initialized = true; void refresh(); } return; }
+        initialized = true;
+        void refresh(snapshot);
+      });
     }, 150);
     void loadCached(env, sessionId).then((cached) => {
+      cacheRead = true;
       if (stopped || initialized) return;
       clearTimeout(cacheHeadStart);
+      let useful = false;
       if (cached?.events.length) {
         consume([...cached.events].sort((a, b) => a.seq - b.seq));
         if (!log.turns.length) reset();
-        else { log.loaded = true; first = cached.first || cached.events[0].seq; publish(); }
+        else { log.loaded = true; first = cached.first || cached.events[0].seq; publish(); useful = true; }
       }
+      // Nothing on the device, and the same window already asked for: its
+      // answer starts the chat. Asking again doubled every slow open.
+      if (!useful && headStart) return;
       initialized = true;
       void refresh();
     });

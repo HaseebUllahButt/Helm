@@ -6,7 +6,7 @@ import { previewForLink, previewWait, previewDelay, previewLease, type BrowserPr
 import { isDockKey } from './BrowserDock';
 import { BrowserPointer, type Pointer } from './BrowserPointer';
 
-type Tab = { id: string; engine: string; title: string; url: string; viewport: { width: number; height: number }; control: string | null; controlEpoch: number; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[]; pointer?: Pointer | null; fit?: boolean };
+type Tab = { id: string; engine: string; title: string; url: string; viewport: { width: number; height: number }; control: string | null; controlEpoch: number; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[]; pointer?: Pointer | null; fit?: boolean; loading?: boolean };
 const keys: Record<string, string> = { Control: 'Control', Meta: 'Meta', ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight', ' ': 'Space' };
 const clamp = (value: number, min: number, max: number) => Math.round(Math.max(min, Math.min(max, value)));
 const near = (a: { width: number; height: number }, b: { width: number; height: number }) => Math.abs(a.width - b.width) < 24 && Math.abs(a.height - b.height) < 24;
@@ -124,10 +124,10 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   const act = (value: Record<string, unknown>) => takeControl().then(epoch => action(value, epoch), (e: any) => setError(/another viewer/.test(e.message) ? 'Someone else is using this tab right now.' : e.message));
   const handBack = async () => { try { const result = await call<{ tab: Tab }>('control', { tabId: chosen, viewer: viewer.current, take: false }); setTabs(current => current.map(t => t.id === chosen ? result.tab : t)); } catch (e: any) { setError(e.message); } };
   const flushTyped = () => { clearTimeout(typeTimer.current); typeTimer.current = undefined; const value = typed.current; typed.current = ''; if (value) void act({ kind: 'type', text: value }); };
-  const flushWheel = () => { clearTimeout(wheelTimer.current); wheelTimer.current = undefined; const { dx, dy } = wheel.current; wheel.current = { dx: 0, dy: 0 }; if (dx || dy) void action({ kind: 'scroll', dx: Math.max(-20000, Math.min(20000, dx)), dy: Math.max(-20000, Math.min(20000, dy)) }); };
+  const flushWheel = () => { clearTimeout(wheelTimer.current); wheelTimer.current = undefined; const { dx, dy } = wheel.current; wheel.current = { dx: 0, dy: 0 }; if (dx || dy) void act({ kind: 'scroll', dx: Math.max(-20000, Math.min(20000, dx)), dy: Math.max(-20000, Math.min(20000, dy)) }); };
   const controlled = tab?.control === viewer.current, othersHave = !!tab?.control && !controlled, direct = tab?.engine === 'chromium';
   const download = async (downloadId: string) => { try { const result = await call<{ name: string; data: string }>('download', { tabId: chosen, downloadId }); const bytes = Uint8Array.from(atob(result.data), c => c.charCodeAt(0)), url = URL.createObjectURL(new Blob([bytes])); const a = document.createElement('a'); a.href = url; a.download = result.name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } catch (e: any) { setError(e.message); } };
-  const openTab = async () => { setBusy(true); setError(''); try { const result = await call<{ tab: Tab }>('open', { engine, viewer: viewer.current }); await refresh(); setChosen(result.tab.id); } catch (e: any) { setError(e.message); } finally { setBusy(false); } };
+  const openTab = async (url?: string) => { setBusy(true); setError(''); try { const result = await call<{ tab: Tab }>('open', { engine, viewer: viewer.current, ...(url ? { url } : {}) }); await refresh(); setChosen(result.tab.id); } catch (e: any) { setError(e.message); } finally { setBusy(false); } };
   const closeTab = async (id: string) => { try { await call('close', { tabId: id }); await refresh(); } catch (e: any) { setError(e.message); } };
   const at = (e: { clientX: number; clientY: number; currentTarget: Element }, view: { width: number; height: number }) => { const rect = e.currentTarget.getBoundingClientRect(); return { x: Math.min(view.width, Math.max(0, Math.floor((e.clientX - rect.left) * view.width / rect.width))), y: Math.min(view.height, Math.max(0, Math.floor((e.clientY - rect.top) * view.height / rect.height))) }; };
   const ready = tab?.downloads.filter(d => d.status === 'ready').length || 0;
@@ -135,7 +135,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   // On the page picture when there is one, so it sits where the eyes are.
   const controlState = controlled ? <div className="bp-pill" role="status">You’re in control<span aria-hidden="true">·</span><button onClick={() => void handBack()}>Hand back</button></div>
     : othersHave ? <div className="bp-pill" role="status">Someone else is in control</div>
-    : direct && image && preview !== 'text' ? <div className="bp-hint" aria-hidden="true">Click or type to take over</div> : null;
+    : direct && image && preview !== 'text' ? <div className="bp-hint" aria-hidden="true">Click, scroll or type to take over</div> : null;
   const sized = (width: number, height: number) => tab?.fit === false && tab.viewport.width === width && tab.viewport.height === height;
   return <section ref={panel} className="browser-panel" aria-label="Browser">
     <div className="bp-tabs" role="tablist" aria-label="Browser tabs">
@@ -146,17 +146,19 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
       <button className="bp-icon" aria-label="New tab" title="New tab" disabled={busy} onClick={() => void openTab()}><Icon name="plus" size={15} /></button>
       {onClose && <button className="bp-icon bp-close" aria-label="Close browser" title="Close browser (Ctrl/⌘ Shift B)" onClick={onClose}><Icon name="close" size={16} /></button>}
     </div>
+    <div ref={nav} className="bp-nav">
+      <button className="bp-icon" aria-label="Go back" title="Back" disabled={busy || !tab} onClick={() => void act({ kind: 'back' })}><Icon name="back" size={15} /></button>
+      <button className="bp-icon" aria-label="Go forward" title="Forward" disabled={busy || !tab || tab.engine === 'bowser'} onClick={() => void act({ kind: 'forward' })}><Icon name="forward" size={15} /></button>
+      <button className="bp-icon" aria-label="Reload" title="Reload" disabled={busy || !tab} onClick={() => void act({ kind: 'reload' })}><Icon name="refresh" size={15} /></button>
+      {/* With no tab yet, the address opens one there. */}
+      <form onSubmit={e => { e.preventDefault(); const url = address.trim(); if (!url) return; if (tab) void act({ kind: 'navigate', url }); else void openTab(url); }}><input aria-label="Browser address" value={address} onChange={e => setAddress(e.target.value)} onFocus={e => e.currentTarget.select()} placeholder="Search or type an address" spellCheck={false} autoCapitalize="off" enterKeyHint="go" autoFocus={!tab && innerWidth >= 600} /></form>
+      <BrowserLogins key={`${env.id}:${session.id}`} client={client} env={env} session={session} />
+      {tab && <button className={`bp-icon${tools ? ' on' : ''}`} aria-label="More browser tools" title="More tools" aria-expanded={tools} onClick={() => setTools(v => !v)}><Icon name="more" size={16} />{ready > 0 && <b className="bp-dot" aria-hidden="true" />}</button>}
+      {tab?.loading && <span className="bp-loading" role="progressbar" aria-label="Loading page" />}
+    </div>
     {tab ? <>
-      <div ref={nav} className="bp-nav">
-        <button className="bp-icon" aria-label="Go back" title="Back" disabled={busy} onClick={() => void act({ kind: 'back' })}><Icon name="back" size={15} /></button>
-        <button className="bp-icon" aria-label="Go forward" title="Forward" disabled={busy || tab.engine === 'bowser'} onClick={() => void act({ kind: 'forward' })}><Icon name="forward" size={15} /></button>
-        <button className="bp-icon" aria-label="Reload" title="Reload" disabled={busy} onClick={() => void act({ kind: 'reload' })}><Icon name="refresh" size={15} /></button>
-        <form onSubmit={e => { e.preventDefault(); if (address.trim()) void act({ kind: 'navigate', url: address.trim() }); }}><input aria-label="Browser address" value={address} onChange={e => setAddress(e.target.value)} onFocus={e => e.currentTarget.select()} placeholder="Search or type an address" spellCheck={false} autoCapitalize="off" enterKeyHint="go" /></form>
-        <BrowserLogins key={`${env.id}:${session.id}`} client={client} env={env} session={session} />
-        <button className={`bp-icon${tools ? ' on' : ''}`} aria-label="More browser tools" title="More tools" aria-expanded={tools} onClick={() => setTools(v => !v)}><Icon name="more" size={16} />{ready > 0 && <b className="bp-dot" aria-hidden="true" />}</button>
-      </div>
       <div className="bp-stage">
-        <div ref={screen} className={`browser-screen${controlled ? ' controlled' : ''}${direct ? ' direct' : ''}`} tabIndex={0} role="group" aria-label="Live browser page" onWheel={e => { if (!controlled) return; flushTyped(); e.preventDefault(); wheel.current.dx += Math.round(e.deltaX); wheel.current.dy += Math.round(e.deltaY); if (!wheelTimer.current) wheelTimer.current = setTimeout(() => { wheelTimer.current = undefined; flushWheel(); }, 40); }} onKeyDown={e => {
+        <div ref={screen} className={`browser-screen${controlled ? ' controlled' : ''}${direct ? ' direct' : ''}`} tabIndex={0} role="group" aria-label="Live browser page" onWheel={e => { if (othersHave || !controlled && !(direct && image)) return; flushTyped(); e.preventDefault(); wheel.current.dx += Math.round(e.deltaX); wheel.current.dy += Math.round(e.deltaY); if (!wheelTimer.current) wheelTimer.current = setTimeout(() => { wheelTimer.current = undefined; flushWheel(); }, 40); }} onKeyDown={e => {
           // Keys on the pill's own button (Hand back) belong to that button.
           if (e.nativeEvent.isComposing || isDockKey(e) || (e.target as HTMLElement).closest('button, input, select, textarea, a')) return;
           const printable = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey;

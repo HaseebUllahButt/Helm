@@ -1898,6 +1898,7 @@ export class Daemon {
       case M.SESSION_DISCARD_EMPTY: return this.sessions.discardEmpty(p.id);
       case M.SESSION_TITLE:   return this.sessions.rename(p.id, p.title);
       case M.SESSION_ARCHIVE: return this.sessions.archive(p.id, p.archived !== false);
+      case M.SESSION_DISMISS_CHILD_FAILURES: return this.sessions.dismissChildFailures(p.id);
       case M.SESSION_SEEN:    return this.sessions.markSeen(p.id);
       case M.SESSION_FORK: return { session: await this.sessions.fork(p.id, p.turnId) };
       case M.SESSION_REWIND: return this.sessions.rewind(p.id, p.turnId, { restoreFiles: p.restoreFiles });

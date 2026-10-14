@@ -2275,6 +2275,8 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
 /* A card that is a container: the main tap area, and a quiet row under it. */
 .need-main { display: flex; flex-direction: column; gap: 8px; width: 100%; text-align: left; color: inherit; }
 .need-foot { display: flex; justify-content: flex-end; align-self: flex-end; min-height: 28px; margin-top: -34px; position: relative; }
+.need-foot.has-dismiss { align-self: stretch; margin-top: 4px; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.need-dismiss { color: var(--text-dim); }
 .need-foot.is-choosing { align-self: stretch; margin-top: 4px; }
 .need-snooze { font-size: var(--t-meta); color: var(--mutedfg); padding: 3px 4px; min-height: 28px; border-radius: 6px; }
 .need-snooze:hover { background: var(--hover); color: var(--text); }

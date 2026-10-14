@@ -269,6 +269,60 @@ test('a crashed browser does not let a held write erase the saved tab list', asy
   rmSync(directory, { recursive: true, force: true });
 });
 
+test('Chromium dying before Helm keeps the tab list, and a page closing on its own still updates it', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json');
+  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.recovered.set('one', Promise.resolve());
+  const page = () => Object.assign(new EventEmitter(), { url: () => 'http://x/1', viewportSize: () => ({ width: 800, height: 600 }) });
+  const dying = page(), staying = page();
+  manager.register('one', dying); manager.register('one', staying);
+  await manager.persistTabs('one'); assert.equal(JSON.parse(readFileSync(file, 'utf8')).length, 2);
+  let connected = false; manager.browser = { isConnected: () => connected, on() {} };
+  dying.emit('close'); await tick(120);
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).length, 2, 'a restart that takes Chromium first forgets nothing');
+  connected = true; staying.emit('close'); await tick(120);
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).length, 0, 'a page that closed itself is gone from the list');
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('sign-ins are saved while the owner works, at most every 15 seconds', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), { page } = streamPage(); let saves = 0, now = 1_000_000;
+  const context = { storageState: async () => { saves++; return { cookies: [], origins: [] }; }, close: async () => {} };
+  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }), now: () => now });
+  manager.recovered.set('one', Promise.resolve()); manager.contexts.set('one', Promise.resolve(context));
+  const tab = fakeTab(page); tab.viewers.set('v', now); manager.tabs.set('tab', tab);
+  await manager.sweep(); assert.equal(saves, 0, 'nothing done, nothing to save');
+  await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 }); await manager.sweep(); assert.equal(saves, 1, 'saved after the owner acted');
+  now += 5000; await manager.run('one', 'tab', { kind: 'click', x: 1, y: 1 }); await manager.sweep(); assert.equal(saves, 1, 'not again within 15 seconds');
+  now += 11000; tab.viewers.set('v', now); await manager.sweep(); assert.equal(saves, 2, 'the later action is saved once the 15 seconds pass');
+  now += 20000; tab.viewers.set('v', now); await manager.sweep(); assert.equal(saves, 2, 'no action since, no save');
+  await manager.stop(); rmSync(directory, { recursive: true, force: true });
+});
+
+test('the address bar takes a host, a local dev server or words to search', async () => {
+  const { httpUrl } = await import('../packages/connect/src/browser.js');
+  assert.equal(httpUrl('github.com/a?b=1'), 'https://github.com/a?b=1');
+  assert.equal(httpUrl('localhost:3000'), 'http://localhost:3000/', 'dev servers are plain http');
+  assert.equal(httpUrl('192.168.1.5:5173/x'), 'http://192.168.1.5:5173/x');
+  assert.equal(httpUrl('vm:8787'), 'http://vm:8787/');
+  assert.equal(httpUrl('how do cookies work'), 'https://www.bing.com/search?q=how%20do%20cookies%20work');
+  assert.equal(httpUrl('helm'), 'https://www.bing.com/search?q=helm');
+  assert.equal(httpUrl('http://example.com'), 'http://example.com/');
+  assert.throws(() => httpUrl('file:///etc/passwd'), /HTTP or HTTPS/);
+  assert.match(httpUrl('javascript:alert(1)'), /^https:\/\/www\.bing\.com\//, 'a script address is only ever searched for');
+});
+
+test('a tab says it is loading from the main page request until the page loads', async () => {
+  const manager = new BrowserManager({ directory: mkdtempSync(join(tmpdir(), 'helm-load-')), session: sid => ({ id: sid }) });
+  const main = {}, page = Object.assign(new EventEmitter(), { url: () => 'http://x/', viewportSize: () => ({ width: 800, height: 600 }), mainFrame: () => main });
+  const tab = manager.register('one', page), request = (frame, nav = true) => ({ isNavigationRequest: () => nav, frame: () => frame, resourceType: () => 'document' });
+  page.emit('request', request({}, true)); assert.equal(manager.metadata(tab).loading, false, 'a frame inside the page is not the page loading');
+  page.emit('request', request(main, false)); assert.equal(manager.metadata(tab).loading, false);
+  const before = tab.revision || 0; page.emit('request', request(main)); assert.equal(manager.metadata(tab).loading, true); assert.ok(tab.revision > before, 'a waiting viewer hears it at once');
+  page.emit('load'); assert.equal(manager.metadata(tab).loading, false);
+  page.emit('request', request(main)); page.emit('requestfailed', Object.assign(request(main), { failure: () => ({ errorText: 'x' }), url: () => 'http://x/', method: () => 'GET' })); assert.equal(manager.metadata(tab).loading, false, 'a failed load ends too');
+  page.emit('close');
+});
+
 test('Playwright’s own browser is tried first; a pinned path wins; the system browser is the fallback', async () => {
   const { chromium } = await import('playwright'), real = chromium.launch, calls = [], browser = new EventEmitter(); browser.isConnected = () => true; browser.close = async () => {};
   const saved = { HELM_CHROMIUM_PATH: process.env.HELM_CHROMIUM_PATH, HELM_TEST_CHROMIUM: process.env.HELM_TEST_CHROMIUM };

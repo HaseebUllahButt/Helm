@@ -619,8 +619,10 @@ export class ClaudeDriver extends Driver {
     if (m.subtype === 'task_notification') {
       const id = this.#tasks.get(m.task_id) ?? m.tool_use_id;
       if (!id) return;
+      if (nonAgentClaudeTask({ type: m.task_type, summary: m.summary })) this.#nonAgentTasks.add(id);
       const status = m.status === 'failed' ? 'error' : m.status === 'stopped' ? 'declined' : 'ok';
-      this.push('item.update', { id, agent: { id: m.task_id, status: m.status, summary: m.summary } });
+      this.push('item.update', { id, agent: { id: m.task_id, status: m.status, summary: m.summary,
+        ...(this.#nonAgentTasks.has(id) ? { type: m.task_type || 'local_bash' } : {}) } });
       // Terminal: the card is done. A foreground Task's tool_result lands
       // too and overwrites this with the agent's own report.
       if (['completed', 'failed', 'stopped'].includes(m.status)) {

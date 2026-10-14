@@ -287,6 +287,31 @@ test('a blocked cache transaction cannot hold up healthy network history or over
   await page.waitForFunction(()=>window.state.log.turns[0].items[0].text==='Fresh network response');
 });
 
+test('a slow device copy that turns out empty waits for the history already asked for', async t => {
+  const { page } = await pageFor(t);
+  await page.evaluate(async () => {
+    // Hold the device store so its (empty) read lands after the head start
+    // has gone out, while the network answer is slower still.
+    const db = await window.idb();
+    const tx = db.transaction('session-logs','readwrite'), store = tx.objectStore('session-logs');
+    window.releaseDisk = false;
+    const hold = () => { const r=store.get('holding');r.onsuccess=()=>{if(!window.releaseDisk)hold();}; };
+    hold();
+    setTimeout(() => { window.releaseDisk = true; }, 300);
+    window.tails = 0;
+    window.reads = async (env,method,params) => {
+      if (method !== 'session.events') return {last:3};
+      if (params.tail) window.tails++;
+      await new Promise(r => setTimeout(r, 700));
+      return {events:window.events('Only once'),last:3,firstSeq:1,logFirst:1,pending:[]};
+    };
+    window.probe();
+  });
+  await page.waitForFunction(()=>window.state?.log.loaded && !window.state.syncing, null, {timeout:3000});
+  assert.match(await page.locator('pre').innerText(), /Only once/);
+  assert.equal(await page.evaluate(() => window.tails), 1);
+});
+
 test('workspace cache separates memberships and omits provider configuration', async t => {
   const { page } = await pageFor(t);
   const result = await page.evaluate(async () => {

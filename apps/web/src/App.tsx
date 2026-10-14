@@ -465,6 +465,8 @@ function Shell({ client, conn, onSignOut }: {
   const [cached] = useState(() => loadWorkspace(scope));
   const [envs, setEnvs] = useState<Environment[]>(() => cached.environments.map(e => ({ ...e, online: false })));
   const [sessions, setSessions] = useState<Record<string, Session[]>>(cached.sessions);
+  const sessionsNow = useRef(sessions);
+  sessionsNow.current = sessions;
   const [savedSend] = useState(() => history.state?.helm && history.state.stack?.at(-1)?.kind === 'transfer'
     && history.state.stack.at(-1).jobId ? history.state : null);
   const [selected, setSelected] = useState<string | null>(savedSend?.selected ?? cached.view?.envId ?? null);
@@ -777,8 +779,19 @@ function Shell({ client, conn, onSignOut }: {
         if (up?.id) {
           recordSession(e, up);
         }
-        clearTimeout(relist.current[e]);
-        relist.current[e] = setTimeout(() => loadSessions(e), 400);
+        // The whole list (hundreds of KB) is asked for again only when this
+        // update can change which threads it holds: one new to it, one that
+        // ended, moved or was archived. A known thread changing, or a helper
+        // (shown under its lead, which sends its own update), is drawn from
+        // the update alone - busy helpers used to cost a full list each.
+        const known = up?.id ? sessionsNow.current[e]?.find((x) => x.id === up.id) : undefined;
+        const helper = !!up?.delegation?.parentId && !up.unhomed;
+        const changesList = !up?.id || !!up.movedTo || up.status === 'exited'
+          || (known ? !!known.archived !== !!up.archived : !helper);
+        if (changesList) {
+          clearTimeout(relist.current[e]);
+          relist.current[e] = setTimeout(() => loadSessions(e), 400);
+        }
         // A session that just started waiting, on a machine this window is
         // not looking at, earns a tap-target in front of whatever is open -
         // on a phone the sidebar that would say so is hidden behind the
@@ -1493,6 +1506,7 @@ function Shell({ client, conn, onSignOut }: {
                   <NeedCard
                     key={s.id} s={s} machine={e.name} onOpen={() => openSession(e.id, s, s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
                     onSnooze={(until) => snoozeThread(e.id, s, until)}
+                    onDismiss={async () => { await client.rpc(e.id, 'session.dismiss-child-failures', { id: s.id }); }}
                   />
                 ))}
               </Fold>
@@ -3429,9 +3443,17 @@ const NEED_GO: Record<string, string> = {
   question: 'Answer', command: 'Review the command', edit: 'Review the change', plan: 'Review the plan', tool: 'Review and allow',
 };
 
-function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: string; onOpen: () => void; onSnooze: (until: number) => void }) {
+function NeedCard({ s, machine, onOpen, onSnooze, onDismiss }: { s: Session; machine: string; onOpen: () => void; onSnooze: (until: number) => void; onDismiss: () => Promise<void> }) {
   const now = useNow();
   const [choosing, setChoosing] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
+  const [dismissError, setDismissError] = useState('');
+  const dismiss = async () => {
+    setDismissing(true); setDismissError('');
+    try { await onDismiss(); }
+    catch (error: any) { setDismissError(error?.message || 'Could not dismiss this failure. Try again.'); }
+    finally { setDismissing(false); }
+  };
   const eng = engineOf(s.engine);
   const n = s.pending ?? 0;
   const ask = s.status === 'blocked' ? s.ask : null;
@@ -3451,11 +3473,15 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
           </span>
         </span>
         {ask?.text && <span className={`need-q${ask.kind === 'command' ? ' mono' : ''}`}>{ask.text}{ask.more ? ` (+${ask.more} more)` : ''}</span>}
-        <span className="need-go">{s.team?.blocked ? `${s.team.blocked} child tasks need approval` : s.team?.failed ? `${s.team.failed} child tasks failed` : s.recovery && !ask ? 'View task' : NEED_GO[ask?.kind ?? ''] ?? 'Review and answer'}<Icon name="forward" size={15} /></span>
+        <span className="need-go">{s.team?.blocked ? `${s.team.blocked} child tasks need approval` : s.team?.failed ? `${s.team.failed} child ${s.team.failed === 1 ? 'task' : 'tasks'} failed` : s.recovery && !ask ? 'View task' : NEED_GO[ask?.kind ?? ''] ?? 'Review and answer'}<Icon name="forward" size={15} /></span>
       </button>
-      <div className={`need-foot${choosing ? ' is-choosing' : ''}`}>
+      <div className={`need-foot${s.team?.failed ? ' has-dismiss' : ''}${choosing ? ' is-choosing' : ''}`}>
         {!choosing ? (
-          <button className="need-snooze" onClick={() => setChoosing(true)}>Snooze…</button>
+          <>
+            {!!s.team?.failed && <button className="need-snooze need-dismiss" disabled={dismissing} onClick={() => void dismiss()}
+              title="Clear the current child failure alert on all devices. Keep its history; new failures will still alert you.">{dismissing ? 'Dismissing…' : s.team.failed === 1 ? 'Dismiss failure' : 'Dismiss failures'}</button>}
+            <button className="need-snooze" onClick={() => setChoosing(true)}>Snooze…</button>
+          </>
         ) : (
           <div className="snooze-opts">
             {snoozeChoices().map((c) => (
@@ -3465,6 +3491,7 @@ function NeedCard({ s, machine, onOpen, onSnooze }: { s: Session; machine: strin
           </div>
         )}
       </div>
+      {dismissError && <p className="error" role="alert">{dismissError}</p>}
     </div>
   );
 }

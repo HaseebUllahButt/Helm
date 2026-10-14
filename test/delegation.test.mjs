@@ -796,6 +796,29 @@ test('a completed task stays complete after a message was consumed during its tu
   assert.equal(delegationOutput({status:'working',delegation:{status:'working'}},events).complete,false);
 });
 
+test('a restart closing a mid-task message does not make a working helper look finished', () => {
+  // As logged on the laptop: the task, then a message sent mid-task, then a
+  // restart that closed both tickets while the CLI's own turn ran on.
+  const events = [
+    { type:'turn.start', turnId:'local-task', text:'Measure startup' },
+    { type:'turn.start', turnId:'provider-turn', text:'Measure startup' },
+    { type:'item.start', id:'note', kind:'text' },
+    { type:'item.delta', id:'note', text:'Reading the startup code now.' },
+    { type:'turn.start', turnId:'local-note', text:'Avoid activeTurn' },
+    { type:'turn.deliver', turnId:'local-note' },
+    { type:'turn.accept', turnId:'local-note' },
+    { type:'turn.done', turnId:'local-task', status:'ok' },
+    { type:'turn.done', turnId:'local-note', status:'ok' },
+  ];
+  const result = delegationOutput({ status:'working', delegation:{status:'working'} }, events);
+  assert.equal(result.complete, false);
+  assert.equal(result.status, 'working');
+  // Once the CLI's turn ends, it is finished as usual.
+  const done = delegationOutput({ status:'idle', delegation:{status:'done'} },
+    [...events, { type:'turn.done', turnId:'provider-turn', status:'ok' }]);
+  assert.equal(done.complete, true);
+});
+
 test('CLI flags do not leak into the task; literal task flags survive --', () => {
   const parsed = parseAgentArgs(['claude-main', '--model', 'opus', '--wait', '--', 'review', '--dangerously-skip-permissions'], { values: ['model'], switches: ['wait'] });
   assert.deepEqual(parsed.options, { model: 'opus', wait: true });
@@ -970,4 +993,71 @@ test('a helper with no thread to sit under lists on its own, and its team nests 
   record.delegation.finishedAt = Date.now() - 25 * 60 * 60_000;
   assert.equal((await sessions.list()).some((s) => s.id === helper.id), false);
   assert.equal((await sessions.list({ includeDelegations: true })).some((s) => s.id === helper.id), true);
+});
+
+
+test('dismissed native failures stay in history and only a new failure alerts again', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Review with helpers');
+  const driver = drivers.get(parent.id);
+  driver.push('subagent.status', { id: 'failed-helper', status: 'error' });
+  driver.push('subagent.status', { id: 'busy-helper', status: 'working' });
+  driver.push('permission.request', { requestId: 'approval', parentId: 'blocked-helper', kind: 'command', title: 'Run check?' });
+  const history = sessions.events.tail(parent.id, 100);
+  const updates = [];
+  sessions.on('session', session => { if (session.id === parent.id) updates.push(structuredClone(session.team)); });
+  const { session } = sessions.dismissChildFailures(parent.id);
+  assert.deepEqual(session.team, { working: 1, blocked: 1, failed: 0 });
+  assert.equal(session.dismissedNativeFailures, undefined, 'internal acknowledgement is not exposed on the wire');
+  assert.equal(parent.nativeAgents['failed-helper'], 'error');
+  assert.deepEqual(sessions.events.tail(parent.id, 100), history);
+  assert.equal(sessions.events.pending(parent.id).length, 1);
+  assert.deepEqual(updates.at(-1), session.team, 'every connected device gets the cleared count');
+  driver.push('subagent.status', { id: 'failed-helper', status: 'error' });
+  assert.equal(parent.team.failed, 0, 'a duplicate failure cannot revive the alert');
+  driver.push('subagent.status', { id: 'failed-helper', status: 'working' });
+  driver.push('subagent.status', { id: 'failed-helper', status: 'error' });
+  assert.equal(parent.team.failed, 1, 'the same helper can raise a new failure');
+});
+
+test('dismissing nested delegated failures preserves results and a retry can fail again', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  const { session: grandchild } = await sessions.delegate({ id: child.id, profileId: 'claude-main', task: 'Nested review' });
+  drivers.get(grandchild.id).finish('error');
+  drivers.get(child.id).push('subagent.status', { id: 'native-error', status: 'error' });
+  assert.equal(parent.team.failed, 2);
+  const { session: before, ...result } = sessions.delegationResult(grandchild.id);
+  sessions.dismissChildFailures(parent.id);
+  assert.equal(parent.team.failed, 0);
+  assert.equal(sessions.get(child.id).team.failed, 0);
+  const { session: after, ...retained } = sessions.delegationResult(grandchild.id);
+  assert.deepEqual(retained, result);
+  assert.equal(after.delegation.status, before.delegation.status);
+  assert.equal(sessions.get(grandchild.id).archived, undefined);
+  const retry = drivers.get(grandchild.id);
+  retry.engineSessionId = randomUUID();
+  await sessions.messageDelegation(child.id, grandchild.id, 'Try again');
+  retry.finish('error');
+  assert.equal(parent.team.failed, 1, 'a later failed turn reaches every ancestor');
+});
+
+
+test('an orphaned background-command completion cannot become a failed native helper', async t => {
+  let receive;
+  const pipe = { onData: cb => { receive = cb; }, onExit: () => {}, detach: () => {} };
+  const { ClaudeDriver } = await import('../packages/connect/src/drivers/claude.js');
+  const driver = new ClaudeDriver({ cmd: 'unused', cwd: process.env.HELM_DIR,
+    procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe }, openTurn: () => null, resumeEvents: () => [] });
+  const events = [];
+  driver.on('event', event => events.push(event));
+  await driver.start();
+  t.after(() => driver.suspend());
+  receive(JSON.stringify({ type: 'system', subtype: 'task_notification', task_id: 'old-bash', tool_use_id: 'old-tool',
+    status: 'failed', summary: 'Background command "npm run dev" failed with exit code 1' }) + '\n');
+  assert.equal(events.filter(e => e.type === 'subagent.status').length, 0);
+  assert.equal(events.find(e => e.type === 'item.update' && e.id === 'old-tool').agent.type, 'local_bash');
+  assert.equal(events.find(e => e.type === 'item.done' && e.id === 'old-tool').status, 'error');
 });

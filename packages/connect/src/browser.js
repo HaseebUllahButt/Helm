@@ -12,9 +12,25 @@ const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
 const text = (value, max = 20000) => { if (typeof value !== 'string' || value.length > max) throw new Error(`expected text up to ${max} characters`); return value; };
 const integer = (value, min, max) => { if (!Number.isInteger(value) || value < min || value > max) throw new Error(`expected integer ${min}–${max}`); return value; };
-const httpUrl = value => { const u = new URL(String(value).includes('://') || String(value).startsWith('about:') ? value : `https://${value}`); if (!['http:', 'https:'].includes(u.protocol) && u.href !== 'about:blank') throw new Error('use an HTTP or HTTPS browser address'); return u.href; };
+// What a person types in an address bar: a full address, a bare host (local
+// dev servers are plain http), or words to search for. Bing, because
+// DuckDuckGo and Google turn a headless browser away as a robot.
+export const httpUrl = value => {
+  const raw = String(value).trim();
+  let address = raw;
+  if (!raw.includes('://') && !raw.startsWith('about:')) {
+    const local = /^(localhost|127(\.\d+){3}|0\.0\.0\.0|\[::1\]|10(\.\d+){3}|192\.168(\.\d+){2}|172\.(1[6-9]|2\d|3[01])(\.\d+){2}|[\w-]+\.local)(:\d+)?([/?#]|$)/i.test(raw) || /^[\w-]+:\d+([/?#]|$)/.test(raw);
+    const host = /^[^\s/?#]+\.[a-z][a-z0-9-]*(:\d+)?([/?#]\S*)?$/i.test(raw) || /^[^\s/?#]+:\d+([/?#]\S*)?$/.test(raw);
+    address = local ? `http://${raw}` : host ? `https://${raw}` : `https://www.bing.com/search?q=${encodeURIComponent(raw)}`;
+  }
+  const u = new URL(address); if (!['http:', 'https:'].includes(u.protocol) && u.href !== 'about:blank') throw new Error('use an HTTP or HTTPS browser address'); return u.href;
+};
 const executable = () => process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM || ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
-const LAUNCH = { headless: true, args: ['--disable-gpu', '--disk-cache-size=33554432'], timeout: 15000 };
+// Pages are drawn at twice their size so the live picture stays sharp on phone
+// and laptop screens; it costs about 30 MB per browser and pages still see a
+// 1x screen. HELM_BROWSER_SCALE=1 turns it off.
+const SCALE = Math.min(3, Math.max(1, Number(process.env.HELM_BROWSER_SCALE) || 2));
+const LAUNCH = { headless: true, args: ['--disable-gpu', '--disk-cache-size=33554432', `--force-device-scale-factor=${SCALE}`], timeout: 15000 };
 // Playwright's headless shell starts ~3x faster and uses about half the memory of full Chromium; a pinned path or a missing shell falls back to the system browser.
 async function launchChromium() {
   const { chromium } = await import('playwright'), pinned = process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM;
@@ -28,8 +44,8 @@ const MAX_THREAD_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 export const BROWSER_PREVIEWS = Object.freeze({
   low: { maxWidth: 640, maxHeight: 640, quality: 35, interval: 1000 },
   balanced: { maxWidth: 960, maxHeight: 960, quality: 50, interval: 500 },
-  full: { maxWidth: 1280, maxHeight: 1200, quality: 60, interval: 200 },
-  smooth: { maxWidth: 1280, maxHeight: 1200, quality: 60, interval: 33 },
+  full: { maxWidth: 1920, maxHeight: 1800, quality: 60, interval: 200 },
+  smooth: { maxWidth: 1920, maxHeight: 1800, quality: 60, interval: 33 },
 });
 const FRAME_WAIT_MS = 1500;
 const POINTER_WORDS = { click: 'Clicking', hover: 'Pointing at', type: 'Typing into', select: 'Choosing in', upload: 'Uploading into', drag: 'Dragging', scroll: 'Scrolling', point: '' };
@@ -173,6 +189,13 @@ export class BrowserManager {
     page.on('response', response => cap(tab.network, { url: response.url().slice(0, 2000), method: response.request().method(), status: response.status() }));
     page.on('requestfailed', request => cap(tab.network, { url: request.url().slice(0, 2000), method: request.method(), error: request.failure()?.errorText }));
     page.on('domcontentloaded', () => { void page.title().then(title => { tab.title = title; }).catch(() => {}); });
+    // The viewer shows a loading bar from the click to the page's load, like a real browser.
+    // A download or an empty answer never loads, so the bar gives up after 20 seconds.
+    const loading = value => { clearTimeout(tab.loadingTimer); if (value) { tab.loadingTimer = setTimeout(() => loading(false), 20000); tab.loadingTimer.unref?.(); } if (tab.loading !== value) { tab.loading = value; this.changed(tab); } };
+    page.on('request', request => { if (request.isNavigationRequest() && request.frame() === page.mainFrame()) loading(true); });
+    page.on('requestfailed', request => { if (request.isNavigationRequest() && request.frame() === page.mainFrame()) loading(false); });
+    page.on('load', () => loading(false));
+    page.on('download', () => loading(false)); page.on('close', () => clearTimeout(tab.loadingTimer));
     page.on('dialog', dialog => { tab.dialog = dialog; });
     page.on('download', download => {
       const record = { id: id(), name: basename(download.suggestedFilename()), url: download.url(), status: 'pending', at: this.now() };
@@ -184,7 +207,7 @@ export class BrowserManager {
     });
     return tab;
   }
-  metadata(tab) { return { id: tab.id, engine: tab.engine, url: tab.page?.url() || tab.url || 'about:blank', title: tab.title, viewport: tab.page?.viewportSize() || { width: 1280, height: 800 }, control: tab.control, controlEpoch: tab.controlEpoch || 0, dialog: tab.dialog ? { type: tab.dialog.type(), message: tab.dialog.message().slice(0, 2000) } : null, downloads: tab.downloads.map(({ path, ...d }) => d), pointer: this.pointer(tab), fit: tab.fit !== false }; }
+  metadata(tab) { return { id: tab.id, engine: tab.engine, url: tab.page?.url() || tab.url || 'about:blank', title: tab.title, viewport: tab.page?.viewportSize() || { width: 1280, height: 800 }, control: tab.control, controlEpoch: tab.controlEpoch || 0, dialog: tab.dialog ? { type: tab.dialog.type(), message: tab.dialog.message().slice(0, 2000) } : null, downloads: tab.downloads.map(({ path, ...d }) => d), pointer: this.pointer(tab), fit: tab.fit !== false, loading: !!tab.loading }; }
   pointer(tab) { const p = tab.pointer; return p && this.now() - p.at < (p.by === 'guide' ? 60000 : 4000) ? p : null; }
   discardDownloads(tab) { for (const record of tab.downloads) { record.discarded = true; if (record.path) void rm(record.path, { force: true }).catch(() => {}); } }
   async finishDownload(tab, record) {
@@ -269,7 +292,7 @@ export class BrowserManager {
         if (!readOnlyAction(action)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
       }
       this.checkControl(tab, action, actor, epoch);
-      tab.lastUsed = this.now(); const owned = actor !== 'agent' && tab.engine === 'chromium'; if (owned) this.boost(tab);
+      tab.lastUsed = tab.actedAt = this.now(); const owned = actor !== 'agent' && tab.engine === 'chromium'; if (owned) this.boost(tab);
       let result;
       try { result = await this.perform(tab, action, actor, epoch); }
       catch (error) { if (!error.candidates && !error.check) throw error; result = { error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await this.look(tab)) }; }
@@ -515,7 +538,7 @@ export class BrowserManager {
   }
   async capture(tab, { fullPage = false, maxWidth = 1280 } = {}) {
     if (tab.engine === 'bowser') { const result = await this.bowser.call('screenshot', { max_size: maxWidth }); const part = result.content.find(p => p.type === 'image'); if (!part) throw new Error('Bowser did not return a screenshot'); return { image: `data:${part.mimeType};base64,${part.data}` }; }
-    const bytes = await tab.page.screenshot({ type: 'jpeg', quality: 75, fullPage: !!fullPage, timeout: 10000 });
+    const bytes = await tab.page.screenshot({ type: 'jpeg', quality: 75, fullPage: !!fullPage, scale: 'css', timeout: 10000 });
     if (bytes.length > 3 * 1024 * 1024) throw new Error('screenshot exceeds 3 MiB; capture the viewport instead');
     return { image: `data:image/jpeg;base64,${bytes.toString('base64')}` };
   }
@@ -599,6 +622,10 @@ export class BrowserManager {
   async unwatch(sessionId, tabId, viewer) { const tab = this.get(sessionId, tabId); tab.viewers.delete(viewer); this.wake(tab); tab.viewerProfiles?.delete(viewer); tab.viewerLeases?.delete(viewer); tab.viewerRevisions?.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } if (!tab.viewers.size || this.previewMode(tab) === 'text') { await tab.streamConfig?.catch(() => {}); if (!tab.viewers.size || this.previewMode(tab) === 'text') await this.clearStream(tab); } return { ok: true }; }
   async control(sessionId, tabId, viewer, take) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer'); if (tab.control && tab.control !== viewer) throw new Error('another viewer has control'); tab.control = take ? viewer : null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; tab.viewers.set(viewer, this.now()); if (!tab.dialog) await (this.serial.get(tab.id) || Promise.resolve()).catch(() => {}); return { tab: this.metadata(tab) }; }
   async pageClosed(sessionId) {
+    // A restart stops Chromium a moment before Helm: its pages close first,
+    // and writing that down would forget every tab the owner had open.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    if (this.stopping || !this.browser || this.browser.isConnected?.() === false) return;
     await this.persistTabs(sessionId);
     if ([...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) return;
     const pending = this.contexts.get(sessionId), context = await pending;
@@ -606,7 +633,7 @@ export class BrowserManager {
     await this.save(sessionId).catch(() => {}); this.contexts.delete(sessionId); await context.close();
     if (!this.contexts.size) await this.shutdownBrowser();
   }
-  async save(sessionId) { const context = await this.contexts.get(sessionId); if (context) await this.saveContext(sessionId, context); }
+  async save(sessionId) { const context = await this.contexts.get(sessionId); if (context) { (this.savedAt ||= new Map()).set(sessionId, this.now()); await this.saveContext(sessionId, context); } }
   async close(sessionId, tabId) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (this.serial.has(tab.id)) throw new Error('wait for the current browser action to finish'); await this.save(sessionId); await this.clearStream(tab); if (tab.page) { tab.explicitClose = true; await tab.page.close(); } else { this.tabs.delete(tab.id); this.bowser.stop(); } await this.persistTabs(sessionId); if (![...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) { const context = await this.contexts.get(sessionId); this.contexts.delete(sessionId); await context?.close(); } if (!this.contexts.size) await this.shutdownBrowser(); return { ok: true }; }
   async download(sessionId, tabId, downloadId) { await this.recover(sessionId); const tab = this.get(sessionId, tabId), record = tab.downloads.find(d => d.id === downloadId && d.status === 'ready'); if (!record) throw new Error('download is not ready'); if ((await stat(record.path)).size > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); const bytes = await readFile(record.path); if (bytes.length > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); return { name: record.name, data: bytes.toString('base64') }; }
   async sweep() {
@@ -617,6 +644,9 @@ export class BrowserManager {
     }
     for (const sid of [...this.contexts.keys()]) {
       const tabs = [...this.tabs.values()].filter(t => t.sessionId === sid && t.engine === 'chromium');
+      // Sign-ins made since the last save survive Chromium dying with Helm.
+      const savedAt = this.savedAt?.get(sid) || 0;
+      if (tabs.some(t => t.actedAt > savedAt) && this.now() - savedAt > 15000) await this.save(sid).catch(() => {});
       if (!tabs.length || !tabs.every(t => !t.viewers.size && !this.serial.has(t.id) && this.now() - t.lastUsed > this.idleMs)) continue;
       await this.save(sid); await this.persistTabs(sid); const context = await this.contexts.get(sid); this.suspending.add(sid); try { await context?.close(); } finally { this.suspending.delete(sid); } this.contexts.delete(sid); this.recovered.delete(sid);
     }

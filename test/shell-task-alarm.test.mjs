@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -68,4 +68,53 @@ test('saved quick-chat artifact subscriptions are repaired without ending actual
   assert.equal(sessions.hasActiveDelegations('quick2'), false);
   const saved = JSON.parse(readFileSync(join(dir, 'sessions.json'), 'utf8')).sessions[0];
   assert.deepEqual(saved.nativeAgents, s.nativeAgents, 'the repair survives another restart');
+});
+
+
+test('dismissing a saved native and delegated failure survives daemon restart', async t => {
+  const dir = process.env.HELM_DIR;
+  writeFileSync(join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions: [{
+    id: 'dismiss-parent', engine: 'codex', cwd: dir, status: 'idle',
+    nativeAgents: { failed: 'error' }, team: { working: 0, blocked: 0, failed: 2 },
+  }, {
+    id: 'dismiss-child', engine: 'codex', cwd: dir, status: 'idle',
+    delegation: { parentId: 'dismiss-parent', status: 'error', finishedAt: 100 },
+  }] }));
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new EventEmitter(), { makeDriver: () => { throw Error('history must not launch'); } });
+  sessions.dismissChildFailures('dismiss-parent');
+  sessions.stop();
+  const restored = new Sessions(new EventEmitter(), { makeDriver: () => { throw Error('history must not launch'); } });
+  t.after(() => restored.stop());
+  assert.equal(restored.get('dismiss-parent').team.failed, 0);
+  assert.equal(restored.get('dismiss-parent').nativeAgents.failed, 'error');
+  assert.equal(restored.get('dismiss-child').delegation.status, 'error');
+  restored.dismissChildFailures('dismiss-parent');
+  assert.equal(restored.get('dismiss-parent').team.failed, 0, 'recomputing the counts keeps the acknowledgements');
+});
+
+
+test('a shell failure whose start was trimmed is repaired from the account transcript', async t => {
+  const dir = process.env.HELM_DIR;
+  const home = join(dir, 'claude-home'), cwd = join(dir, 'project');
+  const sessionId = '12345678-1234-1234-1234-123456789abc';
+  const folder = join(home, 'projects', cwd.replace(/\//g, '-'));
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, `${sessionId}.jsonl`), [
+    { message: { content: [{ type: 'tool_use', id: 'trimmed-bash', name: 'Bash' }] } },
+    { message: { content: [{ type: 'tool_use', id: 'real-agent', name: 'Agent' }] } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  writeFileSync(join(dir, 'profiles.json'), JSON.stringify({ profiles: [{ id: 'isolated-claude', env: { CLAUDE_CONFIG_DIR: home } }] }));
+  writeFileSync(join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions: [{
+    id: 'trimmed-parent', engine: 'claude', profileId: 'isolated-claude', engineSessionId: sessionId, cwd, status: 'idle',
+    nativeAgents: { 'trimmed-bash': 'error', 'real-agent': 'error' }, team: { working: 0, blocked: 0, failed: 2 },
+  }] }));
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const sessions = new Sessions(new EventEmitter(), { makeDriver: () => { throw Error('history must not launch'); } });
+  t.after(() => sessions.stop());
+  await once(sessions, 'session', { signal: AbortSignal.timeout(3000) });
+  assert.deepEqual(sessions.get('trimmed-parent').nativeAgents, { 'real-agent': 'error' });
+  assert.equal(sessions.get('trimmed-parent').team.failed, 1, 'a real failed agent keeps its alert');
+  const saved = JSON.parse(readFileSync(join(dir, 'sessions.json'), 'utf8')).sessions[0];
+  assert.deepEqual(saved.nativeAgents, { 'real-agent': 'error' });
 });
