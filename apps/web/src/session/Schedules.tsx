@@ -83,7 +83,7 @@ export function Schedules({ client, env, session, onOpen }: { client: Client; en
     }}>
       <label>Name<input value={name} onChange={event => setName(event.target.value)} maxLength={100} placeholder="Daily review" /></label>
       <label>Trigger<select aria-label="Trigger" value={type} onChange={event => setType(event.target.value as Schedule['type'])}><option value="interval">Interval</option><option value="fixed_time">Fixed time</option><option value="webhook">Webhook</option></select></label>
-      <label>Task<textarea required rows={4} value={prompt} maxLength={32000} onChange={event => setPrompt(event.target.value)} placeholder="Describe the task…" /></label>
+      <label>Task<textarea aria-label="Task" required rows={4} value={prompt} maxLength={32000} onChange={event => setPrompt(event.target.value)} placeholder="Describe the task…" /></label>
       {type === 'interval' && <label>Every (minutes)<input type="number" min={5} max={525600} required value={interval} onChange={event => setIntervalMinutes(Number(event.target.value))} /></label>}
       {type === 'fixed_time' && <><label>Time<input type="time" required value={timeOfDay} onChange={event => setTimeOfDay(event.target.value)} /></label>
         <label>Time zone<input required value={timeZone} onChange={event => setTimeZone(event.target.value)} placeholder="America/New_York" /></label>
