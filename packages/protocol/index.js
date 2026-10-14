@@ -168,7 +168,8 @@ export const M = {
   SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task, worktree? } -> { session }; cwd beats the parent's folder; worktree: own checkout on a helm/ branch
   SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id, consume?, parentId?, callerThreadId? } -> { session, status, complete, output, pending }
   SESSION_DELEGATION_MESSAGE: 'session.delegation-message', // { parentId, id, data } -> { ok }
-  SESSION_NATIVE_AGENT: 'session.native-agent', // { id, agentId } -> { agent }  one of Claude's own subagents, read-only
+  SESSION_NATIVE_AGENT: 'session.native-agent', // { id, agentId, full? } -> { agent, events? }  one of a CLI's own subagents
+  SESSION_NATIVE_MESSAGE: 'session.native-message', // { id, agentId, data } -> { ok }  passed on to it by its parent
   SESSION_ATTACH: 'session.attach',// { id, cols, rows } -> { session, scrollback }
   SESSION_CONNECT: 'session.connect', // { id } -> { session }  share one managed provider with CLI and app
   SESSION_DETACH: 'session.detach',// { id }

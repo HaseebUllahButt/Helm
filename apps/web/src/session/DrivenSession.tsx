@@ -21,7 +21,7 @@ import { money, busyStatus } from '../format';
 import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
-import type { Decision, Turn } from './types';
+import type { Decision, Item, Turn } from './types';
 import { useThreadTeam } from './TeamSummary';
 import { ThreadDetails, type DetailsTab } from './ThreadDetails';
 import { ExternalSessionNotice } from './ExternalSessionNotice';
@@ -115,8 +115,15 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const failedSendSeq = useRef(0);
   const retryingSends = useRef(new Set<string>());
   const team = useThreadTeam(client, env.id, session.id);
-  // Claude's own subagents have no Helm session, so they ride on this one.
+  // The CLI's own subagents have no Helm session, so they ride on this one.
   const agentCount = team.length + (session.nativeCards?.length ?? 0);
+  // A spawn step in the chat opens the helper it started, by the tool call
+  // that started it or, for Codex, the thread the step names.
+  const nativeCards = session.nativeCards;
+  const openAgent = useCallback((item: Item) => {
+    const card = onOpenNative && nativeCards?.find((agent) => agent.toolUseId === item.id || (!!item.agent?.id && agent.id === item.agent.id));
+    return card ? () => onOpenNative!(card) : null;
+  }, [nativeCards, onOpenNative]);
   useEffect(() => {
     let stale = false;
     client.rpc<{ sessions: Session[] }>(env.id, 'session.list', {}).then((result) => {
@@ -683,7 +690,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       {firstMessage && <EmptyChat cwd={session.cwd} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={modelNow} />}
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
-        readVisual={readVisual}
+        readVisual={readVisual} openAgent={openAgent}
         pending={log.pending} onReviewRequest={reviewRequest} focusItem={focusItem}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
         onResend={resend} onWithdraw={withdraw}

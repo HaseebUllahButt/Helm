@@ -41,6 +41,8 @@ function CompactItem({ item }: { item: Item }) {
 }
 
 type ItemFocus = { id: string; visit: number; start?: boolean };
+/** Opens the chat of the helper a spawn step started, when Helm knows that helper. */
+const OpenAgent = createContext<((item: Item) => (() => void) | null) | undefined>(undefined);
 const Requests = createContext<{ pending: Permission[]; review?: (id: string) => void; focusItem?: ItemFocus }>({ pending: [] });
 
 /**
@@ -429,6 +431,7 @@ const tokens = (n?: number) => (
 function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, Item[]> }) {
   const live = item.agent?.status ? ['running', 'pendingInit', 'working'].includes(item.agent.status) : item.status === 'streaming';
   const requests = useContext(Requests);
+  const open = useContext(OpenAgent)?.(item);
   const request = requests.pending.find(p => p.parentId === item.id);
   const input = item.input ?? tryParse(item.inputJson);
   const who = input?.subagent_type ?? item.name ?? 'subagent';
@@ -457,6 +460,9 @@ function SubagentItem({ item, byParent }: { item: Item; byParent: Map<string, It
       {request && requests.review && <button className="subagent-request" onClick={event => {
         event.preventDefault(); event.stopPropagation(); requests.review?.(request.requestId);
       }}>{request.kind === 'question' ? 'Answer question' : 'Review request'}<Icon name="forward" size={13} /></button>}
+      {open && !request && <button className="subagent-request subagent-open" onClick={event => {
+        event.preventDefault(); event.stopPropagation(); open();
+      }}>Open<Icon name="forward" size={13} /></button>}
     </>
   );
   if (!kids.length && !out) return <div className="act">{head}</div>;
@@ -708,6 +714,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
       {head && display.printed && !!said.text && <div className="turn assistant command-note"><Markdown text={said.text} className="prose" /></div>}
       {head && !display.printed && !!(turn.text || turn.attachments?.length) && (
         <div className={`turn user${queued ? ' queued' : ''}`}><div className="bubble">
+          {display.to && <span className="turn-note">To {display.to}</span>}
           {said.note && (said.note.length > 160
             // The delegation brief is a paragraph of instructions to the
             // agent; on a phone it buried the one line the owner typed.
@@ -767,7 +774,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   );
 });
 
-export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, onRewind, pending = [], onReviewRequest, focusItem, readVisual }: {
+export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, onRewind, pending = [], onReviewRequest, focusItem, readVisual, openAgent }: {
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
   pending?: Permission[]; onReviewRequest?: (requestId: string) => void;
   /** The machine holds more of this conversation than is on screen. */
@@ -781,6 +788,8 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   onRewind?: (turn: Turn) => void;
   focusItem?: { id: string; visit: number };
   readVisual?: VisualReader;
+  /** The chat of the helper a spawn step started, if Helm knows it. */
+  openAgent?: (item: Item) => (() => void) | null;
 }) {
   const requestKey = pending.map(request => request.requestId).join('\0');
   // Text deltas clone the pending array too. Only changed requests should
@@ -935,6 +944,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
 
   return (
     <Busy.Provider value={working || status === 'starting'}>
+    <OpenAgent.Provider value={openAgent}>
     <Requests.Provider value={requests}>
     <Reveal.Provider value={reveal}>
     <Visuals.Provider value={readVisual}>
@@ -968,6 +978,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     </Visuals.Provider>
     </Reveal.Provider>
     </Requests.Provider>
+    </OpenAgent.Provider>
     </Busy.Provider>
   );
 }

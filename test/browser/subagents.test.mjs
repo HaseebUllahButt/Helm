@@ -536,7 +536,7 @@ test('Shell back history leaves parent and child chats without cycling between t
   }
 });
 
-test('Claude Code native subagents show as read-only cards beside delegated tasks', async () => {
+test('a CLI\'s own subagents show beside delegated tasks, looking the same', async () => {
   const bundle = await build({ stdin: { contents: `
     import React, { useState } from 'react';
     import { createRoot } from 'react-dom/client';
@@ -590,14 +590,15 @@ test('Claude Code native subagents show as read-only cards beside delegated task
       const finished = view.locator('.delegation-group.finished');
       await active.getByRole('heading').filter({hasText:'2'}).waitFor();
       await finished.getByRole('heading').filter({hasText:'2'}).waitFor();
-      assert.equal(await active.locator('.native-badge').count(), 2);
+      // Nothing marks them apart from Helm's own helpers.
+      assert.equal(await view.locator('.native-badge').count(), 0);
       // The chat says one waits on an approval: one card, first, saying so.
       assert.deepEqual(await active.locator('.delegation-status').allInnerTexts(), ['Needs approval', 'Working']);
       await active.getByRole('button', {name:'Needs approval, details'}).click();
       await view.locator('#task-detail-native-a3').getByText('It is waiting for your approval in the chat.', {exact:true}).waitFor();
       await active.getByRole('button', {name:'Needs approval, details'}).click();
       assert.match(await active.locator('.delegation-task small').nth(1).innerText(), /general-purpose · claude-opus-test · worktree-agent-a1/i);
-      assert.equal(await finished.locator('.delegation-branch.native').count(), 1);
+      assert.equal(await finished.locator('.delegation-branch').count(), 2);
       // Expanding reads its result and steps; nothing offers to steer it.
       await view.getByRole('button', {name:/Write the summary/}).click();
       const detail = view.locator('#task-detail-native-a2');
@@ -615,7 +616,7 @@ test('Claude Code native subagents show as read-only cards beside delegated task
   }
 });
 
-test('a terminal thread lists its native subagents without a task form', async () => {
+test('a terminal thread lists its CLI\'s subagents without a task form', async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
@@ -642,7 +643,7 @@ test('a terminal thread lists its native subagents without a task form', async (
     await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
     await view.addScriptTag({ content:bundle.outputFiles[0].text });
     const dialog = view.getByRole('dialog', {name:'Subagents'});
-    await dialog.locator('.delegation-group.finished .native-badge').waitFor();
+    await dialog.locator('.delegation-group.finished .delegation-branch').waitFor();
     await dialog.getByRole('button', {name:'Stopped, details'}).click();
     await dialog.getByText('Finished without a written reply.', {exact:true}).waitFor();
     assert.equal(await dialog.getByRole('button', {name:/New task/}).count(), 0);
@@ -651,7 +652,7 @@ test('a terminal thread lists its native subagents without a task form', async (
   } finally { await view.close(); }
 });
 
-test('a native subagent opens as a read-only chat of its whole conversation', async () => {
+test('a CLI\'s subagent opens as a chat of its whole conversation', async () => {
   const bundle = await build({ stdin: { contents: `
     import React, { useState } from 'react';
     import { createRoot } from 'react-dom/client';
@@ -714,12 +715,68 @@ test('a native subagent opens as a read-only chat of its whole conversation', as
       // Still working, so it is read again until it settles.
       await view.getByText('It is checked in auth.js line 40.').waitFor();
       await view.locator('.sub').filter({hasText:/^Finished · Explore · claude-opus-test$/}).waitFor();
-      // Read only: no composer, and a line saying where to steer it.
+      // Its parent cannot pass messages on: no composer, and a line saying where to steer it.
       assert.equal(await view.locator('textarea').count(), 0);
       await view.locator('.native-foot').filter({hasText:'Fix the login bug'}).waitFor();
       await capture(view, `native-chat-${width}.png`);
       await view.getByRole('button', {name:'Back', exact:true}).click();
       await view.getByRole('button', {name:/Map the code/}).waitFor();
+    } finally { await view.close(); }
+  }
+});
+
+test('a subagent whose parent can pass messages on takes one from its chat', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { NativeAgentView } from './apps/web/src/session/NativeAgentView';
+    const env = { id:'local', name:'Laptop', online:true, info:{} };
+    const card = { id:'kid', native:true, engine:'codex', title:'audit flow', agentType:'Dewey', model:'gpt-test', status:'done',
+      startedAt:1, updatedAt:2, branch:null, toolUseId:'spawn1', last:'Saves twice.', canMessage:true };
+    const parent = { id:'parent', title:'Fix intake', cwd:'/project', engine:'codex', status:'idle', driver:'codex', nativeCards:[card] };
+    let sent = '';
+    const client = {
+      on: () => () => {},
+      rpc: async (envId, method, params) => {
+        (window.calls ??= []).push({ method, params });
+        if (method === 'session.native-message') { sent = params.data; return { ok:true }; }
+        if (method === 'session.native-agent') {
+          const events = [
+            { seq:1, type:'turn.start', turnId:'native-1', text:'New task from the main chat.' },
+            { seq:2, type:'item.start', turnId:'native-1', id:'native-2', kind:'text' },
+            { seq:3, type:'item.delta', turnId:'native-1', id:'native-2', text:'Saves twice.' },
+            { seq:4, type:'item.done', turnId:'native-1', id:'native-2', status:'ok' },
+            { seq:5, type:'turn.done', turnId:'native-1', status:'ok' },
+          ];
+          if (sent) events.push({ seq:6, type:'turn.start', turnId:'native-3', text:sent });
+          return { agent:{ ...card, status: sent ? 'working' : 'done', updatedAt: sent ? 3 : 2, result:'', activity:[], task:'', worktree:null }, events, more:false };
+        }
+        return { ok:true };
+      },
+    };
+    createRoot(document.getElementById('root')).render(<div className="main showing" style={{display:'flex',flexDirection:'column',height:'100vh'}}>
+      <NativeAgentView client={client} env={env} parent={parent} agent={card} onBack={() => {}} /></div>);
+  `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true, write:false, format:'iife', jsx:'automatic' });
+  for (const width of [1280, 390]) {
+    const view = await browser.newPage({ viewport:{width,height:844} });
+    view.setDefaultTimeout(10_000);
+    try {
+      await view.setContent('<div id="root"></div>');
+      await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
+      await view.addScriptTag({ content:bundle.outputFiles[0].text });
+      await view.getByText('Saves twice.').waitFor();
+      await view.getByText('Goes straight to this helper').waitFor();
+      assert.equal(await view.locator('.native-foot').count(), 0);
+      const box = view.locator('textarea');
+      await box.fill('Check the quote path too');
+      await box.press('Enter');
+      // Shown in the helper's chat once it is on its way.
+      await view.locator('.turn.user').filter({hasText:'Check the quote path too'}).waitFor();
+      await view.locator('.sub').filter({hasText:/^Working · Dewey · gpt-test$/}).waitFor();
+      assert.ok(await view.evaluate(() => window.calls.some(c => c.method === 'session.native-message' && c.params.id === 'parent'
+        && c.params.agentId === 'kid' && c.params.data === 'Check the quote path too')));
+      assert.equal(await box.inputValue(), '');
+      await capture(view, `native-message-${width}.png`);
     } finally { await view.close(); }
   }
 });

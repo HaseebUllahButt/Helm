@@ -157,9 +157,18 @@ export interface Session {
   unhomed?: boolean;
 }
 
-/** A Claude Code subagent Helm can show but not message, stop or open. */
+/**
+ * A helper the chat's own CLI started (Claude's Agent tool, Codex's
+ * spawn_agent, OpenCode's task...). It opens as a chat; `canMessage` says
+ * whether its parent can pass a message on to it.
+ */
 export interface NativeAgent {
   id: string; native: true; title: string; agentType: string | null; model: string | null;
+  /** The CLI it runs in; older machines only reported Claude's. */
+  engine?: string;
+  canMessage?: boolean;
+  /** Known only from what the chat's log saw start. */
+  fromLog?: boolean;
   /** `blocked` comes from the chat itself: the subagent waits on an approval there. */
   status: 'working' | 'blocked' | 'done' | 'error' | 'interrupted';
   startedAt: number; updatedAt: number; branch: string | null; toolUseId: string | null;

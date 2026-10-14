@@ -2403,11 +2403,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   margin: 0; padding: 12px 14px; max-height: none; box-shadow: none;
   border-radius: var(--radius-xl); border-bottom: 1px solid color-mix(in srgb, var(--amber) 34%, transparent);
 }
-/* Claude Code's own subagents: read-only cards beside Helm's tasks. */
-.native-badge {
-  display: inline-block; margin-right: 6px; padding: 0 5px; border: 1px solid var(--line-2); border-radius: 999px;
-  font: 600 var(--t-micro) var(--sans); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim);
-}
+/* A CLI's own subagents, beside Helm's tasks. */
 .native-activity summary { cursor: pointer; color: var(--mutedfg); font-size: var(--t-meta); }
 .native-activity ol { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; font: var(--t-micro) var(--mono); color: var(--text-dim); overflow-wrap: anywhere; }
 .delegation-follow { display: flex; gap: 8px; align-items: flex-end; margin: 0; }
@@ -2531,6 +2527,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .child-requests button span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .child-requests small { display: block; color: var(--text-dim); font-size: var(--t-meta); }
 .subagent-request { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 5px 8px; color: var(--amber-text); font-size: var(--t-meta); }
+.subagent-request.subagent-open { color: var(--text-dim); }
+.subagent-request.subagent-open:hover { color: var(--text); }
 .thread-details-launch { position: relative; }
 .brain-entry { margin-block: 10px 16px; }
 .thread-details-back { position: fixed; inset: 0; z-index: 60; background: #0005; display: flex; justify-content: flex-end; }
@@ -3282,14 +3280,16 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .chip-pick.account .mark { width: auto; height: auto; padding: 0; background: none; border-radius: 0; }
 .chip-pick.account .mark svg { width: 13px; height: 13px; }
 
-/* A Claude Code subagent opened as a chat: read only, so a quiet line
-   stands where the composer would be. */
+/* A CLI's own subagent opened as a chat: a quiet line where the composer
+   would be when its parent cannot pass a message on. */
 .native-foot {
   margin: 0; padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line); color: var(--text-dim); font-size: 13px; text-align: center;
 }
 .native-foot b { color: var(--text); font-weight: 500; }
 .native-error { margin: 8px 16px 0; }
+.native-foot-line { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); font-size: var(--t-meta); }
+.native-foot-line b { color: var(--text); font-weight: 500; }
 /* A new chat while its agent starts. */
 .starting-note {
   display: flex; align-items: center; justify-content: center; gap: 6px;

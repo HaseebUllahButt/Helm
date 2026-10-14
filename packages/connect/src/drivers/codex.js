@@ -825,6 +825,35 @@ export class CodexDriver extends Driver {
     }
   }
 
+  /**
+   * A message straight to one of this thread's own helpers, the way Codex's
+   * own app switches to an agent's thread: a turn on the child thread, or a
+   * steer while it is mid-turn. It goes through this thread's server
+   * because that one holds the child - another process is refused as a
+   * second writer. A child it does not hold (after a restart) is resumed.
+   */
+  async messageSubagent(threadId, text) {
+    await this.start();
+    const input = [{ type: 'text', text, text_elements: [] }];
+    const policy = this.#policy();
+    const params = { threadId, input, clientUserMessageId: randomUUID(), approvalPolicy: policy.approvalPolicy, sandboxPolicy: policy.sandboxPolicy };
+    let res = await this.#server.call('turn/start', params);
+    if (res.error && /thread not found/i.test(res.error.message)) {
+      const resumed = await this.#server.call('thread/resume', { threadId, excludeTurns: true });
+      if (resumed.error) throw new Error(resumed.error.message);
+      res = await this.#server.call('turn/start', params);
+    }
+    if (res.error) {
+      // Busy: what it is doing now takes the message, as a typed-in steer would.
+      const read = await this.#server.call('thread/read', { threadId, includeTurns: true }, 10_000);
+      const turn = [...(read.result?.thread?.turns ?? [])].reverse().find((t) => t.status === 'inProgress');
+      if (!turn) throw new Error(res.error.message);
+      const steer = await this.#server.call('turn/steer', { threadId, expectedTurnId: turn.id, input, clientUserMessageId: randomUUID() });
+      if (steer.error) throw new Error(steer.error.message);
+    }
+    this.#server.alias(threadId, this);
+  }
+
   /** app-server does not advertise these: they are client-side in Codex TUI. */
   async availableCommands() { return CODEX_COMMANDS; }
 

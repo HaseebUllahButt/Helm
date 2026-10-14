@@ -4,6 +4,11 @@ import type { Turn } from './types';
 export function userMessage(text?: string, attachments: Turn['attachments'] = []) {
   const channel = text?.match(/^\s*<channel\s+source="helm-native"[^>]*>\s*([\s\S]*?)\s*<\/channel>\s*$/);
   if (channel) text = channel[1];
+  // A message for one of the chat's helpers, which the agent was asked to
+  // pass on: what the owner wrote, and to whom. The ask is Helm's.
+  let to: string | undefined;
+  const relay = text?.match(/^\s*<subagent-message\s+to="[^"]*"\s+title="([^"]*)">\n?([\s\S]*?)\n?<\/subagent-message>/);
+  if (relay) { to = relay[1]; text = relay[2]; }
   // A message Helm pasted into a terminal CLI comes back from the CLI's own
   // record wrapped as a paste; the wrapper is the CLI's bookkeeping, not
   // what the owner wrote.
@@ -52,5 +57,5 @@ export function userMessage(text?: string, attachments: Turn['attachments'] = []
       .map((m) => m[1]).join('\n').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
     printed = true;
   }
-  return { text, attachments, printed };
+  return { text, attachments, printed, to };
 }

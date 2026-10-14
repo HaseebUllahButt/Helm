@@ -30,11 +30,11 @@ const offeredOf = (agents: CliAgent[], profileId?: string | null) => {
 /**
  * Account → model → task, then a live branch list beside the parent thread.
  * `nativeOnly` is for a terminal thread Helm cannot delegate from: just the
- * Claude Code subagents it ran, with no task form.
+ * subagents its CLI ran, with no task form.
  */
 export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, embedded = false, reviewAttention = false, onNativeAttention, nativeOnly = false }: {
   client: Client; env: Environment; parent: Session; onClose: () => void; onOpen?: (session: Session) => void;
-  /** Open one of Claude Code's own subagents as a read-only chat. */
+  /** Open one of the CLI's own subagents as a chat. */
   onOpenNative?: (agent: NativeAgent) => void;
   embedded?: boolean; reviewAttention?: boolean; onNativeAttention?: () => void; nativeOnly?: boolean;
 }) {
@@ -79,7 +79,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     Number(stateOf(right) === 'blocked') - Number(stateOf(left) === 'blocked') || (left.createdAt ?? 0) - (right.createdAt ?? 0));
   const finished = children.filter((child) => !ACTIVE.includes(stateOf(child)))
     .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
-  // Claude Code's own subagents: read from its files, shown, never steered.
+  // The CLI's own subagents: read from its records, opened as chats.
   const natives = parent.nativeCards ?? [];
   const nativeActive = natives.filter((agent) => ACTIVE.includes(agent.status))
     .sort((left, right) => Number(right.status === 'blocked') - Number(left.status === 'blocked'));
@@ -369,14 +369,14 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     const label = STATUS[agent.status] || agent.status;
     const toggle = () => { setNativeOpen(open ? '' : agent.id); setNativeDetail(null); setError(null); };
     const detail = open && nativeDetail?.id === agent.id ? nativeDetail : null;
-    return <li key={key} className={`delegation-branch native${open ? ' selected' : ''}`}>
+    return <li key={key} className={`delegation-branch${open ? ' selected' : ''}`}>
       <div className="delegation-row">
-        <button type="button" className="delegation-task" title={onOpenNative ? 'Open subagent conversation (read only)' : 'Started by Claude Code itself; read only'}
+        <button type="button" className="delegation-task" title={onOpenNative ? 'Open subagent conversation' : undefined}
           aria-expanded={onOpenNative ? undefined : open} aria-controls={onOpenNative ? undefined : `task-detail-${key}`}
           onClick={() => onOpenNative ? onOpenNative(agent) : toggle()}>
-          <EngineMark engine="claude" />
+          <EngineMark engine={agent.engine ?? parent.engine} />
           <span className="grow"><b>{agent.title}</b>
-            <small><span className="native-badge">native</span>{[agent.agentType || 'subagent', agent.model || 'Claude default', agent.branch].filter(Boolean).join(' · ')}</small></span>
+            <small>{[agent.agentType || 'subagent', agent.model || 'CLI default', agent.branch].filter(Boolean).join(' · ')}</small></span>
         </button>
         <button type="button" className={`delegation-status state-${agent.status}`} data-task={key} aria-label={`${label}, details`}
           aria-expanded={open} aria-controls={`task-detail-${key}`} onClick={toggle}>
@@ -394,9 +394,8 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
           <ol>{detail.activity.map((line, index) => <li key={index}>{line}</li>)}</ol>
         </details>}
         {onOpenNative && <div className="delegation-actions">
-          <button type="button" className="ghost" onClick={() => onOpenNative(agent)}>Open conversation</button>
+          <button type="button" className="ghost" onClick={() => onOpenNative(agent)}>{agent.canMessage ? 'Open and message' : 'Open conversation'}</button>
         </div>}
-        <p className="note">Claude Code started this subagent inside the chat. Helm shows it here but cannot message or stop it.</p>
         {errorBox(`native:${agent.id}`)}
       </div>}
     </li>;

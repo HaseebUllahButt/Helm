@@ -1875,6 +1875,7 @@ export class Daemon {
       case M.SESSION_DELEGATION_RESULT: return this.sessions.delegationResult(p.id, p);
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
       case M.SESSION_NATIVE_AGENT: return this.sessions.nativeAgent(p.id, p.agentId, { full: p.full === true });
+      case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);
       case M.SESSION_START: {
         if (p.brain) throw new Error('Use brain.open to start the single Helm brain on the VM.');
         const { originHandoffId: _originHandoffId, delegation: _delegation, ...start } = p;

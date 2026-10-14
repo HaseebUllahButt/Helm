@@ -236,10 +236,11 @@ test('the team counts native subagents beside delegated children, once each', as
   assert.equal(parent.team.working, 1);
   assert.equal(updates.length, 2);
 
-  // Helm's chat already shows this one inline under its tool call.
+  // Shown inline under its tool call in the chat, it is still one of the
+  // chat's helpers: one card, and the step in the chat opens the same one.
   drivers.get(parent.id).push('item.start', { id: 'toolu_over', kind: 'subagent', turnId: 't1', name: 'Agent', input: {} });
-  await assert.rejects(sessions.nativeAgent(parent.id, 'over'), /no such subagent/);
-  assert.deepEqual(parent.nativeCards.map((a) => a.id), ['live']);
+  await sessions.nativeAgent(parent.id, 'over');
+  assert.deepEqual(parent.nativeCards.map((a) => [a.id, a.toolUseId, a.canMessage]), [['live', 'toolu_live', true], ['over', 'toolu_over', true]]);
 
   // What Claude's files say is never written into Helm's own index.
   const saved = JSON.parse(readFileSync(join(process.env.HELM_DIR, 'sessions.json'), 'utf8'));

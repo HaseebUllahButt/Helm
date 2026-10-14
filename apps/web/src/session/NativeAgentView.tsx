@@ -2,15 +2,21 @@ import { useEffect, useState } from 'react';
 import type { Client, Environment, NativeAgent, NativeAgentDetail, Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { BackIcon } from '../Icon';
+import { Composer } from './Composer';
 import { Transcript } from './Transcript';
 import { apply, emptyLog, type HelmEvent, type LogState } from './types';
 
 const POLL_MS = 3000;
+// After a message goes in, the parent passes it on and the helper wakes:
+// keep looking that long even while its record still says finished.
+const AFTER_SEND_MS = 90_000;
 
 /**
- * One of Claude Code's own subagents, opened like any chat: its whole
- * conversation, read from the file Claude writes. Helm cannot message or
- * stop it, so there is no composer - only a line saying where it runs.
+ * One of the CLI's own subagents, opened like any chat: its whole
+ * conversation, read from the record its CLI keeps. A message typed here
+ * reaches the helper (Codex directly; the others through the chat that
+ * started it, with their own tool for that), and it carries on with
+ * everything it knew.
  */
 export function NativeAgentView({ client, env, parent, agent, onBack }: {
   client: Client; env: Environment; parent: Session; agent: NativeAgent; onBack: () => void;
@@ -19,6 +25,9 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
   const [card, setCard] = useState<NativeAgent>(agent);
   const [more, setMore] = useState(false);
   const [error, setError] = useState('');
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sentAt, setSentAt] = useState(0);
 
   useEffect(() => {
     let stopped = false, timer: ReturnType<typeof setTimeout> | undefined, seen = '';
@@ -29,7 +38,7 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
         if (stopped) return;
         setError('');
         setCard(r.agent);
-        // Redrawn whole each time it moves: the file is the only record.
+        // Redrawn whole each time it moves: the record is the only one.
         const stamp = `${r.agent.status}:${r.agent.updatedAt}:${r.events.length}`;
         if (stamp !== seen) {
           seen = stamp;
@@ -39,7 +48,7 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
           setLog(next);
           setMore(!!r.more);
         }
-        if (r.agent.status === 'working' || r.agent.status === 'blocked') timer = setTimeout(load, POLL_MS);
+        if (r.agent.status === 'working' || r.agent.status === 'blocked' || Date.now() - sentAt < AFTER_SEND_MS) timer = setTimeout(load, POLL_MS);
       } catch (failure) {
         if (stopped) return;
         setError(failure instanceof Error ? failure.message : String(failure));
@@ -49,10 +58,25 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
     };
     void load();
     return () => { stopped = true; clearTimeout(timer); };
-  }, [client, env.id, parent.id, agent.id]);
+  }, [client, env.id, parent.id, agent.id, sentAt]);
 
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || sending) return;
+    setSending(true); setError('');
+    try {
+      await client.rpc(env.id, 'session.native-message', { id: parent.id, agentId: agent.id, data: text }, 70_000);
+      setDraft('');
+      setSentAt(Date.now());
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally { setSending(false); }
+  };
+
+  const engine = card.engine ?? agent.engine ?? parent.engine;
   const working = card.status === 'working' || card.status === 'blocked';
   const state = { working: 'Working', blocked: 'Waiting for approval', done: 'Finished', error: 'Failed', interrupted: 'Stopped' }[card.status] ?? card.status;
+  const canMessage = card.canMessage ?? agent.canMessage;
 
   return (
     <>
@@ -60,10 +84,10 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
         <div className="titles">
           <div className="crumb">
-            <EngineMark engine="claude" />
+            <EngineMark engine={engine} />
             <h1 className="crumb-title" title={card.title}>{card.title}</h1>
           </div>
-          <span className="sub">{[state, card.agentType || 'subagent', card.model || 'Claude default'].join(' · ')}</span>
+          <span className="sub">{[state, card.agentType || 'subagent', card.model || 'CLI default'].join(' · ')}</span>
         </div>
       </div>
       {error && <p className="error native-error" role="alert">{error}</p>}
@@ -71,10 +95,22 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
         turns={log.turns} status={working ? 'working' : 'idle'} loaded={log.loaded}
         empty={working ? 'Waiting for the subagent…' : 'This subagent left no messages.'}
       />
-      <p className="native-foot" role="note">
-        {more && <>Showing the latest part. </>}
-        Claude Code started this helper inside <b>{parent.title || 'its chat'}</b>. You can read it here; message or stop it from that chat.
-      </p>
+      {more && <p className="native-foot" role="note">Showing the latest part.</p>}
+      {canMessage ? (
+        <Composer
+          draft={draft} setDraft={setDraft} engine={engine} keys={false} canAttach={false} preparing={sending}
+          onSend={() => void send()}
+          statusLine={<span className="native-foot-line">{engine === 'codex'
+            ? 'Goes straight to this helper'
+            : <>Sent through <b>{parent.title || 'the main chat'}</b></>}</span>}
+        />
+      ) : (
+        <p className="native-foot" role="note">
+          {card.fromLog || !parent.driver && !parent.nativeChat
+            ? <>Started inside <b>{parent.title || 'its chat'}</b>. You can read it here; message it from that chat.</>
+            : <>This CLI can't pass messages to its helpers. You can read it here.</>}
+        </p>
+      )}
     </>
   );
 }
