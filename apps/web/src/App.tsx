@@ -1334,7 +1334,14 @@ function Shell({ client, conn, onSignOut }: {
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
   // older work stays available on its machine and through search.
-  const doneNow = everyone.filter(({ s }) => ((s.driver || s.adopted) && (s.turns ?? 0) > 0 || s.nativeCli && s.alive)
+  //
+  // Only machines that are on, like Working: a machine that is off is known
+  // here only from what this device happened to save the last time it saw
+  // it, so each phone and computer counted a different, frozen list. Until
+  // the live machine list arrives (or with no connection at all) the saved
+  // lists are all there is, and they show, marked as saved.
+  const doneNow = everyone.filter(({ env: machine, s }) => ((s.driver || s.adopted) && (s.turns ?? 0) > 0 || s.nativeCli && s.alive)
+    && (machine.online || !liveEnvsSeen.current)
     && settledThread(s)
     && tick - (s.updatedAt ?? 0) < DONE_FOR_MS).sort(byNewest);
   const doneIsSaved = doneNow.some(({ env }) => !env.online || !liveListsSeen.current.has(env.id));

@@ -189,6 +189,19 @@ test('Helm-created Codex sessions use the existing daemon while preserving the e
   await sessions.stop();
 });
 
+test('a Helm-started chat is not copied in a second time when its rollout appears', async () => {
+  nativeId = '01a11111-0000-7000-8000-000000000021';
+  emptyThread = false; approved = true;
+  const sessions = createSessions();
+  const s = await sessions.start({cwd:root,profileId:'native-codex'});
+  await sessions.input(s.id, 'Continue this native thread');
+  await sessions.list();
+  assert.equal((await sessions.list()).find(r => r.id === s.id).transcript, undefined, 'the transcript path stays off the wire');
+  const starts = sessions.history(s.id).events.filter(e => e.type === 'turn.start');
+  assert.equal(starts.some(e => e.imported), false, 'the message the chat already shows is not added again');
+  await sessions.stop();
+});
+
 test('an older idle Helm thread resumed in a terminal joins the daemon with the same Helm identity', async () => {
   nativeId = '01a11111-0000-7000-8000-000000000006';
   const index = join(process.env.HELM_DIR,'sessions.json');
