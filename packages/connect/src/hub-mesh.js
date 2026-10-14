@@ -244,8 +244,10 @@ export class HubMesh {
     if (slot.probing != null) return;
     slots.set(env, slot);
     const started = this.now();
+    const probe = slot.probe = Symbol();
     slot.probing = started;
     const record = (ms) => {
+      if (slot.probe !== probe) return;
       slot.ms = slot.ms == null ? ms : slot.ms + SMOOTHING * (ms - slot.ms);
     };
     this.#request(link, env, M.PING, {}, { sub: network.self, timeout: PROBE_TIMEOUT_MS })
@@ -254,6 +256,7 @@ export class HubMesh {
         // machine is not with it any more is not a time.
         (error) => { if (error.code === 'timeout') record(PROBE_TIMEOUT_MS); })
       .finally(() => {
+        if (slot.probe !== probe) return;
         slot.probing = null;
         if (this.links.has(link)) this.route(env);
       });
@@ -264,6 +267,18 @@ export class HubMesh {
       for (const env of machines.keys()) this.probe(link, env);
     }
     this.direct?.tick();
+  }
+
+  networkChanged() {
+    this.routes.clear();
+    this.directUse.clear();
+    for (const slots of this.timing.values()) for (const slot of slots.values()) {
+      slot.ms = null;
+      slot.probing = null;
+      slot.probe = null;
+    }
+    this.direct?.networkChanged();
+    this.probeAll();
   }
 
   /**

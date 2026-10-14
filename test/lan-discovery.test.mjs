@@ -68,6 +68,24 @@ test('two machines hear each other, and the newcomer is answered at once', async
   b.lan.stop();
 });
 
+test('turning a VPN on or off immediately rechecks LAN routing and clears old Wi-Fi hints', async () => {
+  const pa = await freePort();
+  let allowed = true, checked = 0;
+  const a = node('laptop', 18787, pa, pa, { routable: async () => { checked++; return { ok: allowed }; } });
+  try {
+    await a.lan.start();
+    a.lan.hints.set('http://192.168.1.9:8787', { id: 'homepc', seen: Date.now() });
+    allowed = false;
+    await a.lan.networkChanged();
+    assert.equal(a.lan.status().on, false);
+    assert.equal(a.lan.list().length, 0);
+    allowed = true;
+    await a.lan.networkChanged();
+    assert.equal(a.lan.status().on, true);
+    assert.equal(checked, 3);
+  } finally { a.lan.stop(); }
+});
+
 test('announcements that are forged, from a stranger network, or from a removed machine are ignored', async () => {
   const [pa, pb] = [await freePort(), await freePort()];
   const a = node('laptop', 18787, pa, pb);

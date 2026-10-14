@@ -55,6 +55,31 @@ test('a single route is not timed: there is nothing to choose between', async ()
   mesh.stop();
 });
 
+test('a network change discards old latency samples without moving an in-flight write', async () => {
+  const { mesh, link, attach, answer, tick } = fixture();
+  const vm = link('https://vm.example');
+  const own = link('http://192.168.1.9:8787');
+  attach(vm); attach(own);
+  const oldProbe = own.sent.find(f => f.method === 'ping');
+  const write = mesh.call('remote', 'session.send', { text: 'once' });
+  const request = own.sent.find(f => f.method === 'session.send');
+  tick(1000);
+  mesh.networkChanged();
+  tick(2);
+  const freshProbe = own.sent.filter(f => f.method === 'ping').at(-1);
+  mesh.receive(own, { t: T.RPC_RESULT, id: freshProbe.id, ok: true, result: {} });
+  await new Promise(resolve => setImmediate(resolve));
+  mesh.receive(own, { t: T.RPC_RESULT, id: oldProbe.id, ok: true, result: {} });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(mesh.estimate(own, 'remote').ms, 2);
+  assert.equal(own.sent.filter(f => f.method === 'session.send').length, 1);
+  assert.equal(vm.sent.filter(f => f.method === 'session.send').length, 0);
+  mesh.receive(own, { t: T.RPC_RESULT, id: request.id, ok: true, result: { accepted: true } });
+  assert.deepEqual(await write, { accepted: true });
+  await answer(vm);
+  mesh.stop();
+});
+
 test('a second route is timed at once, and a clearly faster one wins', async () => {
   const { mesh, link, attach, answer, tick } = fixture();
   const own = link('http://192.168.1.9:8787');

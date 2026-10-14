@@ -101,6 +101,39 @@ test('a machine on an older Helm never gets a channel and keeps the hub', async 
   mesh.stop();
 });
 
+test('a VPN change keeps healthy direct channels and never replays a write in flight', async () => {
+  const { mesh, hub, timed, answerDirect, peers } = fixture();
+  const peer = await timed(3, 100);
+  assert.equal(mesh.table()[0].direct.used, true);
+  const write = mesh.call('remote', 'session.send', { text: 'once' });
+  const frame = peer.sent.find(f => f.method === 'session.send');
+  mesh.networkChanged();
+  assert.equal(peer.closed, false);
+  assert.equal(peers.made.length, 1);
+  assert.equal(mesh.table()[0].direct.used, false);
+  assert.equal(peer.sent.filter(f => f.method === 'session.send').length, 1);
+  assert.equal(hub.sent.filter(f => f.method === 'session.send').length, 0);
+  peer.answer(frame.id, { accepted: true });
+  assert.deepEqual(await write, { accepted: true });
+  await answerDirect(peer);
+  mesh.stop();
+});
+
+test('a new network cancels old ICE attempts and resets failed direct retry waits', async () => {
+  const { mesh, peers, answerHub } = fixture();
+  mesh.call('remote', 'session.list', {}).catch(() => {});
+  await answerHub('session.list');
+  const first = peers.made[0];
+  mesh.networkChanged();
+  assert.equal(first.closed, true);
+  assert.equal(peers.made.length, 2);
+  peers.made[1].die();
+  assert.equal(mesh.direct.status('remote').state, 'retrying');
+  mesh.networkChanged();
+  assert.equal(peers.made.length, 3);
+  mesh.stop();
+});
+
 test('the channel opens in the background and wins only once it is measured faster', async () => {
   const { mesh, hub, peers, signals, timed, answerDirect } = fixture();
   const peer = await timed(5, 600);

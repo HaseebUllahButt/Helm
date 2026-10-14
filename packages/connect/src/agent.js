@@ -59,6 +59,7 @@ import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
 import { ensureTcpRecovery } from './network-recovery.js';
+import { NetworkMonitor } from './network-monitor.js';
 
 const RECONNECT_MIN = 250;
 const RECONNECT_MAX = 5000;
@@ -92,13 +93,17 @@ export class Link {
   #waiting = false;
   #retryTimer = null;
   #pingAt = null;
+  #generation = 0;
+  #opening = null;
+  #probeTimer = null;
 
-  constructor(daemon, url, { hintFor } = {}) {
+  constructor(daemon, url, { hintFor, recoveryTimeout = 5000 } = {}) {
     this.daemon = daemon;
     this.url = url;
     this.id = url;
     this.connected = false;
     this.rtt = null;
+    this.recoveryTimeout = recoveryTimeout;
     // Set when this address came from a machine announcing itself on the
     // local network rather than from the roster: whose hub it should be.
     this.hintFor = hintFor ?? null;
@@ -118,13 +123,51 @@ export class Link {
 
   stop() {
     this.#stopped = true;
+    this.#reset();
+  }
+
+  #reset() {
+    this.#generation++;
+    this.#opening?.abort();
+    this.#opening = null;
     const wasConnected = this.connected;
     this.connected = false;
     clearInterval(this.#beat);
     clearTimeout(this.#retryTimer);
     this.#retryTimer = null;
+    clearTimeout(this.#probeTimer);
+    this.#probeTimer = null;
+    this.#pingAt = null;
+    this.rtt = null;
     try { this.#ws?.terminate(); } catch { /* already gone */ }
     if (wasConnected) this.daemon.linkDown?.(this);
+  }
+
+  /** Keep a healthy socket; replace a stale path without waiting for its old timeout. */
+  recover() {
+    if (this.#stopped || this.#probeTimer) return;
+    this.rtt = null;
+    if (!this.connected) {
+      this.#reset();
+      this.#backoff = RECONNECT_MIN;
+      this.start();
+      return;
+    }
+    this.#probeTimer = setTimeout(() => {
+      this.#probeTimer = null;
+      if (this.#stopped) return;
+      this.#reset();
+      this.#backoff = RECONNECT_MIN;
+      this.start();
+    }, this.recoveryTimeout);
+    this.#probeTimer.unref?.();
+    this.#ping();
+  }
+
+  #alive() {
+    this.#waiting = false;
+    clearTimeout(this.#probeTimer);
+    this.#probeTimer = null;
   }
 
   /**
@@ -168,7 +211,7 @@ export class Link {
    * times through this hub to each machine.
    */
   onPong() {
-    this.#waiting = false;
+    this.#alive();
     if (this.#pingAt == null) return;
     const sample = performance.now() - this.#pingAt;
     this.#pingAt = null;
@@ -187,8 +230,10 @@ export class Link {
 
   async #open() {
     if (this.#stopped) return;
-    const info = await this.daemon.describe();
-    if (this.#stopped) return;
+    const generation = this.#generation;
+    const current = () => !this.#stopped && generation === this.#generation;
+    const opening = this.#opening = new AbortController();
+    let info;
     // The one hub a machine attaches to as *itself* is its own, on loopback -
     // which is what lets a phone reach this machine through the very hub this
     // machine is running. Mark that link `role=self` so the hub can allow this
@@ -200,17 +245,20 @@ export class Link {
     // it hears is good for this one socket. See hubCredential.
     let credential;
     try {
-      credential = await hubCredential(loadNetwork() ?? this.daemon.net, this.url);
+      info = await this.daemon.describe();
+      if (!current()) return;
+      credential = await hubCredential(loadNetwork() ?? this.daemon.net, this.url, { signal: opening.signal });
     } catch (err) {
+      if (!current()) return;
       if (err.untrusted && !this.warned) {
         this.warned = true;
         console.log(`[helm] ${this.url}: ${err.message}`);
       }
-      if (this.#stopped) return;
       this.#retry();
       return;
     }
-    if (this.#stopped) return;
+    if (!current()) return;
+    this.#opening = null;
     this.warned = false;
     // The token travels as a header rather than in the URL, so it never
     // appears in the access logs of Caddy or a tunnel along the way.
@@ -224,6 +272,7 @@ export class Link {
     this.#ws = ws;
 
     ws.on('open', () => {
+      if (!current()) { ws.terminate(); return; }
       this.#backoff = RECONNECT_MIN;
       this.connected = true;
       this.#heartbeat();
@@ -231,20 +280,24 @@ export class Link {
     });
 
     ws.on('message', (raw) => {
+      if (!current()) return;
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
       // Data and credit frames also prove the hub is alive. A pong queued
       // behind transfer bytes must not tear down an actively flowing link.
-      this.#waiting = false;
+      this.#alive();
       this.daemon.onFrame(this, msg).catch((err) =>
         console.error(`[helm] ${this.url}: ${err?.message || err}`)
       );
     });
 
     ws.on('close', (code, reason) => {
+      if (!current()) return;
       const was = this.connected;
       this.connected = false;
       clearInterval(this.#beat);
+      clearTimeout(this.#probeTimer);
+      this.#probeTimer = null;
       if (this.#stopped) return;
       if (was) console.log(`[helm] lost ${this.url} (${code}${reason?.length ? `: ${reason}` : ''}); retrying`);
       if (was) this.daemon.linkDown?.(this);
@@ -498,6 +551,8 @@ export class Daemon {
       onChange: () => this.#reconcileLinks(),
     });
     this.lan.start().catch((err) => console.error('[helm] local network discovery:', err?.message || err));
+    this.networkMonitor = new NetworkMonitor(reason => this.#networkChanged(reason));
+    void this.networkMonitor.start().catch(error => console.warn('[helm] network monitor:', error.message));
     // Start the fingerprint exchange the moment our roster changes instead of
     // at the next tick: a removal typed on this machine reaches the hubs in a
     // second, not up to fifteen. The tick below remains the net under it.
@@ -616,6 +671,7 @@ export class Daemon {
     this.github?.stop();
     this.#stopWatch?.();
     this.lan?.stop();
+    this.networkMonitor?.stop();
     for (const link of this.#links.values()) link.stop();
     this.mesh?.stop();
     // A locally terminated tunnel is a live socket even after every hub link
@@ -683,6 +739,20 @@ export class Daemon {
 
   /** Hinted address -> the machine that announced it, for this round's links. */
   #hintOwners = new Map();
+
+  async #networkChanged(reason) {
+    if (this.#stopped) return;
+    console.log(`[helm] ${reason}; checking remote connections`);
+    // Loopback never crosses a VPN. Leave it, hosted sessions and healthy
+    // remote sockets alone. Lost writes keep the existing uncertain-delivery
+    // semantics; only future requests take a freshly chosen route.
+    for (const link of this.#links.values()) {
+      if (link.url !== `http://127.0.0.1:${this.port}`) link.recover();
+    }
+    this.mesh?.networkChanged();
+    this.#networkRecoveryAt = -Infinity;
+    await Promise.all([this.lan?.networkChanged(), this.#tick()]);
+  }
 
   #networkRecoveryAt = -Infinity;
   networkRecovery = null;

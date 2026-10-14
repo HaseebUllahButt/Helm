@@ -161,6 +161,14 @@ export class LanDiscovery {
     };
   }
 
+  /** VPN and Wi-Fi changes invalidate both learned addresses and route checks. */
+  networkChanged() {
+    this.#routable.at = -Infinity;
+    this.hints.clear();
+    this.onChange();
+    return this.tick();
+  }
+
   async tick() {
     if (this.#stopped) return;
     if (!this.enabled()) return this.#off('turned off');

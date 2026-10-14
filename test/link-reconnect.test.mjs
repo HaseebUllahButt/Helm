@@ -14,7 +14,7 @@ const { hubRpc } = await import('../packages/connect/src/hub-client.js');
 const net = createNetwork({ name: 'test' });
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
-async function fixture(context, firstUpgrade) {
+async function fixture(context, firstUpgrade, linkOptions = {}) {
   let upgrades = 0;
   const sockets = new Set();
   const webSockets = new WebSocketServer({ noServer: true });
@@ -36,7 +36,7 @@ async function fixture(context, firstUpgrade) {
   let connected;
   const ready = new Promise(resolve => { connected = resolve; });
   const daemon = { net, port: server.address().port, name: 'test', describe: async () => ({}), onLinkUp: connected, onFrame: async () => {} };
-  const link = new Link(daemon, url);
+  const link = new Link(daemon, url, linkOptions);
   context.after(() => {
     link.stop();
     for (const socket of sockets) socket.destroy();
@@ -62,6 +62,56 @@ test('a timed-out hub proof does not prevent the CLI from trying another known h
     ...net.machines, [net.self]: { ...net.machines[net.self], endpoints: [setup.url] },
   } };
   assert.equal(await hubRpc(network, 'vm', 'env.info'), 'recovered');
+});
+
+test('a network change keeps a healthy hub socket and probes it at once', async context => {
+  const setup = await fixture(context, null, { recoveryTimeout: 100 });
+  setup.daemon.onFrame = async (_link, frame) => { if (frame.t === 'pong') setup.link.onPong(); };
+  setup.webSockets.on('connection', socket => socket.on('message', raw => {
+    if (JSON.parse(raw).t === 'ping') socket.send(JSON.stringify({ t: 'pong' }));
+  }));
+  setup.link.start();
+  await setup.ready;
+  setup.link.recover();
+  await new Promise(resolve => setTimeout(resolve, 160));
+  assert.equal(setup.upgrades(), 1);
+  assert.equal(setup.link.connected, true);
+});
+
+test('a stale hub path reconnects quickly after a network change and late closes cannot undo it', async context => {
+  const setup = await fixture(context, null, { recoveryTimeout: 30 });
+  let up = 0, down = 0;
+  let recovered;
+  const ready = new Promise(resolve => { recovered = resolve; });
+  setup.daemon.onLinkUp = () => { if (++up === 2) recovered(); };
+  setup.daemon.linkDown = () => down++;
+  setup.link.start();
+  while (!setup.link.connected) await new Promise(resolve => setTimeout(resolve, 5));
+  setup.link.recover();
+  setup.link.recover(); // repeated events do not continually postpone recovery
+  await ready;
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(setup.upgrades(), 2);
+  assert.equal(down, 1);
+  assert.equal(setup.link.connected, true);
+});
+
+test('a route change cancels a stalled hub proof and stale answers never attach twice', async context => {
+  const setup = await fixture(context, null);
+  const fetch = globalThis.fetch;
+  let calls = 0, release;
+  context.mock.method(globalThis, 'fetch', (url, options) => {
+    if (++calls === 1) return new Promise(resolve => { release = () => resolve(fetch(url, options)); });
+    return fetch(url, options);
+  });
+  setup.link.start();
+  while (!release) await new Promise(resolve => setTimeout(resolve, 5));
+  setup.link.recover();
+  await setup.ready;
+  release();
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(setup.upgrades(), 1);
+  assert.equal(setup.link.connected, true);
 });
 
 test('daemon retries rejected upgrades and transient describe failures', { timeout: 4000 }, async context => {

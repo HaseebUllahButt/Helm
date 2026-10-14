@@ -227,6 +227,20 @@ export class DirectMesh {
     }
   }
 
+  networkChanged() {
+    this.waits.clear();
+    for (const [env, channel] of this.channels) {
+      if (channel.state === 'connecting') {
+        this.#drop(env);
+        this.waits.delete(env);
+      } else {
+        channel.ms = null;
+        this.ping(env);
+      }
+    }
+    this.tick();
+  }
+
   /** A machine taken out of the network loses its channel at once. */
   dropRevoked(revoked = {}) {
     const self = this.network()?.self;

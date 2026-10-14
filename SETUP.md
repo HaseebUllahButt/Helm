@@ -75,6 +75,12 @@ helm network-repair
 This may ask for your sudo password. The repair takes effect without restarting
 Helm and survives reboot; background services never ask for a password.
 
+Helm also watches Linux route, policy, interface and DNS changes, with a polling
+fallback and a wake-from-sleep check. When a VPN or Wi-Fi path changes it probes
+existing connections, reconnects silent hubs after five seconds, refreshes LAN
+discovery and measures routes again. Healthy connections and running chats stay
+in place. A write that may already have arrived is never automatically replayed.
+
 ## 4. Return the link
 
 If a fresh controller link is needed, run:
