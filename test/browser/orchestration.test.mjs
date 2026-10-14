@@ -47,7 +47,7 @@ before(async () => {
       const px=(i)=>{ const c=document.createElement('canvas'); c.width=160; c.height=110; const g=c.getContext('2d'); g.fillStyle=['#3b82f6','#10b981','#f59e0b'][i%3]; g.fillRect(0,0,160,110); return c.toDataURL(); };
       return <Composer draft={draft} setDraft={setDraft} engine="Claude" keys={false} onSend={()=>{}}
         attachments={attachments} onRemoveAttachment={i=>setAttachments(a=>a.filter((_,j)=>j!==i))}
-        onAttach={async files=>{ const next=[...files].map((f,i)=>({name:f.name,mime:'image/png',data:'',url:px(i+f.name.charCodeAt(0))})); setAttachments(a=>[...a,...next]); return next.length; }} />;
+        onAttach={async files=>{ const next=[...files].map((f,i)=>({name:f.name,mime:'image/png',data:'',url:px(i+f.name.charCodeAt(0))})); setAttachments(a=>[...a,...next]); return next; }} />;
     }
     function ComposeLimits() {
       const [draft,setDraft] = useState('Test message');

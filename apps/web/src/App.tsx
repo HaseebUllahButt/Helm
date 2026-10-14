@@ -22,7 +22,7 @@ import { VisualReply, Visuals, type VisualReader } from './session/VisualReply';
 import { useChatKeys } from './session/chatKeys';
 import { BrowserDock, useBrowserDock } from './session/BrowserDock';
 import { watchAccounts, prefetchAccounts } from './accountsCache';
-import { prepareImage, type PreparedImage } from './session/image';
+import { prepareAttachment } from './session/image';
 import { useDraftImages } from './session/useDraftImages';
 import { loadDraft, saveDraft } from './draftStore';
 import { userMessage } from './session/userMessage';
@@ -5065,24 +5065,24 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
   useLiveInterval(status === 'exited' ? null : 15_000, refresh, [status, refresh]);
 
   const [sending, setSending] = useState(false);
-  const { images, setImages, loading: loadingImages, saving: savingImages } = useDraftImages<PreparedImage>(env.id, session.id, setError);
+  const { images, setImages, loading: loadingImages, saving: savingImages } = useDraftImages<{ name: string; mime: string; data: string; url: string }>(env.id, session.id, setError);
   const [preparingImages, setPreparingImages] = useState(false);
   const imageBusy = useRef(false);
   const attachImages = async (files: FileList | File[]) => {
-    if (imageBusy.current || sending || loadingImages || savingImages) return 0;
+    if (imageBusy.current || sending || loadingImages || savingImages) return [];
     const picked = Array.from(files);
-    if (!picked.length) return 0;
+    if (!picked.length) return [];
     imageBusy.current = true; setPreparingImages(true); setError('');
-    const ready: PreparedImage[] = [];
+    const ready: { name: string; mime: string; data: string; url: string }[] = [];
     const failures: string[] = [];
     try {
       for (const file of picked) {
-        try { ready.push(await prepareImage(file)); }
+        try { ready.push(await prepareAttachment(file)); }
         catch (e: any) { failures.push(`${file.name}: ${e.message}`); }
       }
       await setImages(current => [...current, ...ready]);
-      if (failures.length) setError(`Image not added — ${failures.join('; ')}`);
-      return ready.length;
+      if (failures.length) setError(`Not added — ${failures.join('; ')}`);
+      return ready;
     } finally { imageBusy.current = false; setPreparingImages(false); }
   };
   const questionHandle = useRef<QuestionHandle | null>(null);

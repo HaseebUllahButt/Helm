@@ -152,3 +152,37 @@ test('clipboard file items work when the clipboard file list is empty, without d
     return [window.clipboardImages({files:[],items}).length,window.clipboardImages({files:[file],items}).length];
   });assert.deepEqual(counts,[1,1]);
 });
+for(const mode of ['Native','Driven'])test(`${mode} documents dropped anywhere on the chat become file chips and send as they are`,async t=>{
+  const p=await pageFor(t);if(mode==='Driven')await p.evaluate(()=>window.showDriven());
+  await p.evaluate(()=>document.getElementById('root').classList.add('main'));
+  await paste(p);
+  // Dropped on the chat, not the box: it still lands in the box.
+  await p.evaluate(()=>{
+    const dt=new DataTransfer();dt.items.add(new File(['%PDF-1.4 notes'],'notes.pdf',{type:'application/pdf'}));
+    const target=document.querySelector('#root > *');
+    target.dispatchEvent(new DragEvent('dragover',{dataTransfer:dt,bubbles:true,cancelable:true}));
+    target.dispatchEvent(new DragEvent('drop',{dataTransfer:dt,bubbles:true,cancelable:true}));
+  });
+  await p.locator('.attach-preview.file').waitFor();
+  assert.match(await p.locator('textarea').inputValue(),/\[Image #1\] \[File: notes\.pdf\]/);
+  // A second picture is still Image #2: files do not take picture numbers.
+  await paste(p);
+  await p.waitForFunction(()=>document.querySelector('textarea').value.includes('[Image #2]'));
+  await p.getByRole('button',{name:'remove Image #1',exact:true}).click();
+  await p.waitForFunction(()=>document.querySelectorAll('.attach-preview').length===2);
+  assert.match(await p.locator('textarea').inputValue(),/^\[File: notes\.pdf\] \[Image #1\]/);
+  await p.getByRole('button',{name:'send',exact:true}).click();
+  await p.waitForFunction(()=>window.calls.length===1);
+  const sent=await p.evaluate(()=>window.calls[0].params.attachments);
+  assert.deepEqual(sent.map(a=>a.mime),['application/pdf','image/jpeg']);
+  assert.equal(Buffer.from(sent[0].data,'base64').toString(),'%PDF-1.4 notes');
+});
+test('removing a file chip takes its label out of the draft',async t=>{
+  const p=await pageFor(t);await p.evaluate(()=>window.showDriven());
+  await p.locator('input[type=file]').setInputFiles({name:'data.csv',mimeType:'text/csv',buffer:Buffer.from('a,b\n1,2\n')});
+  await p.locator('.attach-preview.file').waitFor();
+  assert.equal(await p.locator('textarea').inputValue(),'[File: data.csv] ');
+  await p.getByRole('button',{name:'remove data.csv',exact:true}).click();
+  await p.waitForFunction(()=>!document.querySelector('.attach-preview'));
+  assert.equal(await p.locator('textarea').inputValue(),'');
+});

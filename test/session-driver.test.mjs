@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1024,6 +1024,38 @@ test('an attached image survives a restart, and nonsense is refused', async () =
   assert.deepEqual(acceptImages(many), many);
   assert.deepEqual(acceptImages([]), []);
   assert.deepEqual(acceptImages(undefined), []);
+});
+
+test('attached documents are saved on the machine and named to the agent', async () => {
+  const { Sessions, acceptAttachments } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  class ImageDriver extends FakeDriver {
+    async sendWithAttachments(text, attachments) { this.gotAttachments = { text, attachments }; }
+  }
+  const sessions = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-files')),
+    makeDriver: (engine, opts) => new ImageDriver({ engine, ...opts }),
+  });
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const pdf = Buffer.from('%PDF-1.4 hello').toString('base64');
+  const png = { filename: 'a.png', mime: 'image/png', data: 'iVBORw0KGgo=' };
+  await sessions.input(s.id, 'read [File: ../report.pdf] and [Image #1]', { attachments: [{ filename: '../report.pdf', mime: 'application/pdf', data: pdf }, png] });
+  const d = ImageDriver.made.at(-1);
+  // The picture still goes as a picture; the document goes as a path.
+  assert.deepEqual(d.gotAttachments.attachments, [png]);
+  const [, path] = /\[File: \.\.\/report\.pdf\]: "([^"]+)"/.exec(d.gotAttachments.text) ?? [];
+  assert.ok(path, d.gotAttachments.text);
+  assert.ok(path.startsWith(join(process.env.HELM_DIR, 'uploads', s.id)), 'saved inside Helm, never beside it');
+  assert.equal(readFileSync(path, 'utf8'), '%PDF-1.4 hello');
+  // The owner's bubble keeps their own words.
+  const turn = sessions.events.since(s.id, 0).find((e) => e.type === 'turn.start');
+  assert.equal(turn.text, 'read [File: ../report.pdf] and [Image #1]');
+  assert.equal(turn.attachments.length, 1);
+
+  assert.throws(() => acceptAttachments([{ filename: 'x.bin', mime: 'application/octet-stream', data: 'not base64!' }]), /valid base64/);
+  // Deleting the chat deletes what was uploaded to it.
+  await sessions.kill(s.id);
+  assert.equal(existsSync(join(process.env.HELM_DIR, 'uploads', s.id)), false);
 });
 
 test('model and effort switch mid-session on the live driver', async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IMAGE_ACCEPT, looksLikeImage, clipboardImages } from './image';
+import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
 import { useDictation } from './voice';
 import type { Turn } from './types';
 import { isBigPaste, stashPaste } from './pasteStore';
@@ -72,13 +72,13 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
   /** The agent is compacting, since this time (or true when unknown). */
   compacting?: number | boolean;
   children?: React.ReactNode;
-  /** Resolves to how many images were added, so each gets its "[Image #N]". */
-  onAttach?: (files: FileList | File[]) => void | Promise<number | void>;
-  attachments?: { name: string; url: string }[];
+  /** Resolves to what was added, so each gets its "[Image #N]" or "[File: name]". */
+  onAttach?: (files: FileList | File[]) => void | Promise<{ name: string; mime: string }[] | void>;
+  attachments?: { name: string; mime: string; url: string }[];
   onRemoveAttachment?: (i: number) => void;
-  /** False when the running model cannot see images: no clip, no paste. */
+  /** False when the running model cannot see images; other files still go. */
   canAttach?: boolean;
-  /** True while selected images are being compressed in the browser. */
+  /** True while picked files are being compressed or read in the browser. */
   preparing?: boolean;
   /** Called when images arrive but this agent cannot see them. */
   onAttachUnsupported?: () => void;
@@ -177,23 +177,30 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
   /**
    * "[Image #N]" goes where the cursor was, the way Claude Code and Codex
    * write it, so "compare [Image #1] with [Image #2]" says which is which.
-   * The driver puts the same label before each picture it sends.
+   * The driver puts the same label before each picture it sends. Any other
+   * file is "[File: name]", the label the agent is given with its path.
    */
   const attach = async (files: FileList | File[]) => {
     if (!onAttach) return;
     const el = ref.current;
     const at = el && document.activeElement === el ? el.selectionStart : draftNow.current.length;
-    const before = attachments?.length ?? 0;
+    let images = (attachments ?? []).filter(isImageAttachment).length;
     const added = await onAttach(files);
-    if (!added) return;
-    const tokens = Array.from({ length: added }, (_, k) => `[Image #${before + k + 1}]`).join(' ');
+    if (!added?.length) return;
+    const tokens = added.map((a) => isImageAttachment(a) ? `[Image #${++images}]` : `[File: ${a.name}]`).join(' ');
     const now = draftNow.current;
     const pre = now.slice(0, Math.min(at, now.length)), post = now.slice(pre.length);
     setDraft(`${pre}${pre && !/\s$/.test(pre) ? ' ' : ''}${tokens}${/^\s/.test(post) ? '' : ' '}${post}`);
   };
   /** Its label leaves with it, and the ones after it move up a number. */
   const removeAttachment = (index: number) => {
-    const gone = index + 1;
+    const item = attachments?.[index];
+    if (item && !isImageAttachment(item)) {
+      setDraft(draftNow.current.replace(`[File: ${item.name}] `, '').replace(`[File: ${item.name}]`, ''));
+      onRemoveAttachment?.(index);
+      return;
+    }
+    const gone = (attachments ?? []).slice(0, index + 1).filter(isImageAttachment).length;
     setDraft(draftNow.current
       .replace(new RegExp(`\\[Image #${gone}\\] ?`, 'g'), '')
       .replace(/\[Image #(\d+)\]/g, (label, n) => Number(n) > gone ? `[Image #${Number(n) - 1}]` : label));
@@ -292,18 +299,47 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
   }, [onTranscribe, dictation]);
 
   /**
-   * Images arriving by paste or drop. Both routes land here so they cannot
+   * Files arriving by paste or drop. Both routes land here so they cannot
    * drift apart, and both say something when the agent cannot take images -
    * a screenshot pasted into a session that silently ignores it is the
-   * worst version of this feature.
+   * worst version of this feature. Documents go to any agent.
    */
   const take = (list: FileList | File[] | undefined | null) => {
-    const images = Array.from(list ?? []).filter(looksLikeImage);
-    if (!images.length) return false;
-    if (!canAttach || !onAttach) { onAttachUnsupported?.(); return true; }
-    void attach(images);
+    const all = Array.from(list ?? []);
+    if (!all.length) return false;
+    if (!onAttach) { onAttachUnsupported?.(); return true; }
+    const usable = canAttach ? all : all.filter((f) => !looksLikeImage(f));
+    if (usable.length < all.length) onAttachUnsupported?.();
+    if (usable.length) void attach(usable);
     return true;
   };
+  const takeNow = useRef(take);
+  takeNow.current = take;
+
+  /**
+   * A file dropped anywhere on the chat lands in this box, not only on the
+   * box itself - and the browser does not open it in place of Helm. The
+   * browser panel and terminals keep their own drops.
+   */
+  const slabRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!onAttach) return;
+    const mine = (e: DragEvent) => {
+      const target = e.target as Element | null;
+      const area = slabRef.current?.closest('.main');
+      return !!area && !!target?.closest && area.contains(target) && !target.closest('.browser-panel, .xterm, .slab')
+        && Array.from(e.dataTransfer?.types ?? []).includes('Files');
+    };
+    const over = (e: DragEvent) => { if (!mine(e)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; setDragging(true); };
+    const leave = (e: DragEvent) => { if (!e.relatedTarget) setDragging(false); };
+    const drop = (e: DragEvent) => { setDragging(false); if (!mine(e)) return; e.preventDefault(); takeNow.current(e.dataTransfer?.files); };
+    const end = () => setDragging(false);
+    window.addEventListener('dragover', over);
+    window.addEventListener('dragleave', leave);
+    window.addEventListener('drop', drop);
+    window.addEventListener('dragend', end);
+    return () => { window.removeEventListener('dragover', over); window.removeEventListener('dragleave', leave); window.removeEventListener('drop', drop); window.removeEventListener('dragend', end); };
+  }, [!!onAttach]);
 
   useEffect(() => {
     const el = ref.current;
@@ -327,9 +363,10 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
         )}
         {shoulder}
         <div
+          ref={slabRef}
           className={`slab${danger ? ' danger' : ''}${dragging ? ' dropping' : ''}`}
-          onDragOver={(e) => { if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) { e.preventDefault(); setDragging(true); } }}
-          onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
+          onDragOver={(e) => { if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDragging(true); } }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
           onDrop={(e) => { setDragging(false); if (take(e.dataTransfer?.files)) e.preventDefault(); }}
         >
           {banner}
@@ -396,12 +433,18 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
           )}
           {attachments && attachments.length > 0 && (
             <div className="attach-previews">
-              {attachments.map((a, i) => (
-                <span key={i} className="attach-preview" title={`[Image #${i + 1}] ${a.name}`}>
-                  <img src={a.url} alt={`Image #${i + 1}`} />
-                  <button onClick={() => removeAttachment(i)} title={`remove Image #${i + 1}`} aria-label={`remove Image #${i + 1}`}><Icon name="close" size={12} /></button>
-                </span>
-              ))}
+              {attachments.map((a, i) => {
+                const label = isImageAttachment(a) ? `Image #${attachments.slice(0, i + 1).filter(isImageAttachment).length}` : a.name;
+                return (
+                  <span key={i} className={`attach-preview${isImageAttachment(a) ? '' : ' file'}`} title={isImageAttachment(a) ? `[${label}] ${a.name}` : a.name}>
+                    {isImageAttachment(a) ? <img src={a.url} alt={label} /> : <span className="attach-file">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z" /><path d="M14 3v5h5" /></svg>
+                      <span className="attach-file-name">{a.name}</span>
+                    </span>}
+                    <button onClick={() => removeAttachment(i)} title={`remove ${label}`} aria-label={`remove ${label}`}><Icon name="close" size={12} /></button>
+                  </span>
+                );
+              })}
             </div>
           )}
           <textarea
@@ -410,7 +453,7 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
             placeholder={placeholder} aria-label={`Message ${engine}`} data-composer=""
             onChange={(e) => { historyAt.current = null; setDraft(e.target.value); }}
             onPaste={(e) => {
-              if (take(clipboardImages(e.clipboardData))) { e.preventDefault(); return; }
+              if (take(clipboardFiles(e.clipboardData))) { e.preventDefault(); return; }
               // A wall of text goes in as a token, not into the box.
               const text = e.clipboardData?.getData('text/plain') ?? '';
               if (text && isBigPaste(text)) {
@@ -458,13 +501,13 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
             }}
           />
           <div className="slab-foot">
-            {onAttach && canAttach && (
+            {onAttach && (
               <>
-                <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} multiple style={{ display: 'none' }} onChange={(e) => { if (e.target.files?.length) void attach(e.target.files); e.target.value = ''; }} />
+                <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={(e) => { if (e.target.files?.length) void attach(e.target.files); e.target.value = ''; }} />
                 {/* A paperclip drawn rather than an emoji: the emoji rendered in
                     the platform's own colour, which made it the only coloured
                     glyph in the chrome and the brightest thing in the composer. */}
-                <button className="ctl icon" onClick={() => fileRef.current?.click()} title="attach image" aria-label="attach image">
+                <button className="ctl icon" onClick={() => fileRef.current?.click()} title="Attach files or images" aria-label="Attach files or images">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                        strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />

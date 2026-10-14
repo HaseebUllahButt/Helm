@@ -32,14 +32,39 @@ export function looksLikeImage(file: File): boolean {
 }
 
 /** Some clipboard sources expose file items without populating files. */
-export function clipboardImages(clipboard: DataTransfer | null): File[] {
-  const files = Array.from(clipboard?.files ?? []).filter(looksLikeImage);
+export function clipboardFiles(clipboard: DataTransfer | null): File[] {
+  const files = Array.from(clipboard?.files ?? []);
   if (files.length) return files;
   return Array.from(clipboard?.items ?? [])
     .filter((item) => item.kind === 'file')
     .map((item) => item.getAsFile())
-    .filter((file): file is File => !!file && looksLikeImage(file));
+    .filter((file): file is File => !!file);
 }
+
+export const clipboardImages = (clipboard: DataTransfer | null) => clipboardFiles(clipboard).filter(looksLikeImage);
+
+/** An attachment that goes to the model as a picture, not as a saved file. */
+export const isImageAttachment = (a: { mime: string }) => a.mime.startsWith('image/');
+
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Any other file - a PDF, a spreadsheet, notes - is sent as it is and saved
+ * on the agent's machine for it to read. Its preview is its name.
+ */
+export async function prepareFile(file: File): Promise<{ name: string; mime: string; data: string; url: string }> {
+  if (!file.size) throw new Error('the file is empty');
+  if (file.size > MAX_FILE_BYTES) throw new Error(`it is ${(file.size / 1024 / 1024).toFixed(1)} MB; the limit is 20 MB`);
+  const url = await dataUrl(file);
+  const comma = url.indexOf(',');
+  if (comma < 0) throw new Error('the file could not be read');
+  const mime = (file.type || 'application/octet-stream').toLowerCase();
+  // A file that only looks like an image by its type still goes as a file.
+  return { name: file.name || 'file', mime: mime.startsWith('image/') ? 'application/octet-stream' : mime, data: url.slice(comma + 1), url: '' };
+}
+
+/** A picture is compressed for the model; anything else goes as a file. */
+export const prepareAttachment = (file: File) => looksLikeImage(file) ? prepareImage(file) : prepareFile(file);
 
 export interface PreparedImage {
   name: string;
@@ -122,7 +147,7 @@ function dataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error('the compressed image could not be read'));
+    reader.onerror = () => reject(new Error('it could not be read'));
     reader.readAsDataURL(blob);
   });
 }

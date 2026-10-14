@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction 
 import { Client, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
 import { useNow, waitingSince } from '../useNow';
 import { Composer } from './Composer';
-import { looksLikeImage, prepareImage } from './image';
+import { prepareAttachment } from './image';
 import { EngineMark } from '../EngineMark';
 import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
 import { TodoStrip, stripTodos } from './Todos';
@@ -260,33 +260,30 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   };
 
   /**
-   * Picked, pasted or dropped images, compressed in the browser.
+   * Picked, pasted or dropped files: images compressed in the browser,
+   * anything else sent as it is, to be saved where the agent can read it.
    *
-   * Every decode failure says so; all chosen images are prepared.
+   * Every failure says so; all chosen files are prepared.
    */
   const onAttach = async (files: FileList | File[]) => {
-    if (loadingImages || savingImages || sendingImages) return 0;
+    if (loadingImages || savingImages || sendingImages) return [];
     const chosen = Array.from(files);
-    if (!chosen.length) return 0;
+    if (!chosen.length) return [];
     const failures: string[] = [];
     const next: typeof attachments = [];
     setPreparingImages((count) => count + 1);
     setError('');
     try {
       for (const f of chosen) {
-        if (!looksLikeImage(f)) {
-          failures.push(`${f.name}: not an image`);
-          continue;
-        }
         try {
-          next.push(await prepareImage(f));
+          next.push(await prepareAttachment(f));
         } catch (e: any) {
-          failures.push(`${f.name}: ${e?.message || 'compression failed'}`);
+          failures.push(`${f.name}: ${e?.message || 'it could not be read'}`);
         }
       }
       if (next.length) await setAttachments((current) => [...current, ...next]);
-      if (failures.length) setError(`Image not added — ${failures.join('; ')}`);
-      return next.length;
+      if (failures.length) setError(`Not added — ${failures.join('; ')}`);
+      return next;
     } finally {
       setPreparingImages((count) => Math.max(0, count - 1));
     }

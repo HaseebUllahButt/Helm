@@ -241,6 +241,7 @@ const agentName = (profileId) =>
  */
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_ATTACHED_BYTES = 24 * 1024 * 1024;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 const MB = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
 
@@ -252,6 +253,50 @@ const MB = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
 export function driverTakesImages(d) {
   if (!d || typeof d.sendWithAttachments !== 'function') return false;
   return d.acceptsImages?.() ?? true;
+}
+
+/**
+ * Split what the owner attached into pictures, which go to the model as
+ * images, and every other file (a PDF, a spreadsheet, notes), which is saved
+ * on the agent's machine for it to read with its own tools.
+ */
+export function acceptAttachments(attachments) {
+  const list = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+  const isImage = (a) => String(a.mime ?? '').toLowerCase().startsWith('image/');
+  const images = acceptImages(list.filter(isImage));
+  let total = images.reduce((sum, a) => sum + base64Bytes(a.data), 0);
+  const files = [];
+  for (const a of list.filter((a) => !isImage(a))) {
+    const filename = String(a.filename ?? 'file').slice(0, 120);
+    const data = String(a.data ?? '');
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 !== 0) throw new Error(`${filename} is not valid base64`);
+    const bytes = base64Bytes(data);
+    if (bytes > MAX_FILE_BYTES) throw new Error(`${filename} is ${MB(bytes)}; the limit is ${MB(MAX_FILE_BYTES)}`);
+    total += bytes;
+    if (total > MAX_ATTACHED_BYTES) throw new Error(`those attachments come to ${MB(total)}; the limit is ${MB(MAX_ATTACHED_BYTES)} a message`);
+    files.push({ filename, data });
+  }
+  return { images, files };
+}
+
+const base64Bytes = (data) => Math.floor(data.length * 3 / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0);
+
+/**
+ * Write attached files under ~/.helm/uploads/<chat>/ and say where they are,
+ * in the words the agent reads after the owner's message. Each message gets
+ * its own folder, so two files with one name never overwrite each other.
+ */
+export function saveUploads(sessionId, files, root = join(HELM_DIR, 'uploads')) {
+  if (!files.length) return '';
+  const dir = join(root, sessionId, randomBytes(6).toString('hex'));
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const lines = files.map(({ filename, data }) => {
+    const name = basename(filename).replace(/[\x00-\x1f/\\]/g, '_').replace(/^\.+/, '') || 'file';
+    const path = join(dir, name);
+    writeFileSync(path, Buffer.from(data, 'base64'), { mode: 0o600 });
+    return `[File: ${filename}]: ${JSON.stringify(path)}`;
+  });
+  return `The owner attached ${files.length === 1 ? 'a file' : `${files.length} files`}, saved on this machine. Read ${files.length === 1 ? 'it' : 'them'} before answering:\n${lines.join('\n')}`;
 }
 
 export function acceptImages(attachments) {
@@ -4109,7 +4154,7 @@ export class Sessions extends EventEmitter {
     }
     if (references.length && (raw || !s.driver || text.trimStart().startsWith('/'))) throw new Error('thread context needs an ordinary agent message');
     if (s.nativeChat && !raw) {
-      const images = acceptImages(attachments);
+      const { images, files } = acceptAttachments(attachments);
       const extensions = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
       if (images.some((image) => !extensions[image.mime])) throw new Error('Claude needs JPEG, PNG, WebP or GIF images.');
       // Typed into the terminal, as the person at the keyboard would: pasted
@@ -4117,7 +4162,8 @@ export class Sessions extends EventEmitter {
       // it if it is busy, exactly as it does for typing.
       const body = text.replace(/\r\n?/g, '\n').trim();
       if (body.startsWith('/') && images.length) throw new Error('Send Claude commands without images.');
-      if (!body && !images.length) return { ok: true };
+      if (body.startsWith('/') && files.length) throw new Error('Send Claude commands without files.');
+      if (!body && !images.length && !files.length) return { ok: true };
       const send = (this.#nativeInputs.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
         if (!this.nativeTerminals.has(id)) throw new Error('Claude is no longer running in that terminal.');
         if ([...this.#hookAsks.values()].some((a) => a.id === id)) throw new Error('Answer Claude\'s question first.');
@@ -4135,6 +4181,7 @@ export class Sessions extends EventEmitter {
           });
           prompt = `${body}${body ? '\n\n' : ''}Read the attached image files before answering:\n${refs.join('\n')}`;
         }
+        if (files.length) prompt = `${prompt}${prompt ? '\n\n' : ''}${saveUploads(id, files)}`;
         await this.nativeTerminals.write(id, `\x1b[200~${prompt}\x1b[201~`);
         await new Promise((r) => setTimeout(r, 60));
         await this.nativeTerminals.write(id, '\r');
@@ -4154,7 +4201,11 @@ export class Sessions extends EventEmitter {
       return this.#nativeWrite(s, body, { control: false });
     }
     if (source !== 'user' && s.stoppedAt) throw new Error('the thread was stopped');
-    const referenceContext = references.length ? this.#referenceContext(references) : undefined;
+    // Files ride with the message the way another chat's context does:
+    // added after the owner's words as it goes out, and kept with a queued
+    // message across a restart.
+    const uploads = !raw && s.driver && !s.nativeCli ? saveUploads(id, acceptAttachments(attachments).files) : '';
+    const referenceContext = [references.length ? this.#referenceContext(references) : '', uploads].filter(Boolean).join('\n\n') || undefined;
     if (s.taskTransfer?.role === 'destination' && ['returning', 'returned', 'conflict'].includes(s.taskTransfer.status)) {
       throw new Error(`This task is returning to ${s.taskTransfer.machineName}; continue on the original machine.`);
     }
@@ -4259,7 +4310,7 @@ export class Sessions extends EventEmitter {
       }
       // What a client sent is not trusted to be sane: it arrives over the
       // network and lands in the event log and in a CLI's stdin.
-      const images = acceptImages(attachments);
+      const { images } = acceptAttachments(attachments);
 
       // The brain is asked about a network, not a folder, so what it is
       // told has to include which network and in what state. One line, not
@@ -5083,6 +5134,7 @@ export class Sessions extends EventEmitter {
       this.#dropQuickDir(s);
       this.#save();
       this.events.remove(id);
+      rmSync(join(HELM_DIR, 'uploads', id), { recursive: true, force: true });
       this.#updateTeam(s);
       this.emit('session', { ...s, status: 'exited', alive: false });
       return { ok: true };
