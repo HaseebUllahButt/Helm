@@ -67,6 +67,10 @@ const usage = () => {
   helm join <CODE> --at <url>       long form of 'helm join CODE url'
 
   helm devices                      controllers that can drive this network
+  helm device readiness | list      mobile testing tools, Android devices and iOS simulators
+  helm device open <id>              connect a mobile test device to this thread
+  helm browser open <url>            browse with your agent (Chromium or --engine bowser)
+  helm browser tabs | look <id>      list tabs or read text and numbered controls
   helm machines                     machines in this network
   helm redesignate [machine] <kind> what a machine is for: pc, vm or nas
   helm nas [machine] [add|remove <folder>]   what a nas shares
@@ -2246,6 +2250,11 @@ try {
     case 'browser': {
       const { runBrowserCommand } = await import('../src/browser-cli.js');
       await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession });
+      break;
+    }
+    case 'device': {
+      const { runDeviceCommand } = await import('../src/device-cli.js');
+      await runDeviceCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, machineId });
       break;
     }
     case 'render':

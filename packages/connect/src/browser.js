@@ -190,6 +190,12 @@ export class BrowserManager {
     } else if (kind === 'drag') { const { width, height } = page.viewportSize(); for (const field of ['fromX', 'toX']) integer(action[field], 0, width); for (const field of ['fromY', 'toY']) integer(action[field], 0, height); await page.mouse.move(action.fromX, action.fromY); await page.mouse.down(); try { await page.mouse.move(action.toX, action.toY, { steps: 6 }); } finally { await page.mouse.up(); } }
     else if (kind === 'type') { const value = text(action.text); if (action.ref || action.selector || action.name || action.role) { const target = await this.target(tab, action); try { await target.fill(value); } finally { if (target.dispose) await target.dispose(); } } else await page.keyboard.insertText(value); }
     else if (kind === 'key') await page.keyboard.press(text(action.key, 100));
+    else if (kind === 'clipboard') {
+      const origin = new URL(page.url()).origin;
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+      try { return { text: await page.evaluate(() => navigator.clipboard.readText()) }; }
+      finally { await page.context().clearPermissions(); }
+    }
     else if (kind === 'scroll') await page.mouse.wheel(integer(action.dx ?? 0, -20000, 20000), integer(action.dy ?? 500, -20000, 20000));
     else if (kind === 'select') { const target = await this.target(tab, action); try { await target.selectOption(action.values || text(action.value, 1000)); } finally { if (target.dispose) await target.dispose(); } }
     else if (kind === 'upload') {

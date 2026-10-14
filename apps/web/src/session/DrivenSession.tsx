@@ -1,4 +1,5 @@
 import { useDismiss } from '../useDismiss';
+import { DeviceAccess } from '../DeviceAccess';
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react';
 import { Client, type Environment, type Session, type ModelList, type NativeAgent } from '../client';
 import { useNow, waitingSince } from '../useNow';
@@ -51,7 +52,7 @@ type FailedSend = { id: string; body: string; references: string[]; error: strin
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
-export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onSendFolder, onOpenMachineSession, onOpenNative, reviewChildren }: {
+export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onSendFolder, onOpenMachineSession, onOpenNative, onOpenDevices, reviewChildren }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account and so apply on all of them. */
   machines?: Environment[];
@@ -71,6 +72,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   onSendTask?: () => void;
   onSendFolder?: () => void;
   onOpenMachineSession?: (machineId: string, session: Session) => void;
+  onOpenDevices?: () => void;
 }) {
   const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
   const readVisual = useCallback((ref: string) => client.rpc<{ html: string }>(env.id, 'session.visual', { id: session.id, ref }, 60_000), [client, env.id, session.id]);
@@ -640,6 +642,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents and scheduled tasks"
           onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
         <button className="iconbtn" title="Browser" aria-label="Open browser" onClick={() => setDetails('browser')}><Icon name="web" size={17} /></button>
+        {onOpenDevices && <DeviceAccess onOpenDevices={onOpenDevices} />}
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}

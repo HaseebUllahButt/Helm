@@ -1,5 +1,6 @@
 @import '@xterm/xterm/css/xterm.css';
 @import './session/browser.css';
+@import './devices.css';
 
 /* Saved visual replies: controls belong to Helm; the page stays isolated. */
 .visual-reply { margin: 12px 0; border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; background: var(--bg); }
