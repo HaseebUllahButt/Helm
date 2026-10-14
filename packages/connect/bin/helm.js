@@ -2243,6 +2243,11 @@ try {
       await say();
       break;
 
+    case 'browser': {
+      const { runBrowserCommand } = await import('../src/browser-cli.js');
+      await runBrowserCommand(rest, { rpc: brainRpc, self: () => requireNetwork().self, findSession });
+      break;
+    }
     case 'render':
     case 'preview': {
       const { runVisualCommand } = await import('../src/visual-cli.js');

@@ -4,8 +4,10 @@ import { Icon } from '../Icon';
 import { Subagents } from './Subagents';
 import { ChangesPanel, type GitStatus } from './Changes';
 import { Schedules } from './Schedules';
+import { lazy, Suspense } from 'react';
+const BrowserPanel = lazy(() => import('./BrowserPanel'));
 
-export type DetailsTab = 'agents' | 'changes' | 'schedules';
+export type DetailsTab = 'agents' | 'changes' | 'schedules' | 'browser';
 
 export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit, onClose, onOpen, onOpenNative, reviewAttention = false, onNativeAttention }: {
   client: Client; env: Environment; session: Session; tab: DetailsTab; onTab: (tab: DetailsTab) => void;
@@ -13,7 +15,7 @@ export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit
   onOpen?: (session: Session) => void; onOpenNative?: (agent: NativeAgent) => void; reviewAttention?: boolean; onNativeAttention?: () => void;
 }) {
   const ref = useDialog(onClose);
-  const all: { id: DetailsTab; label: string }[] = [{ id: 'changes', label: 'Git' }, { id: 'agents', label: 'Agents' }, { id: 'schedules', label: 'Schedules' }];
+  const all: { id: DetailsTab; label: string }[] = [{ id: 'changes', label: 'Git' }, { id: 'agents', label: 'Agents' }, { id: 'schedules', label: 'Schedules' }, { id: 'browser', label: 'Browser' }];
   // A quick chat has no folder, so no Git.
   const tabs = all.filter((item) => !(session.quick && item.id === 'changes'));
   if (tab === 'changes' && git?.repo) return <div className="thread-details-back" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -47,6 +49,7 @@ export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit
         {tab === 'agents' && <Subagents embedded onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} onOpenNative={onOpenNative} />}
         {tab === 'changes' && <p className="note">No Git repository available for this thread.</p>}
         {tab === 'schedules' && <Schedules client={client} env={env} session={session} />}
+        {tab === 'browser' && <Suspense fallback={<p className="note">Opening browser…</p>}><BrowserPanel client={client} env={env} session={session} /></Suspense>}
       </div>
     </div>
   </div>;

@@ -60,6 +60,7 @@ import { Schedules } from './schedules.js';
 import { ExecutionJobs } from './execution.js';
 import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
+import { createBrowserRoutes } from './browser-routes.js';
 
 const RECONNECT_MIN = 250;
 const RECONNECT_MAX = 5000;
@@ -382,6 +383,7 @@ export class Daemon {
     this.name = net.machines[net.self]?.name || name || hostname();
     this.copyReceiver = new CopyReceiver({ network: () => loadNetwork() ?? this.net });
     this.executions = new ExecutionJobs();
+    this.browsers = createBrowserRoutes({ sessions: { get: id => this.sessions.get(id) } });
     this.cliUpdates = new CliUpdater({
       auto: () => cliAutoUpdate(),
       // Only asked on Windows, where a running program can not be replaced.
@@ -661,6 +663,7 @@ export class Daemon {
     if (this.#stopped) return;
     this.#stopped = true;
     await this.executions.stop();
+    await this.browsers?.stop();
     clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
     clearInterval(this.#wake);
@@ -1535,6 +1538,7 @@ export class Daemon {
   }
 
   async dispatch(method, p, caller) {
+    if (method.startsWith('browser.')) return this.browsers.dispatch(method, p);
     switch (method) {
       case M.EXEC_START:
         if (p.sessionId && ['plan', 'readonly', 'read'].includes(this.sessions.get(p.sessionId).mode)) {
