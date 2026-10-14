@@ -40,9 +40,8 @@ export default function BrowserLogins({ client, env, session }: { client: Client
       </select> : <p>{busy ? 'Finding profiles…' : 'No browser profiles found on this machine.'}</p>}
       {profiles.some(p => !p.readable) && <p className="note">{profiles.find(p => !p.readable)?.reason}</p>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
-        <button disabled={busy || !selected} onClick={() => void copy()}>Use in this chat</button>
+        <button disabled={busy || !selected} onClick={() => void copy()}>{message ? 'Refresh' : 'Use in this chat'}</button>
         <button disabled={busy || !selected} onClick={() => void copy(true)}>Use for all new chats</button>
-        <button disabled={busy || !selected} onClick={() => void copy()}>Refresh</button>
       </div>
       {defaultKey && <p className="note">New chats use {profiles.find(p => p.key === defaultKey)?.name || 'the saved profile'}. <button disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await call('loginDefault', { profileKey: null }); setDefaultKey(null); } catch (e: any) { setError(e.message); } finally { setBusy(false); } }}>Clear default</button></p>}
       {message && <p role="status">{message}</p>}{error && <p role="alert" className="error">{error}</p>}
