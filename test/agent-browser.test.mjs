@@ -271,16 +271,26 @@ test('a crashed browser does not let a held write erase the saved tab list', asy
 
 test('Chromium dying before Helm keeps the tab list, and a page closing on its own still updates it', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json');
-  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.recovered.set('one', Promise.resolve());
   const page = () => Object.assign(new EventEmitter(), { url: () => 'http://x/1', viewportSize: () => ({ width: 800, height: 600 }) });
-  const dying = page(), staying = page();
-  manager.register('one', dying); manager.register('one', staying);
-  await manager.persistTabs('one'); assert.equal(JSON.parse(readFileSync(file, 'utf8')).length, 2);
-  let connected = false; manager.browser = { isConnected: () => connected, on() {} };
-  dying.emit('close'); await tick(120);
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).length, 2, 'a restart that takes Chromium first forgets nothing');
-  connected = true; staying.emit('close'); await tick(120);
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).length, 0, 'a page that closed itself is gone from the list');
+  const saved = () => JSON.parse(readFileSync(file, 'utf8')).length;
+  // A restart: Chromium's pages close while the browser still looks connected, then Helm stops.
+  let manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.closeGraceMs = 30; manager.recovered.set('one', Promise.resolve());
+  let connected = true; manager.browser = { isConnected: () => connected, on() {}, close: async () => {} };
+  const a = page(), b = page(); manager.register('one', a); manager.register('one', b); await manager.persistTabs('one'); assert.equal(saved(), 2);
+  a.emit('close'); b.emit('close'); await manager.stop();
+  assert.equal(saved(), 2, 'stopping after the pages closed forgets nothing');
+  await tick(60); assert.equal(saved(), 2, 'nor does the close check that was still waiting');
+  // A crash: the pages close and the browser is gone.
+  manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.closeGraceMs = 30; manager.recovered.set('one', Promise.resolve());
+  manager.browser = { isConnected: () => false, on() {} };
+  const c = page(); manager.register('one', c); await manager.persistTabs('one'); c.emit('close'); await tick(60);
+  assert.equal(saved(), 1);
+  // window.close(): the browser is alive without the page.
+  manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.closeGraceMs = 30; manager.recovered.set('one', Promise.resolve());
+  manager.browser = { isConnected: () => true, on() {} };
+  const d = page(), e = page(); manager.register('one', d); manager.register('one', e); await manager.persistTabs('one');
+  d.emit('close'); await tick(60);
+  assert.equal(saved(), 1, 'a page that closed itself is gone from the list');
   rmSync(directory, { recursive: true, force: true });
 });
 

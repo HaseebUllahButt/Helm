@@ -181,8 +181,14 @@ export class BrowserManager {
     page.on('requestfinished', finished); page.on('requestfailed', finished);
     page.on('close', () => {
       this.tabs.delete(tab.id); void this.clearStream(tab);
-      if (!this.stopping && !this.suspending.has(sessionId)) this.discardDownloads(tab);
-      if (!tab.explicitClose && !this.stopping && !this.suspending.has(sessionId)) void this.pageClosed(sessionId).catch(() => {});
+      if (this.suspending.has(sessionId)) return;
+      if (tab.explicitClose) { if (!this.stopping) this.discardDownloads(tab); return; }
+      // A tab nobody closed: Chromium may be going down with Helm, in either
+      // order. It stays in the saved list until the browser is seen alive
+      // without it, so a restart forgets nothing.
+      let row; try { row = this.metadata(tab); } catch { return; }
+      (this.orphans ||= new Map()).set(tab.id, { sessionId, row, tab });
+      if (!this.stopping) void this.pageClosed(sessionId, tab).catch(() => {});
     });
     page.on('console', msg => cap(tab.console, { level: msg.type(), text: msg.text().slice(0, 4000), at: this.now() }));
     page.on('pageerror', error => cap(tab.console, { level: 'error', text: error.message.slice(0, 4000), at: this.now() }));
@@ -223,6 +229,7 @@ export class BrowserManager {
   async recover(sessionId) {
     this.owner(sessionId);
     if (!this.recovered.has(sessionId)) this.recovered.set(sessionId, (async () => {
+      for (const [key, orphan] of this.orphans || []) if (orphan.sessionId === sessionId) this.orphans.delete(key);
       let rows; try { rows = JSON.parse(await readFile(join(this.directory, sessionId, 'tabs.json'), 'utf8')); } catch { return; }
       if (!Array.isArray(rows)) return;
       for (const row of rows.slice(0, 24)) {
@@ -247,7 +254,7 @@ export class BrowserManager {
     const timers = this.persistTimers ||= new Map(); if (timers.has(sessionId)) return;
     const timer = setTimeout(() => { timers.delete(sessionId); if ([...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) void this.persistTabs(sessionId).catch(() => {}); }, 1000); timer.unref?.(); timers.set(sessionId, timer);
   }
-  async persistTabs(sessionId) { clearTimeout(this.persistTimers?.get(sessionId)); this.persistTimers?.delete(sessionId); const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); await writeFile(join(folder, 'tabs.json'), JSON.stringify([...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t))), { mode: 0o600 }); }
+  async persistTabs(sessionId) { clearTimeout(this.persistTimers?.get(sessionId)); this.persistTimers?.delete(sessionId); const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); await writeFile(join(folder, 'tabs.json'), JSON.stringify([...[...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t)), ...[...this.orphans?.values() || []].filter(o => o.sessionId === sessionId && !this.tabs.has(o.row.id)).map(o => o.row)]), { mode: 0o600 }); }
   async list(sessionId) { await this.recover(sessionId); return { tabs: [...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t)), bowser: !!bowserBin(), running: !!this.browser }; }
   async open(sessionId, { url = 'about:blank', engine = 'chromium' } = {}) {
     await this.recover(sessionId); url = httpUrl(url);
@@ -621,11 +628,11 @@ export class BrowserManager {
   async clearStream(tab) { await tab.streamStart?.catch(() => {}); this.wake(tab); for (const timer of tab.acks?.keys() || []) clearTimeout(timer); tab.acks?.clear(); tab.nextAckAt = 0; const cdp = tab.cdp; tab.cdp = null; tab.frame = null; if (cdp) { await cdp.send('Page.stopScreencast').catch(() => {}); await cdp.detach().catch(() => {}); } }
   async unwatch(sessionId, tabId, viewer) { const tab = this.get(sessionId, tabId); tab.viewers.delete(viewer); this.wake(tab); tab.viewerProfiles?.delete(viewer); tab.viewerLeases?.delete(viewer); tab.viewerRevisions?.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } if (!tab.viewers.size || this.previewMode(tab) === 'text') { await tab.streamConfig?.catch(() => {}); if (!tab.viewers.size || this.previewMode(tab) === 'text') await this.clearStream(tab); } return { ok: true }; }
   async control(sessionId, tabId, viewer, take) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer'); if (tab.control && tab.control !== viewer) throw new Error('another viewer has control'); tab.control = take ? viewer : null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; tab.viewers.set(viewer, this.now()); if (!tab.dialog) await (this.serial.get(tab.id) || Promise.resolve()).catch(() => {}); return { tab: this.metadata(tab) }; }
-  async pageClosed(sessionId) {
-    // A restart stops Chromium a moment before Helm: its pages close first,
-    // and writing that down would forget every tab the owner had open.
-    await new Promise(resolve => setTimeout(resolve, 50));
-    if (this.stopping || !this.browser || this.browser.isConnected?.() === false) return;
+  async pageClosed(sessionId, tab) {
+    await new Promise(resolve => { const timer = setTimeout(resolve, this.closeGraceMs ?? 1500); timer.unref?.(); });
+    if (this.stopping || !this.browser || this.browser.isConnected?.() === false || !this.orphans?.has(tab.id)) return;
+    // The browser is still up: the page closed itself (window.close).
+    this.orphans.delete(tab.id); this.discardDownloads(tab);
     await this.persistTabs(sessionId);
     if ([...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) return;
     const pending = this.contexts.get(sessionId), context = await pending;
