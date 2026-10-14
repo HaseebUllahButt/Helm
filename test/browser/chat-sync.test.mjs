@@ -63,6 +63,22 @@ async function device(t,remote,{cache,clock=false}={}) {
 const caughtUp=(page,last)=>page.waitForFunction(last=>window.state?.log.last===last&&!window.state.syncing,last);
 const text=page=>page.evaluate(()=>window.state.log.turns.flatMap(t=>t.items.map(i=>i.text)).join(''));
 
+test('focus and transport changes share an outstanding slow watch renewal', async t => {
+  const remote = server(), gate = deferred(), rpc = remote.rpc.bind(remote); let watches = 0;
+  remote.rpc = async (...args) => {
+    if (args[1] === 'session.watch') { watches++; await gate.promise; }
+    return rpc(...args);
+  };
+  const page = await device(t, remote, { clock: true });
+  await caughtUp(page, 3);
+  await page.evaluate(() => {
+    for (let i = 0; i < 3; i++) { window.dispatchEvent(new Event('focus')); window.emit('transport', {}); }
+  });
+  assert.equal(watches, 1, 'slow renewals cannot build up behind reconnection events');
+  gate.resolve(); await page.clock.runFor(11000);
+  assert.equal(watches, 2, 'renewal continues after the outstanding call finishes');
+});
+
 test('image recovery updates an already completed cached turn without replacing its answer', async t => {
   const old = [
     event(1, 'turn.start', { turnId: 'imported-image', text: 'Old image envelope' }),

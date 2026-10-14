@@ -51,6 +51,43 @@ test('Bowser reuses one bridge and propagates a human pause instead of bypassing
   await assert.rejects(bridge.call('act', { actions: [] }), /paused/); bridge.stop();
 });
 
+test('preview profiles reduce capture work, text keeps control without images, and leases restore full quality', async () => {
+  let clock = 1; const streams = [], commands = [];
+  const page = { url: () => 'about:blank', viewportSize: () => ({ width: 1280, height: 800 }), context: () => ({ newCDPSession: async () => {
+    const cdp = new EventEmitter(); streams.push(cdp); cdp.detach = async () => {};
+    cdp.send = async (method, params) => { commands.push({ method, params }); }; return cdp;
+  } }) };
+  const manager = new BrowserManager({ session: sid => ({ id: sid }), now: () => clock });
+  const tab = { id: 'preview', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], sequence: 0 }; manager.tabs.set(tab.id, tab);
+  await manager.frame('one', tab.id, { viewer: 'phone', preview: 'text' }); assert.equal(streams.length, 0);
+  await manager.control('one', tab.id, 'phone', true); clock += 5000;
+  const text = await manager.frame('one', tab.id, { viewer: 'phone', preview: 'text' });
+  assert.equal(text.tab.control, 'phone'); assert.equal(text.image, undefined); assert.equal(streams.length, 0);
+  await Promise.all([manager.frame('one', tab.id, { viewer: 'desktop', preview: 'full' }), manager.frame('one', tab.id, { viewer: 'desktop', preview: 'full' })]);
+  assert.equal(streams.length, 1);
+  const full = commands.find(c => c.method === 'Page.startScreencast').params;
+  await manager.frame('one', tab.id, { viewer: 'slow', preview: 'low' });
+  const low = commands.filter(c => c.method === 'Page.startScreencast').at(-1).params;
+  assert.ok(low.maxWidth < full.maxWidth); assert.ok(low.quality < full.quality);
+  streams.at(-1).emit('Page.screencastFrame', { data: 'smaller', sessionId: 1 });
+  assert.equal((await manager.frame('one', tab.id, { viewer: 'phone', preview: 'text' })).image, undefined);
+  assert.equal((await manager.frame('one', tab.id, { viewer: 'desktop', preview: 'full' })).preview, 'low');
+  await manager.unwatch('one', tab.id, 'desktop'); await manager.unwatch('one', tab.id, 'slow');
+  assert.equal(tab.cdp, null, 'remaining text viewers do not keep screenshot capture alive');
+  await manager.frame('one', tab.id, { viewer: 'slow', preview: 'low' });
+  clock += 11000;
+  assert.equal((await manager.frame('one', tab.id, { viewer: 'desktop', preview: 'full' })).preview, 'full');
+  assert.equal(tab.control, null); assert.equal(tab.viewerProfiles.has('slow'), false);
+  await manager.unwatch('one', tab.id, 'desktop'); assert.equal(tab.cdp, null);
+  await assert.rejects(manager.frame('one', tab.id, { viewer: 'phone', preview: 'unbounded' }), /preview mode/);
+  await assert.rejects(manager.frame('one', tab.id, { viewer: 'phone', leaseMs: 999999 }), /expected integer/);
+  await manager.frame('one', tab.id, { viewer: 'slow-phone', preview: 'text', leaseMs: 30000 });
+  await manager.control('one', tab.id, 'slow-phone', true); clock += 18000; await manager.sweep();
+  assert.equal(tab.control, 'slow-phone', 'a slow controller keeps its bounded lease');
+  clock += 13000; await manager.sweep(); assert.equal(tab.control, null);
+  await manager.stop();
+});
+
 test('unchanged Bowser frame is available after closing and reopening a viewer', async () => {
   const manager = new BrowserManager({ session: sid => ({ id: sid }) });
   manager.capture = async () => ({ image: 'data:image/jpeg;base64,same' });

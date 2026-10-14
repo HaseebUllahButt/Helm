@@ -100,6 +100,55 @@ test('a fast hub opens promptly even when another remembered endpoint is unreach
   h.client.close();
 });
 
+test('a slow healthy read is not duplicated at the old fixed hedge deadline', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  h.client.rttSamples.set('vm', [2400]);
+  const result = h.client.rpc('vm', 'session.events', { id: 'thread' }, 20000);
+  const frame = h.sockets[0].frames.at(-1);
+  await h.advance(3000);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  assert.equal(h.sockets[0].frames.filter(f => f.id === frame.id).length, 1);
+  h.sockets[0].message({ t: 'rpcResult', id: frame.id, ok: true, result: { last: 5 } });
+  assert.equal((await result).last, 5); h.client.close();
+});
+
+test('read recovery learns slow payload delivery even when ping latency is low', async () => {
+  const h = harness(); h.start(); await h.advance(200); h.client.rttSamples.set('vm', [30]);
+  const first = h.client.rpc('vm', 'session.events', { id: 'thread' }, 20000);
+  const frame = h.sockets[0].frames.at(-1);
+  // A successful history delivery establishes its cost without another probe.
+  await h.advance(1400); h.sockets[0].message({ t: 'rpcResult', id: frame.id, ok: true, result: { last: 1 } }); await first;
+  const second = h.client.rpc('vm', 'session.events', { id: 'thread' }, 20000), secondFrame = h.sockets[0].frames.at(-1);
+  await h.advance(1800);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/api/read')).length, 0);
+  h.sockets[0].message({ t: 'rpcResult', id: secondFrame.id, ok: true, result: { last: 2 } });
+  assert.equal((await second).last, 2); h.client.close();
+});
+
+test('a slow route still falls back within its bounded latency budget without replaying writes', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  h.client.rttSamples.set('vm', [2400]);
+  const read = h.client.rpc('vm', 'session.list', {}, 20000);
+  await h.advance(5060); assert.equal((await read).fresh, true);
+  const write = h.client.rpc('vm', 'session.input', { id: 'thread', data: 'once' }, 20000);
+  const rejected = assert.rejects(write, /client closed|disconnected/);
+  await h.advance(10000);
+  assert.equal(h.sockets[0].frames.filter(f => f.method === 'session.input').length, 1);
+  h.client.close(); await rejected;
+});
+
+test('slow latency probes stay single-flight instead of building a queue', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  const off = h.client.watchLatency('vm');
+  await h.advance(9000);
+  assert.equal(h.sockets[0].frames.filter(f => f.method === 'ping').length, 1);
+  const ping = h.sockets[0].frames.find(f => f.method === 'ping');
+  h.sockets[0].message({ t: 'rpcResult', id: ping.id, ok: true, result: {} });
+  await h.advance(3000);
+  assert.equal(h.sockets[0].frames.filter(f => f.method === 'ping').length, 2);
+  off(); h.client.close();
+});
+
 test('direct signalling buffers early candidates and ignores superseded negotiations', async () => {
   const setup = harness();
   setup.start(); await setup.advance(200);

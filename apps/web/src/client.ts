@@ -447,6 +447,8 @@ type Pending = {
   direct?: Peer; env?: string; hedged?: boolean;
   routes?: Set<RpcRoute>;
   recover?: () => void;
+  readKey?: string;
+  sentAt?: Partial<Record<RpcRoute, number>>;
 };
 type Listener = (env: string, kind: string, payload: any) => void;
 
@@ -744,6 +746,7 @@ export class Client {
    * bad connection instead of like broken software.
    */
   private rttSamples = new Map<string, number[]>();
+  private readDurations = new Map<string, number>();
   private rttTimers = new Map<string, ReturnType<typeof setInterval>>();
 
   /**
@@ -809,8 +812,10 @@ export class Client {
   watchLatency(env: string) {
     this.rttWatchers.set(env, (this.rttWatchers.get(env) ?? 0) + 1);
     if (this.rttTimers.has(env)) return () => this.unwatchLatency(env);
+    let pending = false;
     const ping = async () => {
-      if (!this.connected && !this.directTo(env)) return;
+      if (pending || (!this.connected && !this.directTo(env))) return;
+      pending = true;
       const started = performance.now();
       try {
         await this.rpc(env, 'ping', {}, 15_000);
@@ -824,6 +829,7 @@ export class Client {
       } catch {
         this.rttSamples.delete(env);
       }
+      finally { pending = false; }
       this.emit(env, 'latency', { env, ms: this.latency(env) });
     };
     ping();
@@ -1379,6 +1385,7 @@ export class Client {
         reject: (error) => { clear(); reject(error); },
         ...(direct ? { direct: peer, env } : {}),
         routes: new Set([direct ? 'direct' : 'relay']),
+        ...(HTTP_READ_METHODS.has(method) ? { readKey: `${env}:${method}`, sentAt: { [direct ? 'direct' : 'relay']: started } } : {}),
       });
       const frame = JSON.stringify({ t: 'rpc', id, env, method, params });
       // Prefer the direct channel: relaying costs two internet round trips
@@ -1389,7 +1396,7 @@ export class Client {
       if (direct) sent = sendDirect(peer!.channel, frame);
       if (!sent) {
         const pending = this.pending.get(id);
-        if (pending) { pending.direct = undefined; pending.routes = new Set(['relay']); }
+        if (pending) { pending.direct = undefined; pending.routes = new Set(['relay']); if (pending.sentAt) pending.sentAt = { relay: started }; }
         if (!this.connected) {
           this.pending.delete(id);
           reject(new Error('not connected'));
@@ -1408,7 +1415,13 @@ export class Client {
       // These reads (and the idempotent view lease) are safe to race over the
       // hub too; never replay prompts, approvals, or other writes this way.
       if (HTTP_READ_METHODS.has(method)) {
-        const hedgeAfter = Math.min(1500, timeout / 2);
+        // A slow but healthy link must not multiply a large history download.
+        // Keep quick recovery when no latency is known, with a bounded grace
+        // period once the machine's round-trip cost has been measured.
+        const samples = this.rttSamples?.get(env);
+        const rtt = samples?.length ? Math.min(...samples) : 0;
+        const previousRead = this.readDurations?.get(`${env}:${method}`) || 0;
+        const hedgeAfter = Math.min(8000, Math.max(1500, rtt * 2 + 250, previousRead * 1.5 + 250), timeout / 2);
         const httpFallback = (elapsed: number) => {
           const pending = this.pending.get(id);
           if (!pending || pending.routes?.has('http')) return;
@@ -1416,6 +1429,7 @@ export class Client {
           pending.recover = undefined;
           pending.hedged = true;
           pending.routes?.add('http');
+          if (pending.sentAt) pending.sentAt.http = Date.now();
           this.readHttp<T>(env, method, params, timeout - elapsed).then(
             result => this.receiveRpc({ id, ok: true, result }, 'http'),
             error => this.receiveRpc({ id, ok: false, error }, 'http'),
@@ -1428,10 +1442,11 @@ export class Client {
           pending.hedged = true;
           if (sent && this.connected) {
             pending.routes?.add('relay');
+            if (pending.sentAt) pending.sentAt.relay = Date.now();
             try {
               this.ws!.send(frame);
               if (this.pending.has(id)) {
-                const httpAfter = Math.min(1500, (timeout - hedgeAfter) / 2);
+                const httpAfter = Math.min(hedgeAfter, (timeout - hedgeAfter) / 2);
                 fallback = setTimeout(() => httpFallback(hedgeAfter + httpAfter), httpAfter);
               }
               return;
@@ -1510,6 +1525,12 @@ export class Client {
     // The relay may not see a machine that the direct route can reach. An
     // early hedge error must not beat the other route's successful answer.
     if (!msg.ok && pending.routes?.size) return;
+    if (msg.ok && pending.readKey && pending.sentAt?.[route] !== undefined) {
+      // Winning-route delivery includes payload transfer time, so a low-RTT
+      // connection with poor bandwidth also learns a suitable read grace.
+      (this.readDurations ||= new Map()).set(pending.readKey, Date.now() - pending.sentAt[route]!);
+      if (this.readDurations.size > 128) this.readDurations.delete(this.readDurations.keys().next().value!);
+    }
     this.pending.delete(msg.id);
     msg.ok ? pending.resolve(msg.result) : pending.reject(new Error(msg.error?.message ?? 'failed'));
     // Retire the unresponsive peer after its fallback succeeds, so the next

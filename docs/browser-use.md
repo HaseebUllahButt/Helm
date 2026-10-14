@@ -8,6 +8,14 @@ there, including when you watch from a phone. Read page & controls gives a
 text view; Console and Network show bounded diagnostics. The viewport buttons
 switch between phone and desktop sizes.
 
+**Preview → Auto** reduces image size and frame rate when delivery slows down,
+using network hints where available and measured replies on every browser.
+Choose **Low data** to hold that setting, **Full quality** for finer detail,
+or **Text only** to stop all image downloads while keeping text inspection,
+navigation and control available. Preview quality never resizes the actual
+page or changes agent actions. When several people view the same tab, the
+slowest visual viewer sets the shared capture quality.
+
 Agents use the same tabs through the CLI:
 
 ```sh
@@ -63,9 +71,11 @@ and apps running. `HELM_BOWSER_PATH` selects a custom executable.
 The daemon imports no Playwright code and launches no browser until one is
 needed. All Chromium contexts share one process tree. Live preview uses CDP
 screencast frames, stores only the latest JPEG, and paces acknowledgements
-to roughly five frames per second. The viewer requests the next frame only
-after its previous request finishes; unchanged frames carry no image payload.
-Streaming stops when a viewer closes or its ten-second lease expires. A
+to roughly five frames per second at full quality, two in balanced mode and
+one in low-data mode. The viewer requests the next frame only after its
+previous request and image decode finish; unchanged frames carry no image payload.
+Streaming stops when a viewer closes or its bounded lease expires. The web
+viewer adapts its lease to observed latency, capped at sixty seconds. A
 hidden client stops requesting frames. Bowser previews are sampled at most
 once per second and unchanged images are omitted. After ten minutes without
 actions or viewers, inactive Chromium contexts release their processes and

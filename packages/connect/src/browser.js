@@ -14,6 +14,11 @@ const executable = () => process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST
 const bowserBin = () => process.env.HELM_BOWSER_PATH || (process.env.PATH || '').split(':').map(p => join(p, 'bowser-computer')).find(existsSync);
 const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 const MAX_THREAD_DOWNLOAD_BYTES = 256 * 1024 * 1024;
+export const BROWSER_PREVIEWS = Object.freeze({
+  low: { maxWidth: 640, maxHeight: 640, quality: 35, interval: 1000 },
+  balanced: { maxWidth: 960, maxHeight: 960, quality: 50, interval: 500 },
+  full: { maxWidth: 1280, maxHeight: 1200, quality: 60, interval: 200 },
+});
 
 /** One persistent stdio bridge to the owner's Bowser. Closing it leaves Bowser intact. */
 export class BowserBridge {
@@ -297,37 +302,74 @@ export class BrowserManager {
     if (!Array.isArray(action.files) || !action.files.length || action.files.length > 20) throw new Error('upload 1–20 host files');
     return { paths: action.files.map(f => resolve(text(f, 4000))), cleanup: async () => {} };
   }
-  async capture(tab, { fullPage = false } = {}) {
-    if (tab.engine === 'bowser') { const result = await this.bowser.call('screenshot', { max_size: 1280 }); const part = result.content.find(p => p.type === 'image'); if (!part) throw new Error('Bowser did not return a screenshot'); return { image: `data:${part.mimeType};base64,${part.data}` }; }
+  async capture(tab, { fullPage = false, maxWidth = 1280 } = {}) {
+    if (tab.engine === 'bowser') { const result = await this.bowser.call('screenshot', { max_size: maxWidth }); const part = result.content.find(p => p.type === 'image'); if (!part) throw new Error('Bowser did not return a screenshot'); return { image: `data:${part.mimeType};base64,${part.data}` }; }
     const bytes = await tab.page.screenshot({ type: 'jpeg', quality: 75, fullPage: !!fullPage, timeout: 10000 });
     if (bytes.length > 3 * 1024 * 1024) throw new Error('screenshot exceeds 3 MiB; capture the viewport instead');
     return { image: `data:image/jpeg;base64,${bytes.toString('base64')}` };
   }
-  async frame(sessionId, tabId, { viewer, since = -1 } = {}) {
+  expireViewers(tab) {
+    for (const [viewer, at] of tab.viewers) if (this.now() - at > (tab.viewerLeases?.get(viewer) || 10000)) {
+      tab.viewers.delete(viewer); tab.viewerProfiles?.delete(viewer); tab.viewerLeases?.delete(viewer);
+      if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; }
+    }
+  }
+  previewMode(tab) {
+    const modes = [...tab.viewers.keys()].map(viewer => tab.viewerProfiles?.get(viewer) || 'full');
+    return ['low', 'balanced', 'full'].find(mode => modes.includes(mode)) || 'text';
+  }
+  async configurePreview(tab) {
+    // Serialize profile changes as well as startup. The slowest active visual
+    // viewer sets the shared stream cap; text-only viewers need no images.
+    const work = (tab.streamConfig || Promise.resolve()).catch(() => {}).then(async () => {
+      const mode = this.previewMode(tab);
+      if (tab.previewMode === mode && (tab.engine === 'bowser' || tab.cdp || mode === 'text')) return;
+      await tab.capturing?.catch(() => {});
+      await this.clearStream(tab);
+      if (!tab.viewers.size || this.stopping) return;
+      tab.previewMode = mode; tab.frameAt = 0; tab.hash = null;
+      if (mode === 'text' || tab.engine === 'bowser') return;
+      const profile = BROWSER_PREVIEWS[mode];
+      tab.streamStart = (async () => {
+        const cdp = await tab.page.context().newCDPSession(tab.page);
+        if (!tab.viewers.size || this.stopping) { await cdp.detach(); return; }
+        tab.cdp = cdp;
+        cdp.on('Page.screencastFrame', event => {
+          if (tab.cdp !== cdp) return;
+          tab.frame = `data:image/jpeg;base64,${event.data}`; tab.sequence++;
+          // Chromium can have multiple unacknowledged frames. Pace their
+          // acknowledgements together rather than giving each its own clock.
+          const now = Date.now(); tab.nextAckAt = Math.max(now, tab.nextAckAt || 0) + profile.interval;
+          const ack = setTimeout(() => { tab.acks?.delete(ack); void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {}); }, tab.nextAckAt - now);
+          ack.unref?.(); (tab.acks ||= new Set()).add(ack);
+        });
+        try { await cdp.send('Page.startScreencast', { format: 'jpeg', quality: profile.quality, maxWidth: profile.maxWidth, maxHeight: profile.maxHeight, everyNthFrame: 1 }); }
+        catch (error) { if (tab.cdp === cdp) { tab.cdp = null; tab.frame = null; } await cdp.detach().catch(() => {}); throw error; }
+      })().finally(() => { tab.streamStart = null; });
+      await tab.streamStart;
+    });
+    tab.streamConfig = work;
+    try { await work; } finally { if (tab.streamConfig === work) tab.streamConfig = null; }
+  }
+  async frame(sessionId, tabId, { viewer, since = -1, preview = 'full', leaseMs = 10000 } = {}) {
     await this.recover(sessionId);
     const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer');
+    if (preview !== 'text' && !Object.hasOwn(BROWSER_PREVIEWS, preview)) throw new Error('invalid browser preview mode');
+    integer(leaseMs, 10000, 60000);
+    this.expireViewers(tab);
     tab.lastUsed = this.now(); tab.viewers.set(viewer, this.now());
-    if (tab.engine === 'bowser') {
-      if (!tab.capturing && (!tab.frame || this.now() - (tab.frameAt || 0) > 900)) tab.capturing = this.capture(tab).then(result => { const hash = createHash('sha256').update(result.image).digest('hex'); if (hash !== tab.hash || !tab.frame) { tab.frame = result.image; tab.sequence++; tab.hash = hash; } tab.frameAt = this.now(); }).finally(() => { tab.capturing = null; });
+    (tab.viewerProfiles ||= new Map()).set(viewer, preview);
+    (tab.viewerLeases ||= new Map()).set(viewer, leaseMs);
+    await this.configurePreview(tab);
+    const mode = this.previewMode(tab);
+    if (preview !== 'text' && mode !== 'text' && tab.engine === 'bowser') {
+      if (!tab.capturing && (!tab.frame || this.now() - (tab.frameAt || 0) > 900)) tab.capturing = this.capture(tab, { maxWidth: BROWSER_PREVIEWS[mode].maxWidth }).then(result => { const hash = createHash('sha256').update(result.image).digest('hex'); if (hash !== tab.hash || !tab.frame) { tab.frame = result.image; tab.sequence++; tab.hash = hash; } tab.frameAt = this.now(); }).finally(() => { tab.capturing = null; });
       if (tab.capturing) await tab.capturing;
-    } else if (!tab.cdp && !tab.streamStart) {
-      tab.streamStart = (async () => {
-      const cdp = await tab.page.context().newCDPSession(tab.page); tab.cdp = cdp;
-      cdp.on('Page.screencastFrame', event => {
-        if (tab.cdp !== cdp) return;
-        // Keep only the latest frame and pace acknowledgements: bounded memory and five fps.
-        tab.frame = `data:image/jpeg;base64,${event.data}`; tab.sequence++;
-        const ack = setTimeout(() => { tab.acks?.delete(ack); void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {}); }, 200); ack.unref?.(); (tab.acks ||= new Set()).add(ack);
-      });
-      try { await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 }); }
-      catch (error) { if (tab.cdp === cdp) { tab.cdp = null; tab.frame = null; } await cdp.detach().catch(() => {}); throw error; }
-      })().finally(() => { tab.streamStart = null; });
     }
-    if (tab.streamStart) await tab.streamStart;
-    return { tab: this.metadata(tab), sequence: tab.sequence, ...(tab.frame && since !== tab.sequence ? { image: tab.frame } : {}) };
+    return { tab: this.metadata(tab), sequence: tab.sequence, preview: mode, ...(preview !== 'text' && tab.frame && since !== tab.sequence ? { image: tab.frame } : {}) };
   }
-  async clearStream(tab) { await tab.streamStart?.catch(() => {}); for (const timer of tab.acks || []) clearTimeout(timer); tab.acks?.clear(); const cdp = tab.cdp; tab.cdp = null; tab.frame = null; if (cdp) { await cdp.send('Page.stopScreencast').catch(() => {}); await cdp.detach().catch(() => {}); } }
-  async unwatch(sessionId, tabId, viewer) { const tab = this.get(sessionId, tabId); tab.viewers.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } if (!tab.viewers.size) await this.clearStream(tab); return { ok: true }; }
+  async clearStream(tab) { await tab.streamStart?.catch(() => {}); for (const timer of tab.acks || []) clearTimeout(timer); tab.acks?.clear(); tab.nextAckAt = 0; const cdp = tab.cdp; tab.cdp = null; tab.frame = null; if (cdp) { await cdp.send('Page.stopScreencast').catch(() => {}); await cdp.detach().catch(() => {}); } }
+  async unwatch(sessionId, tabId, viewer) { const tab = this.get(sessionId, tabId); tab.viewers.delete(viewer); tab.viewerProfiles?.delete(viewer); tab.viewerLeases?.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } if (!tab.viewers.size || this.previewMode(tab) === 'text') { await tab.streamConfig?.catch(() => {}); if (!tab.viewers.size || this.previewMode(tab) === 'text') await this.clearStream(tab); } return { ok: true }; }
   async control(sessionId, tabId, viewer, take) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer'); if (tab.control && tab.control !== viewer) throw new Error('another viewer has control'); tab.control = take ? viewer : null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; tab.viewers.set(viewer, this.now()); if (!tab.dialog) await (this.serial.get(tab.id) || Promise.resolve()).catch(() => {}); return { tab: this.metadata(tab) }; }
   async pageClosed(sessionId) {
     await this.persistTabs(sessionId);
@@ -342,8 +384,8 @@ export class BrowserManager {
   async download(sessionId, tabId, downloadId) { await this.recover(sessionId); const tab = this.get(sessionId, tabId), record = tab.downloads.find(d => d.id === downloadId && d.status === 'ready'); if (!record) throw new Error('download is not ready'); if ((await stat(record.path)).size > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); const bytes = await readFile(record.path); if (bytes.length > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); return { name: record.name, data: bytes.toString('base64') }; }
   async sweep() {
     for (const tab of this.tabs.values()) {
-      for (const [viewer, at] of tab.viewers) if (this.now() - at > 10000) { tab.viewers.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } }
-      if (!tab.viewers.size && tab.cdp) await this.clearStream(tab);
+      this.expireViewers(tab);
+      if (tab.cdp && (!tab.viewers.size || this.previewMode(tab) === 'text')) await this.clearStream(tab);
       if (tab.engine === 'bowser' && !tab.viewers.size && this.now() - tab.lastUsed > this.idleMs && !this.serial.has(tab.id)) this.bowser.stop();
     }
     for (const sid of [...this.contexts.keys()]) {

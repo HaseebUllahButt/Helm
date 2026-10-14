@@ -16,5 +16,8 @@
 .browser-input input:nth-child(2){flex:1;min-width:140px}
 .browser-text{white-space:pre-wrap;max-height:300px;overflow:auto;font-size:12px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:8px}
 .browser-dialog{padding:12px;border:1px solid var(--line);border-radius:8px}
+.browser-preview{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px}
+.browser-preview select{padding:6px 8px;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:7px}
+.browser-screen>.note{padding:16px}
 .thread-details:has(.browser-panel){width:min(1100px,calc(100vw - 24px))}
 @media(max-width:600px){.browser-screen{max-height:55vh}.browser-toolbar form{order:1;flex-basis:100%}.browser-input input:nth-child(2){min-width:130px}}

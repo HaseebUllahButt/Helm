@@ -39,7 +39,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
   useEffect(() => {
     // All mutable state belongs to this mount. A late reply from another
     // chat (or a StrictMode cleanup) can never write into this conversation.
-    let stopped = false, initialized = false, fetching = false, pagingBack = false;
+    let stopped = false, initialized = false, fetching = false, pagingBack = false, renewing = false;
     let log = emptyLog(), raw: HelmEvent[] = [], first = 0, windowVersion = 0;
     let dirty = false, retryDelay = 1000;
     let paint: ReturnType<typeof setTimeout> | undefined;
@@ -148,10 +148,13 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     };
 
     const renew = async () => {
+      if (stopped || renewing) return;
+      renewing = true;
       try {
         const r = await client.rpc<{ last: number; status?: string }>(env, 'session.watch', { id: sessionId, watchId }, 10_000);
         if (!stopped && initialized && (!log.loaded || r.last !== log.last || (r.status && r.status !== log.status))) void refresh();
       } catch { if (!stopped) scheduleRetry(); }
+      finally { renewing = false; }
     };
     const catchUp = () => { if (!stopped) { void renew(); void refresh(); } };
     const onVisibility = () => {

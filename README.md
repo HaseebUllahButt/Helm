@@ -39,6 +39,10 @@ Android devices/emulators and iOS simulators. Both start their tools only when
 needed. Supported idle Claude/Codex threads offer [Edit from here](docs/rewind.md),
 with optional file restore in an exclusive Git worktree.
 
+For a slow phone connection, browser Preview can adapt automatically or use
+Low data / Text only. [Controller performance](docs/controller-performance.md)
+explains which operations stay local and how chat recovery avoids extra traffic.
+
 Thread schedules can run at a fixed time, on an interval, or from an authenticated
 webhook, including starting a fresh thread. Usage-limit recovery offers an opt-in
 to continue automatically at the provider's reset time. GitHub watches can wake
