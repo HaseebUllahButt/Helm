@@ -180,6 +180,8 @@ export const M = {
   SESSION_ARCHIVE: 'session.archive', // { id, archived? } -> { session }
   SESSION_SEEN:    'session.seen',    // { id } -> { seenAt }  the owner looked at it, on some device
   SESSION_FORK: 'session.fork',       // { id, turnId } -> { session }  a new thread, as this one was before that message
+  SESSION_REWIND: 'session.rewind',   // { id, turnId, restoreFiles?: boolean } -> { session, draft, recoveryId }
+  SESSION_REWIND_CHECK: 'session.rewind-check', // { id, turnId } -> { restoreFiles, reason? }
   DIGEST_LIST: 'digest.list',      // { limit? } -> { digests[] }
   SESSION_KEYS: 'session.keys',    // { id, keys[] }  e.g. ["Enter"], ["C-c"]
   SESSION_MESSAGES: 'session.messages', // { id, limit? } -> { messages[], source }

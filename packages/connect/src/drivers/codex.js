@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 import { codexProcId } from '../hosted-process.js';
+import { stageCodexRewind } from './rewind.js';
 import { Driver, readJsonLines, checkVersion } from './index.js';
 import { modeFor } from '../modes.js';
 import { expand } from '../paths.js';
@@ -545,6 +546,25 @@ function childStep(item) {
 }
 
 export class CodexDriver extends Driver {
+  static canRewind = true;
+
+  async prepareRewind({ turnId }) {
+    if (this.nativeSocket || this.monitorOnly) throw new Error('Rewind is unavailable for a provider controlled outside Helm.');
+    await this.start();
+    await this.#rewindIdle();
+    return stageCodexRewind(async (method, params) => {
+      const response = await this.#server.call(method, params);
+      if (response.error) throw Object.assign(new Error(response.error.message), { code: response.error.code });
+      return response.result;
+    }, this.threadId, turnId);
+  }
+
+  async #rewindIdle() {
+    const response = await this.#server.call('thread/read', { threadId: this.threadId, includeTurns: false });
+    if (response.error || response.result?.thread?.status?.type !== 'idle') throw new Error('Codex could not confirm an idle conversation for rewind.');
+  }
+
+  async validateRewind() { await this.start(); await this.#rewindIdle(); }
   /** helm's brief rides in the developer instructions, not the first message. */
   static takesInstructions = true;
   #server = null;

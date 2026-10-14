@@ -68,6 +68,7 @@ export function useSessionLog(client: Client, env: string, sessionId: string) {
     const consume = (events: HelmEvent[]) => {
       for (const event of events) {
         if (event.seq <= log.last) continue;
+        if (event.type === 'history.reset') { raw = []; first = event.seq; windowVersion++; setEarlier(false); }
         raw.push(event);
         apply(log, event);
       }

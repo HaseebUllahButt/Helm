@@ -102,6 +102,8 @@ export interface Session {
   lastUsage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputIncludesCache?: boolean; at: number; model?: string };
   /** Set on a headless agent session: which driver runs it. */
   driver?: string;
+  /** The machine's driver can prepare a rewind without changing the source. */
+  rewindSupported?: boolean;
   /** A managed provider shared by the terminal client and paired apps. */
   shared?: boolean;
   /** Set on a terminal helm owns: a pty, not a herdr pane. */

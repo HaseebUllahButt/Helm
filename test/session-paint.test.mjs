@@ -37,6 +37,7 @@ async function mount() {
   states.length = 0;
   return {
     push(seq) { listener('machine', 'session.event', { id: 'thread', events: [{ seq }] }); },
+    pushEvent(event) { listener('machine', 'session.event', { id: 'thread', events: [event] }); },
     timers, states, saves,
     tick(ms) { for (const [key, timer] of [...timers]) if (timer.ms === ms) { timers.delete(key); timer.fn(); } },
     close() { cleanup.forEach((fn) => fn?.()); },
@@ -65,4 +66,15 @@ test('unmount cancels a pending paint and persists the final events', async () =
   assert.equal(h.timers.size, 0);
   assert.equal(h.saves.length, 1);
   assert.equal(h.saves[0][2], 1);
+});
+
+
+test('a rewind reset removes discarded raw events from the persisted device cache', async () => {
+  const h = await mount();
+  h.push(1); h.push(2); h.tick(50);
+  h.pushEvent({ type: 'history.reset', seq: 3 }); h.push(4); h.tick(50); h.tick(2000);
+  const cached = h.saves.at(-1);
+  assert.deepEqual(Array.from(cached[3], event => event.seq), [3, 4]);
+  assert.equal(cached[4], 3);
+  h.close();
 });

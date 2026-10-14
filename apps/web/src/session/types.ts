@@ -110,6 +110,7 @@ export interface TurnEnd {
 }
 
 export interface Turn {
+  checkpoint?: string;
   id: string;
   /** Last event that changed this turn; items are mutated while streaming. */
   revision?: number;
@@ -225,6 +226,15 @@ export function apply(state: LogState, e: HelmEvent): void {
   if (e.seq <= state.last) return;
   state.last = e.seq;
   switch (e.type) {
+    case 'history.reset': {
+      Object.assign(state, emptyLog(), { last: e.seq, loaded: true, status: 'idle' });
+      return;
+    }
+    case 'turn.checkpoint': {
+      const turn = state.turns.find(t => t.id === e.turnId);
+      if (turn) { turn.checkpoint = e.checkpoint; turn.revision = e.seq; }
+      return;
+    }
     case 'turn.start': {
       const id = e.turnId ?? String(e.seq);
       // helm posts the owner's message the moment it is sent, so it shows
@@ -268,6 +278,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         open.revision = e.seq;
         open.id = id;
         open.queued = false;
+        open.checkpoint = e.checkpoint ?? open.checkpoint;
         if (e.local) {
           open.local = true;
           open.insideOf = host?.id;
@@ -275,7 +286,7 @@ export function apply(state: LogState, e: HelmEvent): void {
         }
         return;
       }
-      const turn: Turn = { id, revision: e.seq, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, delivery: e.delivery, references: e.references };
+      const turn: Turn = { id, revision: e.seq, text: e.text ?? '', at: e.at, items: [], attachments: e.attachments ?? [], queued: e.queued === true, delivery: e.delivery, references: e.references, checkpoint: e.checkpoint };
       if (e.local) {
         turn.local = true;
         turn.insideOf = host?.id;

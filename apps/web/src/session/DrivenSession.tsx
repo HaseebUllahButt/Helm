@@ -13,7 +13,7 @@ import { Controls, trayPrefs, type Kind } from './Controls';
 import { Transcript, splitNote, isCompaction } from './Transcript';
 import { useGitStatus } from './Changes';
 import { expandPastes } from './pasteStore';
-import { Confirm, TextPrompt } from '../Modal';
+import { Confirm, TextPrompt, Sheet } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
 import { useDraftImages } from './useDraftImages';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
@@ -74,7 +74,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   onOpenMachineSession?: (machineId: string, session: Session) => void;
   onOpenDevices?: () => void;
 }) {
-  const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier } = useSessionLog(client, env.id, session.id);
+  const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier, refresh } = useSessionLog(client, env.id, session.id);
   const readVisual = useCallback((ref: string) => client.rpc<{ html: string }>(env.id, 'session.visual', { id: session.id, ref }, 60_000), [client, env.id, session.id]);
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
@@ -125,6 +125,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     return () => { stale = true; };
   }, [client, env.id, session.id]);
   /** The message a branch was asked for from, while the confirmation is up. */
+  const [rewinding, setRewinding] = useState<{ turn: Turn; allowed: boolean; restore: boolean; reason?: string } | null>(null);
   const [branching, setBranching] = useState<Turn | null>(null);
   useDismiss(menu !== null, useCallback(() => setMenu(null), []));
   const [options, setOptions] = useState<ModelList | null>(null);
@@ -687,6 +688,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         pending={log.pending} onReviewRequest={reviewRequest} focusItem={focusItem}
         earlier={earlier} loadingEarlier={loadingEarlier} onEarlier={loadEarlier}
         onResend={resend} onWithdraw={withdraw}
+        onRewind={session.rewindSupported && !working && !busy && !pending && !queuedTurns.length ? (turn) => {
+          void call(async () => {
+            const check = await client.rpc<{ restoreFiles: boolean; reason?: string }>(env.id, 'session.rewind-check', { id: session.id, turnId: turn.id });
+            setRewinding({ turn, allowed: check.restoreFiles, restore: false, reason: check.reason });
+          });
+        } : undefined}
         onBranch={session.engine === 'claude' && onOpenSession ? setBranching : undefined}
         empty={session.alive === false ? 'This conversation resumes with your next message.' : sentFirst ? 'Waiting for the agent…' : undefined}
       />
@@ -755,6 +762,33 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       {editingQueue && <QueueEdit turn={editingQueue} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSave={async (text, attachments) => {
         if (await queueAction(editingQueue, 'session.queue-edit', { text, attachments })) setEditingQueue(null);
       }} />}
+
+      {rewinding && <Sheet label="Edit from here" onClose={() => { if (!busy) setRewinding(null); }}>
+        <div className="modal-title">Edit from here?</div>
+        <div className="modal-body">
+          <p>This message and the replies after it will be removed from this conversation. The message and its attachments return to your draft for editing. Discarded history is saved privately on the host.</p>
+          {(draft.trim() || attachments.length > 0) && <p>Your current draft will be replaced.</p>}
+          <label className="rewind-files"><input type="checkbox" checked={rewinding.restore} disabled={!rewinding.allowed || busy} onChange={event => setRewinding({ ...rewinding, restore: event.target.checked })} />Restore worktree files to before this message</label>
+          <p>{rewinding.allowed ? 'File restore includes staged changes and untracked files. Ignored files are preserved.' : rewinding.reason}</p>
+          {error && <p role="alert" className="error">{error}</p>}
+        </div>
+        <div className="modal-actions">
+          <button className="ghost" disabled={busy} onClick={() => setRewinding(null)}>Cancel</button>
+          <button className="primary" disabled={busy || working || !!pending || !!queuedTurns.length} onClick={() => {
+            const choice = rewinding;
+            void call(async () => {
+              const result = await client.rpc<{ session: Session; draft: { text: string; attachments: { filename: string; mime: string; data: string }[]; references: string[] } }>(env.id, 'session.rewind', { id: session.id, turnId: choice.turn.id, restoreFiles: choice.restore }, 120_000);
+              setDraft(splitNote(result.draft.text).text ?? result.draft.text);
+              await setAttachments(result.draft.attachments.map(image => ({ name: image.filename || 'image', mime: image.mime, data: image.data, url: `data:${image.mime};base64,${image.data}` })));
+              setReferences(result.draft.references.map(id => ({ id, title: referenceOptions.find(option => option.id === id)?.title ?? 'Thread' })));
+              onSession(result.session);
+              setRewinding(null);
+              await refresh();
+              setNotice('Conversation rewound. Edit your draft and send when ready.');
+            });
+          }}>{busy ? 'Rewinding…' : 'Edit from here'}</button>
+        </div>
+      </Sheet>}
 
       {branching && (
         <Confirm

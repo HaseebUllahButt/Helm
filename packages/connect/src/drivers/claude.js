@@ -75,6 +75,19 @@ export function localCommandRecord(text) {
 }
 
 export class ClaudeDriver extends Driver {
+  static canRewind = true;
+
+  async prepareRewind({ first, resumeAt }) {
+    if (!first && !UUID.test(resumeAt ?? '')) throw new Error('Claude has no saved boundary before this message.');
+    return { engineSessionId: randomUUID(), transcript: null, unsent: true,
+      forkFrom: first ? null : { sessionId: this.engineSessionId, at: resumeAt } };
+  }
+
+  async validateRewind() {
+    await this.start();
+    const response = await this.#control({ subtype: 'initialize' });
+    if (response?.subtype !== 'success') throw new Error(response?.error || 'Claude did not confirm the rewind boundary.');
+  }
   /** helm's brief rides in the system prompt, not the first message. */
   static takesInstructions = true;
   #pipe = null;

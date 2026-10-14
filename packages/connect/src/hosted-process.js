@@ -7,5 +7,5 @@ export function codexProcId(cmd, env = {}) {
 
 export function hostedProcId(session, spec) {
   if (session.driver === 'codex') return spec ? codexProcId(spec.cmd, spec.env) : null;
-  return session.id;
+  return session.rewindProcId || session.id;
 }

@@ -617,7 +617,7 @@ function FinalMeta({ text, cost, tests }: { text: string; cost?: number; tests: 
   );
 }
 
-const TurnView = memo(function TurnView({ turn, items, head = true, tail = true, saidBelow = false, working, blocked, onResend, onWithdraw, onBranch }: {
+const TurnView = memo(function TurnView({ turn, items, head = true, tail = true, saidBelow = false, working, blocked, onResend, onWithdraw, onBranch, onRewind }: {
   turn: Turn;
   revision?: number;
   /**
@@ -633,6 +633,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   working: boolean; blocked: boolean; onResend?: (turn: Turn) => void; onWithdraw?: (turn: Turn) => void;
   /** Start a new thread from the conversation as it was before this message. */
   onBranch?: (turn: Turn) => void;
+  onRewind?: (turn: Turn) => void;
 }) {
   const said = splitNote(turn.text);
   const display = userMessage(said.text, turn.attachments);
@@ -730,6 +731,9 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
             {onBranch && !queued && !turn.id.startsWith('local-') && (
               <button className="branch" onClick={() => onBranch(turn)} title="a new thread from before this message" aria-label="branch from before this message"><Icon name="branch" size={13} />branch</button>
             )}
+            {onRewind && turn.checkpoint && !queued && !turn.local && (
+              <button className="branch" onClick={() => onRewind(turn)} title="Edit this message and rewind the conversation">Edit from here</button>
+            )}
             {clock(turn.at)}
           </span>
         </div></div>
@@ -763,7 +767,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   );
 });
 
-export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, pending = [], onReviewRequest, focusItem, readVisual }: {
+export function Transcript({ turns, status, loaded, empty, earlier, loadingEarlier, onEarlier, onResend, onWithdraw, onBranch, onRewind, pending = [], onReviewRequest, focusItem, readVisual }: {
   turns: Turn[]; status: string; loaded: boolean; empty?: string;
   pending?: Permission[]; onReviewRequest?: (requestId: string) => void;
   /** The machine holds more of this conversation than is on screen. */
@@ -774,6 +778,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   onWithdraw?: (turn: Turn) => void;
   /** Offered on every message but the first: branch the conversation from before it. */
   onBranch?: (turn: Turn) => void;
+  onRewind?: (turn: Turn) => void;
   focusItem?: { id: string; visit: number };
   readVisual?: VisualReader;
 }) {
@@ -808,11 +813,12 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
   };
   // Parent renders supply fresh closures. Keep the memoized turns' handlers
   // stable while dispatching to the latest actions, including during a send.
-  const actions = useRef({ onResend, onWithdraw, onBranch });
-  actions.current = { onResend, onWithdraw, onBranch };
+  const actions = useRef({ onResend, onWithdraw, onBranch, onRewind });
+  actions.current = { onResend, onWithdraw, onBranch, onRewind };
   const resend = useCallback((turn: Turn) => actions.current.onResend?.(turn), []);
   const withdraw = useCallback((turn: Turn) => actions.current.onWithdraw?.(turn), []);
   const branch = useCallback((turn: Turn) => actions.current.onBranch?.(turn), []);
+  const rewind = useCallback((turn: Turn) => actions.current.onRewind?.(turn), []);
   // The working pulse hangs off the turn still being written - with a helm
   // answer hosted mid-turn, that is not necessarily the last turn in the list.
   // A message the CLI took mid-turn sits inside its host turn and never
@@ -910,7 +916,7 @@ export function Transcript({ turns, status, loaded, empty, earlier, loadingEarli
     <TurnView key={key} turn={t} revision={t.revision} items={items} head={head} tail={tail} saidBelow={saidBelow.has(t.id)}
       working={working && t === openTurn} blocked={status === 'blocked'}
       onResend={onResend ? resend : undefined} onWithdraw={onWithdraw ? withdraw : undefined}
-      onBranch={onBranch && t !== turns[0] ? branch : undefined} />
+      onBranch={onBranch && t !== turns[0] ? branch : undefined} onRewind={onRewind ? rewind : undefined} />
   );
   const flow: ReactNode[] = [];
   for (const t of turns) {

@@ -363,11 +363,11 @@ test('a headless session: start, stream, watch, prompt, resume, kill', async (t)
   // The first turn.start is helm's own optimistic `local-` turn, posted the
   // moment the message is sent; the second is the agent echoing it back
   // under its own id once it picks the message up.
-  assert.deepEqual(h.events.map((e) => e.type), ['turn.start', 'status', 'turn.start', 'item.start', 'item.delta']);
+  assert.deepEqual(h.events.map((e) => e.type), ['turn.start', 'turn.checkpoint', 'status', 'turn.start', 'item.start', 'item.delta']);
   assert.ok(h.events[0].turnId.startsWith('local-'));
-  assert.deepEqual(h.events.map((e) => e.seq), [1, 2, 3, 4, 5]);
-  assert.equal(sessions.history(s.id, { since: 4 }).events.length, 1);
-  assert.equal(pushed.length, 5, 'every event reaches the daemon; the daemon decides who gets it');
+  assert.deepEqual(h.events.map((e) => e.seq), [1, 2, 3, 4, 5, 6]);
+  assert.equal(sessions.history(s.id, { since: 5 }).events.length, 1);
+  assert.equal(pushed.length, 6, 'every event reaches the daemon; the daemon decides who gets it');
   assert.ok(updates.includes('working'));
 
   // A prompt: the session is blocked, the prompt is pending, and answering it clears it.

@@ -1903,6 +1903,8 @@ export class Daemon {
       case M.SESSION_ARCHIVE: return this.sessions.archive(p.id, p.archived !== false);
       case M.SESSION_SEEN:    return this.sessions.markSeen(p.id);
       case M.SESSION_FORK: return { session: await this.sessions.fork(p.id, p.turnId) };
+      case M.SESSION_REWIND: return this.sessions.rewind(p.id, p.turnId, { restoreFiles: p.restoreFiles });
+      case M.SESSION_REWIND_CHECK: return this.sessions.rewindCheck(p.id, p.turnId);
 
       // Headless agent sessions.
       case M.SESSION_RENDER: return this.sessions.renderVisual(p.id, p);

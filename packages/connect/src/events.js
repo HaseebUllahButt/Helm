@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, renameSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
@@ -134,8 +134,8 @@ function pendingTickets(events) {
 
 /** Small identities outside the contiguous tail, never old tool payloads. */
 function anchor(event) {
-  const { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason } = event;
-  const result = { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason };
+  const { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason, checkpoint } = event;
+  const result = { seq, at, type, id, turnId, inputId, kind, parentId, name, queued, local, status, reason, checkpoint };
   if (kind === 'visual' && event.visual) result.visual = event.visual;
   if (type === 'turn.start' || type === 'turn.edit' || type === 'turn.images') {
     result.text = String(event.text ?? '').slice(0, 8000);
@@ -479,6 +479,26 @@ export class EventLog {
   }
 
   last(id) { return this.#open(id).seq; }
+
+  /** Publish a new history in one rename; attachments remain for recovery. */
+  replace(id, events) {
+    mkdirSync(this.dir, { recursive: true });
+    const file = this.#file(id);
+    writeFileSync(`${file}.rewind`, events.map(e => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
+    renameSync(`${file}.rewind`, file);
+    this.#logs.delete(id); this.#pending.delete(id);
+    this.#open(id);
+  }
+
+  rewind(id, history) {
+    // The gap also forces older clients that do not know history.reset to
+    // reload a fresh window rather than retain discarded cached messages.
+    let seq = this.last(id) + 1;
+    const kept = history.filter(e => e.type !== 'history.reset');
+    const events = [{ type: 'history.reset', seq: ++seq, at: Date.now() }, ...kept.map(e => ({ ...e, seq: ++seq }))];
+    this.replace(id, events);
+    return events;
+  }
 
   /**
    * Whether the retained log already holds this turn's start.
