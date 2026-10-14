@@ -6,7 +6,7 @@ import { previewForLink, previewWait, previewDelay, previewLease, type BrowserPr
 import { isDockKey } from './BrowserDock';
 import { BrowserPointer, type Pointer } from './BrowserPointer';
 
-type Tab = { id: string; engine: string; title: string; url: string; viewport: { width: number; height: number }; control: string | null; controlEpoch: number; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[]; pointer?: Pointer | null; fit?: boolean; loading?: boolean; problem?: { url: string; message: string } | null };
+type Tab = { id: string; engine: string; title: string; url: string; window?: boolean; viewport: { width: number; height: number }; control: string | null; controlEpoch: number; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[]; pointer?: Pointer | null; fit?: boolean; loading?: boolean; problem?: { url: string; message: string } | null };
 const keys: Record<string, string> = { Control: 'Control', Meta: 'Meta', ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight', ' ': 'Space' };
 const clamp = (value: number, min: number, max: number) => Math.round(Math.max(min, Math.min(max, value)));
 const near = (a: { width: number; height: number }, b: { width: number; height: number }) => Math.abs(a.width - b.width) < 24 && Math.abs(a.height - b.height) < 24;
@@ -14,6 +14,7 @@ const host = (url: string) => { try { const u = new URL(url); return u.protocol 
 
 export default function BrowserPanel({ client, env, session, onClose }: { client: Client; env: Environment; session: Session; onClose?: () => void }) {
   const [tabs, setTabs] = useState<Tab[]>([]), [chosen, setChosen] = useState(''), [address, setAddress] = useState(''), [engine, setEngine] = useState('chromium'), [bowser, setBowser] = useState(false);
+  const [windowed, setWindowed] = useState(false), [canWindow, setCanWindow] = useState(false);
   const [image, setImage] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false), [pageText, setPageText] = useState(''), [entry, setEntry] = useState(''), [target, setTarget] = useState('');
   const [preview, setPreview] = useState<BrowserPreview | 'auto'>('auto'), [effectivePreview, setEffectivePreview] = useState<BrowserPreview>('full');
   const [tools, setTools] = useState(false), [natural, setNatural] = useState<{ width: number; height: number } | null>(null), [dismissed, setDismissed] = useState(0);
@@ -29,7 +30,27 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   // Whatever goes wrong is said in words: no terminal colour codes or call logs.
   const plain = (message: string) => message.replace(/\u001b\[[0-9;]*m/g, '').replace(/\s*Call log:[\s\S]*$/, '').replace(/^page\.\w+: /, '').trim();
   const call = useCallback(<T,>(method: string, params: Record<string, unknown> = {}) => client.rpc<T>(env.id, `browser.${method}`, { id: session.id, ...params }, 60000), [client, env.id, session.id]);
-  const refresh = useCallback(async () => { const result = await call<{ tabs: Tab[]; bowser: boolean }>('list', { warm: true }); setTabs(result.tabs); setBowser(result.bowser); setChosen(current => result.tabs.some(t => t.id === current) ? current : result.tabs[0]?.id || ''); }, [call]);
+  const listed = useCallback((result: { tabs: Tab[]; bowser?: boolean; window?: boolean; canWindow?: boolean }) => { setTabs(result.tabs); if (result.bowser !== undefined) setBowser(result.bowser); setWindowed(!!result.window); setCanWindow(!!result.canWindow); setChosen(current => result.tabs.some(t => t.id === current) ? current : result.tabs[0]?.id || ''); }, []);
+  const refresh = useCallback(async () => { const result = await call<{ tabs: Tab[]; bowser: boolean; window?: boolean; canWindow?: boolean }>('list', { warm: true }); listed(result); }, [call, listed]);
+  // In a window, the owner opens and closes tabs there, or closes the window: keep the list current.
+  useEffect(() => { if (!windowed) return; const timer = setInterval(() => void refresh().catch(() => {}), 2000); return () => clearInterval(timer); }, [windowed, refresh]);
+  /**
+   * The tabs move into a real Chromium window on the chat's machine. It is
+   * placed over this panel, where the owner was already looking; a window
+   * manager that places windows itself (a tiling one) puts it beside Helm.
+   */
+  const toWindow = async (open: boolean) => {
+    setBusy(true); setError('');
+    let place: { x: number; y: number; width: number; height: number } | undefined;
+    const box = panel.current?.getBoundingClientRect();
+    if (open && box && matchMedia('(pointer: fine)').matches) {
+      const left = screenX + Math.max(0, outerWidth - innerWidth), top = screenY + Math.max(0, outerHeight - innerHeight);
+      place = { x: Math.round(left + box.left), y: Math.round(top + box.top), width: Math.max(400, Math.round(box.width)), height: Math.max(300, Math.round(box.height)) };
+    }
+    // A picture request cut short by the move is not worth saying anything about.
+    try { listed(await call<{ tabs: Tab[]; window: boolean; canWindow: boolean }>('window', { open, tabId: chosen || undefined, ...(place ? { place } : {}) })); setError(''); }
+    catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  };
   useEffect(() => { void refresh().catch(e => setError(e.message)); }, [refresh]);
   // The agent opened a tab here: list it and follow it.
   useEffect(() => client.on((id, kind, payload: any) => {
@@ -41,7 +62,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   useEffect(() => { if (tab?.url && !typingAddress.current) setAddress(tab.url === 'about:blank' ? '' : tab.url); }, [chosen, tab?.url]);
   useEffect(() => { setNatural(null); }, [chosen]);
   useEffect(() => {
-    if (!chosen) { setImage(''); return; }
+    if (!chosen || windowed) { setImage(''); return; }
     let alive = true, oldServer = false, timer: ReturnType<typeof setTimeout>;
     sequence.current = -1; setImage(''); setPageText('');
     const poll = async () => {
@@ -70,7 +91,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
     };
     void poll();
     return () => { alive = false; clearTimeout(timer); void call('unwatch', { tabId: chosen, viewer: viewer.current }).catch(() => {}); };
-  }, [call, chosen, refresh]);
+  }, [call, chosen, refresh, windowed]);
   // The page is as big as the live area below the nav bar, like a real
   // browser window. Sent on first view of a tab and after the panel settles
   // at a new size; this viewer's own last size is the yardstick, so two
@@ -82,7 +103,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   };
   useEffect(() => {
     const box = panel.current;
-    if (!box || !chosen || latest.current?.engine !== 'chromium') return;
+    if (!box || !chosen || latest.current?.engine !== 'chromium' || windowed) return;
     const fit = () => {
       const current = latest.current, size = liveSize();
       if (!current || !size || current.fit === false || current.control && current.control !== viewer.current) return;
@@ -95,7 +116,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
     const observer = new ResizeObserver(() => { clearTimeout(fitTimer.current); fitTimer.current = setTimeout(fit, 300); });
     observer.observe(box);
     return () => { observer.disconnect(); clearTimeout(fitTimer.current); };
-  }, [call, chosen, !!tab]); // eslint-disable-line react-hooks/exhaustive-deps -- the tab is read fresh; a fit choice made elsewhere must not trigger a send here
+  }, [call, chosen, !!tab, windowed]); // eslint-disable-line react-hooks/exhaustive-deps -- the tab is read fresh; a fit choice made elsewhere must not trigger a send here
   const size = (mode: 'panel' | 'phone' | 'desktop') => {
     const live = mode === 'panel' ? liveSize() : null;
     if (mode === 'panel' && !live) return;
@@ -127,7 +148,8 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
       .then(result => { latest.current = result.tab; setTabs(list => list.map(t => t.id === result.tab.id ? result.tab : t)); return result.tab.controlEpoch; })
       .finally(() => { taking.current = null; });
   };
-  const act = (value: Record<string, unknown>) => takeControl().then(epoch => action(value, epoch), (e: any) => setError(/another viewer/.test(e.message) ? 'Someone else is using this tab right now.' : e.message));
+  // In a window the owner is at the page already: the panel's buttons just go.
+  const act = (value: Record<string, unknown>) => latest.current?.window ? action(value) : takeControl().then(epoch => action(value, epoch), (e: any) => setError(/another viewer/.test(e.message) ? 'Someone else is using this tab right now.' : e.message));
   const handBack = async () => { try { const result = await call<{ tab: Tab }>('control', { tabId: chosen, viewer: viewer.current, take: false }); setTabs(current => current.map(t => t.id === chosen ? result.tab : t)); } catch (e: any) { setError(e.message); } };
   const flushTyped = () => { clearTimeout(typeTimer.current); typeTimer.current = undefined; const value = typed.current; typed.current = ''; if (value) void act({ kind: 'type', text: value }); };
   const flushWheel = () => { clearTimeout(wheelTimer.current); wheelTimer.current = undefined; const { dx, dy } = wheel.current; wheel.current = { dx: 0, dy: 0 }; if (dx || dy) void act({ kind: 'scroll', dx: Math.max(-20000, Math.min(20000, dx)), dy: Math.max(-20000, Math.min(20000, dy)) }); };
@@ -159,13 +181,19 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
         : <button className="bp-icon" aria-label="Reload" title="Reload" disabled={busy || !tab} onClick={() => void act({ kind: 'reload' })}><Icon name="refresh" size={15} /></button>}
       {/* With no tab yet, the address opens one there. */}
       <form onSubmit={e => { e.preventDefault(); const url = address.trim(); if (!url) return; if (tab) void act({ kind: 'navigate', url }); else void openTab(url); screen.current?.focus(); }}><input aria-label="Browser address" value={address} onChange={e => setAddress(e.target.value)} onFocus={e => { typingAddress.current = true; e.currentTarget.select(); }} onBlur={() => { typingAddress.current = false; if (tab?.url) setAddress(tab.url === 'about:blank' ? '' : tab.url); }} placeholder="Search or type an address" spellCheck={false} autoCapitalize="off" enterKeyHint="go" autoFocus={!tab && innerWidth >= 600} /></form>
+      {canWindow && !windowed && engine === 'chromium' && <button className="bp-icon" aria-label="Open in a window" title={`Open in a real window on ${env.name}`} disabled={busy} onClick={() => void toWindow(true)}><Icon name="popout" size={15} /></button>}
       <BrowserLogins key={`${env.id}:${session.id}`} client={client} env={env} session={session} />
       {tab && <button className={`bp-icon${tools ? ' on' : ''}`} aria-label="More browser tools" title="More tools" aria-expanded={tools} onClick={() => setTools(v => !v)}><Icon name="more" size={16} />{ready > 0 && <b className="bp-dot" aria-hidden="true" />}</button>}
       {tab?.loading && <span className="bp-loading" role="progressbar" aria-label="Loading page" />}
     </div>
     {tab ? <>
       <div className="bp-stage">
-        <div ref={screen} className={`browser-screen${controlled ? ' controlled' : ''}${direct ? ' direct' : ''}`} tabIndex={0} role="group" aria-label="Live browser page" onWheel={e => { if (othersHave || !controlled && !(direct && image)) return; flushTyped(); e.preventDefault(); wheel.current.dx += Math.round(e.deltaX); wheel.current.dy += Math.round(e.deltaY); if (!wheelTimer.current && !actionCount.current) flushWheel(); else if (!wheelTimer.current) wheelTimer.current = setTimeout(() => { wheelTimer.current = undefined; flushWheel(); }, 40); }} onKeyDown={e => {
+        {windowed && tab.window ? <div className="bp-window" role="status">
+          <Icon name="popout" size={22} />
+          <p>Open in a window on {env.name}.</p>
+          <p className="note">You and the agent share its tabs. The agent waits while you click or type there.</p>
+          <span><button onClick={() => void toWindow(true)} disabled={busy}>Show window</button><button onClick={() => void toWindow(false)} disabled={busy}>Bring back here</button></span>
+        </div> : <div ref={screen} className={`browser-screen${controlled ? ' controlled' : ''}${direct ? ' direct' : ''}`} tabIndex={0} role="group" aria-label="Live browser page" onWheel={e => { if (othersHave || !controlled && !(direct && image)) return; flushTyped(); e.preventDefault(); wheel.current.dx += Math.round(e.deltaX); wheel.current.dy += Math.round(e.deltaY); if (!wheelTimer.current && !actionCount.current) flushWheel(); else if (!wheelTimer.current) wheelTimer.current = setTimeout(() => { wheelTimer.current = undefined; flushWheel(); }, 40); }} onKeyDown={e => {
           // Keys on the pill's own button (Hand back) belong to that button.
           if (e.nativeEvent.isComposing || isDockKey(e) || (e.target as HTMLElement).closest('button, input, select, textarea, a')) return;
           const printable = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey;
@@ -187,7 +215,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
             <BrowserPointer key={tab.id} pointer={tab.pointer} viewport={tab.viewport} dismissed={dismissed} />
             {controlState}
           </div> : <p className="note">Starting the live picture…</p>}
-        </div>
+        </div>}
         {tab.problem && !tab.loading && <div className="bp-problem" role="alert"><p>{tab.problem.message}</p><button onClick={() => void act({ kind: 'navigate', url: tab.problem!.url })}>Try again</button></div>}
         {tab.dialog && <div className="bp-dialog" role="alertdialog" aria-label="Page message"><p>{tab.dialog.message}</p><span><button onClick={() => void takeControl().then(epoch => action({ kind: 'dialog', accept: false }, epoch), (e: any) => setError(e.message))}>Dismiss</button><button className="primary" onClick={() => void takeControl().then(epoch => action({ kind: 'dialog', accept: true, text: entry }, epoch), (e: any) => setError(e.message))}>OK</button></span></div>}
         {!(image && preview !== 'text') && controlState}
@@ -199,7 +227,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
           <button disabled={busy} onClick={() => void action({ kind: 'network' })}>Network</button>
           {direct && <button disabled={busy} onClick={async () => { try { const epoch = await takeControl(); const result = await call<{ text: string }>('action', { tabId: chosen, viewer: viewer.current, controlEpoch: epoch, action: { kind: 'clipboard' } }); setPageText(result.text); if (navigator.clipboard) await navigator.clipboard.writeText(result.text); } catch (e: any) { setError(e.message); } }}>Copy page clipboard</button>}
         </div>
-        {direct && <div className="bp-row" role="group" aria-label="Page size">
+        {direct && !tab.window && <div className="bp-row" role="group" aria-label="Page size">
           <span>Page size</span>
           <button className="bp-choice" aria-pressed={tab.fit !== false} disabled={busy} onClick={() => size('panel')}>Fit to panel</button>
           <button className="bp-choice" aria-pressed={sized(390, 844)} disabled={busy} onClick={() => size('phone')}>Phone</button>

@@ -7,7 +7,7 @@
  */
 
 export type IconName =
-  | 'back' | 'forward' | 'up' | 'down' | 'arrow-up' | 'arrow-down'
+  | 'back' | 'forward' | 'popout' | 'up' | 'down' | 'arrow-up' | 'arrow-down'
   | 'more' | 'close' | 'refresh' | 'plus' | 'check' | 'checkbox'
   | 'subagents' | 'git' | 'branch' | 'terminal' | 'raw'
   | 'star' | 'star-on' | 'bolt' | 'model' | 'effort' | 'shield' | 'key'
@@ -18,6 +18,7 @@ export type IconName =
 const PATHS: Record<IconName, JSX.Element> = {
   back: <path d="M15 5l-7 7 7 7" />,
   forward: <path d="M9 5l7 7-7 7" />,
+  popout: <><path d="M13.5 4.5h6v6" /><path d="M19.5 4.5L11 13" /><path d="M18 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h4" /></>,
   up: <path d="M6 15l6-6 6 6" />,
   down: <path d="M6 9l6 6 6-6" />,
   'arrow-up': <path d="M12 19V5M6 11l6-6 6 6" />,

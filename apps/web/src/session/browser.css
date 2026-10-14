@@ -62,6 +62,11 @@
 .bp-input input:nth-child(2){flex:1;min-width:120px}
 .browser-text{white-space:pre-wrap;max-height:260px;overflow:auto;font-size:12px;padding:10px;margin:0;background:var(--accent);border-radius:var(--radius-md)}
 .bp-empty{padding:24px 16px;text-align:center}
+.bp-window{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;color:var(--text-dim)}
+.bp-window p{margin:0;max-width:36ch;font-size:14.5px;line-height:1.45;color:var(--text)}
+.bp-window p.note{font-size:13px;color:var(--text-dim)}
+.bp-window span{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;justify-content:center}
+.bp-window button{padding:7px 16px;border-radius:999px;background:var(--accent);color:var(--text);font-weight:550}
 .bp-error{margin:8px 10px;flex:none;cursor:pointer}
 
 /* The agent's pointer and the "show me" highlight. Transform only, so

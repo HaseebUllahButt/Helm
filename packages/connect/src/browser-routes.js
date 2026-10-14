@@ -1,5 +1,10 @@
 import { BrowserManager } from './browser.js';
 
+const whole = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
+/** Where Helm's own window said there is room, or nothing when it did not say sensibly. */
+const windowPlace = (place) => place && whole(place.x, -20000, 20000) && whole(place.y, -20000, 20000) && whole(place.width, 400, 10000) && whole(place.height, 300, 10000)
+  ? { x: place.x, y: place.y, width: place.width, height: place.height } : undefined;
+
 export function createBrowserRoutes({ sessions, manager = new BrowserManager({ session: id => sessions.get(id) }), onOpen = () => {} } = {}) {
   return {
     manager,
@@ -19,6 +24,8 @@ export function createBrowserRoutes({ sessions, manager = new BrowserManager({ s
       if (method === 'browser.unwatch') return manager.unwatch(p.id, p.tabId, p.viewer);
       if (method === 'browser.control') return manager.control(p.id, p.tabId, p.viewer, !!p.take);
       if (method === 'browser.close') return manager.close(p.id, p.tabId);
+      // A real window on this machine's screen, beside Helm where it has room.
+      if (method === 'browser.window') return manager.window(p.id, { open: p.open !== false, tabId: typeof p.tabId === 'string' ? p.tabId : undefined, place: windowPlace(p.place) });
       if (method === 'browser.download') return manager.download(p.id, p.tabId, p.downloadId);
       throw new Error(`unknown browser method: ${method}`);
     },
