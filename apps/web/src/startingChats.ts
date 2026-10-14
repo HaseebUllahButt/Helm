@@ -18,6 +18,8 @@ export interface StartInfo {
   /** Where it runs, as the picker showed it; null for a quick chat. */
   folder: string | null;
   account: string;
+  /** The account's id, which the live chat names under its composer. */
+  profileId: string;
   engine: string;
   /** The engine's name as people know it, e.g. "Claude". */
   agent: string;
@@ -39,6 +41,15 @@ const chats = new Map<string, StartingChat>();
 const runs = new Map<string, () => Promise<Session>>();
 const listeners = new Set<(chat: StartingChat) => void>();
 let seq = 0;
+
+/**
+ * Chats that came up with nothing sent in them. One is known to be empty,
+ * so it can stay on the empty page its placeholder showed rather than
+ * "Loading…" while its history is fetched. Only until that history is in.
+ */
+const cameUpEmpty = new Set<string>();
+export const startedEmpty = (sessionId: string) => cameUpEmpty.has(sessionId);
+export const loadedChat = (sessionId: string) => { cameUpEmpty.delete(sessionId); };
 
 const notify = (chat: StartingChat) => { for (const l of listeners) l(chat); };
 
@@ -74,6 +85,7 @@ function attempt(client: Client, chat: StartingChat) {
       const more = chat.message.slice(first.length).replace(/^\n+/, '');
       if (more) await send(more);
       chat.state = 'started';
+      if (!chat.message) cameUpEmpty.add(session.id);
       if (chat.draft) saveDraft(chat.envId, session.id, chat.draft);
       runs.delete(chat.id);
       notify(chat);

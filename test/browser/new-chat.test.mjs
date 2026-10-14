@@ -24,6 +24,7 @@ before(async () => {
         rpc:async(env,method,params)=>{
           window.calls.push({env,method,params});
           if(method==='session.list') return {sessions:env==='laptop'?[session,quick]:[]};
+          if(method==='session.events' && params.id==='fresh') return {session:{status:'idle'},events:[],pending:[],last:0};
           if(method==='session.events') return {session:quick,events:[],pending:[],last:0};
           if(method==='session.watch') return {last:0};
           if(method==='model.list') return {models:[],modes:[]};
@@ -45,7 +46,7 @@ before(async () => {
           if(method==='project.list') return {projects:[]};
           if(method==='profile.list') return window.profileList ?? {profiles:[{id:'claude',engine:'claude',cmd:'claude'}]};
           if(method==='session.start' && window.startGate) await window.startGate(params);
-          if(method==='session.start') return {session:{...session,id:'fresh',cwd:params.quick?'/home/test/.helm/quick/fresh':params.cwd,quick:params.quick,nativeCli:false,pty:false}};
+          if(method==='session.start') return {session:{...session,id:'fresh',cwd:params.quick?'/home/test/.helm/quick/fresh':params.cwd,quick:params.quick,nativeCli:false,pty:false,...window.startAs}};
           return {};
         }};
       createRoot(document.getElementById('root')).render(<Shell client={client} conn={{online:true,reachable:true}} onSignOut={()=>{}}/>);
@@ -171,6 +172,42 @@ test('a new chat opens at once while its agent starts, and what you send then go
   assert.deepEqual({env:input.env,id:input.params.id,data:input.params.data},{env:'vm',id:'fresh',data:'hello there'});
   await page.locator('.chip.working').filter({hasText:'starting'}).waitFor({state:'detached'});
   await page.locator('.main h1').filter({hasText:'Current chat'}).waitFor();
+});
+
+test('a new chat stays on one steady empty page from starting to ready',async t=>{
+  const page=await pageFor(t);
+  // A chat helm drives itself, as a real Claude start is.
+  await page.evaluate(()=>{ window.startGate=()=>new Promise(ok=>{ window.release=ok; }); window.startAs={driver:'claude',engine:'claude',title:'project'}; });
+  await folderStep(page);
+  await page.getByRole('option').filter({hasText:'project'}).click();
+  await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
+  await page.keyboard.press('Enter');
+  await page.locator('[data-empty-chat]').waitFor();
+  // The row under the box that the live chat has, so the box does not move.
+  assert.equal(await page.locator('.composer-wrap .slab-status').count(),1);
+  // Every frame from here: the empty page must never leave, nor fade in again.
+  await page.evaluate(()=>{
+    window.flicker=[];
+    let shown=document.querySelector('[data-empty-chat]');
+    const watch=()=>{
+      const now=document.querySelector('[data-empty-chat]');
+      if(!now) window.flicker.push('gone');
+      // No stylesheet here, so the fade itself never runs: what turns it off has to be there.
+      else if(now!==shown && !now.classList.contains('still')) window.flicker.push('faded in again');
+      shown=now ?? shown;
+      if(window.watching) requestAnimationFrame(watch);
+    };
+    window.watching=true; requestAnimationFrame(watch);
+  });
+  await page.evaluate(()=>window.release());
+  await page.locator('.chip.working').filter({hasText:'starting'}).waitFor({state:'detached'});
+  await page.getByRole('button',{name:'Thread options'}).waitFor();
+  await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.events' && c.params.id==='fresh'));
+  await page.waitForTimeout(400);
+  await page.evaluate(()=>{ window.watching=false; });
+  assert.deepEqual(await page.evaluate(()=>[...new Set(window.flicker)]),[]);
+  assert.match(await page.locator('[data-empty-chat]').innerText(),/What should we build in project\?/);
+  assert.equal(await page.locator('.composer-wrap .slab-status').count(),1);
 });
 
 test('an agent that fails to start says why, keeps what you wrote, and can be tried again',async t=>{

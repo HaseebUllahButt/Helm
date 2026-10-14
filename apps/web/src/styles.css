@@ -3211,6 +3211,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .empty-chat-sub { margin: 10px 0 0; font-size: var(--t-body); color: var(--mutedfg); }
 @keyframes empty-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .empty-chat { animation: none; } }
+.empty-chat.still { animation: none; }
 @media (max-width: 899px) { .empty-chat { padding: 16px 16px 14px; } .empty-chat ~ .composer-wrap { padding-bottom: max(6vh, env(safe-area-inset-bottom)); } }
 
 /* ------------------------------------------------------ the machine's home */

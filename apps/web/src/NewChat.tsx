@@ -272,7 +272,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     const env = machine.id;
     onClose();
     onStarting(
-      { envId: env, title: quick ? 'Quick chat' : where(folder), folder: quick ? null : folder, account: a.account, engine: a.engine, agent: engineOf(a.engine).label },
+      { envId: env, title: quick ? 'Quick chat' : where(folder), folder: quick ? null : folder, account: a.account, profileId: a.profile.id, engine: a.engine, agent: engineOf(a.engine).label },
       () => client.rpc<{ session: Session }>(env, 'session.start', params, 70_000).then((r) => r.session),
     );
   };
