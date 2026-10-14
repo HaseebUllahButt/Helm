@@ -307,6 +307,17 @@ test('malformed cached navigation cannot crash the app on startup', async t => {
   assert.deepEqual(result,{environments:[],sessions:{}});
 });
 
+test('history from a retired screen returns to its supported machine view', async t => {
+  const { page } = await pageFor(t);
+  await page.evaluate(async () => { await window.seed(); window.mount(); });
+  await page.getByText('Saved response', { exact: true }).waitFor();
+  await page.evaluate(() => window.dispatchEvent(new PopStateEvent('popstate', {
+    state: { helm: 1, selected: 'machine', depth: 1, stack: [{ kind: 'env' }, { kind: 'retired-screen' }] },
+  })));
+  await page.locator('.machine-bar h1').filter({ hasText: 'Laptop' }).waitFor();
+  assert.equal(await page.locator('.machine-bar h1').textContent(), 'Laptop');
+});
+
 test('a fast live machine list preserves saved threads and navigation from a slower disk read', async t => {
   const { page, boot } = await pageFor(t);
   await page.evaluate(async()=>{await window.seed();localStorage.clear();});

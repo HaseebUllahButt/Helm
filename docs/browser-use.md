@@ -1,5 +1,13 @@
 # Browser use
 
+Helm's normal browser is Chromium controlled through Playwright. It is for
+using websites, checking local development apps, and completing browser
+workflows alongside an agent. Agents can act on numbered controls, use
+page coordinates for visual interaction, inspect text, run page JavaScript,
+and read console/network diagnostics. The live viewer lets the owner take
+over the same tab. Its controls operate inside web pages; it is not a general
+desktop controller for arbitrary native apps or operating-system windows.
+
 Open a thread’s **Browser** button, or **Thread details → Browser**. Open a tab,
 then take control to navigate, click, type, paste, scroll, answer dialogs,
 upload files, or save downloads. Release control to let the agent continue.
@@ -46,6 +54,14 @@ restart. Browser actions, pending navigation and page form state are not
 replayed. Chromium must be installed on the host; Helm uses an existing
 browser, `HELM_CHROMIUM_PATH`, or Playwright’s installed Chromium. It never
 downloads a browser during daemon startup.
+
+## Logins
+
+The standard browser keeps login state separately for each thread. Sign in
+through its viewer and the thread can reuse that session after storage is
+saved. It currently has no button to import a complete existing Chrome/Edge
+profile. Playwright authentication state contains cookies and web storage,
+which is a smaller format than a full browser profile.
 
 ## Bowser Computer Use
 

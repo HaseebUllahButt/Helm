@@ -34,9 +34,7 @@ Sessions show which computer, directory, CLI, and account they use. A blocked
 session moves to the top.
 
 Threads include a shared [browser](docs/browser-use.md) for agent actions and
-live owner control, and [mobile testing](docs/mobile-devices.md) for installed
-Android devices/emulators and iOS simulators. Both start their tools only when
-needed. Supported idle Claude/Codex threads offer [Edit from here](docs/rewind.md),
+live owner control. It starts only when needed. Supported idle Claude/Codex threads offer [Edit from here](docs/rewind.md),
 with optional file restore in an exclusive Git worktree.
 
 For a slow phone connection, browser Preview can adapt automatically or use

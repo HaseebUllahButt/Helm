@@ -26,7 +26,6 @@ import { useDraftImages } from './session/useDraftImages';
 import { loadDraft, saveDraft } from './draftStore';
 import { userMessage } from './session/userMessage';
 import { DrivenSession } from './session/DrivenSession';
-import { DeviceAccess } from './DeviceAccess';
 import { Subagents } from './session/Subagents';
 import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
@@ -180,7 +179,6 @@ const Terminal = lazy(() => import('./Terminal').then((m) => ({ default: m.Termi
 const UsageView = lazy(() => import('./Usage').then((m) => ({ default: m.UsageView })));
 const UpdatesView = lazy(() => import('./Updates').then((m) => ({ default: m.UpdatesView })));
 const IntegrationsView = lazy(() => import('./Integrations').then((m) => ({ default: m.IntegrationsView })));
-const MobileDevicesView = lazy(() => import('./Devices').then((m) => ({ default: m.DevicesView })));
 const BrowserDrawer = lazy(() => import('./session/BrowserPanel').then((m) => ({ default: m.BrowserDrawer })));
 const TransferView = lazy(() => import('./Transfer').then((m) => ({ default: m.TransferView })));
 const VerifyView = lazy(() => import('./Transfer').then((m) => ({ default: m.VerifyView })));
@@ -382,7 +380,6 @@ export function App() {
 type MainView =
   | { kind: 'env' }
   | { kind: 'integrations' }
-  | { kind: 'mobile-devices'; sessionId?: string }
   // Every machine summed, or one machine's own scope. Same screen, same
   // facets - the question is the same, only the scope changes.
   | { kind: 'usage'; envId?: string }
@@ -414,6 +411,19 @@ type MainView =
   | { kind: 'native-agent'; parent: Session; agent: NativeAgent }
   // A new chat whose agent is still starting; becomes the chat once it is.
   | { kind: 'starting'; startId: string };
+
+const VIEW_KINDS: Record<MainView['kind'], true> = {
+  env: true, integrations: true, usage: true, brain: true, new: true,
+  browse: true, 'transfer-browse': true, transfer: true, verify: true,
+  start: true, settings: true, 'network-settings': true, links: true,
+  updates: true, models: true, devices: true, 'app-settings': true,
+  media: true, session: true, 'native-agent': true, starting: true,
+};
+/** History can outlive the screen that wrote it across an app update. */
+function supportedViews(views: MainView[]): MainView[] {
+  const supported = views.filter(view => view && Object.hasOwn(VIEW_KINDS, view.kind));
+  return supported.length ? supported : [{ kind: 'env' }];
+}
 
 /** A request answered elsewhere, or a session that just started waiting -
     the toast the sidebar cannot show while it is hidden behind a session. */
@@ -458,7 +468,7 @@ function Shell({ client, conn, onSignOut }: {
   const [savedSend] = useState(() => history.state?.helm && history.state.stack?.at(-1)?.kind === 'transfer'
     && history.state.stack.at(-1).jobId ? history.state : null);
   const [selected, setSelected] = useState<string | null>(savedSend?.selected ?? cached.view?.envId ?? null);
-  const [stack, setStack] = useState<MainView[]>(() => savedSend?.stack ?? (cached.view
+  const [stack, setStack] = useState<MainView[]>(() => savedSend ? supportedViews(savedSend.stack) : (cached.view
     ? [{ kind: 'env' }, { kind: 'session', session: cached.view.session }] : [{ kind: 'env' }]));
   const sends = useSends(client, envs);
   const liveEnvsSeen = useRef(false);
@@ -580,7 +590,8 @@ function Shell({ client, conn, onSignOut }: {
     history.replaceState({ helm: 1, ...nav.current }, '');
     const onPop = (e: PopStateEvent) => {
       const s = e.state;
-      if (!s?.helm) return;
+      if (!s?.helm || !Array.isArray(s.stack)) return;
+      s.stack = supportedViews(s.stack);
       discardEmpty(nav.current, s.stack);
       nav.current = { stack: s.stack, selected: s.selected, depth: s.depth };
       setStack(s.stack);
@@ -916,7 +927,6 @@ function Shell({ client, conn, onSignOut }: {
           run: () => setNewChat({ envId: e.id }),
         });
         items.push({ id: `integrations:${e.id}`, group: 'action', title: `Connectors & skills on ${e.name}`, keywords: 'mcp servers plugins integrations', run: () => navigate([{ kind: 'env' }, { kind: 'integrations' }], e.id) });
-        items.push({ id: `mobile-devices:${e.id}`, group: 'action', title: `Mobile testing on ${e.name}`, keywords: 'android ios simulator emulator device testing', run: () => navigate([{ kind: 'env' }, { kind: 'mobile-devices' }], e.id) });
         items.push({
           id: `send:${e.id}`, group: 'action', title: `Send a project from ${e.name}`,
           keywords: 'transfer env copy move folder', run: () => navigate([{ kind: 'env' }, { kind: 'transfer-browse' }], e.id),
@@ -1677,7 +1687,6 @@ function Shell({ client, conn, onSignOut }: {
             onNewSession={() => setNewChat({ envId: env.id })}
             onAddProject={() => push({ kind: 'browse' })}
             onIntegrations={() => push({ kind: 'integrations' })}
-            onMobileTesting={() => push({ kind: 'mobile-devices' })}
             onSendProject={(cwd) => push(cwd ? { kind: 'transfer', cwd } : { kind: 'transfer-browse' })}
             onCheckProject={(path) => push({ kind: 'verify', path })}
             onStart={(cwd) => push({ kind: 'start', cwd })}
@@ -1686,10 +1695,6 @@ function Shell({ client, conn, onSignOut }: {
             onMedia={() => push({ kind: 'media' })}
             onOpen={(s) => push({ kind: 'session', session: s })}
           />
-        ) : view.kind === 'mobile-devices' ? (
-          <Suspense fallback={<ViewLoading title="Mobile testing" onBack={back} />}>
-            <MobileDevicesView key={`${env.id}:${view.sessionId || ''}`} client={client} env={env} sessionId={view.sessionId} onBack={back} />
-          </Suspense>
         ) : view.kind === 'integrations' ? (
           <Suspense fallback={<ViewLoading title="Connectors & skills" onBack={back} />}>
             <IntegrationsView key={env.id} client={client} env={env} onBack={back} onOpenSession={(s) => openSession(env.id, s)} />
@@ -1780,7 +1785,6 @@ function Shell({ client, conn, onSignOut }: {
             onOpenSession={(s) => openRelatedSession(env.id, s)}
             onOpenNative={(agent) => push({ kind: 'native-agent', parent: view.session, agent })}
             onOpenMachineSession={openSession}
-            onOpenDevices={() => push({ kind: 'mobile-devices', sessionId: view.session.id })}
             onClosed={() => { if (view.session.brain) dropBrain(env.id); loadSessions(env.id); back(); }}
             onArchived={() => { loadSessions(env.id); back(); }}
             onSession={onSessionChanged(env.id)}
@@ -1789,7 +1793,6 @@ function Shell({ client, conn, onSignOut }: {
           <SessionView
             key={`${env.id}:${view.session.id}`}
             client={client} env={env} machines={envs} onTranscribe={transcribeVia(env.id)}
-            onOpenDevices={() => push({ kind: 'mobile-devices', sessionId: view.session.id })}
             onSendTask={view.session.quick || view.session.external || view.session.brain || view.session.engine === 'shell'
               ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd, session: view.session })}
             onSendFolder={view.session.quick || !view.session.cwd ? undefined : () => push({ kind: 'transfer', cwd: view.session.cwd })}
@@ -2561,14 +2564,13 @@ function DevicesView({ client, onBack }: { client: Client; onBack: () => void })
   );
 }
 
-function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onMobileTesting, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming, isSnoozed = () => false, sendJobs = [], sendTarget }: {
+function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload, onBack, onNewSession, onAddProject, onSendProject, onIntegrations, onCheckProject, onStart, onSettings, onUsage, onMedia, onOpen, onResume, resuming, isSnoozed = () => false, sendJobs = [], sendTarget }: {
   client: Client; env: Environment; wide: boolean; sessions: Session[]; sendJobs?: SendJob[]; sendTarget?: string;
   isSnoozed?: (session: Session) => boolean;
   /** What this machine last said it was running, while it cannot be asked. */
   remembered?: Session[]; rememberedAt?: number;
   reload: () => void; onBack: () => void; onNewSession: () => void; onAddProject: () => void;
   onIntegrations: () => void;
-  onMobileTesting: () => void;
   onSendProject: (cwd?: string) => void; onCheckProject: (path: string) => void;
   onStart: (cwd: string) => void;
   onSettings: () => void;
@@ -2942,7 +2944,6 @@ function EnvView({ client, env, wide, sessions, remembered, rememberedAt, reload
           <button className="linkish" disabled={!env.online} onClick={onIntegrations} title="Manage agent connections, skills and plugins">
             <Icon name="tool" size={15} /><span>Connectors &amp; skills</span>
           </button>
-          <button className="linkish" disabled={!env.online} onClick={onMobileTesting} title="Test Android apps and iOS simulators"><Icon name="machine" size={15} /><span>Mobile testing</span></button>
         </div>
 
         {searchable && (
@@ -4872,13 +4873,12 @@ function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
 
 // ------------------------------------------------------------------ session
 
-function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask, onSendFolder, onOpenNative, onOpenDevices }: {
+function SessionView({ client, env, machines, session, terminals = [], onSwitch, onNewTerminal, onBack, onClosed, onArchived, onSession, onTranscribe, onSendTask, onSendFolder, onOpenNative }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account. */
   machines?: Environment[];
   onSendTask?: () => void; onSendFolder?: () => void;
   onOpenNative?: (agent: NativeAgent) => void;
-  onOpenDevices?: () => void;
   /** This machine's open terminals, for the tabs above one. */
   terminals?: Session[];
   onSwitch?: (s: Session) => void;
@@ -5188,7 +5188,6 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
         </div>
         <StatusChip status={compacting && status === 'working' ? 'compacting' : status} at={statusAt} />
         {!isShell && <button className="iconbtn" title="Browser" aria-label="Open browser" onClick={() => setBrowserOpen(true)}><Icon name="web" size={17} /></button>}
-        {!isShell && onOpenDevices && <DeviceAccess onOpenDevices={onOpenDevices} />}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
