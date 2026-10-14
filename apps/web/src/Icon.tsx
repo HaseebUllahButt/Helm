@@ -10,7 +10,7 @@ export type IconName =
   | 'back' | 'forward' | 'up' | 'down' | 'arrow-up' | 'arrow-down'
   | 'more' | 'close' | 'refresh' | 'plus' | 'check' | 'checkbox'
   | 'subagents' | 'git' | 'branch' | 'terminal' | 'raw'
-  | 'star' | 'star-on' | 'bolt' | 'model' | 'effort' | 'shield'
+  | 'star' | 'star-on' | 'bolt' | 'model' | 'effort' | 'shield' | 'key'
   | 'read' | 'edit' | 'run' | 'search' | 'web' | 'tool' | 'ask' | 'plan' | 'think' | 'alert'
   | 'folder' | 'repo' | 'machine' | 'transfer' | 'image' | 'sidebar' | 'jump' | 'stop'
   | 'tag' | 'cloud' | 'copy';
@@ -40,6 +40,7 @@ const PATHS: Record<IconName, JSX.Element> = {
   model: <><rect x="6.5" y="6.5" width="11" height="11" rx="2" /><path d="M9.5 3.5v3M14.5 3.5v3M9.5 17.5v3M14.5 17.5v3M3.5 9.5h3M3.5 14.5h3M17.5 9.5h3M17.5 14.5h3" /></>,
   effort: <><path d="M4.5 16a7.5 7.5 0 1115 0" /><path d="M12 16l3.5-4.5" /></>,
   shield: <path d="M12 3.5l7 2.7v5.3c0 4.3-3 7.6-7 9-4-1.4-7-4.7-7-9V6.2z" />,
+  key: <><circle cx="8" cy="15" r="3.5" /><path d="M10.5 12.5L19 4M16 7l2.5 2.5M14 9l2 2" /></>,
   read: <><path d="M7 3.5h7l4.5 4.5v12.5H7z" /><path d="M14 3.5V8h4.5M10 12.5h5.5M10 16h5.5" /></>,
   edit: <><path d="M5 19l1-4.2L15.6 5.2a2 2 0 012.8 0l.4.4a2 2 0 010 2.8L9.2 18 5 19z" /><path d="M13.8 7l3.2 3.2" /></>,
   run: <path d="M5 7l5 5-5 5M12 17h7" />,

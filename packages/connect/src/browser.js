@@ -32,6 +32,9 @@ export const BROWSER_PREVIEWS = Object.freeze({
   smooth: { maxWidth: 1280, maxHeight: 1200, quality: 60, interval: 33 },
 });
 const FRAME_WAIT_MS = 1500;
+const POINTER_WORDS = { click: 'Clicking', hover: 'Pointing at', type: 'Typing into', select: 'Choosing in', upload: 'Uploading into', drag: 'Dragging', scroll: 'Scrolling', point: '' };
+const POINTER_CLEARS = ['navigate', 'back', 'forward', 'reload', 'resize'];
+const elementName = el => (el.getAttribute('aria-label') || el.labels?.[0]?.innerText || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 60);
 
 /** One persistent stdio bridge to the owner's Bowser. Closing it leaves Bowser intact. */
 export class BowserBridge {
@@ -181,7 +184,8 @@ export class BrowserManager {
     });
     return tab;
   }
-  metadata(tab) { return { id: tab.id, engine: tab.engine, url: tab.page?.url() || tab.url || 'about:blank', title: tab.title, viewport: tab.page?.viewportSize() || { width: 1280, height: 800 }, control: tab.control, controlEpoch: tab.controlEpoch || 0, dialog: tab.dialog ? { type: tab.dialog.type(), message: tab.dialog.message().slice(0, 2000) } : null, downloads: tab.downloads.map(({ path, ...d }) => d) }; }
+  metadata(tab) { return { id: tab.id, engine: tab.engine, url: tab.page?.url() || tab.url || 'about:blank', title: tab.title, viewport: tab.page?.viewportSize() || { width: 1280, height: 800 }, control: tab.control, controlEpoch: tab.controlEpoch || 0, dialog: tab.dialog ? { type: tab.dialog.type(), message: tab.dialog.message().slice(0, 2000) } : null, downloads: tab.downloads.map(({ path, ...d }) => d), pointer: this.pointer(tab) }; }
+  pointer(tab) { const p = tab.pointer; return p && this.now() - p.at < (p.by === 'guide' ? 60000 : 4000) ? p : null; }
   discardDownloads(tab) { for (const record of tab.downloads) { record.discarded = true; if (record.path) void rm(record.path, { force: true }).catch(() => {}); } }
   async finishDownload(tab, record) {
     if (record.discarded || this.tabs.get(tab.id) !== tab) { await rm(record.path, { force: true }); return; }
@@ -269,7 +273,7 @@ export class BrowserManager {
       try { result = await this.perform(tab, action, actor, epoch); }
       catch (error) { if (!error.candidates && !error.check) throw error; result = { error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await this.look(tab)) }; }
       if (owned) this.boost(tab);
-      if (!['look', 'console', 'network', 'screenshot'].includes(action?.kind)) { if (['navigate', 'back', 'forward', 'reload', 'batch'].includes(action?.kind)) await this.persistTabs(sessionId); else this.persistSoon(sessionId); }
+      if (!['look', 'console', 'network', 'screenshot', 'point'].includes(action?.kind)) { if (['navigate', 'back', 'forward', 'reload', 'batch'].includes(action?.kind)) await this.persistTabs(sessionId); else this.persistSoon(sessionId); }
       return result;
     });
     const job = Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => { if (started && epoch === (tab.controlEpoch || 0)) tab.controlEpoch = epoch + 1; reject(new Error('Browser action timed out; inspect the page before retrying.')); }, this.actionTimeoutMs); timer.unref?.(); })]);
@@ -349,7 +353,7 @@ export class BrowserManager {
   async listFlows(sessionId) { this.owner(sessionId); return this.flows.list(); }
   async runFlow(sessionId, tabId, name, values) { this.owner(sessionId); const flow = await this.flows.load(name); return this.run(sessionId, tabId, { actions: flow.actions, with: values }); }
   checkControl(tab, action, actor, epoch = tab.controlEpoch || 0) {
-    if (['look', 'console', 'network', 'screenshot'].includes(action?.kind)) return;
+    if (['look', 'console', 'network', 'screenshot', 'point', 'check'].includes(action?.kind)) return;
     if (epoch !== (tab.controlEpoch || 0)) throw new Error('Browser control changed; inspect the tab before continuing.');
     if (actor !== 'agent' && tab.control !== actor) throw new Error('Take control before changing this browser tab.');
     if (tab.control && tab.control !== actor) throw new Error('You have control of this tab. Release control to let the agent continue.');
@@ -391,8 +395,11 @@ export class BrowserManager {
       if (!check.pass) { const error = new Error(`check failed: ${JSON.stringify(wanted)} expected ${check.expect}`); error.check = check; throw error; }
       return { ...check, ...(!inBatch ? view : {}) };
     }
+    if (kind === 'point' && tab.engine === 'bowser') throw new Error('pointing works in isolated Chromium tabs, not Bowser');
     if (tab.engine === 'bowser') return this.bowserAction(tab, action);
     const page = tab.page;
+    await this.aim(tab, action, actor);
+    if (kind === 'point') return { tab: this.metadata(tab) };
     if (kind === 'navigate') await page.goto(httpUrl(action.url), { waitUntil: 'domcontentloaded' });
     else if (kind === 'back') await page.goBack({ waitUntil: 'domcontentloaded' });
     else if (kind === 'forward') await page.goForward({ waitUntil: 'domcontentloaded' });
@@ -425,6 +432,29 @@ export class BrowserManager {
     // Only actions that can change the title ask for it; page loads update it as they finish.
     if (!['hover', 'scroll', 'type', 'resize'].includes(kind)) tab.title = await page.title().catch(() => tab.title);
     return { tab: this.metadata(tab), ...(agent && !inBatch ? await this.look(tab) : {}) };
+  }
+  /** Where the agent is about to act, for a viewer's pointer. Free when nobody is watching; point always records. */
+  async aim(tab, action, actor) {
+    const kind = action.kind;
+    if (POINTER_CLEARS.includes(kind) || actor !== 'agent' && tab.pointer?.by === 'guide' && ['click', 'drag', 'type', 'key', 'select', 'upload'].includes(kind)) { tab.pointer = null; return; }
+    if (actor !== 'agent' || !Object.hasOwn(POINTER_WORDS, kind) || kind !== 'point' && (!tab.viewers?.size || this.previewMode(tab) === 'text')) return;
+    const { width, height } = tab.page.viewportSize() || { width: 1280, height: 800 };
+    let x = kind === 'drag' ? action.toX : action.x, y = kind === 'drag' ? action.toY : action.y, box, name = '';
+    if (kind === 'scroll' && x == null) { x = Math.round(width / 2); y = Math.round(height / 2); }
+    else if (x == null && !(kind === 'type' && !(action.ref || action.selector || action.name || action.role))) {
+      let target; try {
+        target = await this.target(tab, action);
+        if (!['point', 'upload'].includes(kind)) await target.scrollIntoViewIfNeeded({ timeout: 500 });
+        const timeout = kind === 'point' ? 5000 : 500, [found, label] = await Promise.all([target.boundingBox({ timeout }), target.evaluate(elementName, undefined, { timeout }).catch(() => '')]);
+        if (found) { box = { x: Math.round(found.x), y: Math.round(found.y), width: Math.round(found.width), height: Math.round(found.height) }; x = Math.round(found.x + found.width / 2); y = Math.round(found.y + found.height / 2); name = label; }
+      } catch (error) { if (kind === 'point') throw error; } finally { if (target?.dispose) await target.dispose(); }
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > width || y > height) { if (kind === 'point') throw new Error('that spot is not on screen; scroll to it first'); return; }
+    const note = kind === 'point' && action.note != null ? text(action.note, 300).trim() : '';
+    const verb = kind === 'click' ? action.button === 'right' ? 'Right-clicking' : action.double ? 'Double-clicking' : 'Clicking' : kind === 'scroll' ? (action.dy ?? 500) < 0 ? 'Scrolling up' : 'Scrolling down' : POINTER_WORDS[kind];
+    tab.pointerSeq = (tab.pointerSeq || 0) + 1;
+    tab.pointer = { x, y, ...(box ? { box } : {}), action: kind, label: [verb, name && `“${name}”`].filter(Boolean).join(' '), by: kind === 'point' ? 'guide' : 'agent', ...(note ? { note } : {}), seq: tab.pointerSeq, at: this.now() };
+    if (kind !== 'point') await new Promise(done => setTimeout(done, 120));
   }
   async bowserAction(tab, action) {
     const kind = action.kind, target = action.ref || action.name || action.selector || action.target;
@@ -567,4 +597,4 @@ export class BrowserManager {
   async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } for (const tab of this.tabs.values()) await this.clearStream(tab); this.bowser.stop(); await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
 }
 
-export function browserNote() { return '[Helm browser: Agents and the owner can use the same browser tabs. Run helm browser open <url> inside this chat (isolated Chromium), or --engine bowser to reuse Bowser Computer Use on machines where installed. helm browser tabs lists your tabs. helm browser look <tab> returns text and numbered elements without screenshots. Plan the whole task as one batch; prefer direct URLs and plain targets: helm browser act <tab> \'{"actions":[{"click":"the Save button"},{"check":"Saved"}]}\'. Checks use literal page text or targets, not questions. Read the returned settled page; failed batches stop with candidates and element numbers. Save repeating tasks with actions using {{param}}, with values, save_as and note; helm browser flows lists them, helm browser run <tab> <name> key=value replays them. Existing kind/ref, selector, role/name and coordinate actions still work; kinds include key, scroll, hover, select, upload/files, evaluate/script, wait/selector, resize, dialog, console, network, back, forward and reload. helm browser screenshot <tab> --output <path> captures when visuals matter; close <tab> releases it. Browser tabs run on this machine: localhost reaches your dev servers. Use text views and batch actions to keep context small. The owner can view tabs and take control from Thread details → Browser; wait if they have control. When a site needs a login, suggest that the owner copy their browser profile logins using Logins in the viewer instead of asking for passwords. Respect the request when browsing authenticated sites.]'; }
+export function browserNote() { return '[Helm browser: Agents and the owner can use the same browser tabs. Run helm browser open <url> inside this chat (isolated Chromium), or --engine bowser to reuse Bowser Computer Use on machines where installed. helm browser tabs lists your tabs. helm browser look <tab> returns text and numbered elements without screenshots. Plan the whole task as one batch; prefer direct URLs and plain targets: helm browser act <tab> \'{"actions":[{"click":"the Save button"},{"check":"Saved"}]}\'. Checks use literal page text or targets, not questions. Read the returned settled page; failed batches stop with candidates and element numbers. Save repeating tasks with actions using {{param}}, with values, save_as and note; helm browser flows lists them, helm browser run <tab> <name> key=value replays them. Existing kind/ref, selector, role/name and coordinate actions still work; kinds include key, scroll, hover, select, upload/files, evaluate/script, wait/selector, resize, dialog, console, network, back, forward and reload. helm browser screenshot <tab> --output <path> captures when visuals matter; close <tab> releases it. Browser tabs run on this machine: localhost reaches your dev servers. Use text views and batch actions to keep context small. The owner watches from the chat\'s Browser button and can take control; wait if they have control. When the owner asks to be shown or wants to do it themselves, do not click: helm browser point <tab> <ref|selector> --note "Click here to approve" shows them the spot without touching the page. When a site needs a login, suggest that the owner copy their browser profile logins using Logins in the viewer instead of asking for passwords. Respect the request when browsing authenticated sites.]'; }

@@ -20,6 +20,7 @@ import { nativeConversation } from './session/nativeView';
 import { CompactionLine } from './session/Transcript';
 import { VisualReply, Visuals, type VisualReader } from './session/VisualReply';
 import { useChatKeys } from './session/chatKeys';
+import { BrowserDock, useBrowserDock } from './session/BrowserDock';
 import { watchAccounts, prefetchAccounts } from './accountsCache';
 import { prepareImage, type PreparedImage } from './session/image';
 import { useDraftImages } from './session/useDraftImages';
@@ -179,7 +180,6 @@ const Terminal = lazy(() => import('./Terminal').then((m) => ({ default: m.Termi
 const UsageView = lazy(() => import('./Usage').then((m) => ({ default: m.UsageView })));
 const UpdatesView = lazy(() => import('./Updates').then((m) => ({ default: m.UpdatesView })));
 const IntegrationsView = lazy(() => import('./Integrations').then((m) => ({ default: m.IntegrationsView })));
-const BrowserDrawer = lazy(() => import('./session/BrowserPanel').then((m) => ({ default: m.BrowserDrawer })));
 const TransferView = lazy(() => import('./Transfer').then((m) => ({ default: m.TransferView })));
 const VerifyView = lazy(() => import('./Transfer').then((m) => ({ default: m.VerifyView })));
 const AppearanceSettings = lazy(() => import('./AppearanceSettings').then((m) => ({ default: m.AppearanceSettings })));
@@ -4896,7 +4896,7 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat && !nativeConversation(session.engine));
   const [agentsOpen, setAgentsOpen] = useState(false);
-  const [browserOpen, setBrowserOpen] = useState(false);
+  const browser = useBrowserDock(client, env, session, !isShell);
   const [status, setStatus] = useState(session.status);
   const [compacting, setCompacting] = useState(session.compacting || false);
   // When it entered the status it is in, for "working 14m" beside the word.
@@ -5187,7 +5187,7 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
           </span>
         </div>
         <StatusChip status={compacting && status === 'working' ? 'compacting' : status} at={statusAt} />
-        {!isShell && <button className="iconbtn" title="Browser" aria-label="Open browser" onClick={() => setBrowserOpen(true)}><Icon name="web" size={17} /></button>}
+        {!isShell && <button className="iconbtn" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
@@ -5228,7 +5228,7 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
 
       {agentsOpen && <Subagents nativeOnly client={client} env={env} parent={session} onClose={() => setAgentsOpen(false)}
         onOpenNative={onOpenNative ? (agent) => { setAgentsOpen(false); onOpenNative(agent); } : undefined} />}
-      {browserOpen && <Suspense fallback={<p className="note">Opening browser…</p>}><BrowserDrawer client={client} env={env} session={session} onClose={() => setBrowserOpen(false)} /></Suspense>}
+      {!isShell && browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
 
       {/* Every open terminal on this machine, one tap apart. */}
       {isShell && terminals.length > 1 && (

@@ -42,5 +42,5 @@ export function normalizeAction(action) {
 
 export function readOnlyAction(action) {
   action = normalizeAction(action);
-  return ['look', 'console', 'network', 'screenshot', 'navigate', 'back', 'forward', 'check'].includes(action.kind) || action.kind === 'wait' && Object.hasOwn(action, 'wait_for') || action.kind === 'batch' && Array.isArray(action.actions) && action.actions.every(readOnlyAction);
+  return ['look', 'console', 'network', 'screenshot', 'point', 'navigate', 'back', 'forward', 'check'].includes(action.kind) || action.kind === 'wait' && Object.hasOwn(action, 'wait_for') || action.kind === 'batch' && Array.isArray(action.actions) && action.actions.every(readOnlyAction);
 }

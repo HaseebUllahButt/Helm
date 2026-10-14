@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { Client, Environment, Session } from '../client';
 import { useDialog } from '../useDialog';
+import { Icon } from '../Icon';
 
 type Profile = { key: string; browser: string; browserName: string; directory: string; name: string; lastUsed: boolean; readable: boolean; reason?: string };
 type Copied = { cookies: number; sites: number; failed: number; profile: string };
@@ -30,7 +31,7 @@ export default function BrowserLogins({ client, env, session }: { client: Client
   };
   const browsers = [...new Set(profiles.map(p => p.browser))];
   return <div style={{ position: 'relative' }}>
-    <button ref={button} aria-expanded={open} aria-haspopup="dialog" onClick={() => open ? close() : void load()}>Logins</button>
+    <button ref={button} className={`bp-icon${open ? ' on' : ''}`} aria-label="Logins" title="Copy logins from your browser" aria-expanded={open} aria-haspopup="dialog" onClick={() => open ? close() : void load()}><Icon name="key" size={15} /></button>
     {open && <div ref={menu} role="dialog" aria-modal="true" aria-label="Browser logins" style={{ position: 'fixed', top: position.top, left: position.left, zIndex: 80, maxHeight: `calc(100dvh - ${position.top + 8}px)`, overflowY: 'auto', boxSizing: 'border-box', width: 'min(320px, calc(100vw - 32px))', padding: 12, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--card)', color: 'var(--text)', boxShadow: '0 6px 24px #0004' }}>
       <p style={{ marginTop: 0 }}>Copy logins from a browser on {env.name}.</p>
       {profiles.length ? <select aria-label="Login profile" value={selected} disabled={busy} style={{ width: '100%' }} onChange={e => { setSelected(e.target.value); setMessage(''); }}>

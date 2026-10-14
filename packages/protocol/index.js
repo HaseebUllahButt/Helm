@@ -307,6 +307,7 @@ export const M = {
 export const E = {
   SEND_UPDATE: 'send.update', // { job } source-owned durable send progress
   GIT_MONITOR: 'git.monitor',      // { id, snapshot, watching } background GitHub watch update
+  BROWSER_TAB: 'browser.tab',      // { id, tabId, viewer? } a browser tab opened in a chat
   // Terminal output, pushed while a viewer is attached.
   //
   // From a pty helm owns this is the raw byte stream, appended as it arrives.
