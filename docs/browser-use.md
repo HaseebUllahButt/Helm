@@ -4,8 +4,8 @@ Helm's normal browser is Chromium controlled through Playwright. It is for
 using websites, checking local development apps, and completing browser
 workflows alongside an agent. Agents can act on numbered controls, use
 page coordinates for visual interaction, inspect text, run page JavaScript,
-and read console/network diagnostics. The live viewer lets the owner take
-over the same tab. Its controls operate inside web pages; it is not a general
+and read console/network diagnostics. On a computer the owner uses the same tabs
+in a real Chromium window. Its controls operate inside web pages; it is not a general
 desktop controller for arbitrary native apps or operating-system windows.
 
 Press a chat’s **Browser** button or **Ctrl/⌘ Shift B**. On a wide screen
@@ -17,77 +17,46 @@ opens the same panel. When the agent opens a tab in the chat you are viewing,
 the dock opens by itself on a wide screen once per tab, unless you closed it
 in that chat; otherwise a dot appears on the Browser button.
 
-The panel is a tab strip, back/forward/reload with the address bar, and the
-live page. Clicking or typing on the page takes control and does that click;
-a pill shows **You’re in control · Hand back**. Hand back lets the agent
-continue. While you have control the agent’s actions are refused, as before.
-The rarely used tools sit behind **⋯**: Read page, Console, Network, page
-size, copying the page clipboard, preview quality, typing or
-clicking by element number, uploads and downloads. The tab runs on the
-thread’s machine: `localhost` reaches development servers there, including
-when you watch from a phone.
+On a machine with a screen, each chat's browser is a real Chromium window on
+that machine, beside Helm, with its own profile folder (it keeps what you sign
+in to; a new chat starts with the default profile's logins). Opening the
+browser at a computer brings the window forward. It never takes your
+keyboard or mouse: the agent drives it from inside Chromium, not through the
+desktop, so you can keep typing in Helm while it works, and you click the
+window when you want to use it yourself. On niri this needs one window rule,
+which matches the window's app id `helm-browser-<chat>`:
 
-The page fills the panel: its size follows the panel's width and the height
-below the address bar (240–1920 by 200–1200), so text stays readable when
-the dock is narrow or full screen on a phone. It refits when you drag the
-dock edge or rotate the phone, after a short pause, and ignores changes under
-24px. This needs no control and works in read-only chats. **⋯ → Page size**
-offers **Fit to panel** (the default), **Phone** (390×844) and **Desktop**
-(1280×800). Phone, Desktop or an agent `resize` turns fitting off for that
-tab until someone picks Fit to panel again; the choice is kept with the tab.
-When two people watch the same tab, the one in control sets the size;
-otherwise the last panel that changed wins. A “show me” highlight moves with
-its element after a refit.
-
-While someone watches, the agent’s clicks, hovers, typing, selects, uploads,
-drags and scrolls show a pointer that glides to the spot with a short label
-such as “Clicking “Sign in””, then fades. The server waits about 120ms before
-acting so the viewer can follow; with nobody watching there is no pointer
-work and no wait. **Show me** mode: `helm browser point <tab> <element # or
-selector> --note "Click here to approve"` (or the `point` action) highlights
-the element with the note and changes nothing on the page. It stays until
-you click in the page, the agent points elsewhere, or a minute passes. It
-works in read-only chats and while you have control; Bowser tabs do not
-support it.
-
-**Preview → Auto** reduces image size and frame rate when delivery slows down,
-using network hints where available and measured replies on every browser.
-Choose **Low data** to hold that setting, **Full quality** for finer detail,
-or **Text only** to stop all image downloads while keeping text inspection,
-navigation and control available. Preview quality never resizes the actual
-page or changes agent actions. When several people view the same tab, the
-slowest visual viewer sets the shared capture quality.
-
-Agents use the same tabs through the CLI. Plan the whole task as one batch,
-prefer direct URLs, name controls plainly, and check steps that must work:
-
-```sh
-helm browser open http://localhost:3000
-helm browser act <tab-id> '{"actions":[{"type":"Ada","into":"the Name box","clear":true},{"click":"the Save button"},{"check":"Saved","expect":true}]}'
-helm browser screenshot <tab-id> --output /tmp/page.jpg
-helm browser point <tab-id> 4 --note "Click here to approve"
-helm browser close <tab-id>
+```kdl
+window-rule {
+    match app-id=r#"^helm-browser"#
+    open-focused false
+}
 ```
 
-Each action returns the settled page, including numbered controls and their
-state. Use that reply instead of looking again. Text budgets still limit page
-prose (`budget: 0` keeps controls only); at most 300 controls are listed.
-Password values are excluded. Same-origin frames and open shadow roots are
-included. A plain target matches names and role words deterministically;
-Helm makes no model calls to choose a control. A missing or ambiguous target
-stops the batch and returns likely candidates with element numbers. Submit
-only the remaining steps with a corrected target or `ref`.
+You and the agent can use the window at the same time. When you click, type
+or scroll in it, the agent's next step waits until you have been still for
+2.5 seconds (at most 20 seconds). Closing the window keeps its tabs, listed
+as asleep; Show window, or the agent's next step on one, opens it again with
+all of them. Listing tabs never opens the window.
 
-Bowser-style steps work in a batch or alone: `goto`, `click`, `type` with
-`into`, `clear` and `enter`, `key`, `select` with `option` (the option's label),
-`hover`, `scroll` with `up`/`down` and `pages`, `wait_for`, `back`, and `check`.
-Typing appends by default; `clear: true` replaces the field. Checks match
-literal, case-sensitive page text or a named control; they do not answer
-questions. `expect` defaults to `true`; a failed check stops the batch and
-returns its pass/fail result. Navigation and data requests settle before the
-reply: load completion and a 150 ms quiet period for fetch/XHR, capped at
-three seconds. A quiet static page incurs no fixed action delay. Long-lived
-requests can reach the cap; use `wait_for` for content that needs longer.
+The panel in Helm is the window's remote: the chat's tabs, back/forward/
+reload with the address bar, **Show window**, **New tab** and **Read page**
+(what the agent sees, as text), plus logins, downloads and any page message.
+There is no picture of the page in Helm.
+
+On a machine without a screen (the VM), agents use a hidden Chromium. The
+panel there, and on a phone, lists the tabs and shows pages as text. The tabs
+run on the chat's machine, so `localhost` reaches development servers there.
+
+In the window the agent's clicks, hovers, typing, selects, uploads, drags and
+scrolls show a cursor drawn on the page, with a short label such as
+“Clicking “Sign in””, then it fades. The agent waits about 120ms before
+acting so you can follow; hidden tabs have no cursor and no wait. **Show me**
+mode: `helm browser point <tab> <element # or selector> --note "Click here to
+approve"` (or the `point` action) highlights the element with the note and
+changes nothing on the page. It stays until you click in the page or the
+agent points elsewhere. It works in read-only chats; Bowser tabs do not
+support it.
 
 The existing `kind` actions, `ref`, CSS `selector`, `role` plus exact `name`,
 exact text `name`, and coordinates still work. Other kinds include drag,
@@ -95,8 +64,7 @@ upload, evaluate, wait, resize, dialog, console, network, forward, reload and
 point.
 Use `--session <thread-id>` outside an agent chat. Read-only agents can read,
 navigate, wait and check; batches containing a mutation are rejected before
-any step. Human control still stops agent actions and cancels later batch
-steps.
+any step.
 
 Save a repeating task from its successful run, without repeating it:
 
@@ -189,30 +157,16 @@ pins a specific browser and skips the headless shell; set it if a site refuses
 the headless shell (it has no `window.chrome` object, so some bot checks
 notice it).
 
-Live preview uses CDP screencast frames and stores only the latest JPEG.
-There are four visual tiers, plus text only: low data (about 1 frame/s),
-balanced (2/s), full (5/s) and smooth (up to about 30/s, for a quick link).
-Auto starts at full, measures the round trip, and moves to smooth, balanced or
-low data as the link allows; a phone-sized screen stays at balanced or lower.
-A viewer asks for the next frame with `browser.frame { since, waitMs }`; the
-host holds the request (at most 1.5 s) until the page paints something new, so
-frames arrive as soon as they exist and nothing polls while the page is still.
-`waited` in the answer is the time the host held it. Unchanged frames carry no
-image. When the owner clicks, types or scrolls, the host acknowledges paints
-without pacing for 0.4 s, so the result shows at once. Streaming stops when a
-viewer closes or its bounded lease expires. The web viewer adapts its lease to
-observed latency, capped at sixty seconds. A hidden client stops requesting
-frames. Bowser previews are sampled at most once per second and unchanged
-images are omitted.
+A chat's window is its own Chromium process with its own profile; the hidden
+browser is not started on a machine that can show windows. Nothing is
+streamed to Helm: the panel asks for the tab list every two seconds while it
+is open and visible.
 
 The tab list is written to disk at most once a second after a burst of actions,
 and at once on navigation, close, idle shutdown and stop. After ten minutes
-without actions or viewers, inactive Chromium contexts release their processes
+without actions, inactive hidden Chromium contexts release their processes
 and recover their saved tabs when next used. Text inspection and batched agent
 actions avoid unnecessary screenshots and repeated model calls.
-
-Measure it yourself with `node scripts/browser-bench.mjs` (cold start, memory
-of the whole process tree, action and input latency, frame rate, idle CPU).
 
 The implementation was informed by T3 Code’s `ServerBrowserContexts`,
 `ServerBrowserStream`, browser ownership and automation patterns in the

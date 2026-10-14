@@ -8,37 +8,21 @@ import { EventEmitter } from 'node:events';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-agent-browser-'));
 process.env.HELM_NO_SERVICE = '1';
+// No real windows on the screen of the machine running the tests.
+delete process.env.WAYLAND_DISPLAY; delete process.env.DISPLAY;
 for (const [key, file] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(process.env.HELM_DIR, file);
 test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
-const { BrowserManager, BowserBridge, BROWSER_PREVIEWS } = await import('../packages/connect/src/browser.js');
+const { BrowserManager, BowserBridge } = await import('../packages/connect/src/browser.js');
 const { createBrowserRoutes } = await import('../packages/connect/src/browser-routes.js');
 const { runBrowserCommand } = await import('../packages/connect/src/browser-cli.js');
 
-test('browser is lazy, actions cannot cross thread boundaries, and UI control blocks only mutations', async () => {
+test('browser is lazy and actions cannot cross thread boundaries', async () => {
   let launched = 0;
   const manager = new BrowserManager({ session: sid => ['one', 'two'].includes(sid) ? { id: sid } : null, launch: () => { launched++; throw new Error('unexpected launch'); } });
   assert.deepEqual((await manager.list('one')).tabs, []); assert.equal(launched, 0);
-  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], console: [], network: [], viewers: new Map(), control: 'owner' }; manager.tabs.set('tab', tab);
+  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], console: [], network: [], viewers: new Map() }; manager.tabs.set('tab', tab);
   await assert.rejects(manager.run('two', 'tab', { kind: 'look' }), /not found/);
-  await assert.rejects(manager.run('one', 'tab', { kind: 'navigate', url: 'https://example.com' }), /control/);
   assert.deepEqual(await manager.run('one', 'tab', { kind: 'console' }), { entries: [] });
-  await assert.rejects(manager.control('one', 'tab', 'other', true), /another viewer/);
-  await manager.control('one', 'tab', 'owner', false); assert.equal(tab.control, null);
-  await manager.stop();
-});
-
-test('stream keeps one frame, rejects stale cross-thread access, and stops after viewer timeout', async () => {
-  let clock = 1, stops = 0;
-  const cdp = new EventEmitter(); cdp.send = async command => { if (command === 'Page.stopScreencast') stops++; }; cdp.detach = async () => {};
-  const page = { url: () => 'about:blank', viewportSize: () => ({ width: 1280, height: 800 }), context: () => ({ newCDPSession: async () => cdp }) };
-  const manager = new BrowserManager({ session: sid => ({ id: sid }), now: () => clock });
-  manager.tabs.set('tab', { id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], lastUsed: clock, sequence: 0 });
-  await Promise.all([manager.frame('one', 'tab', { viewer: 'phone' }), manager.frame('one', 'tab', { viewer: 'desktop' })]);
-  cdp.emit('Page.screencastFrame', { data: 'first', sessionId: 1 }); cdp.emit('Page.screencastFrame', { data: 'latest', sessionId: 2 });
-  const frame = await manager.frame('one', 'tab', { viewer: 'phone', since: 0 }); assert.equal(frame.image, 'data:image/jpeg;base64,latest');
-  assert.equal((await manager.frame('one', 'tab', { viewer: 'phone', since: frame.sequence })).image, undefined);
-  await assert.rejects(manager.frame('two', 'tab', { viewer: 'phone' }), /not found/);
-  clock += 11000; await manager.sweep(); assert.equal(stops, 1); assert.equal(manager.tabs.get('tab').cdp, null);
   await manager.stop();
 });
 
@@ -49,53 +33,6 @@ test('Bowser reuses one bridge and propagates a human pause instead of bypassing
   const bridge = new BowserBridge({ bin: '/test/bowser', spawnProcess: () => { starts++; return child; } });
   assert.equal((await bridge.call('look')).content[0].text, 'Page controls'); await bridge.call('look'); assert.equal(starts, 1);
   await assert.rejects(bridge.call('act', { actions: [] }), /paused/); bridge.stop();
-});
-
-test('preview profiles reduce capture work, text keeps control without images, and leases restore full quality', async () => {
-  let clock = 1; const streams = [], commands = [];
-  const page = { url: () => 'about:blank', viewportSize: () => ({ width: 1280, height: 800 }), context: () => ({ newCDPSession: async () => {
-    const cdp = new EventEmitter(); streams.push(cdp); cdp.detach = async () => {};
-    cdp.send = async (method, params) => { commands.push({ method, params }); }; return cdp;
-  } }) };
-  const manager = new BrowserManager({ session: sid => ({ id: sid }), now: () => clock });
-  const tab = { id: 'preview', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], sequence: 0 }; manager.tabs.set(tab.id, tab);
-  await manager.frame('one', tab.id, { viewer: 'phone', preview: 'text' }); assert.equal(streams.length, 0);
-  await manager.control('one', tab.id, 'phone', true); clock += 5000;
-  const text = await manager.frame('one', tab.id, { viewer: 'phone', preview: 'text' });
-  assert.equal(text.tab.control, 'phone'); assert.equal(text.image, undefined); assert.equal(streams.length, 0);
-  await Promise.all([manager.frame('one', tab.id, { viewer: 'desktop', preview: 'full' }), manager.frame('one', tab.id, { viewer: 'desktop', preview: 'full' })]);
-  assert.equal(streams.length, 1);
-  const full = commands.find(c => c.method === 'Page.startScreencast').params;
-  await manager.frame('one', tab.id, { viewer: 'slow', preview: 'low' });
-  const low = commands.filter(c => c.method === 'Page.startScreencast').at(-1).params;
-  assert.ok(low.maxWidth < full.maxWidth); assert.ok(low.quality < full.quality);
-  streams.at(-1).emit('Page.screencastFrame', { data: 'smaller', sessionId: 1 });
-  assert.equal((await manager.frame('one', tab.id, { viewer: 'phone', preview: 'text' })).image, undefined);
-  assert.equal((await manager.frame('one', tab.id, { viewer: 'desktop', preview: 'full' })).preview, 'low');
-  await manager.unwatch('one', tab.id, 'desktop'); await manager.unwatch('one', tab.id, 'slow');
-  assert.equal(tab.cdp, null, 'remaining text viewers do not keep screenshot capture alive');
-  await manager.frame('one', tab.id, { viewer: 'slow', preview: 'low' });
-  clock += 11000;
-  assert.equal((await manager.frame('one', tab.id, { viewer: 'desktop', preview: 'full' })).preview, 'full');
-  assert.equal(tab.control, null); assert.equal(tab.viewerProfiles.has('slow'), false);
-  await manager.unwatch('one', tab.id, 'desktop'); assert.equal(tab.cdp, null);
-  await assert.rejects(manager.frame('one', tab.id, { viewer: 'phone', preview: 'unbounded' }), /preview mode/);
-  await assert.rejects(manager.frame('one', tab.id, { viewer: 'phone', leaseMs: 999999 }), /expected integer/);
-  await manager.frame('one', tab.id, { viewer: 'slow-phone', preview: 'text', leaseMs: 30000 });
-  await manager.control('one', tab.id, 'slow-phone', true); clock += 18000; await manager.sweep();
-  assert.equal(tab.control, 'slow-phone', 'a slow controller keeps its bounded lease');
-  clock += 13000; await manager.sweep(); assert.equal(tab.control, null);
-  await manager.stop();
-});
-
-test('unchanged Bowser frame is available after closing and reopening a viewer', async () => {
-  const manager = new BrowserManager({ session: sid => ({ id: sid }) });
-  manager.capture = async () => ({ image: 'data:image/jpeg;base64,same' });
-  manager.tabs.set('tab', { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], viewers: new Map(), sequence: 0 });
-  const first = await manager.frame('one', 'tab', { viewer: 'phone' });
-  await manager.unwatch('one', 'tab', 'phone');
-  const reopened = await manager.frame('one', 'tab', { viewer: 'phone' });
-  assert.equal(reopened.image, first.image); assert.ok(reopened.sequence > first.sequence); await manager.stop();
 });
 
 test('Bowser owner is reserved before startup and survives Chromium shutdown', async () => {
@@ -115,18 +52,6 @@ test('Bowser EPIPE rejects its requests without an unhandled stream error', asyn
   child.stdin.emit('error', new Error('EPIPE')); await rejected; assert.equal(bridge.child, null);
 });
 
-test('finishing an old stream teardown cannot erase a newer stream frame', async () => {
-  let stopped, release; const stopping = new Promise(resolve => { stopped = resolve; });
-  const old = new EventEmitter(); old.send = async method => { if (method === 'Page.stopScreencast') { stopped(); await new Promise(resolve => { release = resolve; }); } }; old.detach = async () => {};
-  const fresh = new EventEmitter(); fresh.send = async () => {}; fresh.detach = async () => {};
-  const page = { url: () => 'about:blank', viewportSize: () => ({ width: 1280, height: 800 }), context: () => ({ newCDPSession: async () => fresh }) };
-  const manager = new BrowserManager({ session: sid => ({ id: sid }) });
-  const tab = { id: 'tab', sessionId: 'stream', engine: 'chromium', page, cdp: old, frame: 'old', viewers: new Map(), downloads: [], sequence: 0 }; manager.tabs.set('tab', tab);
-  const cleanup = manager.clearStream(tab); await stopping;
-  await manager.frame('stream', 'tab', { viewer: 'new-viewer' }); fresh.emit('Page.screencastFrame', { data: 'new', sessionId: 1 }); release(); await cleanup;
-  assert.equal(tab.frame, 'data:image/jpeg;base64,new'); assert.equal(tab.cdp, fresh); await manager.stop();
-});
-
 test('download retention evicts old files and rejects oversized completed downloads', async () => {
   const manager = new BrowserManager({ session: sid => ({ id: sid }) });
   const tab = { id: 'download-tab', sessionId: 'downloads', engine: 'bowser', downloads: [], viewers: new Map() }; manager.tabs.set(tab.id, tab);
@@ -135,30 +60,6 @@ test('download retention evicts old files and rejects oversized completed downlo
   await manager.finishDownload(tab, tab.downloads[2]); assert.equal(tab.downloads[0].status, 'expired'); assert.equal(existsSync(tab.downloads[0].path), false);
   const huge = { id: 'huge', name: 'huge', path: join(folder, 'huge'), status: 'pending' }; writeFileSync(huge.path, ''); truncateSync(huge.path, 129 * 1024 * 1024); tab.downloads.push(huge);
   await manager.finishDownload(tab, huge); assert.match(huge.status, /too large/); assert.equal(existsSync(huge.path), false); await manager.stop();
-});
-
-test('releasing control cancels queued viewer mutations while retaining the action already sent', async () => {
-  const manager = new BrowserManager({ session: sid => ({ id: sid }) });
-  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], viewers: new Map(), control: 'phone' }; manager.tabs.set('tab', tab);
-  let finish, started, calls = 0; const ready = new Promise(resolve => { started = resolve; });
-  manager.perform = async () => { calls++; started(); await new Promise(resolve => { finish = resolve; }); return {}; };
-  const first = manager.run('one', 'tab', { kind: 'type', text: 'first' }, 'phone'); await ready;
-  const second = manager.run('one', 'tab', { kind: 'type', text: 'queued' }, 'phone');
-  const released = manager.control('one', 'tab', 'phone', false);
-  // Bind the rejection before completing the first operation.
-  const cancelled = assert.rejects(second, /control/i);
-  finish(); await first; await cancelled; await released; assert.equal(calls, 1); await manager.stop();
-});
-
-test('human takeover stops an agent batch at its next step', async () => {
-  const manager = new BrowserManager({ session: sid => ({ id: sid }) });
-  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], viewers: new Map(), control: null }; manager.tabs.set('tab', tab);
-  let finish, started, calls = 0; const ready = new Promise(resolve => { started = resolve; });
-  manager.look = async () => ({ text: 'Current page' });
-  manager.bowserAction = async () => { calls++; started(); await new Promise(resolve => { finish = resolve; }); return {}; };
-  const batch = manager.run('one', 'tab', { kind: 'batch', actions: [{ kind: 'type', text: 'first' }, { kind: 'type', text: 'never sent' }] }); await ready;
-  const takeover = manager.control('one', 'tab', 'phone', true); finish(); const result = await batch; await takeover;
-  assert.equal(result.failedAt, 1); assert.match(result.error, /control/); assert.equal(calls, 1); await manager.stop();
 });
 
 test('a read-only agent can inspect a tab but cannot mutate it through browser CLI', async () => {
@@ -184,58 +85,6 @@ const streamPage = (acks = []) => {
 const paint = (cdp, data, sessionId) => cdp.emit('Page.screencastFrame', { data, sessionId });
 const tick = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fakeTab = (page, extra = {}) => ({ id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], lastUsed: Date.now(), sequence: 0, console: [], network: [], ...extra });
-
-test('frame long poll answers at once when a newer frame exists, waits for a paint, and gives up at its cap', async () => {
-  const { cdp, page } = streamPage(), manager = new BrowserManager({ session: sid => ({ id: sid }) }), tab = fakeTab(page); manager.tabs.set('tab', tab);
-  // Nothing painted yet: the request is held until the cap, then answers without an image.
-  let started = Date.now(); const idle = await manager.frame('one', 'tab', { viewer: 'a', waitMs: 80 });
-  assert.equal(idle.image, undefined); assert.ok(Date.now() - started >= 70); assert.ok(idle.waited >= 70);
-  // A paint during the wait releases the request with that frame.
-  started = Date.now(); const held = manager.frame('one', 'tab', { viewer: 'a', since: idle.sequence, waitMs: 1500 });
-  await tick(30); assert.equal(tab.waiters.size, 1); paint(cdp, 'first', 1);
-  const woke = await held; assert.equal(woke.image, 'data:image/jpeg;base64,first'); assert.ok(Date.now() - started < 600); assert.equal(tab.waiters.size, 0);
-  // A frame the viewer has not seen yet comes back immediately, without a wait.
-  paint(cdp, 'second', 2); started = Date.now();
-  const now = await manager.frame('one', 'tab', { viewer: 'a', since: woke.sequence, waitMs: 1500 });
-  assert.equal(now.image, 'data:image/jpeg;base64,second'); assert.equal(now.waited, undefined); assert.ok(Date.now() - started < 300);
-  // Several viewers waiting on one tab all wake on the same paint.
-  const both = Promise.all([manager.frame('one', 'tab', { viewer: 'a', since: now.sequence, waitMs: 1500 }), manager.frame('one', 'tab', { viewer: 'b', since: now.sequence, waitMs: 1500 })]);
-  await tick(30); assert.equal(tab.waiters.size, 2); paint(cdp, 'third', 3);
-  assert.deepEqual((await both).map(r => r.image), ['data:image/jpeg;base64,third', 'data:image/jpeg;base64,third']);
-  // Text viewers never wait, and the cap is bounded.
-  started = Date.now(); assert.equal((await manager.frame('one', 'tab', { viewer: 't', preview: 'text', waitMs: 1500 })).waited, undefined); assert.ok(Date.now() - started < 300);
-  await assert.rejects(manager.frame('one', 'tab', { viewer: 'a', waitMs: 60000 }), /expected integer/);
-  await manager.stop();
-});
-
-test('a waiting frame request is released by unwatch, by stream teardown and by stopping', async () => {
-  const { cdp, page } = streamPage(), manager = new BrowserManager({ session: sid => ({ id: sid }) }), tab = fakeTab(page); manager.tabs.set('tab', tab);
-  await manager.frame('one', 'tab', { viewer: 'a', waitMs: 10 }); paint(cdp, 'x', 1);
-  const seen = (await manager.frame('one', 'tab', { viewer: 'a' })).sequence;
-  const hold = async () => { const started = Date.now(), held = manager.frame('one', 'tab', { viewer: 'a', since: seen, waitMs: 1500 }); await tick(30); assert.equal(tab.waiters.size, 1); return async () => { await held; assert.ok(Date.now() - started < 600, 'released well before the 1.5s cap'); assert.equal(tab.waiters.size, 0); }; };
-  let done = await hold(); await manager.unwatch('one', 'tab', 'a'); await done();
-  done = await hold(); await manager.clearStream(tab); await done();
-  done = await hold(); await manager.stop(); await done();
-});
-
-test('the owner’s input lets the next paints through without waiting for the pacing delay', async () => {
-  const acks = [], { cdp, page } = streamPage(acks), manager = new BrowserManager({ session: sid => ({ id: sid }) }), tab = fakeTab(page); manager.tabs.set('tab', tab);
-  await manager.frame('one', 'tab', { viewer: 'owner', preview: 'low' }); await manager.control('one', 'tab', 'owner', true);
-  paint(cdp, 'a', 11); assert.deepEqual(acks, [], 'low-data pacing holds the acknowledgement for a second');
-  await manager.run('one', 'tab', { kind: 'click', x: 5, y: 5 }, 'owner');
-  assert.deepEqual(acks, [11], 'the waiting acknowledgement was sent by the input');
-  paint(cdp, 'b', 12); assert.deepEqual(acks, [11, 12], 'a paint right after the input is acknowledged at once');
-  await tick(450); paint(cdp, 'c', 13); assert.deepEqual(acks, [11, 12], 'pacing returns after the short window');
-  await manager.stop();
-});
-
-test('smooth preview is the fastest tier and a slower viewer still sets the stream', async () => {
-  const { page } = streamPage(), manager = new BrowserManager({ session: sid => ({ id: sid }) }), tab = fakeTab(page); manager.tabs.set('tab', tab);
-  assert.equal((await manager.frame('one', 'tab', { viewer: 'lan', preview: 'smooth' })).preview, 'smooth');
-  assert.ok(BROWSER_PREVIEWS.smooth.interval < BROWSER_PREVIEWS.full.interval && BROWSER_PREVIEWS.smooth.interval <= 40);
-  assert.equal((await manager.frame('one', 'tab', { viewer: 'far', preview: 'full' })).preview, 'full');
-  await manager.stop();
-});
 
 test('tab list writes are coalesced after busy bursts but never lost on navigation, close or stop', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json'), { page } = streamPage(); let closed = 0;
@@ -327,7 +176,7 @@ test('a tab says it is loading from the main page request until the page loads',
   const tab = manager.register('one', page), request = (frame, nav = true) => ({ isNavigationRequest: () => nav, frame: () => frame, resourceType: () => 'document' });
   page.emit('request', request({}, true)); assert.equal(manager.metadata(tab).loading, false, 'a frame inside the page is not the page loading');
   page.emit('request', request(main, false)); assert.equal(manager.metadata(tab).loading, false);
-  const before = tab.revision || 0; page.emit('request', request(main)); assert.equal(manager.metadata(tab).loading, true); assert.ok(tab.revision > before, 'a waiting viewer hears it at once');
+  page.emit('request', request(main)); assert.equal(manager.metadata(tab).loading, true);
   page.emit('load'); assert.equal(manager.metadata(tab).loading, false);
   page.emit('request', request(main)); page.emit('requestfailed', Object.assign(request(main), { failure: () => ({ errorText: 'x' }), url: () => 'http://x/', method: () => 'GET' })); assert.equal(manager.metadata(tab).loading, false, 'a failed load ends too');
   page.emit('close');
@@ -371,14 +220,14 @@ test('Playwright’s own browser is tried first; a pinned path wins; the system 
   } finally { chromium.launch = real; for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; }
 });
 
-test('real browser isolation, batched actions, uploads, owner control and restart restore', { timeout: 60000 }, async t => {
+test('real browser isolation, batched actions, uploads, the owner answering a dialog, and restart restore', { timeout: 60000 }, async t => {
   const { chromium } = await import('playwright');
   const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Browser test</title><label>Name<input id="name"></label><button onclick="document.querySelector(\'output\').textContent=document.querySelector(\'input\').value">Save</button><output></output><input type="file" id="upload"><script>console.log("ready")</script>'); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}`, directory = join(process.env.HELM_DIR, 'live');
   let launches = 0, manager;
   const launch = async () => { launches++; return chromium.launch({ headless: true, ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) }); };
-  manager = new BrowserManager({ directory, session: sid => ({ id: sid }), launch });
+  manager = new BrowserManager({ directory, session: sid => ({ id: sid }), launch, canWindow: false });
   t.after(async () => { await manager.stop(); await new Promise(resolve => server.close(resolve)); });
   const first = await manager.open('one', { url }); const second = await manager.open('two', { url }); assert.equal(launches, 1);
   assert.ok(first.elements.some(e => e.name === 'Save'));
@@ -390,51 +239,48 @@ test('real browser isolation, batched actions, uploads, owner control and restar
   await assert.rejects(manager.run('one', first.tab.id, { kind: 'upload', selector: '#upload', uploads: [{ name: 'bad', data: 'not base64!' }] }), /upload data/);
   await assert.rejects(manager.run('one', first.tab.id, { kind: 'upload', ref: 299, uploads: [{ name: 'stale.txt', data: 'c3RhbGU=' }] }), /reference expired/);
   assert.deepEqual(readdirSync(join(directory, 'one', 'uploads')), []);
-  await manager.control('one', first.tab.id, 'phone', true); await assert.rejects(manager.run('one', first.tab.id, { kind: 'type', text: 'oops' }), /control/); await manager.control('one', first.tab.id, 'phone', false);
   const page = manager.tabs.get(first.tab.id).page, observed = page.waitForEvent('dialog');
   const alert = manager.run('one', first.tab.id, { kind: 'evaluate', script: 'alert("Need input"); "dismissed"' });
-  await observed; await manager.control('one', first.tab.id, 'phone', true); await manager.run('one', first.tab.id, { kind: 'dialog', accept: false }, 'phone'); assert.equal((await alert).value, 'dismissed'); await manager.control('one', first.tab.id, 'phone', false);
+  await observed; await manager.run('one', first.tab.id, { kind: 'dialog', accept: false }, 'phone'); assert.equal((await alert).value, 'dismissed');
   await manager.run('one', first.tab.id, { kind: 'resize', width: 390, height: 844 });
   await assert.rejects(manager.run('one', second.tab.id, { kind: 'look' }), /not found/);
   const savedId = first.tab.id; await manager.stop();
   assert.ok(existsSync(join(directory, 'one', 'storage.json')));
-  manager = new BrowserManager({ directory, session: sid => ({ id: sid }), launch });
+  manager = new BrowserManager({ directory, session: sid => ({ id: sid }), launch, canWindow: false });
   const restored = (await manager.list('one')).tabs[0]; assert.equal(restored.id, savedId); assert.deepEqual(restored.viewport, { width: 390, height: 844 });
   assert.equal((await manager.run('one', savedId, { kind: 'evaluate', script: 'localStorage.getItem("private")' })).value, 'one');
   await manager.close('one', savedId); assert.equal((await manager.list('one')).tabs.length, 0); assert.equal(manager.browser, null);
 });
 
-test('agent pointer is recorded only for a watching viewer and point guides without touching the page', async () => {
-  let clock = 1000, clicks = 0, scrolled = 0;
+test('the agent’s cursor is drawn in a window tab only, and point guides without touching the page', async () => {
+  let clock = 1000, clicks = 0, scrolled = 0; const drawn = [];
   const box = { x: 100, y: 40, width: 80, height: 20 };
   const locator = { first: () => locator, scrollIntoViewIfNeeded: async () => { scrolled++; }, boundingBox: async () => box, evaluate: async () => 'Sign in', click: async () => { clicks++; } };
-  const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => ({ width: 1280, height: 800 }), locator: () => locator, mouse: { click: async () => { clicks++; }, move: async () => {} }, evaluate: async () => ({ title: 'Example', url: 'http://example.test/', text: '', elements: [] }) };
-  const manager = new BrowserManager({ session: sid => ({ id: sid, mode: sid === 'reader' ? 'readonly' : 'default' }), now: () => clock });
-  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
-  manager.persistTabs = async () => {};
+  const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => ({ width: 1280, height: 800 }), locator: () => locator, mouse: { click: async () => { clicks++; }, move: async () => {} }, evaluate: async (fn, arg) => { if (arg?.label != null) drawn.push(arg); return { title: 'Example', url: 'http://example.test/', text: '', elements: [] }; } };
+  const manager = new BrowserManager({ session: sid => ({ id: sid, mode: sid === 'reader' ? 'readonly' : 'default' }), now: () => clock, canWindow: false });
+  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
+  manager.persistTabs = async () => {}; manager.persistSoon = () => {};
   const started = Date.now(); await manager.run('one', 'tab', { kind: 'click', selector: 'button' });
-  assert.equal(tab.pointer, undefined, 'nobody watching: no pointer work'); assert.equal(scrolled, 0); assert.ok(Date.now() - started < 100, 'nobody watching: no added wait');
-  tab.viewers.set('phone', clock); tab.viewerProfiles = new Map([['phone', 'full']]);
-  const result = await manager.run('one', 'tab', { kind: 'click', selector: 'button' });
-  assert.deepEqual(result.tab.pointer, { x: 140, y: 50, box, action: 'click', label: 'Clicking “Sign in”', by: 'agent', seq: 1, at: 1000 }); assert.equal(clicks, 2);
+  assert.equal(tab.pointer, undefined, 'a hidden tab: no cursor work'); assert.equal(scrolled, 0); assert.ok(Date.now() - started < 100, 'a hidden tab: no added wait');
+  tab.window = true;
+  await manager.run('one', 'tab', { kind: 'click', selector: 'button' });
+  assert.deepEqual(tab.pointer, { x: 140, y: 50, box, action: 'click', label: 'Clicking “Sign in”', by: 'agent', seq: 1, at: 1000 }); assert.equal(clicks, 2);
+  assert.equal(drawn.at(-1).label, 'Clicking “Sign in”', 'drawn on the page itself');
   await manager.run('one', 'tab', { kind: 'scroll', dy: -300 }).catch(() => {});
   assert.equal(tab.pointer.label, 'Scrolling up'); assert.deepEqual([tab.pointer.x, tab.pointer.y], [640, 400]);
-  clock += 5000; assert.equal(manager.metadata(tab).pointer, null, 'an idle agent pointer fades');
-  tab.viewerProfiles.set('phone', 'text'); await manager.run('one', 'tab', { kind: 'click', x: 5, y: 5 }); assert.equal(tab.pointer.seq, 2, 'text-only viewers see no pointer');
-  // A guide works with nobody watching, while the owner holds control, and in a read-only thread.
-  tab.viewers.clear(); await manager.control('one', 'tab', 'phone', true);
+  // A guide works in a hidden tab too, and never clicks or scrolls.
+  tab.window = false; scrolled = 0;
   const guided = await manager.run('one', 'tab', { kind: 'point', selector: '#approve', note: 'Click here to approve' });
-  assert.deepEqual(guided.tab.pointer, { x: 140, y: 50, box, action: 'point', label: '“Sign in”', by: 'guide', note: 'Click here to approve', seq: 3, at: clock });
-  assert.equal(clicks, 3, 'point never clicks'); assert.equal(scrolled, 1, 'point never scrolls');
-  clock += 30000; assert.equal(manager.metadata(tab).pointer.by, 'guide');
+  assert.deepEqual(guided.tab.pointer, undefined, 'tab answers no longer carry a cursor');
+  assert.deepEqual(tab.pointer, { x: 140, y: 50, box, action: 'point', label: '“Sign in”', by: 'guide', note: 'Click here to approve', seq: 3, at: clock });
+  assert.equal(drawn.at(-1).guide, true); assert.equal(clicks, 2, 'point never clicks'); assert.equal(scrolled, 0, 'point never scrolls');
   await manager.run('one', 'tab', { kind: 'hover', x: 2, y: 2 }, 'phone'); assert.equal(tab.pointer?.by, 'guide', 'owner hovering keeps the guide');
   await manager.run('one', 'tab', { kind: 'click', x: 2, y: 2 }, 'phone'); assert.equal(tab.pointer, null, 'owner clicking clears the guide');
-  await manager.run('one', 'tab', { kind: 'point', x: 10, y: 20, note: 'Here' }); clock += 61000; assert.equal(manager.metadata(tab).pointer, null, 'a guide lasts a minute');
   await assert.rejects(manager.run('one', 'tab', { kind: 'point', x: 5000, y: 20 }), /not on screen/);
   await assert.rejects(manager.run('one', 'tab', { kind: 'point' }), /choose a target/);
-  manager.tabs.set('read', { ...tab, id: 'read', sessionId: 'reader', control: null, pointer: null }); await manager.run('reader', 'read', { kind: 'point', selector: 'button' });
+  manager.tabs.set('read', { ...tab, id: 'read', sessionId: 'reader', pointer: null }); await manager.run('reader', 'read', { kind: 'point', selector: 'button' });
   assert.equal(manager.tabs.get('read').pointer.by, 'guide');
-  manager.tabs.set('shared', { id: 'shared', sessionId: 'one', engine: 'bowser', downloads: [], viewers: new Map() });
+  manager.tabs.set('shared', { id: 'shared', sessionId: 'one', engine: 'bowser', downloads: [] });
   await assert.rejects(manager.run('one', 'shared', { kind: 'point', ref: 1 }), /isolated Chromium/);
   await manager.stop();
 });
@@ -452,58 +298,3 @@ test('browser point CLI builds a guide action and opening a tab tells the chat',
   assert.deepEqual(opened, [{ id: 's1', tabId: 'new' }, { id: 's1', tabId: 'new', viewer: 'owner' }]);
 });
 
-test('a viewer fits the page to its panel without control, after agent actions, and fixed sizes stick', async () => {
-  let viewport = { width: 1280, height: 800 }, box = { x: 100, y: 40, width: 80, height: 20 }, release, busy;
-  const sizes = [], locator = { first: () => locator, scrollIntoViewIfNeeded: async () => {}, boundingBox: async () => box, evaluate: async () => 'Approve', click: async () => {} };
-  const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => viewport, setViewportSize: async size => { sizes.push(size); viewport = size; }, locator: () => locator, mouse: {}, evaluate: async () => ({ title: 'Example', url: 'http://example.test/', text: '', elements: [] }) };
-  const manager = new BrowserManager({ session: sid => ({ id: sid, mode: 'readonly' }) });
-  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
-  manager.persistTabs = async () => {}; manager.persistSoon = () => {}; manager.settle = async () => {};
-  const fit = (viewer, extra) => manager.run('one', 'tab', { kind: 'fit', mode: 'panel', auto: true, width: 700, height: 600, ...extra }, viewer);
-  assert.deepEqual((await fit('desk')).tab.viewport, { width: 700, height: 600 }, 'no control needed, even in a read-only chat');
-  assert.equal(manager.metadata(tab).fit, true);
-  await assert.rejects(manager.run('one', 'tab', { kind: 'fit', mode: 'panel', width: 700, height: 600 }), /read-only/);
-  await assert.rejects(fit('desk', { width: 5000 }), /expected integer/);
-  await fit('desk'); assert.equal(sizes.length, 1, 'an unchanged size is not sent to the page');
-  // It waits its turn behind an agent action.
-  manager.perform = (original => async (t, action, actor, ...rest) => { if (action.kind === 'look') { busy = true; await new Promise(resolve => { release = resolve; }); busy = false; return {}; } return original.call(manager, t, action, actor, ...rest); })(manager.perform);
-  const agent = manager.run('one', 'tab', { kind: 'look' });
-  await new Promise(resolve => setTimeout(resolve, 10));
-  const queued = fit('desk', { width: 800 }); await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal(busy, true); assert.equal(sizes.length, 1, 'no fit lands mid-action'); release(); await agent; await queued; assert.deepEqual(viewport, { width: 800, height: 600 });
-  // A fixed choice, or the agent resizing, turns fitting off until Fit is picked again.
-  await manager.run('one', 'tab', { kind: 'fit', mode: 'phone' }, 'desk'); assert.deepEqual(viewport, { width: 390, height: 844 }); assert.equal(manager.metadata(tab).fit, false);
-  await fit('phone-viewer'); assert.deepEqual(viewport, { width: 390, height: 844 }, 'automatic fits leave a fixed size alone');
-  await manager.run('one', 'tab', { kind: 'fit', mode: 'panel', width: 900, height: 700 }, 'phone-viewer'); assert.equal(manager.metadata(tab).fit, true);
-  manager.owner = () => ({ id: 'one' }); await manager.run('one', 'tab', { kind: 'resize', width: 1280, height: 800 }); assert.equal(tab.fit, false);
-  await assert.rejects(manager.run('one', 'tab', { kind: 'fit', mode: 'panel', width: 700, height: 600 }), /agents use resize/);
-  await manager.run('one', 'tab', { kind: 'fit', mode: 'panel', width: 700, height: 600 }, 'desk');
-  // While someone has control, only their panel sets the size.
-  await manager.control('one', 'tab', 'desk', true);
-  await fit('phone-viewer', { width: 400, height: 700 }); assert.deepEqual(viewport, { width: 700, height: 600 });
-  await fit('desk', { width: 720 }); assert.deepEqual(viewport, { width: 720, height: 600 });
-  await manager.control('one', 'tab', 'desk', false);
-  // A guide follows its element through a fit.
-  await manager.run('one', 'tab', { kind: 'point', selector: '#approve', note: 'Here' });
-  box = { x: 10, y: 300, width: 80, height: 20 }; await fit('desk', { width: 500 });
-  assert.deepEqual([tab.pointer.x, tab.pointer.y, tab.pointer.by, tab.pointer.note], [50, 310, 'guide', 'Here']);
-  await manager.stop();
-});
-
-test('a pointer change answers a waiting viewer at once, and plain-words typing shows the pointer', async () => {
-  const box = { x: 100, y: 40, width: 80, height: 20 }, locator = { first: () => locator, scrollIntoViewIfNeeded: async () => {}, boundingBox: async () => box, evaluate: async () => 'Email', fill: async () => {}, dispose: async () => {}, ownerFrame: async () => null };
-  const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => ({ width: 1280, height: 800 }), locator: () => locator, evaluateHandle: async () => ({ asElement: () => locator }), mainFrame: () => null, evaluate: async () => ({ title: 'Example', url: 'http://example.test/', text: '', elements: [] }) };
-  const manager = new BrowserManager({ session: sid => ({ id: sid }) });
-  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], console: [], network: [], cdp: { send: async () => {}, detach: async () => {} }, previewMode: 'full', frame: 'data:image/jpeg;base64,x', sequence: 3 }; manager.tabs.set('tab', tab);
-  manager.persistTabs = async () => {}; manager.persistSoon = () => {}; manager.settle = async () => {};
-  const frame = (waitMs = 1500) => manager.frame('one', 'tab', { viewer: 'phone', since: 3, waitMs });
-  await frame(0);
-  let started = Date.now(); const waiting = frame(); await new Promise(resolve => setTimeout(resolve, 30));
-  await manager.run('one', 'tab', { kind: 'point', selector: '#email', note: 'Type here' });
-  const answered = await waiting; assert.ok(Date.now() - started < 500, 'the guide arrives without waiting for a paint'); assert.equal(answered.tab.pointer.by, 'guide');
-  manager.changed(tab); started = Date.now(); await frame(); assert.ok(Date.now() - started < 100, 'a change between polls is returned at once');
-  started = Date.now(); await frame(); assert.ok(Date.now() - started >= 1400, 'with nothing new the request still waits');
-  await manager.run('one', 'tab', { kind: 'type', text: 'Ada', target: 1 });
-  assert.equal(tab.pointer.label, 'Typing into “Email”');
-  await manager.stop();
-});

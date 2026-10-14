@@ -8,6 +8,8 @@ import { fixture, encrypted } from './fixtures/browser-logins.mjs';
 
 const directory = await mkdtemp(join(tmpdir(), 'helm-login-tests-'));
 process.env.HELM_DIR = directory; process.env.HELM_NO_SERVICE = '1';
+// No real windows on the screen of the machine running the tests.
+delete process.env.WAYLAND_DISPLAY; delete process.env.DISPLAY;
 for (const [key, file] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(directory, file);
 test.after(() => rm(directory, { recursive: true, force: true }));
 const { createLoginReader } = await import('../packages/connect/src/browser-logins.js');

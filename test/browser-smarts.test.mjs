@@ -6,6 +6,8 @@ import { join } from 'node:path';
 
 const directory = await mkdtemp(join(tmpdir(), 'helm-browser-smarts-'));
 process.env.HELM_DIR = directory; process.env.HELM_NO_SERVICE = '1';
+// No real windows on the screen of the machine running the tests.
+delete process.env.WAYLAND_DISPLAY; delete process.env.DISPLAY;
 for (const [key, file] of Object.entries({ HELM_DB: 'test.db', HELM_SSH_DIR: 'ssh', HELM_TERMINALS_SOCKET: 'term.sock', HELM_PROCS_SOCKET: 'proc.sock', HELM_NATIVE_SOCKET: 'native.sock' })) process.env[key] = join(directory, file);
 test.after(() => rm(directory, { recursive: true, force: true }));
 const { resolveTarget, scoreTargets, normalizeAction, readOnlyAction } = await import('../packages/connect/src/browser-targets.js');
@@ -67,15 +69,14 @@ test('flows fill nested values, require every parameter, and save only successfu
   await assert.rejects(flows.save('../bad', actions, '', {}), /flow names/);
   assert.deepEqual(await readdir(join(directory, 'flows')), ['login.json']);
 });
-test('read-only and human control gate alias batches and flow replays before any step', async () => {
+test('read-only gates alias batches and flow replays before any step', async () => {
   const manager = new BrowserManager({ directory: join(directory, 'gates'), session: id => ({ id, mode: 'readonly' }) });
-  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], viewers: new Map(), control: null };
+  const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], viewers: new Map() };
   manager.tabs.set(tab.id, tab); let calls = 0; manager.perform = async () => { calls++; return {}; };
   await assert.rejects(manager.run('one', tab.id, { actions: [{ goto: 'example.com' }, { click: 'Send' }] }), /read-only/);
   await manager.run('one', tab.id, { actions: [{ check: 'Done' }, { wait_for: 'Done' }] }); assert.equal(calls, 1);
   await manager.flows.save('send', [{ click: 'Send' }], '', {});
   await assert.rejects(manager.runFlow('one', tab.id, 'send'), /read-only/);
-  tab.control = 'owner'; await assert.rejects(manager.run('one', tab.id, { goto: 'example.com' }), /control/);
   assert.equal(calls, 1); await manager.stop();
 });
 test('batch failure stops delivery and cannot save a failed flow', async () => {

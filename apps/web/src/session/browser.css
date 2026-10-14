@@ -1,91 +1,50 @@
-/* The browser: a slim tab strip, one nav row, then the live page. Quiet on
-   purpose - few borders, one accent, the rarely used tools behind ⋯. */
+/* The browser's remote: the real page is a Chromium window on the chat's
+   machine. A heading, one nav row, then the tabs as a list. */
 .browser-panel{display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;font-family:var(--system)}
 .browser-panel button{font-size:12.5px;color:var(--text-dim);border-radius:var(--radius-md);cursor:pointer}
 .browser-panel button:hover:not(:disabled){color:var(--text);background:var(--hover)}
-.browser-panel button:focus-visible,.browser-panel label.ctl:focus-within{outline:2px solid var(--primary-q);outline-offset:1px}
+.browser-panel button:focus-visible{outline:2px solid var(--primary-q);outline-offset:1px}
 .browser-panel button:disabled{opacity:.4;cursor:default}
 .browser-panel .note{margin:0;font-size:12.5px}
 .bp-icon{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;padding:0;position:relative}
 
-.bp-tabs{display:flex;align-items:center;gap:2px;padding:6px 6px 0 8px;min-height:40px;overflow-x:auto;scrollbar-width:none;flex:none}
-.bp-tabs::-webkit-scrollbar{display:none}
-.bp-tab{display:flex;align-items:center;min-width:0;max-width:200px;flex:0 1 auto;border-radius:var(--radius-md)}
-.bp-tab>button[role=tab]{padding:6px 10px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
-.bp-tab.selected{background:var(--accent)}
-.bp-tab.selected>button[role=tab]{color:var(--text);padding-right:2px}
-.bp-tab.selected>button[role=tab]:hover{background:none}
-.bp-tab-close{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin-right:4px;flex:none;padding:0}
+.bp-head{display:flex;align-items:center;gap:10px;padding:10px 8px 2px 14px;flex:none;min-height:36px}
+.bp-head strong{font-size:14px;color:var(--text);font-weight:600}
+.bp-head .note{color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bp-body{position:relative;flex:1;min-height:0;overflow-y:auto;padding:4px 10px 12px;display:flex;flex-direction:column;gap:10px}
+.bp-actions{gap:6px}
+.browser-panel .bp-actions button{padding:6px 12px;min-height:30px;border-radius:999px}
+.browser-panel .bp-actions .bp-primary{background:var(--primary);color:var(--pill-fg);font-weight:550}
+.browser-panel .bp-actions .bp-primary:hover:not(:disabled){background:var(--primary);color:var(--pill-fg);filter:brightness(1.08)}
+.bp-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.bp-item{display:flex;align-items:center;gap:2px;border-radius:var(--radius-md)}
+.bp-item.selected{background:var(--accent)}
+.browser-panel .bp-item-main{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:7px 10px;text-align:left}
+.browser-panel .bp-item.selected .bp-item-main:hover{background:none}
+.bp-item-title{max-width:100%;color:var(--text);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bp-item-host{max-width:100%;color:var(--text-dim);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bp-item .bp-icon{opacity:0}
+.bp-item:hover .bp-icon,.bp-item.selected .bp-icon,.bp-item .bp-icon:focus-visible{opacity:1}
+@media(hover:none){.bp-item .bp-icon{opacity:1}}
 .bp-close{margin-left:auto}
 
 .bp-nav{display:flex;align-items:center;gap:2px;padding:6px 8px 8px;flex:none}
 .bp-nav form{flex:1;min-width:0;display:flex;margin:0 4px}
 .bp-nav input{flex:1;width:0;min-width:0;height:32px;padding:0 12px;border:none;border-radius:999px;background:var(--accent);font-size:13px;color:var(--text);box-sizing:border-box}
 .bp-nav input:focus{outline:1.5px solid var(--primary-q);background:var(--bg)}
-.bp-icon.on{background:var(--accent);color:var(--text)}
-.bp-dot{position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--primary-q)}
 
-/* The page fills what is left. The frame keeps the page's shape and is its
-   own measuring box, so the pointer can sit in page coordinates. */
-.bp-stage{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
-.browser-screen{flex:1;min-height:160px;background:color-mix(in srgb,var(--text) 5%,var(--bg));display:flex;align-items:flex-start;justify-content:center;overflow:hidden;container-type:size;outline:none}
-.browser-screen:focus-visible{box-shadow:inset 0 0 0 2px var(--primary-q)}
-.browser-screen>.note{padding:16px;text-align:center;align-self:center}
-.bp-frame{position:relative;width:min(100cqw,calc(100cqh * var(--fw) / var(--fh)));aspect-ratio:var(--fw)/var(--fh);container-type:size;flex:none}
-.bp-frame img{display:block;width:100%;height:100%;user-select:none;-webkit-user-select:none;touch-action:none}
-.browser-screen.direct img{cursor:pointer}
-.browser-screen.controlled img{cursor:default}
-
-.bp-pill,.bp-hint{position:absolute;left:50%;bottom:min(12px,4cqh);transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:5px 6px 5px 14px;border-radius:999px;background:rgb(20 22 27 / 88%);color:#e8eaf0;font-size:12.5px;white-space:nowrap;box-shadow:0 4px 18px rgb(0 0 0 / 35%);z-index:3}
-.bp-pill:not(:has(button)){padding-right:14px}
-.bp-pill span{opacity:.5}
-.browser-panel .bp-pill button{color:#fff;background:rgb(255 255 255 / 12%);padding:4px 10px;border-radius:999px;font-weight:550}
-.browser-panel .bp-pill button:hover{background:rgb(255 255 255 / 20%)}
-.bp-hint{padding:5px 12px;opacity:0;transition:opacity .2s;pointer-events:none}
-.bp-frame:hover .bp-hint{opacity:.9}
-@media(hover:none){.bp-hint{display:none}}
-
-.bp-dialog{position:absolute;top:12px;left:12px;right:12px;margin:0 auto;max-width:420px;padding:12px 14px;border-radius:var(--radius-xl);background:var(--raised);box-shadow:var(--shadow);z-index:4;display:flex;flex-direction:column;gap:10px}
+.bp-dialog{padding:12px 14px;border-radius:var(--radius-xl);background:var(--raised);box-shadow:var(--shadow);z-index:4;display:flex;flex-direction:column;gap:10px}
 .bp-dialog p{margin:0;font-size:13px;white-space:pre-wrap;max-height:30vh;overflow:auto}
 .bp-dialog span{display:flex;justify-content:flex-end;gap:6px}
 .browser-panel .bp-dialog button{padding:6px 14px;min-height:30px}
 .browser-panel .bp-dialog button.primary{width:auto;margin:0;min-height:30px;color:var(--pill-fg)}
 
-.bp-drawer{flex:none;max-height:45%;overflow-y:auto;padding:8px 10px 10px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px;overscroll-behavior:contain}
 .bp-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;font-size:12.5px;color:var(--mutedfg)}
-.bp-row button,.bp-row label.ctl{padding:5px 10px;min-height:28px;background:var(--accent)}
-.bp-row .bp-choice[aria-pressed=true]{color:var(--text);background:var(--hover);box-shadow:inset 0 0 0 1px var(--primary-q)}
-.bp-row label{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
-.bp-row label.ctl{border-radius:var(--radius-md);color:var(--text-dim);cursor:pointer}
-.bp-row select,.bp-input input{padding:5px 8px;font-size:12.5px;background:var(--accent);color:var(--text);border:none;border-radius:var(--radius-md);min-height:28px;box-sizing:border-box}
-.bp-input input:first-child{width:84px}
-.bp-input input:nth-child(2){flex:1;min-width:120px}
+.bp-row button{padding:5px 10px;min-height:28px;background:var(--accent)}
+.bp-row select{padding:5px 8px;font-size:12.5px;background:var(--accent);color:var(--text);border:none;border-radius:var(--radius-md);min-height:28px;box-sizing:border-box}
 .browser-text{white-space:pre-wrap;max-height:260px;overflow:auto;font-size:12px;padding:10px;margin:0;background:var(--accent);border-radius:var(--radius-md)}
 .bp-empty{padding:24px 16px;text-align:center}
-.bp-window{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;color:var(--text-dim)}
-.bp-window p{margin:0;max-width:36ch;font-size:14.5px;line-height:1.45;color:var(--text)}
-.bp-window p.note{font-size:13px;color:var(--text-dim)}
-.bp-window span{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;justify-content:center}
-.bp-window button{padding:7px 16px;border-radius:999px;background:var(--accent);color:var(--text);font-weight:550}
 .bp-error{margin:8px 10px;flex:none;cursor:pointer}
-
-/* The agent's pointer and the "show me" highlight. Transform only, so
-   gliding never re-lays out the page. */
-.bp-pointer{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .6s ease}
-.bp-pointer.live{opacity:1;transition-duration:.15s}
-.bp-cursor{position:absolute;left:0;top:0;transform:translate(calc(var(--fx) * 100cqw - 2px),calc(var(--fy) * 100cqh - 2px));transition:transform .45s cubic-bezier(.2,.8,.2,1);will-change:transform}
-.bp-cursor svg{display:block;filter:drop-shadow(0 1px 2px rgb(0 0 0 / 45%))}
-.bp-cursor path{fill:#fff;stroke:#111;stroke-width:1.3;stroke-linejoin:round}
-.bp-bubble{position:absolute;left:18px;top:20px;max-width:min(240px,calc(50cqw - 26px));padding:4px 9px;border-radius:8px;background:#1d2029;color:#f1f2f6;font:500 12px/1.35 var(--system);box-shadow:0 3px 12px rgb(0 0 0 / 35%);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.guide .bp-bubble{white-space:normal;background:var(--primary);color:#fff;width:max-content;font-size:12.5px;padding:6px 10px}
-.flip-x .bp-bubble{left:auto;right:4px}
-.flip-y .bp-bubble{top:auto;bottom:24px}
-.bp-ripple{position:absolute;left:-12px;top:-12px;width:28px;height:28px;border-radius:50%;border:2px solid var(--primary-q);opacity:0;animation:bp-ripple .6s ease-out .15s}
-.guide .bp-ripple{animation:bp-ripple 1.6s ease-out infinite}
-.bp-highlight{position:absolute;border-radius:6px;box-shadow:0 0 0 2px var(--primary-q),0 0 0 6px color-mix(in srgb,var(--primary-q) 25%,transparent);animation:bp-glow 1.6s ease-in-out infinite alternate}
-@keyframes bp-ripple{from{transform:scale(.4);opacity:.9}to{transform:scale(1.6);opacity:0}}
-@keyframes bp-glow{from{box-shadow:0 0 0 2px var(--primary-q),0 0 0 4px color-mix(in srgb,var(--primary-q) 20%,transparent)}to{box-shadow:0 0 0 2px var(--primary-q),0 0 0 9px color-mix(in srgb,var(--primary-q) 8%,transparent)}}
-@media(prefers-reduced-motion:reduce){.bp-cursor{transition:none}.bp-ripple,.bp-highlight{animation:none}}
 
 /* Docked beside the chat on a wide screen; the whole screen on a phone. */
 .with-browser-dock{padding-right:var(--browser-dock-w)}
@@ -98,7 +57,6 @@
 .browser-dock-handle:hover::after,.browser-dock-handle:focus-visible::after,.browser-dock-dragging .browser-dock-handle::after{background:var(--primary-q)}
 .browser-dock-handle:focus-visible{outline:none}
 .browser-dock-dragging{cursor:col-resize;user-select:none}
-.browser-dock-dragging .browser-screen{pointer-events:none}
 .browser-dock-loading{padding:16px}
 .iconbtn .browser-new{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--primary-q);box-shadow:0 0 0 2px var(--bg)}
 
@@ -106,12 +64,12 @@
 .thread-details:has(.browser-panel){width:min(1100px,calc(100vw - 24px))}
 .details-content:has(>.browser-panel){display:flex;flex-direction:column;padding:0}
 .details-content>.browser-panel{flex:1;height:auto}
-@media(max-width:600px){.bp-nav{padding-inline:4px}.bp-input input:nth-child(2){min-width:110px}}
+@media(max-width:600px){.bp-nav{padding-inline:4px}}
 .bp-nav{position:relative}
 .bp-loading{position:absolute;left:0;right:0;bottom:0;height:2px;overflow:hidden;pointer-events:none}
 .bp-loading::after{content:"";position:absolute;inset:0 auto 0 0;width:35%;background:var(--primary-q);border-radius:2px;animation:bp-loading 1.1s ease-in-out infinite}
 @keyframes bp-loading{from{transform:translateX(-100%)}to{transform:translateX(290%)}}
 @media (prefers-reduced-motion:reduce){.bp-loading::after{animation:none;width:100%;opacity:.5}}
-.bp-problem{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;background:var(--bg);color:var(--text);text-align:center;z-index:2}
-.bp-problem p{margin:0;max-width:34ch;font-size:15px;line-height:1.45}
-.bp-problem button{padding:7px 16px;border-radius:999px;background:var(--accent);color:var(--text);font-weight:550}
+.bp-problem{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:12px 14px;border-radius:var(--radius-xl);background:var(--accent);color:var(--text)}
+.bp-problem p{margin:0;font-size:13.5px;line-height:1.45}
+.bp-problem button{padding:7px 16px;border-radius:999px;background:var(--bg);color:var(--text);font-weight:550}

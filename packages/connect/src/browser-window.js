@@ -1,9 +1,11 @@
 // A thread's browser tabs in a real Chromium window on this machine's screen,
-// beside Helm, instead of pictures in the panel. The agent still drives the
-// tabs through Chromium's own channel, so it never moves the owner's mouse
-// or types on their keyboard; the owner just uses the window.
+// beside Helm. The agent drives the tabs through Chromium's own channel, so
+// it never moves the owner's mouse or types on their keyboard; the owner
+// just uses the window.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 /** A screen to open a window on: always on a Mac or Windows, a display on Linux. */
 export const canOpenWindow = (env = process.env, platform = process.platform) =>
@@ -17,15 +19,15 @@ const systemChromium = () => process.env.HELM_WINDOW_CHROMIUM || [
 ].find(existsSync);
 
 /**
- * One Chromium per windowed thread, with its own profile folder, so its tabs
- * are tabs in one window and its sign-ins outlive the window. `place` is
- * where the owner's Helm window has room beside it, when it said.
+ * One Chromium per thread, with its own profile folder, so its tabs are tabs
+ * in one window and its sign-ins outlive the window. `name` is the window's
+ * app id: a window manager rule on "helm-browser" keeps it from taking focus
+ * (niri: `window-rule { match app-id=r#"^helm-browser"# open-focused false }`).
  */
-export async function launchWindow(profileDir, { place } = {}) {
+export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
   const { chromium } = await import('playwright');
-  const args = ['--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432'];
+  const args = ['--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', `--class=${name}`];
   if (process.platform === 'linux') args.push('--ozone-platform-hint=auto');
-  if (place) args.push(`--window-position=${place.x},${place.y}`, `--window-size=${place.width},${place.height}`);
   // No "controlled by automated test software" bar: it is the owner's window.
   const options = { headless: false, viewport: null, acceptDownloads: true, ignoreDefaultArgs: ['--enable-automation'], args, timeout: 15000 };
   const system = systemChromium();
@@ -34,6 +36,24 @@ export async function launchWindow(profileDir, { place } = {}) {
 }
 
 export const windowProfile = (directory, sessionId) => join(directory, sessionId, 'window');
+/** Each thread's window has its own app id, so Show window finds the right one. */
+export const windowName = (sessionId) => `helm-browser-${String(sessionId).replace(/[^\w-]/g, '').slice(0, 40)}`;
+
+/**
+ * Give a thread's window the keyboard, when the owner asked to see it. Only
+ * niri needs telling (its rule keeps these windows from taking focus by
+ * themselves); elsewhere bringing the tab forward is enough.
+ */
+export async function focusWindow(name, { env = process.env, run = promisify(execFile) } = {}) {
+  if (!/niri/i.test(env.XDG_CURRENT_DESKTOP || '') && !env.NIRI_SOCKET) return false;
+  try {
+    const { stdout } = await run('niri', ['msg', '-j', 'windows'], { timeout: 3000 });
+    const window = JSON.parse(stdout).find(w => w.app_id === name);
+    if (!window) return false;
+    await run('niri', ['msg', 'action', 'focus-window', '--id', String(window.id)], { timeout: 3000 });
+    return true;
+  } catch { return false; }
+}
 
 /**
  * Runs in every page of a window: tells Helm when the owner clicks, types or
