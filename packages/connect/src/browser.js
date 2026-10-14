@@ -34,7 +34,7 @@ export const BROWSER_PREVIEWS = Object.freeze({
 const FRAME_WAIT_MS = 1500;
 const POINTER_WORDS = { click: 'Clicking', hover: 'Pointing at', type: 'Typing into', select: 'Choosing in', upload: 'Uploading into', drag: 'Dragging', scroll: 'Scrolling', point: '' };
 const POINTER_CLEARS = ['navigate', 'back', 'forward', 'reload', 'resize'];
-const elementName = el => (el.getAttribute('aria-label') || el.labels?.[0]?.innerText || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+const elementName = el => (el.getAttribute('aria-label') || el.labels?.[0]?.innerText || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (['submit', 'button', 'reset'].includes(el.type) ? el.value : '') || '').trim().replace(/\s+/g, ' ').slice(0, 60);
 
 /** One persistent stdio bridge to the owner's Bowser. Closing it leaves Bowser intact. */
 export class BowserBridge {
@@ -184,7 +184,7 @@ export class BrowserManager {
     });
     return tab;
   }
-  metadata(tab) { return { id: tab.id, engine: tab.engine, url: tab.page?.url() || tab.url || 'about:blank', title: tab.title, viewport: tab.page?.viewportSize() || { width: 1280, height: 800 }, control: tab.control, controlEpoch: tab.controlEpoch || 0, dialog: tab.dialog ? { type: tab.dialog.type(), message: tab.dialog.message().slice(0, 2000) } : null, downloads: tab.downloads.map(({ path, ...d }) => d), pointer: this.pointer(tab) }; }
+  metadata(tab) { return { id: tab.id, engine: tab.engine, url: tab.page?.url() || tab.url || 'about:blank', title: tab.title, viewport: tab.page?.viewportSize() || { width: 1280, height: 800 }, control: tab.control, controlEpoch: tab.controlEpoch || 0, dialog: tab.dialog ? { type: tab.dialog.type(), message: tab.dialog.message().slice(0, 2000) } : null, downloads: tab.downloads.map(({ path, ...d }) => d), pointer: this.pointer(tab), fit: tab.fit !== false }; }
   pointer(tab) { const p = tab.pointer; return p && this.now() - p.at < (p.by === 'guide' ? 60000 : 4000) ? p : null; }
   discardDownloads(tab) { for (const record of tab.downloads) { record.discarded = true; if (record.path) void rm(record.path, { force: true }).catch(() => {}); } }
   async finishDownload(tab, record) {
@@ -207,6 +207,7 @@ export class BrowserManager {
         if (this.tabs.has(row.id)) continue;
         const context = await this.context(sessionId), page = await context.newPage(), tab = this.register(sessionId, page);
         this.tabs.delete(tab.id); tab.id = row.id; tab.title = row.title || ''; this.tabs.set(tab.id, tab);
+        if (row.fit === false) tab.fit = false;
         if (row.viewport && Number.isInteger(row.viewport.width) && row.viewport.width >= 240 && row.viewport.width <= 1920 && Number.isInteger(row.viewport.height) && row.viewport.height >= 200 && row.viewport.height <= 1200) await page.setViewportSize(row.viewport);
         for (const download of (Array.isArray(row.downloads) ? row.downloads : []).slice(-20)) {
           if (!/^[a-f0-9]{16}$/.test(download.id || '') || typeof download.name !== 'string') continue;
@@ -353,7 +354,7 @@ export class BrowserManager {
   async listFlows(sessionId) { this.owner(sessionId); return this.flows.list(); }
   async runFlow(sessionId, tabId, name, values) { this.owner(sessionId); const flow = await this.flows.load(name); return this.run(sessionId, tabId, { actions: flow.actions, with: values }); }
   checkControl(tab, action, actor, epoch = tab.controlEpoch || 0) {
-    if (['look', 'console', 'network', 'screenshot', 'point', 'check'].includes(action?.kind)) return;
+    if (['look', 'console', 'network', 'screenshot', 'point', 'check', 'fit'].includes(action?.kind)) return;
     if (epoch !== (tab.controlEpoch || 0)) throw new Error('Browser control changed; inspect the tab before continuing.');
     if (actor !== 'agent' && tab.control !== actor) throw new Error('Take control before changing this browser tab.');
     if (tab.control && tab.control !== actor) throw new Error('You have control of this tab. Release control to let the agent continue.');
@@ -395,6 +396,7 @@ export class BrowserManager {
       if (!check.pass) { const error = new Error(`check failed: ${JSON.stringify(wanted)} expected ${check.expect}`); error.check = check; throw error; }
       return { ...check, ...(!inBatch ? view : {}) };
     }
+    if (kind === 'fit') return this.fit(tab, action, actor);
     if (kind === 'point' && tab.engine === 'bowser') throw new Error('pointing works in isolated Chromium tabs, not Bowser');
     if (tab.engine === 'bowser') return this.bowserAction(tab, action);
     const page = tab.page;
@@ -423,7 +425,7 @@ export class BrowserManager {
       let target; try { target = await this.target(tab, action); await target.setInputFiles(files.paths); } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
     } else if (kind === 'evaluate') { const value = await page.evaluate(text(action.script, 20000)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
     else if (kind === 'wait') { integer(action.timeout ?? 10000, 1, 30000); if (action.selector) await page.locator(text(action.selector, 2000)).waitFor({ state: action.state || 'visible', timeout: action.timeout ?? 10000 }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: action.timeout ?? 10000 }); }
-    else if (kind === 'resize') { await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) }); await this.clearStream(tab); }
+    else if (kind === 'resize') { tab.fit = false; await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) }); await this.clearStream(tab); }
     else if (kind === 'dialog') { if (!tab.dialog) throw new Error('no dialog is open'); const dialog = tab.dialog; tab.dialog = null; action.accept ? await dialog.accept(action.text ?? '') : await dialog.dismiss(); }
     else throw new Error(`unknown browser action: ${kind}`);
     // The owner watches the live page; only agent actions wait for it to settle and get it back as text.
@@ -433,15 +435,37 @@ export class BrowserManager {
     if (!['hover', 'scroll', 'type', 'resize'].includes(kind)) tab.title = await page.title().catch(() => tab.title);
     return { tab: this.metadata(tab), ...(agent && !inBatch ? await this.look(tab) : {}) };
   }
+  /**
+   * A viewer sizes the page to its panel, or picks a fixed phone or desktop
+   * size. It only changes the view, so it needs no control and works in
+   * read-only chats; it still waits its turn behind agent actions. An
+   * automatic fit never undoes a fixed size, and while someone has control
+   * only their panel sets the size; otherwise the last panel change wins.
+   */
+  async fit(tab, action, actor) {
+    if (actor === 'agent') throw new Error('fit is for viewers; agents use resize');
+    const size = action.mode === 'phone' ? { width: 390, height: 844 } : action.mode === 'desktop' ? { width: 1280, height: 800 } : action.mode === 'panel' ? { width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) } : null;
+    if (!size) throw new Error('fit mode is panel, phone or desktop');
+    if (action.auto && (tab.fit === false || tab.control && tab.control !== actor)) return { tab: this.metadata(tab) };
+    tab.fit = action.mode === 'panel';
+    const now = tab.page?.viewportSize();
+    if (tab.engine !== 'chromium' || tab.dialog || now?.width === size.width && now?.height === size.height) return { tab: this.metadata(tab) };
+    await tab.page.setViewportSize(size); await this.clearStream(tab);
+    // The page reflowed: a guide follows its element, an agent pointer is stale.
+    const guide = tab.pointer?.by === 'guide' && tab.guide, at = tab.pointer?.at; tab.pointer = null;
+    if (guide) { try { await this.aim(tab, guide, 'agent'); if (tab.pointer) tab.pointer.at = at; } catch { tab.pointer = null; } }
+    this.changed(tab);
+    return { tab: this.metadata(tab) };
+  }
   /** Where the agent is about to act, for a viewer's pointer. Free when nobody is watching; point always records. */
   async aim(tab, action, actor) {
     const kind = action.kind;
-    if (POINTER_CLEARS.includes(kind) || actor !== 'agent' && tab.pointer?.by === 'guide' && ['click', 'drag', 'type', 'key', 'select', 'upload'].includes(kind)) { tab.pointer = null; return; }
+    if (POINTER_CLEARS.includes(kind) || actor !== 'agent' && tab.pointer?.by === 'guide' && ['click', 'drag', 'type', 'key', 'select', 'upload'].includes(kind)) { if (tab.pointer) { tab.pointer = null; this.changed(tab); } return; }
     if (actor !== 'agent' || !Object.hasOwn(POINTER_WORDS, kind) || kind !== 'point' && (!tab.viewers?.size || this.previewMode(tab) === 'text')) return;
     const { width, height } = tab.page.viewportSize() || { width: 1280, height: 800 };
     let x = kind === 'drag' ? action.toX : action.x, y = kind === 'drag' ? action.toY : action.y, box, name = '';
     if (kind === 'scroll' && x == null) { x = Math.round(width / 2); y = Math.round(height / 2); }
-    else if (x == null && !(kind === 'type' && !(action.ref || action.selector || action.name || action.role))) {
+    else if (x == null && !(kind === 'type' && !(action.ref || action.selector || action.name || action.role || action.target != null))) {
       let target; try {
         target = await this.target(tab, action);
         if (!['point', 'upload'].includes(kind)) await target.scrollIntoViewIfNeeded({ timeout: 500 });
@@ -449,11 +473,13 @@ export class BrowserManager {
         if (found) { box = { x: Math.round(found.x), y: Math.round(found.y), width: Math.round(found.width), height: Math.round(found.height) }; x = Math.round(found.x + found.width / 2); y = Math.round(found.y + found.height / 2); name = label; }
       } catch (error) { if (kind === 'point') throw error; } finally { if (target?.dispose) await target.dispose(); }
     }
+    if (kind === 'point') tab.guide = action.x == null ? action : null;
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > width || y > height) { if (kind === 'point') throw new Error('that spot is not on screen; scroll to it first'); return; }
     const note = kind === 'point' && action.note != null ? text(action.note, 300).trim() : '';
     const verb = kind === 'click' ? action.button === 'right' ? 'Right-clicking' : action.double ? 'Double-clicking' : 'Clicking' : kind === 'scroll' ? (action.dy ?? 500) < 0 ? 'Scrolling up' : 'Scrolling down' : POINTER_WORDS[kind];
     tab.pointerSeq = (tab.pointerSeq || 0) + 1;
     tab.pointer = { x, y, ...(box ? { box } : {}), action: kind, label: [verb, name && `“${name}”`].filter(Boolean).join(' '), by: kind === 'point' ? 'guide' : 'agent', ...(note ? { note } : {}), seq: tab.pointerSeq, at: this.now() };
+    this.changed(tab);
     if (kind !== 'point') await new Promise(done => setTimeout(done, 120));
   }
   async bowserAction(tab, action) {
@@ -495,7 +521,7 @@ export class BrowserManager {
   }
   expireViewers(tab) {
     for (const [viewer, at] of tab.viewers) if (this.now() - at > (tab.viewerLeases?.get(viewer) || 10000)) {
-      tab.viewers.delete(viewer); tab.viewerProfiles?.delete(viewer); tab.viewerLeases?.delete(viewer);
+      tab.viewers.delete(viewer); tab.viewerProfiles?.delete(viewer); tab.viewerLeases?.delete(viewer); tab.viewerRevisions?.delete(viewer);
       if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; }
     }
   }
@@ -556,18 +582,21 @@ export class BrowserManager {
     }
     // Long poll: hold the request until Chromium paints something new, so the viewer needs no timer.
     let waited;
-    if (waitMs && preview !== 'text' && mode !== 'text' && tab.engine === 'chromium' && tab.cdp && (!tab.frame || since === tab.sequence)) {
+    if (waitMs && preview !== 'text' && mode !== 'text' && tab.engine === 'chromium' && tab.cdp && (!tab.frame || since === tab.sequence) && (tab.viewerRevisions?.get(viewer) ?? tab.revision ?? 0) === (tab.revision || 0)) {
       const started = Date.now();
       await new Promise(resolve => { const waiter = { resolve, timer: setTimeout(() => { tab.waiters.delete(waiter); resolve(); }, waitMs) }; waiter.timer.unref?.(); (tab.waiters ||= new Set()).add(waiter); });
       waited = Date.now() - started;
     }
+    (tab.viewerRevisions ||= new Map()).set(viewer, tab.revision || 0);
     return { tab: this.metadata(tab), sequence: tab.sequence, preview: mode, ...(waited !== undefined ? { waited } : {}), ...(preview !== 'text' && tab.frame && since !== tab.sequence ? { image: tab.frame } : {}) };
   }
+  /** Something a viewer shows changed without a new paint: answer waiting and next frame requests at once. */
+  changed(tab) { tab.revision = (tab.revision || 0) + 1; this.wake(tab); }
   wake(tab) { for (const waiter of tab.waiters || []) { clearTimeout(waiter.timer); waiter.resolve(); } tab.waiters?.clear(); }
   /** The owner just did something: let the page's next paints through without pacing. */
   boost(tab) { tab.boostUntil = Date.now() + 400; for (const [timer, send] of tab.acks || []) { clearTimeout(timer); send(); } tab.acks?.clear(); tab.nextAckAt = 0; }
   async clearStream(tab) { await tab.streamStart?.catch(() => {}); this.wake(tab); for (const timer of tab.acks?.keys() || []) clearTimeout(timer); tab.acks?.clear(); tab.nextAckAt = 0; const cdp = tab.cdp; tab.cdp = null; tab.frame = null; if (cdp) { await cdp.send('Page.stopScreencast').catch(() => {}); await cdp.detach().catch(() => {}); } }
-  async unwatch(sessionId, tabId, viewer) { const tab = this.get(sessionId, tabId); tab.viewers.delete(viewer); this.wake(tab); tab.viewerProfiles?.delete(viewer); tab.viewerLeases?.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } if (!tab.viewers.size || this.previewMode(tab) === 'text') { await tab.streamConfig?.catch(() => {}); if (!tab.viewers.size || this.previewMode(tab) === 'text') await this.clearStream(tab); } return { ok: true }; }
+  async unwatch(sessionId, tabId, viewer) { const tab = this.get(sessionId, tabId); tab.viewers.delete(viewer); this.wake(tab); tab.viewerProfiles?.delete(viewer); tab.viewerLeases?.delete(viewer); tab.viewerRevisions?.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } if (!tab.viewers.size || this.previewMode(tab) === 'text') { await tab.streamConfig?.catch(() => {}); if (!tab.viewers.size || this.previewMode(tab) === 'text') await this.clearStream(tab); } return { ok: true }; }
   async control(sessionId, tabId, viewer, take) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer'); if (tab.control && tab.control !== viewer) throw new Error('another viewer has control'); tab.control = take ? viewer : null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; tab.viewers.set(viewer, this.now()); if (!tab.dialog) await (this.serial.get(tab.id) || Promise.resolve()).catch(() => {}); return { tab: this.metadata(tab) }; }
   async pageClosed(sessionId) {
     await this.persistTabs(sessionId);

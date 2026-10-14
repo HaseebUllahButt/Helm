@@ -323,7 +323,7 @@ test('agent pointer is recorded only for a watching viewer and point guides with
   let clock = 1000, clicks = 0, scrolled = 0;
   const box = { x: 100, y: 40, width: 80, height: 20 };
   const locator = { first: () => locator, scrollIntoViewIfNeeded: async () => { scrolled++; }, boundingBox: async () => box, evaluate: async () => 'Sign in', click: async () => { clicks++; } };
-  const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => ({ width: 1280, height: 800 }), locator: () => locator, mouse: { click: async () => { clicks++; }, move: async () => {} } };
+  const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => ({ width: 1280, height: 800 }), locator: () => locator, mouse: { click: async () => { clicks++; }, move: async () => {} }, evaluate: async () => ({ title: 'Example', url: 'http://example.test/', text: '', elements: [] }) };
   const manager = new BrowserManager({ session: sid => ({ id: sid, mode: sid === 'reader' ? 'readonly' : 'default' }), now: () => clock });
   const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
   manager.persistTabs = async () => {};
@@ -346,7 +346,7 @@ test('agent pointer is recorded only for a watching viewer and point guides with
   await manager.run('one', 'tab', { kind: 'click', x: 2, y: 2 }, 'phone'); assert.equal(tab.pointer, null, 'owner clicking clears the guide');
   await manager.run('one', 'tab', { kind: 'point', x: 10, y: 20, note: 'Here' }); clock += 61000; assert.equal(manager.metadata(tab).pointer, null, 'a guide lasts a minute');
   await assert.rejects(manager.run('one', 'tab', { kind: 'point', x: 5000, y: 20 }), /not on screen/);
-  await assert.rejects(manager.run('one', 'tab', { kind: 'point' }), /choose an element/);
+  await assert.rejects(manager.run('one', 'tab', { kind: 'point' }), /choose a target/);
   manager.tabs.set('read', { ...tab, id: 'read', sessionId: 'reader', control: null, pointer: null }); await manager.run('reader', 'read', { kind: 'point', selector: 'button' });
   assert.equal(manager.tabs.get('read').pointer.by, 'guide');
   manager.tabs.set('shared', { id: 'shared', sessionId: 'one', engine: 'bowser', downloads: [], viewers: new Map() });
@@ -365,4 +365,60 @@ test('browser point CLI builds a guide action and opening a tab tells the chat',
   const routes = createBrowserRoutes({ sessions: { get: () => ({}) }, manager, onOpen: payload => opened.push(payload) });
   await routes.dispatch('browser.open', { id: 's1', url: 'about:blank' }); await routes.dispatch('browser.open', { id: 's1', viewer: 'owner' });
   assert.deepEqual(opened, [{ id: 's1', tabId: 'new' }, { id: 's1', tabId: 'new', viewer: 'owner' }]);
+});
+
+test('a viewer fits the page to its panel without control, after agent actions, and fixed sizes stick', async () => {
+  let viewport = { width: 1280, height: 800 }, box = { x: 100, y: 40, width: 80, height: 20 }, release, busy;
+  const sizes = [], locator = { first: () => locator, scrollIntoViewIfNeeded: async () => {}, boundingBox: async () => box, evaluate: async () => 'Approve', click: async () => {} };
+  const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => viewport, setViewportSize: async size => { sizes.push(size); viewport = size; }, locator: () => locator, mouse: {}, evaluate: async () => ({ title: 'Example', url: 'http://example.test/', text: '', elements: [] }) };
+  const manager = new BrowserManager({ session: sid => ({ id: sid, mode: 'readonly' }) });
+  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
+  manager.persistTabs = async () => {}; manager.persistSoon = () => {}; manager.settle = async () => {};
+  const fit = (viewer, extra) => manager.run('one', 'tab', { kind: 'fit', mode: 'panel', auto: true, width: 700, height: 600, ...extra }, viewer);
+  assert.deepEqual((await fit('desk')).tab.viewport, { width: 700, height: 600 }, 'no control needed, even in a read-only chat');
+  assert.equal(manager.metadata(tab).fit, true);
+  await assert.rejects(manager.run('one', 'tab', { kind: 'fit', mode: 'panel', width: 700, height: 600 }), /read-only/);
+  await assert.rejects(fit('desk', { width: 5000 }), /expected integer/);
+  await fit('desk'); assert.equal(sizes.length, 1, 'an unchanged size is not sent to the page');
+  // It waits its turn behind an agent action.
+  manager.perform = (original => async (t, action, actor, ...rest) => { if (action.kind === 'look') { busy = true; await new Promise(resolve => { release = resolve; }); busy = false; return {}; } return original.call(manager, t, action, actor, ...rest); })(manager.perform);
+  const agent = manager.run('one', 'tab', { kind: 'look' });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const queued = fit('desk', { width: 800 }); await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(busy, true); assert.equal(sizes.length, 1, 'no fit lands mid-action'); release(); await agent; await queued; assert.deepEqual(viewport, { width: 800, height: 600 });
+  // A fixed choice, or the agent resizing, turns fitting off until Fit is picked again.
+  await manager.run('one', 'tab', { kind: 'fit', mode: 'phone' }, 'desk'); assert.deepEqual(viewport, { width: 390, height: 844 }); assert.equal(manager.metadata(tab).fit, false);
+  await fit('phone-viewer'); assert.deepEqual(viewport, { width: 390, height: 844 }, 'automatic fits leave a fixed size alone');
+  await manager.run('one', 'tab', { kind: 'fit', mode: 'panel', width: 900, height: 700 }, 'phone-viewer'); assert.equal(manager.metadata(tab).fit, true);
+  manager.owner = () => ({ id: 'one' }); await manager.run('one', 'tab', { kind: 'resize', width: 1280, height: 800 }); assert.equal(tab.fit, false);
+  await assert.rejects(manager.run('one', 'tab', { kind: 'fit', mode: 'panel', width: 700, height: 600 }), /agents use resize/);
+  await manager.run('one', 'tab', { kind: 'fit', mode: 'panel', width: 700, height: 600 }, 'desk');
+  // While someone has control, only their panel sets the size.
+  await manager.control('one', 'tab', 'desk', true);
+  await fit('phone-viewer', { width: 400, height: 700 }); assert.deepEqual(viewport, { width: 700, height: 600 });
+  await fit('desk', { width: 720 }); assert.deepEqual(viewport, { width: 720, height: 600 });
+  await manager.control('one', 'tab', 'desk', false);
+  // A guide follows its element through a fit.
+  await manager.run('one', 'tab', { kind: 'point', selector: '#approve', note: 'Here' });
+  box = { x: 10, y: 300, width: 80, height: 20 }; await fit('desk', { width: 500 });
+  assert.deepEqual([tab.pointer.x, tab.pointer.y, tab.pointer.by, tab.pointer.note], [50, 310, 'guide', 'Here']);
+  await manager.stop();
+});
+
+test('a pointer change answers a waiting viewer at once, and plain-words typing shows the pointer', async () => {
+  const box = { x: 100, y: 40, width: 80, height: 20 }, locator = { first: () => locator, scrollIntoViewIfNeeded: async () => {}, boundingBox: async () => box, evaluate: async () => 'Email', fill: async () => {}, dispose: async () => {}, ownerFrame: async () => null };
+  const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => ({ width: 1280, height: 800 }), locator: () => locator, evaluateHandle: async () => ({ asElement: () => locator }), mainFrame: () => null, evaluate: async () => ({ title: 'Example', url: 'http://example.test/', text: '', elements: [] }) };
+  const manager = new BrowserManager({ session: sid => ({ id: sid }) });
+  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], console: [], network: [], cdp: { send: async () => {}, detach: async () => {} }, previewMode: 'full', frame: 'data:image/jpeg;base64,x', sequence: 3 }; manager.tabs.set('tab', tab);
+  manager.persistTabs = async () => {}; manager.persistSoon = () => {}; manager.settle = async () => {};
+  const frame = (waitMs = 1500) => manager.frame('one', 'tab', { viewer: 'phone', since: 3, waitMs });
+  await frame(0);
+  let started = Date.now(); const waiting = frame(); await new Promise(resolve => setTimeout(resolve, 30));
+  await manager.run('one', 'tab', { kind: 'point', selector: '#email', note: 'Type here' });
+  const answered = await waiting; assert.ok(Date.now() - started < 500, 'the guide arrives without waiting for a paint'); assert.equal(answered.tab.pointer.by, 'guide');
+  manager.changed(tab); started = Date.now(); await frame(); assert.ok(Date.now() - started < 100, 'a change between polls is returned at once');
+  started = Date.now(); await frame(); assert.ok(Date.now() - started >= 1400, 'with nothing new the request still waits');
+  await manager.run('one', 'tab', { kind: 'type', text: 'Ada', target: 1 });
+  assert.equal(tab.pointer.label, 'Typing into “Email”');
+  await manager.stop();
 });

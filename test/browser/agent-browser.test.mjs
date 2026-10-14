@@ -37,6 +37,11 @@ test('browser viewer on phone and desktop: click to take over, typing, upload an
     await page.setContent('<html data-theme="dark"><body><div class="browser-dock" style="height:900px;max-width:calc(100vw - 20px);margin:16px auto"><div id="root" style="display:contents"></div></div></body></html>');
     await page.addStyleTag({ content: css }); await page.addScriptTag({ content: bundle.outputFiles[0].text }); await page.evaluate(() => window.mount());
     await page.getByAltText('Live browser page').waitFor();
+    // The page fits the live area below the nav bar, without taking control.
+    const live = await page.evaluate(() => { const panel = document.querySelector('.browser-panel'), nav = document.querySelector('.bp-nav'); return { width: panel.clientWidth, height: Math.round(panel.getBoundingClientRect().bottom - nav.getBoundingClientRect().bottom) }; });
+    const want = { width: Math.max(240, live.width), height: Math.min(1200, Math.max(200, live.height)) }, close = () => { const v = manager.tabs.get(opened.tab.id).page.viewportSize(); return Math.abs(v.width - want.width) < 24 && Math.abs(v.height - want.height) < 24; };
+    const fitBy = Date.now() + 10000; while (!close() && Date.now() < fitBy) await new Promise(resolve => setTimeout(resolve, 50));
+    assert.ok(close(), `page ${JSON.stringify(manager.tabs.get(opened.tab.id).page.viewportSize())} fits ${JSON.stringify(want)}`); assert.equal(manager.tabs.get(opened.tab.id).control, null);
     await page.getByAltText('Live browser page').click(); await page.getByRole('button', { name: 'Hand back' }).waitFor();
     await page.getByRole('button', { name: 'More browser tools' }).click();
     await page.getByRole('button', { name: 'Read page' }).click(); await page.locator('.browser-text').filter({ hasText: 'Name' }).waitFor();
@@ -63,7 +68,8 @@ test('browser viewer on phone and desktop: click to take over, typing, upload an
     assert.deepEqual(manager.tabs.get(opened.tab.id).page.viewportSize(), viewport, 'preview quality never changes page geometry');
     await page.getByLabel('Browser preview quality').selectOption('full'); await page.getByAltText('Live browser page').waitFor();
     if (process.env.HELM_TEST_SCREENSHOT_DIR) { await mkdir(process.env.HELM_TEST_SCREENSHOT_DIR, { recursive: true }); await page.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, `browser-${width}.png`), fullPage: true }); }
-    await page.getByRole('button', { name: 'Hand back' }).click(); await page.getByRole('button', { name: 'Hand back' }).waitFor({ state: 'detached' });
+    // Keyboard users hand back with Enter on the pill's button; the page must not take that key.
+    await page.getByRole('button', { name: 'Hand back' }).focus(); await page.keyboard.press('Enter'); await page.getByRole('button', { name: 'Hand back' }).waitFor({ state: 'detached' });
     assert.equal(manager.tabs.get(opened.tab.id).control, null);
     await page.evaluate(() => window.unmount()); await page.close(); assert.deepEqual(errors, []);
   }
@@ -71,7 +77,7 @@ test('browser viewer on phone and desktop: click to take over, typing, upload an
 
 test('an agent click puts the pointer on the element centre, and point only highlights', { timeout: 60000 }, async t => {
   const manager = new BrowserManager({ session: id => ({ id }) });
-  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Pointer</title><body style="margin:0;height:2400px"><button id=sign style="position:absolute;left:300px;top:120px;width:160px;height:40px" onclick="this.textContent=\'Done\'">Sign in</button><button id=far style="position:absolute;left:20px;top:1500px">Far away</button>'); });
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<title>Pointer</title><body style="margin:0;height:2400px"><button id=sign style="position:absolute;left:300px;top:120px;width:160px;height:40px" onclick="this.textContent=\'Done\'">Sign in</button><button id=far style="position:absolute;left:20px;top:1500px">Far away</button><input id=secret type=password value="hunter2-secret" style="position:absolute;left:300px;top:300px">'); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { await manager.stop(); await new Promise(resolve => server.close(resolve)); });
   const { tab: opened } = await manager.open('pointer', { url: `http://127.0.0.1:${server.address().port}` });
@@ -87,6 +93,11 @@ test('an agent click puts the pointer on the element centre, and point only high
   assert.equal(await page.textContent('#sign'), 'Done', 'point does not click');
   await assert.rejects(manager.run('pointer', opened.id, { kind: 'point', selector: '#far' }), /not on screen/);
   assert.equal(await page.evaluate(() => scrollY), 0, 'point does not scroll');
+  // A filled password field never lends its value to the pointer, the reply or the saved tabs.
+  const hovered = await manager.run('pointer', opened.id, { kind: 'hover', selector: '#secret' });
+  const pointed = await manager.run('pointer', opened.id, { kind: 'point', selector: '#secret', note: 'Your password' });
+  assert.equal(hovered.tab.pointer.label, 'Pointing at'); assert.doesNotMatch(JSON.stringify([hovered, pointed]), /hunter2/);
+  await manager.persistTabs('pointer'); assert.doesNotMatch(await readFile(join(manager.directory, 'pointer', 'tabs.json'), 'utf8'), /hunter2/);
   await manager.run('pointer', opened.id, { kind: 'click', selector: '#far' });
   const far = manager.tabs.get(opened.id).pointer, box = await page.locator('#far').boundingBox();
   assert.equal(far.label, 'Clicking “Far away”'); assert.ok(Math.abs(far.y - (box.y + box.height / 2)) <= 1, 'the pointer lands where the element is after scrolling to it');

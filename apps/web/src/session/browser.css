@@ -54,6 +54,7 @@
 .bp-drawer{flex:none;max-height:45%;overflow-y:auto;padding:8px 10px 10px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px;overscroll-behavior:contain}
 .bp-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;font-size:12.5px;color:var(--mutedfg)}
 .bp-row button,.bp-row label.ctl{padding:5px 10px;min-height:28px;background:var(--accent)}
+.bp-row .bp-choice[aria-pressed=true]{color:var(--text);background:var(--hover);box-shadow:inset 0 0 0 1px var(--primary-q)}
 .bp-row label{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .bp-row label.ctl{border-radius:var(--radius-md);color:var(--text-dim);cursor:pointer}
 .bp-row select,.bp-input input{padding:5px 8px;font-size:12.5px;background:var(--accent);color:var(--text);border:none;border-radius:var(--radius-md);min-height:28px;box-sizing:border-box}

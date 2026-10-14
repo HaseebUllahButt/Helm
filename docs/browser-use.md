@@ -21,11 +21,23 @@ The panel is a tab strip, back/forward/reload with the address bar, and the
 live page. Clicking or typing on the page takes control and does that click;
 a pill shows **You’re in control · Hand back**. Hand back lets the agent
 continue. While you have control the agent’s actions are refused, as before.
-The rarely used tools sit behind **⋯**: Read page, Console, Network, phone
-and desktop sizes, copying the page clipboard, preview quality, typing or
+The rarely used tools sit behind **⋯**: Read page, Console, Network, page
+size, copying the page clipboard, preview quality, typing or
 clicking by element number, uploads and downloads. The tab runs on the
 thread’s machine: `localhost` reaches development servers there, including
 when you watch from a phone.
+
+The page fills the panel: its size follows the panel's width and the height
+below the address bar (240–1920 by 200–1200), so text stays readable when
+the dock is narrow or full screen on a phone. It refits when you drag the
+dock edge or rotate the phone, after a short pause, and ignores changes under
+24px. This needs no control and works in read-only chats. **⋯ → Page size**
+offers **Fit to panel** (the default), **Phone** (390×844) and **Desktop**
+(1280×800). Phone, Desktop or an agent `resize` turns fitting off for that
+tab until someone picks Fit to panel again; the choice is kept with the tab.
+When two people watch the same tab, the one in control sets the size;
+otherwise the last panel that changed wins. A “show me” highlight moves with
+its element after a refit.
 
 While someone watches, the agent’s clicks, hovers, typing, selects, uploads,
 drags and scrolls show a pointer that glides to the spot with a short label
