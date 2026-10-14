@@ -4,6 +4,8 @@ import { readFile, writeFile, rm, chmod, stat } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { spawn } from 'node:child_process';
 import { HELM_DIR } from './paths.js';
+import { normalizeAction, readOnlyAction, resolveTarget } from './browser-targets.js';
+import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -60,6 +62,7 @@ export class BowserBridge {
 export class BrowserManager {
   constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, bowser = new BowserBridge(), idleMs = 10 * 60000, actionTimeoutMs = 45000 } = {}) {
     this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.bowser = bowser; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
+    this.flows = new BrowserFlows(directory);
   }
   async start() {
     if (!this.starting) this.starting = (async () => {
@@ -102,6 +105,11 @@ export class BrowserManager {
     const existing = [...this.tabs.values()].find(t => t.page === page); if (existing) return existing;
     const tab = { id: id(), sessionId, engine: 'chromium', page, title: '', console: [], network: [], downloads: [], lastUsed: this.now(), viewers: new Map(), sequence: 0, frame: null, control: null, dialog: null };
     this.tabs.set(tab.id, tab);
+    tab.fetching = new Set(); tab.quietAt = 0;
+    const changed = () => { tab.quietAt = Date.now(); for (const wake of tab.settleWaiters || []) wake(); };
+    page.on('request', request => { if (['fetch', 'xhr'].includes(request.resourceType())) { tab.fetching.add(request); changed(); } });
+    const finished = request => { if (tab.fetching.delete(request)) changed(); };
+    page.on('requestfinished', finished); page.on('requestfailed', finished);
     page.on('close', () => {
       this.tabs.delete(tab.id); void this.clearStream(tab);
       if (!this.stopping && !this.suspending.has(sessionId)) this.discardDownloads(tab);
@@ -174,11 +182,12 @@ export class BrowserManager {
     }
     if (engine !== 'chromium') throw new Error('unknown browser engine');
     const context = await this.context(sessionId), page = await context.newPage(), tab = this.register(sessionId, page);
-    try { if (url !== 'about:blank') await page.goto(url, { waitUntil: 'domcontentloaded' }); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(await this.look(tab)) }; }
+    try { if (url !== 'about:blank') await page.goto(url, { waitUntil: 'domcontentloaded' }); await this.settle(tab); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(await this.look(tab)) }; }
     catch (error) { await page.close(); throw error; }
   }
   get(sessionId, tabId) { this.owner(sessionId); const tab = this.tabs.get(tabId); if (!tab || tab.sessionId !== sessionId) throw new Error('browser tab not found in this thread'); return tab; }
   async run(sessionId, tabId, action, actor = 'agent', expectedEpoch) {
+    action = normalizeAction(action);
     await this.recover(sessionId);
     const tab = this.get(sessionId, tabId);
     const epoch = expectedEpoch ?? tab.controlEpoch ?? 0;
@@ -196,11 +205,13 @@ export class BrowserManager {
       started = true;
       const owner = this.owner(sessionId);
       if (actor === 'agent' && ['read', 'readonly', 'plan'].includes(owner.mode)) {
-        const readOnly = step => ['look', 'console', 'network', 'screenshot', 'navigate', 'back', 'forward'].includes(step?.kind) || step?.kind === 'batch' && Array.isArray(step.actions) && step.actions.every(readOnly);
-        if (!readOnly(action)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
+        if (!readOnlyAction(action)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
       }
       this.checkControl(tab, action, actor, epoch);
-      tab.lastUsed = this.now(); const result = await this.perform(tab, action, actor, epoch); if (!['look', 'console', 'network', 'screenshot'].includes(action?.kind)) await this.persistTabs(sessionId); return result;
+      tab.lastUsed = this.now(); let result;
+      try { result = await this.perform(tab, action, actor, epoch); }
+      catch (error) { if (!error.candidates && !error.check) throw error; result = { error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await this.look(tab)) }; }
+      if (!['look', 'console', 'network', 'screenshot'].includes(action?.kind)) await this.persistTabs(sessionId); return result;
     });
     const job = Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => { if (started && epoch === (tab.controlEpoch || 0)) tab.controlEpoch = epoch + 1; reject(new Error('Browser action timed out; inspect the page before retrying.')); }, this.actionTimeoutMs); timer.unref?.(); })]);
     this.serial.set(tab.id, job); void job.finally(() => { clearTimeout(timer); if (this.serial.get(tab.id) === job) this.serial.delete(tab.id); }).catch(() => {}); return job;
@@ -209,37 +220,117 @@ export class BrowserManager {
     integer(budget, 0, 20000);
     if (tab.engine === 'bowser') { const result = await this.bowser.call('look', { budget }); return { text: result.content.filter(p => p.type === 'text').map(p => p.text).join('\n') }; }
     const result = await tab.page.evaluate(limit => {
-      const visible = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
-      const elements = [...document.querySelectorAll('a[href],button,input:not([type=hidden]),textarea,select,[role=button],[role=link],[contenteditable=true]')].filter(visible).slice(0, 300);
-      window.__helmBrowserElements = elements;
-      return { title: document.title, url: location.href, text: document.body?.innerText.slice(0, limit) || '', elements: elements.map((el, i) => ({ ref: i + 1, role: el.getAttribute('role') || el.tagName.toLowerCase(), name: (el.getAttribute('aria-label') || el.labels?.[0]?.innerText || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || '').trim().slice(0, 180) })) };
+      const visible = el => { const r = el.getBoundingClientRect(), s = el.ownerDocument.defaultView.getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert]'); };
+      const selector = 'a[href],button,input:not([type=hidden]),textarea,select,option,summary,label[for],[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menu],[role=menuitem],[role=option],[role=combobox],[role=switch],[role=textbox],[role=searchbox],[contenteditable=true],[onclick]';
+      const elements = [], roots = [], seen = new Set();
+      const visit = (root, inView = true) => {
+        if (seen.has(root)) return; seen.add(root); roots.push(root);
+        for (const el of root.querySelectorAll('*')) {
+          if (elements.length < 300 && (el.matches(selector) || typeof el.onclick === 'function') && visible(el)) elements.push({ el, inView });
+          if (el.shadowRoot && visible(el)) visit(el.shadowRoot, inView);
+          if (el.tagName === 'IFRAME' && visible(el)) { try { if (el.contentDocument) { const r = el.getBoundingClientRect(), w = el.ownerDocument.defaultView; visit(el.contentDocument, inView && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth); } } catch {} }
+        }
+      };
+      visit(document);
+      window.__helmBrowserElements = elements.map(({ el }) => el);
+      const prose = []; let left = limit;
+      for (const root of roots) { if (!left) break; const content = (root.body?.innerText || (root.nodeType === 11 ? [...root.childNodes].map(node => node.nodeType === 3 ? node.textContent : node.nodeType === 1 && visible(node) ? node.innerText || '' : '').join('\n') : '') || '').slice(0, left); prose.push(content); left -= content.length; }
+      return { title: document.title, url: location.href, text: prose.join('\n').slice(0, limit), elements: elements.map(({ el, inView }, i) => {
+        const tag = el.tagName.toLowerCase(), type = tag === 'input' ? el.type : 'text', r = el.getBoundingClientRect(), w = el.ownerDocument.defaultView;
+        const role = el.getAttribute('role') || (tag === 'input' ? ({ checkbox: 'checkbox', radio: 'radio', button: 'button', submit: 'button', reset: 'button', file: 'file', search: 'searchbox' }[type] || 'textbox') : tag === 'a' ? 'link' : tag === 'select' ? 'combobox' : tag === 'textarea' || el.isContentEditable ? 'textbox' : tag);
+        const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => el.getRootNode().getElementById?.(id)?.textContent || '').join(' ').trim();
+        const name = (el.getAttribute('aria-label') || labelled || el.labels?.[0]?.innerText || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || (['submit', 'button', 'reset'].includes(type) ? el.value : '') || '').trim().slice(0, 180);
+        const state = {};
+        if (el.disabled || el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') state.disabled = true;
+        if (['checkbox', 'radio', 'switch'].includes(role)) state.checked = el.getAttribute('aria-checked') === 'mixed' ? 'mixed' : el.hasAttribute('aria-checked') ? el.getAttribute('aria-checked') === 'true' : !!el.checked;
+        if (el.hasAttribute('aria-expanded') || tag === 'summary') state.expanded = tag === 'summary' ? !!el.parentElement?.open : el.getAttribute('aria-expanded') === 'true';
+        if (el.hasAttribute('aria-selected')) state.selected = el.getAttribute('aria-selected') === 'true';
+        if (el.hasAttribute('aria-current')) state.current = el.getAttribute('aria-current');
+        if (['input', 'textarea', 'select'].includes(tag) && type !== 'password' && type !== 'file') state.value = String(el.value ?? '').slice(0, 180);
+        return { ref: i + 1, role, name, ...state, inViewport: inView && r.bottom > 0 && r.right > 0 && r.top < w.innerHeight && r.left < w.innerWidth };
+      }) };
     }, budget);
     tab.title = result.title;
-    return { text: `${result.title}\n${result.url}\n${result.text}\n\n${result.elements.map(e => `[${e.ref}] ${e.role} ${JSON.stringify(e.name)}`).join('\n')}`, elements: result.elements };
+    return { text: `${result.title}\n${result.url}\n${result.text}\n\n${result.elements.map(e => `[${e.ref}] ${e.role} ${JSON.stringify(e.name)}${e.disabled ? ' disabled' : ''}${e.checked != null ? ` checked=${e.checked}` : ''}${e.expanded != null ? ` expanded=${e.expanded}` : ''}${e.selected != null ? ` selected=${e.selected}` : ''}${e.current ? ` current=${e.current}` : ''}${e.value != null ? ` value=${JSON.stringify(e.value)}` : ''}${!e.inViewport ? ' offscreen' : ''}`).join('\n')}`, elements: result.elements };
   }
   async target(tab, action) {
-    if (action.ref != null) { integer(action.ref, 1, 300); const handle = await tab.page.evaluateHandle(ref => window.__helmBrowserElements?.[ref - 1], action.ref); const element = handle.asElement(); if (!element) { await handle.dispose(); throw new Error('element reference expired; look at the page again'); } return element; }
+    if (action.ref != null) {
+      integer(action.ref, 1, 300); const handle = await tab.page.evaluateHandle(ref => window.__helmBrowserElements?.[ref - 1], action.ref), element = handle.asElement();
+      if (!element) { await handle.dispose(); throw new Error('element reference expired; look at the page again'); }
+      const frame = await element.ownerFrame();
+      if (frame && frame !== tab.page.mainFrame()) { try { return (await frame.evaluateHandle(el => el, element)).asElement(); } finally { await handle.dispose(); } }
+      return element;
+    }
     if (action.selector) return tab.page.locator(text(action.selector, 2000)).first();
     if (action.role) return tab.page.getByRole(text(action.role, 40), { name: text(action.name, 500), exact: true });
     if (action.name) return tab.page.getByText(text(action.name, 500), { exact: true });
-    throw new Error('choose an element ref, selector, role/name, or x/y coordinates');
+    if (action.target != null) {
+      if (typeof action.target === 'number' || typeof action.target === 'string' && /^\d+$/.test(action.target.trim())) return this.target(tab, { ref: Number(action.target) });
+      const { elements } = await this.look(tab, 0), chosen = resolveTarget(text(action.target, 500), elements, action.kind);
+      return this.target(tab, { ref: chosen.ref });
+    }
+    throw new Error('choose a target, element ref, selector, role/name, or x/y coordinates');
   }
+  async settle(tab) {
+    if (tab.engine !== 'chromium' || !tab.fetching || tab.dialog) return;
+    const deadline = Date.now() + 3000;
+    await tab.page.waitForLoadState('load', { timeout: 3000 }).catch(() => {});
+    if (tab.dialog || Date.now() >= deadline) return;
+    await new Promise(resolve => {
+      let timer;
+      const wake = () => {
+        clearTimeout(timer);
+        const remaining = deadline - Date.now(), quiet = 150 - (Date.now() - tab.quietAt);
+        if (tab.dialog || remaining <= 0 || !tab.fetching.size && quiet <= 0) { tab.settleWaiters.delete(wake); resolve(); return; }
+        timer = setTimeout(wake, Math.min(remaining, tab.fetching.size ? remaining : Math.max(1, quiet)));
+      };
+      (tab.settleWaiters ||= new Set()).add(wake); wake();
+    });
+  }
+  async listFlows(sessionId) { this.owner(sessionId); return this.flows.list(); }
+  async runFlow(sessionId, tabId, name, values) { this.owner(sessionId); const flow = await this.flows.load(name); return this.run(sessionId, tabId, { actions: flow.actions, with: values }); }
   checkControl(tab, action, actor, epoch = tab.controlEpoch || 0) {
     if (['look', 'console', 'network', 'screenshot'].includes(action?.kind)) return;
     if (epoch !== (tab.controlEpoch || 0)) throw new Error('Browser control changed; inspect the tab before continuing.');
     if (actor !== 'agent' && tab.control !== actor) throw new Error('Take control before changing this browser tab.');
     if (tab.control && tab.control !== actor) throw new Error('You have control of this tab. Release control to let the agent continue.');
   }
-  async perform(tab, action, actor = 'agent', epoch = tab.controlEpoch || 0) {
-    if (!action || typeof action !== 'object') throw new Error('browser action must be an object');
+  async perform(tab, action, actor = 'agent', epoch = tab.controlEpoch || 0, inBatch = false) {
+    action = normalizeAction(action);
     const kind = action.kind;
     if (kind === 'look') return { tab: this.metadata(tab), ...(await this.look(tab, action.budget ?? 6000)) };
     if (kind === 'console') return { entries: tab.console };
     if (kind === 'network') return { entries: tab.network };
     if (kind === 'screenshot') return this.capture(tab, action);
     if (kind === 'batch') {
-      if (!Array.isArray(action.actions) || action.actions.length > 40 || action.actions.some(a => a.kind === 'batch')) throw new Error('a batch holds at most 40 nonnested actions');
-      const results = []; for (const step of action.actions) { try { this.checkControl(tab, step, actor, epoch); results.push(await this.perform(tab, step, actor, epoch)); } catch (error) { return { results, failedAt: results.length, error: error.message, ...(await this.look(tab)) }; } } return { results, ...(await this.look(tab)) };
+      if (!Array.isArray(action.actions) || action.actions.length > 40 || action.actions.some(a => normalizeAction(a).kind === 'batch')) throw new Error('a batch holds at most 40 nonnested actions');
+      integer(action.budget ?? 6000, 0, 20000);
+      if (action.save_as != null) validateFlow(action.actions, action.save_as, action.note);
+      const actions = fillParams(action.actions, action.with ?? {}), results = [];
+      for (const raw of actions) { try { const step = normalizeAction(raw); this.checkControl(tab, step, actor, epoch); results.push(await this.perform(tab, step, actor, epoch, true)); } catch (error) { return { results, failedAt: results.length, error: error.message, ...(error.candidates ? { candidates: error.candidates } : {}), ...(error.check ? { check: error.check } : {}), ...(await this.look(tab, action.budget ?? 6000)) }; } }
+      const result = { results, ...(await this.look(tab, action.budget ?? 6000)) };
+      if (action.save_as != null) { try { if (await this.flows.save(action.save_as, action.actions, action.note, result)) result.saved = action.save_as; } catch (error) { result.saveError = `Steps succeeded, but the flow could not be saved: ${error.message}`; } }
+      return result;
+    }
+    if (kind === 'check') {
+      if (tab.engine === 'bowser') throw new Error('deterministic checks need a Chromium tab');
+      if (action.expect != null && typeof action.expect !== 'boolean') throw new Error('check expect must be true or false');
+      const wanted = text(action.check, 2000);
+      await this.settle(tab);
+      const view = await this.look(tab, 20000);
+      let found = await tab.page.evaluate(value => {
+        const visible = el => { const r = el.getBoundingClientRect(), s = el.ownerDocument.defaultView.getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.closest('[hidden],[inert]'); };
+        const visit = root => {
+          if ((root.body?.innerText || (root.nodeType === 11 ? [...root.childNodes].map(node => node.nodeType === 3 ? node.textContent : node.nodeType === 1 && visible(node) ? node.innerText || '' : '').join('\n') : '') || '').includes(value)) return true;
+          for (const el of root.querySelectorAll('*')) { if (el.shadowRoot && visible(el) && visit(el.shadowRoot)) return true; if (el.tagName === 'IFRAME' && visible(el)) { try { if (el.contentDocument && visit(el.contentDocument)) return true; } catch {} } }
+          return false;
+        };
+        return visit(document);
+      }, wanted);
+      if (!found) { try { resolveTarget(wanted, view.elements); found = true; } catch (error) { if (error.candidates?.[0]?.score) throw error; } }
+      const check = { check: wanted, found, expect: action.expect ?? true, pass: found === (action.expect ?? true) };
+      if (!check.pass) { const error = new Error(`check failed: ${JSON.stringify(wanted)} expected ${check.expect}`); error.check = check; throw error; }
+      return { ...check, ...(!inBatch ? view : {}) };
     }
     if (tab.engine === 'bowser') return this.bowserAction(tab, action);
     const page = tab.page;
@@ -251,7 +342,7 @@ export class BrowserManager {
       if (action.x != null) { const { width, height } = page.viewportSize(); integer(action.x, 0, width); integer(action.y, 0, height); kind === 'click' ? await page.mouse.click(action.x, action.y, { button: ['left', 'right', 'middle'].includes(action.button) ? action.button : 'left', clickCount: action.double ? 2 : 1 }) : await page.mouse.move(action.x, action.y); }
       else { const target = await this.target(tab, action); try { kind === 'click' ? await target.click({ button: action.button || 'left', clickCount: action.double ? 2 : 1 }) : await target.hover(); } finally { if (target.dispose) await target.dispose(); } }
     } else if (kind === 'drag') { const { width, height } = page.viewportSize(); for (const field of ['fromX', 'toX']) integer(action[field], 0, width); for (const field of ['fromY', 'toY']) integer(action[field], 0, height); await page.mouse.move(action.fromX, action.fromY); await page.mouse.down(); try { await page.mouse.move(action.toX, action.toY, { steps: 6 }); } finally { await page.mouse.up(); } }
-    else if (kind === 'type') { const value = text(action.text); if (action.ref || action.selector || action.name || action.role) { const target = await this.target(tab, action); try { await target.fill(value); } finally { if (target.dispose) await target.dispose(); } } else await page.keyboard.insertText(value); }
+    else if (kind === 'type') { const value = text(action.text); if (action.ref || action.selector || action.name || action.role || action.target != null) { const target = await this.target(tab, action); try { if (action.append) { await target.focus(); await page.keyboard.insertText(value); } else await target.fill(value); if (action.enter) await target.press('Enter'); } finally { if (target.dispose) await target.dispose(); } } else { if (action.clear) { await page.keyboard.press('ControlOrMeta+a'); await page.keyboard.press('Backspace'); } await page.keyboard.insertText(value); if (action.enter) await page.keyboard.press('Enter'); } }
     else if (kind === 'key') await page.keyboard.press(text(action.key, 100));
     else if (kind === 'clipboard') {
       const origin = new URL(page.url()).origin;
@@ -259,24 +350,25 @@ export class BrowserManager {
       try { return { text: await page.evaluate(() => navigator.clipboard.readText()) }; }
       finally { await page.context().clearPermissions(); }
     }
-    else if (kind === 'scroll') await page.mouse.wheel(integer(action.dx ?? 0, -20000, 20000), integer(action.dy ?? 500, -20000, 20000));
-    else if (kind === 'select') { const target = await this.target(tab, action); try { await target.selectOption(action.values || text(action.value, 1000)); } finally { if (target.dispose) await target.dispose(); } }
+    else if (kind === 'scroll') await page.mouse.wheel(integer(action.dx ?? 0, -20000, 20000), integer(action.direction ? Math.round(page.viewportSize().height * (action.pages ?? 1) * (action.direction === 'up' ? -1 : 1)) : action.dy ?? 500, -20000, 20000));
+    else if (kind === 'select') { const target = await this.target(tab, action); try { await target.selectOption(action.option != null ? { label: text(action.option, 1000) } : action.values || text(action.value, 1000)); } finally { if (target.dispose) await target.dispose(); } }
     else if (kind === 'upload') {
       const files = await this.uploads(tab, action);
       let target; try { target = await this.target(tab, action); await target.setInputFiles(files.paths); } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
-    } else if (kind === 'evaluate') return { value: await page.evaluate(text(action.script, 20000)) };
+    } else if (kind === 'evaluate') { const value = await page.evaluate(text(action.script, 20000)); await this.settle(tab); return { value, ...(!inBatch ? await this.look(tab) : {}) }; }
     else if (kind === 'wait') { integer(action.timeout ?? 10000, 1, 30000); if (action.selector) await page.locator(text(action.selector, 2000)).waitFor({ state: action.state || 'visible', timeout: action.timeout ?? 10000 }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: action.timeout ?? 10000 }); }
     else if (kind === 'resize') { await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) }); await this.clearStream(tab); }
     else if (kind === 'dialog') { if (!tab.dialog) throw new Error('no dialog is open'); const dialog = tab.dialog; tab.dialog = null; action.accept ? await dialog.accept(action.text ?? '') : await dialog.dismiss(); }
     else throw new Error(`unknown browser action: ${kind}`);
-    tab.title = await page.title().catch(() => tab.title); return { tab: this.metadata(tab) };
+    if (['navigate', 'back', 'forward', 'reload', 'click', 'type', 'key', 'select', 'hover', 'scroll', 'drag', 'resize', 'upload', 'dialog', 'wait'].includes(kind)) await this.settle(tab);
+    tab.title = await page.title().catch(() => tab.title); return { tab: this.metadata(tab), ...(!inBatch ? await this.look(tab) : {}) };
   }
   async bowserAction(tab, action) {
-    const kind = action.kind, target = action.ref || action.name || action.selector;
+    const kind = action.kind, target = action.ref || action.name || action.selector || action.target;
     if (kind === 'bowser') { if (!['act', 'look', 'eval', 'flows', 'tabs', 'screenshot'].includes(action.tool)) throw new Error('unknown Bowser tool'); return this.bowser.call(action.tool, action.args || {}); }
     const actions = kind === 'navigate' ? [{ goto: httpUrl(action.url) }] : kind === 'click' ? [{ click: target, double: !!action.double, button: action.button || 'left' }]
-      : kind === 'hover' ? [{ hover: target }] : kind === 'type' ? [{ type: text(action.text), ...(target ? { into: target, clear: true } : {}) }] : kind === 'key' ? [{ key: text(action.key, 100) }]
-      : kind === 'scroll' ? [{ scroll: (action.dy || 0) < 0 ? 'up' : 'down', pages: Math.max(0.1, Math.abs(action.dy || 500) / 800) }] : kind === 'select' ? [{ select: target, option: action.value }]
+      : kind === 'hover' ? [{ hover: target }] : kind === 'type' ? [{ type: text(action.text), ...(target ? { into: target, clear: !action.append } : {}), ...(action.enter ? { enter: true } : {}) }] : kind === 'key' ? [{ key: text(action.key, 100) }]
+      : kind === 'scroll' ? [{ scroll: action.direction || ((action.dy || 0) < 0 ? 'up' : 'down'), pages: action.pages ?? Math.max(0.1, Math.abs(action.dy || 500) / 800) }] : kind === 'select' ? [{ select: target, option: action.option ?? action.value }]
       : kind === 'upload' ? [{ upload: target, paths: action.files }] : kind === 'back' ? [{ back: true }] : kind === 'wait' ? [{ wait_for: action.text, timeout: (action.timeout || 10000) / 1000 }]
       : kind === 'dialog' ? [{ dialog: action.accept ? 'accept' : 'dismiss', text: action.text }] : kind === 'reload' ? [{ key: 'Control+r' }] : null;
     if (kind === 'evaluate') { const result = await this.bowser.call('eval', { js: action.script }); return { text: result.content.filter(p => p.type === 'text').map(p => p.text).join('\n') }; }
@@ -399,4 +491,4 @@ export class BrowserManager {
   async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } for (const tab of this.tabs.values()) await this.clearStream(tab); this.bowser.stop(); await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
 }
 
-export function browserNote() { return '[Helm browser: Agents and the owner can use the same browser tabs. Run helm browser open <url> inside this chat (isolated Chromium), or --engine bowser to reuse Bowser Computer Use on machines where installed. helm browser tabs lists your tabs. helm browser look <tab> returns text and numbered elements without screenshots. helm browser act <tab> \'{"kind":"click","ref":1}\' drives them; use kind batch with actions for several steps. Other kinds: navigate/url, type/text/ref, key/key, scroll/dy, hover/ref, select/ref/value, upload/ref/files (host paths), evaluate/script, wait/selector, resize/width/height, dialog/accept, console, network, back, forward, reload. helm browser screenshot <tab> --output <path> captures when visuals matter; close <tab> releases it. Browser tabs run on this machine: localhost reaches your dev servers. Use text views and batch actions to keep context small. The owner can view tabs and take control from Thread details → Browser; wait if they have control. Respect the request when browsing authenticated sites.]'; }
+export function browserNote() { return '[Helm browser: Agents and the owner can use the same browser tabs. Run helm browser open <url> inside this chat (isolated Chromium), or --engine bowser to reuse Bowser Computer Use on machines where installed. helm browser tabs lists your tabs. helm browser look <tab> returns text and numbered elements without screenshots. Plan the whole task as one batch; prefer direct URLs and plain targets: helm browser act <tab> \'{"actions":[{"click":"the Save button"},{"check":"Saved"}]}\'. Checks use literal page text or targets, not questions. Read the returned settled page; failed batches stop with candidates and element numbers. Save repeating tasks with actions using {{param}}, with values, save_as and note; helm browser flows lists them, helm browser run <tab> <name> key=value replays them. Existing kind/ref, selector, role/name and coordinate actions still work; kinds include key, scroll, hover, select, upload/files, evaluate/script, wait/selector, resize, dialog, console, network, back, forward and reload. helm browser screenshot <tab> --output <path> captures when visuals matter; close <tab> releases it. Browser tabs run on this machine: localhost reaches your dev servers. Use text views and batch actions to keep context small. The owner can view tabs and take control from Thread details → Browser; wait if they have control. Respect the request when browsing authenticated sites.]'; }

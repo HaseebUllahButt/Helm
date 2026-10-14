@@ -24,22 +24,59 @@ navigation and control available. Preview quality never resizes the actual
 page or changes agent actions. When several people view the same tab, the
 slowest visual viewer sets the shared capture quality.
 
-Agents use the same tabs through the CLI:
+Agents use the same tabs through the CLI. Plan the whole task as one batch,
+prefer direct URLs, name controls plainly, and check steps that must work:
 
 ```sh
 helm browser open http://localhost:3000
-helm browser tabs
-helm browser look <tab-id>
-helm browser act <tab-id> '{"kind":"batch","actions":[{"kind":"type","selector":"#name","text":"Ada"},{"kind":"click","role":"button","name":"Save"}]}'
+helm browser act <tab-id> '{"actions":[{"type":"Ada","into":"the Name box","clear":true},{"click":"the Save button"},{"check":"Saved","expect":true}]}'
 helm browser screenshot <tab-id> --output /tmp/page.jpg
 helm browser close <tab-id>
 ```
 
-Use `--session <thread-id>` outside an agent chat. Element numbers returned by
-`look` can be used as `ref`; look again after a page changes. Other actions
-include hover, drag, key, scroll, select, upload, evaluate, wait, resize,
-dialog, back, forward and reload. A failed batch stops at its failed step and
-returns the current page; inspect it before submitting the remaining steps.
+Each action returns the settled page, including numbered controls and their
+state. Use that reply instead of looking again. Text budgets still limit page
+prose (`budget: 0` keeps controls only); at most 300 controls are listed.
+Password values are excluded. Same-origin frames and open shadow roots are
+included. A plain target matches names and role words deterministically;
+Helm makes no model calls to choose a control. A missing or ambiguous target
+stops the batch and returns likely candidates with element numbers. Submit
+only the remaining steps with a corrected target or `ref`.
+
+Bowser-style steps work in a batch or alone: `goto`, `click`, `type` with
+`into`, `clear` and `enter`, `key`, `select` with `option` (the option's label),
+`hover`, `scroll` with `up`/`down` and `pages`, `wait_for`, `back`, and `check`.
+Typing appends by default; `clear: true` replaces the field. Checks match
+literal, case-sensitive page text or a named control; they do not answer
+questions. `expect` defaults to `true`; a failed check stops the batch and
+returns its pass/fail result. Navigation and data requests settle before the
+reply: load completion and a 150 ms quiet period for fetch/XHR, capped at
+three seconds. A quiet static page incurs no fixed action delay. Long-lived
+requests can reach the cap; use `wait_for` for content that needs longer.
+
+The existing `kind` actions, `ref`, CSS `selector`, `role` plus exact `name`,
+exact text `name`, and coordinates still work. Other kinds include drag,
+upload, evaluate, wait, resize, dialog, console, network, forward and reload.
+Use `--session <thread-id>` outside an agent chat. Read-only agents can read,
+navigate, wait and check; batches containing a mutation are rejected before
+any step. Human control still stops agent actions and cancels later batch
+steps.
+
+Save a repeating task from its successful run, without repeating it:
+
+```sh
+helm browser act <tab-id> '{"actions":[{"type":"{{name}}","into":"the Name box","clear":true},{"click":"the Save button"},{"check":"Saved"}],"with":{"name":"Ada"},"save_as":"save-name","note":"Save a name"}'
+helm browser flows
+helm browser run <tab-id> save-name name=Grace
+```
+
+Flows are saved only if every step succeeds. Their original parameter
+placeholders are kept in private (0600) files at
+`~/.helm/browser/flows/<name>.json`, shared on that machine. Names use
+lowercase letters, digits, `-` and `_`, up to 64 characters. Every parameter
+must be supplied when running a flow. Prefer names or selectors over element
+numbers in saved flows, since numbers can change on another visit.
+
 For uploads, agents pass `files` containing host file paths. The viewer can
 send up to ten files and 8 MiB total through Helm. Downloads up to 8 MiB can
 be saved in the viewer; larger files up to 128 MiB remain on the host while
