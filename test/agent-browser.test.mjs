@@ -304,11 +304,11 @@ test('the address bar takes a host, a local dev server or words to search', asyn
   assert.equal(httpUrl('localhost:3000'), 'http://localhost:3000/', 'dev servers are plain http');
   assert.equal(httpUrl('192.168.1.5:5173/x'), 'http://192.168.1.5:5173/x');
   assert.equal(httpUrl('vm:8787'), 'http://vm:8787/');
-  assert.equal(httpUrl('how do cookies work'), 'https://duckduckgo.com/?q=how%20do%20cookies%20work');
-  assert.equal(httpUrl('helm'), 'https://duckduckgo.com/?q=helm');
+  assert.equal(httpUrl('how do cookies work'), 'https://www.bing.com/search?q=how%20do%20cookies%20work');
+  assert.equal(httpUrl('helm'), 'https://www.bing.com/search?q=helm');
   assert.equal(httpUrl('http://example.com'), 'http://example.com/');
   assert.throws(() => httpUrl('file:///etc/passwd'), /HTTP or HTTPS/);
-  assert.match(httpUrl('javascript:alert(1)'), /^https:\/\/duckduckgo\.com\//, 'a script address is only ever searched for');
+  assert.match(httpUrl('javascript:alert(1)'), /^https:\/\/www\.bing\.com\//, 'a script address is only ever searched for');
 });
 
 test('a tab says it is loading from the main page request until the page loads', async () => {

@@ -13,14 +13,15 @@ const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > 
 const text = (value, max = 20000) => { if (typeof value !== 'string' || value.length > max) throw new Error(`expected text up to ${max} characters`); return value; };
 const integer = (value, min, max) => { if (!Number.isInteger(value) || value < min || value > max) throw new Error(`expected integer ${min}–${max}`); return value; };
 // What a person types in an address bar: a full address, a bare host (local
-// dev servers are plain http), or words to search for.
+// dev servers are plain http), or words to search for. Bing, because
+// DuckDuckGo and Google turn a headless browser away as a robot.
 export const httpUrl = value => {
   const raw = String(value).trim();
   let address = raw;
   if (!raw.includes('://') && !raw.startsWith('about:')) {
     const local = /^(localhost|127(\.\d+){3}|0\.0\.0\.0|\[::1\]|10(\.\d+){3}|192\.168(\.\d+){2}|172\.(1[6-9]|2\d|3[01])(\.\d+){2}|[\w-]+\.local)(:\d+)?([/?#]|$)/i.test(raw) || /^[\w-]+:\d+([/?#]|$)/.test(raw);
     const host = /^[^\s/?#]+\.[a-z][a-z0-9-]*(:\d+)?([/?#]\S*)?$/i.test(raw) || /^[^\s/?#]+:\d+([/?#]\S*)?$/.test(raw);
-    address = local ? `http://${raw}` : host ? `https://${raw}` : `https://duckduckgo.com/?q=${encodeURIComponent(raw)}`;
+    address = local ? `http://${raw}` : host ? `https://${raw}` : `https://www.bing.com/search?q=${encodeURIComponent(raw)}`;
   }
   const u = new URL(address); if (!['http:', 'https:'].includes(u.protocol) && u.href !== 'about:blank') throw new Error('use an HTTP or HTTPS browser address'); return u.href;
 };
