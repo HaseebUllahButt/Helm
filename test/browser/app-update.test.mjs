@@ -64,6 +64,30 @@ test('an arriving update waits while someone is typing, then reloads by itself',
   } finally { await browser.close(); }
 });
 
+test('a newer build found right after opening loads at once, even with a panel open', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { AppUpdate } from './apps/web/src/AppUpdate';
+    window.reloads = 0;
+    createRoot(document.getElementById('root')).render(<AppUpdate reload={() => window.reloads++} />);
+  `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
+  const browser = await chromium.launch({ headless: true,
+    ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
+  try {
+    const page = await browser.newPage();
+    await page.route('http://helm-test/**', (route) => route.fulfill(route.request().url().endsWith('/api/version')
+      ? { contentType: 'application/json', body: JSON.stringify({ build: 'index-new.js' }) }
+      : route.request().url().endsWith('.js') ? { contentType: 'text/javascript', body: '' }
+        : { contentType: 'text/html', body: '<div role="dialog">Agents</div><div id="root"></div><script type="module" src="/assets/index-old.js"></script>' }));
+    await page.goto('http://helm-test/');
+    await page.mouse.click(5, 5);
+    await page.addScriptTag({ content: bundle.outputFiles[0].text });
+    // The default 20s quiet wait would still be running; the old screen goes now.
+    await page.waitForFunction(() => window.reloads === 1, null, { timeout: 3_000 });
+  } finally { await browser.close(); }
+});
+
 test('an installed worker loads the new build by itself despite a slow network, without clearing pairing', async context => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';

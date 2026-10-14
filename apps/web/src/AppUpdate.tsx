@@ -3,6 +3,13 @@ import { reloadApp } from './reload';
 
 /** How long nobody has typed, tapped or scrolled before a reload is safe. */
 const QUIET_MS = 20_000;
+/**
+ * Just opened: a reload over a slow link can be answered with the saved old
+ * build, and the newer one is only noticed once the page is up. Nothing has
+ * happened on it yet, so switching straight away loses nothing - waiting for
+ * a quiet moment meant opening a panel at once kept the old screen showing.
+ */
+const JUST_OPENED_MS = 15_000;
 
 /**
  * A new web build reloads the page by itself, at a moment nobody will feel:
@@ -10,20 +17,21 @@ const QUIET_MS = 20_000;
  * owner has stopped touching it and is not in the middle of typing or a
  * dialog. Drafts are saved as they are typed, so nothing is lost either way.
  */
-export function AppUpdate({ reload = reloadApp, quietMs = QUIET_MS }: { reload?: () => void; quietMs?: number }) {
+export function AppUpdate({ reload = reloadApp, quietMs = QUIET_MS, justOpenedMs = JUST_OPENED_MS }: { reload?: () => void; quietMs?: number; justOpenedMs?: number }) {
   useEffect(() => {
     let stopped = false;
     let checking = false;
     let ready = false;
     let lastTouch = Date.now();
-    const busy = () => {
+    const typing = () => {
       const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
-      const typing = !!el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable) && !!el.value;
-      return typing || !!document.querySelector('[role="dialog"], [aria-modal="true"]');
+      return !!el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable) && !!el.value;
     };
+    const busy = () => typing() || !!document.querySelector('[role="dialog"], [aria-modal="true"]');
     const maybeReload = () => {
       if (!ready || stopped) return;
-      if (document.hidden || (Date.now() - lastTouch >= quietMs && !busy())) { stopped = true; reload(); }
+      const justOpened = performance.now() < justOpenedMs && !typing();
+      if (document.hidden || justOpened || (Date.now() - lastTouch >= quietMs && !busy())) { stopped = true; reload(); }
     };
     const check = async () => {
       if (checking || ready) return;
@@ -55,6 +63,6 @@ export function AppUpdate({ reload = reloadApp, quietMs = QUIET_MS }: { reload?:
       window.removeEventListener('online', visible);
       window.removeEventListener('pageshow', visible);
     };
-  }, [reload, quietMs]);
+  }, [reload, quietMs, justOpenedMs]);
   return null;
 }
