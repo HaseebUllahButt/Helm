@@ -1365,14 +1365,15 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [runningNow, openSession]);
-  // Ctrl+` opens a terminal, as in VS Code (Ctrl on a Mac too: Cmd+` is the
-  // system's window switcher). From a chat it is that chat's folder; the same
-  // key in a terminal goes back to where you were. A terminal already open
-  // there is reused, so a running build or server is never cut off.
+  // Ctrl/Cmd+Shift+E opens a terminal, next to Shift+B for the browser (T is
+  // the browser's own "reopen tab" and cannot be taken). From a chat it is
+  // that chat's folder; the same key in a terminal goes back to where you
+  // were. A terminal already open there is reused, so a running build or
+  // server is never cut off.
   const terminalOpening = useRef(false);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.code !== 'Backquote' || !event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing
+      if (event.code !== 'KeyE' || !(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.isComposing
           || document.querySelector('[aria-modal="true"]')) return;
       event.preventDefault();
       event.stopPropagation();
