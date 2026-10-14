@@ -11,7 +11,8 @@ before(async () => {
     import { createRoot } from 'react-dom/client';
     import { Shell } from './apps/web/src/App';
     const token = 'helm1.' + btoa(JSON.stringify({net:'network',sub:'device'})) + '.test';
-    window.mount = (mode) => {
+    window.mount = (mode, failLists) => {
+      window.failLists = failLists ?? {};
       const envs = ['laptop','vm','offline'].map(id => ({id,name:id,online:id!=='offline',info:{}}));
       const base = {cwd:'/work/project',engine:'codex',profileId:'codex',driver:'codex',alive:true,status:'working',turns:1};
       const sessions = {
@@ -51,6 +52,7 @@ before(async () => {
         subscribe:()=>{},watchLatency:()=>()=>{},openDirect:async()=>{},route:async()=>null,
         rpc:async(env,method,params)=>{
           window.calls.push({env,method,params});
+          if(method==='session.list' && window.failLists?.[env] > 0){window.failLists[env]--;throw new Error('timed out');}
           if(method==='session.list') return {sessions:sessions[env].map(s => ({...s}))};
           if(method==='session.attach') return {pty:true,text:'Ready'};
           if(method==='session.messages') return {messages:[]};
@@ -70,7 +72,7 @@ before(async () => {
 });
 after(async () => browser?.close());
 
-async function pageFor(t, mode) {
+async function pageFor(t, mode, failLists) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.setDefaultTimeout(5000);
   t.after(() => page.close());
@@ -81,7 +83,7 @@ async function pageFor(t, mode) {
   await page.route('http://helm-test/**', route => route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' }));
   await page.goto('http://helm-test/');
   await page.addScriptTag({ content: script });
-  await page.evaluate(mode => window.mount(mode), mode);
+  await page.evaluate(([mode, failLists]) => window.mount(mode, failLists), [mode, failLists]);
   await page.locator('.sidebar').waitFor();
   await page.waitForFunction(() => window.calls.some(c => c.env === 'vm' && c.method === 'session.list'));
   return page;
@@ -174,4 +176,10 @@ test('a known thread or a helper changing is drawn from its update, without fetc
   const afterArchive = await lists();
   await page.evaluate(() => window.add('laptop', { cwd:'/work/project', engine:'codex', driver:'codex', id:'fresh', title:'Fresh', status:'working', updatedAt:300 }));
   await page.waitForFunction(n => window.calls.filter(c => c.env === 'laptop' && c.method === 'session.list').length > n, afterArchive);
+});
+
+test('a chat list that fails right after a restart is asked for again, with no update needed', async t => {
+  const page = await pageFor(t, undefined, { laptop: 3 });
+  await page.waitForFunction(() => window.calls.filter(c => c.env === 'laptop' && c.method === 'session.list').length >= 4, null, { timeout: 12_000 });
+  assert.equal(await page.evaluate(() => window.failLists.laptop), 0);
 });

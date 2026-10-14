@@ -312,6 +312,17 @@ test('a slow device copy that turns out empty waits for the history already aske
   assert.equal(await page.evaluate(() => window.tails), 1);
 });
 
+test('the saved chat list keeps how full each chat is', async t => {
+  const { page } = await pageFor(t);
+  const context = await page.evaluate(async () => {
+    await window.seed();
+    const context = { used: 221902, window: 383000, model: 'claude-opus-5-5', full: 1000000, at: 1 };
+    window.workspace.saveWorkspace(window.scope, { sessions: { machine: [{ ...window.session('ctx'), context }] } });
+    return window.workspace.loadWorkspace(window.scope).sessions.machine.find(s => s.id === 'ctx')?.context;
+  });
+  assert.deepEqual(context, { used: 221902, window: 383000, model: 'claude-opus-5-5', full: 1000000, at: 1 });
+});
+
 test('workspace cache separates memberships and omits provider configuration', async t => {
   const { page } = await pageFor(t);
   const result = await page.evaluate(async () => {

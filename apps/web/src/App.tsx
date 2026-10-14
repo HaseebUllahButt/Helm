@@ -708,6 +708,7 @@ function Shell({ client, conn, onSignOut }: {
 
   /** One trailing session.list per machine per burst of updates. */
   const relist = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const listRetries = useRef<Record<string, number>>({});
   /**
    * Updates that landed while a list was on its way. The list can have been
    * read before them - on the VPN a round trip is over half a second - so
@@ -737,13 +738,23 @@ function Shell({ client, conn, onSignOut }: {
       .then((r) => {
         if (!active.current) return;
         liveListsSeen.current.add(envId);
+        delete listRetries.current[envId];
         const list = pushed.size
           ? r.sessions.map((x) => { const up = pushed.get(x.id); return up ? { ...x, ...up, recovery: up.recovery } : x; })
           : r.sessions;
         setSessions((s) => ({ ...s, [envId]: list }));
         saveWorkspace(scope, { sessions: { [envId]: list } });
       })
-      .catch(() => {})
+      .catch(() => {
+        // Until one list has arrived, the screen is the saved copy, which
+        // updates alone never complete: keep asking (a machine that just
+        // restarted can take a while to answer).
+        const tries = listRetries.current[envId] = (listRetries.current[envId] ?? 0) + 1;
+        if (!liveListsSeen.current.has(envId) && tries <= 20) {
+          clearTimeout(relist.current[envId]);
+          relist.current[envId] = setTimeout(() => loadSessions(envId), 3000);
+        }
+      })
       .finally(() => {
         sessionRequests.current.delete(envId);
         if (pushedDuringList.current[envId] === pushed) delete pushedDuringList.current[envId];
@@ -784,9 +795,10 @@ function Shell({ client, conn, onSignOut }: {
         // ended, moved or was archived. A known thread changing, or a helper
         // (shown under its lead, which sends its own update), is drawn from
         // the update alone - busy helpers used to cost a full list each.
+        // Until a live list has arrived, every update still asks for one.
         const known = up?.id ? sessionsNow.current[e]?.find((x) => x.id === up.id) : undefined;
         const helper = !!up?.delegation?.parentId && !up.unhomed;
-        const changesList = !up?.id || !!up.movedTo || up.status === 'exited'
+        const changesList = !liveListsSeen.current.has(e) || !up?.id || !!up.movedTo || up.status === 'exited'
           || (known ? !!known.archived !== !!up.archived : !helper);
         if (changesList) {
           clearTimeout(relist.current[e]);
