@@ -6,8 +6,10 @@ import { Route } from '../Route';
 import { draftChat, onStartingChat, retryChat, sendWhenReady, startingChat, unsendChat } from '../startingChats';
 import { Composer } from './Composer';
 import { EmptyChat, useDockLift } from './EmptyChat';
+import { LimitsLine } from './LimitsLine';
 import { Transcript } from './Transcript';
 import { apply, emptyLog } from './types';
+import { useAccountLimits } from './useAccountLimits';
 
 /**
  * A new chat in the second or so before its agent is up: the chat itself,
@@ -40,6 +42,8 @@ export function StartingChatView({ client, env, startId, onBack }: {
   }, [message]);
 
   const dockAnchor = useDockLift(!!chat && !message);
+  // The live chat's row under the composer, here already, so the box does not shift when it opens.
+  const limits = useAccountLimits(client, env.id, chat?.engine ?? '', chat?.profileId);
 
   if (!chat) {
     return (
@@ -94,7 +98,7 @@ export function StartingChatView({ client, env, startId, onBack }: {
       {message && !failed && <p className="starting-note" role="status"><Icon name="think" size={12} className="tspin" />Sends as soon as {chat.agent} is ready.</p>}
       <Composer
         draft={draft} setDraft={setDraft} engine={chat.engine} keys={false}
-        canAttach={false}
+        canAttach={false} statusLine={<LimitsLine windows={limits} account={chat.profileId} />}
         onSend={() => { if (draft.trim()) sendWhenReady(startId, draft); }}
       />
     </>

@@ -8,15 +8,17 @@ const folderName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
  * The first message sends the composer down to its usual dock (see
  * useDockLift) and this goes away.
  */
-export function EmptyChat({ cwd, quick, brain, machine, agent, model, note }: {
+export function EmptyChat({ cwd, quick, brain, machine, agent, model, note, still }: {
   cwd?: string; quick?: boolean; brain?: boolean;
   machine: string; agent: string; model?: string;
   /** Said under the question instead of the model, such as that the agent is still starting. */
   note?: React.ReactNode;
+  /** Already on screen a moment ago (its starting placeholder showed it), so it does not fade in again. */
+  still?: boolean;
 }) {
   const folder = !quick && !brain && cwd ? folderName(cwd) : '';
   return (
-    <div className="empty-chat" data-empty-chat>
+    <div className={still ? 'empty-chat still' : 'empty-chat'} data-empty-chat>
       <h2 className="empty-chat-title">
         {folder
           ? <>What should we build in <span className="empty-chat-folder" title={cwd}>{folder}</span>?</>

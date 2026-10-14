@@ -14,6 +14,7 @@ import { useGitStatus } from './Changes';
 import { expandPastes } from './pasteStore';
 import { Confirm, TextPrompt, Sheet } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
+import { loadedChat, startedEmpty } from '../startingChats';
 import { useDraftImages } from './useDraftImages';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
 import { messageDelivery } from '@helm/protocol/message-delivery';
@@ -74,6 +75,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   onOpenMachineSession?: (machineId: string, session: Session) => void;
 }) {
   const { log, error: logError, syncing, earlier, loadingEarlier, loadEarlier, refresh } = useSessionLog(client, env.id, session.id);
+  // Just up from its placeholder with nothing said: it is empty for certain,
+  // so the empty page it already showed stays put while the history loads.
+  const [cameUpEmpty] = useState(() => startedEmpty(session.id));
+  useEffect(() => { if (log.loaded) loadedChat(session.id); }, [log.loaded, session.id]);
+  const loaded = log.loaded || cameUpEmpty;
   const readVisual = useCallback((ref: string) => client.rpc<{ html: string }>(env.id, 'session.visual', { id: session.id, ref }, 60_000), [client, env.id, session.id]);
   // The draft outlives the view: leaving to answer another thread and coming
   // back finds the sentence where it was left, not an empty composer.
@@ -588,7 +594,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const canAttach = options?.imagesByModel?.[modelNow] ?? options?.images ?? true;
 
   // Nothing said yet: the composer sits mid-page under a greeting.
-  const firstMessage = log.loaded && !logError && transcriptTurns.length === 0 && queuedTurns.length === 0
+  const firstMessage = loaded && !logError && transcriptTurns.length === 0 && queuedTurns.length === 0
     && !sentFirst && !working && !pending && !session.external && session.alive !== false && failedSends.length === 0 && !session.recovery;
   const dockAnchor = useDockLift(firstMessage);
 
@@ -633,7 +639,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             {folder && <span className="sub-folder" title={session.cwd}><span className="sep"> · </span>{folder}</span>}
             {log.loaded && (logError || (!env.online && syncing))
               ? <span className="offline" role="status"> · Saved chat · reconnecting…</span>
-              : syncing && <span role="status"> · Syncing chat…</span>}
+              : syncing && !(cameUpEmpty && !log.loaded) && <span role="status"> · Syncing chat…</span>}
             {!env.online && !log.loaded && <span className="offline"> · machine offline</span>}
             {env.online && conn && !conn.online && !logError && (
               <span className="offline"> · live updates reconnecting…</span>
@@ -687,7 +693,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       <ExternalSessionNotice session={session}
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       <span ref={dockAnchor} hidden />
-      {firstMessage && <EmptyChat cwd={session.cwd} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={modelNow} />}
+      {firstMessage && <EmptyChat cwd={session.cwd} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={modelNow} still={cameUpEmpty} />}
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
         readVisual={readVisual} openAgent={openAgent}
