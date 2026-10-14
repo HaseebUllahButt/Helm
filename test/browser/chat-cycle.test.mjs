@@ -41,13 +41,17 @@ before(async () => {
         Object.assign(session, patch);
         for (const listener of listeners) listener(env,'session.update',{session});
       };
+      window.add = (env, session) => {
+        sessions[env].push(session);
+        for (const listener of listeners) listener(env,'session.update',{session});
+      };
       const client = {token,relay:'http://helm-test',
         environments:async()=>({environments:envs}),
         on:listener=>{listeners.add(listener);return()=>listeners.delete(listener)},
         subscribe:()=>{},watchLatency:()=>()=>{},openDirect:async()=>{},route:async()=>null,
         rpc:async(env,method,params)=>{
           window.calls.push({env,method,params});
-          if(method==='session.list') return {sessions:sessions[env]};
+          if(method==='session.list') return {sessions:sessions[env].map(s => ({...s}))};
           if(method==='session.attach') return {pty:true,text:'Ready'};
           if(method==='session.messages') return {messages:[]};
           if(method==='session.events') return {events:[],pending:[],last:0};
@@ -152,4 +156,22 @@ test('one running chat stays selected without adding history, and no running cha
   await empty.keyboard.press('Control+Tab');
   await empty.keyboard.press('Control+Shift+Tab');
   assert.deepEqual(await empty.evaluate(() => history.state), state);
+});
+
+test('a known thread or a helper changing is drawn from its update, without fetching the whole list again', async t => {
+  const page = await pageFor(t);
+  const lists = () => page.evaluate(() => window.calls.filter(c => c.env === 'laptop' && c.method === 'session.list').length);
+  await page.waitForTimeout(600);
+  const before = await lists();
+  await page.evaluate(() => {
+    window.update('laptop', 'same', { status: 'idle', updatedAt: 200 });
+    window.update('laptop', 'child', { status: 'idle', updatedAt: 200 });
+  });
+  await page.waitForTimeout(700);
+  assert.equal(await lists(), before, 'no list for a thread already shown, or for a helper');
+  await page.evaluate(() => window.update('laptop', 'same', { archived: true }));
+  await page.waitForFunction(n => window.calls.filter(c => c.env === 'laptop' && c.method === 'session.list').length > n, before);
+  const afterArchive = await lists();
+  await page.evaluate(() => window.add('laptop', { cwd:'/work/project', engine:'codex', driver:'codex', id:'fresh', title:'Fresh', status:'working', updatedAt:300 }));
+  await page.waitForFunction(n => window.calls.filter(c => c.env === 'laptop' && c.method === 'session.list').length > n, afterArchive);
 });

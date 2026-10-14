@@ -465,6 +465,8 @@ function Shell({ client, conn, onSignOut }: {
   const [cached] = useState(() => loadWorkspace(scope));
   const [envs, setEnvs] = useState<Environment[]>(() => cached.environments.map(e => ({ ...e, online: false })));
   const [sessions, setSessions] = useState<Record<string, Session[]>>(cached.sessions);
+  const sessionsNow = useRef(sessions);
+  sessionsNow.current = sessions;
   const [savedSend] = useState(() => history.state?.helm && history.state.stack?.at(-1)?.kind === 'transfer'
     && history.state.stack.at(-1).jobId ? history.state : null);
   const [selected, setSelected] = useState<string | null>(savedSend?.selected ?? cached.view?.envId ?? null);
@@ -777,8 +779,19 @@ function Shell({ client, conn, onSignOut }: {
         if (up?.id) {
           recordSession(e, up);
         }
-        clearTimeout(relist.current[e]);
-        relist.current[e] = setTimeout(() => loadSessions(e), 400);
+        // The whole list (hundreds of KB) is asked for again only when this
+        // update can change which threads it holds: one new to it, one that
+        // ended, moved or was archived. A known thread changing, or a helper
+        // (shown under its lead, which sends its own update), is drawn from
+        // the update alone - busy helpers used to cost a full list each.
+        const known = up?.id ? sessionsNow.current[e]?.find((x) => x.id === up.id) : undefined;
+        const helper = !!up?.delegation?.parentId && !up.unhomed;
+        const changesList = !up?.id || !!up.movedTo || up.status === 'exited'
+          || (known ? !!known.archived !== !!up.archived : !helper);
+        if (changesList) {
+          clearTimeout(relist.current[e]);
+          relist.current[e] = setTimeout(() => loadSessions(e), 400);
+        }
         // A session that just started waiting, on a machine this window is
         // not looking at, earns a tap-target in front of whatever is open -
         // on a phone the sidebar that would say so is hidden behind the
