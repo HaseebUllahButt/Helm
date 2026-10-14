@@ -156,7 +156,9 @@ test('saved imported chats retain their Done count and resume account before liv
       { ...window.session('Imported'), driver: undefined, adopted: true, account: 'second-account', engineSessionId: 'cli-id', status: 'done' },
     ];
     window.workspace.saveWorkspace(window.scope, { sessions: { machine: window.savedSessions }, view: undefined });
-    window.envs = async () => ({ environments: [{ id: 'machine', name: 'Laptop', online: false, info: {} }] });
+    // Exercise the saved shelf before live reachability arrives. Once an
+    // offline machine is known live, its saved chats leave the shared count.
+    window.envs = () => new Promise(resolve => { window.releaseEnvs = resolve; });
     window.reads = async () => { throw new Error('offline'); };
     window.mount();
   });
@@ -173,6 +175,7 @@ test('saved imported chats retain their Done count and resume account before liv
   await page.evaluate(() => {
     window.envs = async () => ({ environments: [{ id: 'machine', name: 'Laptop', online: true, info: {} }] });
     window.reads = async (_env, method) => method === 'session.list' ? { sessions: window.savedSessions } : { projects: [], recent: [] };
+    window.releaseEnvs({ environments: [{ id: 'machine', name: 'Laptop', online: true, info: {} }] });
     window.dispatchEvent(new Event('online'));
   });
   await page.waitForFunction(() => ![...document.querySelectorAll('.sidebar button')]

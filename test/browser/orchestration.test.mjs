@@ -161,20 +161,20 @@ test('thread details create, pause, run and delete a schedule on the selected ma
   await page.evaluate(() => window.showDetails());
   const dialog = page.getByRole('dialog', { name: 'Thread details' });
   await dialog.getByRole('tab', { name: 'Schedules' }).click();
-  await dialog.getByRole('button', { name: 'New scheduled task' }).click();
+  await dialog.getByRole('button', { name: 'New automation' }).click();
   await dialog.getByLabel('Name', { exact: true }).fill('Morning review');
   await dialog.getByLabel('Task', { exact: true }).fill('Review open changes');
   await dialog.getByLabel('Every (minutes)').fill('1440');
-  await dialog.getByRole('button', { name: 'Save schedule' }).click();
+  await dialog.getByRole('button', { name: 'Save automation' }).click();
   await dialog.getByRole('button', { name: 'Pause', exact: true }).click();
   await dialog.getByRole('button', { name: 'Resume', exact: true }).waitFor();
   await dialog.getByRole('button', { name: 'Run now' }).click();
-  await dialog.getByText('Task sent. Its result appears in this conversation.').waitFor();
+  await dialog.getByText('Task sent. Its result appears in the execution thread.').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await capture(page, 'orchestration-schedules-phone.png');
   assert.equal(await page.evaluate(() => window.calls.every(call => call.env === 'laptop')), true);
   await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
-  await dialog.getByText('No scheduled tasks for this thread.').waitFor();
+  await dialog.getByText('No automations for this thread.').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 
@@ -204,6 +204,8 @@ test('account limits occupy their own row without covering mobile composer contr
     const bounds = await page.locator('.slab-status').boundingBox();
     const buttons = await page.locator('.slab-foot button').all();
     for (const button of buttons) {
+      // Settings intentionally scroll horizontally on narrow phones.
+      await button.scrollIntoViewIfNeeded();
       const b = await button.boundingBox();
       assert.ok(b.x>=0 && b.x+b.width<=width, 'every control stays on screen');
       assert.ok(b.y+b.height<=bounds.y+1, 'usage never overlaps a control');
