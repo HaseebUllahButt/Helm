@@ -56,6 +56,7 @@ before(async () => {
             runs:[{id:91,name:'Build and deploy',state:'failure',attempt:window.monitorAttempt || 1,event:'push',sha:'merge',url:'https://example.test/actions/91'}],
             deployments:[{id:12,environment:'production',state:'success',sha:'merge',description:'Published',url:'https://example.test/deploy',environmentUrl:'https://app.example.test'}]};
         }
+        if(method === 'git.prs') return {pullRequests:[],more:false};
         if(method === 'git.accounts') return {selected:window.githubAccount || 'auto',accounts:[{login:'personal',active:true,valid:true},{login:'work',active:false,valid:true}]};
         if(method === 'git.account') {window.githubAccount=params.login;return {selected:params.login};}
         if(method === 'git.watch') {window.pipelineWatching=params.on;return {watching:params.on};}

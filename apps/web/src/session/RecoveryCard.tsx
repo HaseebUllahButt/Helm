@@ -9,11 +9,12 @@ import { plainProblem } from './problem';
  * eye already is when a turn ends, not at the top of a long thread. The
  * CLI's own words are kept behind "Details".
  */
-export function RecoveryCard({ recovery, busy, offline, onRetry }: {
+export function RecoveryCard({ recovery, busy, offline, onRetry, autoResume, onAutoResume }: {
   recovery: NonNullable<Session['recovery']>;
   busy: boolean; offline: boolean;
   /** Absent while there is nothing to retry from here. */
   onRetry?: () => void;
+  autoResume?: boolean; onAutoResume?: (on: boolean) => void;
 }) {
   const [details, setDetails] = useState(false);
   // Hidden on this screen only; the next turn's outcome replaces it anyway.
@@ -27,10 +28,12 @@ export function RecoveryCard({ recovery, busy, offline, onRetry }: {
         <span className="recovery-icon"><Icon name={recovery.kind === 'interrupted' ? 'stop' : recovery.kind === 'restart' ? 'refresh' : 'alert'} size={16} /></span>
         <div className="recovery-copy">
           <b>{p.title}</b>
-          <p>{p.text}</p>
+          <p>{recovery.kind === 'limited' && recovery.resetAt ? `Limit resets ${new Date(recovery.resetAt).toLocaleString()}. ${autoResume && !recovery.autoResumeCancelled ? 'Helm will continue when the reset is due and this thread is available.' : 'Resume manually or enable automatic continuation.'}` : p.text}</p>
+          {recovery.autoResumeError && <p className="error">Automatic continuation failed: {recovery.autoResumeError}</p>}
         </div>
         <button className="recovery-x" aria-label="Hide" onClick={() => setHiddenAt(recovery.at)}><Icon name="close" size={14} /></button>
       </div>
+      {recovery.kind === 'limited' && onAutoResume && <label className="automation-option"><input type="checkbox" checked={!!autoResume} disabled={busy || offline} onChange={event => onAutoResume(event.target.checked)} /> Continue automatically at reset</label>}
       {details && p.raw && <pre className="recovery-raw">{p.raw}</pre>}
       {(p.raw || onRetry) && (
         <div className="recovery-actions">

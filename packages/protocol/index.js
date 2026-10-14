@@ -127,6 +127,10 @@ export const M = {
   GIT_DIFF: 'git.diff',            // { cwd, path } -> { path, diff, truncated }
   GIT_COMMIT: 'git.commit',        // { cwd, hash } -> { hash, subject, body, author, date, parents[], files[] }
   GIT_WORKTREE: 'git.worktree',    // { cwd, name? } -> { path, branch, base }  a sibling checkout on a new branch
+  GIT_PRS: 'git.prs',              // { cwd, state?, page? } -> bounded PR list
+  GIT_PR_DETAIL: 'git.pr-detail',  // { cwd, number } -> PR, activity, files, head checks
+  GIT_PR_ACTION: 'git.pr-action',  // { cwd, number, action, body?, event?, headSha?, comments?, mergeMethod? }
+  GIT_PUBLISH: 'git.publish',      // { cwd, action: commit|push|create|publish, paths?, message?, title?, body?, base?, draft? }
   GIT_PR: 'git.pr',                // { cwd } -> the branch's pull request, or null
   GIT_MONITOR: 'git.monitor',      // { cwd, force?, sessionId? } -> GitHub checks, PR, workflows, deployments
   GIT_JOBS: 'git.jobs',            // { cwd, runId } -> jobs and failed steps (read-only)
@@ -192,6 +196,7 @@ export const M = {
   SESSION_QUEUE_EDIT: 'session.queue-edit',
   SESSION_QUEUE_REORDER: 'session.queue-reorder',
   SESSION_RECOVER: 'session.recover',
+  SESSION_AUTO_RESUME: 'session.auto-resume', // { id, on } -> persisted usage-reset continuation choice
   SCHEDULE_LIST: 'schedule.list',
   SCHEDULE_SAVE: 'schedule.save',
   SCHEDULE_DELETE: 'schedule.delete',

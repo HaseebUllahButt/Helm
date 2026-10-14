@@ -1,3 +1,4 @@
+import { usageResetAt, recoveryDue, isUsageLimit, mergeUsageLimits } from './usage-recovery.js';
 import { reportedMode } from './native-settings.js';
 import { piChatArgs, BASH_GUARD_MODES } from './pi-settings.js';
 import { nativeAccount } from './native-account.js';
@@ -163,7 +164,7 @@ const SEEN_KEEP_MS = 30 * 86_400_000;
 const pendingSummary = (pending) => ({ pending: pending.length,
   ask: pending.length ? { ...askPreview(pending[pending.length - 1]), requestId: pending[pending.length - 1].requestId } : null });
 
-export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, ...s }) =>
+export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, lastLimits, ...s }) =>
   typeof s.title === 'string' && /\[(?:Image|Pasted text) #/.test(s.title) ? { ...s, title: bareTitle(s.title) || s.title } : s;
 
 /**
@@ -1403,8 +1404,8 @@ export class Sessions extends EventEmitter {
 
   canReturnTask(id) {
     return ['idle', 'done'].includes(this.get(id).status)
-      && !this.#sending.has(id) && !this.#outbox.get(id)?.length
-      && !this.events.activeTurn(id) && !this.hasActiveDelegations(id);
+      && !this.#sending.has(id) && !this.#settling.has(id) && !this.get(id).queuePaused && !this.#outbox.get(id)?.length
+      && !this.events.activeTurn(id) && !this.events.pending(id).length && !this.hasActiveDelegations(id);
   }
 
   /**
@@ -1438,7 +1439,12 @@ export class Sessions extends EventEmitter {
     });
   }
 
-  async start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null }) {
+  async start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null }) {
+    if (originAutomationId != null) {
+      if (!/^[A-Za-z0-9._:-]{1,120}$/.test(originAutomationId)) throw new Error('invalid automation identity');
+      const existing = this.findAutomationSession(originAutomationId);
+      if (existing) return existing;
+    }
     if (originHandoffId !== null && !/^[a-f0-9]{24}$/.test(originHandoffId)) {
       throw new Error('invalid origin handoff id');
     }
@@ -1469,7 +1475,7 @@ export class Sessions extends EventEmitter {
     if (!mode) mode = defaults.mode === 'plan' ? defaultMode(profile.engine) : defaults.mode ?? null;
     if (!speed) speed = defaults.speed ?? null;
     const lineage = parentLink(parent);
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation });
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -1738,7 +1744,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null }) {
+  async #startDriven({ cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null }) {
     const id = randomBytes(6).toString('hex');
     // A quick chat's folder is made for it, empty, and named by its id. A
     // branch of one keeps its parent's: the CLI files a conversation under
@@ -1782,6 +1788,7 @@ export class Sessions extends EventEmitter {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       parent: parentLink(parent),
+      originAutomationId: originAutomationId || undefined,
       originHandoffId: originHandoffId || undefined,
     };
     this.#index.set(session.id, session);
@@ -1924,6 +1931,7 @@ export class Sessions extends EventEmitter {
     this.#drivers.set(s.id, d);
     d.on('event', (e) => {
       if (e.type === 'limits' && this.#drivers.get(s.id) === d) {
+        s.lastLimits = mergeUsageLimits(s.lastLimits, e);
         try { this.limits.record(accountKey(profile), e); }
         catch (err) { this.log(`account limits: ${err.message}`); }
       }
@@ -2153,12 +2161,16 @@ export class Sessions extends EventEmitter {
       }
       // A wake-up that was cut short is not the task being stopped.
       if (e.status === 'error' || (e.status === 'interrupted' && !wake)) {
-        const limited = e.status === 'error' && /rate.?limit|usage limit|quota|too many requests|\b429\b/i.test(e.error ?? '');
+        const limited = e.status === 'error' && isUsageLimit(e);
         s.recovery = { kind: limited ? 'limited' : e.status, message: e.error || 'The task was stopped.', at: Date.now() };
         for (const key of ['errorCode', 'errorKind', 'retryable']) {
           if (Object.hasOwn(e, key)) s.recovery[key] = e[key];
         }
-        if (limited) s.queuePaused = true;
+        if (limited) {
+          s.recovery.resetAt = usageResetAt(e, s.lastLimits, s.recovery.at);
+          s.recovery.turnId = e.turnId;
+          s.queuePaused = true;
+        }
       } else if (!wake && !s.stoppedAt) delete s.recovery;
       if (e.usage) s.lastUsage = { ...e.usage, at: Date.now(), model: s.model || s.engineModel };
       // A CLI that reports tokens but no price (Codex, and most others)
@@ -3837,7 +3849,7 @@ export class Sessions extends EventEmitter {
       // cannot, since the first send into an idle session is briefly local
       // too without ever having waited.
       let sideband = delivery !== 'queue' && !raw && compact == null && !images.length && d?.canRunWhileBusy?.(clean);
-      let busy = !sideband && (this.#sending.has(s.id) || this.#settling.has(s.id) || s.status === 'working' || s.status === 'blocked');
+      let busy = !sideband && (s.queuePaused || this.#sending.has(s.id) || this.#settling.has(s.id) || s.status === 'working' || s.status === 'blocked');
       const commandText = compact != null ? `/compact${compact ? ` ${compact}` : ''}` : clean;
       if (s.stoppedAt || stopGeneration !== (s.stopGeneration ?? 0) || !this.#index.has(id)) throw new Error('message cancelled because the thread was stopped');
       const item = { turnId, text: commandText, images, compact, delivery, references, referenceContext, stopGeneration, introduce };
@@ -4026,6 +4038,12 @@ export class Sessions extends EventEmitter {
         error: String(err?.message || err),
       });
       s.lastSeq = failed.seq;
+      if (!s.stoppedAt && isUsageLimit(err)) {
+        s.recovery = { kind: 'limited', message: failed.error, at: failed.at, resetAt: usageResetAt(err, s.lastLimits, failed.at),
+          turnId: item.turnId, retryTurnId: item.turnId };
+        s.queuePaused = true;
+        this.#save(); this.emit('session', s);
+      }
       this.emit('event', { id: s.id, event: failed });
       throw err;
     }
@@ -4170,16 +4188,95 @@ export class Sessions extends EventEmitter {
     return { ok: true, session: wire(session) };
   }
 
-  async recover(id) {
+  findAutomationSession(identity) {
+    return [...this.#index.values()].find(s => s.originAutomationId === identity) || null;
+  }
+
+  setAutoResumeLimited(id, on) {
+    const s = this.get(id);
+    if (!s.driver || s.external || s.delegation || s.nativeChat || s.nativeCli) throw new Error('choose a Helm thread');
+    if (typeof on !== 'boolean') throw new Error('on must be true or false');
+    s.autoResumeLimited = on;
+    if (!on) this.cancelLimitContinuation(s);
+    if (s.recovery) {
+      if (on && s.recovery.kind === 'limited' && !s.recovery.resetAt) s.recovery.resetAt = usageResetAt({ error: s.recovery.message }, s.lastLimits, s.recovery.at);
+      delete s.recovery.autoResumeError; delete s.recovery.autoResumeCancelled;
+    }
+    this.#save(); this.emit('session', s);
+    return { ok: true, session: wire(s) };
+  }
+
+  cancelLimitContinuation(session) {
+    const r = session.recovery;
+    if (r?.kind !== 'limited' || !r.resetAt) return;
+    const identity = `${session.id}:${r.turnId || r.at}:${r.resetAt}`;
+    const turnId = `local-limit-${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`;
+    if (this.#outbox.get(session.id)?.some(item => item.turnId === turnId)) this.dequeue(session.id, turnId);
+  }
+
+  startLimitRecovery() {
+    if (this.limitRecoveryTimer) return;
+    this.limitRecoveryTimer = setInterval(() => void this.tickLimitRecovery().catch(error => this.log(`usage-limit recovery: ${error.message}`)), 15000);
+    this.limitRecoveryTimer.unref?.();
+    void this.tickLimitRecovery().catch(error => this.log(`usage-limit recovery: ${error.message}`));
+  }
+
+  async tickLimitRecovery(now = Date.now()) {
+    if (this.limitRecoveryBusy) return;
+    this.limitRecoveryBusy = true;
+    try {
+      for (const s of this.#index.values()) {
+        if (!recoveryDue(s, now)) continue;
+        if (!['idle', 'done', 'error'].includes(s.status) || this.events.pending(s.id).length
+          || this.events.activeTurn(s.id) || this.#sending.has(s.id) || this.#settling.has(s.id) || this.hasActiveDelegations(s.id)) continue;
+        try { await this.recover(s.id, { automatic: true, now }); }
+        catch (error) {
+          if (s.recovery?.kind === 'limited') {
+            s.recovery.autoResumeError = error.message;
+            this.#save(); this.emit('session', s);
+          }
+        }
+      }
+    } finally { this.limitRecoveryBusy = false; }
+  }
+
+  async recover(id, { automatic = false, now = Date.now() } = {}) {
     const session = this.get(id);
-    if (!session.driver || ['working', 'blocked', 'starting'].includes(session.status)) throw new Error('this thread is still active');
+    if (!session.driver || ['working', 'blocked', 'starting'].includes(session.status)
+      || this.events.pending(id).length || this.hasActiveDelegations(id)) throw new Error('this thread is still active or awaiting approval');
+    const recovery = session.recovery;
+    if (automatic && !recoveryDue(session, now)) return { skipped: true };
+    const generation = session.stopGeneration ?? 0;
+    const queued = this.#outbox.get(id)?.length;
+    // Leave the durable failure in place until the continuation ticket exists.
+    // Retrying after a crash uses the same ticket, never a second prompt.
+    if (automatic && (!queued || recovery.retryTurnId)) {
+      const identity = `${id}:${recovery.turnId || recovery.at}:${recovery.resetAt}`;
+      const turnId = `local-limit-${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`;
+      let prompt = 'Continue the previous task from the saved conversation. Check what already finished before taking further action.';
+      let attachments = [];
+      if (recovery.retryTurnId) {
+        const failed = this.events.tail(id, 0).findLast(e => e.type === 'turn.start' && e.turnId === recovery.retryTurnId);
+        if (!failed) throw new Error('The refused message is no longer available. Resume manually.');
+        prompt = `${failed.text}${failed.referenceContext ? `\n\n${failed.referenceContext}` : ''}`;
+        attachments = (failed.attachments || []).map(a => ({ mime: a.mime, filename: a.filename, data: a.data || this.events.attachment(id, a.ref) }));
+        if (attachments.some(a => !a.data)) throw new Error('A refused attachment is no longer available. Resume manually.');
+      }
+      await this.input(id, prompt, { turnId, attachments, delivery: 'queue', source: 'usage-reset' });
+      if (recovery.retryTurnId && this.#outbox.get(id)?.some(item => item.turnId === turnId)) {
+        this.reorderQueue(id, [turnId, ...this.#outbox.get(id).filter(item => item.turnId !== turnId).map(item => item.turnId)]);
+      }
+      if (!recoveryDue(session, now) || session.stoppedAt || generation !== (session.stopGeneration ?? 0) || session.recovery !== recovery) {
+        this.dequeue(id, turnId);
+        return { skipped: true };
+      }
+    }
     delete session.stoppedAt;
     delete session.recovery;
     session.queuePaused = false;
-    this.#save();
-    this.emit('session', session);
+    this.#save(); this.emit('session', session);
     if (this.#outbox.get(id)?.length) this.#pump(session);
-    else await this.input(id, 'Continue the previous task from the saved conversation. Check what already finished before taking further action.');
+    else if (!automatic) await this.input(id, 'Continue the previous task from the saved conversation. Check what already finished before taking further action.');
     return { ok: true, session: wire(session) };
   }
 
@@ -4635,6 +4732,7 @@ export class Sessions extends EventEmitter {
     const s = this.get(id);
     s.archived = !!archived;
     s.archivedAt = s.archived ? Date.now() : null;
+    if (s.archived && s.recovery?.kind === 'limited') { s.recovery.autoResumeCancelled = true; this.cancelLimitContinuation(s); }
     this.#updateTeam(s);
     this.#save();
     this.emit('session', s);
@@ -4995,6 +5093,8 @@ export class Sessions extends EventEmitter {
 
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
+    clearInterval(this.limitRecoveryTimer);
+    this.limitRecoveryTimer = null;
     for (const timer of this.#modeReads) clearTimeout(timer);
     this.#modeReads.clear();
     clearInterval(this.nativePoll);

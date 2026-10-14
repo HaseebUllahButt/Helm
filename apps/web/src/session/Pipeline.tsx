@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Client, Environment } from '../client';
 import { Icon } from '../Icon';
+import { PullRequests } from './PullRequests';
 
 export interface PullRequest {
   number: number; title: string; url: string | null; state: string; draft: boolean; review: string | null;
@@ -16,6 +17,7 @@ export interface PipelineSnapshot {
   errors: { section: string; code: string; message: string; retryAt?: number | null }[];
   checkedAt: number; stale?: boolean; retryAt?: number | null; truncated?: boolean; watching?: boolean;
   account?: string;
+  agentWatch?: { enabled: boolean; maxWakes: number; wakes: number; pending: boolean; lastError?: string | null };
 }
 
 export function usePipeline(client: Client, env: Environment, cwd: string, branch: string | null | undefined, head: string | undefined, sessionId?: string) {
@@ -49,7 +51,7 @@ export function usePipeline(client: Client, env: Environment, cwd: string, branc
       if (id !== env.id) return;
       if (kind === 'git.monitor' && payload.id === sessionId && payload.snapshot?.sha) {
         // A branch switch must not let an older watch overwrite the newly opened checkout.
-        if (payload.snapshot.sha.startsWith(head || '') && payload.snapshot.branch === branch) setSnapshot({ ...payload.snapshot, watching: payload.watching });
+        if (payload.snapshot.sha.startsWith(head || '') && payload.snapshot.branch === branch) setSnapshot({ ...payload.snapshot, watching: payload.watching, agentWatch: payload.agentWatch });
       }
     });
     return () => { stale = true; clearInterval(timer); document.removeEventListener('visibilitychange', visible); off(); };
@@ -84,6 +86,8 @@ export function Pipeline({ client, env, cwd, sessionId, data, error, loading, re
   const identity = useRef(0);
   const [accounts, setAccounts] = useState<{ selected: string; accounts: { login: string; active: boolean; valid: boolean }[] } | null>(null);
   const [accountBusy, setAccountBusy] = useState(false);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentError, setAgentError] = useState('');
   const [accountError, setAccountError] = useState('');
   useEffect(() => {
     let stale = false; setAccounts(null); setAccountError('');
@@ -109,6 +113,12 @@ export function Pipeline({ client, env, cwd, sessionId, data, error, loading, re
       if (epoch === identity.current) setJobs(s => ({ ...s, [runId]: result }));
     } catch { if (epoch === identity.current) setJobs(s => ({ ...s, [runId]: 'failed' })); }
   };
+  const agentWatch = async (enabled: boolean, maxWakes = data?.agentWatch?.maxWakes || 5) => {
+    setAgentBusy(true); setAgentError('');
+    try { await client.rpc(env.id, 'git.watch', { sessionId, on: true, agent: enabled, maxWakes }, 20000); refresh(); }
+    catch (e: any) { setAgentError(e.message); }
+    finally { setAgentBusy(false); }
+  };
   const pr = data?.pr;
   return <div className="pipeline">
     <div className="pipeline-heading"><div><h2>CI / CD</h2><p>{data?.repository || 'GitHub checks and deployments'}{data?.sha && <> · <code>{data.sha.slice(0, 7)}</code></>}</p></div>
@@ -122,6 +132,11 @@ export function Pipeline({ client, env, cwd, sessionId, data, error, loading, re
     {sessionId && data?.supported && <div className="pipeline-watch"><div><b>Notify this thread</b><p>Checks fail, reviews change, PR merges, or deployment finishes. Continues when you close Helm.</p></div>
       <button className={`switch${data.watching ? ' on' : ''}`} role="switch" aria-label="Notify this thread about CI / CD" aria-checked={!!data.watching}
         disabled={watchBusy || !env.online} onClick={watch}><i /></button></div>}
+    {sessionId && data?.supported && <div className="pipeline-watch"><div><b>Wake the agent on GitHub changes</b><p>Checks finish, reviews or comments change, or conflicts appear. Waits for idle threads and approvals. Five-minute cooldown.</p>
+      {data.agentWatch?.enabled && <label>Maximum wakes per day <input type="number" min={1} max={20} value={data.agentWatch.maxWakes} disabled={agentBusy || !env.online} onChange={e => { const n = Number(e.target.value); if (n >= 1 && n <= 20) void agentWatch(true, n); }} /></label>}
+      {data.agentWatch?.enabled && <p>{data.agentWatch.wakes} wakes today{data.agentWatch.pending ? ' · Changes waiting' : ''}{data.agentWatch.lastError ? ` · ${data.agentWatch.lastError}` : ''}</p>}</div>
+      <button className={`switch${data.agentWatch?.enabled ? ' on' : ''}`} role="switch" aria-label="Wake agent on GitHub changes" aria-checked={!!data.agentWatch?.enabled} disabled={agentBusy || !env.online} onClick={() => void agentWatch(!data.agentWatch?.enabled)}><i /></button></div>}
+    {agentError && <p className="error" role="alert">{agentError}</p>}
     {!env.online && <div className="pipeline-notice" role="status">This machine is offline. Reconnect to update GitHub status.</div>}
     {error && <div className="pipeline-notice failure" role="status">{error}<button className="linkish" onClick={() => refresh()}>Try again</button></div>}
     {loading && !data && <p className="note" role="status">Reading GitHub status…</p>}
@@ -132,6 +147,7 @@ export function Pipeline({ client, env, cwd, sessionId, data, error, loading, re
     {data?.unpublished && <div className="pipeline-notice">The PR is on a different commit. Checks below are for this checkout; push your changes to run CI for them.</div>}
     {data?.truncated && <div className="pipeline-notice">Some results exceed the display limit. Open GitHub for the full list; incomplete checks are never marked passed.</div>}
     {data?.supported && <>
+      <PullRequests client={client} env={env} cwd={cwd} account={data.account} onChanged={() => refresh(true)} />
       <section className="pipeline-section"><h3>Pull request</h3>
         {pr ? <><div className="pipeline-row"><External url={pr.url}>#{pr.number} {pr.title}</External><span className={`pipeline-state ${pr.state === 'MERGED' ? 'success' : ''}`}>{pr.draft ? 'Draft' : pr.state.toLowerCase()}</span></div>
           <div className="pipeline-pr-meta"><span>{pr.review === 'APPROVED' ? 'Reviews approved' : pr.review === 'CHANGES_REQUESTED' ? 'Changes requested' : pr.review === 'REVIEW_REQUIRED' ? 'Review required' : 'Review status unavailable'}</span>

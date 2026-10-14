@@ -1,5 +1,6 @@
 import { listIntegrations, addMcp, removeMcp, connectMcp, addSkills, removeSkill, changePlugin } from './integrations.js';
 import WebSocket from 'ws';
+import { createHash } from 'node:crypto';
 import { beginTransferActivity } from '@helm/protocol/transfer-activity';
 import { hostname, platform, arch, release, homedir } from 'node:os';
 import { connect as tcpConnect } from 'node:net';
@@ -427,10 +428,13 @@ export class Daemon {
       context: gitq.githubContext, watchFile: join(HELM_DIR, 'github-watches.json'),
       accountFile: join(HELM_DIR, 'github-accounts.json'),
       session: id => { try { return { ...this.sessions.get(id), envId: this.id }; } catch { return null; } },
+      canWake: id => this.sessions.canReturnTask(id),
+      wake: (id, prompt, options) => this.sessions.input(id, prompt, options),
       notify: payload => this.broadcastFrame(T.NOTIFY, { payload }),
       emit: payload => this.#emit(E.GIT_MONITOR, payload),
     });
-    try { this.schedules = new Schedules({ sessions: this.sessions }); }
+    try { this.schedules = new Schedules({ sessions: this.sessions, shareName: `helm-hooks-${createHash('sha256').update(this.id).digest('hex').slice(0, 16)}`,
+      publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     this.sessions.delegationBrief = () => helmBrief(loadNetwork() ?? this.net);
     this.handoffs = new Handoffs({
@@ -478,7 +482,7 @@ export class Daemon {
     this.sessions.adoptTerminals()
       .catch(() => {})
       .then(() => this.sessions.resume())
-      .then(() => { if (!this.#stopped) this.schedules?.start(); })
+      .then(() => { if (!this.#stopped) { this.schedules?.start(); this.sessions.startLimitRecovery(); } })
       .catch((error) => console.error(`[helm] session recovery: ${error.message}`));
     // Caches worth having warm, none worth being late for: they start once
     // the links are up. Re-reading the shell's aliases blocks for a moment,
@@ -1430,6 +1434,7 @@ export class Daemon {
     return [
       Number(process.env.HELM_SSH_PORT || 22),
       this.#media?.port,
+      this.schedules?.share()?.port,
       // Ports shared on purpose with `helm share`, and only those.
       ...listShares().map((share) => share.port),
       ...(Array.isArray(extra) ? extra.map(Number) : []),
@@ -1559,10 +1564,14 @@ export class Daemon {
       case M.GIT_DIFF: return gitq.diff(p.cwd, p.path);
       case M.GIT_COMMIT: return gitq.commit(p.cwd, p.hash, p.path);
       case M.GIT_WORKTREE: return gitq.addWorktree(p.cwd, p.name);
+      case M.GIT_PRS: return this.github.pullRequests(p.cwd, p);
+      case M.GIT_PR_DETAIL: return this.github.pullRequest(p.cwd, p.number);
+      case M.GIT_PR_ACTION: return this.github.prAction(p.cwd, p);
+      case M.GIT_PUBLISH: return this.github.publish(p.cwd, p);
       case M.GIT_PR: return { pr: (await this.github.get(p.cwd)).pr || null };
-      case M.GIT_MONITOR: return { ...(await this.github.get(p.cwd, { force: p.force === true })), watching: this.github.watching(p.sessionId) };
+      case M.GIT_MONITOR: return { ...(await this.github.get(p.cwd, { force: p.force === true })), watching: this.github.watching(p.sessionId), agentWatch: this.github.watchState(p.sessionId) };
       case M.GIT_JOBS: return this.github.jobs(p.cwd, p.runId);
-      case M.GIT_WATCH: return this.github.watch(p.sessionId, p.on === true);
+      case M.GIT_WATCH: return this.github.watch(p.sessionId, p.on === true, p);
       case M.GIT_ACCOUNTS: return this.github.accounts(p.cwd);
       case M.GIT_ACCOUNT: return this.github.selectAccount(p.cwd, p.login);
 
@@ -1632,7 +1641,7 @@ export class Daemon {
       // it carries the password hash so the hub can check a visitor without
       // a round trip here. Apps get `publicShare`, without it.
       case M.SHARE_LIST: {
-        const shares = listShares();
+        const shares = [...listShares(), ...(this.schedules?.share() ? [this.schedules.share()] : [])];
         // Only a hub's own call (no member behind it) gets the hashes. A
         // private link goes only to a hub that says it can keep one private:
         // an older hub would not know the flag and serve it to anyone.
@@ -1920,6 +1929,7 @@ export class Daemon {
       case M.SESSION_QUEUE_EDIT: return this.sessions.editQueued(p.id, p.turnId, p.text, p.attachments);
       case M.SESSION_QUEUE_REORDER: return this.sessions.reorderQueue(p.id, p.turnIds);
       case M.SESSION_RECOVER: return this.sessions.recover(p.id);
+      case M.SESSION_AUTO_RESUME: return this.sessions.setAutoResumeLimited(p.id, p.on);
       case M.SCHEDULE_LIST:
       case M.SCHEDULE_SAVE:
       case M.SCHEDULE_DELETE:

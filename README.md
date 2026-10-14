@@ -33,7 +33,7 @@ computer → directory → session
 Sessions show which computer, directory, CLI, and account they use. A blocked
 session moves to the top.
 
-## GitHub checks and deployments
+## GitHub pull requests, checks and deployments
 
 Open a thread's **Git → CI / CD** tab for its PR reviews and merge status,
 commit checks, GitHub Actions workflows, failed steps with links to job logs,
@@ -55,6 +55,29 @@ merges, and deployment success/failure reach the same push and desktop
 notification paths as thread notifications. Watches survive daemon restarts
 and stop when disabled or the thread is archived. The machine must stay online,
 and notifications must be enabled for the receiving device.
+
+The same panel lists open, closed and merged pull requests, shows their description,
+latest comments/reviews, changed-file patches and head checks, and provides comment,
+review (including an optional inline comment), and merge actions. Reviews and merges
+are tied to the displayed head SHA; refresh when the head changes. GitHub enforces
+repository permissions and merge requirements. Merge requires an explicit selection
+of the PR/head and merge method in the panel.
+
+**Commit / push / create PR** can run each step separately, or commit selected files,
+push the feature branch, and create a PR in sequence. Existing staged files outside
+the selection stay staged. Push uses HTTPS with the repository's selected `gh`
+credential, even for an SSH origin, and never forces history. A failed later step
+keeps completed commits/pushes and reports which steps finished. Use the individual
+remaining action to continue without repeating a successful step.
+
+**Wake the agent on GitHub changes** is a separate opt-in from notifications. It
+wakes an idle Helm thread when checks finish, reviews/comments change, or conflicts
+appear. Initial results establish a baseline. Pending changes coalesce while the
+thread is working or awaiting approval. Durable turn IDs prevent duplicate delivery
+across restarts. The default limit is five wakes per UTC day (configurable from one
+to twenty), with a five-minute cooldown. Stop discards pending wakes; archiving or
+turning off the watch cancels it. Watches never bypass a usage-limit recovery card,
+user stop, or approval. GitHub text is untrusted context for the agent.
 
 Requests share an account-scoped cache and in-flight reads on each machine.
 REST reads revalidate with ETags; PR lookups use GraphQL with a REST fallback.
@@ -620,17 +643,61 @@ automatically.
 
 ### Scheduled tasks
 
-In **Thread details → Schedules**, create an interval task (minimum five
-minutes), pause/resume it, edit it, run it now, or delete it. It runs in the
-selected thread on its machine, using that thread's current account, model,
-folder, and permissions. Results appear in the same conversation. These are
-normal agent turns and consume provider usage; only schedule trusted tasks.
+In **Thread details → Schedules**, create an interval, fixed-time or webhook
+automation, pause/resume it, edit it, run it now, or delete it. Interval tasks have a
+five-minute minimum. Fixed-time tasks choose an IANA time zone, time of day and
+optional weekdays (none means daily); daylight-saving transitions use real local
+clock occurrences. A fixed slot missed by more than ten minutes advances to its
+next occurrence, while a missed interval coalesces into one run.
 
-Schedules persist in `~/.helm/schedules.json`. The machine's daemon must be
-running. Busy, stopped, archived, and attention-needed threads do not receive
-scheduled work. Missed intervals coalesce into one run, not a catch-up burst;
-dispatch failures pause the schedule. The displayed times use your browser's
-local time zone. Interval tasks are not calendar/cron schedules.
+Tasks use the selected thread's account, model, folder and permissions. Choose
+**Start a fresh thread for each run** for independent executions. Each result appears
+as a normal thread in the session list; its ID and last dispatch time are shown on
+the automation card. Durable execution identities reuse the same thread and message
+when recovering an uncertain dispatch. The next fresh run waits for its previous
+result thread to finish; stopping that result or leaving it needing attention also
+holds future runs. Automation does not bypass permissions. Normal agent turns
+consume provider usage; only schedule trusted tasks.
+
+Webhook tasks expose a secret POST URL through Helm's existing public share routing
+on `helm-hooks-<machine-id-hash>.<public-host>`. The loopback listener exposes only
+webhook routes and is advertised only when a webhook task exists. No separate port
+forwarding is needed, but the machine, daemon and public hub must be online. Optional
+HMAC authentication uses `X-Hub-Signature-256: sha256=<hex digest>` over the request
+body. Rotating the URL cancels queued deliveries and immediately invalidates the old
+token. Editing the task template, target, execution mode or HMAC secret also cancels
+queued payloads. Pausing holds existing deliveries and rejects new ones.
+
+Prompts support `{{body}}`, `{{body.field}}`, `{{query.field}}` and `{{headers.name}}`.
+JSON and form bodies support own-property lookups; missing fields become empty.
+Credential-named headers/query fields are excluded. Payloads are untrusted input:
+the template controls what the agent sees. Request bodies are capped at 16 KiB,
+rendered prompts at 32,000 characters, and headers at 8 KiB. A task accepts at most
+thirty deliveries per minute and eight pending deliveries; recent receipts are
+bounded to thirty-two. `X-GitHub-Delivery` or `Idempotency-Key` deduplicates deliveries
+within that receipt history. Over-limit requests return 413/429; senders should retry
+429 after waiting. The task card shows delivery receipts and dispatch errors.
+
+Schedules persist atomically with mode 0600 in `~/.helm/schedules.json`, including
+queued rendered payloads and webhook secrets. Dispatch errors pause the automation
+and keep its durable dispatch ID for safe recovery. Busy, stopped, archived and
+attention-needed targets never receive scheduled work. Fixed-time zones belong to
+the task; next/last timestamps are displayed in the browser's local zone.
+
+**Continue automatically when this account's usage limit resets** is opt-in per
+thread and is also offered in the usage-limit card. Helm persists the provider's
+absolute reset timestamp and resumes once when due, with no browser required. It
+retries a request refused before delivery, otherwise uses existing queued messages
+first or sends one durable continuation. An
+unknown, stale or ambiguous reset time never starts a retry loop. Working/blocked
+threads, pending approvals and active child agents wait. Manual input, Stop, archive
+or switching the option off cancels the pending continuation. After an archive,
+explicitly toggle the option to re-arm a still-visible limit failure. Restart recovery
+reuses the same failure and continuation identity.
+
+Validate this workflow with `helm run --heavy -- npm run test:automation`. The
+preload sets temporary Helm state, database, SSH and process socket paths before
+imports; the suite has bounded timeouts and uses fake providers and temporary repos.
 
 Cache keepalive is deferred: this release installs no warmer, sends no
 background cache pings, and exposes no keepalive toggle. Providers' native

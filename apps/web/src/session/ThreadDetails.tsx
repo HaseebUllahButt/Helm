@@ -48,7 +48,7 @@ export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit
       <div className="details-content" role="tabpanel" id="details-content" aria-labelledby={`details-${tab}`}>
         {tab === 'agents' && <Subagents embedded onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} onOpenNative={onOpenNative} />}
         {tab === 'changes' && <p className="note">No Git repository available for this thread.</p>}
-        {tab === 'schedules' && <Schedules client={client} env={env} session={session} />}
+        {tab === 'schedules' && <Schedules client={client} env={env} session={session} onOpen={onOpen} />}
         {tab === 'browser' && <Suspense fallback={<p className="note">Opening browser…</p>}><BrowserPanel client={client} env={env} session={session} /></Suspense>}
       </div>
     </div>

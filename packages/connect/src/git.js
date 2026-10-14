@@ -65,9 +65,10 @@ export async function status(cwd) {
     if (!entry) continue;
     const x = entry[0], y = entry[1];
     const path = entry.slice(3);
-    if (x === 'R' || x === 'C') parts.shift(); // the name it had before
+    const originalPath = x === 'R' || x === 'C' ? parts.shift() : undefined;
     files.push({
       path,
+      ...(originalPath ? { originalPath } : {}),
       status: x === '?' ? '?' : (x === 'R' ? 'R' : (x === 'D' || y === 'D') ? 'D' : (x === 'A' || y === 'A') ? 'A' : 'M'),
       staged: x !== ' ' && x !== '?',
       add: 0, del: 0,
@@ -282,11 +283,12 @@ export async function githubContext(cwd, { resolveHost = async host => {
   return /^hostname\s+(\S+)$/m.exec(stdout)?.[1] || host;
 } } = {}) {
   const dir = await folder(cwd);
-  const [sha, branch, remotes, resolved] = await Promise.all([
+  const [sha, branch, remotes, resolved, root] = await Promise.all([
     git(dir, ['rev-parse', 'HEAD']).then(s => s.trim()),
     git(dir, ['symbolic-ref', '--quiet', '--short', 'HEAD']).then(s => s.trim()).catch(() => null),
     git(dir, ['remote', '-v']),
     git(dir, ['config', '--get-regexp', '^remote\\..*\\.gh-resolved$']).catch(() => ''),
+    git(dir, ['rev-parse', '--show-toplevel']).then(s => s.trim()),
   ]);
   const parse = value => {
     const match = /^(?:https:\/\/|ssh:\/\/git@|git@)([^/:]+)[:/]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(value);
@@ -311,6 +313,6 @@ export async function githubContext(cwd, { resolveHost = async host => {
   if (!base || (base.host !== 'github.com' && !mark)) return null;
   const tracking = branch ? await git(dir, ['config', '--get', `branch.${branch}.remote`]).then(s => s.trim()).catch(() => '') : '';
   const head = refs.get(tracking) || refs.get('origin') || base;
-  return { host: base.host, repository: base.repository, headRepository: head.host === base.host ? head.repository : base.repository,
+  return { root, host: base.host, repository: base.repository, headRepository: head.host === base.host ? head.repository : base.repository,
     headOwner: head.host === base.host ? head.owner : base.owner, branch, sha };
 }

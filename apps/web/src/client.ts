@@ -95,7 +95,8 @@ export interface Session {
   team?: { working: number; blocked: number; failed: number };
   /** Claude Code's own subagents (its Agent/Task tool), read from its files; no Helm session behind them. */
   nativeCards?: NativeAgent[];
-  recovery?: { kind: 'limited' | 'error' | 'interrupted' | 'restart'; message: string; at: number };
+  autoResumeLimited?: boolean;
+  recovery?: { kind: 'limited' | 'error' | 'interrupted' | 'restart'; message: string; at: number; resetAt?: number | null; autoResumeError?: string; autoResumeCancelled?: boolean };
   /** How full the conversation's context is after its latest reply (Claude, Codex). */
   context?: { used: number; window: number; at: number; /** The model that replied (`claude-opus-5-5`). */ model?: string; /** The model's whole window, before the account's "compact at" size cuts it down. */ full?: number; /** Just compacted; the new size comes with the next reply. */ compacted?: boolean };
   lastUsage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; inputIncludesCache?: boolean; at: number; model?: string };
