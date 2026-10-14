@@ -796,6 +796,29 @@ test('a completed task stays complete after a message was consumed during its tu
   assert.equal(delegationOutput({status:'working',delegation:{status:'working'}},events).complete,false);
 });
 
+test('a restart closing a mid-task message does not make a working helper look finished', () => {
+  // As logged on the laptop: the task, then a message sent mid-task, then a
+  // restart that closed both tickets while the CLI's own turn ran on.
+  const events = [
+    { type:'turn.start', turnId:'local-task', text:'Measure startup' },
+    { type:'turn.start', turnId:'provider-turn', text:'Measure startup' },
+    { type:'item.start', id:'note', kind:'text' },
+    { type:'item.delta', id:'note', text:'Reading the startup code now.' },
+    { type:'turn.start', turnId:'local-note', text:'Avoid activeTurn' },
+    { type:'turn.deliver', turnId:'local-note' },
+    { type:'turn.accept', turnId:'local-note' },
+    { type:'turn.done', turnId:'local-task', status:'ok' },
+    { type:'turn.done', turnId:'local-note', status:'ok' },
+  ];
+  const result = delegationOutput({ status:'working', delegation:{status:'working'} }, events);
+  assert.equal(result.complete, false);
+  assert.equal(result.status, 'working');
+  // Once the CLI's turn ends, it is finished as usual.
+  const done = delegationOutput({ status:'idle', delegation:{status:'done'} },
+    [...events, { type:'turn.done', turnId:'provider-turn', status:'ok' }]);
+  assert.equal(done.complete, true);
+});
+
 test('CLI flags do not leak into the task; literal task flags survive --', () => {
   const parsed = parseAgentArgs(['claude-main', '--model', 'opus', '--wait', '--', 'review', '--dangerously-skip-permissions'], { values: ['model'], switches: ['wait'] });
   assert.deepEqual(parsed.options, { model: 'opus', wait: true });

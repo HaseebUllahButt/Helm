@@ -5,6 +5,7 @@ import { modelPrefs, startPrefs, subagentPrefs, accountKey } from './settings.js
 import { modesFor, defaultMode } from './modes.js';
 import { credentialScan } from './credentials.js';
 import { fold } from './brain.js';
+import { activeTurnFromEvents } from './events.js';
 import { createHash } from 'node:crypto';
 import { browserNote } from './browser.js';
 
@@ -158,7 +159,11 @@ export function delegationOutput(session, events) {
   const settled = !['starting', 'working', 'blocked'].includes(session.status)
     && ['done', 'error', 'interrupted'].includes(session.delegation?.status)
     ? session.delegation.status : null;
-  const complete = !!settled || !!turn?.status;
+  // The other way round: a restart closes the tickets of messages already
+  // handed to a CLI that is still working. Its own turn is still open, so the
+  // task is not finished just because the newest card is.
+  const running = ['starting', 'working'].includes(session.status) && !!activeTurnFromEvents(events);
+  const complete = !!settled || (!!turn?.status && !running);
   const status = !complete && (pending || session.status === 'blocked') ? 'blocked'
     : settled || (complete ? (turn.status === 'ok' ? 'done' : turn.status) : 'working');
   return { session, status, complete, output: output.slice(-32_000), truncated: output.length > 32_000,
