@@ -143,8 +143,8 @@ export class BrowserManager {
         const readOnly = step => ['look', 'console', 'network', 'screenshot', 'navigate', 'back', 'forward'].includes(step?.kind) || step?.kind === 'batch' && Array.isArray(step.actions) && step.actions.every(readOnly);
         if (!readOnly(action)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
       }
-      if (tab.control && tab.control !== actor && !['look', 'console', 'network', 'screenshot'].includes(action?.kind)) throw new Error('You have control of this tab. Release control to let the agent continue.');
-      tab.lastUsed = this.now(); const result = await this.perform(tab, action); if (!['look', 'console', 'network', 'screenshot'].includes(action?.kind)) await this.persistTabs(sessionId); return result;
+      this.checkControl(tab, action, actor);
+      tab.lastUsed = this.now(); const result = await this.perform(tab, action, actor); if (!['look', 'console', 'network', 'screenshot'].includes(action?.kind)) await this.persistTabs(sessionId); return result;
     });
     this.serial.set(tab.id, job); void job.finally(() => { if (this.serial.get(tab.id) === job) this.serial.delete(tab.id); }).catch(() => {}); return job;
   }
@@ -167,7 +167,12 @@ export class BrowserManager {
     if (action.name) return tab.page.getByText(text(action.name, 500), { exact: true });
     throw new Error('choose an element ref, selector, role/name, or x/y coordinates');
   }
-  async perform(tab, action) {
+  checkControl(tab, action, actor) {
+    if (['look', 'console', 'network', 'screenshot'].includes(action?.kind)) return;
+    if (actor !== 'agent' && tab.control !== actor) throw new Error('Take control before changing this browser tab.');
+    if (tab.control && tab.control !== actor) throw new Error('You have control of this tab. Release control to let the agent continue.');
+  }
+  async perform(tab, action, actor = 'agent') {
     if (!action || typeof action !== 'object') throw new Error('browser action must be an object');
     const kind = action.kind;
     if (kind === 'look') return { tab: this.metadata(tab), ...(await this.look(tab, action.budget ?? 6000)) };
@@ -176,7 +181,7 @@ export class BrowserManager {
     if (kind === 'screenshot') return this.capture(tab, action);
     if (kind === 'batch') {
       if (!Array.isArray(action.actions) || action.actions.length > 40 || action.actions.some(a => a.kind === 'batch')) throw new Error('a batch holds at most 40 nonnested actions');
-      const results = []; for (const step of action.actions) { try { results.push(await this.perform(tab, step)); } catch (error) { return { results, failedAt: results.length, error: error.message, ...(await this.look(tab)) }; } } return { results, ...(await this.look(tab)) };
+      const results = []; for (const step of action.actions) { try { this.checkControl(tab, step, actor); results.push(await this.perform(tab, step, actor)); } catch (error) { return { results, failedAt: results.length, error: error.message, ...(await this.look(tab)) }; } } return { results, ...(await this.look(tab)) };
     }
     if (tab.engine === 'bowser') return this.bowserAction(tab, action);
     const page = tab.page;
@@ -200,7 +205,7 @@ export class BrowserManager {
     else if (kind === 'select') { const target = await this.target(tab, action); try { await target.selectOption(action.values || text(action.value, 1000)); } finally { if (target.dispose) await target.dispose(); } }
     else if (kind === 'upload') {
       const files = await this.uploads(tab, action);
-      const target = await this.target(tab, action); try { await target.setInputFiles(files.paths); } finally { if (target.dispose) await target.dispose(); await files.cleanup(); }
+      let target; try { target = await this.target(tab, action); await target.setInputFiles(files.paths); } finally { if (target?.dispose) await target.dispose(); await files.cleanup(); }
     } else if (kind === 'evaluate') return { value: await page.evaluate(text(action.script, 20000)) };
     else if (kind === 'wait') { integer(action.timeout ?? 10000, 1, 30000); if (action.selector) await page.locator(text(action.selector, 2000)).waitFor({ state: action.state || 'visible', timeout: action.timeout ?? 10000 }); else await page.getByText(text(action.text, 2000)).first().waitFor({ timeout: action.timeout ?? 10000 }); }
     else if (kind === 'resize') { await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) }); await this.clearStream(tab); }
@@ -250,7 +255,7 @@ export class BrowserManager {
     const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer');
     tab.lastUsed = this.now(); tab.viewers.set(viewer, this.now());
     if (tab.engine === 'bowser') {
-      if (!tab.capturing && (!tab.frame || this.now() - (tab.frameAt || 0) > 900)) tab.capturing = this.capture(tab).then(result => { const hash = createHash('sha256').update(result.image).digest('hex'); if (hash !== tab.hash) { tab.frame = result.image; tab.sequence++; tab.hash = hash; } tab.frameAt = this.now(); }).finally(() => { tab.capturing = null; });
+      if (!tab.capturing && (!tab.frame || this.now() - (tab.frameAt || 0) > 900)) tab.capturing = this.capture(tab).then(result => { const hash = createHash('sha256').update(result.image).digest('hex'); if (hash !== tab.hash || !tab.frame) { tab.frame = result.image; tab.sequence++; tab.hash = hash; } tab.frameAt = this.now(); }).finally(() => { tab.capturing = null; });
       if (tab.capturing) await tab.capturing;
     } else if (!tab.cdp && !tab.streamStart) {
       tab.streamStart = (async () => {
