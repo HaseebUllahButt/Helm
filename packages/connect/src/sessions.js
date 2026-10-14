@@ -16,7 +16,7 @@ import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages, sessionSnapshot, sessionActivity } from './transcript.js';
 import { findSubagentsDir, nativeActive, nativeSubagent, nativeSubagents, nativeWorking, subagentsDir } from './native-subagents.js';
 import { codexSubagents, codexChildMessages, cursorMessages, cursorSubagents, eventSubagents, opencodeSubagents, relayToSubagent, unwrapCoordinator, SUBAGENT_ENGINES } from './cli-subagents.js';
-import { nonAgentClaudeTask } from './claude-tasks.js';
+import { nonAgentClaudeTask, claudeServiceTasks } from './claude-tasks.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
 import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
@@ -175,7 +175,7 @@ const SEEN_KEEP_MS = 30 * 86_400_000;
 const pendingSummary = (pending) => ({ pending: pending.length,
   ask: pending.length ? { ...askPreview(pending[pending.length - 1]), requestId: pending[pending.length - 1].requestId } : null });
 
-export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, nativeSent, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, lastLimits, rewindProcId, rewindFailure, ...s }) => ({
+export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, dismissedNativeFailures, nativeSent, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, lastLimits, rewindProcId, rewindFailure, ...s }) => ({
   ...s, rewindSupported: !!DRIVERS[s.driver]?.canRewind && !s.external && !nativeSocket && !s.nativeCli && !s.shared && !rewindFailure,
   ...(typeof s.title === 'string' && /\[(?:Image|Pasted text) #/.test(s.title) ? { title: bareTitle(s.title) || s.title } : {}),
 });
@@ -1002,6 +1002,20 @@ export class Sessions extends EventEmitter {
       const removed = Object.keys(s.nativeAgents).filter((id) => services.has(id));
       for (const id of removed) delete s.nativeAgents[id];
       if (removed.length) { changed = true; this.#refreshTeam(s); }
+      // A long-running shell can finish after its start was trimmed from
+      // Helm's log. Read only this conversation, only for unresolved ids.
+      const known = new Set(events.filter(e => e.type === 'item.start' || e.type === 'item.update' && e.agent?.type).map(e => e.id));
+      const unknown = Object.keys(s.nativeAgents).filter(id => !known.has(id));
+      if (unknown.length) {
+        const profile = loadProfiles()?.profiles?.find(p => p.id === s.profileId);
+        const home = s.nativeHome || s.externalHome || profile?.env?.CLAUDE_CONFIG_DIR || '~/.claude';
+        void claudeServiceTasks({ home, cwd: s.cwd, sessionId: s.engineSessionId, ids: unknown }).then(ids => {
+          if (this.#index.get(s.id) !== s || !ids.some(id => s.nativeAgents?.[id])) return;
+          for (const id of ids) if (s.nativeAgents) delete s.nativeAgents[id];
+          this.#refreshTeam(s);
+          this.#save();
+        });
+      }
     }
     if (changed) this.#save();
   }
@@ -1323,7 +1337,15 @@ export class Sessions extends EventEmitter {
    */
   #refreshTeam(parent) {
     const children = [...this.#index.values()].filter((session) => session.delegation?.parentId === parent.id && !session.archived);
-    const native = Object.values(parent.nativeAgents ?? {});
+    // Acknowledgements last for this failure episode. When the same helper
+    // works again, its next failure must ask for attention again.
+    for (const id of Object.keys(parent.dismissedNativeFailures ?? {})) {
+      if (parent.nativeAgents?.[id] !== 'error') delete parent.dismissedNativeFailures[id];
+    }
+    const native = Object.entries(parent.nativeAgents ?? {});
+    for (const child of children) {
+      if ((child.delegation.status ?? child.status) !== 'error') delete child.delegation.dismissedFailureAt;
+    }
     const cards = this.#nativeCards(parent);
     if (cards.length) parent.nativeCards = cards; else delete parent.nativeCards;
     // A card the driver also reported is already counted through the map.
@@ -1332,12 +1354,37 @@ export class Sessions extends EventEmitter {
       const state = session.delegation.status ?? session.status;
       team.working += Number(['working', 'starting'].includes(state)) + (session.team?.working ?? 0);
       team.blocked += Number(state === 'blocked') + (session.team?.blocked ?? 0);
-      team.failed += Number(state === 'error') + (session.team?.failed ?? 0);
+      team.failed += Number(state === 'error' && session.delegation.dismissedFailureAt !== (session.delegation.finishedAt ?? 0)) + (session.team?.failed ?? 0);
       return team;
-    }, { working: native.filter(state => state === 'working').length + unreported,
-      blocked: native.filter(state => state === 'blocked').length, failed: native.filter(state => state === 'error').length });
+    }, { working: native.filter(([, state]) => state === 'working').length + unreported,
+      blocked: native.filter(([, state]) => state === 'blocked').length,
+      failed: native.filter(([id, state]) => state === 'error' && !parent.dismissedNativeFailures?.[id]).length });
     this.emit('session', parent);
     if (parent.delegation) this.#updateTeam(parent);
+  }
+
+  /** Acknowledge current child failures without changing their status or history. */
+  dismissChildFailures(id) {
+    const parent = this.get(id);
+    const visited = new Set();
+    const dismiss = (session) => {
+      if (visited.has(session.id)) return;
+      visited.add(session.id);
+      for (const [agentId, state] of Object.entries(session.nativeAgents ?? {})) {
+        if (state === 'error') (session.dismissedNativeFailures ??= {})[agentId] = true;
+      }
+      for (const child of this.#index.values()) {
+        if (child.archived || child.delegation?.parentId !== session.id) continue;
+        if ((child.delegation.status ?? child.status) === 'error') {
+          child.delegation.dismissedFailureAt = child.delegation.finishedAt ?? 0;
+        }
+        dismiss(child);
+      }
+      this.#refreshTeam(session);
+    };
+    dismiss(parent);
+    this.#save();
+    return { session: wire(parent) };
   }
 
   /** id -> { key, dir, sig, cards, at, busy }: where each session's subagents are, and what their records last said. */
@@ -2347,6 +2394,11 @@ export class Sessions extends EventEmitter {
     if (e.type === 'item.update' && e.agent?.id && e.id && e.id !== e.agent.id) {
       const tools = this.#agentTools.get(s.id) ?? new Map();
       this.#agentTools.set(s.id, tools.set(e.agent.id, (tools.get(e.agent.id) ?? new Set()).add(e.id)));
+    }
+    if (s.engine === 'claude' && e.type === 'item.update' && nonAgentClaudeTask(e.agent) && s.nativeAgents?.[e.id]) {
+      delete s.nativeAgents[e.id];
+      this.#refreshTeam(s);
+      this.#save();
     }
     if (e.type === 'subagent.status' || (e.type === 'permission.request' && e.parentId)) {
       const id = e.type === 'subagent.status' ? e.id : e.parentId;

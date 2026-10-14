@@ -849,3 +849,59 @@ for (const width of [1280, 390]) test(`native child failure opens its older tran
   assert.ok(await page.evaluate(() => window.nativeHistoryReads.some(params => params.before === 100)));
   await native.waitFor({ state: 'visible' });
 });
+
+
+for (const width of [1280, 390]) test(`dismissing a child failure clears it across refresh and later failures return at ${width}px`, async t => {
+  const { page, boot } = await pageFor(t, { width, height: 900 });
+  await boot();
+  const mount = () => page.evaluate(() => {
+    const listeners = new Set();
+    const failed = !localStorage.getItem('test.failure-dismissed');
+    const parent = { id: 'dismiss-parent', title: 'Keep building', cwd: '/project', engine: 'claude', driver: 'claude', profileId: 'claude', status: 'working', alive: true, turns: 2, updatedAt: Date.now(), team: { working: 1, blocked: 0, failed: failed ? 1 : 0 } };
+    const client = window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [parent] });
+    client.on = listener => { listeners.add(listener); return () => listeners.delete(listener); };
+    const rpc = client.rpc;
+    const publish = () => { for (const listener of listeners) listener('laptop', 'session.update', { session: { ...parent, team: { ...parent.team } } }); };
+    client.rpc = (env, method, params) => {
+      if (method === 'session.dismiss-child-failures') {
+        window.dismissRequest = { env, params };
+        if (window.rejectDismiss) return Promise.reject(new Error('Machine disconnected. Try again.'));
+        parent.team.failed = 0;
+        localStorage.setItem('test.failure-dismissed', 'yes');
+        publish();
+        return Promise.resolve({ session: parent });
+      }
+      return rpc(env, method, params);
+    };
+    window.newFailure = () => { parent.team.failed = 1; publish(); };
+    window.newApproval = () => { parent.team.blocked = 1; publish(); };
+    window.mount(client);
+  });
+  await mount();
+  const card = page.locator('.sidebar .need');
+  await card.getByRole('button', { name: 'Dismiss failure', exact: true }).waitFor();
+  assert.equal(await card.locator('.need-go').innerText(), '1 child task failed');
+  const dismissBounds = await card.getByRole('button', { name: 'Dismiss failure', exact: true }).boundingBox();
+  const reviewBounds = await card.locator('.need-go').boundingBox();
+  assert.ok(dismissBounds.y >= reviewBounds.y + reviewBounds.height, 'dismiss and snooze do not overlap the review action');
+  await page.screenshot({ path: `/tmp/helm-dismiss-child-${width}.png` });
+  await page.evaluate(() => { window.rejectDismiss = true; });
+  await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
+  await card.getByRole('alert').getByText('Machine disconnected. Try again.', { exact: true }).waitFor();
+  await page.evaluate(() => { window.rejectDismiss = false; });
+  await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
+  await card.waitFor({ state: 'detached' });
+  assert.deepEqual(await page.evaluate(() => window.dismissRequest), { env: 'laptop', params: { id: 'dismiss-parent' } });
+  assert.equal(await page.evaluate(() => localStorage.getItem('helm.snoozed')), null, 'dismissal is not a browser-local snooze');
+  await page.locator('.sidebar .thread-row').filter({ hasText: 'Keep building' }).locator('.tstat.working').waitFor();
+  await page.reload(); await boot(); await mount();
+  await page.locator('.sidebar .thread-row').filter({ hasText: 'Keep building' }).waitFor();
+  assert.equal(await card.count(), 0);
+  await page.evaluate(() => window.newFailure());
+  await card.getByRole('button', { name: 'Dismiss failure', exact: true }).waitFor();
+  await page.evaluate(() => window.newApproval());
+  await card.getByRole('button', { name: 'Dismiss failure', exact: true }).click();
+  await card.getByText('Needs you', { exact: false }).waitFor();
+  assert.equal(await card.getByRole('button', { name: 'Dismiss failure', exact: true }).count(), 0, 'approval remains visible after dismissing failures');
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+});
