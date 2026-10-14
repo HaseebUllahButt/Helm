@@ -7,6 +7,8 @@ export function createBrowserRoutes({ sessions, manager = new BrowserManager({ s
     async dispatch(method, p) {
       if (!method.startsWith('browser.')) return undefined;
       if (method === 'browser.list') return manager.list(p.id);
+      if (method === 'browser.flows') return manager.listFlows(p.id);
+      if (method === 'browser.run') return manager.runFlow(p.id, p.tabId, p.name, p.with);
       if (method === 'browser.open') return manager.open(p.id, p);
       if (method === 'browser.action') return manager.run(p.id, p.tabId, p.action, p.viewer || 'agent', p.controlEpoch);
       if (method === 'browser.frame') return manager.frame(p.id, p.tabId, p);
