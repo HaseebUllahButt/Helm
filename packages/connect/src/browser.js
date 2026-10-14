@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
-import { readFile, writeFile, rm, chmod } from 'node:fs/promises';
+import { readFile, writeFile, rm, chmod, stat } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { spawn } from 'node:child_process';
 import { HELM_DIR } from './paths.js';
@@ -111,6 +111,11 @@ export class BrowserManager {
         if (this.tabs.has(row.id)) continue;
         const context = await this.context(sessionId), page = await context.newPage(), tab = this.register(sessionId, page);
         this.tabs.delete(tab.id); tab.id = row.id; tab.title = row.title || ''; this.tabs.set(tab.id, tab);
+        for (const download of (Array.isArray(row.downloads) ? row.downloads : []).slice(-20)) {
+          if (!/^[a-f0-9]{16}$/.test(download.id || '') || typeof download.name !== 'string') continue;
+          const path = join(this.directory, sessionId, 'downloads', `${download.id}-${basename(download.name)}`);
+          tab.downloads.push({ ...download, name: basename(download.name), path, status: download.status === 'ready' && existsSync(path) ? 'ready' : 'failed' });
+        }
         try { await page.goto(httpUrl(row.url), { waitUntil: 'domcontentloaded' }); } catch { /* keep the tab available to retry */ }
       }
     })().catch(error => { this.recovered.delete(sessionId); throw error; }));
@@ -276,7 +281,7 @@ export class BrowserManager {
   async control(sessionId, tabId, viewer, take) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer'); if (tab.control && tab.control !== viewer) throw new Error('another viewer has control'); tab.control = take ? viewer : null; tab.viewers.set(viewer, this.now()); await (this.serial.get(tab.id) || Promise.resolve()).catch(() => {}); return { tab: this.metadata(tab) }; }
   async save(sessionId) { const context = await this.contexts.get(sessionId); if (!context) return; const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); const file = join(folder, 'storage.json'); await context.storageState({ path: file, indexedDB: true }); await chmod(file, 0o600); }
   async close(sessionId, tabId) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (this.serial.has(tab.id)) throw new Error('wait for the current browser action to finish'); await this.save(sessionId); await this.clearStream(tab); if (tab.page) await tab.page.close(); else { this.tabs.delete(tab.id); this.bowser.stop(); } await this.persistTabs(sessionId); if (![...this.tabs.values()].some(t => t.sessionId === sessionId)) { const context = await this.contexts.get(sessionId); await context?.close(); this.contexts.delete(sessionId); } if (!this.tabs.size) await this.shutdownBrowser(); return { ok: true }; }
-  async download(sessionId, tabId, downloadId) { const tab = this.get(sessionId, tabId), record = tab.downloads.find(d => d.id === downloadId && d.status === 'ready'); if (!record) throw new Error('download is not ready'); const bytes = await readFile(record.path); if (bytes.length > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); return { name: record.name, data: bytes.toString('base64') }; }
+  async download(sessionId, tabId, downloadId) { await this.recover(sessionId); const tab = this.get(sessionId, tabId), record = tab.downloads.find(d => d.id === downloadId && d.status === 'ready'); if (!record) throw new Error('download is not ready'); if ((await stat(record.path)).size > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); const bytes = await readFile(record.path); if (bytes.length > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); return { name: record.name, data: bytes.toString('base64') }; }
   async sweep() {
     for (const tab of this.tabs.values()) {
       for (const [viewer, at] of tab.viewers) if (this.now() - at > 10000) { tab.viewers.delete(viewer); if (tab.control === viewer) tab.control = null; }
