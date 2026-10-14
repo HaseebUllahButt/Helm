@@ -146,6 +146,19 @@ test('a refused connection falls back to a reachable hub instead of aborting on 
   assert.deepEqual(await hubRpc(net, 'peer', 'env.info', {}, { timeout: 2000, budget: 5000 }), { reached: true });
 });
 
+test('every hub refusing marks the request as never sent, so asking again later is safe', async () => {
+  const N = await import('@helm/protocol/network');
+  const { hubRpc } = await import('../packages/connect/src/hub-client.js');
+  const net = { ...N.loadNetwork() };
+  const closed = createServer();
+  await new Promise(resolve => closed.listen(0, '127.0.0.1', resolve));
+  net.port = closed.address().port;
+  await new Promise(resolve => closed.close(resolve));
+  net.machines = { peer: { endpoints: [] } };
+  await assert.rejects(hubRpc(net, 'peer', 'session.input', { id: 's1', data: 'hi' }, { timeout: 2000, budget: 5000 }),
+    err => err.code === 'unreachable' && !err.uncertain && /could not reach that machine/.test(err.message));
+});
+
 // A hub that proves itself and then either answers every RPC or swallows it.
 async function fakeHub(t, net, { answer }) {
   const N = await import('@helm/protocol/network');

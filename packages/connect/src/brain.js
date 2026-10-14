@@ -4,34 +4,68 @@ import { fileURLToPath } from 'node:url';
 import { HELM_DIR } from './paths.js';
 import { M } from '@helm/protocol';
 
-/** Resolve CLI targets from the full inventory; the digest omits helper tasks. */
-export async function findNetworkSession(id, { machines, snapshot, rpc }) {
+/**
+ * Resolve CLI targets from the full inventory; the digest omits helper tasks.
+ *
+ * A machine that is restarting or busy does not answer for a while. Its
+ * saved list (helpers included) still names what it holds, and with
+ * `waitMs` the machines that did not answer and are worth waiting for
+ * (`waitFor`: this one, or one seen moments ago) are asked again, backing
+ * off, before an id is called unknown - so a helper is never reported
+ * missing just because its machine was slow to say so.
+ */
+export async function findNetworkSession(id, { machines, snapshot, rpc, waitMs = 0, waitFor = () => true, onWait, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   if (!id) throw new Error('which session? `helm digest` lists them');
-  const inventories = await Promise.all(Object.entries(machines ?? {}).map(async ([env, machine]) => {
+  const ask = async (env, machine) => {
     try {
       const result = await rpc(env, M.SESSION_LIST, { includeDelegations: true });
-      return { env, machine: machine.name ?? env, sessions: result.sessions ?? [] };
+      return { env, machine: machine.name ?? env, sessions: result.sessions ?? [], answered: true };
     } catch {
       // An offline machine can still own the ID. Keep that candidate so a
       // short prefix cannot silently select another machine's live session.
       const saved = snapshot?.machines?.[env];
-      return { env, machine: saved?.name ?? machine.name ?? env, sessions: saved?.sessions ?? [] };
+      return { env, machine: saved?.name ?? machine.name ?? env, sessions: savedSessions(saved), answered: false };
     }
-  }));
-  const hits = [];
-  for (const { env, machine, sessions } of inventories) {
-    for (const session of sessions) {
-      if (session.id === id || shortId(session.id) === id || session.id.startsWith(id)) {
-        hits.push({ env, machine, session });
+  };
+  const entries = Object.entries(machines ?? {});
+  let inventories = await Promise.all(entries.map(([env, machine]) => ask(env, machine)));
+  const deadline = Date.now() + waitMs;
+  for (let delay = 1000; ; delay = Math.min(delay * 2, 10_000)) {
+    const hits = [];
+    for (const { env, machine, sessions } of inventories) {
+      for (const session of sessions) {
+        if (session.id === id || shortId(session.id) === id || session.id.startsWith(id)) {
+          hits.push({ env, machine, session });
+        }
       }
     }
+    if (hits.length > 1) {
+      throw new Error(`"${id}" matches ${hits.length} sessions:\n` +
+        hits.map((h) => `  ${h.machine}  ${h.session.id}  ${h.session.title}`).join('\n'));
+    }
+    if (hits.length) return hits[0];
+    const silent = inventories.filter((x) => !x.answered);
+    if (!silent.length) throw new Error(`no session "${id}" - \`helm digest\` lists them`);
+    const names = silent.map((x) => x.machine).join(', ');
+    if (!silent.some((x) => waitFor(x.env)) || Date.now() + delay > deadline) {
+      throw Object.assign(new Error(`no session "${id}" on the machines that answered. ${names} did not answer`
+        + ` (offline, restarting or busy) - try again in a minute`), { code: 'busy' });
+    }
+    onWait?.(silent.filter((x) => waitFor(x.env)).map((x) => x.machine).join(', '));
+    await sleep(delay);
+    inventories = await Promise.all(inventories.map((x) => x.answered || !waitFor(x.env) ? x
+      : ask(x.env, machines[x.env])));
   }
-  if (!hits.length) throw new Error(`no session "${id}" - \`helm digest\` lists them`);
-  if (hits.length > 1) {
-    throw new Error(`"${id}" matches ${hits.length} sessions:\n` +
-      hits.map((h) => `  ${h.machine}  ${h.session.id}  ${h.session.title}`).join('\n'));
+}
+
+/** A saved machine's sessions, with the helpers the digest nests under them. */
+function savedSessions(saved) {
+  const out = [];
+  for (const s of saved?.sessions ?? []) {
+    out.push(s);
+    out.push(...(s.helpers ?? []));
   }
-  return hits[0];
+  return out;
 }
 
 /**

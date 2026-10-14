@@ -811,7 +811,37 @@ async function dictate() {
 // person, which is the reason they print rather than return JSON by default.
 
 const brainRpc = (env, method, params = {}, timeout = 25_000) =>
-  hubRpc(requireNetwork(), env, method, params, { timeout });
+  untilBack(env, () => hubRpc(requireNetwork(), env, method, params, { timeout }));
+
+// A machine restarting Helm answers nothing for a minute or so. While no
+// request has gone out, waiting and asking again is safe, and beats telling
+// an agent its helper is gone. Anything that may have arrived is not retried.
+// Only this machine, or one seen moments ago, is worth the wait; one that has
+// been off for an hour gets a quick answer instead.
+const WAIT_FOR_MACHINE_MS = 90_000;
+const RECENTLY_SEEN_MS = 5 * 60_000;
+function worthWaiting(env) {
+  if (env === requireNetwork().self) return true;
+  return Date.now() - (readSnapshot().machines?.[env]?.at ?? 0) < RECENTLY_SEEN_MS;
+}
+let toldWaiting = false;
+function waitingFor(names) {
+  if (toldWaiting) return;
+  toldWaiting = true;
+  process.stderr.write(`${names} is restarting or busy - retrying for up to ${WAIT_FOR_MACHINE_MS / 1000}s...\n`);
+}
+async function untilBack(env, call) {
+  const deadline = Date.now() + WAIT_FOR_MACHINE_MS;
+  for (let delay = 1000; ; delay = Math.min(delay * 2, 10_000)) {
+    try {
+      return await call();
+    } catch (err) {
+      if (err.code !== 'unreachable' || !worthWaiting(env) || Date.now() + delay > deadline) throw err;
+      waitingFor(requireNetwork().machines?.[env]?.name ?? env);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
 
 /** A machine by name, short id or full id. */
 function machineId(who) {
@@ -874,7 +904,14 @@ async function findSession(id) {
   return findNetworkSession(id, {
     machines: net.machines,
     snapshot: readSnapshot(),
-    rpc: (env, method, params) => hubRpc(net, env, method, params, { timeout: 8000, budget: 8000 }),
+    // Every route to this machine ends at the same daemon, so it gets one
+    // long try. Another machine's hubs each get half the budget, so one slow
+    // hub (a busy local one relaying) cannot use it all before the next.
+    rpc: (env, method, params) => hubRpc(net, env, method, params,
+      env === net.self ? { timeout: 10_000, budget: 10_000 } : { timeout: 4000, budget: 8000 }),
+    waitMs: WAIT_FOR_MACHINE_MS,
+    waitFor: worthWaiting,
+    onWait: waitingFor,
   });
 }
 

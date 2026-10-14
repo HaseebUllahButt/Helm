@@ -54,6 +54,53 @@ test('CLI lookup retains offline candidates and rejects live/offline prefix coll
   await assert.rejects(findNetworkSession('gone', options), /no session/);
 });
 
+test('CLI lookup finds a helper saved under its lead while that machine restarts', async () => {
+  const options = {
+    machines: { laptop: { name: 'Laptop' } },
+    snapshot: { machines: { laptop: { name: 'Laptop', sessions: [
+      { id: 'c6df5f000000', title: 'Coordinator', helpers: [{ id: '397140aaaaaa', title: 'Helper', depth: 1 }] },
+    ] } } },
+    rpc: async () => { throw new Error('timed out'); },
+  };
+  const hit = await findNetworkSession('397140', options);
+  assert.equal(hit.env, 'laptop');
+  assert.equal(hit.session.id, '397140aaaaaa');
+});
+
+test('CLI lookup waits for a machine that is restarting instead of calling the id unknown', async () => {
+  const helper = { id: '713142bbbbbb', title: 'Helper', delegation: { parentId: 'lead' } };
+  let tries = 0;
+  const waits = [], slept = [];
+  const options = {
+    machines: { laptop: { name: 'Laptop' }, vm: { name: 'VM' } },
+    snapshot: { machines: {} },
+    rpc: async (env) => {
+      if (env === 'vm') return { sessions: [] };
+      if (++tries < 3) throw new Error('connect ECONNREFUSED 127.0.0.1:8787');
+      return { sessions: [helper] };
+    },
+    waitMs: 60_000, onWait: (names) => waits.push(names), sleep: async (ms) => { slept.push(ms); },
+  };
+  assert.deepEqual(await findNetworkSession('713142', options), { env: 'laptop', machine: 'Laptop', session: helper });
+  assert.deepEqual(waits, ['Laptop', 'Laptop']);
+  assert.deepEqual(slept, [1000, 2000], 'backs off between tries');
+});
+
+test('CLI lookup says a silent machine is busy, not that the session is gone', async () => {
+  const options = {
+    machines: { laptop: { name: 'Laptop' }, vm: { name: 'VM' } },
+    snapshot: { machines: {} },
+    rpc: async (env) => { if (env === 'laptop') throw new Error('timed out'); return { sessions: [] }; },
+    waitMs: 5000, sleep: async () => {},
+  };
+  let asked = 0;
+  const offline = { ...options, rpc: async (env) => { asked++; return options.rpc(env); }, waitFor: () => false, sleep: () => assert.fail('no wait for a machine off for long') };
+  await assert.rejects(findNetworkSession('397140', offline), /Laptop did not answer/);
+  assert.equal(asked, 2, 'one try each, no waiting');
+  await assert.rejects(findNetworkSession('397140', options),
+    (err) => err.code === 'busy' && /Laptop did not answer \(offline, restarting or busy\)/.test(err.message));
+});
+
 test('CLI lookup uses a live empty inventory instead of a stale cached match', async () => {
   const options = {
     machines: { vm: { name: 'VM' } },

@@ -148,7 +148,8 @@ export async function hubRpc(net, env, method, params = {}, { timeout = 20_000, 
           && !/offline|not connected|reach|ECONN|socket|timed out|fetch failed|401/i.test(err.message)) throw err;
     }
   }
-  throw new Error(`could not reach that machine through any hub\n  ${failures.join('\n  ')}`);
+  // Nothing went out: asking again later cannot do anything twice.
+  throw Object.assign(new Error(`could not reach that machine through any hub\n  ${failures.join('\n  ')}`), { code: 'unreachable' });
 }
 
 /**
