@@ -9,7 +9,7 @@ export function createBrowserRoutes({ sessions, manager = new BrowserManager({ s
       if (method === 'browser.profiles') return manager.profiles(p.id);
       if (method === 'browser.importLogins') return manager.importLogins(p.id, p.profileKey);
       if (method === 'browser.loginDefault') return manager.loginDefault(p.id, p.profileKey);
-      if (method === 'browser.list') return manager.list(p.id);
+      if (method === 'browser.list') return manager.list(p.id, { warm: p.warm === true });
       if (method === 'browser.flows') return manager.listFlows(p.id);
       if (method === 'browser.run') return manager.runFlow(p.id, p.tabId, p.name, p.with);
       // The chat being viewed hears of a new tab, so its Browser button can say so.

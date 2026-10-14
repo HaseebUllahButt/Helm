@@ -138,6 +138,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['Ctrl/⌘ ]', 'Forward'],
     ['Ctrl/⌘ Shift S', 'Settings'],
     ['Ctrl/⌘ Shift 4', 'Usage, limits and cost (the $ key)'],
+    ['Ctrl `', 'Terminal (in a chat: its folder); again to go back'],
     ['?', 'This list'],
   ]],
   ['In the new-chat box', [

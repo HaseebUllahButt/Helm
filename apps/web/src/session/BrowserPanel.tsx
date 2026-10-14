@@ -6,7 +6,7 @@ import { previewForLink, previewWait, previewDelay, previewLease, type BrowserPr
 import { isDockKey } from './BrowserDock';
 import { BrowserPointer, type Pointer } from './BrowserPointer';
 
-type Tab = { id: string; engine: string; title: string; url: string; viewport: { width: number; height: number }; control: string | null; controlEpoch: number; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[]; pointer?: Pointer | null; fit?: boolean; loading?: boolean };
+type Tab = { id: string; engine: string; title: string; url: string; viewport: { width: number; height: number }; control: string | null; controlEpoch: number; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[]; pointer?: Pointer | null; fit?: boolean; loading?: boolean; problem?: { url: string; message: string } | null };
 const keys: Record<string, string> = { Control: 'Control', Meta: 'Meta', ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight', ' ': 'Space' };
 const clamp = (value: number, min: number, max: number) => Math.round(Math.max(min, Math.min(max, value)));
 const near = (a: { width: number; height: number }, b: { width: number; height: number }) => Math.abs(a.width - b.width) < 24 && Math.abs(a.height - b.height) < 24;
@@ -26,15 +26,19 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
   const panel = useRef<HTMLElement>(null), nav = useRef<HTMLDivElement>(null), fitted = useRef(new Map<string, { width: number; height: number }>()), fitTimer = useRef<ReturnType<typeof setTimeout>>();
   if (!viewer.current) viewer.current = [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, '0')).join('');
   useEffect(() => () => { viewEpoch.current++; clearTimeout(typeTimer.current); clearTimeout(wheelTimer.current); typed.current = ''; wheel.current = { dx: 0, dy: 0 }; }, [chosen]);
+  // Whatever goes wrong is said in words: no terminal colour codes or call logs.
+  const plain = (message: string) => message.replace(/\u001b\[[0-9;]*m/g, '').replace(/\s*Call log:[\s\S]*$/, '').replace(/^page\.\w+: /, '').trim();
   const call = useCallback(<T,>(method: string, params: Record<string, unknown> = {}) => client.rpc<T>(env.id, `browser.${method}`, { id: session.id, ...params }, 60000), [client, env.id, session.id]);
-  const refresh = useCallback(async () => { const result = await call<{ tabs: Tab[]; bowser: boolean }>('list'); setTabs(result.tabs); setBowser(result.bowser); setChosen(current => result.tabs.some(t => t.id === current) ? current : result.tabs[0]?.id || ''); }, [call]);
+  const refresh = useCallback(async () => { const result = await call<{ tabs: Tab[]; bowser: boolean }>('list', { warm: true }); setTabs(result.tabs); setBowser(result.bowser); setChosen(current => result.tabs.some(t => t.id === current) ? current : result.tabs[0]?.id || ''); }, [call]);
   useEffect(() => { void refresh().catch(e => setError(e.message)); }, [refresh]);
   // The agent opened a tab here: list it and follow it.
   useEffect(() => client.on((id, kind, payload: any) => {
     if (id !== env.id || kind !== 'browser.tab' || payload?.id !== session.id) return;
     void refresh().then(() => { if (!payload.viewer) setChosen(payload.tabId); }).catch(() => {});
   }), [client, env.id, session.id, refresh]);
-  useEffect(() => { if (tab?.url) setAddress(tab.url === 'about:blank' ? '' : tab.url); }, [chosen, tab?.url]);
+  // What the owner is typing stays put while the page under it moves on.
+  const typingAddress = useRef(false);
+  useEffect(() => { if (tab?.url && !typingAddress.current) setAddress(tab.url === 'about:blank' ? '' : tab.url); }, [chosen, tab?.url]);
   useEffect(() => { setNatural(null); }, [chosen]);
   useEffect(() => {
     if (!chosen) { setImage(''); return; }
@@ -102,12 +106,14 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
     const controlEpoch = epoch ?? tab?.controlEpoch;
     if (value.kind === 'dialog') return call('action', { tabId: chosen, viewer: viewer.current, controlEpoch, action: value }).then(() => refresh()).catch((e: any) => setError(e.message));
     if (actionCount.current >= 64) { setError('Browser input is catching up. Wait before sending more.'); return Promise.resolve(); }
-    if (!chosen) return Promise.resolve(); setBusy(true); setError(''); actionCount.current++;
-    const started = viewEpoch.current;
+    if (!chosen) return Promise.resolve(); setError(''); actionCount.current++;
+    // Sent at once, never behind the reply to the one before: the machine
+    // keeps each tab's actions in order, and a slow link no longer turns
+    // every key and click into a round trip of its own.
+    const sent = call<{ tab?: Tab; text?: string; value?: unknown; entries?: unknown[] }>('action', { tabId: chosen, viewer: viewer.current, controlEpoch, action: value });
     actionQueue.current = actionQueue.current.catch(() => {}).then(async () => {
-      if (started !== viewEpoch.current) { if (--actionCount.current === 0) setBusy(false); return; }
-      try { const result = await call<{ tab?: Tab; text?: string; value?: unknown; entries?: unknown[] }>('action', { tabId: chosen, viewer: viewer.current, controlEpoch, action: value }); if (result.text) setPageText(result.text); if (result.value !== undefined) setPageText(JSON.stringify(result.value, null, 2)); if (result.entries) setPageText(JSON.stringify(result.entries, null, 2)); if (result.tab) setTabs(current => current.map(t => t.id === result.tab!.id ? result.tab! : t)); }
-      catch (e: any) { setError(e.message); } finally { if (--actionCount.current === 0) setBusy(false); }
+      try { const result = await sent; if (result.text) setPageText(result.text); if (result.value !== undefined) setPageText(JSON.stringify(result.value, null, 2)); if (result.entries) setPageText(JSON.stringify(result.entries, null, 2)); if (result.tab) setTabs(current => current.map(t => t.id === result.tab!.id ? result.tab! : t)); }
+      catch (e: any) { setError(e.message); } finally { actionCount.current--; }
     });
     return actionQueue.current;
   };
@@ -149,16 +155,17 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
     <div ref={nav} className="bp-nav">
       <button className="bp-icon" aria-label="Go back" title="Back" disabled={busy || !tab} onClick={() => void act({ kind: 'back' })}><Icon name="back" size={15} /></button>
       <button className="bp-icon" aria-label="Go forward" title="Forward" disabled={busy || !tab || tab.engine === 'bowser'} onClick={() => void act({ kind: 'forward' })}><Icon name="forward" size={15} /></button>
-      <button className="bp-icon" aria-label="Reload" title="Reload" disabled={busy || !tab} onClick={() => void act({ kind: 'reload' })}><Icon name="refresh" size={15} /></button>
+      {tab?.loading ? <button className="bp-icon" aria-label="Stop loading" title="Stop" onClick={() => void act({ kind: 'stop' })}><Icon name="close" size={15} /></button>
+        : <button className="bp-icon" aria-label="Reload" title="Reload" disabled={busy || !tab} onClick={() => void act({ kind: 'reload' })}><Icon name="refresh" size={15} /></button>}
       {/* With no tab yet, the address opens one there. */}
-      <form onSubmit={e => { e.preventDefault(); const url = address.trim(); if (!url) return; if (tab) void act({ kind: 'navigate', url }); else void openTab(url); }}><input aria-label="Browser address" value={address} onChange={e => setAddress(e.target.value)} onFocus={e => e.currentTarget.select()} placeholder="Search or type an address" spellCheck={false} autoCapitalize="off" enterKeyHint="go" autoFocus={!tab && innerWidth >= 600} /></form>
+      <form onSubmit={e => { e.preventDefault(); const url = address.trim(); if (!url) return; if (tab) void act({ kind: 'navigate', url }); else void openTab(url); screen.current?.focus(); }}><input aria-label="Browser address" value={address} onChange={e => setAddress(e.target.value)} onFocus={e => { typingAddress.current = true; e.currentTarget.select(); }} onBlur={() => { typingAddress.current = false; if (tab?.url) setAddress(tab.url === 'about:blank' ? '' : tab.url); }} placeholder="Search or type an address" spellCheck={false} autoCapitalize="off" enterKeyHint="go" autoFocus={!tab && innerWidth >= 600} /></form>
       <BrowserLogins key={`${env.id}:${session.id}`} client={client} env={env} session={session} />
       {tab && <button className={`bp-icon${tools ? ' on' : ''}`} aria-label="More browser tools" title="More tools" aria-expanded={tools} onClick={() => setTools(v => !v)}><Icon name="more" size={16} />{ready > 0 && <b className="bp-dot" aria-hidden="true" />}</button>}
       {tab?.loading && <span className="bp-loading" role="progressbar" aria-label="Loading page" />}
     </div>
     {tab ? <>
       <div className="bp-stage">
-        <div ref={screen} className={`browser-screen${controlled ? ' controlled' : ''}${direct ? ' direct' : ''}`} tabIndex={0} role="group" aria-label="Live browser page" onWheel={e => { if (othersHave || !controlled && !(direct && image)) return; flushTyped(); e.preventDefault(); wheel.current.dx += Math.round(e.deltaX); wheel.current.dy += Math.round(e.deltaY); if (!wheelTimer.current) wheelTimer.current = setTimeout(() => { wheelTimer.current = undefined; flushWheel(); }, 40); }} onKeyDown={e => {
+        <div ref={screen} className={`browser-screen${controlled ? ' controlled' : ''}${direct ? ' direct' : ''}`} tabIndex={0} role="group" aria-label="Live browser page" onWheel={e => { if (othersHave || !controlled && !(direct && image)) return; flushTyped(); e.preventDefault(); wheel.current.dx += Math.round(e.deltaX); wheel.current.dy += Math.round(e.deltaY); if (!wheelTimer.current && !actionCount.current) flushWheel(); else if (!wheelTimer.current) wheelTimer.current = setTimeout(() => { wheelTimer.current = undefined; flushWheel(); }, 40); }} onKeyDown={e => {
           // Keys on the pill's own button (Hand back) belong to that button.
           if (e.nativeEvent.isComposing || isDockKey(e) || (e.target as HTMLElement).closest('button, input, select, textarea, a')) return;
           const printable = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey;
@@ -166,7 +173,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
           if (!controlled && !printable && !['Enter', 'Backspace'].includes(e.key)) return;
           if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { flushTyped(); return; }
           e.preventDefault(); flushWheel();
-          if (printable) { typed.current += e.key; if (typed.current.length >= 1000) flushTyped(); else if (!typeTimer.current) typeTimer.current = setTimeout(() => { typeTimer.current = undefined; flushTyped(); }, 40); }
+          if (printable) { typed.current += e.key; if (typed.current.length >= 1000 || !typeTimer.current && !actionCount.current) flushTyped(); else if (!typeTimer.current) typeTimer.current = setTimeout(() => { typeTimer.current = undefined; flushTyped(); }, 40); }
           else if (!['Shift', 'Control', 'Meta', 'Alt'].includes(e.key)) { flushTyped(); void act({ kind: 'key', key: [e.ctrlKey ? 'Control' : '', e.metaKey ? 'Meta' : '', e.altKey ? 'Alt' : '', e.shiftKey ? 'Shift' : '', keys[e.key] || e.key].filter(Boolean).join('+') }); }
         }} onPaste={e => { flushTyped(); e.preventDefault(); void act({ kind: 'type', text: e.clipboardData.getData('text/plain') }); }}>
           {preview === 'text' ? <p className="note">Live picture is off. Open ⋯ and read the page as text.</p> : image ? <div className="bp-frame" style={{ '--fw': frame.width, '--fh': frame.height } as CSSProperties}>
@@ -174,13 +181,14 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
               onLoad={e => { const { naturalWidth: width, naturalHeight: height } = e.currentTarget; setNatural(n => n?.width === width && n.height === height ? n : { width, height }); }}
               onContextMenu={e => { if (!direct) return; e.preventDefault(); void act({ kind: 'click', button: 'right', ...at(e, tab.viewport) }); }}
               onPointerDown={e => { if (!direct || e.button !== 0) return; press.current = at(e, tab.viewport); e.currentTarget.setPointerCapture(e.pointerId); }}
-              onPointerMove={e => { if (!controlled || busy || !direct || press.current || e.pointerType !== 'mouse' || Date.now() - hoverAt.current < 200) return; hoverAt.current = Date.now(); void action({ kind: 'hover', ...at(e, tab.viewport) }); }}
+              onPointerMove={e => { if (!controlled || actionCount.current > 0 || !direct || press.current || e.pointerType !== 'mouse' || Date.now() - hoverAt.current < 200) return; hoverAt.current = Date.now(); void action({ kind: 'hover', ...at(e, tab.viewport) }); }}
               onPointerUp={e => { if (!direct || e.button !== 0 || !press.current) return; const start = press.current, { x, y } = at(e, tab.viewport); press.current = null; screen.current?.focus(); if (tab.pointer?.by === 'guide') setDismissed(tab.pointer.seq); void act(Math.hypot(x - start.x, y - start.y) > 8 ? e.pointerType === 'touch' ? { kind: 'scroll', dx: start.x - x, dy: start.y - y } : { kind: 'drag', fromX: start.x, fromY: start.y, toX: x, toY: y } : { kind: 'click', x, y }); }}
               onPointerCancel={() => { press.current = null; }} />
             <BrowserPointer key={tab.id} pointer={tab.pointer} viewport={tab.viewport} dismissed={dismissed} />
             {controlState}
           </div> : <p className="note">Starting the live picture…</p>}
         </div>
+        {tab.problem && !tab.loading && <div className="bp-problem" role="alert"><p>{tab.problem.message}</p><button onClick={() => void act({ kind: 'navigate', url: tab.problem!.url })}>Try again</button></div>}
         {tab.dialog && <div className="bp-dialog" role="alertdialog" aria-label="Page message"><p>{tab.dialog.message}</p><span><button onClick={() => void takeControl().then(epoch => action({ kind: 'dialog', accept: false }, epoch), (e: any) => setError(e.message))}>Dismiss</button><button className="primary" onClick={() => void takeControl().then(epoch => action({ kind: 'dialog', accept: true, text: entry }, epoch), (e: any) => setError(e.message))}>OK</button></span></div>}
         {!(image && preview !== 'text') && controlState}
       </div>
@@ -213,6 +221,6 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
         {pageText && <pre className="browser-text">{pageText}</pre>}
       </div>}
     </> : <p className="note bp-empty">Open a tab to browse with your agent. The browser runs on {env.name}, so localhost reaches servers there.</p>}
-    {error && <p role="alert" className="error bp-error" onClick={() => setError('')}>{error}</p>}
+    {error && <p role="alert" className="error bp-error" onClick={() => setError('')}>{plain(error)}</p>}
   </section>;
 }

@@ -333,6 +333,27 @@ test('a tab says it is loading from the main page request until the page loads',
   page.emit('close');
 });
 
+test('the owner does not wait for a page to load, and a page that cannot be reached is said in plain words', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'helm-go-')), { page, cdp } = streamPage();
+  const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); manager.recovered.set('one', Promise.resolve());
+  let fail; page.goto = function (u) { return new Promise((resolve, reject) => { fail = () => reject(new Error(`page.goto: net::ERR_NAME_NOT_RESOLVED at ${u}\nCall log:\n\u001b[2m  - navigating to "${u}"\u001b[22m`)); }); };
+  const tab = fakeTab(page, { control: 'phone', controlEpoch: 1 }); manager.tabs.set('tab', tab);
+  const started = Date.now(); await manager.run('one', 'tab', { kind: 'navigate', url: 'eat.nowhere.test' }, 'phone', 1);
+  assert.ok(Date.now() - started < 500, 'the owner gets the tab back while the page is still loading');
+  assert.equal(manager.metadata(tab).url, 'https://eat.nowhere.test/', 'the address shows where it is going');
+  fail(); await tick(5);
+  assert.deepEqual(manager.metadata(tab).problem, { url: 'https://eat.nowhere.test/', message: "Can't find eat.nowhere.test. Check the address." });
+  // An agent waits for the page and gets the same sentence, not Playwright's log.
+  tab.control = null; tab.controlEpoch = 2;
+  const agent = manager.run('one', 'tab', { kind: 'navigate', url: 'eat.nowhere.test' });
+  await tick(5); assert.equal(manager.metadata(tab).problem, null, 'a new try clears the old message'); fail();
+  await assert.rejects(agent, error => error.message === "Can't find eat.nowhere.test. Check the address.");
+  // Stop asks Chromium to stop loading.
+  const sent = []; cdp.send = async method => { sent.push(method); };
+  await manager.run('one', 'tab', { kind: 'stop' }); assert.ok(sent.includes('Page.stopLoading'));
+  await manager.stop(); rmSync(directory, { recursive: true, force: true });
+});
+
 test('Playwright’s own browser is tried first; a pinned path wins; the system browser is the fallback', async () => {
   const { chromium } = await import('playwright'), real = chromium.launch, calls = [], browser = new EventEmitter(); browser.isConnected = () => true; browser.close = async () => {};
   const saved = { HELM_CHROMIUM_PATH: process.env.HELM_CHROMIUM_PATH, HELM_TEST_CHROMIUM: process.env.HELM_TEST_CHROMIUM };

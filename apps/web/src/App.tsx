@@ -1365,6 +1365,35 @@ function Shell({ client, conn, onSignOut }: {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [runningNow, openSession]);
+  // Ctrl+` opens a terminal, as in VS Code (Ctrl on a Mac too: Cmd+` is the
+  // system's window switcher). From a chat it is that chat's folder; the same
+  // key in a terminal goes back to where you were. A terminal already open
+  // there is reused, so a running build or server is never cut off.
+  const terminalOpening = useRef(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== 'Backquote' || !event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing
+          || document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const current = nav.current.stack.at(-1);
+      if (current?.kind === 'session' && current.session.engine === 'shell') { history.back(); return; }
+      const envId = nav.current.selected ?? envs.find((e) => e.online)?.id;
+      if (!envId || terminalOpening.current) return;
+      const chat = current?.kind === 'session' && !current.session.quick ? current.session : null;
+      const cwd = chat?.cwd || '~';
+      const open = (sessions[envId] ?? []).filter(ownTerminal).sort(byRecent);
+      const reuse = (chat ? open.find((s) => s.cwd === cwd) : null) ?? (chat ? null : open[0]);
+      if (reuse) { openSession(envId, reuse); return; }
+      terminalOpening.current = true;
+      client.rpc<{ session: Session }>(envId, 'session.start', { cwd, profileId: 'shell' }, 45_000)
+        .then((r) => { loadSessions(envId); if (r?.session) openSession(envId, r.session); })
+        .catch(() => { /* the machine is off or has no shell; nothing to open */ })
+        .finally(() => { terminalOpening.current = false; });
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [envs, sessions, openSession, client, loadSessions]);
   const runningCount = envs.reduce((total, machine) => total + workingThreadsOn(machine).length, 0);
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;

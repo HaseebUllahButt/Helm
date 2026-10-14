@@ -75,12 +75,26 @@ test('Ctrl+Shift+S opens Settings and Ctrl+Shift+4 ($) opens Usage from anywhere
   await page.getByLabel('Environment').waitFor({timeout:10000});
 });
 
+test('Ctrl+` opens a terminal in the open chat\'s folder, and goes back from it', async t => {
+  const page = await pageFor(t);
+  await page.evaluate(()=>window.visit('laptop',{kind:'session',session:{id:'done1',title:'Yesterday work',cwd:'/work/yesterday',engine:'claude',profileId:'claude',driver:'claude',alive:true,status:'idle'}}));
+  await page.keyboard.press('Control+Backquote');
+  await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.start'));
+  const start = await page.evaluate(()=>window.calls.find(c=>c.method==='session.start'));
+  assert.deepEqual([start.env, start.params], ['laptop', { cwd: '/work/yesterday', profileId: 'shell' }]);
+  await page.evaluate(()=>window.visit('laptop',{kind:'session',session:{id:'sh1',title:'zsh',cwd:'~',engine:'shell',profileId:'shell',alive:true,status:'shell'}}));
+  await page.keyboard.press('Control+Backquote');
+  await page.waitForFunction(()=>history.state?.stack?.at(-1)?.session?.id === 'done1', null, {timeout:3000});
+  assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='session.start').length), 1, 'the key in a terminal starts nothing new');
+});
+
 test('the shortcuts list names both keys', async t => {
   const page = await pageFor(t);
   await page.keyboard.press('?');
   const text = await page.locator('.shortcuts').innerText();
   assert.match(text, /Settings/);
   assert.match(text, /Usage, limits and cost/);
+  assert.match(text, /Terminal/);
 });
 
 test('New session paints the agents it remembers before a slow machine answers', async t => {
