@@ -25,6 +25,8 @@ export interface Choice {
   label: string;
   hint?: string;
   danger?: boolean;
+  /** A small picture before the label, such as an account's CLI logo. */
+  icon?: ReactNode;
 }
 
 /**
@@ -411,6 +413,7 @@ export function ChoiceSheet({ title, note, choices, more = [], current, saved, b
         className={`moderow${on ? ' on' : ''}${c.danger ? ' danger' : ''}${armed ? ' armed' : ''}`}
         onClick={() => choose(c)}
       >
+        {c.icon}
         <span className="grow">
           <span className="rt"><span className="rt-text">{c.label}</span></span>
           {(armed || c.hint) && <span className="rm">{armed ? 'Tap again to confirm' : c.hint}</span>}

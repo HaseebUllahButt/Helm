@@ -432,6 +432,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
           </div>
           {choosingAccount ? <ChoiceSheet title={`CLI account on ${env.name}`} current={account} busy={busy}
             choices={offered.map((candidate) => ({ id: candidate.id, label: `${accountName(candidate)} · ${candidate.engine}`,
+              icon: <EngineMark engine={candidate.engine} />,
               hint: candidate.auth === 'authenticated' ? 'signed in' : candidate.auth === 'unauthenticated' ? 'signed out' : 'sign-in not checked' }))}
             onPick={(id) => { setChoosingAccount(false); if (offered.find((candidate) => candidate.id === id)?.available) setAccount(id); }}
             onClose={() => setChoosingAccount(false)}

@@ -324,6 +324,8 @@ test('launch options stay folded until asked for, then create a linked child and
   const accounts = page.getByRole('listbox', {name:'CLI account on Laptop'});
   await accounts.waitFor();
   await accounts.getByRole('option', {name:/Claude work/}).filter({hasText:'signed out'}).waitFor();
+  assert.equal(await accounts.locator('.moderow .mark').count(), await accounts.getByRole('option').count(), 'each account shows its CLI logo');
+  await capture(page, 'subagents-desktop-accounts.png');
   await accounts.getByRole('option', {name:/Claude personal/}).click();
   await page.getByRole('button', {name:'CLI account: Claude personal'}).waitFor();
   await page.getByRole('button', {name:/^permissions:/}).click();
