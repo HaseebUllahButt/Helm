@@ -239,7 +239,7 @@ test('smooth preview is the fastest tier and a slower viewer still sets the stre
 
 test('tab list writes are coalesced after busy bursts but never lost on navigation, close or stop', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'helm-persist-')), file = join(directory, 'one', 'tabs.json'), { page } = streamPage(); let closed = 0;
-  const context = { storageState: async ({ path }) => writeFileSync(path, '{}'), close: async () => { closed++; } };
+  const context = { storageState: async () => ({ cookies: [], origins: [] }), close: async () => { closed++; } };
   const manager = new BrowserManager({ directory, session: sid => ({ id: sid }) }); let writes = 0; const write = manager.persistTabs.bind(manager);
   manager.persistTabs = async sid => { writes++; return write(sid); };
   page.close = async () => { manager.tabs.delete('tab'); };
