@@ -208,3 +208,51 @@ test('real browser isolation, batched actions, uploads, owner control and restar
   assert.equal((await manager.run('one', savedId, { kind: 'evaluate', script: 'localStorage.getItem("private")' })).value, 'one');
   await manager.close('one', savedId); assert.equal((await manager.list('one')).tabs.length, 0); assert.equal(manager.browser, null);
 });
+
+test('agent pointer is recorded only for a watching viewer and point guides without touching the page', async () => {
+  let clock = 1000, clicks = 0, scrolled = 0;
+  const box = { x: 100, y: 40, width: 80, height: 20 };
+  const locator = { first: () => locator, scrollIntoViewIfNeeded: async () => { scrolled++; }, boundingBox: async () => box, evaluate: async () => 'Sign in', click: async () => { clicks++; } };
+  const page = { url: () => 'http://example.test/', title: async () => 'Example', viewportSize: () => ({ width: 1280, height: 800 }), locator: () => locator, mouse: { click: async () => { clicks++; }, move: async () => {} } };
+  const manager = new BrowserManager({ session: sid => ({ id: sid, mode: sid === 'reader' ? 'readonly' : 'default' }), now: () => clock });
+  const tab = { id: 'tab', sessionId: 'one', engine: 'chromium', page, viewers: new Map(), downloads: [], console: [], network: [] }; manager.tabs.set('tab', tab);
+  manager.persistTabs = async () => {};
+  const started = Date.now(); await manager.run('one', 'tab', { kind: 'click', selector: 'button' });
+  assert.equal(tab.pointer, undefined, 'nobody watching: no pointer work'); assert.equal(scrolled, 0); assert.ok(Date.now() - started < 100, 'nobody watching: no added wait');
+  tab.viewers.set('phone', clock); tab.viewerProfiles = new Map([['phone', 'full']]);
+  const result = await manager.run('one', 'tab', { kind: 'click', selector: 'button' });
+  assert.deepEqual(result.tab.pointer, { x: 140, y: 50, box, action: 'click', label: 'Clicking “Sign in”', by: 'agent', seq: 1, at: 1000 }); assert.equal(clicks, 2);
+  await manager.run('one', 'tab', { kind: 'scroll', dy: -300 }).catch(() => {});
+  assert.equal(tab.pointer.label, 'Scrolling up'); assert.deepEqual([tab.pointer.x, tab.pointer.y], [640, 400]);
+  clock += 5000; assert.equal(manager.metadata(tab).pointer, null, 'an idle agent pointer fades');
+  tab.viewerProfiles.set('phone', 'text'); await manager.run('one', 'tab', { kind: 'click', x: 5, y: 5 }); assert.equal(tab.pointer.seq, 2, 'text-only viewers see no pointer');
+  // A guide works with nobody watching, while the owner holds control, and in a read-only thread.
+  tab.viewers.clear(); await manager.control('one', 'tab', 'phone', true);
+  const guided = await manager.run('one', 'tab', { kind: 'point', selector: '#approve', note: 'Click here to approve' });
+  assert.deepEqual(guided.tab.pointer, { x: 140, y: 50, box, action: 'point', label: '“Sign in”', by: 'guide', note: 'Click here to approve', seq: 3, at: clock });
+  assert.equal(clicks, 3, 'point never clicks'); assert.equal(scrolled, 1, 'point never scrolls');
+  clock += 30000; assert.equal(manager.metadata(tab).pointer.by, 'guide');
+  await manager.run('one', 'tab', { kind: 'hover', x: 2, y: 2 }, 'phone'); assert.equal(tab.pointer?.by, 'guide', 'owner hovering keeps the guide');
+  await manager.run('one', 'tab', { kind: 'click', x: 2, y: 2 }, 'phone'); assert.equal(tab.pointer, null, 'owner clicking clears the guide');
+  await manager.run('one', 'tab', { kind: 'point', x: 10, y: 20, note: 'Here' }); clock += 61000; assert.equal(manager.metadata(tab).pointer, null, 'a guide lasts a minute');
+  await assert.rejects(manager.run('one', 'tab', { kind: 'point', x: 5000, y: 20 }), /not on screen/);
+  await assert.rejects(manager.run('one', 'tab', { kind: 'point' }), /choose an element/);
+  manager.tabs.set('read', { ...tab, id: 'read', sessionId: 'reader', control: null, pointer: null }); await manager.run('reader', 'read', { kind: 'point', selector: 'button' });
+  assert.equal(manager.tabs.get('read').pointer.by, 'guide');
+  manager.tabs.set('shared', { id: 'shared', sessionId: 'one', engine: 'bowser', downloads: [], viewers: new Map() });
+  await assert.rejects(manager.run('one', 'shared', { kind: 'point', ref: 1 }), /isolated Chromium/);
+  await manager.stop();
+});
+
+test('browser point CLI builds a guide action and opening a tab tells the chat', async () => {
+  const calls = [];
+  const rpc = async (...args) => { calls.push(args); return {}; };
+  await runBrowserCommand(['point', 'tab', '3', '--note', 'Approve here'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
+  await runBrowserCommand(['point', 'tab', 'button.primary'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} });
+  assert.deepEqual(calls.map(c => c[2].action), [{ kind: 'point', ref: 3, note: 'Approve here' }, { kind: 'point', selector: 'button.primary' }]);
+  await assert.rejects(runBrowserCommand(['point', 'tab'], { env: { HELM_SESSION_ID: 's1' }, self: () => 'me', rpc, print: () => {} }), /element number or CSS selector/);
+  const opened = [], manager = { open: async () => ({ tab: { id: 'new' } }), stop: async () => {} };
+  const routes = createBrowserRoutes({ sessions: { get: () => ({}) }, manager, onOpen: payload => opened.push(payload) });
+  await routes.dispatch('browser.open', { id: 's1', url: 'about:blank' }); await routes.dispatch('browser.open', { id: 's1', viewer: 'owner' });
+  assert.deepEqual(opened, [{ id: 's1', tabId: 'new' }, { id: 's1', tabId: 'new', viewer: 'owner' }]);
+});

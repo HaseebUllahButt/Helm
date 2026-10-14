@@ -8,13 +8,35 @@ and read console/network diagnostics. The live viewer lets the owner take
 over the same tab. Its controls operate inside web pages; it is not a general
 desktop controller for arbitrary native apps or operating-system windows.
 
-Open a thread’s **Browser** button, or **Thread details → Browser**. Open a tab,
-then take control to navigate, click, type, paste, scroll, answer dialogs,
-upload files, or save downloads. Release control to let the agent continue.
-The tab runs on the thread’s machine: `localhost` reaches development servers
-there, including when you watch from a phone. Read page & controls gives a
-text view; Console and Network show bounded diagnostics. The viewport buttons
-switch between phone and desktop sizes.
+Press a chat’s **Browser** button or **Ctrl/⌘ Shift B**. On a wide screen
+(1000px and up) the browser docks on the right of the chat, which stays usable
+beside it; drag its left edge to resize it (double-click resets it). The width
+is remembered on this device, and open/closed is remembered per chat. On a
+phone it opens full screen with a close button. **Thread details → Browser**
+opens the same panel. When the agent opens a tab in the chat you are viewing,
+the dock opens by itself on a wide screen once per tab, unless you closed it
+in that chat; otherwise a dot appears on the Browser button.
+
+The panel is a tab strip, back/forward/reload with the address bar, and the
+live page. Clicking or typing on the page takes control and does that click;
+a pill shows **You’re in control · Hand back**. Hand back lets the agent
+continue. While you have control the agent’s actions are refused, as before.
+The rarely used tools sit behind **⋯**: Read page, Console, Network, phone
+and desktop sizes, copying the page clipboard, preview quality, typing or
+clicking by element number, uploads and downloads. The tab runs on the
+thread’s machine: `localhost` reaches development servers there, including
+when you watch from a phone.
+
+While someone watches, the agent’s clicks, hovers, typing, selects, uploads,
+drags and scrolls show a pointer that glides to the spot with a short label
+such as “Clicking “Sign in””, then fades. The server waits about 120ms before
+acting so the viewer can follow; with nobody watching there is no pointer
+work and no wait. **Show me** mode: `helm browser point <tab> <element # or
+selector> --note "Click here to approve"` (or the `point` action) highlights
+the element with the note and changes nothing on the page. It stays until
+you click in the page, the agent points elsewhere, or a minute passes. It
+works in read-only chats and while you have control; Bowser tabs do not
+support it.
 
 **Preview → Auto** reduces image size and frame rate when delivery slows down,
 using network hints where available and measured replies on every browser.
@@ -32,13 +54,14 @@ helm browser tabs
 helm browser look <tab-id>
 helm browser act <tab-id> '{"kind":"batch","actions":[{"kind":"type","selector":"#name","text":"Ada"},{"kind":"click","role":"button","name":"Save"}]}'
 helm browser screenshot <tab-id> --output /tmp/page.jpg
+helm browser point <tab-id> 4 --note "Click here to approve"
 helm browser close <tab-id>
 ```
 
 Use `--session <thread-id>` outside an agent chat. Element numbers returned by
 `look` can be used as `ref`; look again after a page changes. Other actions
 include hover, drag, key, scroll, select, upload, evaluate, wait, resize,
-dialog, back, forward and reload. A failed batch stops at its failed step and
+dialog, back, forward, reload and point. A failed batch stops at its failed step and
 returns the current page; inspect it before submitting the remaining steps.
 For uploads, agents pass `files` containing host file paths. The viewer can
 send up to ten files and 8 MiB total through Helm. Downloads up to 8 MiB can
