@@ -11,6 +11,14 @@ const text = (value, max = 20000) => { if (typeof value !== 'string' || value.le
 const integer = (value, min, max) => { if (!Number.isInteger(value) || value < min || value > max) throw new Error(`expected integer ${min}–${max}`); return value; };
 const httpUrl = value => { const u = new URL(String(value).includes('://') || String(value).startsWith('about:') ? value : `https://${value}`); if (!['http:', 'https:'].includes(u.protocol) && u.href !== 'about:blank') throw new Error('use an HTTP or HTTPS browser address'); return u.href; };
 const executable = () => process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM || ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
+const LAUNCH = { headless: true, args: ['--disable-gpu', '--disk-cache-size=33554432'], timeout: 15000 };
+// Playwright's headless shell starts ~3x faster and uses about half the memory of full Chromium; a pinned path or a missing shell falls back to the system browser.
+async function launchChromium() {
+  const { chromium } = await import('playwright'), pinned = process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM;
+  if (pinned) return chromium.launch({ ...LAUNCH, executablePath: pinned });
+  try { return await chromium.launch(LAUNCH); }
+  catch (error) { const system = executable(); if (!system) throw error; return chromium.launch({ ...LAUNCH, executablePath: system }); }
+}
 const bowserBin = () => process.env.HELM_BOWSER_PATH || (process.env.PATH || '').split(':').map(p => join(p, 'bowser-computer')).find(existsSync);
 const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 const MAX_THREAD_DOWNLOAD_BYTES = 256 * 1024 * 1024;
@@ -18,7 +26,9 @@ export const BROWSER_PREVIEWS = Object.freeze({
   low: { maxWidth: 640, maxHeight: 640, quality: 35, interval: 1000 },
   balanced: { maxWidth: 960, maxHeight: 960, quality: 50, interval: 500 },
   full: { maxWidth: 1280, maxHeight: 1200, quality: 60, interval: 200 },
+  smooth: { maxWidth: 1280, maxHeight: 1200, quality: 60, interval: 33 },
 });
+const FRAME_WAIT_MS = 1500;
 
 /** One persistent stdio bridge to the owner's Bowser. Closing it leaves Bowser intact. */
 export class BowserBridge {
@@ -64,7 +74,7 @@ export class BrowserManager {
   async start() {
     if (!this.starting) this.starting = (async () => {
       if (this.browser?.isConnected()) return this.browser;
-      const launch = this.launch || (async () => { const { chromium } = await import('playwright'); return chromium.launch({ headless: true, ...(executable() ? { executablePath: executable() } : {}), args: ['--disable-gpu', '--disk-cache-size=33554432'], timeout: 15000 }); });
+      const launch = this.launch || launchChromium;
       try { this.browser = await launch(); } catch (error) { throw new Error(`Chromium could not start. Set HELM_CHROMIUM_PATH or install it with npx playwright install chromium. ${error.message}`); }
       const browser = this.browser;
       browser.on('disconnected', () => {
@@ -111,6 +121,7 @@ export class BrowserManager {
     page.on('pageerror', error => cap(tab.console, { level: 'error', text: error.message.slice(0, 4000), at: this.now() }));
     page.on('response', response => cap(tab.network, { url: response.url().slice(0, 2000), method: response.request().method(), status: response.status() }));
     page.on('requestfailed', request => cap(tab.network, { url: request.url().slice(0, 2000), method: request.method(), error: request.failure()?.errorText }));
+    page.on('domcontentloaded', () => { void page.title().then(title => { tab.title = title; }).catch(() => {}); });
     page.on('dialog', dialog => { tab.dialog = dialog; });
     page.on('download', download => {
       const record = { id: id(), name: basename(download.suggestedFilename()), url: download.url(), status: 'pending', at: this.now() };
@@ -155,7 +166,12 @@ export class BrowserManager {
     })().catch(error => { this.recovered.delete(sessionId); throw error; }));
     return this.recovered.get(sessionId);
   }
-  async persistTabs(sessionId) { const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); await writeFile(join(folder, 'tabs.json'), JSON.stringify([...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t))), { mode: 0o600 }); }
+  /** Coalesce the tab-list write after busy bursts of actions; navigation, close, idle and stop still write at once. */
+  persistSoon(sessionId) {
+    const timers = this.persistTimers ||= new Map(); if (timers.has(sessionId)) return;
+    const timer = setTimeout(() => { timers.delete(sessionId); if ([...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) void this.persistTabs(sessionId).catch(() => {}); }, 1000); timer.unref?.(); timers.set(sessionId, timer);
+  }
+  async persistTabs(sessionId) { clearTimeout(this.persistTimers?.get(sessionId)); this.persistTimers?.delete(sessionId); const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); await writeFile(join(folder, 'tabs.json'), JSON.stringify([...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t))), { mode: 0o600 }); }
   async list(sessionId) { await this.recover(sessionId); return { tabs: [...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t)), bowser: !!bowserBin(), running: !!this.browser }; }
   async open(sessionId, { url = 'about:blank', engine = 'chromium' } = {}) {
     await this.recover(sessionId); url = httpUrl(url);
@@ -200,7 +216,10 @@ export class BrowserManager {
         if (!readOnly(action)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
       }
       this.checkControl(tab, action, actor, epoch);
-      tab.lastUsed = this.now(); const result = await this.perform(tab, action, actor, epoch); if (!['look', 'console', 'network', 'screenshot'].includes(action?.kind)) await this.persistTabs(sessionId); return result;
+      tab.lastUsed = this.now(); const owned = actor !== 'agent' && tab.engine === 'chromium'; if (owned) this.boost(tab);
+      const result = await this.perform(tab, action, actor, epoch); if (owned) this.boost(tab);
+      if (!['look', 'console', 'network', 'screenshot'].includes(action?.kind)) { if (['navigate', 'back', 'forward', 'reload', 'batch'].includes(action?.kind)) await this.persistTabs(sessionId); else this.persistSoon(sessionId); }
+      return result;
     });
     const job = Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => { if (started && epoch === (tab.controlEpoch || 0)) tab.controlEpoch = epoch + 1; reject(new Error('Browser action timed out; inspect the page before retrying.')); }, this.actionTimeoutMs); timer.unref?.(); })]);
     this.serial.set(tab.id, job); void job.finally(() => { clearTimeout(timer); if (this.serial.get(tab.id) === job) this.serial.delete(tab.id); }).catch(() => {}); return job;
@@ -269,7 +288,9 @@ export class BrowserManager {
     else if (kind === 'resize') { await page.setViewportSize({ width: integer(action.width, 240, 1920), height: integer(action.height, 200, 1200) }); await this.clearStream(tab); }
     else if (kind === 'dialog') { if (!tab.dialog) throw new Error('no dialog is open'); const dialog = tab.dialog; tab.dialog = null; action.accept ? await dialog.accept(action.text ?? '') : await dialog.dismiss(); }
     else throw new Error(`unknown browser action: ${kind}`);
-    tab.title = await page.title().catch(() => tab.title); return { tab: this.metadata(tab) };
+    // Only actions that can change the title ask for it; page loads update it as they finish.
+    if (!['hover', 'scroll', 'type', 'resize'].includes(kind)) tab.title = await page.title().catch(() => tab.title);
+    return { tab: this.metadata(tab) };
   }
   async bowserAction(tab, action) {
     const kind = action.kind, target = action.ref || action.name || action.selector;
@@ -316,7 +337,7 @@ export class BrowserManager {
   }
   previewMode(tab) {
     const modes = [...tab.viewers.keys()].map(viewer => tab.viewerProfiles?.get(viewer) || 'full');
-    return ['low', 'balanced', 'full'].find(mode => modes.includes(mode)) || 'text';
+    return ['low', 'balanced', 'full', 'smooth'].find(mode => modes.includes(mode)) || 'text';
   }
   async configurePreview(tab) {
     // Serialize profile changes as well as startup. The slowest active visual
@@ -336,12 +357,15 @@ export class BrowserManager {
         tab.cdp = cdp;
         cdp.on('Page.screencastFrame', event => {
           if (tab.cdp !== cdp) return;
-          tab.frame = `data:image/jpeg;base64,${event.data}`; tab.sequence++;
+          tab.frame = `data:image/jpeg;base64,${event.data}`; tab.sequence++; this.wake(tab);
+          const send = () => cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
+          // Right after the owner's input every frame is acknowledged at once.
+          const now = Date.now(); if (now < (tab.boostUntil || 0)) { void send(); return; }
           // Chromium can have multiple unacknowledged frames. Pace their
           // acknowledgements together rather than giving each its own clock.
-          const now = Date.now(); tab.nextAckAt = Math.max(now, tab.nextAckAt || 0) + profile.interval;
-          const ack = setTimeout(() => { tab.acks?.delete(ack); void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {}); }, tab.nextAckAt - now);
-          ack.unref?.(); (tab.acks ||= new Set()).add(ack);
+          tab.nextAckAt = Math.max(now, tab.nextAckAt || 0) + profile.interval;
+          const ack = setTimeout(() => { tab.acks?.delete(ack); void send(); }, tab.nextAckAt - now);
+          ack.unref?.(); (tab.acks ||= new Map()).set(ack, send);
         });
         try { await cdp.send('Page.startScreencast', { format: 'jpeg', quality: profile.quality, maxWidth: profile.maxWidth, maxHeight: profile.maxHeight, everyNthFrame: 1 }); }
         catch (error) { if (tab.cdp === cdp) { tab.cdp = null; tab.frame = null; } await cdp.detach().catch(() => {}); throw error; }
@@ -351,11 +375,11 @@ export class BrowserManager {
     tab.streamConfig = work;
     try { await work; } finally { if (tab.streamConfig === work) tab.streamConfig = null; }
   }
-  async frame(sessionId, tabId, { viewer, since = -1, preview = 'full', leaseMs = 10000 } = {}) {
+  async frame(sessionId, tabId, { viewer, since = -1, preview = 'full', leaseMs = 10000, waitMs = 0 } = {}) {
     await this.recover(sessionId);
     const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer');
     if (preview !== 'text' && !Object.hasOwn(BROWSER_PREVIEWS, preview)) throw new Error('invalid browser preview mode');
-    integer(leaseMs, 10000, 60000);
+    integer(leaseMs, 10000, 60000); integer(waitMs, 0, FRAME_WAIT_MS);
     this.expireViewers(tab);
     tab.lastUsed = this.now(); tab.viewers.set(viewer, this.now());
     (tab.viewerProfiles ||= new Map()).set(viewer, preview);
@@ -366,10 +390,20 @@ export class BrowserManager {
       if (!tab.capturing && (!tab.frame || this.now() - (tab.frameAt || 0) > 900)) tab.capturing = this.capture(tab, { maxWidth: BROWSER_PREVIEWS[mode].maxWidth }).then(result => { const hash = createHash('sha256').update(result.image).digest('hex'); if (hash !== tab.hash || !tab.frame) { tab.frame = result.image; tab.sequence++; tab.hash = hash; } tab.frameAt = this.now(); }).finally(() => { tab.capturing = null; });
       if (tab.capturing) await tab.capturing;
     }
-    return { tab: this.metadata(tab), sequence: tab.sequence, preview: mode, ...(preview !== 'text' && tab.frame && since !== tab.sequence ? { image: tab.frame } : {}) };
+    // Long poll: hold the request until Chromium paints something new, so the viewer needs no timer.
+    let waited;
+    if (waitMs && preview !== 'text' && mode !== 'text' && tab.engine === 'chromium' && tab.cdp && (!tab.frame || since === tab.sequence)) {
+      const started = Date.now();
+      await new Promise(resolve => { const waiter = { resolve, timer: setTimeout(() => { tab.waiters.delete(waiter); resolve(); }, waitMs) }; waiter.timer.unref?.(); (tab.waiters ||= new Set()).add(waiter); });
+      waited = Date.now() - started;
+    }
+    return { tab: this.metadata(tab), sequence: tab.sequence, preview: mode, ...(waited !== undefined ? { waited } : {}), ...(preview !== 'text' && tab.frame && since !== tab.sequence ? { image: tab.frame } : {}) };
   }
-  async clearStream(tab) { await tab.streamStart?.catch(() => {}); for (const timer of tab.acks || []) clearTimeout(timer); tab.acks?.clear(); tab.nextAckAt = 0; const cdp = tab.cdp; tab.cdp = null; tab.frame = null; if (cdp) { await cdp.send('Page.stopScreencast').catch(() => {}); await cdp.detach().catch(() => {}); } }
-  async unwatch(sessionId, tabId, viewer) { const tab = this.get(sessionId, tabId); tab.viewers.delete(viewer); tab.viewerProfiles?.delete(viewer); tab.viewerLeases?.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } if (!tab.viewers.size || this.previewMode(tab) === 'text') { await tab.streamConfig?.catch(() => {}); if (!tab.viewers.size || this.previewMode(tab) === 'text') await this.clearStream(tab); } return { ok: true }; }
+  wake(tab) { for (const waiter of tab.waiters || []) { clearTimeout(waiter.timer); waiter.resolve(); } tab.waiters?.clear(); }
+  /** The owner just did something: let the page's next paints through without pacing. */
+  boost(tab) { tab.boostUntil = Date.now() + 400; for (const [timer, send] of tab.acks || []) { clearTimeout(timer); send(); } tab.acks?.clear(); tab.nextAckAt = 0; }
+  async clearStream(tab) { await tab.streamStart?.catch(() => {}); this.wake(tab); for (const timer of tab.acks?.keys() || []) clearTimeout(timer); tab.acks?.clear(); tab.nextAckAt = 0; const cdp = tab.cdp; tab.cdp = null; tab.frame = null; if (cdp) { await cdp.send('Page.stopScreencast').catch(() => {}); await cdp.detach().catch(() => {}); } }
+  async unwatch(sessionId, tabId, viewer) { const tab = this.get(sessionId, tabId); tab.viewers.delete(viewer); this.wake(tab); tab.viewerProfiles?.delete(viewer); tab.viewerLeases?.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } if (!tab.viewers.size || this.previewMode(tab) === 'text') { await tab.streamConfig?.catch(() => {}); if (!tab.viewers.size || this.previewMode(tab) === 'text') await this.clearStream(tab); } return { ok: true }; }
   async control(sessionId, tabId, viewer, take) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer'); if (tab.control && tab.control !== viewer) throw new Error('another viewer has control'); tab.control = take ? viewer : null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; tab.viewers.set(viewer, this.now()); if (!tab.dialog) await (this.serial.get(tab.id) || Promise.resolve()).catch(() => {}); return { tab: this.metadata(tab) }; }
   async pageClosed(sessionId) {
     await this.persistTabs(sessionId);
