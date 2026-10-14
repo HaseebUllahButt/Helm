@@ -787,9 +787,6 @@ pre.snippet {
 .ctx-more > summary { cursor: pointer; color: var(--text-dim); }
 .ctx-more > summary .ctx-count { margin-left: 6px; color: var(--mutedfg); }
 .ctx-more .md { margin-top: 6px; }
-/* Before the markdown chunk lands, the same text as plain text. */
-.md.raw { white-space: pre-wrap; }
-
 /* Activity: one 24px line per tool call, never a card. */
 .act {
   display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 2px;

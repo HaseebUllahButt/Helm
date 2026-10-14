@@ -6,11 +6,11 @@ import { retainAssets } from './retainAssets.mjs';
  * Three chunks by intent, not by accident:
  *   - `react`, which changes only when the framework is upgraded, so a phone
  *     that has it keeps it across every helm deploy;
- *   - `md` and the terminal, which split themselves out through the dynamic
- *     imports in Markdown.tsx and App.tsx;
+ *   - syntax highlighting and the terminal, split through dynamic imports;
  *   - everything else, which is helm itself.
  * The point is the first paint: signing in and picking a machine should not
- * wait on a syntax highlighter or a terminal emulator.
+ * wait on a syntax highlighter or a terminal emulator. Markdown formatting
+ * itself stays with the chat so failed optional chunks cannot leave raw fences.
  */
 export default defineConfig({
   plugins: [react(), retainAssets()],

@@ -1,49 +1,29 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import typescript from 'highlight.js/lib/languages/typescript';
-import python from 'highlight.js/lib/languages/python';
-import bash from 'highlight.js/lib/languages/bash';
-import json from 'highlight.js/lib/languages/json';
-import css from 'highlight.js/lib/languages/css';
-import xml from 'highlight.js/lib/languages/xml';
-import go from 'highlight.js/lib/languages/go';
-import rust from 'highlight.js/lib/languages/rust';
-import sql from 'highlight.js/lib/languages/sql';
-import yaml from 'highlight.js/lib/languages/yaml';
-import markdown from 'highlight.js/lib/languages/markdown';
-import diff from 'highlight.js/lib/languages/diff';
 
-/**
- * The markdown engine, kept out of the first load.
- *
- * marked, DOMPurify and highlight.js together are a third of the JavaScript
- * this app ships, and none of it is needed to sign in or to pick a machine.
- * Splitting it into its own chunk means a phone on a slow link paints the
- * machine list without waiting for a syntax highlighter it may never use.
- * `Markdown.tsx` pulls this in on idle, so by the time a conversation opens
- * it is almost always already here.
- */
+let highlighting: typeof import('./highlight') | null = null;
+let pending: Promise<void> | null = null;
+export const hasHighlighting = () => highlighting !== null;
 
-for (const [name, lang] of Object.entries({
-  javascript, js: javascript, jsx: javascript, typescript, ts: typescript, tsx: typescript,
-  python, py: python, bash, sh: bash, shell: bash, zsh: bash, json, css, xml, html: xml,
-  go, rust, rs: rust, sql, yaml, yml: yaml, markdown, md: markdown, diff,
-})) hljs.registerLanguage(name, lang);
+/** Failure keeps formatted, escaped code readable without an unhandled rejection. */
+export function loadHighlighting(): Promise<void> {
+  if (highlighting) return Promise.resolve();
+  if (!pending) pending = import('./highlight').then((module) => {
+    highlighting = module;
+  }).catch(() => { pending = null; });
+  return pending;
+}
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 const codeBlock = ({ text, lang }: { text: string; lang?: string }) => {
   const language = (lang || '').split(/\s+/)[0].toLowerCase();
-  const known = language && hljs.getLanguage(language);
-  const body = known && text.length <= 40_000
-    ? hljs.highlight(text, { language, ignoreIllegals: true }).value
-    : escapeHtml(text);
+  const colored = text.length <= 40_000 ? highlighting?.highlight(text, language) : null;
+  const body = colored ?? escapeHtml(text);
   return `<div class="codeblock"><div class="codehead"><span>${escapeHtml(language || 'text')}</span>` +
     `<button type="button" class="copy" data-copy>copy</button></div>` +
-    `<pre><code class="hljs${known ? ` language-${language}` : ''}">${body}</code></pre></div>`;
+    `<pre><code class="hljs${colored != null ? ` language-${language}` : ''}">${body}</code></pre></div>`;
 };
 // Only our renderer may create controls or style classes. Raw HTML from a
 // tool result is displayed literally; otherwise it can forge the copy button

@@ -12,9 +12,10 @@ before(async () => {
       import { createRoot } from 'react-dom/client';
       import { Palette } from './apps/web/src/Palette';
       import { Confirm } from './apps/web/src/Modal';
-      import { render } from './apps/web/src/md';
+      import { render, loadHighlighting } from './apps/web/src/md';
       import { Markdown } from './apps/web/src/Markdown';
       window.renderMarkdown = render;
+      loadHighlighting().then(() => { window.highlightingReady = true; });
       const root = createRoot(document.getElementById('root'));
       window.showPalette = (count = 3) => root.render(<Palette items={Array.from({length: count}, (_, i) => ({
         id: 'thread-' + i, group: 'thread', title: 'Thread ' + i, sub: 'laptop · ~/helm',
@@ -33,6 +34,7 @@ before(async () => {
   await page.setContent('<button id="launcher">Open</button><div id="root"></div><button id="behind">Behind</button>');
   await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
+  await page.waitForFunction(() => window.highlightingReady);
 });
 after(async () => { await browser?.close(); });
 
