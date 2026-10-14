@@ -35,9 +35,12 @@ function valid(value: any): value is WorkspaceSnapshot {
 /** Small headers, never transcript bodies, keys or provider settings. */
 function header(s: Session): Session {
   const { id, title, cwd, engine, profileId, status, driver, pty, model, engineModel, mode, effort, engineEffort, permissionControl,
-    speed, alive, createdAt, updatedAt, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared } = s;
+    speed, alive, createdAt, updatedAt, seenAt, team, recovery, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared } = s;
+  // seenAt, team and recovery decide which shelf a chat sits on and whether
+  // it is new; a saved row without them was sorted differently from the
+  // same chat live.
   return { id, title: title?.slice(0, 300), cwd, engine, profileId, status, driver, pty,
-    model, engineModel, mode, effort, engineEffort, permissionControl, speed, alive, createdAt, updatedAt, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared };
+    model, engineModel, mode, effort, engineEffort, permissionControl, speed, alive, createdAt, updatedAt, seenAt, team, recovery, pending, archived, brain, turns, external, engineSessionId, adopted, account, nativeCli, nativeChat, shared };
 }
 
 export function loadWorkspace(scope: string): WorkspaceSnapshot {
