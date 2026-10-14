@@ -111,6 +111,8 @@ function turnStartFor(events, from) {
   return -1;
 }
 
+const isTurn = (e) => typeof e?.type === 'string' && e.type.startsWith('turn.');
+
 const TURN_CONTEXT = new Set(['turn.start', 'turn.edit', 'turn.images', 'turn.deliver', 'turn.accept', 'turn.done', 'turn.remove']);
 
 function pendingTickets(events) {
@@ -240,7 +242,10 @@ export class EventLog {
       if (log.events.length) log.seq = log.events[log.events.length - 1].seq;
       // Compact to the tail and its identities, preserving ownership across
       // eviction/restart as well as while this instance remains in memory.
-      if (lines.length > KEEP) {
+      // A trimmed log is its tail plus the older lines that tail still refers
+      // to, so it stays over KEEP; rewriting it unchanged on every open
+      // rewrote a hundred busy logs on each start.
+      if (lines.length > KEEP && log.events.length < lines.length) {
         writeFileSync(file, log.events.map((e) => JSON.stringify(e)).join('\n') + '\n');
         this.#sweep(id, log.events);
       }
@@ -508,7 +513,73 @@ export class EventLog {
     return value;
   }
 
-  last(id) { return this.#open(id).seq; }
+  /**
+   * What a restart asks of a thread nobody is looking at: its last seq, its
+   * turn events and its unanswered questions. Only those lines are parsed,
+   * and only they are kept, until the file changes. Opening every thread
+   * whole on start held a laptop with hundreds of them at full CPU, and the
+   * session list waited behind it.
+   *
+   * Questions count only in the newest KEEP lines, as `#open` keeps them.
+   * Turn events come from the whole file: `#open` keeps the older ones that
+   * the tail still refers to, and a trimmed log holds nothing else, so the
+   * two differ only for a log grown past KEEP since it was last trimmed -
+   * where an older turn left open is one the restart closes anyway.
+   */
+  glance(id) {
+    const pick = (turns, seq) => ({ seq, turns, pending: this.pending(id) });
+    const log = this.#logs.get(id);
+    if (log) return pick(log.events.filter(isTurn), log.seq);
+    let stamp = null;
+    try { const st = statSync(this.#file(id)); stamp = `${st.size}:${st.mtimeMs}`; } catch { /* no log yet */ }
+    const hit = stamp && this.#glanced.get(id);
+    if (hit?.stamp === stamp) return pick(hit.turns, hit.seq);
+    let buf = null;
+    try { buf = stamp ? readFileSync(this.#file(id)) : null; } catch { /* removed meanwhile */ }
+    // Where each non-empty line starts. Searching the bytes and decoding only
+    // the lines that matter is most of what makes this cheap.
+    const starts = [];
+    for (let at = 0; buf && at < buf.length;) {
+      const end = buf.indexOf(10, at);
+      const stop = end < 0 ? buf.length : end;
+      if (stop > at) starts.push(at);
+      at = stop + 1;
+    }
+    if (!starts.length) { const opened = this.#open(id); return pick(opened.events.filter(isTurn), opened.seq); }
+    const line = (i) => {
+      const end = buf.indexOf(10, starts[i]);
+      return JSON.parse(buf.toString('utf8', starts[i], end < 0 ? buf.length : end));
+    };
+    let seq = 0;
+    for (let i = starts.length - 1; i >= 0 && !seq; i--) {
+      try { seq = line(i).seq ?? 0; } catch { /* a torn last line after a crash */ }
+    }
+    // Inside a JSON string these quotes are escaped, so a hit is a field.
+    const hits = new Set();
+    for (const needle of ['"type":"turn.', '"type":"permission.']) {
+      for (let at = buf.indexOf(needle); at >= 0; at = buf.indexOf(needle, at + needle.length)) {
+        const start = buf.lastIndexOf(10, at) + 1;
+        let lo = 0, hi = starts.length - 1;
+        while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= start) lo = mid; else hi = mid - 1; }
+        hits.add(lo);
+      }
+    }
+    const turns = [], open = new Map(), from = starts.length - KEEP;
+    for (const i of [...hits].sort((a, b) => a - b)) {
+      let e;
+      try { e = line(i); } catch { continue; }
+      if (isTurn(e)) turns.push(e);
+      else if (i >= from) this.#track(open, e);
+    }
+    if (!this.#pending.has(id)) this.#pending.set(id, open);
+    this.#glanced.set(id, { stamp, seq, turns });
+    return pick(turns, seq);
+  }
+
+  /** id -> { stamp, seq, turns } from glance(), kept until the file changes. */
+  #glanced = new Map();
+
+  last(id) { return this.#logs.get(id)?.seq ?? this.glance(id).seq; }
 
   /** Publish a new history in one rename; attachments remain for recovery. */
   replace(id, events) {
@@ -516,7 +587,7 @@ export class EventLog {
     const file = this.#file(id);
     writeFileSync(`${file}.rewind`, events.map(e => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
     renameSync(`${file}.rewind`, file);
-    this.#logs.delete(id); this.#pending.delete(id); this.#derived.delete(id);
+    this.#logs.delete(id); this.#pending.delete(id); this.#derived.delete(id); this.#glanced.delete(id);
     this.#open(id);
   }
 
@@ -568,7 +639,7 @@ export class EventLog {
    * the agent is still holding open must not vanish from the phone.
    */
   pending(id) {
-    if (!this.#pending.has(id)) this.#open(id);
+    if (!this.#pending.has(id)) this.glance(id);
     return [...this.#pending.get(id).values()];
   }
 
@@ -607,6 +678,7 @@ export class EventLog {
   remove(id) {
     this.#logs.delete(id);
     this.#derived.delete(id);
+    this.#glanced.delete(id);
     this.#pending.delete(id);
     rmSync(this.#file(id), { force: true });
     rmSync(this.#attDir(id), { force: true, recursive: true });
