@@ -14,7 +14,7 @@ import { overlaps, workspace, validateRestore, readSnapshot } from './checkpoint
 import { realpathSync } from 'node:fs';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages, sessionSnapshot, sessionActivity } from './transcript.js';
-import { findSubagentsDir, nativeActive, nativeSubagent, nativeSubagents, nativeWorking, subagentsDir } from './native-subagents.js';
+import { findSubagentsDir, nativeActive, nativeAgentFile, nativeSubagent, nativeSubagents, nativeWorking, subagentsDir } from './native-subagents.js';
 import { codexSubagents, codexChildMessages, cursorMessages, cursorSubagents, eventSubagents, opencodeSubagents, relayToSubagent, unwrapCoordinator, SUBAGENT_ENGINES } from './cli-subagents.js';
 import { nonAgentClaudeTask, claudeServiceTasks } from './claude-tasks.js';
 import { ENGINES, isInteractiveProc } from './engines.js';
@@ -1532,7 +1532,8 @@ export class Sessions extends EventEmitter {
     if (s.engine === 'claude') {
       const key = `${s.transcript ?? ''}|${s.engineSessionId ?? ''}|${s.profileId ?? ''}|${s.cwd ?? ''}`;
       if (n.key !== key || !n.dir) { n.key = key; n.dir = await this.#nativeDir(s); }
-      return (await nativeSubagents(n.dir)).map((agent) => ({ ...agent, engine: 'claude', target: agent.id }));
+      // A Workflow's agents take no messages: no target, so no message box.
+      return (await nativeSubagents(n.dir)).map((agent) => ({ ...agent, engine: 'claude', target: agent.workflow ? null : agent.id }));
     }
     if (!s.engineSessionId) return [];
     const env = await this.#engineEnv(s);
@@ -1589,7 +1590,9 @@ export class Sessions extends EventEmitter {
     } else if (s.engine === 'claude') {
       // The whole conversation, drawn like any chat: a window onto the file
       // Claude writes, re-read each time it is asked for.
-      found = (await readMessages({ engine: 'claude', path: join(this.#native.get(s.id).dir, `agent-${agentId}.jsonl`), all: true, sidechain: true }))
+      const path = await nativeAgentFile(this.#native.get(s.id)?.dir, agentId);
+      if (!path) throw new Error('no such subagent');
+      found = (await readMessages({ engine: 'claude', path, all: true, sidechain: true }))
         .map((m) => m.role === 'user' ? { ...m, text: unwrapCoordinator(m.text) } : m);
     } else if (s.engine === 'codex') {
       found = await codexChildMessages(raw.path, { sent });

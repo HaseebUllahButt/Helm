@@ -18,7 +18,7 @@ writeFileSync(join(process.env.HELM_DIR, 'profiles.json'), JSON.stringify({ vers
   { id: 'codex-main', label: 'Codex', engine: 'codex', cmd: process.execPath, source: 'custom' },
 ] }));
 
-const { nativeSubagents, nativeSubagent, nativeStatus, subagentsDir, findSubagentsDir, NATIVE_STALE_MS } = await import('../packages/connect/src/native-subagents.js');
+const { nativeSubagents, nativeSubagent, nativeAgentFile, nativeStatus, subagentsDir, findSubagentsDir, NATIVE_STALE_MS } = await import('../packages/connect/src/native-subagents.js');
 const { Sessions, wire } = await import('../packages/connect/src/sessions.js');
 
 const at = (ms) => new Date(ms).toISOString();
@@ -156,6 +156,32 @@ test('only the newest runs are listed, oldest first', async () => {
     writeAgent(dir, id, [user(`Run ${id}`, t + i * 1000), reply('m', [text('ok')], 'end_turn', t + i * 1000 + 1)], { ageMs: 400_000 - i * 60_000 });
   }
   assert.deepEqual((await nativeSubagents(dir, { limit: 2 })).map((a) => a.id), ['r3', 'r4']);
+});
+
+test('agents a Workflow run started are listed beside the parent\'s own, read from their own folder', async () => {
+  const dir = agentDir();
+  const t = Date.now() - 3000;
+  writeAgent(dir, 'own', [user('Own task', t), reply('m1', [text('Done.')], 'end_turn', t + 1)], { ageMs: 60_000 });
+  const run = join(dir, 'workflows', 'wf_ab12-034');
+  mkdirSync(run, { recursive: true });
+  writeFileSync(join(run, 'journal.jsonl'), '{"type":"launched"}\n');
+  writeAgent(run, 'wf1', [user('Edit the doc', t + 10), reply('m2', [tool('Edit', { file_path: 'docs/a.md' })], 'tool_use', t + 20)],
+    { meta: { agentType: 'workflow-subagent', description: 'edit:a.md', workflowPhase: 'Edit', spawnDepth: 1, model: 'haiku' } });
+  mkdirSync(join(dir, 'workflows', 'not-a-run'), { recursive: true });
+  writeAgent(join(dir, 'workflows', 'not-a-run'), 'stray', [user('x', t)]);
+  const list = await nativeSubagents(dir);
+  assert.deepEqual(list.map((a) => a.id), ['own', 'wf1']);
+  const wf = list.find((a) => a.id === 'wf1');
+  assert.equal(wf.workflow, 'wf_ab12-034');
+  assert.equal(wf.title, 'edit:a.md');
+  assert.equal(wf.status, 'working');
+  assert.equal(list.find((a) => a.id === 'own').workflow, undefined);
+  const detail = await nativeSubagent(dir, 'wf1');
+  assert.equal(detail.workflow, 'wf_ab12-034');
+  assert.equal(detail.task, 'Edit the doc');
+  assert.equal(await nativeAgentFile(dir, 'wf1'), join(run, 'agent-wf1.jsonl'));
+  assert.equal(await nativeAgentFile(dir, 'own'), join(dir, 'agent-own.jsonl'));
+  assert.equal(await nativeAgentFile(dir, 'stray'), null);
 });
 
 test('folders and ids are found the way Claude names them, never outside the folder', async () => {

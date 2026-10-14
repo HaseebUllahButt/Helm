@@ -9,7 +9,9 @@ import { expand } from './paths.js';
  *
  * They are not Helm sessions: nothing here can message, stop or resume one.
  * Each run is `<projects>/<project>/<sessionId>/subagents/agent-<id>.jsonl`
- * plus an `agent-<id>.meta.json` naming its type, model and worktree. A long
+ * plus an `agent-<id>.meta.json` naming its type, model and worktree. Agents a
+ * Workflow run starts sit one level down, in `subagents/workflows/wf_<id>/`,
+ * and Claude's SendMessage cannot reach them, so their cards are read-only. A long
  * subagent's file runs to megabytes, so only its head and tail are read, and
  * only again once its size or mtime moves.
  */
@@ -32,6 +34,7 @@ const MAX_ACTIVITY = 8;
 
 const AGENT_FILE = /^agent-([A-Za-z0-9_-]+)\.jsonl$/;
 const AGENT_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const WORKFLOW_DIR = /^wf_[A-Za-z0-9_-]{1,80}$/;
 
 const oneLine = (s, max = MAX_LINE) => {
   const t = String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -195,25 +198,53 @@ function entry(id, { meta, parsed, birth, mtime }, now, detail) {
   };
 }
 
+/** Every run's folder under `dir`: its own, then each Workflow run's. */
+async function agentFolders(dir) {
+  const folders = [{ dir, workflow: null }];
+  let runs;
+  try { runs = await readdir(join(dir, 'workflows')); } catch { return folders; }
+  for (const run of runs) if (WORKFLOW_DIR.test(run)) folders.push({ dir: join(dir, 'workflows', run), workflow: run });
+  return folders;
+}
+
+/** The folder holding `agent-<id>.jsonl`, or null. */
+async function agentHome(dir, id) {
+  for (const folder of await agentFolders(dir)) {
+    if (existsSync(join(folder.dir, `agent-${id}.jsonl`))) return folder;
+  }
+  return null;
+}
+
+/** The conversation file of one subagent under `dir`, wherever it sits; null when there is none. */
+export async function nativeAgentFile(dir, id) {
+  if (!dir || typeof id !== 'string' || !AGENT_ID.test(id)) return null;
+  const home = await agentHome(dir, id);
+  return home ? join(home.dir, `agent-${id}.jsonl`) : null;
+}
+
+const fromWorkflow = (card, workflow) => workflow ? { ...card, workflow } : card;
+
 /**
  * The subagents under `dir`, oldest first: the newest MAX_AGENTS runs, each
  * a read-only card. A missing folder is simply none.
  */
 export async function nativeSubagents(dir, { now = Date.now(), limit = MAX_AGENTS } = {}) {
   if (!dir) return [];
-  let names;
-  try { names = await readdir(dir); } catch { return []; }
   // Pick the newest by mtime before opening any: a folder of hundreds of
   // old runs costs a stat each, not a read each.
   const files = [];
-  for (const name of names) {
-    const id = AGENT_FILE.exec(name)?.[1];
-    if (!id) continue;
-    try { files.push({ id, info: await stat(join(dir, name)) }); } catch { /* vanished mid-scan */ }
+  for (const folder of await agentFolders(dir)) {
+    let names;
+    try { names = await readdir(folder.dir); } catch { continue; }
+    for (const name of names) {
+      const id = AGENT_FILE.exec(name)?.[1];
+      if (!id) continue;
+      try { files.push({ id, folder, info: await stat(join(folder.dir, name)) }); } catch { /* vanished mid-scan */ }
+    }
   }
   const found = [];
-  for (const { id, info } of files.sort((a, b) => b.info.mtimeMs - a.info.mtimeMs).slice(0, limit)) {
-    try { found.push(entry(id, await readAgent(dir, id, info), now, false)); } catch { /* vanished or unreadable */ }
+  for (const { id, folder, info } of files.sort((a, b) => b.info.mtimeMs - a.info.mtimeMs).slice(0, limit)) {
+    try { found.push(fromWorkflow(entry(id, await readAgent(folder.dir, id, info), now, false), folder.workflow)); } catch { /* vanished or unreadable */ }
   }
   return found.sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
 }
@@ -221,7 +252,10 @@ export async function nativeSubagents(dir, { now = Date.now(), limit = MAX_AGENT
 /** One subagent with its result and a short activity tail, or null. */
 export async function nativeSubagent(dir, id, { now = Date.now() } = {}) {
   if (!dir || typeof id !== 'string' || !AGENT_ID.test(id)) return null;
-  try { return entry(id, await readAgent(dir, id), now, true); } catch { return null; }
+  try {
+    const home = await agentHome(dir, id);
+    return home ? fromWorkflow(entry(id, await readAgent(home.dir, id), now, true), home.workflow) : null;
+  } catch { return null; }
 }
 
 /** How many of these are still running. */
