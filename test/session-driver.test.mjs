@@ -1795,3 +1795,21 @@ test('a command card mid-task neither finishes a delegated task nor reports to i
   assert.match(parentDriver.sent[0], /hello/, 'with the task reply');
   assert.doesNotMatch(parentDriver.sent[0], /Quota/, 'not the command card');
 });
+
+test('opening a chat whose folder was removed does not start its agent there', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const { mkdirSync } = await import('node:fs');
+  const folder = join(process.env.HELM_DIR, 'merged-helper-worktree'); mkdirSync(folder);
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-missing-folder'));
+  const first = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => new FakeDriver({ engine, ...opts }) });
+  const session = await first.start({ cwd: folder, profileId: 'claudea' });
+  await first.stop();
+  rmSync(folder, { recursive: true, force: true });
+  let made = 0;
+  const later = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => { made += 1; return new FakeDriver({ engine, ...opts }); } });
+  assert.deepEqual(await later.commands(session.id), []);
+  assert.equal(made, 0, 'no agent is started just to fill the / menu');
+  assert.equal(later.history(session.id).events.filter((e) => e.type === 'error').length, 0, 'nothing red is added to the chat');
+  await later.stop();
+});
