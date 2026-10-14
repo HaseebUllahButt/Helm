@@ -14,6 +14,7 @@
     "./share": "./share.js",
     "./limits": "./limits.js",
     "./message-delivery": "./message-delivery.js",
-    "./visual": "./visual.js"
+    "./visual": "./visual.js",
+    "./devices": "./devices.js"
   }
 }
