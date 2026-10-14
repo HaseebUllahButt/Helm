@@ -478,7 +478,7 @@ export class EventLog {
     return n > 0 && events.length > n ? events.slice(-n) : events;
   }
 
-  /** id -> { stamp, value } for derive(): one line per thread, kept until the thread changes. */
+  /** id -> fn -> { stamp, value } for derive(): kept until the thread changes. */
   #derived = new Map();
 
   /**
@@ -493,7 +493,9 @@ export class EventLog {
     const log = this.#logs.get(id);
     let stamp = log ? `seq:${log.seq}:${log.first}` : 'none';
     if (!log) { try { const st = statSync(this.#file(id)); stamp = `file:${st.size}:${st.mtimeMs}`; } catch {} }
-    const hit = this.#derived.get(id);
+    let kept = this.#derived.get(id);
+    if (!kept) this.#derived.set(id, kept = new Map());
+    const hit = kept.get(fn);
     if (hit?.stamp === stamp) return hit.value;
     let events = log?.events ?? [];
     if (!log && stamp !== 'none') {
@@ -502,7 +504,7 @@ export class EventLog {
       for (const line of lines) { try { events.push(JSON.parse(line)); } catch { /* a torn last line */ } }
     }
     const value = fn(n > 0 && events.length > n ? events.slice(-n) : events);
-    this.#derived.set(id, { stamp, value });
+    kept.set(fn, { stamp, value });
     return value;
   }
 
@@ -514,7 +516,7 @@ export class EventLog {
     const file = this.#file(id);
     writeFileSync(`${file}.rewind`, events.map(e => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
     renameSync(`${file}.rewind`, file);
-    this.#logs.delete(id); this.#pending.delete(id);
+    this.#logs.delete(id); this.#pending.delete(id); this.#derived.delete(id);
     this.#open(id);
   }
 
@@ -580,8 +582,15 @@ export class EventLog {
     return null;
   }
 
-  /** The agent's live turn, even when unsent queued messages follow it. */
-  activeTurn(id) { return activeTurnFromEvents(this.#open(id).events); }
+  /**
+   * The agent's live turn, even when unsent queued messages follow it.
+   *
+   * The session list and the native thread check ask this of every thread
+   * every few seconds; opening each log for it pushed the threads agents were
+   * writing to out of the parsed cache, so a laptop with hundreds of threads
+   * sat at full CPU re-reading them.
+   */
+  activeTurn(id) { return this.derive(id, activeTurnFromEvents, 0); }
 
   /**
    * Start a log over from empty without reusing its numbers: a client holding

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventLog } from '../packages/connect/src/events.js';
@@ -348,4 +348,23 @@ test('old owner anchors disappear when no retained event needs them', () => {
   assert.equal(events.length, 2002);
   assert.deepEqual(events.filter(e => e.type === 'turn.start').map(e => e.turnId), ['t2']);
   assert.equal(new EventLog(dir).since('s').length, 2002);
+});
+
+test('the live turn is read from disk once per change and shares the cache with other derived values', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-active-'));
+  try {
+    const writer = new EventLog(dir);
+    writer.append('a1', { type: 'turn.start', turnId: 't1', text: 'go' });
+    const reader = new EventLog(dir);
+    assert.equal(reader.activeTurn('a1')?.turnId, 't1');
+    assert.equal(reader.derive('a1', (events) => events.length), 1, 'a second value for the same thread is kept apart');
+    assert.equal(reader.activeTurn('a1')?.turnId, 't1');
+    writer.append('a1', { type: 'turn.done', turnId: 't1', status: 'ok' });
+    assert.equal(reader.activeTurn('a1'), null, 'a turn finished on disk is seen');
+    reader.append('a1', { type: 'turn.start', turnId: 't2', text: 'again' });
+    assert.equal(reader.activeTurn('a1')?.turnId, 't2', 'a turn started in this log is seen');
+    reader.append('a1', { type: 'turn.done', turnId: 't2', status: 'ok' });
+    assert.equal(reader.activeTurn('a1'), null);
+    assert.equal(reader.activeTurn('none'), null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
