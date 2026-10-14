@@ -26,7 +26,10 @@ dialog, back, forward and reload. A failed batch stops at its failed step and
 returns the current page; inspect it before submitting the remaining steps.
 For uploads, agents pass `files` containing host file paths. The viewer can
 send up to ten files and 8 MiB total through Helm. Downloads up to 8 MiB can
-be saved in the viewer; larger files remain on the host.
+be saved in the viewer; larger files up to 128 MiB remain on the host while
+the tab stays open. Each tab retains at most twenty downloads, with 256 MiB
+total retained per thread. Older files expire when that limit is reached.
+Closing a tab removes its retained downloads.
 
 Chromium is shared across thread contexts, with separate cookies and site
 storage for each thread. Cookies, local storage, IndexedDB and tab addresses

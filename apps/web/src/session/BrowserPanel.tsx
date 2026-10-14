@@ -3,7 +3,7 @@ import type { Client, Environment, Session } from '../client';
 import { useDialog } from '../useDialog';
 import { Icon } from '../Icon';
 
-type Tab = { id: string; engine: string; title: string; url: string; viewport: { width: number; height: number }; control: string | null; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[] };
+type Tab = { id: string; engine: string; title: string; url: string; viewport: { width: number; height: number }; control: string | null; controlEpoch: number; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[] };
 const keys: Record<string, string> = { Control: 'Control', Meta: 'Meta', ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight', ' ': 'Space' };
 
 export function BrowserDrawer({ client, env, session, onClose }: { client: Client; env: Environment; session: Session; onClose: () => void }) {
@@ -15,7 +15,9 @@ export default function BrowserPanel({ client, env, session }: { client: Client;
   const [tabs, setTabs] = useState<Tab[]>([]), [chosen, setChosen] = useState(''), [address, setAddress] = useState(''), [engine, setEngine] = useState('chromium'), [bowser, setBowser] = useState(false);
   const [image, setImage] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false), [pageText, setPageText] = useState(''), [entry, setEntry] = useState(''), [target, setTarget] = useState('');
   const viewer = useRef(''), sequence = useRef(-1), actionQueue = useRef(Promise.resolve()), actionCount = useRef(0), hoverAt = useRef(0), pointer = useRef<{ x: number; y: number } | null>(null), tab = tabs.find(t => t.id === chosen);
+  const viewEpoch = useRef(0), typed = useRef(''), typeTimer = useRef<ReturnType<typeof setTimeout>>(), wheel = useRef({ dx: 0, dy: 0 }), wheelTimer = useRef<ReturnType<typeof setTimeout>>();
   if (!viewer.current) viewer.current = [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, '0')).join('');
+  useEffect(() => () => { viewEpoch.current++; clearTimeout(typeTimer.current); clearTimeout(wheelTimer.current); typed.current = ''; wheel.current = { dx: 0, dy: 0 }; }, [chosen]);
   const call = useCallback(<T,>(method: string, params: Record<string, unknown> = {}) => client.rpc<T>(env.id, `browser.${method}`, { id: session.id, ...params }, 60000), [client, env.id, session.id]);
   const refresh = useCallback(async () => { const result = await call<{ tabs: Tab[]; bowser: boolean }>('list'); setTabs(result.tabs); setBowser(result.bowser); setChosen(current => result.tabs.some(t => t.id === current) ? current : result.tabs[0]?.id || ''); }, [call]);
   useEffect(() => { void refresh().catch(e => setError(e.message)); }, [refresh]);
@@ -31,21 +33,28 @@ export default function BrowserPanel({ client, env, session }: { client: Client;
           const result = await call<{ tab: Tab; sequence: number; image?: string }>('frame', { tabId: chosen, viewer: viewer.current, since: sequence.current });
           if (!alive) return; sequence.current = result.sequence; if (result.image) setImage(result.image);
           setTabs(current => { const previous = current.find(t => t.id === result.tab.id); return JSON.stringify(previous) === JSON.stringify(result.tab) ? current : current.map(t => t.id === result.tab.id ? result.tab : t); });
-        } catch (e: any) { if (alive) setError(e.message); }
+        } catch (e: any) { if (alive) { setError(e.message); if (/tab not found|thread not found/i.test(e.message)) await refresh().catch(() => {}); } }
       }
       if (alive) timer = setTimeout(poll, 250);
     };
     void poll();
     return () => { alive = false; clearTimeout(timer); void call('unwatch', { tabId: chosen, viewer: viewer.current }).catch(() => {}); };
-  }, [call, chosen]);
+  }, [call, chosen, refresh]);
   const action = (value: Record<string, unknown>) => {
+    const controlEpoch = tab?.controlEpoch;
+    if (value.kind === 'dialog') return call('action', { tabId: chosen, viewer: viewer.current, controlEpoch, action: value }).then(() => refresh()).catch((e: any) => setError(e.message));
+    if (actionCount.current >= 64) { setError('Browser input is catching up. Wait before sending more.'); return Promise.resolve(); }
     if (!chosen) return Promise.resolve(); setBusy(true); setError(''); actionCount.current++;
+    const epoch = viewEpoch.current;
     actionQueue.current = actionQueue.current.catch(() => {}).then(async () => {
-      try { const result = await call<{ tab?: Tab; text?: string; value?: unknown; entries?: unknown[] }>('action', { tabId: chosen, viewer: viewer.current, action: value }); if (result.text) setPageText(result.text); if (result.value !== undefined) setPageText(JSON.stringify(result.value, null, 2)); if (result.entries) setPageText(JSON.stringify(result.entries, null, 2)); if (result.tab) setTabs(current => current.map(t => t.id === result.tab!.id ? result.tab! : t)); }
+      if (epoch !== viewEpoch.current) { if (--actionCount.current === 0) setBusy(false); return; }
+      try { const result = await call<{ tab?: Tab; text?: string; value?: unknown; entries?: unknown[] }>('action', { tabId: chosen, viewer: viewer.current, controlEpoch, action: value }); if (result.text) setPageText(result.text); if (result.value !== undefined) setPageText(JSON.stringify(result.value, null, 2)); if (result.entries) setPageText(JSON.stringify(result.entries, null, 2)); if (result.tab) setTabs(current => current.map(t => t.id === result.tab!.id ? result.tab! : t)); }
       catch (e: any) { setError(e.message); } finally { if (--actionCount.current === 0) setBusy(false); }
     });
     return actionQueue.current;
   };
+  const flushTyped = () => { clearTimeout(typeTimer.current); typeTimer.current = undefined; const value = typed.current; typed.current = ''; if (value) void action({ kind: 'type', text: value }); };
+  const flushWheel = () => { clearTimeout(wheelTimer.current); wheelTimer.current = undefined; const { dx, dy } = wheel.current; wheel.current = { dx: 0, dy: 0 }; if (dx || dy) void action({ kind: 'scroll', dx: Math.max(-20000, Math.min(20000, dx)), dy: Math.max(-20000, Math.min(20000, dy)) }); };
   const controlled = tab?.control === viewer.current;
   const download = async (downloadId: string) => { try { const result = await call<{ name: string; data: string }>('download', { tabId: chosen, downloadId }); const bytes = Uint8Array.from(atob(result.data), c => c.charCodeAt(0)), url = URL.createObjectURL(new Blob([bytes])); const a = document.createElement('a'); a.href = url; a.download = result.name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } catch (e: any) { setError(e.message); } };
   return <section className="browser-panel" aria-label="Browser">
@@ -53,11 +62,13 @@ export default function BrowserPanel({ client, env, session }: { client: Client;
     {tab ? <>
       <div className="browser-toolbar"><button aria-label="Go back" disabled={busy || !controlled} onClick={() => void action({ kind: 'back' })}><Icon name="back" size={14} /></button><button aria-label="Go forward" disabled={busy || !controlled || tab.engine === 'bowser'} onClick={() => void action({ kind: 'forward' })}><Icon name="forward" size={14} /></button><button aria-label="Reload" disabled={busy || !controlled} onClick={() => void action({ kind: 'reload' })}><Icon name="refresh" size={14} /></button><form onSubmit={e => { e.preventDefault(); void action({ kind: 'navigate', url: address }); }}><input aria-label="Browser address" value={address} onChange={e => setAddress(e.target.value)} placeholder="https:// or localhost" disabled={!controlled} /><button disabled={busy || !controlled}>Go</button></form><button onClick={async () => { try { const result = await call<{ tab: Tab }>('control', { tabId: chosen, viewer: viewer.current, take: !controlled }); setTabs(current => current.map(t => t.id === chosen ? result.tab : t)); } catch (e: any) { setError(e.message); } }}>{controlled ? 'Release control' : 'Take control'}</button><button aria-label="Close browser tab" disabled={busy} onClick={async () => { try { await call('close', { tabId: chosen }); await refresh(); } catch (e: any) { setError(e.message); } }}><Icon name="close" size={14} /></button></div>
       <p className="note">{controlled ? 'You have control. Release it when the agent should continue.' : tab.control ? 'Another viewer has control.' : 'Watching the agent’s browser. Take control to interact.'}{tab.engine === 'bowser' && ' Bowser preserves its existing browser and logins; use numbered controls below.'}</p>
-      <div className="browser-screen" tabIndex={controlled ? 0 : -1} role="group" aria-label="Live browser page" onWheel={e => { if (!controlled) return; e.preventDefault(); void action({ kind: 'scroll', dx: Math.round(e.deltaX), dy: Math.round(e.deltaY) }); }} onKeyDown={e => {
-        if (!controlled || e.nativeEvent.isComposing) return; e.preventDefault();
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) void action({ kind: 'type', text: e.key });
-        else if (!['Shift', 'Control', 'Meta', 'Alt'].includes(e.key)) void action({ kind: 'key', key: [e.ctrlKey ? 'Control' : '', e.metaKey ? 'Meta' : '', e.altKey ? 'Alt' : '', e.shiftKey ? 'Shift' : '', keys[e.key] || e.key].filter(Boolean).join('+') });
-      }} onPaste={e => { if (controlled) { e.preventDefault(); void action({ kind: 'type', text: e.clipboardData.getData('text/plain') }); } }}>
+      <div className="browser-screen" tabIndex={controlled ? 0 : -1} role="group" aria-label="Live browser page" onWheel={e => { if (!controlled) return; flushTyped(); e.preventDefault(); wheel.current.dx += Math.round(e.deltaX); wheel.current.dy += Math.round(e.deltaY); if (!wheelTimer.current) wheelTimer.current = setTimeout(() => { wheelTimer.current = undefined; flushWheel(); }, 40); }} onKeyDown={e => {
+        if (!controlled || e.nativeEvent.isComposing) return;
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { flushTyped(); return; }
+        e.preventDefault(); flushWheel();
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { typed.current += e.key; if (typed.current.length >= 1000) flushTyped(); else if (!typeTimer.current) typeTimer.current = setTimeout(() => { typeTimer.current = undefined; flushTyped(); }, 40); }
+        else if (!['Shift', 'Control', 'Meta', 'Alt'].includes(e.key)) { flushTyped(); void action({ kind: 'key', key: [e.ctrlKey ? 'Control' : '', e.metaKey ? 'Meta' : '', e.altKey ? 'Alt' : '', e.shiftKey ? 'Shift' : '', keys[e.key] || e.key].filter(Boolean).join('+') }); }
+      }} onPaste={e => { if (controlled) { flushTyped(); e.preventDefault(); void action({ kind: 'type', text: e.clipboardData.getData('text/plain') }); } }}>
         {image ? <img alt="Live browser page" src={image} draggable={false}
           onContextMenu={e => { if (!controlled || tab.engine === 'bowser') return; e.preventDefault(); const rect = e.currentTarget.getBoundingClientRect(); void action({ kind: 'click', button: 'right', x: Math.floor((e.clientX - rect.left) * tab.viewport.width / rect.width), y: Math.floor((e.clientY - rect.top) * tab.viewport.height / rect.height) }); }}
           onPointerDown={e => { if (!controlled || tab.engine === 'bowser' || e.button !== 0) return; const rect = e.currentTarget.getBoundingClientRect(); pointer.current = { x: Math.floor((e.clientX - rect.left) * tab.viewport.width / rect.width), y: Math.floor((e.clientY - rect.top) * tab.viewport.height / rect.height) }; e.currentTarget.setPointerCapture(e.pointerId); }}
@@ -66,7 +77,7 @@ export default function BrowserPanel({ client, env, session }: { client: Client;
           onPointerCancel={() => { pointer.current = null; }} /> : <p className="note">Starting the live preview…</p>}
       </div>
       <div className="browser-tools"><button disabled={busy} onClick={() => void action({ kind: 'look' })}>Read page & controls</button><button disabled={busy} onClick={() => void action({ kind: 'console' })}>Console</button><button disabled={busy} onClick={() => void action({ kind: 'network' })}>Network</button><button disabled={busy || !controlled || tab.engine === 'bowser'} onClick={() => void action({ kind: 'resize', width: 390, height: 844 })}>Phone viewport</button><button disabled={busy || !controlled || tab.engine === 'bowser'} onClick={() => void action({ kind: 'resize', width: 1280, height: 800 })}>Desktop viewport</button></div>
-      {controlled && tab.engine === 'chromium' && <button disabled={busy} onClick={async () => { try { const result = await call<{ text: string }>('action', { tabId: chosen, viewer: viewer.current, action: { kind: 'clipboard' } }); setPageText(result.text); if (navigator.clipboard) await navigator.clipboard.writeText(result.text); } catch (e: any) { setError(e.message); } }}>Copy browser clipboard</button>}
+      {controlled && tab.engine === 'chromium' && <button disabled={busy} onClick={async () => { try { const result = await call<{ text: string }>('action', { tabId: chosen, viewer: viewer.current, controlEpoch: tab.controlEpoch, action: { kind: 'clipboard' } }); setPageText(result.text); if (navigator.clipboard) await navigator.clipboard.writeText(result.text); } catch (e: any) { setError(e.message); } }}>Copy browser clipboard</button>}
       {controlled && <div className="browser-input"><input aria-label="Element number" value={target} onChange={e => setTarget(e.target.value)} placeholder="Element # (optional)" /><input aria-label="Text to type into browser" value={entry} onChange={e => setEntry(e.target.value)} placeholder="Type or paste text" /><button disabled={busy || !entry} onClick={() => { void action({ kind: 'type', text: entry, ...(target ? { ref: Number(target) } : {}) }); setEntry(''); }}>Type</button><button disabled={busy || !target} onClick={() => void action({ kind: 'click', ref: Number(target) })}>Click #</button><label className="ctl">Upload<input type="file" hidden multiple onChange={async e => {
         const files = [...(e.target.files || [])]; e.target.value = ''; if (!files.length) return;
         if (!target) { setError('Read the page and enter its file input element number first.'); return; }

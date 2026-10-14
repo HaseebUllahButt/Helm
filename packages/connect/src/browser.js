@@ -12,6 +12,8 @@ const integer = (value, min, max) => { if (!Number.isInteger(value) || value < m
 const httpUrl = value => { const u = new URL(String(value).includes('://') || String(value).startsWith('about:') ? value : `https://${value}`); if (!['http:', 'https:'].includes(u.protocol) && u.href !== 'about:blank') throw new Error('use an HTTP or HTTPS browser address'); return u.href; };
 const executable = () => process.env.HELM_CHROMIUM_PATH || process.env.HELM_TEST_CHROMIUM || ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
 const bowserBin = () => process.env.HELM_BOWSER_PATH || (process.env.PATH || '').split(':').map(p => join(p, 'bowser-computer')).find(existsSync);
+const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
+const MAX_THREAD_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 
 /** One persistent stdio bridge to the owner's Bowser. Closing it leaves Bowser intact. */
 export class BowserBridge {
@@ -33,12 +35,14 @@ export class BowserBridge {
       const child = this.child;
       child.on('error', error => { if (this.child === child) this.stop(error); });
       child.on('exit', () => { if (this.child === child) this.stop(new Error('Bowser bridge closed')); });
+      child.stdin.on?.('error', error => { if (this.child === child) this.stop(error); });
     }
     const requestId = ++this.sequence;
     const result = await new Promise((resolveCall, reject) => {
       const timer = setTimeout(() => { this.pending.delete(requestId); reject(new Error('Bowser action timed out; inspect the browser before retrying')); }, 45000); timer.unref?.();
       this.pending.set(requestId, { resolve: resolveCall, reject, timer });
-      this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: requestId, method: 'tools/call', params: { name, arguments: args } }) + '\n');
+      try { this.child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: requestId, method: 'tools/call', params: { name, arguments: args } }) + '\n', error => { if (error) this.stop(error); }); }
+      catch (error) { this.stop(error); }
     });
     if (result?.isError) throw new Error(result.content?.filter(p => p.type === 'text').map(p => p.text).join('\n') || 'Bowser action failed');
     return result;
@@ -48,15 +52,21 @@ export class BowserBridge {
 
 /** Lazy, shared Chromium. No browser imports/processes or screenshot work while unused. */
 export class BrowserManager {
-  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, bowser = new BowserBridge(), idleMs = 10 * 60000 } = {}) {
-    this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.bowser = bowser; this.idleMs = idleMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.browser = null;
+  constructor({ directory = join(HELM_DIR, 'browser'), session = () => null, launch, now = Date.now, bowser = new BowserBridge(), idleMs = 10 * 60000, actionTimeoutMs = 45000 } = {}) {
+    this.directory = directory; this.session = session; this.launch = launch; this.now = now; this.bowser = bowser; this.idleMs = idleMs; this.actionTimeoutMs = actionTimeoutMs; this.tabs = new Map(); this.contexts = new Map(); this.serial = new Map(); this.recovered = new Map(); this.suspending = new Set(); this.browser = null;
   }
   async start() {
     if (!this.starting) this.starting = (async () => {
       if (this.browser?.isConnected()) return this.browser;
       const launch = this.launch || (async () => { const { chromium } = await import('playwright'); return chromium.launch({ headless: true, ...(executable() ? { executablePath: executable() } : {}), args: ['--disable-gpu', '--disk-cache-size=33554432'], timeout: 15000 }); });
       try { this.browser = await launch(); } catch (error) { throw new Error(`Chromium could not start. Set HELM_CHROMIUM_PATH or install it with npx playwright install chromium. ${error.message}`); }
-      this.browser.on('disconnected', () => { for (const tab of this.tabs.values()) this.clearStream(tab); this.tabs.clear(); this.contexts.clear(); this.recovered.clear(); this.browser = null; });
+      const browser = this.browser;
+      browser.on('disconnected', () => {
+        if (this.browser !== browser) return;
+        this.browser = null;
+        for (const tab of this.tabs.values()) if (tab.engine === 'chromium') { void this.clearStream(tab); this.tabs.delete(tab.id); this.recovered.delete(tab.sessionId); }
+        this.contexts.clear();
+      });
       this.timer ||= setInterval(() => void this.sweep().catch(() => {}), 2000); this.timer.unref?.();
       return this.browser;
     })().finally(() => { this.starting = null; });
@@ -86,21 +96,38 @@ export class BrowserManager {
     const existing = [...this.tabs.values()].find(t => t.page === page); if (existing) return existing;
     const tab = { id: id(), sessionId, engine: 'chromium', page, title: '', console: [], network: [], downloads: [], lastUsed: this.now(), viewers: new Map(), sequence: 0, frame: null, control: null, dialog: null };
     this.tabs.set(tab.id, tab);
-    page.on('close', () => { this.clearStream(tab); this.tabs.delete(tab.id); });
+    page.on('close', () => {
+      this.tabs.delete(tab.id); void this.clearStream(tab);
+      if (!this.stopping && !this.suspending.has(sessionId)) this.discardDownloads(tab);
+      if (!tab.explicitClose && !this.stopping && !this.suspending.has(sessionId)) void this.pageClosed(sessionId).catch(() => {});
+    });
     page.on('console', msg => cap(tab.console, { level: msg.type(), text: msg.text().slice(0, 4000), at: this.now() }));
     page.on('pageerror', error => cap(tab.console, { level: 'error', text: error.message.slice(0, 4000), at: this.now() }));
     page.on('response', response => cap(tab.network, { url: response.url().slice(0, 2000), method: response.request().method(), status: response.status() }));
     page.on('requestfailed', request => cap(tab.network, { url: request.url().slice(0, 2000), method: request.method(), error: request.failure()?.errorText }));
     page.on('dialog', dialog => { tab.dialog = dialog; });
     page.on('download', download => {
-      const record = { id: id(), name: basename(download.suggestedFilename()), url: download.url(), status: 'pending' }; cap(tab.downloads, record, 20);
+      const record = { id: id(), name: basename(download.suggestedFilename()), url: download.url(), status: 'pending', at: this.now() };
+      if (tab.downloads.length >= 20) { const old = tab.downloads.shift(); old.discarded = true; if (old.path) void rm(old.path, { force: true }).catch(() => {}); }
+      tab.downloads.push(record);
       const folder = join(this.directory, sessionId, 'downloads'); mkdirSync(folder, { recursive: true, mode: 0o700 });
       record.path = join(folder, `${record.id}-${record.name}`);
-      void download.saveAs(record.path).then(() => { record.status = 'ready'; }, () => { record.status = 'failed'; });
+      void download.saveAs(record.path).then(() => this.finishDownload(tab, record)).catch(() => { record.status = 'failed'; void rm(record.path, { force: true }).catch(() => {}); });
     });
     return tab;
   }
-  metadata(tab) { return { id: tab.id, engine: tab.engine, url: tab.page?.url() || tab.url || 'about:blank', title: tab.title, viewport: tab.page?.viewportSize() || { width: 1280, height: 800 }, control: tab.control, dialog: tab.dialog ? { type: tab.dialog.type(), message: tab.dialog.message().slice(0, 2000) } : null, downloads: tab.downloads.map(({ path, ...d }) => d) }; }
+  metadata(tab) { return { id: tab.id, engine: tab.engine, url: tab.page?.url() || tab.url || 'about:blank', title: tab.title, viewport: tab.page?.viewportSize() || { width: 1280, height: 800 }, control: tab.control, controlEpoch: tab.controlEpoch || 0, dialog: tab.dialog ? { type: tab.dialog.type(), message: tab.dialog.message().slice(0, 2000) } : null, downloads: tab.downloads.map(({ path, ...d }) => d) }; }
+  discardDownloads(tab) { for (const record of tab.downloads) { record.discarded = true; if (record.path) void rm(record.path, { force: true }).catch(() => {}); } }
+  async finishDownload(tab, record) {
+    if (record.discarded || this.tabs.get(tab.id) !== tab) { await rm(record.path, { force: true }); return; }
+    const size = (await stat(record.path)).size;
+    if (size > MAX_DOWNLOAD_BYTES) { record.status = 'too large (128 MiB limit)'; await rm(record.path, { force: true }); return; }
+    await chmod(record.path, 0o600); record.status = 'ready';
+    const records = [...this.tabs.values()].filter(t => t.sessionId === tab.sessionId).flatMap(t => t.downloads.filter(d => d.status === 'ready')).sort((a, b) => (a.at || 0) - (b.at || 0));
+    let total = 0; for (const item of records) { item.size = (await stat(item.path).catch(() => ({ size: 0 }))).size; total += item.size; }
+    for (const item of records) { if (total <= MAX_THREAD_DOWNLOAD_BYTES) break; item.status = 'expired'; total -= item.size; await rm(item.path, { force: true }); }
+    await this.persistTabs(tab.sessionId);
+  }
   async recover(sessionId) {
     this.owner(sessionId);
     if (!this.recovered.has(sessionId)) this.recovered.set(sessionId, (async () => {
@@ -111,6 +138,7 @@ export class BrowserManager {
         if (this.tabs.has(row.id)) continue;
         const context = await this.context(sessionId), page = await context.newPage(), tab = this.register(sessionId, page);
         this.tabs.delete(tab.id); tab.id = row.id; tab.title = row.title || ''; this.tabs.set(tab.id, tab);
+        if (row.viewport && Number.isInteger(row.viewport.width) && row.viewport.width >= 240 && row.viewport.width <= 1920 && Number.isInteger(row.viewport.height) && row.viewport.height >= 200 && row.viewport.height <= 1200) await page.setViewportSize(row.viewport);
         for (const download of (Array.isArray(row.downloads) ? row.downloads : []).slice(-20)) {
           if (!/^[a-f0-9]{16}$/.test(download.id || '') || typeof download.name !== 'string') continue;
           const path = join(this.directory, sessionId, 'downloads', `${download.id}-${basename(download.name)}`);
@@ -128,9 +156,15 @@ export class BrowserManager {
     if (this.tabs.size >= 24) throw new Error('close a browser tab before opening another (24 tab limit)');
     if (engine === 'bowser') {
       if ([...this.tabs.values()].some(t => t.engine === 'bowser' && t.sessionId !== sessionId)) throw new Error('Bowser is shared; close its Helm tab in the other thread first');
-      const result = await this.bowser.call('act', { actions: [{ goto: url }], budget: 0 });
-      const tab = [...this.tabs.values()].find(t => t.engine === 'bowser' && t.sessionId === sessionId) || { id: id(), sessionId, engine, title: 'Bowser shared browser', console: [], network: [], downloads: [], viewers: new Map(), sequence: 0, control: null };
-      tab.url = url; tab.lastUsed = this.now(); this.tabs.set(tab.id, tab); this.timer ||= setInterval(() => void this.sweep().catch(() => {}), 2000); this.timer.unref?.(); return { tab: this.metadata(tab), text: result.content?.filter(p => p.type === 'text').map(p => p.text).join('\n') };
+      const existing = [...this.tabs.values()].find(t => t.engine === 'bowser' && t.sessionId === sessionId);
+      const tab = existing || { id: id(), sessionId, engine, title: 'Bowser shared browser', console: [], network: [], downloads: [], viewers: new Map(), sequence: 0, control: null };
+      // Reserve the shared browser before asynchronous startup/navigation.
+      this.tabs.set(tab.id, tab);
+      try {
+        if (existing?.control && url !== 'about:blank') throw new Error('Release control before navigating the shared Bowser browser.');
+        const result = url === 'about:blank' ? await this.bowser.call('look', { budget: 0 }) : await this.bowser.call('act', { actions: [...(!existing ? [{ tab: 'new' }] : []), { goto: url }], budget: 0 });
+        tab.url = url; tab.lastUsed = this.now(); this.timer ||= setInterval(() => void this.sweep().catch(() => {}), 2000); this.timer.unref?.(); return { tab: this.metadata(tab), text: result.content?.filter(p => p.type === 'text').map(p => p.text).join('\n') };
+      } catch (error) { if (!existing) this.tabs.delete(tab.id); throw error; }
     }
     if (engine !== 'chromium') throw new Error('unknown browser engine');
     const context = await this.context(sessionId), page = await context.newPage(), tab = this.register(sessionId, page);
@@ -138,20 +172,29 @@ export class BrowserManager {
     catch (error) { await page.close(); throw error; }
   }
   get(sessionId, tabId) { this.owner(sessionId); const tab = this.tabs.get(tabId); if (!tab || tab.sessionId !== sessionId) throw new Error('browser tab not found in this thread'); return tab; }
-  async run(sessionId, tabId, action, actor = 'agent') {
+  async run(sessionId, tabId, action, actor = 'agent', expectedEpoch) {
     await this.recover(sessionId);
     const tab = this.get(sessionId, tabId);
+    const epoch = expectedEpoch ?? tab.controlEpoch ?? 0;
+    // A modal dialog blocks the browser action that created it. Answering
+    // must bypass that queue while retaining the same ownership check.
+    if (action?.kind === 'dialog') { this.checkControl(tab, action, actor, epoch); tab.lastUsed = this.now(); return this.perform(tab, action, actor, epoch); }
     const previous = this.serial.get(tab.id) || Promise.resolve();
-    const job = previous.catch(() => {}).then(async () => {
+    const deadline = Date.now() + this.actionTimeoutMs;
+    let started = false, timer;
+    const operation = previous.catch(() => {}).then(async () => {
+      if (Date.now() >= deadline) throw new Error('Browser action expired before delivery.');
+      started = true;
       const owner = this.owner(sessionId);
       if (actor === 'agent' && ['read', 'readonly', 'plan'].includes(owner.mode)) {
         const readOnly = step => ['look', 'console', 'network', 'screenshot', 'navigate', 'back', 'forward'].includes(step?.kind) || step?.kind === 'batch' && Array.isArray(step.actions) && step.actions.every(readOnly);
         if (!readOnly(action)) throw new Error('this thread is read-only; browser actions that change the page are disabled');
       }
-      this.checkControl(tab, action, actor);
-      tab.lastUsed = this.now(); const result = await this.perform(tab, action, actor); if (!['look', 'console', 'network', 'screenshot'].includes(action?.kind)) await this.persistTabs(sessionId); return result;
+      this.checkControl(tab, action, actor, epoch);
+      tab.lastUsed = this.now(); const result = await this.perform(tab, action, actor, epoch); if (!['look', 'console', 'network', 'screenshot'].includes(action?.kind)) await this.persistTabs(sessionId); return result;
     });
-    this.serial.set(tab.id, job); void job.finally(() => { if (this.serial.get(tab.id) === job) this.serial.delete(tab.id); }).catch(() => {}); return job;
+    const job = Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => { if (started && epoch === (tab.controlEpoch || 0)) tab.controlEpoch = epoch + 1; reject(new Error('Browser action timed out; inspect the page before retrying.')); }, this.actionTimeoutMs); timer.unref?.(); })]);
+    this.serial.set(tab.id, job); void job.finally(() => { clearTimeout(timer); if (this.serial.get(tab.id) === job) this.serial.delete(tab.id); }).catch(() => {}); return job;
   }
   async look(tab, budget = 6000) {
     integer(budget, 0, 20000);
@@ -172,12 +215,13 @@ export class BrowserManager {
     if (action.name) return tab.page.getByText(text(action.name, 500), { exact: true });
     throw new Error('choose an element ref, selector, role/name, or x/y coordinates');
   }
-  checkControl(tab, action, actor) {
+  checkControl(tab, action, actor, epoch = tab.controlEpoch || 0) {
     if (['look', 'console', 'network', 'screenshot'].includes(action?.kind)) return;
+    if (epoch !== (tab.controlEpoch || 0)) throw new Error('Browser control changed; inspect the tab before continuing.');
     if (actor !== 'agent' && tab.control !== actor) throw new Error('Take control before changing this browser tab.');
     if (tab.control && tab.control !== actor) throw new Error('You have control of this tab. Release control to let the agent continue.');
   }
-  async perform(tab, action, actor = 'agent') {
+  async perform(tab, action, actor = 'agent', epoch = tab.controlEpoch || 0) {
     if (!action || typeof action !== 'object') throw new Error('browser action must be an object');
     const kind = action.kind;
     if (kind === 'look') return { tab: this.metadata(tab), ...(await this.look(tab, action.budget ?? 6000)) };
@@ -186,7 +230,7 @@ export class BrowserManager {
     if (kind === 'screenshot') return this.capture(tab, action);
     if (kind === 'batch') {
       if (!Array.isArray(action.actions) || action.actions.length > 40 || action.actions.some(a => a.kind === 'batch')) throw new Error('a batch holds at most 40 nonnested actions');
-      const results = []; for (const step of action.actions) { try { this.checkControl(tab, step, actor); results.push(await this.perform(tab, step, actor)); } catch (error) { return { results, failedAt: results.length, error: error.message, ...(await this.look(tab)) }; } } return { results, ...(await this.look(tab)) };
+      const results = []; for (const step of action.actions) { try { this.checkControl(tab, step, actor, epoch); results.push(await this.perform(tab, step, actor, epoch)); } catch (error) { return { results, failedAt: results.length, error: error.message, ...(await this.look(tab)) }; } } return { results, ...(await this.look(tab)) };
     }
     if (tab.engine === 'bowser') return this.bowserAction(tab, action);
     const page = tab.page;
@@ -266,37 +310,47 @@ export class BrowserManager {
       tab.streamStart = (async () => {
       const cdp = await tab.page.context().newCDPSession(tab.page); tab.cdp = cdp;
       cdp.on('Page.screencastFrame', event => {
+        if (tab.cdp !== cdp) return;
         // Keep only the latest frame and pace acknowledgements: bounded memory and five fps.
         tab.frame = `data:image/jpeg;base64,${event.data}`; tab.sequence++;
         const ack = setTimeout(() => { tab.acks?.delete(ack); void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {}); }, 200); ack.unref?.(); (tab.acks ||= new Set()).add(ack);
       });
-      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+      try { await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 }); }
+      catch (error) { if (tab.cdp === cdp) { tab.cdp = null; tab.frame = null; } await cdp.detach().catch(() => {}); throw error; }
       })().finally(() => { tab.streamStart = null; });
     }
     if (tab.streamStart) await tab.streamStart;
     return { tab: this.metadata(tab), sequence: tab.sequence, ...(tab.frame && since !== tab.sequence ? { image: tab.frame } : {}) };
   }
-  async clearStream(tab) { await tab.streamStart?.catch(() => {}); for (const timer of tab.acks || []) clearTimeout(timer); tab.acks?.clear(); const cdp = tab.cdp; tab.cdp = null; if (cdp) { await cdp.send('Page.stopScreencast').catch(() => {}); await cdp.detach().catch(() => {}); } tab.frame = null; }
-  async unwatch(sessionId, tabId, viewer) { const tab = this.get(sessionId, tabId); tab.viewers.delete(viewer); if (tab.control === viewer) tab.control = null; if (!tab.viewers.size) await this.clearStream(tab); return { ok: true }; }
-  async control(sessionId, tabId, viewer, take) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer'); if (tab.control && tab.control !== viewer) throw new Error('another viewer has control'); tab.control = take ? viewer : null; tab.viewers.set(viewer, this.now()); await (this.serial.get(tab.id) || Promise.resolve()).catch(() => {}); return { tab: this.metadata(tab) }; }
+  async clearStream(tab) { await tab.streamStart?.catch(() => {}); for (const timer of tab.acks || []) clearTimeout(timer); tab.acks?.clear(); const cdp = tab.cdp; tab.cdp = null; tab.frame = null; if (cdp) { await cdp.send('Page.stopScreencast').catch(() => {}); await cdp.detach().catch(() => {}); } }
+  async unwatch(sessionId, tabId, viewer) { const tab = this.get(sessionId, tabId); tab.viewers.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } if (!tab.viewers.size) await this.clearStream(tab); return { ok: true }; }
+  async control(sessionId, tabId, viewer, take) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (!/^[\w-]{1,100}$/.test(viewer || '')) throw new Error('invalid browser viewer'); if (tab.control && tab.control !== viewer) throw new Error('another viewer has control'); tab.control = take ? viewer : null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; tab.viewers.set(viewer, this.now()); if (!tab.dialog) await (this.serial.get(tab.id) || Promise.resolve()).catch(() => {}); return { tab: this.metadata(tab) }; }
+  async pageClosed(sessionId) {
+    await this.persistTabs(sessionId);
+    if ([...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) return;
+    const pending = this.contexts.get(sessionId), context = await pending;
+    if (!context || this.contexts.get(sessionId) !== pending) return;
+    await this.save(sessionId).catch(() => {}); this.contexts.delete(sessionId); await context.close();
+    if (!this.contexts.size) await this.shutdownBrowser();
+  }
   async save(sessionId) { const context = await this.contexts.get(sessionId); if (!context) return; const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); const file = join(folder, 'storage.json'); await context.storageState({ path: file, indexedDB: true }); await chmod(file, 0o600); }
-  async close(sessionId, tabId) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (this.serial.has(tab.id)) throw new Error('wait for the current browser action to finish'); await this.save(sessionId); await this.clearStream(tab); if (tab.page) await tab.page.close(); else { this.tabs.delete(tab.id); this.bowser.stop(); } await this.persistTabs(sessionId); if (![...this.tabs.values()].some(t => t.sessionId === sessionId)) { const context = await this.contexts.get(sessionId); await context?.close(); this.contexts.delete(sessionId); } if (!this.tabs.size) await this.shutdownBrowser(); return { ok: true }; }
+  async close(sessionId, tabId) { await this.recover(sessionId); const tab = this.get(sessionId, tabId); if (this.serial.has(tab.id)) throw new Error('wait for the current browser action to finish'); await this.save(sessionId); await this.clearStream(tab); if (tab.page) { tab.explicitClose = true; await tab.page.close(); } else { this.tabs.delete(tab.id); this.bowser.stop(); } await this.persistTabs(sessionId); if (![...this.tabs.values()].some(t => t.sessionId === sessionId && t.engine === 'chromium')) { const context = await this.contexts.get(sessionId); this.contexts.delete(sessionId); await context?.close(); } if (!this.contexts.size) await this.shutdownBrowser(); return { ok: true }; }
   async download(sessionId, tabId, downloadId) { await this.recover(sessionId); const tab = this.get(sessionId, tabId), record = tab.downloads.find(d => d.id === downloadId && d.status === 'ready'); if (!record) throw new Error('download is not ready'); if ((await stat(record.path)).size > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); const bytes = await readFile(record.path); if (bytes.length > 8 * 1024 * 1024) throw new Error('download is over 8 MiB; use its file on the host'); return { name: record.name, data: bytes.toString('base64') }; }
   async sweep() {
     for (const tab of this.tabs.values()) {
-      for (const [viewer, at] of tab.viewers) if (this.now() - at > 10000) { tab.viewers.delete(viewer); if (tab.control === viewer) tab.control = null; }
+      for (const [viewer, at] of tab.viewers) if (this.now() - at > 10000) { tab.viewers.delete(viewer); if (tab.control === viewer) { tab.control = null; tab.controlEpoch = (tab.controlEpoch || 0) + 1; } }
       if (!tab.viewers.size && tab.cdp) await this.clearStream(tab);
       if (tab.engine === 'bowser' && !tab.viewers.size && this.now() - tab.lastUsed > this.idleMs && !this.serial.has(tab.id)) this.bowser.stop();
     }
     for (const sid of [...this.contexts.keys()]) {
       const tabs = [...this.tabs.values()].filter(t => t.sessionId === sid && t.engine === 'chromium');
       if (!tabs.length || !tabs.every(t => !t.viewers.size && !this.serial.has(t.id) && this.now() - t.lastUsed > this.idleMs)) continue;
-      await this.save(sid); await this.persistTabs(sid); const context = await this.contexts.get(sid); await context?.close(); this.contexts.delete(sid); this.recovered.delete(sid);
+      await this.save(sid); await this.persistTabs(sid); const context = await this.contexts.get(sid); this.suspending.add(sid); try { await context?.close(); } finally { this.suspending.delete(sid); } this.contexts.delete(sid); this.recovered.delete(sid);
     }
     if (this.browser && !this.contexts.size) await this.shutdownBrowser();
   }
-  async shutdownBrowser() { clearInterval(this.timer); this.timer = null; const browser = this.browser; this.browser = null; await browser?.close(); }
-  async stop() { for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } for (const tab of this.tabs.values()) await this.clearStream(tab); this.bowser.stop(); await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); }
+  async shutdownBrowser() { const browser = this.browser; this.browser = null; await browser?.close(); if (!this.tabs.size) { clearInterval(this.timer); this.timer = null; } }
+  async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } for (const tab of this.tabs.values()) await this.clearStream(tab); this.bowser.stop(); await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
 }
 
 export function browserNote() { return '[Helm browser: Agents and the owner can use the same browser tabs. Run helm browser open <url> inside this chat (isolated Chromium), or --engine bowser to reuse Bowser Computer Use on machines where installed. helm browser tabs lists your tabs. helm browser look <tab> returns text and numbered elements without screenshots. helm browser act <tab> \'{"kind":"click","ref":1}\' drives them; use kind batch with actions for several steps. Other kinds: navigate/url, type/text/ref, key/key, scroll/dy, hover/ref, select/ref/value, upload/ref/files (host paths), evaluate/script, wait/selector, resize/width/height, dialog/accept, console, network, back, forward, reload. helm browser screenshot <tab> --output <path> captures when visuals matter; close <tab> releases it. Browser tabs run on this machine: localhost reaches your dev servers. Use text views and batch actions to keep context small. The owner can view tabs and take control from Thread details → Browser; wait if they have control. Respect the request when browsing authenticated sites.]'; }

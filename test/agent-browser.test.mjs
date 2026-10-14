@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, mkdirSync, writeFileSync, truncateSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -61,6 +61,45 @@ test('unchanged Bowser frame is available after closing and reopening a viewer',
   assert.equal(reopened.image, first.image); assert.ok(reopened.sequence > first.sequence); await manager.stop();
 });
 
+test('Bowser owner is reserved before startup and survives Chromium shutdown', async () => {
+  let release, started; const ready = new Promise(resolve => { started = resolve; });
+  const browser = new EventEmitter(); browser.isConnected = () => true; browser.close = async () => browser.emit('disconnected');
+  const bowser = { call: async () => { started(); await new Promise(resolve => { release = resolve; }); return { content: [] }; }, stop() {} };
+  const manager = new BrowserManager({ session: sid => ({ id: sid }), launch: async () => browser, bowser });
+  const first = manager.open('ownerone', { engine: 'bowser' }); await ready;
+  await assert.rejects(manager.open('ownertwo', { engine: 'bowser' }), /shared/); release(); const result = await first;
+  await manager.start(); await manager.shutdownBrowser(); assert.equal(manager.tabs.get(result.tab.id).engine, 'bowser'); await manager.stop();
+});
+
+test('Bowser EPIPE rejects its requests without an unhandled stream error', async () => {
+  const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.stdin = new EventEmitter(); child.stdin.write = () => {}; child.kill = () => {};
+  const bridge = new BowserBridge({ bin: '/test/bowser', spawnProcess: () => child });
+  const pending = bridge.call('look'), rejected = assert.rejects(pending, /EPIPE/);
+  child.stdin.emit('error', new Error('EPIPE')); await rejected; assert.equal(bridge.child, null);
+});
+
+test('finishing an old stream teardown cannot erase a newer stream frame', async () => {
+  let stopped, release; const stopping = new Promise(resolve => { stopped = resolve; });
+  const old = new EventEmitter(); old.send = async method => { if (method === 'Page.stopScreencast') { stopped(); await new Promise(resolve => { release = resolve; }); } }; old.detach = async () => {};
+  const fresh = new EventEmitter(); fresh.send = async () => {}; fresh.detach = async () => {};
+  const page = { url: () => 'about:blank', viewportSize: () => ({ width: 1280, height: 800 }), context: () => ({ newCDPSession: async () => fresh }) };
+  const manager = new BrowserManager({ session: sid => ({ id: sid }) });
+  const tab = { id: 'tab', sessionId: 'stream', engine: 'chromium', page, cdp: old, frame: 'old', viewers: new Map(), downloads: [], sequence: 0 }; manager.tabs.set('tab', tab);
+  const cleanup = manager.clearStream(tab); await stopping;
+  await manager.frame('stream', 'tab', { viewer: 'new-viewer' }); fresh.emit('Page.screencastFrame', { data: 'new', sessionId: 1 }); release(); await cleanup;
+  assert.equal(tab.frame, 'data:image/jpeg;base64,new'); assert.equal(tab.cdp, fresh); await manager.stop();
+});
+
+test('download retention evicts old files and rejects oversized completed downloads', async () => {
+  const manager = new BrowserManager({ session: sid => ({ id: sid }) });
+  const tab = { id: 'download-tab', sessionId: 'downloads', engine: 'bowser', downloads: [], viewers: new Map() }; manager.tabs.set(tab.id, tab);
+  const folder = join(process.env.HELM_DIR, 'download-fixture'); mkdirSync(folder);
+  for (let i = 0; i < 3; i++) { const path = join(folder, String(i)); writeFileSync(path, ''); truncateSync(path, 128 * 1024 * 1024); tab.downloads.push({ id: String(i), name: String(i), path, at: i, status: i < 2 ? 'ready' : 'pending' }); }
+  await manager.finishDownload(tab, tab.downloads[2]); assert.equal(tab.downloads[0].status, 'expired'); assert.equal(existsSync(tab.downloads[0].path), false);
+  const huge = { id: 'huge', name: 'huge', path: join(folder, 'huge'), status: 'pending' }; writeFileSync(huge.path, ''); truncateSync(huge.path, 129 * 1024 * 1024); tab.downloads.push(huge);
+  await manager.finishDownload(tab, huge); assert.match(huge.status, /too large/); assert.equal(existsSync(huge.path), false); await manager.stop();
+});
+
 test('releasing control cancels queued viewer mutations while retaining the action already sent', async () => {
   const manager = new BrowserManager({ session: sid => ({ id: sid }) });
   const tab = { id: 'tab', sessionId: 'one', engine: 'bowser', downloads: [], viewers: new Map(), control: 'phone' }; manager.tabs.set('tab', tab);
@@ -70,7 +109,7 @@ test('releasing control cancels queued viewer mutations while retaining the acti
   const second = manager.run('one', 'tab', { kind: 'type', text: 'queued' }, 'phone');
   const released = manager.control('one', 'tab', 'phone', false);
   // Bind the rejection before completing the first operation.
-  const cancelled = assert.rejects(second, /Take control/);
+  const cancelled = assert.rejects(second, /control/i);
   finish(); await first; await cancelled; await released; assert.equal(calls, 1); await manager.stop();
 });
 
@@ -119,11 +158,15 @@ test('real browser isolation, batched actions, uploads, owner control and restar
   await assert.rejects(manager.run('one', first.tab.id, { kind: 'upload', ref: 299, uploads: [{ name: 'stale.txt', data: 'c3RhbGU=' }] }), /reference expired/);
   assert.deepEqual(readdirSync(join(directory, 'one', 'uploads')), []);
   await manager.control('one', first.tab.id, 'phone', true); await assert.rejects(manager.run('one', first.tab.id, { kind: 'type', text: 'oops' }), /control/); await manager.control('one', first.tab.id, 'phone', false);
+  const page = manager.tabs.get(first.tab.id).page, observed = page.waitForEvent('dialog');
+  const alert = manager.run('one', first.tab.id, { kind: 'evaluate', script: 'alert("Need input"); "dismissed"' });
+  await observed; await manager.control('one', first.tab.id, 'phone', true); await manager.run('one', first.tab.id, { kind: 'dialog', accept: false }, 'phone'); assert.equal((await alert).value, 'dismissed'); await manager.control('one', first.tab.id, 'phone', false);
+  await manager.run('one', first.tab.id, { kind: 'resize', width: 390, height: 844 });
   await assert.rejects(manager.run('one', second.tab.id, { kind: 'look' }), /not found/);
   const savedId = first.tab.id; await manager.stop();
   assert.ok(existsSync(join(directory, 'one', 'storage.json')));
   manager = new BrowserManager({ directory, session: sid => ({ id: sid }), launch });
-  assert.equal((await manager.list('one')).tabs[0].id, savedId);
+  const restored = (await manager.list('one')).tabs[0]; assert.equal(restored.id, savedId); assert.deepEqual(restored.viewport, { width: 390, height: 844 });
   assert.equal((await manager.run('one', savedId, { kind: 'evaluate', script: 'localStorage.getItem("private")' })).value, 'one');
   await manager.close('one', savedId); assert.equal((await manager.list('one')).tabs.length, 0); assert.equal(manager.browser, null);
 });
