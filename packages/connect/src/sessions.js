@@ -1321,7 +1321,7 @@ export class Sessions extends EventEmitter {
       return team;
     }, { working: native.filter(state => state === 'working').length + unreported,
       blocked: native.filter(state => state === 'blocked').length, failed: native.filter(state => state === 'error').length });
-    this.emit('session', parent);
+    this.emit('session', { ...parent, ...(parent.delegations ? { delegations: this.#visibleDelegations(parent) } : {}) });
     if (parent.delegation) this.#updateTeam(parent);
   }
 
