@@ -17,6 +17,23 @@ mkdirSync(join(HOME, '.config/helm'), { recursive: true });
 process.env.HOME = HOME;
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-test-'));
 
+test('folders sharing the home prefix keep their absolute paths', async t => {
+  const sibling = `${HOME}-neighbor`;
+  mkdirSync(join(sibling, 'project'), { recursive: true });
+  t.after(() => rmSync(sibling, { recursive: true, force: true }));
+  const { list, projectPath } = await import('../packages/connect/src/fs.js');
+  const { collapse, expand } = await import('../packages/connect/src/paths.js');
+  const listing = await list(sibling);
+  assert.equal(listing.path, sibling);
+  assert.equal(listing.entries[0].path, join(sibling, 'project'));
+  assert.equal(projectPath(join(sibling, 'project')), join(sibling, 'project'));
+  for (const path of [HOME, join(HOME, 'dev'), sibling, join(sibling, 'project')]) {
+    assert.equal(expand(collapse(path)), path);
+  }
+  assert.equal(collapse(HOME), '~');
+  assert.equal(collapse(join(HOME, 'dev')), '~/dev');
+});
+
 test('the index is walked once, searched in memory, and skips what list() skips', async () => {
   const { search } = await import('../packages/connect/src/fs.js');
 
