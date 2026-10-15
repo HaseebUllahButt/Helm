@@ -46,8 +46,10 @@ function score(item: PaletteItem, q: string): number {
   return total;
 }
 
-export function Palette({ items, onClose, engineOf }: {
+export function Palette({ items, onClose, engineOf, heading = 'Go anywhere', placeholder = 'Search threads, machines, actions' }: {
   items: PaletteItem[]; onClose: () => void; engineOf: (id?: string) => { cls: string };
+  /** The same box, narrowed to one job (Ctrl+Shift+T: pick a device for a terminal). */
+  heading?: string; placeholder?: string;
 }) {
   const dialog = useDialog(onClose);
   const listId = useId();
@@ -82,11 +84,11 @@ export function Palette({ items, onClose, engineOf }: {
   return (
     <div className="modal-back palette-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="palette-box" role="dialog" aria-modal="true" aria-label="Command palette" ref={dialog} tabIndex={-1}>
-        <div className="palette-heading"><span>Go anywhere</span><button className="iconbtn" onClick={onClose} aria-label="Close command palette" title="Close"><Icon name="close" size={16} /></button></div>
+        <div className="palette-heading"><span>{heading}</span><button className="iconbtn" onClick={onClose} aria-label="Close command palette" title="Close"><Icon name="close" size={16} /></button></div>
         <input
-          className="palette-input" value={q} placeholder="Search threads, machines, actions"
+          className="palette-input" value={q} placeholder={placeholder}
           autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
-          role="combobox" aria-label="Search threads, machines, actions"
+          role="combobox" aria-label={placeholder}
           aria-expanded="true" aria-controls={listId} aria-autocomplete="list"
           aria-activedescendant={shown.length ? `${listId}-${selected}` : undefined}
           onChange={(e) => { setQ(e.target.value); setAt(0); }}
@@ -139,7 +141,14 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['Ctrl/⌘ Shift S', 'Settings'],
     ['Ctrl/⌘ Shift 4', 'Usage, limits and cost (the $ key)'],
     ['Ctrl/⌘ Shift E', 'Terminal (in a chat: its folder); again to go back'],
+    ['Ctrl/⌘ Shift T', 'Terminal on a device you pick'],
     ['?', 'This list'],
+  ]],
+  ['In a terminal (the Helm app window)', [
+    ['Ctrl/⌘ T', 'New terminal'],
+    ['Ctrl/⌘ W', 'Close this terminal'],
+    ['Ctrl Tab', 'Next terminal'],
+    ['Ctrl Shift Tab', 'Previous terminal'],
   ]],
   ['In the new-chat box', [
     ['Ctrl/⌘ Enter', 'Quick chat, no folder'],

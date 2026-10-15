@@ -1351,10 +1351,12 @@ function Shell({ client, conn, onSignOut }: {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Tab' || !event.ctrlKey || event.metaKey || event.altKey || event.isComposing
           || document.querySelector('[aria-modal="true"]') || !runningNow.length) return;
+      const current = nav.current.stack.at(-1);
+      // In a terminal, Ctrl+Tab walks that machine's terminals (SessionView).
+      if (current?.kind === 'session' && current.session.engine === 'shell') return;
       // Capture before a composer completes a suggestion or xterm sends input.
       event.preventDefault();
       event.stopPropagation();
-      const current = nav.current.stack.at(-1);
       const index = runningNow.findIndex(({ env, s }) => env.id === nav.current.selected
         && current?.kind === 'session' && s.id === current.session.id);
       const next = index < 0 ? (event.shiftKey ? runningNow.length - 1 : 0)
@@ -1371,6 +1373,33 @@ function Shell({ client, conn, onSignOut }: {
   // were. A terminal already open there is reused, so a running build or
   // server is never cut off.
   const terminalOpening = useRef(false);
+  /** Back to the newest terminal on a machine (or the one in `cwd`), else a new one there. */
+  const openTerminalOn = useCallback((envId: string, cwd = '~', inFolder = false) => {
+    const open = (sessions[envId] ?? []).filter(ownTerminal).sort(byRecent);
+    const reuse = inFolder ? open.find((s) => s.cwd === cwd) : open[0];
+    if (reuse) { openSession(envId, reuse); return; }
+    if (terminalOpening.current) return;
+    terminalOpening.current = true;
+    client.rpc<{ session: Session }>(envId, 'session.start', { cwd, profileId: 'shell' }, 45_000)
+      .then((r) => { loadSessions(envId); if (r?.session) openSession(envId, r.session); })
+      .catch(() => { /* the machine is off or has no shell; nothing to open */ })
+      .finally(() => { terminalOpening.current = false; });
+  }, [sessions, openSession, client, loadSessions]);
+  // Ctrl/Cmd+Shift+T: pick a device, land in its terminal. Only the Helm app
+  // window gets this key; an ordinary browser tab keeps it for "reopen tab".
+  const [terminalPicker, setTerminalPicker] = useState(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyT' || !(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.isComposing
+          || document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setPalette(false);
+      setTerminalPicker(true);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.code !== 'KeyE' || !(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.isComposing
@@ -1380,21 +1409,13 @@ function Shell({ client, conn, onSignOut }: {
       const current = nav.current.stack.at(-1);
       if (current?.kind === 'session' && current.session.engine === 'shell') { history.back(); return; }
       const envId = nav.current.selected ?? envs.find((e) => e.online)?.id;
-      if (!envId || terminalOpening.current) return;
+      if (!envId) return;
       const chat = current?.kind === 'session' && !current.session.quick ? current.session : null;
-      const cwd = chat?.cwd || '~';
-      const open = (sessions[envId] ?? []).filter(ownTerminal).sort(byRecent);
-      const reuse = (chat ? open.find((s) => s.cwd === cwd) : null) ?? (chat ? null : open[0]);
-      if (reuse) { openSession(envId, reuse); return; }
-      terminalOpening.current = true;
-      client.rpc<{ session: Session }>(envId, 'session.start', { cwd, profileId: 'shell' }, 45_000)
-        .then((r) => { loadSessions(envId); if (r?.session) openSession(envId, r.session); })
-        .catch(() => { /* the machine is off or has no shell; nothing to open */ })
-        .finally(() => { terminalOpening.current = false; });
+      openTerminalOn(envId, chat?.cwd || '~', !!chat);
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [envs, sessions, openSession, client, loadSessions]);
+  }, [envs, openTerminalOn]);
   const runningCount = envs.reduce((total, machine) => total + workingThreadsOn(machine).length, 0);
   // A thread that stops working leaves "running" for "done" rather than
   // vanishing from the sidebar. Keep the latest three days in date order;
@@ -1891,6 +1912,14 @@ function Shell({ client, conn, onSignOut }: {
         </div>
       )}
       {palette && <Palette items={paletteItems()} onClose={() => setPalette(false)} engineOf={engineOf} />}
+      {terminalPicker && <Palette heading="Open a terminal" placeholder="Pick a device" engineOf={engineOf}
+        onClose={() => setTerminalPicker(false)}
+        items={envs.filter((e) => e.online).map((e) => {
+          const open = (sessions[e.id] ?? []).filter(ownTerminal).length;
+          return { id: `term:${e.id}`, group: 'machine' as const, title: e.name,
+            sub: open ? `${open} terminal${open === 1 ? '' : 's'} open` : 'new terminal', keywords: 'device machine terminal shell',
+            run: () => openTerminalOn(e.id) };
+        })} />}
       {newChat && (
         <NewChat
           key={`${newChat.envId ?? ''}:${newChat.folder ?? ''}:${newChat.quick ? 'quick' : ''}`}
@@ -5167,6 +5196,38 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
     try { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); }
     catch (e: any) { setError(e.message); }
   };
+
+  // A terminal's own tab keys, the way a terminal app has them: Ctrl/Cmd+T a
+  // new one, Ctrl/Cmd+W closes this one, Ctrl(+Shift)+Tab walks them. Taken
+  // before xterm sees them, so the shell's Ctrl+W (delete a word) and Ctrl+T
+  // give way here. Only the Helm app window gets these keys; an ordinary
+  // browser tab keeps them for itself.
+  const terminalKeys = useRef({ newTerminal, kill, terminals, session, onSwitch, opening });
+  terminalKeys.current = { newTerminal, kill, terminals, session, onSwitch, opening };
+  useEffect(() => {
+    if (!isShell) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.altKey || event.isComposing || document.querySelector('[aria-modal="true"]')) return;
+      const { newTerminal, kill, terminals, session, onSwitch, opening } = terminalKeys.current;
+      const mod = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (event.key === 'Tab' && event.ctrlKey && !event.metaKey) {
+        event.preventDefault(); event.stopPropagation();
+        const at = terminals.findIndex((t) => t.id === session.id);
+        if (terminals.length < 2 || at < 0) return;
+        const next = terminals[(at + (event.shiftKey ? -1 : 1) + terminals.length) % terminals.length];
+        onSwitch?.(next);
+      } else if (mod && !event.shiftKey && key === 't') {
+        event.preventDefault(); event.stopPropagation();
+        if (!opening) void newTerminal();
+      } else if (mod && !event.shiftKey && key === 'w') {
+        event.preventDefault(); event.stopPropagation();
+        void kill();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [isShell]);
 
   const archive = async () => {
     setMenu(false);

@@ -10,7 +10,8 @@
  *
  * Left alone on purpose: copy/paste/undo, Ctrl+F and F3 (finding text in a
  * long chat is useful), Ctrl+R (the way out of a stuck screen), zoom, Ctrl+W/Q
- * (closing an app window is what apps do), and devtools.
+ * (closing an app window is what apps do - except in a terminal, where
+ * Ctrl+W closes that terminal, App.tsx), and devtools.
  */
 const CTRL_KEYS = new Set(['n', 't', 'p', 's', 'o', 'u', 'h', 'j', 'd', 'l', 'e']);
 const CTRL_SHIFT_KEYS = new Set(['n', 't', 'b', 'd', 'o', 'delete', 'a']);
