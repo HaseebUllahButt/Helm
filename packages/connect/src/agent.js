@@ -1783,7 +1783,9 @@ export class Daemon {
           const hasEffort = nativeEffortChoices(native.engine) && !!(catalog.efforts?.length || Object.keys(catalog.effortsByModel ?? {}).length);
           return { ...filtered, default: null, effort: null, defaultMode: null, modes: native.permissionControl === 'bash-guard' ? BASH_GUARD_MODES : [], speeds: [], speedByModel: {},
             ...(!hasEffort ? { efforts: [], effortsByModel: {} } : {}),
-            nativeControls: nativeControls(native.engine).filter(kind =>
+            // No "settings" chip: it only jumped to the CLI's own menu, which
+            // the terminal button already shows.
+            nativeControls: nativeControls(native.engine).filter(kind => kind !== 'settings' &&
               !(kind === 'model' && (filtered.models?.length || filtered.more?.length)) && !(kind === 'effort' && hasEffort)),
             favs: pickerPrefs().favs[native.engine] ?? [], effortFavs: pickerPrefs().favs[`${native.engine}-effort`] ?? [],
             ...(account ? { prefs, defaults: startPrefs(account), account: accountKey(account), profileId: account.id } : { defaults: {} }) };

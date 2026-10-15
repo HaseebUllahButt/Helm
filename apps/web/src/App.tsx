@@ -5158,6 +5158,11 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
     try { await onNewTerminal(); } catch (e: any) { setError(e.message); } finally { setOpening(false); }
   };
 
+  const stopNative = async () => {
+    try { await client.rpc(env.id, 'session.interrupt', { id: session.id }); }
+    catch (e: any) { setError(e.message); }
+  };
+
   const kill = async () => {
     try { await client.rpc(env.id, 'session.kill', { id: session.id }); onClosed(); }
     catch (e: any) { setError(e.message); }
@@ -5225,7 +5230,9 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
       {...ask}
       onTranscribe={onTranscribe}
       draft={draft} setDraft={setDraft} onSend={send} onKey={key}
-      keys={!session.nativeChat} preparing={sending || preparingImages || loadingImages || savingImages}
+      // The phone key row is for typing into a plain terminal; an agent chat
+      // has its own controls. A terminal Pi stops on Esc (sessions.interrupt).
+      keys={isShell} preparing={sending || preparingImages || loadingImages || savingImages}
       commands={session.nativeCli ? nativeCommands : undefined}
       foot={session.nativeCli ? nativeControls.chips : undefined}
       statusLine={nativeProfile || limits.length || session.context ? <LimitsLine windows={limits} account={nativeProfile || undefined} context={session.context && <ContextLimit client={client} env={env} machines={machines} session={session} />} /> : undefined}
@@ -5235,6 +5242,8 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
       canAttach={!!session.nativeChat}
       onAttachUnsupported={() => setError('This terminal cannot receive images through chat. Open a Claude or Codex chat to attach images.')}
       waiting={status === 'blocked'} engine={eng.label}
+      working={status === 'working' || status === 'blocked'}
+      onStop={session.nativeCli && session.engine === 'pi' ? stopNative : undefined}
       history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
     >
       {nativeControls.sheet}

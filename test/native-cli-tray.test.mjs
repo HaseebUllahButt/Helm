@@ -33,8 +33,8 @@ for (const engine of engines) test(`${engine}: native tray targets the same term
     const s = sessions.get(host.id);
     const daemon = new Daemon(); daemon.sessions = sessions;
     const catalog = await daemon.dispatch(M.MODEL_LIST, {id:s.id,profileId:'unrelated'});
-    assert.deepEqual(catalog.nativeControls, nativeControls(engine));
-    assert.ok(catalog.nativeControls.includes('settings'));
+    assert.deepEqual(catalog.nativeControls, nativeControls(engine).filter(kind => kind !== 'settings'));
+    assert.ok(!catalog.nativeControls.includes('settings'));
     assert.equal(catalog.default,null); assert.equal(catalog.defaultMode,null);
     assert.deepEqual(catalog.modes,[]); // headless auto-approval is not a native permission mode
     for (const kind of catalog.nativeControls) {
@@ -79,7 +79,7 @@ test('native model and effort choices write provider commands without inventing 
     const daemon = new Daemon(); daemon.sessions=sessions;
     const options = await daemon.dispatch(M.MODEL_LIST,{id:host.id});
     assert.deepEqual(options.models,['provider/old','provider/new']);
-    assert.deepEqual(options.nativeControls,['settings']);
+    assert.deepEqual(options.nativeControls,[]);
     assert.equal(options.default,null); assert.equal(options.effort,null);
     await sessions.setModel(host.id,'provider/new'); await sessions.setEffort(host.id,'high');
     assert.deepEqual(host.writes,['\x1b[200~/model provider/new\x1b[201~','\r','\x1b[200~/thinking high\x1b[201~','\r']);

@@ -21,7 +21,7 @@ before(async () => {
       window.calls=[];
       const client={input:(env,params)=>client.rpc(env,'session.input',params),on:()=>()=>{},subscribe:()=>()=>{},rpc:async(env,method,params)=>{
         window.calls.push({method,params});
-        if(method==='model.list')return full ? {default:null,models:['provider/old','provider/new'],efforts:['low','high'],modes:guard?BASH_GUARD_MODES:[],nativeControls:['settings'],profileId:'pi-account',prefs:{approved:[],default:'provider/old'},favs:[],effortFavs:[],defaults:{}} : {default:null,models:[],modes:[],nativeControls:nativeControls(engine)};
+        if(method==='model.list')return full ? {default:null,models:['provider/old','provider/new'],efforts:['low','high'],modes:guard?BASH_GUARD_MODES:[],nativeControls:[],profileId:'pi-account',prefs:{approved:[],default:'provider/old'},favs:[],effortFavs:[],defaults:{}} : {default:null,models:[],modes:[],nativeControls:nativeControls(engine).filter(k=>k!=='settings')};
         if(method==='model.prefs')return {prefs:{approved:[],default:params.default}};
         if(method==='session.messages')return {messages:[{role:'assistant',text:'Existing native conversation',tools:[]}],status};
         if(method==='usage.limits')return {accounts:[
@@ -62,7 +62,9 @@ for(const engine of Object.values(ENGINES).filter(e=>e.bin&&!e.plain).map(e=>e.i
   await page.getByTestId('terminal').waitFor();
   await page.locator('.limits-line').getByText('5h 12% used',{exact:true}).waitFor();
   assert.equal(await page.locator('.limits-line').getByText('5h 99% used',{exact:true}).count(),0);
-  for(const kind of nativeControls(engine)){
+  assert.equal(await page.getByRole('button',{name:'settings: open CLI picker',exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'keys',exact:true}).count(),0,'the phone key row belongs to plain terminals');
+  for(const kind of nativeControls(engine).filter(k=>k!=='settings')){
     const title=kind==='effort'?'thinking':kind==='mode'?'permissions':kind;
     await page.getByRole('button',{name:`${title}: open CLI picker`,exact:true}).click();
     await page.waitForFunction(kind=>window.calls.some(c=>c.method==='session.control'&&c.params.kind===kind),kind);
@@ -81,6 +83,14 @@ for(const status of ['working','blocked'])test(`native controls do not send inpu
   const model=page.getByRole('button',{name:'model: open CLI picker'});await model.waitFor();
   assert.ok(await model.isDisabled());
   assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.method==='session.control').length),0);
+});
+test('a working terminal Pi shows a stop button that stops it',async t=>{
+  const page=await open(t,'pi','working');
+  await page.getByRole('button',{name:'stop the agent',exact:true}).click();
+  await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.interrupt'&&c.params.id==='native-test'));
+  await page.screenshot({path:'/tmp/helm-pi-stop.png'});
+  const idle=await open(t,'pi');await idle.getByText('Existing native conversation',{exact:true}).waitFor();
+  assert.equal(await idle.getByRole('button',{name:'stop the agent'}).count(),0);
 });
 test('provider rejections stay visible beside the native tray',async t=>{
   const page=await open(t,'pi');await page.evaluate(()=>window.rejectControl=true);
