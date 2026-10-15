@@ -285,7 +285,11 @@ export class BrowserManager {
     page.on('pageerror', error => cap(tab.console, { level: 'error', text: error.message.slice(0, 4000), at: this.now() }));
     page.on('response', response => cap(tab.network, { url: response.url().slice(0, 2000), method: response.request().method(), status: response.status() }));
     page.on('requestfailed', request => cap(tab.network, { url: request.url().slice(0, 2000), method: request.method(), error: request.failure()?.errorText }));
-    page.on('domcontentloaded', () => { void page.title().then(title => { tab.title = title; }).catch(() => {}); });
+    page.on('domcontentloaded', () => {
+      void page.title().then(title => { tab.title = title; }).catch(() => {});
+      // A new page keeps the agent's arrow where it last was, without its label.
+      if (tab.window && tab.cursor) void page.evaluate(drawPointer, tab.cursor).catch(() => {});
+    });
     // The panel says a tab is loading from the click to the page's load.
     // A download or an empty answer never loads, so it gives up after 20 seconds.
     const loading = value => { clearTimeout(tab.loadingTimer); if (value) { tab.loadingTimer = setTimeout(() => loading(false), 20000); tab.loadingTimer.unref?.(); } tab.loading = value; };
@@ -594,6 +598,7 @@ export class BrowserManager {
     const verb = kind === 'click' ? action.button === 'right' ? 'Right-clicking' : action.double ? 'Double-clicking' : 'Clicking' : kind === 'scroll' ? (action.dy ?? 500) < 0 ? 'Scrolling up' : 'Scrolling down' : POINTER_WORDS[kind];
     tab.pointerSeq = (tab.pointerSeq || 0) + 1;
     tab.pointer = { x, y, ...(box ? { box } : {}), action: kind, label: [verb, name && `“${name}”`].filter(Boolean).join(' '), by: kind === 'point' ? 'guide' : 'agent', ...(note ? { note } : {}), seq: tab.pointerSeq, at: this.now() };
+    tab.cursor = { x, y };
     await tab.page.evaluate(drawPointer, { ...tab.pointer, guide: kind === 'point' }).catch(() => {});
     if (kind !== 'point') await new Promise(done => setTimeout(done, 120));
   }

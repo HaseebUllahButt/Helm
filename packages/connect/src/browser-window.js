@@ -68,7 +68,12 @@ export const WINDOW_PAGE_SCRIPT = `(() => {
   for (const kind of ['pointerdown', 'keydown', 'wheel', 'touchstart']) addEventListener(kind, said, { capture: true, passive: true });
 })();`;
 
-/** The agent's cursor and what it is doing, drawn over the page; never catches a click. */
+/**
+ * The agent's cursor and what it is doing, drawn over the page; never catches
+ * a click. The arrow stays where the agent last acted; its label and outline
+ * fade. Strict pages (LinkedIn) filter HTML strings and inline <style>, so the
+ * parts are built one by one and styled with a built stylesheet.
+ */
 export function drawPointer({ x, y, label, note, guide, box }) {
   const id = '__helm_pointer';
   let host = document.getElementById(id);
@@ -76,14 +81,23 @@ export function drawPointer({ x, y, label, note, guide, box }) {
     host = document.createElement('div'); host.id = id;
     host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>
+    const css = `
       .c{position:fixed;width:22px;height:22px;transform:translate(-3px,-2px);transition:left .18s ease,top .18s ease,opacity .3s;filter:drop-shadow(0 1px 2px rgb(0 0 0/.45))}
       .l{position:fixed;transform:translate(18px,16px);max-width:280px;padding:4px 9px;border-radius:999px;background:#6d5efc;color:#fff;font:500 12px/1.4 system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:left .18s ease,top .18s ease,opacity .3s}
       .l.g{white-space:normal;border-radius:10px;background:#f5a524;color:#1a1300}
       .b{position:fixed;border:2px solid #6d5efc;border-radius:6px;transition:all .18s ease,opacity .3s}
       .b.g{border-color:#f5a524;box-shadow:0 0 0 4px rgb(245 165 36/.25)}
-      .h{opacity:0}
-    </style><div class="b h"></div><svg class="c h" viewBox="0 0 24 24"><path d="M4 2l15 9-7 1.5L8.5 20z" fill="#6d5efc" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg><div class="l h"></div>`;
+      .h{opacity:0}`;
+    try { const sheet = new CSSStyleSheet(); sheet.replaceSync(css); root.adoptedStyleSheets = [sheet]; }
+    catch { const style = document.createElement('style'); style.textContent = css; root.append(style); }
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const frame = document.createElement('div'); frame.className = 'b h';
+    const arrow = document.createElementNS(svgNs, 'svg'); arrow.setAttribute('class', 'c h'); arrow.setAttribute('viewBox', '0 0 24 24');
+    const path = document.createElementNS(svgNs, 'path');
+    for (const [name, value] of [['d', 'M4 2l15 9-7 1.5L8.5 20z'], ['fill', '#6d5efc'], ['stroke', '#fff'], ['stroke-width', '1.6'], ['stroke-linejoin', 'round']]) path.setAttribute(name, value);
+    arrow.append(path);
+    const words = document.createElement('div'); words.className = 'l h';
+    root.append(frame, arrow, words);
     document.documentElement.appendChild(host);
   }
   const root = host.shadowRoot, cursor = root.querySelector('.c'), tag = root.querySelector('.l'), frame = root.querySelector('.b');
@@ -95,7 +109,7 @@ export function drawPointer({ x, y, label, note, guide, box }) {
   for (const el of [cursor, tag]) el.classList.remove('h');
   tag.classList.toggle('h', !words); frame.classList.toggle('h', !box);
   clearTimeout(window.__helmPointerTimer);
-  window.__helmPointerTimer = setTimeout(() => { for (const el of [cursor, tag, frame]) el.classList.add('h'); }, guide ? 60000 : 2500);
+  window.__helmPointerTimer = setTimeout(() => { for (const el of [tag, frame]) el.classList.add('h'); }, guide ? 60000 : 2500);
 }
 
 export function clearPointer() { const host = document.getElementById('__helm_pointer'); if (host) for (const el of host.shadowRoot.querySelectorAll('.c,.l,.b')) el.classList.add('h'); }
