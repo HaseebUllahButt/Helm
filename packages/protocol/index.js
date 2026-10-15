@@ -137,6 +137,10 @@ export const M = {
   GIT_WATCH: 'git.watch',          // { sessionId, on } -> { watching } persists background notifications
   GIT_ACCOUNTS: 'git.accounts',    // { cwd } -> safe gh account names, never tokens
   GIT_ACCOUNT: 'git.account',      // { cwd, login } -> select gh login for this repository, without gh auth switch
+  // "From GitHub" in the new chat box, through the machine's own gh login.
+  GITHUB_REPOS: 'github.repos',    // { login?, refresh? } -> { installed, accounts[], login, repos[], parent }
+  GITHUB_SIGNIN: 'github.signin',  // { start?, cancel? } -> { state, code, url, login?, error? }
+  GITHUB_CLONE: 'github.clone',    // { repo, parent, login? } | { job } -> { job?, state, percent, path, error? }
   FS_LIST: 'fs.list',              // { path } -> { path, parent, entries[] }
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }

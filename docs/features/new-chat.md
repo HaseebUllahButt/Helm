@@ -27,6 +27,38 @@
 - **Tests:** `test/browser/new-chat`, `chat-home`, `onboarding`;
   `test/quick-chat`, `picker-prefs`, `onboarding`.
 
+## Clone from GitHub
+- **Sees:** "Clone from GitHub" under "No folder · quick chat" in the
+  folder step. Then "Which repo?": a search box, owner chips (All, Mine,
+  each organization), repos newest first with a lock on private ones, and a
+  bar "Into ~/dev" (tap to change, remembered per machine), the gh account,
+  + (add an account) and refresh. Typing `owner/name` offers any repo by
+  name. Picking one shows a progress bar, then the agent step in that
+  folder; a folder already holding that repo just opens. Back from the agent
+  step returns to the repo list.
+- **Signed out:** "Sign in to GitHub" → a code like `AB12-CD34`, Copy,
+  Open GitHub (github.com/login/device), "Waiting…", Cancel. No gh at all:
+  "Install the GitHub CLI on <machine>".
+- **Where:** `apps/web/src/NewChat.tsx` (the `github` step),
+  `packages/connect/src/github-repos.js` (`github.repos`, `github.signin`,
+  `github.clone`). It is the machine's own `gh` login; no token reaches the
+  app.
+- **Prove (driven 2026-10-15):** the private copy's home has no gh login,
+  so it shows the signed-out screen. To see the list, copy
+  `~/.config/gh/hosts.yml` and `config.yml` into
+  `/tmp/helm-verify-<you>/home/.config/gh/` (the token stays in the keyring).
+  ```sh
+  $V key Control+n; $V click "verify-<you>"; $V click "Clone from GitHub"
+  $V wait "Mine" 30000; $V click "Search repos"; $V type "octocat/Hello-World"
+  $V key Enter; $V wait "Which agent" 60000
+  ```
+- **Proof:** "Which agent in Hello-World?" and
+  `/tmp/helm-verify-<you>/home/Hello-World/README`.
+- **Traps:** never finish a sign-in from the private copy: it would add a
+  login to the owner's keyring. Cancel kills gh. The clone uses gh's own git
+  setting (ssh on the laptop).
+- **Tests:** `test/github-repos`.
+
 ## Accounts
 - **Sees:** one row per sign-in (per home folder), with a "default" tag and
   "API key" tag where it applies.

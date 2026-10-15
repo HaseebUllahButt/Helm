@@ -92,6 +92,14 @@ export async function roots() {
   return { roots: out };
 }
 
+/** A folder Helm made some other way (a clone): searchable at once, like `makeDir`. */
+export async function noteFolder(path, repo = false) {
+  if (!indexAt) return;
+  const full = expand(path);
+  addToIndex({ name: full.split('/').pop(), path: collapse(full), repo });
+  await saveIndex();
+}
+
 // ------------------------------------------------------------- the index
 
 /**

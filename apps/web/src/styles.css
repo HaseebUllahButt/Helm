@@ -3379,6 +3379,21 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .newchat-where { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .newchat-create input { width: 100%; min-width: 0; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 14px; }
 .newchat-create input:focus { outline: none; border-color: var(--primary); }
+/* Clone from GitHub: account and owner chips, a clone's bar, the sign-in code. */
+.newchat-owners { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.newchat-account { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.newchat-owners-gap { flex: none; width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
+.newchat-clone { display: flex; align-items: center; gap: 10px; padding: 12px; }
+.newchat-clone .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.newchat-progress { display: block; height: 4px; margin-top: 6px; border-radius: 2px; background: var(--muted); overflow: hidden; }
+.newchat-progress i { display: block; height: 100%; background: var(--primary); transition: width 0.4s var(--ease); }
+.newchat-percent { font-size: var(--t-meta); color: var(--mutedfg); font-variant-numeric: tabular-nums; }
+.newchat-signin { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 28px 16px; text-align: center; color: var(--text-dim); }
+.newchat-signin p { margin: 0; }
+.newchat-signin button.primary { margin-top: 0; width: auto; min-width: 180px; }
+.newchat-code { font: 600 28px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.08em; color: var(--text); user-select: all; }
+.newchat-signin-acts { display: flex; gap: 8px; align-items: center; }
+.newchat-signin-acts button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: auto; min-width: 0; min-height: 42px; margin: 0; padding: 0 16px; white-space: nowrap; }
 @media (max-width: 520px) {
   .newchat-index { display: none; }
   .newchat-bar.creating { flex-wrap: wrap; }

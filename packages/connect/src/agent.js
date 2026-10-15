@@ -54,6 +54,7 @@ import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommit
 import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
 import { createGithubMonitor } from './github.js';
+import { createGithubRepos } from './github-repos.js';
 import { agentCatalog, markShown, helmBrief } from './delegation.js';
 import { SendEngine } from './send-engine.js';
 import { CopyReceiver } from './copy-transport.js';
@@ -433,6 +434,7 @@ export class Daemon {
       notify: payload => this.broadcastFrame(T.NOTIFY, { payload }),
       emit: payload => this.#emit(E.GIT_MONITOR, payload),
     });
+    this.githubRepos = createGithubRepos({ noteFolder: fsApi.noteFolder });
     try { this.schedules = new Schedules({ sessions: this.sessions, shareName: `helm-hooks-${createHash('sha256').update(this.id).digest('hex').slice(0, 16)}`,
       publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
@@ -1573,6 +1575,9 @@ export class Daemon {
       case M.GIT_WATCH: return this.github.watch(p.sessionId, p.on === true, p);
       case M.GIT_ACCOUNTS: return this.github.accounts(p.cwd);
       case M.GIT_ACCOUNT: return this.github.selectAccount(p.cwd, p.login);
+      case M.GITHUB_REPOS: return this.githubRepos.repos({ login: typeof p.login === 'string' ? p.login : undefined, refresh: p.refresh === true });
+      case M.GITHUB_SIGNIN: return this.githubRepos.signIn({ start: p.start === true, cancel: p.cancel === true });
+      case M.GITHUB_CLONE: return this.githubRepos.clone({ repo: p.repo, parent: p.parent, login: typeof p.login === 'string' ? p.login : undefined, job: typeof p.job === 'string' ? p.job : undefined });
 
       // The coding tools on this machine. Updating answers at once and runs
       // in the background; the app asks for the versions again to watch it.
