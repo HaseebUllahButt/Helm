@@ -1160,7 +1160,13 @@ function Shell({ client, conn, onSignOut }: {
   };
   const attentionVisit = useRef(0);
   const openSession = (envId: string, s: Session, reviewChildren = false) => {
-    if (s.id.startsWith('found:')) { void resumeFound(envId, s); return; }
+    if (s.id.startsWith('found:')) {
+      // The tap is the look. Opening a chat Helm did not start can be slow
+      // or fail, and the "new" tick stayed until it had opened.
+      if (markSeen(s.id)) client.rpc(envId, 'session.seen', { id: s.id }).catch(() => { /* an older machine: this device still knows */ });
+      void resumeFound(envId, s);
+      return;
+    }
     navigate([{ kind: 'env' }, { kind: 'session', session: s, reviewChildren: reviewChildren ? ++attentionVisit.current : undefined }], envId);
   };
   // A session that changed under an open view: refresh the machine's list and
