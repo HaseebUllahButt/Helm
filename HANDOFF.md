@@ -16,6 +16,11 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-15 — Helper results arrive once; where helper usage goes
+
+**Done and proven (aa3cdf4):** a parent waiting with `helm delegate --wait` no longer also gets the "A delegated task finished" notice (it lost a sub-second race every time the parent was idle). `--wait` now waits for the end by default (it gave up at 5 min and parents took progress lines for the result). Driven in a private Helm: waited result arrives once, unwaited helper still reports, `--timeout 1` says "Not finished" with exit 3. **Not deployed:** needs a release and a daemon restart, which the owner has not approved yet.
+**Usage, measured on the Riverside chat 75c808fcbf41:** prompt caching works (almost no cache misses in 30 chats). The cost is the Opus parent re-reading its whole conversation on every step (about 180k tokens a step; Helm chats average 214k a step against 70k in direct CLI chats). Duplicate notices were about 12% of that chat. All Claude chats and helpers start at effort "high" (Helm's saved start default) while the owner's own CLI setting is "medium". Per step, output looks about the same at both levels, so the default was left alone. The owner can set a cheaper helper effort in the helper box.
+
 ## 2026-10-15 — Agents can prove their own work (ideas from pstack)
 
 **Done and proven:** `scripts/verify-helm.mjs` + the `verify-helm` skill: a private Helm (own HELM_DIR, home, sockets, port; no systemd units) with two free fake accounts, driven in a hidden 390x844 browser. Ran it end to end: send and reply, approval card (Approve/Decline), file attach, `#devices` start screen, `down` leaves no process. A helper drove most of the app with it and wrote `docs/features/` (13 areas; undriven steps are marked).
