@@ -5,7 +5,7 @@ import { Icon } from '../Icon';
 
 type Tab = { id: string; engine: string; title: string; url: string; window?: boolean; asleep?: boolean; dialog: { type: string; message: string } | null; downloads: { id: string; name: string; status: string }[]; loading?: boolean; problem?: { url: string; message: string } | null };
 type Listed = { tabs: Tab[]; canWindow?: boolean; open?: boolean };
-const host = (url: string) => { try { const u = new URL(url); return u.protocol === 'about:' ? '' : u.host; } catch { return url; } };
+const host = (url: string) => { try { const u = new URL(url); return ['about:', 'chrome:'].includes(u.protocol) ? '' : u.host; } catch { return url; } };
 
 /**
  * The chat's browser. On a machine with a screen it is a real Chromium
@@ -39,7 +39,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
     if (id !== env.id || kind !== 'browser.tab' || payload?.id !== session.id) return;
     void refresh().then(() => { if (!payload.viewer) setChosen(payload.tabId); }).catch(() => {});
   }), [client, env.id, session.id, refresh]);
-  useEffect(() => { if (!typingAddress.current) setAddress(!tab?.url || tab.url === 'about:blank' ? '' : tab.url); }, [chosen, tab?.url]);
+  useEffect(() => { if (!typingAddress.current) setAddress(!tab?.url || tab.url === 'about:blank' || tab.url.startsWith('chrome://') ? '' : tab.url); }, [chosen, tab?.url]);
   const show = useCallback(async (tabId?: string) => {
     setBusy(true); setError('');
     try { listed(await call<Listed>('show', tabId ? { tabId } : {})); } catch (e: any) { setError(e.message); } finally { setBusy(false); }
@@ -77,7 +77,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
       {tab?.loading ? <button className="bp-icon" aria-label="Stop loading" title="Stop" onClick={() => void act({ kind: 'stop' })}><Icon name="close" size={15} /></button>
         : <button className="bp-icon" aria-label="Reload" title="Reload" disabled={!tab} onClick={() => void act({ kind: 'reload' })}><Icon name="refresh" size={15} /></button>}
       {/* With no tab yet, the address opens one. */}
-      <form onSubmit={e => { e.preventDefault(); const url = address.trim(); if (!url) return; (e.currentTarget.querySelector('input') as HTMLInputElement | null)?.blur(); if (tab) void act({ kind: 'navigate', url }); else void openTab(url); }}><input aria-label="Browser address" value={address} onChange={e => setAddress(e.target.value)} onFocus={e => { typingAddress.current = true; e.currentTarget.select(); }} onBlur={() => { typingAddress.current = false; setAddress(!tab?.url || tab.url === 'about:blank' ? '' : tab.url); }} placeholder="Search or type an address" spellCheck={false} autoCapitalize="off" enterKeyHint="go" /></form>
+      <form onSubmit={e => { e.preventDefault(); const url = address.trim(); if (!url) return; (e.currentTarget.querySelector('input') as HTMLInputElement | null)?.blur(); if (tab) void act({ kind: 'navigate', url }); else void openTab(url); }}><input aria-label="Browser address" value={address} onChange={e => setAddress(e.target.value)} onFocus={e => { typingAddress.current = true; e.currentTarget.select(); }} onBlur={() => { typingAddress.current = false; setAddress(!tab?.url || tab.url === 'about:blank' || tab.url.startsWith('chrome://') ? '' : tab.url); }} placeholder="Search or type an address" spellCheck={false} autoCapitalize="off" enterKeyHint="go" /></form>
       <BrowserLogins key={`${env.id}:${session.id}`} client={client} env={env} session={session} />
       {tab?.loading && <span className="bp-loading" role="progressbar" aria-label="Loading page" />}
     </div>

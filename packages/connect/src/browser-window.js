@@ -29,11 +29,20 @@ export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
   const args = ['--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', `--class=${name}`];
   if (process.platform === 'linux') args.push('--ozone-platform-hint=auto');
   // No "controlled by automated test software" bar: it is the owner's window.
-  const options = { headless: false, viewport: null, acceptDownloads: true, ignoreDefaultArgs: ['--enable-automation'], args, timeout: 15000 };
+  // Chromium's own sandbox stays on, so no "--no-sandbox" warning bar either;
+  // only a machine where the sandbox cannot start goes without it.
+  const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ['--enable-automation'], args, timeout: 15000 };
   const system = systemChromium();
-  if (system) { try { return await chromium.launchPersistentContext(profileDir, { ...options, executablePath: system }); } catch { /* try Playwright's own build */ } }
-  return chromium.launchPersistentContext(profileDir, options);
+  const attempts = [...(system ? [{ executablePath: system }, { executablePath: system, chromiumSandbox: false }] : []), {}, { chromiumSandbox: false }];
+  let failure;
+  for (const extra of attempts) {
+    try { return await chromium.launchPersistentContext(profileDir, { ...options, ...extra }); } catch (error) { failure = error; }
+  }
+  throw failure;
 }
+
+/** A tab Helm opens with no address shows Chromium's New Tab page, not about:blank. */
+export const NEW_TAB = 'chrome://newtab/';
 
 export const windowProfile = (directory, sessionId) => join(directory, sessionId, 'window');
 /** Each thread's window has its own app id, so Show window finds the right one. */
@@ -82,8 +91,8 @@ export function drawPointer({ x, y, label, note, guide, box }) {
     host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;';
     const root = host.attachShadow({ mode: 'open' });
     const css = `
-      .c{position:fixed;width:22px;height:22px;transform:translate(-3px,-2px);transition:left .18s ease,top .18s ease,opacity .3s;filter:drop-shadow(0 1px 2px rgb(0 0 0/.45))}
-      .l{position:fixed;transform:translate(18px,16px);max-width:280px;padding:4px 9px;border-radius:999px;background:#6d5efc;color:#fff;font:500 12px/1.4 system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:left .18s ease,top .18s ease,opacity .3s}
+      .c{position:fixed;width:30px;height:30px;transform:translate(-4px,-3px);transition:left .18s ease,top .18s ease,opacity .3s;filter:drop-shadow(0 1px 2px rgb(0 0 0/.45))}
+      .l{position:fixed;transform:translate(24px,22px);max-width:300px;padding:4px 10px;border-radius:999px;background:#6d5efc;color:#fff;font:500 13px/1.4 system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:left .18s ease,top .18s ease,opacity .3s}
       .l.g{white-space:normal;border-radius:10px;background:#f5a524;color:#1a1300}
       .b{position:fixed;border:2px solid #6d5efc;border-radius:6px;transition:all .18s ease,opacity .3s}
       .b.g{border-color:#f5a524;box-shadow:0 0 0 4px rgb(245 165 36/.25)}

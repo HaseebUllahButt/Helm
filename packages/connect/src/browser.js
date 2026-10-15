@@ -7,7 +7,7 @@ import { HELM_DIR } from './paths.js';
 import { normalizeAction, readOnlyAction, resolveTarget } from './browser-targets.js';
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 import * as browserLogins from './browser-logins.js';
-import { canOpenWindow, launchWindow as openWindow, windowProfile, windowName, focusWindow, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer } from './browser-window.js';
+import { canOpenWindow, launchWindow as openWindow, windowProfile, windowName, focusWindow, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB } from './browser-window.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -186,6 +186,8 @@ export class BrowserManager {
     return context;
   }
   async newPage(context) { const spare = context.helmSpare; context.helmSpare = null; return spare && !spare.isClosed() ? spare : context.newPage(); }
+  /** An empty tab in the window shows the New Tab page, as in any browser. */
+  async blank(page) { if (page.context?.().helmWindow) await page.goto(NEW_TAB).catch(() => {}); }
   /** The owner clicked, typed or scrolled in the window; the agent's own input is not theirs. */
   ownerInput(page) {
     const tab = [...this.tabs.values()].find(t => t.page === page);
@@ -217,7 +219,7 @@ export class BrowserManager {
     if (!this.canWindow) throw new Error('This machine has no screen to show a browser window on.');
     await this.recover(sessionId);
     const tabs = () => [...this.tabs.values()].filter(t => t.sessionId === sessionId && t.engine === 'chromium');
-    if (!tabs().length) { const context = await this.context(sessionId); this.register(sessionId, await this.newPage(context)); await this.persistTabs(sessionId); }
+    if (!tabs().length) { const context = await this.context(sessionId), page = await this.newPage(context); this.register(sessionId, page); await this.blank(page); await this.persistTabs(sessionId); }
     const tab = tabs().find(t => t.id === tabId) || tabs()[0];
     await tab?.page.bringToFront().catch(() => {});
     await focusWindow(windowName(sessionId));
@@ -341,6 +343,7 @@ export class BrowserManager {
         // Loads in the background: the tab list answers now, and each page fills in as it arrives.
         let address = 'about:blank'; try { address = httpUrl(row.url); } catch { /* keep the tab available to retry */ }
         if (address !== 'about:blank') { tab.url = address; tab.ready = page.goto(address, { waitUntil: 'domcontentloaded' }).then(() => {}, () => {}); }
+        else tab.ready = this.blank(page);
       }
     })().catch(error => { this.recovered.delete(sessionId); throw error; }));
     return this.recovered.get(sessionId);
@@ -385,10 +388,11 @@ export class BrowserManager {
     // from the panel answers at once; only an agent waits for the page and
     // gets it back as text.
     if (viewer) {
-      if (url !== 'about:blank') { tab.url = url; tab.ready = page.goto(url, { waitUntil: 'domcontentloaded' }).then(() => this.persistSoon(sessionId), error => { if (!/ERR_ABORTED|interrupted by another navigation|closed/i.test(error.message)) tab.problem = { url, message: plainNavError(error, url) }; }); }
+      if (url === 'about:blank') tab.ready = this.blank(page);
+      else { tab.url = url; tab.ready = page.goto(url, { waitUntil: 'domcontentloaded' }).then(() => this.persistSoon(sessionId), error => { if (!/ERR_ABORTED|interrupted by another navigation|closed/i.test(error.message)) tab.problem = { url, message: plainNavError(error, url) }; }); }
       await this.persistTabs(sessionId); return { tab: this.metadata(tab) };
     }
-    try { if (url !== 'about:blank') await page.goto(url, { waitUntil: 'domcontentloaded' }); await this.settle(tab); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(await this.look(tab)) }; }
+    try { if (url !== 'about:blank') await page.goto(url, { waitUntil: 'domcontentloaded' }); else await this.blank(page); await this.settle(tab); tab.title = await page.title(); await this.persistTabs(sessionId); return { tab: this.metadata(tab), ...(await this.look(tab)) }; }
     catch (error) { await page.close(); throw /net::ERR_|Timeout \d+ms/.test(error.message) ? new Error(plainNavError(error, url)) : error; }
   }
   get(sessionId, tabId) { this.owner(sessionId); const tab = this.tabs.get(tabId); if (!tab || tab.sessionId !== sessionId) throw new Error('browser tab not found in this thread'); return tab; }
