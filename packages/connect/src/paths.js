@@ -23,7 +23,7 @@ export const collapse = (p) => {
   if (p.startsWith('~')) return p;          // already collapsed
   if (!p.startsWith('/')) return p;         // not a path at all
   const abs = resolve(p);
-  return abs.startsWith(HOME) ? '~' + abs.slice(HOME.length) : abs;
+  return abs === HOME || abs.startsWith(HOME + '/') ? '~' + abs.slice(HOME.length) : abs;
 };
 
 /**

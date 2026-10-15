@@ -1197,6 +1197,7 @@ export class Client {
         if (stopped) return;
         let msg: any;
         try { msg = JSON.parse(ev.data); } catch { return; }
+        if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
         lastReceived = Date.now(); awaiting = false;
         if (msg.t === 'ping') { ws.send(JSON.stringify({ t: 'pong' })); return; }
         if (msg.t === 'rpcResult') {
@@ -1643,10 +1644,8 @@ export class Client {
     };
     channel.onclose = () => this.dropDirect(env, peer);
     channel.onmessage = (ev) => {
-      const raw = this.accumulate(peer, ev.data);
-      if (raw == null) return;
-      let msg: any;
-      try { msg = JSON.parse(raw); } catch { return; }
+      const msg = this.accumulate(peer, ev.data);
+      if (msg == null) return;
       if (msg.t === 'rpcResult') {
         this.receiveRpc(msg, 'direct');
         return;
@@ -1714,15 +1713,18 @@ export class Client {
   }
 
   /**
-   * Reassemble a possibly-fragmented direct-channel frame. Returns the full
-   * JSON string once complete, or null while waiting for more pieces.
+   * Parse a possibly-fragmented direct-channel frame once. Returns the
+   * message when complete, or null while waiting for more pieces.
    */
-  private accumulate(peer: Peer, raw: any): string | null {
+  private accumulate(peer: Peer, raw: any): Record<string, any> | null {
     if (typeof raw !== 'string') return null;
     let msg: any;
     try { msg = JSON.parse(raw); } catch { return null; }
-    if (msg?.t !== DC_CHUNK_TYPE || typeof msg.gid !== 'string') return raw;
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return null;
+    if (msg.t !== DC_CHUNK_TYPE) return msg;
+    if (typeof msg.gid !== 'string') return null;
     const { gid, i, n, data } = msg;
+    if (gid.length > 100 || typeof data !== 'string' || data.length > DC_CHUNK_AT) return null;
     if (!Number.isInteger(n) || n <= 1 || n > 2000) return null;
     if (!Number.isInteger(i) || i < 0 || i >= n) return null;
     let entry = peer.fragments.get(gid);
@@ -1730,16 +1732,17 @@ export class Client {
       entry = { n, parts: new Array(n), got: 0 };
       peer.fragments.set(gid, entry);
     }
-    if (entry.parts[i] !== undefined) return null;
-    entry.parts[i] = typeof data === 'string' ? data : '';
+    if (entry.n !== n || entry.parts[i] !== undefined) return null;
+    entry.parts[i] = data;
     entry.got++;
     if (peer.fragments.size > 8) {
       const oldest = peer.fragments.keys().next().value as string | undefined;
-      if (oldest && oldest !== gid) peer.fragments.delete(oldest);
+      if (oldest !== undefined) peer.fragments.delete(oldest);
     }
     if (entry.got < entry.n) return null;
     peer.fragments.delete(gid);
-    return entry.parts.join('');
+    try { msg = JSON.parse(entry.parts.join('')); } catch { return null; }
+    return msg && typeof msg === 'object' && !Array.isArray(msg) ? msg : null;
   }
 
   dropDirect(env: string, expected?: Peer) {
