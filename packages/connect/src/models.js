@@ -740,9 +740,28 @@ async function grokModels(root, environment = {}) {
 }
 
 /**
- * Pi keeps its provider catalog on disk at <home>/models.json - reading it
- * costs no process at all. omp answers `omp models --json` with the same
- * rows plus an explicit per-model thinking ladder and input list.
+ * `pi --list-models` prints a table of the models Pi can use right now:
+ * only providers it is logged in to (or has a working key for).
+ * Columns: provider, model, context, max-out, thinking, images.
+ */
+export function parsePiModelList(stdout) {
+  const rows = [];
+  let header = false;
+  for (const line of String(stdout ?? '').split('\n')) {
+    const cols = line.trim().split(/\s+/);
+    if (!header) { header = cols[0] === 'provider' && cols[1] === 'model'; continue; }
+    if (cols.length < 6) continue;
+    const [provider, id, , , thinking, images] = cols;
+    rows.push({ selector: `${provider}/${id}`, thinking: thinking === 'yes', images: images === 'yes' });
+  }
+  return rows;
+}
+
+/**
+ * Pi asks `pi --list-models` so the picker shows only what the owner is
+ * logged in to; names and thinking levels come from Pi's catalogs on disk
+ * (<home>/models.json, models-store.json). omp answers `omp models --json`
+ * with the same rows plus an explicit per-model thinking ladder and input list.
  */
 async function piModels(engine, root, environment = {}) {
   let def = null;
@@ -790,6 +809,47 @@ async function piModels(engine, root, environment = {}) {
   // pi's models.json: providers.<name>.models[] - id, name, reasoning,
   // input, thinkingLevelMap (the levels the model actually accepts).
   const models = [], labels = {}, effortsByModel = {}, imagesByModel = {};
+  if (engine === 'pi') {
+    let listed = null;
+    try {
+      const { stdout } = await exec(ENGINES.pi?.bin ?? 'pi', ['--list-models'], {
+        timeout: 20_000, maxBuffer: 8 << 20,
+        env: { ...process.env, PI_CODING_AGENT_DIR: root, ...environment },
+      });
+      listed = parsePiModelList(stdout);
+    } catch { /* older pi or no binary: fall back to the catalogs on disk */ }
+    if (listed) {
+      const known = {};
+      for (const file of [join(root, 'models.json'), join(root, 'models-store.json')]) {
+        let cat = null;
+        try { cat = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }
+        // models.json nests under providers; models-store.json does not.
+        for (const [provider, p] of Object.entries(cat?.providers ?? cat ?? {})) {
+          for (const m of p?.models ?? []) if (m?.id) known[`${provider}/${m.id}`] ??= m;
+        }
+      }
+      for (const row of listed) {
+        const sel = row.selector;
+        if (models.includes(sel)) continue;
+        models.push(sel);
+        const m = known[sel];
+        if (m?.name) labels[sel] = m.name;
+        const levels = m?.thinkingLevelMap && typeof m.thinkingLevelMap === 'object'
+          ? Object.keys(m.thinkingLevelMap)
+          : (row.thinking ? ['off', 'minimal', 'low', 'medium', 'high'] : null);
+        if (levels?.length) effortsByModel[sel] = levels;
+        imagesByModel[sel] = row.images;
+      }
+      // Pi's saved default may sit on a provider it is no longer logged in
+      // to; offering it would only fail. Logged out of everything, the empty
+      // picker is the truth, not the catalog.
+      return {
+        default: models.includes(def) ? def : (models[0] ?? null), models, labels, effort,
+        efforts: [...new Set(Object.values(effortsByModel).flat())],
+        effortsByModel, images: Object.values(imagesByModel).some(Boolean), imagesByModel,
+      };
+    }
+  }
   for (const file of [join(root, 'models.json'), join(root, 'models-store.json')]) {
     let cat = null;
     try { cat = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }

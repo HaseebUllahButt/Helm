@@ -121,3 +121,18 @@ test('Claude and Gemini lists put the newest published model first and pinned sn
     'claude-haiku-5-5', 'claude-opus-5-5', 'claude-haiku-4-5', 'undated-local', 'claude-haiku-4-5-20251001',
   ]);
 });
+
+test('Pi model list keeps only the table rows Pi can use', async () => {
+  const { parsePiModelList } = await import('../packages/connect/src/models.js');
+  const rows = parsePiModelList([
+    'provider     model                 context  max-out  thinking  images',
+    'antigravity  gemini-3.8-flash      1.0M     65.5K    yes       yes   ',
+    'opencode     big-pickle            200K     32K      no        no    ',
+    '',
+  ].join('\n'));
+  assert.deepEqual(rows, [
+    { selector: 'antigravity/gemini-3.8-flash', thinking: true, images: true },
+    { selector: 'opencode/big-pickle', thinking: false, images: false },
+  ]);
+  assert.deepEqual(parsePiModelList('No models available. Log in with /login.\n  /opt/pi/docs/models.md\n'), []);
+});
