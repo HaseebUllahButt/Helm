@@ -181,6 +181,19 @@ test('readThread folds deltas back into the sentence they were', () => {
   ]);
 });
 
+test('readThread shows what the owner typed, not Helm\'s brief in front of it', () => {
+  // Older chats saved the brief with the first message; the app hides it.
+  const old = '[Helm: you are running on Laptop.\n- Run something: helm exec]\n[Helm visuals: use a picture.]\n\nFix the login form';
+  const tagged = '<helm_instructions>\n[Helm: you are running on Laptop.]\n</helm_instructions>\n\n<user_request>\nAdd tests\n</user_request>';
+  const lines = readThread([
+    { type: 'turn.start', turnId: 't1', text: old },
+    { type: 'turn.done', turnId: 't1', status: 'ok' },
+    { type: 'turn.start', turnId: 't2', text: tagged },
+    { type: 'turn.done', turnId: 't2', status: 'ok' },
+  ]);
+  assert.deepEqual(lines, ['> Fix the login form', '> Add tests']);
+});
+
 // A real EventLog, not a stand-in. The first version of this test handed
 // localDigest a fake whose `since` returned `{ events: [] }`; the real one
 // returns the array itself, so the code read `undefined`, every digest line

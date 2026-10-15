@@ -819,6 +819,26 @@ test('a restart closing a mid-task message does not make a working helper look f
   assert.equal(done.complete, true);
 });
 
+test('a saved "done" does not end a helper whose own turn is still running', async t => {
+  // Seen 2026-10-15: after a restart, `helm delegate-result --wait` said
+  // done twice while the helper was still writing files. Its record said
+  // done, but the CLI's own turn was open and the chat was working.
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  await sessions.input(parent.id, 'Work');
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Write the map' });
+  const kid = drivers.get(child.id);
+  sessions.get(child.id).delegation.status = 'done';
+  const running = sessions.delegationResult(child.id);
+  assert.equal(sessions.get(child.id).status, 'working');
+  assert.equal(running.complete, false);
+  assert.equal(running.status, 'working');
+  kid.finish();
+  const done = sessions.delegationResult(child.id);
+  assert.equal(done.complete, true);
+  assert.equal(done.status, 'done');
+});
+
 test('CLI flags do not leak into the task; literal task flags survive --', () => {
   const parsed = parseAgentArgs(['claude-main', '--model', 'opus', '--wait', '--', 'review', '--dangerously-skip-permissions'], { values: ['model'], switches: ['wait'] });
   assert.deepEqual(parsed.options, { model: 'opus', wait: true });

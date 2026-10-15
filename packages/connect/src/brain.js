@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HELM_DIR } from './paths.js';
 import { M } from '@helm/protocol';
+import { stripBrief } from '@helm/protocol/brief';
 
 /**
  * Resolve CLI targets from the full inventory; the digest omits helper tasks.
@@ -242,7 +243,8 @@ export function readThread(events = [], { limit = 40 } = {}) {
   const { turns, pending } = fold(events);
   const out = [];
   for (const t of turns) {
-    if (t.text) out.push(`> ${oneLine(t.text, 400)}`);
+    const said = t.text && stripBrief(t.text);
+    if (said) out.push(`> ${oneLine(said, 400)}`);
     for (const i of t.items) {
       if (i.kind === 'text' || i.kind === 'thinking') {
         if (i.text.trim()) out.push(`  ${oneLine(i.text, 400)}`);

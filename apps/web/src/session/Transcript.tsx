@@ -5,6 +5,7 @@ import type { Change, Item, Turn, Permission } from './types';
 import { seconds } from '../format';
 import { Icon, toolKind, type IconName } from '../Icon';
 import { userMessage } from './userMessage';
+import { stripBrief } from '@helm/protocol/brief';
 import { plainError } from './problem';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
 import { ContextCard } from './ContextCard';
@@ -558,20 +559,6 @@ function ItemContent({ item, byParent, commandOutput }: { item: Item; byParent: 
  * own quiet line instead.
  */
 const HELM_NOTE = /^((?:\[helm [^\]\n]*\]\n\n)+)([\s\S]*)$/;
-// Helm's brief to a CLI with no instructions channel. It now goes out with
-// the message and is never saved as the owner's words, but chats from before
-// that - and histories read back from a CLI's own files - still begin with it.
-const HELM_BRIEF_TAGGED = /^\s*<helm_instructions>[\s\S]*?<\/helm_instructions>\s*(?:<user_request>\n?([\s\S]*?)\n?<\/user_request>\s*$)?/;
-const HELM_BRIEF_OLD = /^\[Helm[ :][\s\S]*?\]\n\n/;
-export function stripBrief(text: string): string {
-  const tagged = HELM_BRIEF_TAGGED.exec(text);
-  if (tagged) return tagged[1] ?? text.slice(tagged[0].length);
-  const old = HELM_BRIEF_OLD.exec(text);
-  // Only a whole run of [Helm …] lines: every line of it is one of them, or
-  // continues one ("- Run something…").
-  if (old && old[0].split('\n').filter(Boolean).every((line) => line.startsWith('[Helm') || !line.startsWith('['))) return text.slice(old[0].length);
-  return text;
-}
 export function splitNote(text?: string): { note?: string; text?: string } {
   if (text) text = stripBrief(text);
   const m = text ? HELM_NOTE.exec(text) : null;

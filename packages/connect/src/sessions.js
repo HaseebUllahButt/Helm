@@ -2071,7 +2071,10 @@ export class Sessions extends EventEmitter {
       result.output = reply.output;
       result.truncated = reply.truncated;
       const status = session.delegation.status;
-      if (['done', 'error', 'interrupted'].includes(status)) {
+      // A saved outcome is the task's end only once the CLI's own turn is.
+      // A restart can leave "done" on a helper that is still working.
+      const running = ['starting', 'working'].includes(session.status) && !!activeTurnFromEvents(events);
+      if (['done', 'error', 'interrupted'].includes(status) && !running) {
         result.status = status; result.complete = true;
       }
     }
