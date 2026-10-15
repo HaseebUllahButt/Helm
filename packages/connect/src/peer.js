@@ -231,15 +231,16 @@ export class PeerHub {
   #accumulate(peer, { gid, i, n, data }) {
     if (typeof gid !== 'string' || gid.length > 100
         || typeof data !== 'string' || data.length > DC_CHUNK_AT
-        || !Number.isInteger(n) || n <= 1 || n > 4195) return null;
+        || !Number.isInteger(n) || n <= 1 || n > 4195
+        || !Number.isInteger(i) || i < 0 || i >= n) return null;
     if (!peer.fragments) peer.fragments = new Map();
     let entry = peer.fragments.get(gid);
     if (!entry) {
       entry = { n, parts: new Array(n), got: 0, at: Date.now() };
       peer.fragments.set(gid, entry);
     }
-    if (n !== entry.n || !Number.isInteger(i) || i < 0 || i >= entry.n || entry.parts[i] !== undefined) return null;
-    entry.parts[i] = typeof data === 'string' ? data : '';
+    if (n !== entry.n || entry.parts[i] !== undefined) return null;
+    entry.parts[i] = data;
     entry.got++;
     // Stale fragments from a peer that went away mid-message must not leak.
     if (peer.fragments.size > 8) {

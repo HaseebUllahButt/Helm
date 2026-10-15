@@ -95,6 +95,40 @@ function harness({ endpoints = ['http://good'], delays = {}, statuses = {}, reac
     window: kind => windows.get(kind)?.(), visible: () => documents.get('visibilitychange')?.() };
 }
 
+test('direct fragments are bounded even when the oldest group ID is empty', () => {
+  const h = harness(), peer = { fragments: new Map() };
+  for (let n = 0; n < 20; n++) {
+    h.client.accumulate(peer, JSON.stringify({ t: 'dc-chunk', gid: n ? String(n) : '', n: 2, i: 0, data: 'x' }));
+  }
+  assert.equal(peer.fragments.size, 8);
+  h.client.close();
+});
+
+test('invalid direct fragments do not poison a valid reply', () => {
+  const h = harness(), peer = { fragments: new Map() };
+  const chunk = frame => h.client.accumulate(peer, JSON.stringify({ t: 'dc-chunk', gid: 'reply', n: 2, i: 0, data: 'hello', ...frame }));
+  for (const frame of [{ data: 'x'.repeat(16001) }, { data: {} }, { gid: 'x'.repeat(101) }, { i: -1 }]) {
+    assert.equal(chunk(frame), null);
+    assert.equal(peer.fragments.size, 0);
+  }
+  assert.equal(chunk({}), null);
+  assert.equal(chunk({ n: 3, i: 2, data: 'bad' }), null);
+  assert.equal(chunk({ data: 'duplicate' }), null);
+  assert.equal(chunk({ i: 1, data: ' world' }), 'hello world');
+  assert.equal(peer.fragments.size, 0);
+  h.client.close();
+});
+
+test('non-object frames are ignored on both browser transports', async () => {
+  const h = harness(); h.start(); await h.advance(200);
+  await h.client.openDirect('vm');
+  for (const frame of [null, false, 42, 'text', []]) {
+    assert.doesNotThrow(() => h.sockets[0].message(frame));
+    assert.doesNotThrow(() => h.peers[0].message(frame));
+  }
+  h.client.close();
+});
+
 test('a fast hub opens promptly even when another remembered endpoint is unreachable', async () => {
   const h = harness({ endpoints: ['http://good', 'http://asleep'], delays: { 'http://asleep': Infinity } });
   const connection = h.start(); await h.advance(200); await connection;
