@@ -43,6 +43,8 @@ export interface ThreadState {
   status?: string;
   team?: { working?: number; blocked?: number; failed?: number };
   recovery?: { kind?: string } | null;
+  /** Started on a repo still coming down from GitHub; a failed one waits for "Try again". */
+  clone?: { state?: string } | null;
 }
 
 /** Listed as a thread: not a helper, or a helper with no parent thread to sit under. */
@@ -58,7 +60,8 @@ export const busyWord = (status?: string, compacting?: unknown) =>
 /** A question or approval is open, a child is stuck, or a turn failed and is waiting for a decision. */
 export const needsAttention = (s: ThreadState) =>
   s.status === 'blocked' || !!s.team?.blocked || !!s.team?.failed
-  || (!busyStatus(s.status) && ['error', 'limited', 'restart'].includes(s.recovery?.kind ?? ''));
+  || (!busyStatus(s.status) && ['error', 'limited', 'restart'].includes(s.recovery?.kind ?? ''))
+  || s.clone?.state === 'failed';
 
 /** Running describes work in progress, not a process waiting for input. */
 export const runningThread = (s: ThreadState) => busyStatus(s.status) || !!s.team?.working;

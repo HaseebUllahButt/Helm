@@ -29,41 +29,61 @@
 
 ## Clone from GitHub
 - **Sees:** "Clone from GitHub" under "No folder · quick chat" in the
-  folder step. Then "Which repo?": a search box and the repos newest first,
-  under headings - "Yours", then each organization by name, then "Shared
-  with you" for other people's repos - with a lock on private ones. Below:
-  the gh account (tap "switch" when the machine has more than one) and
-  refresh. Typing `owner/name` offers any repo by name. Picking a repo asks
-  "Where should <repo> go?": the last place clones went, home and its
-  folders; typing searches every folder, and a typed path (`~/work`) is
-  offered as it is. Picking a place closes the box and opens that folder's
-  "New session" page, where a bar shows the clone; its Start button reads
-  "Cloning… 40%" until the repo is in. A folder already holding that repo
-  just opens. The keys row at the bottom only lists keys that do something.
+  folder step. Then "Which repo?": the repos newest first under "Yours",
+  each organization by name, then "Shared with you", with a lock on
+  private ones. The list is the one kept from last time (on the machine's
+  disk, `~/.helm/github-repos.json`), so it shows at once; one older than
+  10 minutes is fetched again quietly behind it. Below: the gh account
+  ("switch" with more than one), "447 repos · checked 3m ago" and refresh.
+  A search with no match says "Not in your list. Looking on GitHub…": the
+  list is fetched again and GitHub's own search is asked (an exact
+  `owner/name` first, then names, known owners first) and shown under "On
+  GitHub". Only then: "No repo called "x" on GitHub that <login> can see"
+  with "Look again". Picking a repo asks "Where should <repo> go?" in the
+  same folder tree as the folder step: "last used" place and Home on top,
+  → and ← open and close, typing searches, a typed path (`~/work`) is
+  offered as it is; "Goes to ~/dev/<repo>" under the list. A folder
+  already holding that repo just opens; one holding something else is
+  refused there. Then the agent step as always ("Clones owner/repo into
+  …"). Enter starts the chat at once in the repo's folder: it is listed
+  (Working, "cloning 40%"), and a card over the box shows the bar. What
+  is written meanwhile waits ("1 waiting · Once the repo is in") and goes
+  to the agent when the repo is in. Leaving and coming back keeps it; a
+  cloned chat is never dropped as empty. A failed clone shows why with
+  "Try again" and sits under "Needs you".
 - **Signed out:** "The GitHub CLI on <machine> is not signed in. Run this
   there: `gh auth login`", Copy, "Check again". Helm never signs in to
   GitHub itself. No gh at all: "The GitHub CLI is not on <machine> yet".
 - **Where:** `apps/web/src/NewChat.tsx` (the `github` and `into` steps),
-  `apps/web/src/cloneJobs.ts` (follows a clone after the box closes; the
-  bar is in `Start` in `App.tsx`), `packages/connect/src/github-repos.js`
-  (`github.repos`, `github.clone`). It is the machine's own `gh` login; no
-  token reaches the app. A gh too old for `--json` (2.45 on Ubuntu 24.04)
-  is read from its plain `gh auth status` words.
+  `apps/web/src/session/CloneCard.tsx` (the card in the chat),
+  `packages/connect/src/github-repos.js` (`github.repos`, `github.find`,
+  `github.check`, the clone itself), `packages/connect/src/sessions.js`
+  (`start({ clone })`, `#followClone`, `retryClone`). It is the machine's
+  own `gh` login; no token reaches the app. A gh too old for `--json`
+  (2.45 on Ubuntu 24.04) is read from its plain `gh auth status` words.
 - **Prove (driven 2026-10-15):** without `--real` the private copy's home
   has no gh login, so it shows the signed-out screen. `up --real` shows the
-  owner's list:
+  owner's list (read only); clone a public repo into the scratch folder
+  with the fake agent:
   ```sh
   $V up --real; $V open --desktop; $V click "New chat"; $V key Enter
-  $V click "Clone from GitHub"; $V click "Search repos"; $V type "octocat/Hello-World"
-  $V key Enter; $V click "Search folders, or type a path"; $V type "/tmp/<scratch>"
-  $V key Enter; $V wait "Start" 60000
+  $V click "Clone from GitHub"; $V click "Search repos"; $V type "expressjs/express"
+  $V wait "ON GITHUB" 20000; $V key Enter
+  $V click "Search folders, or type a path"; $V type "/tmp/helm-verify-<you>/work"; $V key Enter
+  $V type fake; $V key Enter                     # the chat opens, "cloning n%"
+  $V click "Ask anything"; $V type "what is in this repo?"; $V click send   # "1 waiting"
+  $V wait "working on it done." 600000
   ```
-- **Proof:** the box closes on "New session · Hello-World" with "Cloning
-  Hello-World · octocat" and a bar, then "Start …" and
-  `/tmp/<scratch>/Hello-World/README`.
+  A failure: `$V rpc session.start '{"cwd":"/tmp/helm-verify-<you>/work/nope","profileId":"fake","clone":{"repo":"octocat/no-such-repo-xyz"}}'`.
+- **Proof:** the chat is in the sidebar while it clones; the waiting
+  message goes in after it and the fake agent answers; the repo's files are
+  in the folder. The failure shows "Could not clone …", the reason and
+  "Try again", under "Needs you".
 - **Traps:** with `--real` the owner's real chats are listed: touch none.
-  The clone uses gh's own git setting (ssh on the laptop).
-- **Tests:** `test/github-repos`.
+  The clone uses gh's own git setting (ssh on the laptop). A restart during
+  a clone leaves the chat saying so, with "Try again" (a half-made folder
+  this chat started is cleared first).
+- **Tests:** `test/github-repos`, `test/clone-chat`.
 
 ## Accounts
 - **Sees:** one row per sign-in (per home folder), with a "default" tag and

@@ -3382,6 +3382,9 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 /* Clone from GitHub: the account, and what to run when gh is not signed in. */
 .newchat-account { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .newchat-refresh.push { margin-left: auto; }
+.newchat-note { margin: -6px 18px 10px; font-size: var(--t-meta); color: var(--mutedfg); overflow-wrap: anywhere; }
+.newchat-missing { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.newchat-missing button { display: inline-flex; align-items: center; gap: 6px; }
 .newchat-new .quiet { color: var(--mutedfg); font-weight: 400; }
 .newchat-signin { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 28px 16px; text-align: center; color: var(--text-dim); }
 .newchat-signin p { margin: 0; }
@@ -3398,6 +3401,11 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .clone-progress i { display: block; height: 100%; background: var(--primary); transition: width 0.4s var(--ease); }
 .clone-card .clone-percent { font-size: var(--t-meta); color: var(--mutedfg); font-variant-numeric: tabular-nums; }
 .clone-card.failed { border-color: var(--red); }
+/* In a chat that is cloning: above the box you write in. */
+.clone-card.in-chat { margin: 0 0 8px; }
+.clone-card .clone-note { font-size: var(--t-meta); color: var(--mutedfg); }
+.clone-card .clone-error { color: var(--red); font-size: var(--t-meta); overflow-wrap: anywhere; }
+.clone-card button.clone-retry { display: inline-flex; align-items: center; gap: 6px; flex: none; width: auto; min-height: 34px; margin: 0; padding: 6px 12px; }
 @media (max-width: 520px) {
   .newchat-index { display: none; }
   .newchat-bar.creating { flex-wrap: wrap; }

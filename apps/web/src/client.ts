@@ -82,6 +82,12 @@ export interface Session {
   cwd: string;
   /** A chat with no folder: `cwd` is an empty scratch folder the machine made for it. */
   quick?: boolean;
+  /**
+   * Started on a GitHub repo cloned into `cwd`. Until `state` is done the
+   * agent has not started and what is sent waits; `cloned` on a failure
+   * means the repo is in and only the agent failed to start.
+   */
+  clone?: { repo: string; login?: string | null; state: 'cloning' | 'done' | 'failed'; percent: number; error?: string; cloned?: boolean };
   /** The git branch the folder is on, read by the machine; null outside a repo. */
   branch?: string | null;
   engine: string;

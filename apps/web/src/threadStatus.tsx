@@ -15,13 +15,15 @@ type Thread = {
   seenAt?: number;
   team?: { working?: number; blocked?: number; failed?: number };
   recovery?: { kind?: string } | null;
+  /** Started on a repo still coming down from GitHub. */
+  clone?: { state?: string; percent?: number } | null;
 };
 
 export type ThreadMood = 'needs' | 'failed' | 'working' | 'unread' | 'quiet';
 
 /** The turn failed (or hit a limit) and nothing is running on top of it. */
 export const failedThread = (s: Thread) =>
-  !runningThread(s) && (['error', 'limited'].includes(s.recovery?.kind ?? '') || !!s.team?.failed);
+  !runningThread(s) && (['error', 'limited'].includes(s.recovery?.kind ?? '') || !!s.team?.failed || s.clone?.state === 'failed');
 
 export function moodOf(s: Thread, unread: boolean): ThreadMood {
   if (s.status === 'blocked') return 'needs';
@@ -164,7 +166,7 @@ export function ThreadStatus({ s, mood, now, label }: { s: Thread; mood: ThreadM
   }
   if (mood === 'working') {
     // "starting" and "compacting" are not the turn's work yet; the word says so.
-    const word = busyWord(s.status, s.compacting);
+    const word = s.clone?.state === 'cloning' ? `cloning ${s.clone.percent ?? 0}%` : busyWord(s.status, s.compacting);
     return (
       <span className="tstat working" data-mood="working">
         <Icon name="think" size={13} className="tspin" />

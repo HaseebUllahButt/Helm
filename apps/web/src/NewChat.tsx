@@ -7,7 +7,6 @@ import { watchAccounts } from './accountsCache';
 import { accountsFrom, loadPrefs, rememberFolder, savePrefs, type Account, type PickerPrefs } from './accounts';
 import { fetchFolders, loadFolders, rememberFolderMade, searchFolders, type FolderIndex } from './folderIndex';
 import type { StartInfo } from './startingChats';
-import { startClone } from './cloneJobs';
 
 /**
  * A new chat without the mouse: machine, then folder, then CLI, in one box.
@@ -32,24 +31,34 @@ import { startClone } from './cloneJobs';
  *
  * "Clone from GitHub" is a side step off the folder list: the repos the
  * machine's own GitHub CLI login can reach, yours first and then each
- * organization's under its name, narrowed by typing. Picking one asks where
- * it goes; the box then closes on that folder, where the clone's bar runs.
- * Helm never signs in to GitHub itself: with no gh login there, it says to
- * run `gh auth login` on that machine.
+ * organization's under its name, narrowed by typing. The list is the one
+ * kept from last time, shown at once and fetched again behind it when old.
+ * A search that finds nothing in it gets the list again and asks GitHub's
+ * own search before saying the repo is not there. Picking a repo asks where
+ * it goes, in the same folder tree as the folder step; then the agent, as
+ * always. The chat opens at once in the repo's folder and the clone runs
+ * inside it - see CloneCard. Helm never signs in to GitHub itself: with no
+ * gh login there, it says to run `gh auth login` on that machine.
  */
 
 type Step = 'machine' | 'folder' | 'github' | 'into' | 'cli';
 
 interface GhRepo { full: string; owner: string; org?: boolean; name: string; private: boolean; archived: boolean; desc: string }
-interface GhView { installed: boolean; accounts: { login: string; active: boolean }[]; login: string | null; repos: GhRepo[]; parent: string; failed?: boolean }
+interface GhView { installed: boolean; accounts: { login: string; active: boolean }[]; login: string | null; repos: GhRepo[]; parent: string; at?: number; stale?: boolean; failed?: boolean }
+/** A search the list missed, asked of GitHub itself. */
+interface GhFind { query: string; state: 'looking' | 'done' | 'failed'; found: GhRepo[]; error?: string }
+
+/** The repo lists already shown on this device, by machine and login: the box opens on them at once. */
+const ghSeen = new Map<string, GhView>();
 
 const QUICK_ROW = ':quick';
 const NEW_ROW = ':new-folder';
 const HIDDEN_ROW = ':hidden-clis';
 const GITHUB_ROW = ':github';
-const TYPED_REPO = /^[\w.-]+\/[\w.-]+$/;
 const YOURS = 'Yours';
 const SHARED = 'Shared with you';
+const ON_GITHUB = 'On GitHub';
+const HOME_ROW = '@home';
 const parentKey = (machineId: string) => `helm.cloneParent.${machineId}`;
 const savedParent = (machineId: string) => { try { return localStorage.getItem(parentKey(machineId)); } catch { return null; } };
 const MOD = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
@@ -85,7 +94,7 @@ const checked = (at: number, now: number) => {
   return s < 10 ? 'just now' : s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`;
 };
 
-export function NewChat({ client, envs, envId, initialFolder, quick: startQuick = false, near, onFolder, onCloned, onClose, onStarting, engineOf }: {
+export function NewChat({ client, envs, envId, initialFolder, quick: startQuick = false, near, onFolder, onClose, onStarting, engineOf }: {
   client: Client;
   envs: Environment[];
   /** Start on this machine's folder step instead of asking which machine. */
@@ -97,8 +106,6 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   /** The machine on screen: asked about first, with the cursor already on it. */
   near?: string | null;
   onFolder?: (envId: string, folder: string) => void;
-  /** A clone has started: show the folder it is going into. */
-  onCloned: (envId: string, folder: string) => void;
   onClose: () => void;
   /** The chat opens at once; `run` starts its agent in the background. */
   onStarting: (info: StartInfo, run: () => Promise<Session>) => void;
@@ -140,9 +147,15 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   const [gh, setGh] = useState<GhView | null>(null);
   const [ghLogin, setGhLogin] = useState<string | undefined>();
   const [ghReload, setGhReload] = useState(0);
+  /** The next load asks GitHub, not the list the machine kept. */
+  const ghRefresh = useRef(false);
   const [ghBusy, setGhBusy] = useState(false);
+  const [finding, setFinding] = useState<GhFind | null>(null);
+  const [findAgain, setFindAgain] = useState(0);
   /** The repo picked, on its way to the "where does it go" step. */
   const [chosen, setChosen] = useState('');
+  /** The CLI step starts a chat that clones this repo into `folder` first. */
+  const [cloneFrom, setCloneFrom] = useState<string | null>(null);
   /** Where clones last went, remembered per machine; offered first. */
   const [cloneParent, setCloneParent] = useState<string | null>(null);
   creatingNow.current = !!creating;
@@ -167,7 +180,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     let stale = false;
     setHome(null); setAccounts(null); setPicker(null); setViewHidden(false); setOpened(new Set()); setInside({}); setAnchor(null);
     setIndex(null); setCreating(null);
-    setGh(null); setGhLogin(undefined); setChosen(''); setCloneParent(savedParent(machine.id));
+    setGh(null); setGhLogin(undefined); setChosen(''); setCloneFrom(null); setFinding(null); setCloneParent(savedParent(machine.id));
     client.rpc<{ entries: DirEntry[] }>(machine.id, 'fs.list', { path: '~' })
       .then((r) => { if (!stale) setHome(r.entries); }).catch((e) => { if (!stale) { setHome([]); setError(e.message); } });
     // The folders this device remembers first, then the machine's own list
@@ -223,33 +236,88 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     [searching, query, index]);
   const hits = remote ? remoteHits : localHits;
 
-  // The repos are asked for when the GitHub step opens, and again for
-  // another account or when asked to look again.
+  // The repos: the list this device already showed, at once; then the
+  // machine's (kept on its disk, so quick), and GitHub's own when that one
+  // is old - quietly, behind the list on screen.
+  const keepGh = (machineId: string, view: GhView, asked?: string) => {
+    ghSeen.set(`${machineId}|${asked ?? ''}`, view);
+    if (view.login) ghSeen.set(`${machineId}|${view.login}`, view);
+  };
   useEffect(() => {
     if (step !== 'github' || !machine) return;
     let stale = false;
+    const refresh = ghRefresh.current;
+    ghRefresh.current = false;
+    const held = ghSeen.get(`${machine.id}|${ghLogin ?? ''}`);
+    if (held && !refresh) setGh((now) => now ?? held);
+    const ask = (again: boolean) => client.rpc<GhView>(machine.id, 'github.repos', { login: ghLogin, refresh: again }, 60_000);
     setGhBusy(true);
-    client.rpc<GhView>(machine.id, 'github.repos', { login: ghLogin, refresh: ghReload > 0 }, 60_000)
-      .then((r) => { if (!stale) setGh(r); })
+    ask(refresh)
+      .then(async (r) => {
+        if (stale) return;
+        setGh(r); keepGh(machine.id, r, ghLogin);
+        if (!r.stale || !r.login) return;
+        const fresh = await ask(true);
+        if (!stale) { setGh(fresh); keepGh(machine.id, fresh, ghLogin); }
+      })
       .catch((e) => { if (!stale) { setGh((now) => now ?? { installed: true, accounts: [], login: null, repos: [], parent: '~', failed: true }); setError(e.message); } })
       .finally(() => { if (!stale) setGhBusy(false); });
     return () => { stale = true; };
   }, [step, client, machine, ghLogin, ghReload]);
+  const reloadGh = () => { ghRefresh.current = true; setGhReload((n) => n + 1); };
 
-  const parentNow = cloneParent ?? gh?.parent ?? '~';
+  // The list narrowed by what is typed; every word has to be in the name or
+  // the description.
+  const ghMatches = useMemo(() => {
+    if (step !== 'github' || !gh?.login) return [];
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    return gh.repos.filter((r) => { const hay = `${r.full} ${r.desc}`.toLowerCase(); return words.every((w) => hay.includes(w)); });
+  }, [step, gh, query]);
+  // Nothing in the list: get it again and ask GitHub's own search, once
+  // typing pauses, before saying the repo is not there.
+  const missed = step === 'github' && !!gh?.login && query.length >= 2 && ghMatches.length === 0;
+  useEffect(() => {
+    if (!missed || !machine || !gh?.login) { setFinding(null); return; }
+    let stale = false;
+    const login = gh.login;
+    setFinding({ query, state: 'looking', found: [] });
+    const t = setTimeout(() => {
+      client.rpc<{ login: string; repos: GhRepo[]; at: number; found: GhRepo[] }>(machine.id, 'github.find', { login, query }, 60_000)
+        .then((r) => {
+          if (stale) return;
+          setFinding({ query, state: 'done', found: r.found });
+          setGh((now) => {
+            if (!now || now.login !== r.login) return now;
+            const next = { ...now, repos: r.repos, at: r.at, stale: false };
+            keepGh(machine.id, next, ghLogin);
+            return next;
+          });
+        })
+        .catch((e) => { if (!stale) setFinding({ query, state: 'failed', found: [], error: e.message }); });
+    }, 500);
+    return () => { stale = true; clearTimeout(t); };
+  }, [missed, query, machine, gh?.login, findAgain]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const chooseRepo = (full: string) => { setChosen(full); go('into'); };
-  /** Starts the clone, then closes on the folder it goes into; its bar runs there. */
-  const cloneInto = async (parent: string) => {
+  /**
+   * The folder the repo goes into is picked: the agent is next. A folder
+   * already holding that repo is simply used; one holding something else
+   * is refused here, before anything starts.
+   */
+  const chooseParent = async (parent: string, id: string) => {
     if (!machine || busy || !chosen) return;
     const clean = parent.trim().replace(/\/+$/, '') || '~';
+    const target = join(clean, chosen.split('/')[1] ?? chosen);
     setBusy(true); setError('');
     try {
-      const job = await startClone(client, machine.id, { repo: chosen, parent: clean, login: gh?.login ?? undefined });
+      const r = await client.rpc<{ state: 'new' | 'there' | 'other'; path: string; reason?: string }>(machine.id, 'github.check', { repo: chosen, target }, 20_000);
+      if (r.state === 'other') throw new Error(r.reason ?? `${target} is already there, and it is not ${chosen}. Pick another folder.`);
       setCloneParent(clean);
       try { localStorage.setItem(parentKey(machine.id), clean); } catch { /* only a default */ }
-      onFolder?.(machine.id, job.path);
-      onClose();
-      onCloned(machine.id, job.path);
+      folderSpot.current = { q, id, step: 'into' };
+      setFolder(target); setQuick(false); setCloneFrom(r.state === 'new' ? chosen : null);
+      setBusy(false);
+      go('cli');
     } catch (e: any) { setError(e.message); setBusy(false); }
   };
 
@@ -264,7 +332,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   };
   // "checked 20s ago" keeps counting while the picker is open.
   useEffect(() => {
-    if (step !== 'folder') return;
+    if (step !== 'folder' && step !== 'github') return;
     const t = setInterval(() => setNow(Date.now()), 10_000);
     return () => clearInterval(t);
   }, [step]);
@@ -272,12 +340,12 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   // Stepping back from the CLIs lands on the same folder in the same list.
   const folderSpot = useRef<{ q: string; id: string; step: Step }>({ q: '', id: '', step: 'folder' });
   const pickFolder = (path: string, id: string) => {
-    folderSpot.current = { q, id, step: 'folder' }; setFolder(path); setQuick(false);
+    folderSpot.current = { q, id, step: 'folder' }; setFolder(path); setQuick(false); setCloneFrom(null);
     if (machine) onFolder?.(machine.id, path);
     go('cli');
   };
   const pickQuick = () => {
-    folderSpot.current = { q, id: QUICK_ROW, step: 'folder' }; setFolder(''); setQuick(true);
+    folderSpot.current = { q, id: QUICK_ROW, step: 'folder' }; setFolder(''); setQuick(true); setCloneFrom(null);
     go('cli');
   };
 
@@ -328,12 +396,14 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       effort: a.defaults?.effort || undefined,
       mode: a.defaults?.mode && a.defaults.mode !== 'plan' ? a.defaults.mode : undefined,
       speed: a.defaults?.speed || undefined,
+      // The repo comes down into the folder inside the chat, which opens now.
+      ...(cloneFrom ? { clone: { repo: cloneFrom, login: gh?.login ?? undefined } } : {}),
     };
     const env = machine.id;
     onClose();
     onStarting(
       { envId: env, title: quick ? 'Quick chat' : where(folder), folder: quick ? null : folder, account: a.account, profileId: a.profile.id, engine: a.engine, agent: engineOf(a.engine).label },
-      () => client.rpc<{ session: Session }>(env, 'session.start', params, 70_000).then((r) => r.session),
+      () => client.rpc<{ session: Session }>(env, 'session.start', params, cloneFrom ? 120_000 : 70_000).then((r) => r.session),
     );
   };
 
@@ -346,20 +416,33 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       // Online first; offline ones stay visible so a missing machine is explained.
       return all.filter((r) => matches(r, query)).sort((a, b) => Number(!!a.disabled) - Number(!!b.disabled));
     }
-    if (step === 'folder') {
+    if (step === 'folder' || step === 'into') {
       // A row's id is its place in the tree - "~/dev>helm>apps" - which can
       // never equal a top-level folder's own path, "~/dev/helm/apps".
+      // Where a repo goes is picked in the same tree as any folder.
       const out: Row[] = [];
-      const add = (path: string, title: string, repo: boolean, depth: number, parent?: string, sub?: string) => {
-        const id = parent ? `${parent}>${title}` : path;
+      const pickAt = step === 'folder' ? pickFolder : (path: string, id: string) => void chooseParent(path, id);
+      const add = (path: string, title: string, repo: boolean, depth: number, parent?: string, sub?: string, own?: { id: string; tag?: string }) => {
+        const id = own?.id ?? (parent ? `${parent}>${title}` : path);
         const open = opened.has(id);
-        out.push({ id, title, sub, icon: repo ? 'repo' : 'folder', folder: { path, depth, open, parent }, pick: () => pickFolder(path, id) });
+        out.push({ id, title, sub, tag: own?.tag, icon: repo ? 'repo' : 'folder', folder: { path, depth, open, parent }, pick: () => pickAt(path, id) });
         if (!open) return;
         const kids = inside[path];
         if (kids === null || kids === undefined) out.push({ id: `${id}>…`, title: 'looking…', disabled: true, folder: { path, depth: depth + 1, open: false, parent: id }, pick: () => {} });
         else if (!kids.length) out.push({ id: `${id}>…`, title: 'no folders inside', disabled: true, folder: { path, depth: depth + 1, open: false, parent: id }, pick: () => {} });
         else for (const k of kids) add(k.path, k.name, k.isRepo, depth + 1, id);
       };
+      if (step === 'into') {
+        // The last place a repo went, then home itself; a typed path is
+        // offered as it is, made if it is not there yet.
+        if (!query) {
+          if (cloneParent && cloneParent !== '~') add(cloneParent, leaf(cloneParent), false, 0, undefined, cloneParent, { id: `@${cloneParent}`, tag: 'last used' });
+          out.push({ id: HOME_ROW, title: 'Home', sub: '~', icon: 'folder', pick: () => void chooseParent('~', HOME_ROW) });
+        } else if (/^[~/]/.test(query)) {
+          const typed = query.replace(/\/+$/, '') || '/';
+          out.push({ id: ':path', title: typed, sub: `→ ${join(typed, chosen.split('/')[1] ?? chosen)}`, icon: 'plus', pick: () => void chooseParent(typed, ':path') });
+        }
+      }
       if (searching) {
         // A hit inside another hit is one → away from it; listing both is
         // the same folder twice.
@@ -370,6 +453,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
         }
       }
       else for (const e of home ?? []) add(e.path, e.name, e.isRepo, 0);
+      if (step === 'into') return out;
       const quickRow: Row = { id: QUICK_ROW, title: 'No folder · quick chat', sub: 'a small question, in no folder', icon: 'bolt', pick: pickQuick };
       const githubRow: Row = { id: GITHUB_ROW, title: 'Clone from GitHub', icon: 'github', pick: () => go('github') };
       if (!query || matches(githubRow, query)) out.unshift(githubRow);
@@ -384,42 +468,17 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     if (step === 'github') {
       if (!gh?.login) return [];
       // Yours first, then each organization under its own name; repos
-      // other people shared with you last, together.
+      // other people shared with you last, together. What GitHub's own
+      // search found, when the list had nothing, comes under its own name.
       const groupOf = (r: GhRepo) => r.owner === gh.login ? YOURS : r.org ? r.owner : SHARED;
       const rank = (g: string) => (g === YOURS ? 0 : g === SHARED ? 2 : 1);
-      const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-      const out = gh.repos
-        .filter((r) => { const hay = `${r.full} ${r.desc}`.toLowerCase(); return words.every((w) => hay.includes(w)); })
-        .map((r): Row => ({
-          id: r.full, title: r.name, sub: r.desc || undefined, group: groupOf(r), icon: r.private ? 'lock' : 'repo',
-          tag: r.archived ? 'archived' : undefined, pick: () => chooseRepo(r.full),
-        }))
-        .sort((x, y) => rank(x.group!) - rank(y.group!) || (rank(x.group!) === 1 ? x.group!.localeCompare(y.group!) : 0));
-      // Any repo by its full name, even one this account does not list.
-      if (TYPED_REPO.test(query) && !gh.repos.some((r) => r.full.toLowerCase() === query.toLowerCase())) {
-        out.unshift({ id: ':typed', title: query, sub: 'clone by name', icon: 'plus', pick: () => chooseRepo(query) });
-      }
-      return out;
-    }
-    if (step === 'into') {
-      // Where the repo goes: the last place clones went, home, and the
-      // folders in home; typing searches every folder, and a typed path
-      // ("~/work") is offered as it is.
-      const name = chosen.split('/')[1] ?? chosen;
-      const place = (path: string, tag?: string): Row => ({
-        id: `into:${path}`, title: path, sub: `→ ${join(path, name)}`, icon: 'folder', tag, pick: () => void cloneInto(path),
+      const row = (r: GhRepo, group: string): Row => ({
+        id: r.full, title: r.name, sub: group === ON_GITHUB ? [r.owner, r.desc].filter(Boolean).join(' · ') : r.desc || undefined, group,
+        icon: r.private ? 'lock' : 'repo', tag: r.archived ? 'archived' : undefined, pick: () => chooseRepo(r.full),
       });
-      const out: Row[] = [];
-      const seen = new Set<string>();
-      const add = (path: string, tag?: string) => { if (!seen.has(path)) { seen.add(path); out.push(place(path, tag)); } };
-      if (!query) {
-        add(parentNow, cloneParent ? 'last used' : undefined);
-        add('~');
-        for (const e of home ?? []) if (!e.skip && !e.isRepo && !e.name.startsWith('.')) add(e.path);
-      } else {
-        if (/^[~/]/.test(query)) add(query.replace(/\/+$/, '') || '/');
-        for (const h of hits ?? []) if (!h.repo) add(h.path);
-      }
+      const out = ghMatches.map((r) => row(r, groupOf(r)))
+        .sort((x, y) => rank(x.group!) - rank(y.group!) || (rank(x.group!) === 1 ? x.group!.localeCompare(y.group!) : 0));
+      if (!out.length && finding?.query === query) for (const r of finding.found) out.push(row(r, ON_GITHUB));
       return out;
     }
     const hidden = new Set(picker?.hidden ?? []);
@@ -448,7 +507,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       pick: () => { setViewHidden(value => !value); setAt(0); input.current?.focus(); },
     });
     return out;
-  }, [step, envs, machine, query, opened, inside, searching, hits, home, accounts, picker, viewHidden, folder, quick, anchor, busy, gh, chosen, cloneParent, parentNow]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, envs, machine, query, opened, inside, searching, hits, home, accounts, picker, viewHidden, folder, quick, anchor, busy, gh, ghMatches, finding, chosen, cloneParent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Where "New folder" puts it: inside the folder the cursor is on when that
   // one is open, beside it otherwise.
@@ -468,7 +527,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   // its list is on screen again.
   const returning = useRef('');
   useEffect(() => {
-    if ((step !== 'folder' && step !== 'github') || !returning.current) return;
+    if ((step !== 'folder' && step !== 'github' && step !== 'into') || !returning.current) return;
     const i = rows.findIndex((r) => r.id === returning.current);
     if (i >= 0) { setAt(i); returning.current = ''; }
   }, [step, rows]);
@@ -496,7 +555,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   const back = () => {
     setError('');
     if (step === 'cli' && viewHidden) { setViewHidden(false); setAt(0); return; }
-    if (step === 'cli') { go(folderSpot.current.step); setQuick(false); setQ(folderSpot.current.q); returning.current = folderSpot.current.id; }
+    if (step === 'cli') { go(folderSpot.current.step); setQuick(false); setCloneFrom(null); setQ(folderSpot.current.q); returning.current = folderSpot.current.id; }
     else if (step === 'into') { go('github'); returning.current = chosen; }
     else if (step === 'github') { go('folder'); returning.current = GITHUB_ROW; }
     else if (step === 'folder') go('machine');
@@ -515,6 +574,11 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     const outer = rows.findIndex((r) => r.id === f.parent);
     if (outer >= 0) { collapse(f.parent!); point(outer); }
   };
+
+  // Where the repo would land from the row the cursor is on.
+  const intoRow = step === 'into' ? rows[selected] : undefined;
+  const intoTarget = !intoRow || intoRow.disabled ? ''
+    : join(intoRow.folder?.path ?? (intoRow.id === HOME_ROW ? '~' : query.replace(/\/+$/, '') || '/'), chosen.split('/')[1] ?? chosen);
 
   const loading = step === 'folder'
     ? (searching ? hits === null : home === null)
@@ -549,6 +613,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
             : quick ? <>Which agent for a <b>quick chat</b>?</>
             : <>Which agent in <b>{leaf(folder)}</b>?</>}
         </h2>
+        {step === 'cli' && cloneFrom && <p className="newchat-note">Clones {cloneFrom} into {folder}. The chat opens right away.</p>}
         <input
           ref={input} className="palette-input" value={q} placeholder={placeholder} disabled={busy || (step === 'github' && !!gh && !gh.login)}
           autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
@@ -591,23 +656,36 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                   <button type="button" className="ghost" title="Copy" aria-label="Copy" onClick={() => void navigator.clipboard?.writeText('gh auth login').catch(() => {})}><Icon name="copy" size={14} /></button>
                 </div>
               </>}
-              <button type="button" className="ghost" onClick={() => setGhReload((n) => n + 1)}><Icon name="refresh" size={14} />Check again</button>
+              <button type="button" className="ghost" onClick={reloadGh}><Icon name="refresh" size={14} />Check again</button>
             </div>
           )}
-          {busy && step !== 'github' && <div className="empty quiet">{step === 'into' ? `Starting the clone of ${chosen}…` : step === 'folder' ? `Making ${newPath}…` : quick ? `Starting ${rows[selected]?.title} as a quick chat…` : `Starting ${rows[selected]?.title} in ${leaf(folder)}…`}</div>}
+          {busy && step !== 'github' && <div className="empty quiet">{step === 'into' ? `Checking where ${chosen.split('/')[1] ?? chosen} goes…` : step === 'folder' ? `Making ${newPath}…` : quick ? `Starting ${rows[selected]?.title} as a quick chat…` : `Starting ${rows[selected]?.title} in ${leaf(folder)}…`}</div>}
           {!busy && loading && !rows.length && <div className="empty quiet">{step === 'cli' ? 'looking for CLIs…' : step === 'github' ? 'asking GitHub…' : 'looking…'}</div>}
-          {!busy && !loading && (!rows.length || (viewHidden && rows.every(row => row.quiet))) && !(step === 'github' && !gh?.login) && (
+          {!busy && !loading && (!rows.length || (viewHidden && rows.every(row => row.quiet))) && step !== 'github' && (
             <div className="empty quiet">
               {step === 'machine' ? 'No machine matches.' : step === 'folder' ? (searching ? 'No folder matches.' : 'No folders here.')
-                : step === 'github' ? 'No repo matches.' : step === 'into' ? 'No folder matches. Type a path like ~/work.' : viewHidden ? 'No hidden CLI matches.' : 'No CLI matches.'}
+                : step === 'into' ? 'No folder matches. Type a path like ~/work.' : viewHidden ? 'No hidden CLI matches.' : 'No CLI matches.'}
             </div>
           )}
+          {/* Not in the list: GitHub is asked before anything says it is not there. */}
+          {step === 'github' && gh?.login && !rows.length && (query.length < 2 ? (
+            gh.repos.length ? null : <div className="empty quiet">{ghBusy ? 'asking GitHub…' : `No repos for ${gh.login} yet.`}</div>
+          ) : !finding || finding.state === 'looking' ? (
+            <div className="empty quiet"><Icon name="think" size={12} className="tspin" /> Not in your list. Looking on GitHub…</div>
+          ) : (
+            <div className="empty quiet newchat-missing">
+              <span>{finding.state === 'failed' ? finding.error : <>No repo called “{query}” on GitHub that <b>{gh.login}</b> can see.</>}</span>
+              <button type="button" className="ghost" onClick={() => setFindAgain((n) => n + 1)}><Icon name="refresh" size={14} />Look again</button>
+            </div>
+          ))}
           {!busy && rows.map((row, i) => {
             const head = row.group && (i === 0 || rows[i - 1].group !== row.group);
             return (
               <div key={row.id}>
                 {head && <div className="palette-group">{row.group}</div>}
-                <div className={`newchat-row${row.folder ? ' tree' : ''}`} style={row.folder ? { paddingLeft: row.folder.depth * 22 } : undefined}>
+                <div className={`newchat-row${row.folder || step === 'into' ? ' tree' : ''}`} style={row.folder ? { paddingLeft: row.folder.depth * 22 } : undefined}>
+                  {/* Home and a typed path sit in line with the folder tree around them. */}
+                  {!row.folder && step === 'into' && <span className="newchat-twisty" />}
                   {row.folder && (row.disabled ? <span className="newchat-twisty" /> : (
                     <button
                       className={`newchat-twisty${row.folder.open ? ' open' : ''}`} tabIndex={-1}
@@ -631,7 +709,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                       {row.sub && <span className="palette-sub">{row.sub}</span>}
                     </span>
                   </button>
-                  {row.folder && !row.disabled && (
+                  {row.folder && !row.disabled && step === 'folder' && (
                     <button
                       className="newchat-add" tabIndex={-1} title={`New folder inside ${row.title}`} aria-label={`New folder inside ${row.title}`}
                       onClick={() => { point(i); if (!row.folder!.open) expand(row.folder!.path, row.id); createIn(row.folder!.path); }}
@@ -678,15 +756,21 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                 <Icon name="github" size={15} /><b>{gh.login}</b><span className="quiet">· switch</span>
               </button>
             ) : <span className="newchat-account" title={`GitHub account ${gh.login}`}><Icon name="github" size={14} />{gh.login}</span>}
-            <button type="button" className="iconbtn newchat-refresh push" onClick={() => setGhReload((n) => n + 1)} disabled={ghBusy}
+            <span className="newchat-index" role="status">{gh.repos.length.toLocaleString()} repos · {ghBusy ? 'checking…' : gh.at ? `checked ${checked(gh.at, now)}` : ''}</span>
+            <button type="button" className="iconbtn newchat-refresh" onClick={reloadGh} disabled={ghBusy}
               title="Look for new repos now" aria-label="Look for new repos now"><Icon name="refresh" size={15} /></button>
+          </div>
+        )}
+        {step === 'into' && machine && (
+          <div className="newchat-bar">
+            <span className="newchat-account"><Icon name="github" size={14} />{intoTarget ? <>Goes to <b>{intoTarget}</b></> : 'Pick the folder it goes in'}</span>
           </div>
         )}
         {/* Only the keys that do something right now. */}
         <div className="palette-foot">
           {!busy && rows.filter((r) => !r.disabled).length > 1 && <span><kbd>↑</kbd><kbd>↓</kbd> move</span>}
-          {!busy && rows.some((r) => !r.disabled) && <span><kbd>Enter</kbd> {step === 'cli' && !rows[selected]?.quiet ? 'start' : step === 'into' ? 'clone here' : 'choose'}</span>}
-          {step === 'folder' && !busy && rows.some((r) => r.folder && !r.disabled) && <span><kbd>→</kbd><kbd>←</kbd> open, close</span>}
+          {!busy && rows.some((r) => !r.disabled) && <span><kbd>Enter</kbd> {step === 'cli' && !rows[selected]?.quiet ? 'start' : 'choose'}</span>}
+          {(step === 'folder' || step === 'into') && !busy && rows.some((r) => r.folder && !r.disabled) && <span><kbd>→</kbd><kbd>←</kbd> open, close</span>}
           {step === 'folder' && !busy && <span><kbd>{MOD}</kbd><kbd>Enter</kbd> quick chat</span>}
           {step === 'folder' && !busy && query && <span><kbd>{MOD}</kbd><kbd>Shift</kbd><kbd>Enter</kbd> new folder</span>}
           {step !== 'machine' && !busy && !q && <span><kbd>⌫</kbd> back</span>}

@@ -1037,6 +1037,12 @@ export class Sessions extends EventEmitter {
         if (s.driver && s.mode === 'plan') s.mode = defaultMode(s.engine);
         // Whatever was compacting before the daemon stopped has said nothing since.
         delete s.compacting;
+        // A clone (or the agent's start after it) the restart cut off: the
+        // chat says so and offers to go again.
+        if (s.clone && !['done', 'failed'].includes(s.clone.state)) {
+          s.clone = { ...s.clone, state: 'failed', error: 'Helm restarted before the repo was in.' };
+          if (s.status === 'starting') s.status = 'idle';
+        }
         this.#index.set(s.id, s);
       }
       for (const [id, state] of Object.entries(raw.external || {})) this.#marks.set(id, state);
@@ -1354,7 +1360,7 @@ export class Sessions extends EventEmitter {
       .map((s) => s.delegations ? { ...s, delegations: this.#visibleDelegations(s) } : s)
       .map((s) => (s.delegation && this.#unhomedDelegation(s) ? { ...s, unhomed: true } : s))
       // The branch each thread's folder is on, for the sidebar's third line.
-      .map((s) => (s.cwd && !s.quick ? { ...s, branch: gitBranch(s.cwd) } : s))
+      .map((s) => (s.cwd && !s.quick && !this.#preparing(s) ? { ...s, branch: gitBranch(s.cwd) } : s))
       .sort((a, b) => rank(a) - rank(b) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   }
 
@@ -1891,7 +1897,7 @@ export class Sessions extends EventEmitter {
     });
   }
 
-  async start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null }) {
+  async start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null }) {
     if (originAutomationId != null) {
       if (!/^[A-Za-z0-9._:-]{1,120}$/.test(originAutomationId)) throw new Error('invalid automation identity');
       const existing = this.findAutomationSession(originAutomationId);
@@ -1928,7 +1934,23 @@ export class Sessions extends EventEmitter {
     if (!mode) mode = defaults.mode === 'plan' ? defaultMode(profile.engine) : defaults.mode ?? null;
     if (!speed) speed = defaults.speed ?? null;
     const lineage = parentLink(parent);
-    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId });
+    // A repo still to come from GitHub into `cwd`. The chat is there at
+    // once and the clone runs inside it (see #followClone); a CLI Helm only
+    // runs in a terminal waits for the clone before it starts instead.
+    let cloning = null;
+    if (clone) {
+      if (quick || brain || delegation) throw new Error('only a new chat in a folder can clone a repo');
+      if (!this.cloner) throw new Error('this machine cannot clone from GitHub');
+      const login = typeof clone.login === 'string' ? clone.login : null;
+      const job = await this.cloner.begin({ repo: clone.repo, target: cwd, login: login ?? undefined });
+      if (job.state !== 'done') {
+        if (!ENGINES[profile.engine]?.driver) {
+          await job.done;
+          if (job.state !== 'done') throw new Error(job.error || 'The clone failed.');
+        } else cloning = { job, login };
+      }
+    }
+    if (ENGINES[profile.engine]?.driver) return this.#startDriven({ cwd, quick, profile, title, model, effort, mode, speed, auto, brain, parent: lineage, originHandoffId, delegation, originAutomationId, cloning });
     if (brain) throw new Error(`${profile.engine} cannot be the brain: it has no headless driver`);
 
     const spec = materialize(profile);
@@ -2205,7 +2227,7 @@ export class Sessions extends EventEmitter {
 
   // ---------------------------------------------------------- headless agents
 
-  async #startDriven({ cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null }) {
+  async #startDriven({ cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null, cloning = null }) {
     this.#assertRewindUnlocked(null, cwd ? expand(cwd) : null);
     const id = randomBytes(6).toString('hex');
     // A quick chat's folder is made for it, empty, and named by its id. A
@@ -2253,6 +2275,18 @@ export class Sessions extends EventEmitter {
       originAutomationId: originAutomationId || undefined,
       originHandoffId: originHandoffId || undefined,
     };
+    if (cloning) {
+      // Listed and open straight away, so the owner can write in it or
+      // leave it; the agent starts in the folder once the repo is in, and
+      // what was sent meanwhile goes to it then.
+      session.status = 'starting';
+      session.clone = { repo: cloning.job.repo, login: cloning.login, state: 'cloning', percent: cloning.job.percent ?? 0 };
+      this.#index.set(session.id, session);
+      this.#save();
+      this.emit('session', session);
+      void this.#followClone(session, cloning.job);
+      return session;
+    }
     this.#index.set(session.id, session);
     let driver = null;
     try {
@@ -2303,6 +2337,82 @@ export class Sessions extends EventEmitter {
   /** sessionId -> a driver being created, so concurrent callers share it. */
   #driverStarts = new Map();
 
+  /** sessionId -> the clone running for a chat that started with one. */
+  #clones = new Map();
+
+  /** Started with a repo that is not in yet: no agent, and what is sent waits. */
+  #preparing(s) { return !!s.clone && s.clone.state !== 'done'; }
+
+  /** The clone's bar while it runs, then the agent in the new folder. */
+  async #followClone(s, job) {
+    this.#clones.set(s.id, job);
+    let shown = 0;
+    const stop = job.onProgress((j) => {
+      if (this.#index.get(s.id) !== s || s.clone?.state !== 'cloning') return;
+      s.clone.percent = j.percent;
+      // Every open app gets each update; twice a second is plenty for a bar.
+      if (Date.now() - shown < 500) return;
+      shown = Date.now();
+      this.emit('session', s);
+    });
+    await job.done;
+    stop();
+    if (this.#clones.get(s.id) === job) this.#clones.delete(s.id);
+    if (this.#index.get(s.id) !== s) return;
+    if (job.state !== 'done') {
+      s.clone = { ...s.clone, state: 'failed', error: job.error || 'The clone failed.' };
+      s.status = 'idle';
+      s.updatedAt = Date.now();
+      this.#save();
+      this.emit('session', s);
+      return;
+    }
+    await this.#startAfterClone(s);
+  }
+
+  async #startAfterClone(s) {
+    s.clone = { ...s.clone, state: 'done', percent: 100, error: undefined };
+    s.status = 'starting';
+    this.emit('session', s);
+    let driver = null;
+    try {
+      driver = await this.#driver(s);
+      await driver.start();
+      s.engineSessionId = driver.engineSessionId;
+      if (!s.engineSessionId) throw new Error('it did not open a conversation');
+      s.unsent = true;
+      if (s.status === 'starting') s.status = 'idle';
+    } catch (err) {
+      this.#drivers.delete(s.id);
+      driver?.removeAllListeners?.('event');
+      await Promise.resolve(driver?.kill?.()).catch(() => {});
+      if (this.#index.get(s.id) !== s) return;
+      // The repo is in; only the agent has to be tried again.
+      s.clone = { ...s.clone, state: 'failed', cloned: true, error: `The agent did not start: ${err.message}` };
+      s.status = 'idle';
+    }
+    s.updatedAt = Date.now();
+    this.#save();
+    this.emit('session', s);
+    this.#pump(s);
+  }
+
+  /** "Try again" on a chat whose clone, or whose agent after it, failed. */
+  async retryClone(id) {
+    const s = this.get(id);
+    if (!s.clone || s.clone.state !== 'failed') return { ok: true };
+    if (s.clone.cloned) { void this.#startAfterClone(s); return { ok: true }; }
+    // A clone cut off half way can be cleared: this chat made that folder.
+    const job = await this.cloner.begin({ repo: s.clone.repo, target: s.cwd, login: s.clone.login ?? undefined, partialOk: true });
+    s.clone = { ...s.clone, state: 'cloning', percent: 0, error: undefined };
+    s.status = 'starting';
+    this.#save();
+    this.emit('session', s);
+    if (job.state === 'done') void this.#startAfterClone(s);
+    else void this.#followClone(s, job);
+    return { ok: true };
+  }
+
   /**
    * The live driver for a session, starting (or resuming) one if needed.
    *
@@ -2326,6 +2436,7 @@ export class Sessions extends EventEmitter {
   }
 
   async #createDriver(s) {
+    if (this.#preparing(s)) throw new Error('The repo is not cloned yet.');
     let d;
     // A thread opened from local history can outlive the provider's
     // transcript. If a previous attempt already proved its id is missing,
@@ -4378,7 +4489,7 @@ export class Sessions extends EventEmitter {
       // cannot, since the first send into an idle session is briefly local
       // too without ever having waited.
       let sideband = delivery !== 'queue' && !raw && compact == null && !images.length && d?.canRunWhileBusy?.(clean);
-      let busy = !sideband && (s.queuePaused || this.#sending.has(s.id) || this.#settling.has(s.id) || s.status === 'working' || s.status === 'blocked');
+      let busy = !sideband && (s.queuePaused || this.#sending.has(s.id) || this.#settling.has(s.id) || s.status === 'working' || s.status === 'blocked' || this.#preparing(s));
       const commandText = compact != null ? `/compact${compact ? ` ${compact}` : ''}` : clean;
       if (s.stoppedAt || stopGeneration !== (s.stopGeneration ?? 0) || !this.#index.has(id)) throw new Error('message cancelled because the thread was stopped');
       const item = { turnId, text: commandText, images, compact, delivery, references, referenceContext, stopGeneration, introduce };
@@ -4606,7 +4717,7 @@ export class Sessions extends EventEmitter {
    * the order the messages were typed.
    */
   #pump(s) {
-    if (this.#rewinding.has(s.id) || this.#sending.has(s.id) || this.#settling.has(s.id) || s.queuePaused || s.stoppedAt) return;
+    if (this.#rewinding.has(s.id) || this.#sending.has(s.id) || this.#settling.has(s.id) || s.queuePaused || s.stoppedAt || this.#preparing(s)) return;
     const q = this.#outbox.get(s.id);
     if (!q?.length) return;
     if (s.status === 'working' || s.status === 'blocked') return;
@@ -4871,6 +4982,7 @@ export class Sessions extends EventEmitter {
     const s = this.get(id);
     const item = (this.#outbox.get(id) ?? []).find((x) => x.turnId === turnId);
     if (!item) return { ok: true, found: false, sent: false };
+    if (this.#preparing(s)) throw new Error('This goes to the agent once the repo is cloned.');
     if (this.#sending.has(s.id)) throw new Error('message is already being sent');
     this.#sending.add(s.id);
     this.#delivering.set(id, turnId);
@@ -5149,6 +5261,8 @@ export class Sessions extends EventEmitter {
       return { ok: true };
     }
     if (s.driver) {
+      this.#clones.get(id)?.cancel();
+      this.#clones.delete(id);
       const d = this.#drivers.get(id);
       this.#drivers.delete(id);
       this.#outbox.delete(id);
@@ -5210,7 +5324,9 @@ export class Sessions extends EventEmitter {
    */
   async discardEmpty(id) {
     const s = this.#index.get(id);
-    if (!s || s.brain || s.engine === 'shell' || s.pty || s.hasInput || (s.prompts ?? 0) > 0) {
+    // A chat that cloned a repo is kept: it is where that repo was asked
+    // for, and leaving it while the clone runs is the point.
+    if (!s || s.brain || s.engine === 'shell' || s.pty || s.hasInput || (s.prompts ?? 0) > 0 || s.clone) {
       return { ok: true, discarded: false };
     }
     await this.kill(id);

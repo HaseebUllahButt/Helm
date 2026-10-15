@@ -23,7 +23,8 @@ function headOf(dir) {
   }
   const head = readFileSync(join(gitdir, 'HEAD'), 'utf8').trim();
   const ref = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
-  return ref ? ref[1] : /^[0-9a-f]{7,}$/.test(head) ? head.slice(0, 7) : null;
+  // `.invalid` is what git writes while a clone is still coming down.
+  return ref ? (ref[1] === '.invalid' ? null : ref[1]) : /^[0-9a-f]{7,}$/.test(head) ? head.slice(0, 7) : null;
 }
 
 export function gitBranch(cwd, now = Date.now()) {

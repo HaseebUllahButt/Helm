@@ -435,6 +435,7 @@ export class Daemon {
       emit: payload => this.#emit(E.GIT_MONITOR, payload),
     });
     this.githubRepos = createGithubRepos({ noteFolder: fsApi.noteFolder });
+    this.sessions.cloner = this.githubRepos;
     try { this.schedules = new Schedules({ sessions: this.sessions, shareName: `helm-hooks-${createHash('sha256').update(this.id).digest('hex').slice(0, 16)}`,
       publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
@@ -1576,6 +1577,9 @@ export class Daemon {
       case M.GIT_ACCOUNTS: return this.github.accounts(p.cwd);
       case M.GIT_ACCOUNT: return this.github.selectAccount(p.cwd, p.login);
       case M.GITHUB_REPOS: return this.githubRepos.repos({ login: typeof p.login === 'string' ? p.login : undefined, refresh: p.refresh === true });
+      case M.GITHUB_CHECK: return this.githubRepos.check({ repo: p.repo, target: p.target });
+      case M.GITHUB_FIND: return this.githubRepos.find({ login: typeof p.login === 'string' ? p.login : undefined, query: p.query });
+      case M.SESSION_CLONE_RETRY: return this.sessions.retryClone(p.id);
       case M.GITHUB_CLONE: return this.githubRepos.clone({ repo: p.repo, parent: p.parent, login: typeof p.login === 'string' ? p.login : undefined, job: typeof p.job === 'string' ? p.job : undefined });
 
       // The coding tools on this machine. Updating answers at once and runs

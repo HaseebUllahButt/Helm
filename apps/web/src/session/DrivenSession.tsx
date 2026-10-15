@@ -31,6 +31,7 @@ import { QueueEdit } from './QueueEdit';
 import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
 import { EmptyChat, useDockLift } from './EmptyChat';
+import { CloneCard } from './CloneCard';
 import { TaskReturn } from './TaskReturn';
 import { LimitsLine } from './LimitsLine';
 import { ContextLimit } from './ContextLimit';
@@ -151,7 +152,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // Starting is work in progress too: Stop is the useful button, and a
   // stale problem card from the last run is not.
   const childrenWorking = !!session.team?.working || team.some(({ session: child }) => ['working', 'starting'].includes(child.delegation?.status ?? child.status));
-  const working = busyStatus(status) || childrenWorking;
+  // A repo still coming down is not the agent at work: nothing to stop
+  // yet, and the chat reads as a new one you can already write in.
+  const preparing = !!session.clone && session.clone.state !== 'done';
+  const cloning = session.clone?.state === 'cloning';
+  const working = (busyStatus(status) && !preparing) || childrenWorking;
   const [reviewingRequest, setReviewingRequest] = useState(() => session.ask?.requestId ?? '');
   useEffect(() => { setReviewingRequest(session.ask?.requestId ?? ''); }, [session.id]);
   const pending = log.pending.find(request => request.requestId === reviewingRequest) ?? log.pending[0];
@@ -609,7 +614,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
 
   // Nothing said yet: the composer sits mid-page under a greeting.
   const firstMessage = loaded && !logError && transcriptTurns.length === 0 && queuedTurns.length === 0
-    && !sentFirst && !working && !pending && !session.external && session.alive !== false && failedSends.length === 0 && !session.recovery;
+    && !sentFirst && !working && !pending && !session.external && (session.alive !== false || preparing) && failedSends.length === 0 && !session.recovery;
   const dockAnchor = useDockLift(firstMessage);
 
   return (
@@ -660,7 +665,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
             )}
           </span>
         </div>
-        {chip(status)}
+        {cloning ? <span className="chip working" role="status"><i />cloning {session.clone!.percent}%</span> : chip(status)}
         {/* Git gets its own button with the count of changed files: it is
             the thing most often checked. The other opens agents and repeats. */}
         {git.status?.repo && !session.brain && (
@@ -721,7 +726,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           });
         } : undefined}
         onBranch={session.engine === 'claude' && onOpenSession ? setBranching : undefined}
-        empty={session.alive === false ? 'This conversation resumes with your next message.' : sentFirst ? 'Waiting for the agent…' : undefined}
+        empty={preparing ? '' : session.alive === false ? 'This conversation resumes with your next message.' : sentFirst ? 'Waiting for the agent…' : undefined}
       />
 
       {failedSends.map((failed) => <div key={failed.id} className="thread-recovery failed-send" role="status"><div>
@@ -756,8 +761,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         onEditQueued={setEditingQueue}
         onRemoveQueued={(turn) => void queueAction(turn, 'session.dequeue')}
         onMoveQueued={moveQueued}
-        onSendQueued={(turn) => void queueAction(turn, 'session.send-now')}
-        pendingLabel={messageDelivery(session.engine).pending}
+        onSendQueued={preparing ? undefined : (turn) => void queueAction(turn, 'session.send-now')}
+        pendingLabel={preparing ? 'Once the repo is in' : messageDelivery(session.engine).pending}
         queueBusy={queueBusy}
         history={log.turns.map((turn) => splitNote(turn.text).text ?? '').filter(Boolean)}
       >
@@ -766,6 +771,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         {(error || (!log.loaded && logError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || logError}</div>}
         {notice && !error && <div className="notice floating" role="status" onClick={() => setNotice('')}><Icon name="check" size={14} />{notice}</div>}
         {controls.sheet}
+        {session.clone && session.clone.state !== 'done' && (
+          <CloneCard clone={session.clone} agent={engine} waiting={queuedTurns.length} busy={busy} offline={!env.online}
+            onRetry={() => void call(() => client.rpc(env.id, 'session.cloneRetry', { id: session.id }, 60_000))} />
+        )}
         {session.recovery && !working && !pending && (
           <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} autoResume={session.autoResumeLimited}
             onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(e.message)); }} />

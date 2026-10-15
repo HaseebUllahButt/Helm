@@ -138,8 +138,10 @@ export const M = {
   GIT_ACCOUNTS: 'git.accounts',    // { cwd } -> safe gh account names, never tokens
   GIT_ACCOUNT: 'git.account',      // { cwd, login } -> select gh login for this repository, without gh auth switch
   // "From GitHub" in the new chat box, through the machine's own gh login.
-  GITHUB_REPOS: 'github.repos',    // { login?, refresh? } -> { installed, accounts[], login, repos[], parent }; a repo's `org` marks an organization's
+  GITHUB_REPOS: 'github.repos',    // { login?, refresh? } -> { installed, accounts[], login, repos[], at, stale, parent }; the list kept on disk unless refresh; a repo's `org` marks an organization's
   GITHUB_CLONE: 'github.clone',    // { repo, parent, login? } | { job } -> { job?, state, percent, path, error? }
+  GITHUB_CHECK: 'github.check',    // { repo, target } -> { state: 'new' | 'there' | 'other', path, reason? }: may the repo be cloned to target
+  GITHUB_FIND: 'github.find',      // { login?, query } -> { login, repos[], at, found[] }: a search the list missed - the list fetched again, and GitHub's own search
   FS_LIST: 'fs.list',              // { path } -> { path, parent, entries[] }
   FS_ROOTS: 'fs.roots',            // {} -> { roots[] }  (home, recent project dirs)
   FS_MKDIR: 'fs.mkdir',            // { path, name } -> { path }
@@ -166,7 +168,8 @@ export const M = {
   CONTEXT_LIMIT: 'account.contextLimit', // { profileId | account, model, window: number|null } -> { matched, window, limits }  Claude's "compact at" size; omit window to only read
   PICKER_PREFS: 'picker.prefs',    // { hidden?, last?, favs? } -> { picker }  what the new-session picker shows, shared by every device
   SESSION_LIST: 'session.list',    // {} -> { sessions[] }
-  SESSION_START: 'session.start',  // { cwd | quick: true, profileId, model?, effort?, mode?, speed?, title?, parent? } -> { session }  quick: no folder; runs in an empty ~/.helm/quick/<id> removed on delete
+  SESSION_START: 'session.start',  // { cwd | quick: true, profileId, model?, effort?, mode?, speed?, title?, parent?, clone?: { repo, login? } } -> { session }  quick: no folder; runs in an empty ~/.helm/quick/<id> removed on delete. clone: the repo is cloned into cwd first; the chat is there at once with session.clone { repo, state, percent, error? }
+  SESSION_CLONE_RETRY: 'session.cloneRetry', // { id } -> { ok }: clone again (or start the agent again) after session.clone failed
   SESSION_LINK:  'session.link',   // { id, child } -> { session }  durable parent/child handoff link
   SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task, worktree? } -> { session }; cwd beats the parent's folder; worktree: own checkout on a helm/ branch
   SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id, consume?, parentId?, callerThreadId? } -> { session, status, complete, output, pending }
