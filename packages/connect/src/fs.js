@@ -240,9 +240,10 @@ export async function search(query, { limit = 30 } = {}) {
 }
 
 /** A folder Helm has seen appear: searchable now, not after the next walk. */
-function addToIndex(entry) {
-  if (indexDirs.some((d) => d.path === entry.path)) return false;
+function addToIndex(entry, known) {
+  if (known ? known.has(entry.path) : indexDirs.some((d) => d.path === entry.path)) return false;
   indexDirs.push(entry);
+  known?.add(entry.path);
   if (building) additions.push(entry);
   stamp = null;
   return true;
@@ -266,7 +267,9 @@ function noticeListing(dir, entries) {
     indexDirs = indexDirs.filter((d) => !gone.has(d.path) && ![...gone].some((g) => d.path.startsWith(`${g}/`)));
     stamp = null; changed = true;
   }
-  for (const e of entries) if (!e.skip && addToIndex({ name: e.name, path: e.path, repo: e.isRepo })) changed = true;
+  // A wide folder must not scan the whole home index once per child.
+  const known = new Set(indexDirs.map((d) => d.path));
+  for (const e of entries) if (!e.skip && addToIndex({ name: e.name, path: e.path, repo: e.isRepo }, known)) changed = true;
   if (changed) void saveIndex();
 }
 
