@@ -3,7 +3,9 @@
 // state and takes its time, which is what a restart-survival test needs:
 // the prompt's response can land after the daemon that asked is gone.
 //
-//   FAKE_TURN_MS=800 FAKE_ASK=1 node fake-agent.mjs
+//   FAKE_TURN_MS=800 FAKE_ASK=1 FAKE_IMAGES=1 node fake-agent.mjs
+//
+//   FAKE_IMAGES says it can see pictures, so a send carries them.
 //
 //   initialize / session/new / session/load / set_config_option  answered at once
 //   session/prompt        emits one text chunk, waits FAKE_TURN_MS, then -
@@ -41,7 +43,7 @@ async function onMessage(m) {
   const reply = (result) => out({ jsonrpc: '2.0', id: m.id, result });
   switch (m.method) {
     case 'initialize':
-      return reply({ protocolVersion: 1, agentCapabilities: { promptCapabilities: { image: false } } });
+      return reply({ protocolVersion: 1, agentCapabilities: { promptCapabilities: { image: process.env.FAKE_IMAGES === '1' } } });
     case 'session/new':
       return reply({ sessionId: 'fake-session-1' });
     case 'session/load':

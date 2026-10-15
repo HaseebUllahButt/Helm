@@ -5575,10 +5575,10 @@ function Turn({ m }: { m: Message }) {
     const display = userMessage(m.text, m.attachments);
     return (
       <div className="turn user">
-        <div className="bubble">{display.text}{display.attachments?.map((a, i) => a.data
+        <div className="bubble">{!!display.attachments?.length && <div className="turn-images">{display.attachments.map((a, i) => a.data
           ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={`Image #${i + 1}${a.filename ? ` · ${a.filename}` : ''}`} loading="lazy" decoding="async" />
           : <span key={i} className="turn-image-gone"><Icon name="image" size={14} /> {a.filename} — no longer stored</span>
-        )}</div>
+        )}</div>}{display.text}</div>
       </div>
     );
   }

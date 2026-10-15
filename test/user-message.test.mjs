@@ -17,6 +17,15 @@ test('a message pasted into a terminal CLI loses the paste wrapper and the image
   assert.deepEqual(userMessage(raw, kept).attachments, kept);
 });
 
+test('labels opening a message go, since the pictures show them; labels in the words stay', () => {
+  const pics = [{ filename: 'a.png', mime: 'image/png', data: 'x' }, { filename: 'b.png', mime: 'image/png', data: 'y' }];
+  assert.equal(userMessage('[Image #1] [Image #2]  lighting isnt great here', pics).text, 'lighting isnt great here');
+  assert.equal(userMessage('compare [Image #1] with [Image #2]', pics).text, 'compare [Image #1] with [Image #2]');
+  assert.equal(userMessage('[Image #1] [Image #2]', pics).text, '');
+  // Without pictures the label is all there is to say one was sent.
+  assert.equal(userMessage('[Image #1] hi').text, '[Image #1] hi');
+});
+
 test('a plain message, with or without the paste wrapper, is left as written', () => {
   assert.equal(userMessage('hello there').text, 'hello there');
   assert.equal(userMessage('<pasted_content id="1">\nline one\nline two\n</pasted_content>').text, 'line one\nline two');

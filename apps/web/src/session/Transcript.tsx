@@ -712,13 +712,15 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
             // agent; on a phone it buried the one line the owner typed.
             ? <details className="turn-note"><summary>helm note to the agent</summary>{said.note}</details>
             : <span className="turn-note">{said.note}</span>)}
-          {said.text}
-          {display.attachments?.map((a, i) => (a.data
+          {/* Pictures sit in their own row above the words, never in the
+              line of text, where they pushed it around. */}
+          {!!display.attachments?.length && <div className="turn-images">{display.attachments.map((a, i) => (a.data
             // A blob the log has swept past still has its name, and saying
             // so beats a browser's broken-image glyph.
             ? <img key={i} className="turn-image" src={`data:${a.mime};base64,${a.data}`} alt={a.filename} title={`Image #${i + 1}${a.filename ? ` · ${a.filename}` : ''}`} loading="lazy" decoding="async" />
             : <span key={i} className="turn-image-gone" title={a.filename}><Icon name="image" size={14} /> {a.filename || 'image'} — no longer stored</span>
-          ))}
+          ))}</div>}
+          {said.text}
           <span className="bubble-meta">
             {queued && <span className="tag">queued</span>}
             {/* Still on helm's side of the wire: the agent has not seen it,

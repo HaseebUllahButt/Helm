@@ -57,5 +57,9 @@ export function userMessage(text?: string, attachments: Turn['attachments'] = []
       .map((m) => m[1]).join('\n').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
     printed = true;
   }
+  // "[Image #1] [Image #2] look at this" opens by saying pictures came with
+  // it, and the pictures show that. Later labels ("compare [Image #1] with
+  // [Image #2]") say which is which, so they stay.
+  if (attachments?.length && text) text = text.replace(/^(?:\s*\[Image #\d+\])+\s*/, '');
   return { text, attachments, printed, to };
 }

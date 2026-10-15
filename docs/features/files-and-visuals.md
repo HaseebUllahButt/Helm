@@ -14,7 +14,12 @@
   ```
 - **Proof:** with the fake agent: the red line "Devin cannot be sent images
   in this session.". With a CLI that takes images: a "remove dot.png" chip.
-- **Traps:** the fake agent never takes images. Other files attach with
+- **Sent (driven 2026-10-15):** pick **fake-pics** (the fake agent that
+  takes pictures), `$V upload a.jpg b.jpg`, type, send. The message shows
+  the pictures two to a row above the words; the "[Image #1] [Image #2]"
+  labels that open a message are hidden, labels inside the words stay.
+  Tapping a picture opens it big.
+- **Traps:** the plain fake agent never takes images; fake-pics does. Other files attach with
   `$V upload <file>` (driven: a text file shows as "[File: note.txt]"). Images
   survive a restart.
 - **Tests:** `test/browser/image-paste`; `test/paste-store`,

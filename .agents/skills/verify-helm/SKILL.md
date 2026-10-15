@@ -52,6 +52,8 @@ agents never share one. `--name <name>` picks another.
   costs nothing.
 - **fake-ask** first asks to run `echo hi` (Approve / Always allow /
   Decline), for approval cards.
+- **fake-pics** takes pictures (`upload` them), for how a sent picture
+  looks.
 - `up --real` adds the owner's real logins. Use one only when the change is
   about that CLI itself (its driver, its models, its output). A real chat
   costs money and lands in that account's history: keep it in a quick chat,
@@ -69,8 +71,9 @@ agents never share one. `--name <name>` picks another.
 - On phone size, Enter and Ctrl+Enter in the composer make a new line.
   Press the button labelled `send`. Its placeholder changes, so click
   "Ask anything".
-- The fake agent ignores Stop, never asks questions (only tool approvals)
-  and cannot take images. Prove those with a real chat or the tests.
+- The fake agent ignores Stop and never asks questions (only tool
+  approvals); only fake-pics takes images. Prove Stop and questions with
+  a real chat or the tests.
 - `wait` reads page text, not what is inside a text box.
 - The folder step does not take a full path; use the quick-chat row.
 - Never stop Helm processes by name (`pkill -f`, `systemctl stop

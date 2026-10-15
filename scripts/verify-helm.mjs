@@ -72,6 +72,7 @@ function writeFakeAccount(dir) {
   const fake = [
     { id: 'fake', label: 'Fake agent', engine: 'devin', cmd: bin, args: [], env: { FAKE_TURN_MS: '800', FAKE_HOME: join(dir, 'fake') }, source: 'custom' },
     { id: 'fake-ask', label: 'Fake agent (asks)', engine: 'devin', cmd: bin, args: [], env: { FAKE_TURN_MS: '800', FAKE_ASK: '1', FAKE_HOME: join(dir, 'fake-ask') }, source: 'custom' },
+    { id: 'fake-pics', label: 'Fake agent (sees pictures)', engine: 'devin', cmd: bin, args: [], env: { FAKE_TURN_MS: '800', FAKE_IMAGES: '1', FAKE_HOME: join(dir, 'fake-pics') }, source: 'custom' },
   ];
   writeFileSync(join(dir, 'helm', 'profiles.json'), JSON.stringify({ version: 1, profiles: fake }, null, 2), { mode: 0o600 });
 }
@@ -100,7 +101,7 @@ async function up() {
   // account's history.
   if (real) await rpc('profile.list', { refresh: true });
   say(`up: ${url}  (copy "${name}", files in ${ROOT})`);
-  say(`accounts: "fake" (answers in 0.8 s) and "fake-ask" (asks permission first)${real ? ', plus your real logins' : ''}.`);
+  say(`accounts: "fake" (answers in 0.8 s), "fake-ask" (asks permission first) and "fake-pics" (takes pictures)${real ? ', plus your real logins' : ''}.`);
   say(`work folder for test chats: ${join(ROOT, 'work')}`);
 }
 

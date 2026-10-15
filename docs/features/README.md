@@ -28,7 +28,7 @@ from the code and notes. Run them once and remove the mark.
 V="node scripts/verify-helm.mjs --name <short-name>"
 $V up && $V open                       # private Helm, phone-size hidden browser
 $V click "New chat"; $V click "verify-<short-name>"; $V click "No folder · quick chat"
-$V click "fake"                         # or "fake-ask" for the one that asks first
+$V click "fake"                         # or "fake-ask" (asks first), "fake-pics" (takes pictures)
 $V click "Ask anything"; $V type "hello"; $V click send
 $V wait "done."                         # the fake reply is "working on it done."
 $V shot /tmp/x.png; $V errors           # look at the picture; no page errors
