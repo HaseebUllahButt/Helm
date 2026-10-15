@@ -168,7 +168,11 @@ function retain(tail, older) {
   const first = tail[0]?.seq ?? 0;
   const pending = pendingTickets([...older()].reverse().concat(tail));
   const items = new Set(tail.filter(e => e.type.startsWith('item.')).map(e => e.id));
-  const owners = new Set(tail.flatMap(e => [e.turnId, e.inputId]).filter(Boolean));
+  const owners = new Set();
+  for (const e of tail) {
+    if (e.turnId) owners.add(e.turnId);
+    if (e.inputId) owners.add(e.inputId);
+  }
   for (const turnId of pending) owners.add(turnId);
   const starts = new Set(tail.filter(e => e.type === 'item.start').map(e => e.id));
   const turns = new Set(tail.filter(e => TURN_CONTEXT.has(e.type)).map(e => `${e.turnId ?? e.seq}:${e.type}`));
