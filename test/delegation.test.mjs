@@ -692,7 +692,7 @@ test('delegation instructions stay compact and independent of the account roster
   assert.match(note, /when the work needs another CLI or account/);
   assert.match(note, /--model cheap/);
   assert.match(note, /helm agents --json only when needed/);
-  assert.match(note, /helm run --heavy/);
+  assert.doesNotMatch(note, /--heavy|slot/);
   assert.match(note, /Inspect package scripts/);
   assert.match(note, /--cwd <folder>/);
   assert.match(note, /--worktree gives it its own checkout/);

@@ -88,11 +88,11 @@ const usage = () => {
   helm status                       membership, links and runtime
   helm profiles [--refresh]         the agent profiles found here
   helm agents [--json] [--refresh]  CLI accounts, sign-in status and model IDs
-  helm run --heavy -- <command> [args]  share this machine's test/build slot
-  helm exec <machine> [--cwd <path>] [--heavy] -- <command> [args]
+  helm run -- <command> [args]      run a command here under Helm
+  helm exec <machine> [--cwd <path>] -- <command> [args]
                                     execute through Helm's managed connection
     --env NAME=value               explicit remote environment (repeatable)
-    --timeout <milliseconds>       command + capacity wait limit (default 15 minutes)
+    --timeout <milliseconds>       command time limit (default 15 minutes)
   helm exec-status <machine> <id> [--wait] [--json]
                                     read a command after a connection loss
   helm exec-cancel <machine> <id>   stop a command started earlier

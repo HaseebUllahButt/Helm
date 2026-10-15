@@ -11,7 +11,7 @@ export function parseWorkArgs(args, { remote = false } = {}) {
   const flags = args.slice(0, separator);
   if (remote) {
     options.machine = flags.shift();
-    if (!options.machine || options.machine.startsWith('-')) throw new Error('helm exec <machine> [--cwd <path>] [--heavy] -- <command> [args]');
+    if (!options.machine || options.machine.startsWith('-')) throw new Error('helm exec <machine> [--cwd <path>] -- <command> [args]');
   }
   while (flags.length) {
     const flag = flags.shift();
@@ -30,9 +30,6 @@ export function parseWorkArgs(args, { remote = false } = {}) {
   options.argv = args.slice(separator + 1);
   return options;
 }
-
-const queueLine = (reason, machine = 'this machine') => reason === 'memory'
-  ? `Waiting for available memory on ${machine}.\n` : `Waiting for the heavy-work slot on ${machine}.\n`;
 
 /** A timed-out command reads as 124, the way `timeout` reports it; otherwise the remote exit code. */
 const exitStatus = result => /timed out|timeout/i.test(result.error ?? '') ? 124 : result.exitCode ?? 1;
@@ -60,7 +57,6 @@ export async function runLocalWork(args, { stdout = process.stdout, stderr = pro
   stdin.pipe(child.stdin); child.stdin.on('error', () => {});
   let error, timeout = false;
   child.on('message', message => {
-    if (message.status === 'queued') stderr.write(queueLine(message.reason));
     if (message.error) { error = message.error; timeout = /timed out|timeout/i.test(error); }
   });
   child.on('error', failure => { error = failure.message; });
@@ -82,7 +78,7 @@ export async function runRemoteWork(args, { net, machineId, connect = connectHub
   const options = parseWorkArgs(args, { remote: true });
   const target = machineId(options.machine);
   const id = randomBytes(16).toString('hex');
-  let connection, cursor = 0, queued, cancelRequested = false;
+  let connection, cursor = 0, cancelRequested = false;
   const cancel = () => {
     cancelRequested = true;
     connection?.rpc(M.EXEC_CANCEL, { id }).catch(() => {});
@@ -118,7 +114,6 @@ export async function runRemoteWork(args, { net, machineId, connect = connectHub
       if (result.truncated) stderr.write('helm: earlier command output expired while disconnected.\n');
       for (const chunk of result.chunks) (chunk.stream === 'stderr' ? stderr : stdout).write(Buffer.from(chunk.data, 'base64'));
       cursor = result.last;
-      if (result.status === 'queued' && queued !== result.reason) { stderr.write(queueLine(result.reason, options.machine)); queued = result.reason; }
       if (result.status === 'exited' && !result.more) {
         if (result.error) stderr.write(`helm: ${result.error}\n`);
         return exitStatus(result);

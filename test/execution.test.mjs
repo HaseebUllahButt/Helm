@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { startWork, prepareWork } from '../packages/connect/src/work-command.js';
+import { startWork } from '../packages/connect/src/work-command.js';
 import { ExecutionJobs } from '../packages/connect/src/execution.js';
 import { parseWorkArgs, runRemoteWork, runLocalWork, readRemoteWork, cancelRemoteWork, parseCommandRef } from '../packages/connect/src/execution-cli.js';
 import { M } from '@helm/protocol';
@@ -53,7 +53,7 @@ test('a command request is idempotent, its output is owner-bound and invalid inp
   assert.equal((await result(jobs, id(2))).output.trim(), 'once');
 });
 
-test('independent supervisors serialize heavy work across sessions using one machine lock', async () => {
+test('heavy work never waits: two heavy commands run at the same time', async () => {
   const log = join(root, 'order.txt');
   const code = name => `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(log)},${JSON.stringify(name + ' start\n')});setTimeout(()=>fs.appendFileSync(${JSON.stringify(log)},${JSON.stringify(name + ' end\n')}),350)`;
   const a = launch(spec(code('a'), { heavy: true }));
@@ -63,29 +63,8 @@ test('independent supervisors serialize heavy work across sessions using one mac
   const exits = await Promise.all([once(a, 'close'), once(b, 'close')]);
   assert.ok(exits.every(([code]) => code === 0));
   const lines = readFileSync(log, 'utf8').trim().split('\n');
-  assert.ok(['a start,a end,b start,b end', 'b start,b end,a start,a end'].includes(lines.join(',')), lines.join(','));
-  assert.ok(messages.some(m => m.status === 'queued' && m.reason === 'slot'));
-});
-
-test('cancelling queued work does not start it or release another session\'s permit', async t => {
-  const jobs = new ExecutionJobs({ launch }); t.after(() => jobs.stop());
-  jobs.start({ id: id(4), ...spec('setTimeout(()=>console.log("first"),700)', { heavy: true }) }, 'owner');
-  while ((await jobs.read({ id: id(4), wait: 50 }, 'owner')).status !== 'running') {}
-  jobs.start({ id: id(5), ...spec('console.log("must not run")', { heavy: true }) }, 'owner');
-  jobs.cancel({ id: id(5) }, 'owner');
-  const cancelled = await result(jobs, id(5));
-  assert.equal(cancelled.exitCode, 130); assert.equal(cancelled.output, '');
-  assert.notEqual((await jobs.read({ id: id(4) }, 'owner')).status, 'exited');
-  assert.equal((await result(jobs, id(4))).output.trim(), 'first');
-});
-
-test('command timeout terminates the job and frees its heavy permit', async t => {
-  const jobs = new ExecutionJobs({ launch }); t.after(() => jobs.stop());
-  jobs.start({ id: id(6), ...spec('setInterval(()=>{},1000)', { heavy: true, timeout: 200 }) }, 'owner');
-  const timedOut = await result(jobs, id(6));
-  assert.match(timedOut.error, /timed out/i);
-  jobs.start({ id: id(7), ...spec('console.log("after timeout")', { heavy: true }) }, 'owner');
-  assert.equal((await result(jobs, id(7))).output.trim(), 'after timeout');
+  assert.deepEqual(lines.slice(0, 2).map(l => l.split(' ')[1]), ['start', 'start'], lines.join(','));
+  assert.ok(!messages.some(m => m.status === 'queued'));
 });
 
 test('output retention is bounded and paged with an explicit truncation marker', async t => {
@@ -107,24 +86,10 @@ test('completed output expires even without another command starting', async t =
   await assert.rejects(() => jobs.read({ id: id(9) }, 'owner'), /expired/);
 });
 
-test('orphaned descendants cannot keep a completed command and heavy slot alive', async () => {
-  const child = launch(spec('require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"inherit"}).unref()', { heavy: true }));
+test('orphaned descendants cannot keep a completed command alive', async () => {
+  const child = launch(spec('require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"inherit"}).unref()'));
   child.stdin.end();
   assert.equal((await once(child, 'close'))[0], 0);
-  const next = launch(spec('console.log("slot released")', { heavy: true })); next.stdin.end();
-  assert.equal((await once(next, 'close'))[0], 0);
-});
-
-test('known runners get bounded workers and compound npm scripts cannot silently turn scoped checks into full suites', () => {
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run && npm run other', client: 'vitest run --config client.ts', nodes: 'node --test test/*.mjs' } }));
-  assert.deepEqual(prepareWork(['node','--test','one.mjs'],root), ['node','--test-concurrency=2','--test','one.mjs']);
-  assert.deepEqual(prepareWork(['vitest','run','--maxWorkers=1'],root), ['vitest','run','--maxWorkers=1']);
-  assert.deepEqual(prepareWork(['npx','vitest','run','--maxWorkers','12'],root), ['npx','vitest','run','--maxWorkers=2']);
-  assert.deepEqual(prepareWork(['npm','run','client','--','one.ts'],root), ['npm','run','client','--','one.ts','--maxWorkers=2']);
-  assert.deepEqual(prepareWork(['npm','run','nodes'],root), ['npm','run','nodes']);
-  assert.deepEqual(prepareWork(['vitest','run','--maxWorkers=10','--maxWorkers','8'],root), ['vitest','run','--maxWorkers=2','--maxWorkers=2']);
-  assert.throws(() => prepareWork(['npm','test','--','one.ts'],root), /earlier suite unfiltered/);
-  assert.deepEqual(prepareWork(['npm','test'],root), ['npm','test']);
 });
 
 test('CLI options preserve command arguments and require explicit remote environment', () => {

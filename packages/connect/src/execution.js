@@ -43,7 +43,7 @@ export class ExecutionJobs {
       if (!oldest) throw new Error('too many commands are already pending');
       this.#forget(oldest.id);
     }
-    const job = { id, owner, fingerprint, status: heavy ? 'queued' : 'starting', seq: 0, chunks: [], bytes: 0, waiters: new Set(), exitCode: null };
+    const job = { id, owner, fingerprint, status: 'starting', seq: 0, chunks: [], bytes: 0, waiters: new Set(), exitCode: null };
     this.#jobs.set(id, job);
     const wake = () => { for (const waiter of job.waiters) waiter(); job.waiters.clear(); };
     try {

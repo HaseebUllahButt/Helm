@@ -483,7 +483,7 @@ You are running on ${name}. Your tools for the network are the \`helm\` CLI, thr
   helm delegate <account> --model <id> --wait --json -- "<task>"   run a CLI subagent in this folder
   helm delegate-result <id> --wait --json   read a child's result or pending approval
   helm machines            the roster
-  helm exec <machine> --cwd <absolute-path> -- <command> [args]   run a command on another machine over Helm's own connection; --heavy for builds and tests, --env NAME=value for environment
+  helm exec <machine> --cwd <absolute-path> -- <command> [args]   run a command on another machine over Helm's own connection; --env NAME=value for environment
   helm exec-status <machine> <id> --wait --json   follow a command that may have started; never rerun it
   helm copy <machine> <file-or-folder> [--target-folder <path>]   copy files there over Helm
 
