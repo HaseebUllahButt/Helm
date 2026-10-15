@@ -192,6 +192,16 @@ test('readThread shows what the owner typed, not Helm\'s brief in front of it', 
     { type: 'turn.done', turnId: 't2', status: 'ok' },
   ]);
   assert.deepEqual(lines, ['> Fix the login form', '> Add tests']);
+  // The CLI's echo of the same message is one message, not two.
+  const echoed = readThread([
+    { type: 'turn.start', turnId: 'local-1', text: old },
+    { type: 'turn.done', turnId: 'local-1', status: 'ok' },
+    { type: 'turn.start', turnId: 't1', text: 'Fix the login form' },
+    { type: 'item.start', id: 'i1', kind: 'text', turnId: 't1' },
+    { type: 'item.delta', id: 'i1', text: 'Fixed.' },
+    { type: 'turn.done', turnId: 't1', status: 'ok' },
+  ]);
+  assert.deepEqual(echoed, ['> Fix the login form', '  Fixed.']);
 });
 
 // A real EventLog, not a stand-in. The first version of this test handed

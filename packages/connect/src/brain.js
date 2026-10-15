@@ -242,8 +242,12 @@ export function lastLine(events = []) {
 export function readThread(events = [], { limit = 40 } = {}) {
   const { turns, pending } = fold(events);
   const out = [];
-  for (const t of turns) {
+  for (const [n, t] of turns.entries()) {
     const said = t.text && stripBrief(t.text);
+    // Older logs keep the owner's message and the CLI's echo of it as two
+    // turns; the echo, which holds the work, is the one to show.
+    const next = turns[n + 1];
+    if (said && !t.items.length && next?.text && stripBrief(next.text) === said) continue;
     if (said) out.push(`> ${oneLine(said, 400)}`);
     for (const i of t.items) {
       if (i.kind === 'text' || i.kind === 'thinking') {
