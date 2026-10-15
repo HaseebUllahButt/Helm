@@ -3628,6 +3628,10 @@ export class Sessions extends EventEmitter {
     if (s && (queued.length || handed.length)) s.lastSeq = this.events.last(id);
     const d = this.#drivers.get(id);
     if (d) stopping.push(d.interrupt());
+    // A Pi in a terminal has no driver to ask: press Esc, which is how Pi
+    // stops a reply. Only mid-turn - a second Esc at Pi's prompt opens its tree.
+    else if (s?.nativeCli && s.engine === 'pi' && ['working', 'blocked'].includes(s.status)
+      && this.nativeTerminals.has(id)) stopping.push(this.nativeTerminals.write(id, '\x1b'));
     const results = await Promise.allSettled(stopping);
     const failed = results.find((result) => result.status === 'rejected');
     if (failed) throw new Error(`Some work could not be stopped: ${failed.reason?.message || failed.reason}`);

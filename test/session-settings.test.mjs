@@ -123,3 +123,16 @@ test('native startup flags distinguish enabling Claude bypass from actually sele
   assert.equal(reportedMode('codex',{approvalPolicy:'on-request',sandbox:'workspace-write'}),'ask');
   assert.equal(reportedMode('codex',{}),undefined);
 });
+test('stopping a terminal Pi mid-reply presses Esc there, and never at its prompt',async()=>{
+  const host=new Host(), sessions=new Sessions(new EventEmitter(),{nativeHost:host,nativeDiscovery:false});
+  await sessions.hooks;
+  try {
+    await sendHook('native-pi',{hook_event_name:'Stop'});
+    await sessions.interrupt('native-pi');
+    assert.deepEqual(host.writes,[],'an idle Pi gets no keys');
+    await sendHook('native-pi',{hook_event_name:'UserPromptSubmit'});
+    assert.equal(sessions.get('native-pi').status,'working');
+    await sessions.interrupt('native-pi');
+    assert.deepEqual(host.writes,['\x1b']);
+  } finally {await sessions.stop();}
+});
