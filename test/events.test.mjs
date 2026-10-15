@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { EventLog } from '../packages/connect/src/events.js';
+import { EventLog, activeTurnFromEvents } from '../packages/connect/src/events.js';
 import { apply, emptyLog } from '../apps/web/src/session/types.ts';
 
 test('events are numbered, persisted, and replayable from a sequence number', () => {
@@ -366,6 +366,31 @@ test('the live turn is read from disk once per change and shares the cache with 
     reader.append('a1', { type: 'turn.done', turnId: 't2', status: 'ok' });
     assert.equal(reader.activeTurn('a1'), null);
     assert.equal(reader.activeTurn('none'), null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('cold active-turn checks agree with the full log through ticket and local-card transitions', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-active-cold-'));
+  try {
+    const reader = new EventLog(dir), events = [];
+    const steps = [
+      { type: 'turn.start', turnId: 'local-send', text: 'go' },
+      { type: 'item.delta', id: 'output', text: '"type":"turn.done"', nested: { type: 'turn.done', turnId: 'local-send' } },
+      { type: 'turn.start', turnId: 'real', text: 'go', inputId: 'local-send' },
+      { type: 'turn.start', turnId: 'local-card', local: true, text: '/status' },
+      { type: 'turn.start', turnId: 'queued', queued: true, text: 'next' },
+      { type: 'turn.edit', turnId: 'queued', text: 'edited' },
+      { type: 'turn.done', turnId: 'real', status: 'ok' },
+      { type: 'turn.accept', turnId: 'queued' },
+      { type: 'turn.start', turnId: 'next', text: 'edited' },
+      { type: 'turn.remove', turnId: 'next' },
+    ];
+    for (const step of steps) {
+      events.push({ seq: events.length + 1, ...step });
+      writeFileSync(join(dir, 's.jsonl'), events.map(e => JSON.stringify(e)).join('\n') + '\n{"type":');
+      assert.deepEqual(reader.activeTurn('s'), activeTurnFromEvents(events));
+      assert.deepEqual(reader.activeTurn('s'), activeTurnFromEvents(events), 'cached result agrees too');
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

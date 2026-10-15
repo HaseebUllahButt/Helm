@@ -503,7 +503,13 @@ export class EventLog {
     const hit = kept.get(fn);
     if (hit?.stamp === stamp) return hit.value;
     let events = log?.events ?? [];
-    if (!log && stamp !== 'none') {
+    if (!log && fn === activeTurnFromEvents && n === 0) {
+      // Live-turn state needs only turn records. Share the restart scan so
+      // polling a cold thread never parses its tool output and text deltas.
+      // derive() keeps the answer; a scan that was not already cached need
+      // not also keep every historical prompt just to remember one turn.
+      events = this.glance(id, { cache: false }).turns;
+    } else if (!log && stamp !== 'none') {
       const lines = readFileSync(this.#file(id), 'utf8').split('\n').filter(Boolean).slice(-n);
       events = [];
       for (const line of lines) { try { events.push(JSON.parse(line)); } catch { /* a torn last line */ } }
@@ -526,7 +532,7 @@ export class EventLog {
    * two differ only for a log grown past KEEP since it was last trimmed -
    * where an older turn left open is one the restart closes anyway.
    */
-  glance(id) {
+  glance(id, { cache = true } = {}) {
     const pick = (turns, seq) => ({ seq, turns, pending: this.pending(id) });
     const log = this.#logs.get(id);
     if (log) return pick(log.events.filter(isTurn), log.seq);
@@ -572,7 +578,7 @@ export class EventLog {
       else if (i >= from) this.#track(open, e);
     }
     if (!this.#pending.has(id)) this.#pending.set(id, open);
-    this.#glanced.set(id, { stamp, seq, turns });
+    if (cache) this.#glanced.set(id, { stamp, seq, turns });
     return pick(turns, seq);
   }
 
