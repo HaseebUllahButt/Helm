@@ -25,8 +25,11 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
     }
     return 0;
   }
-  const timeout = options.timeout === undefined ? 300_000 : Number(options.timeout);
-  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 3_600_000) {
+  // `--wait` waits for the end of the task unless told how long. A default
+  // limit returned helpers still at work, and parents took their progress
+  // lines for the result and then got the real one again as a notice.
+  const timeout = options.timeout === undefined ? Infinity : Number(options.timeout);
+  if (timeout !== Infinity && (!Number.isInteger(timeout) || timeout < 1 || timeout > 3_600_000)) {
     throw new Error('--timeout must be milliseconds between 1 and 3600000');
   }
   let id;
@@ -85,14 +88,20 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
     // Approval is a result, not an unbounded tool wait. The parent can tell
     // the owner to open the child's card, then fetch the result again.
     if (!options.wait || result.complete || result.status === 'blocked') break;
-    if (Date.now() >= deadline) { result = { ...result, timedOut: true }; break; }
+    if (Date.now() >= deadline) {
+      // Progress is not the result: say so where a reader looks for it.
+      result = { ...result, timedOut: true, progress: result.output ?? '',
+        output: `Not finished: ${id} is still working; the text so far is under "progress". Wait for the result with: helm delegate-result ${id} --wait --json` };
+      break;
+    }
     await sleep(Math.min(1000, Math.max(1, deadline - Date.now())));
   } while (true);
   if (options.json) write(JSON.stringify(result));
   else {
-    write(`${id}: ${result.status}${result.timedOut ? ' (wait timed out; task continues)' : ''}`);
+    write(`${id}: ${result.status}${result.timedOut ? ' (wait timed out; task continues; this is not its result)' : ''}`);
     const where = result.session?.delegation?.worktree;
     if (where) write(`worked in ${where.path} on branch ${where.branch} (from ${where.base})`);
+    if (result.timedOut && result.progress) write(`Progress so far:\n${result.progress}`);
     if (result.output) write(result.output);
     if (result.error) write(result.error);
     if (result.pending) write(`Needs approval in Helm: ${result.pending.title ?? result.pending.kind}`);

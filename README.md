@@ -609,9 +609,11 @@ reported instead of silently running it again. `helm run` without a command
 remains the legacy alias for `helm up`.
 
 `--wait` returns the reply when finished, or returns immediately when the
-child needs approval. Read it again after answering in Helm. The default
-wait limit is five minutes; `--timeout <milliseconds>` changes it. Timing
-out stops waiting while the child continues. Exit codes are 0 for success,
+child needs approval. Read it again after answering in Helm. It waits until
+the child's turn has really ended; `--timeout <milliseconds>` sets a limit.
+Timing out stops waiting while the child continues; the reply then says it
+is not finished and keeps the text so far under `progress`. While a parent
+is waiting, Helm does not also send it the result as a separate message. Exit codes are 0 for success,
 1 for failure or interruption, 2 for a pending approval, and 3 for a wait
 timeout. JSON includes the full child ID and its status; replies are bounded
 to the last 32,000 characters. Open the thread for the full conversation.

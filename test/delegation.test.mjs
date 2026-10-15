@@ -377,6 +377,31 @@ test('a completion notice uses its outcome before idle arrives after a steering 
   assert.doesNotMatch(ticket.text, /Status: working/);
 });
 
+test('a parent waiting on a result gets it once, not again as a notice', async t => {
+  const { sessions, drivers } = setup(t, undefined, { waiterGraceMs: 200 });
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  // `delegate-result --wait` is polling while the child works.
+  assert.equal(sessions.delegationResult(child.id, { consume: true, parentId: parent.id }).complete, false);
+  drivers.get(child.id).finish();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(sessions.delegationResult(child.id, { consume: true, parentId: parent.id }).complete, true);
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const tickets = sessions.history(parent.id).events.filter(e => String(e.turnId).startsWith(`local-result-${child.id}-`));
+  assert.deepEqual(tickets, [], 'the waiter took the result; the idle parent is not woken with it again');
+  assert.equal(drivers.get(parent.id).sent, undefined);
+});
+
+test('a waiter that gave up still gets the result as a notice', async t => {
+  const { sessions, drivers } = setup(t, undefined, { waiterGraceMs: 100 });
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  sessions.delegationResult(child.id, { consume: true, parentId: parent.id });
+  drivers.get(child.id).finish();
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert.match(drivers.get(parent.id).sent, /Opus reviewed the task/);
+});
+
 test('collecting an earlier result leaves a later follow-up notification available', async t => {
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
@@ -899,6 +924,30 @@ test('CLI waits for the actual reply and reports pending approvals immediately',
     rpc: async () => ({ status: 'blocked', complete: false, pending: { title: 'Allow read' } }), self: 'self', write: () => {},
     sleep: () => assert.fail('must not wait on approvals'),
   }), 2);
+});
+
+test('CLI --wait waits past five minutes and marks a timed-out reply as unfinished', async (t) => {
+  let clock = Date.now(), reads = 0;
+  const now = Date.now;
+  Date.now = () => clock;
+  t.after(() => { Date.now = now; });
+  const rpc = async () => (++reads < 700
+    ? { status: 'working', complete: false, output: 'Type check passes. Next I am adding tests.' }
+    : { status: 'done', complete: true, output: 'All done.' });
+  const written = [];
+  assert.equal(await runAgentCommand('delegate-result', ['child', '--wait', '--json'], {
+    rpc, self: 'self', parentId: 'parent', write: (s) => written.push(s), sleep: async (ms) => { clock += ms; },
+  }), 0);
+  assert.equal(reads, 700, 'no default limit: about twelve minutes of polling');
+  assert.equal(JSON.parse(written[0]).output, 'All done.');
+  reads = 0; written.length = 0;
+  assert.equal(await runAgentCommand('delegate-result', ['child', '--wait', '--json', '--timeout', '5000'], {
+    rpc, self: 'self', parentId: 'parent', write: (s) => written.push(s), sleep: async (ms) => { clock += ms; },
+  }), 3);
+  const late = JSON.parse(written[0]);
+  assert.equal(late.timedOut, true);
+  assert.equal(late.progress, 'Type check passes. Next I am adding tests.');
+  assert.match(late.output, /^Not finished: child is still working/);
 });
 
 test('the real CLI discovers accounts and delegates through an authenticated relay', async (t) => {

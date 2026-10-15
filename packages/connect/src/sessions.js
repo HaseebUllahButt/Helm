@@ -453,11 +453,14 @@ export class Sessions extends EventEmitter {
   #closedTurns = new Map();
   /** `<child>:<turn>` whose report to the parent is on its way. */
   #notifying = new Set();
+  /** child id -> when its parent last asked for the result (`delegate-result --wait`). */
+  #waiters = new Map();
 
-  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, delegationIdleMs = DELEGATION_IDLE_MS, reattachRetryMs = 90_000, reattachConcurrency = 4 } = {}) {
+  constructor(runtime, { events = new EventLog(), makeDriver = null, log = () => {}, terminals = new TerminalHost(), procHost = null, nativeHost = null, nativeDiscovery = !process.env.HELM_NO_SERVICE, turnSettleMs = 1500, waiterGraceMs = 3000, delegationIdleMs = DELEGATION_IDLE_MS, reattachRetryMs = 90_000, reattachConcurrency = 4 } = {}) {
     super();
     this.runtime = runtime;
     this.turnSettleMs = turnSettleMs;
+    this.waiterGraceMs = waiterGraceMs;
     this.delegationIdleMs = delegationIdleMs;
     this.reattachRetryMs = reattachRetryMs;
     this.reattachConcurrency = reattachConcurrency;
@@ -2082,9 +2085,13 @@ export class Sessions extends EventEmitter {
     // delivery. UI/history reads and unrelated inherited CLI environments
     // must not silence the parent's notification.
     const parent = this.#index.get(parentId);
-    if (consume && result.complete && parent && session.delegation.parentId === parent.id
+    const owner = consume && parent && session.delegation.parentId === parent.id
       && (session.delegation.parentGeneration ?? 0) === (parent.stopGeneration ?? 0)
-      && (!callerThreadId || parent.engine === 'codex' && parent.engineSessionId === callerThreadId)) {
+      && (!callerThreadId || parent.engine === 'codex' && parent.engineSessionId === callerThreadId);
+    // A parent still waiting reads again and takes the result itself.
+    if (owner && !result.complete) this.#waiters.set(id, Date.now());
+    if (owner && result.complete) {
+      this.#waiters.delete(id);
       const completed = events.findLast(e => e.type === 'turn.done' && !String(e.turnId).startsWith('local-'));
       if (completed) {
         session.delegation.consumedSeq = Math.max(session.delegation.consumedSeq ?? 0, completed.seq);
@@ -2757,6 +2764,21 @@ export class Sessions extends EventEmitter {
     if (turnId && (told.includes(turnId) || this.#notifying.has(key))) return;
     if (turnId) this.#notifying.add(key);
     const ticket = `local-result-${child.id}-${event.seq}`;
+    // A parent blocked in `delegate-result --wait` reads again within a
+    // second and gets the result there. Telling it as well cost it a second
+    // turn for the same report, so give that read the chance to land first.
+    // A waiter that gave up (timed out, killed) stops reading, and the
+    // notice goes out as before.
+    const until = Date.now() + this.waiterGraceMs * 5;
+    while (Date.now() < until && Date.now() - (this.#waiters.get(child.id) ?? 0) < this.waiterGraceMs
+      && (child.delegation.consumedSeq ?? 0) < event.seq) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(250, this.waiterGraceMs)));
+    }
+    if ((child.delegation.consumedSeq ?? 0) >= event.seq || parent.archived || parent.stoppedAt
+      || (child.delegation.parentGeneration ?? 0) !== (parent.stopGeneration ?? 0)) {
+      this.#notifying.delete(key);
+      return;
+    }
     const sent = () => {
       child.delegation.notifiedSeq = event.seq;
       if (turnId) child.delegation.notifiedTurns = [...(child.delegation.notifiedTurns ?? []), turnId].slice(-50);
