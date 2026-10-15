@@ -31,6 +31,11 @@ before(async () => {
       if(method==='model.list')return {models:[],default:null};return {pending:[],ok:true};
     }};
     window.native=()=>root.render(<SessionView client={client} env={{id:'remote',name:'VM',online:true}} session={{id:'native1',engine:'claude',nativeCli:true,nativeChat:true,pty:true,status:'idle',title:'Native',cwd:'/tmp'}} onBack={()=>{}} onClosed={()=>{}} onArchived={()=>{}} onSession={()=>{}}/>);
+    window.renderMid=(done)=>root.render(<Transcript status={done?'idle':'running'} loaded readVisual={read} turns={[{id:'t1',text:'draw it',at:1,...(done?{done:{status:'ok'}}:{}),items:[
+      {id:'a',kind:'text',text:'Here is the picture.',status:'ok',startedAt:1},
+      {id:'visual-1',kind:'visual',text:'',status:'ok',startedAt:2,visual:{ref:'ref',title:'Desk clamp clearance',height:420,bytes:1000}},
+      {id:'c',kind:'command',text:'',command:'npm test',status:done?'ok':'streaming',exitCode:done?0:undefined,startedAt:3},
+      ...(done?[{id:'z',kind:'text',text:'All done.',status:'ok',startedAt:4}]:[])]}]}/>);
     window.render();
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', minify: true, jsx: 'automatic', plugins: [{ name: 'native-view-fixture', setup(b) { b.onLoad({ filter: /\/App\.tsx$/ }, async a => ({ contents: (await readFile(a.path, 'utf8')) + '\nexport { SessionView };', loader: 'tsx' })); } }] });
   script = bundle.outputFiles[0].text;
@@ -74,6 +79,16 @@ test('a finished chat shows its interactive page on a phone, sandboxed and outsi
   await frame.getByText('Reference').click();
   const tab = await popup; t.after(() => tab.close());
   assert.equal(tab.url().startsWith('https://example.com/'), true);
+});
+
+test('a picture followed by more steps stays in view, while working and after the turn ends', async t => {
+  const page = await open(t);
+  for (const done of [false, true]) {
+    await page.evaluate(d => window.renderMid(d), done);
+    await page.frameLocator('.visual-frame').getByText('Isolated').waitFor();
+    assert.equal(await page.locator('.final .visual-frame').count(), 1, done ? 'after the turn' : 'while working');
+  }
+  await page.getByText('All done.').waitFor();
 });
 
 test('Expand, Source, Escape, and Save work with focus restored to the launcher', async t => {

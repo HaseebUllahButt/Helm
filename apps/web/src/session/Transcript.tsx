@@ -677,6 +677,11 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
     // "Worked for" row: show what is left instead.
     else if (d.status === 'ok') { answer = [...pre, ...answer]; pre = []; }
   }
+  // A picture the agent drew (helm render, its own or a helper's) is part of
+  // the reply, never a step: one followed by more work used to fold into
+  // "Worked for" the moment the turn ended. Keep it out in the open, in order.
+  const drawn = pre.filter((it) => it.kind === 'visual');
+  if (drawn.length) { pre = pre.filter((it) => it.kind !== 'visual'); answer = [...drawn, ...answer]; }
   const work = pre.filter((it) => !isApart(it));
   const outside = pre.filter(isApart);
   // A chat read from another CLI's history has no streaming steps and no end.
