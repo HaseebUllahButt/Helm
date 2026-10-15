@@ -2,9 +2,9 @@
 // beside Helm. The agent drives the tabs through Chromium's own channel, so
 // it never moves the owner's mouse or types on their keyboard; the owner
 // just uses the window.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, readlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 /** A screen to open a window on: always on a Mac or Windows, a display on Linux. */
@@ -28,17 +28,72 @@ export async function launchWindow(profileDir, { name = 'helm-browser' } = {}) {
   const { chromium } = await import('playwright');
   const args = ['--no-first-run', '--no-default-browser-check', '--disk-cache-size=33554432', `--class=${name}`];
   if (process.platform === 'linux') args.push('--ozone-platform-hint=auto');
+  const running = await attachWindow(chromium, profileDir);
+  if (running) return running;
+  const system = systemChromium();
+  if (system) { try { return await startWindow(chromium, system, profileDir, args); } catch { /* Playwright's way below */ } }
   // No "controlled by automated test software" bar: it is the owner's window.
   // Chromium's own sandbox stays on, so no "--no-sandbox" warning bar either;
-  // only a machine where the sandbox cannot start goes without it.
+  // only a machine where the sandbox cannot start goes without it. A window
+  // started this way closes when Helm does.
   const options = { headless: false, viewport: null, acceptDownloads: true, chromiumSandbox: true, ignoreDefaultArgs: ['--enable-automation'], args, timeout: 15000 };
-  const system = systemChromium();
   const attempts = [...(system ? [{ executablePath: system }, { executablePath: system, chromiumSandbox: false }] : []), {}, { chromiumSandbox: false }];
   let failure;
   for (const extra of attempts) {
     try { return await chromium.launchPersistentContext(profileDir, { ...options, ...extra }); } catch (error) { failure = error; }
   }
   throw failure;
+}
+
+const PORT_FILE = 'DevToolsActivePort';
+
+/** Is a live Chromium using this profile? Chromium's lock names its process. */
+function profileInUse(profileDir) {
+  if (process.platform === 'win32') return true;
+  let target; try { target = readlinkSync(join(profileDir, 'SingletonLock')); } catch { return false; }
+  const pid = Number(target.split('-').pop());
+  if (!Number.isInteger(pid) || pid < 1) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
+/** A window Helm started is open, maybe from before Helm restarted. */
+export const windowOpen = (profileDir) => profileInUse(profileDir) && existsSync(join(profileDir, PORT_FILE));
+
+/** Helm's end of a window it started; letting go leaves the window open. */
+async function connectWindow(chromium, port, timeout) {
+  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout });
+  const context = browser.contexts()[0];
+  if (!context) { await browser.close().catch(() => {}); throw new Error('Chromium has no window'); }
+  context.helmDetach = () => browser.close();
+  return context;
+}
+
+/** The window is still open from before Helm restarted: take it back, tabs and all. */
+async function attachWindow(chromium, profileDir) {
+  if (!profileInUse(profileDir)) return null;
+  let port; try { port = Number(readFileSync(join(profileDir, PORT_FILE), 'utf8').split('\n')[0]); } catch { return null; }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  try { const context = await connectWindow(chromium, port, 3000); context.helmAttached = true; return context; } catch { return null; }
+}
+
+/**
+ * Chromium as its own program, not a child of Helm (on Linux in its own
+ * systemd scope), so restarting Helm never closes the window. Helm talks to
+ * it on a port only this machine can reach, written in the profile folder.
+ */
+async function startWindow(chromium, executable, profileDir, args) {
+  rmSync(join(profileDir, PORT_FILE), { force: true });
+  const argv = [`--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', ...args, 'about:blank'];
+  const scoped = process.platform === 'linux' && !process.env.HELM_NO_SERVICE && ['/usr/bin/systemd-run', '/bin/systemd-run'].find(existsSync);
+  for (const [command, list] of [...(scoped ? [[scoped, ['--user', '--scope', '--collect', '--quiet', executable, ...argv]]] : []), [executable, argv]]) {
+    const child = spawn(command, list, { detached: true, stdio: 'ignore' });
+    let exited = false; child.on('error', () => { exited = true; }); child.on('exit', () => { exited = true; }); child.unref();
+    for (const until = Date.now() + 15000; Date.now() < until && !exited && !existsSync(join(profileDir, PORT_FILE));) await new Promise(done => setTimeout(done, 100));
+    let port; try { port = Number(readFileSync(join(profileDir, PORT_FILE), 'utf8').split('\n')[0]); } catch { /* did not start */ }
+    if (port) return connectWindow(chromium, port, 15000);
+    if (!exited) { try { process.kill(child.pid); } catch { /* gone */ } throw new Error('Chromium did not open a window'); }
+  }
+  throw new Error('Chromium did not open a window');
 }
 
 /** A tab Helm opens with no address shows Chromium's New Tab page, not about:blank. */

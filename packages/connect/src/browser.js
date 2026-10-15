@@ -7,7 +7,7 @@ import { HELM_DIR } from './paths.js';
 import { normalizeAction, readOnlyAction, resolveTarget } from './browser-targets.js';
 import { BrowserFlows, fillParams, validateFlow } from './browser-flows.js';
 import * as browserLogins from './browser-logins.js';
-import { canOpenWindow, launchWindow as openWindow, windowProfile, windowName, focusWindow, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB } from './browser-window.js';
+import { canOpenWindow, launchWindow as openWindow, windowProfile, windowName, focusWindow, WINDOW_PAGE_SCRIPT, drawPointer, clearPointer, NEW_TAB, windowOpen } from './browser-window.js';
 
 const id = () => randomBytes(8).toString('hex');
 const cap = (rows, value, limit = 100) => { rows.push(value); if (rows.length > limit) rows.shift(); };
@@ -177,8 +177,10 @@ export class BrowserManager {
       await context.exposeBinding('__helmOwnerInput', ({ page }) => this.ownerInput(page));
       await context.addInitScript(WINDOW_PAGE_SCRIPT);
     } catch (error) { await context.close().catch(() => {}); throw error; }
-    // The window opens with one blank tab: the first tab Helm needs takes it.
-    context.helmSpare = context.pages()[0] || null;
+    // A new window opens with one blank tab: the first tab Helm needs takes it.
+    // A window still open from before a restart keeps its tabs as they are.
+    context.helmSpare = context.helmAttached ? null : context.pages()[0] || null;
+    if (context.helmAttached) for (const page of context.pages()) this.register(sessionId, page).adopted = true;
     context.on('page', page => this.register(sessionId, page));
     context.on('close', () => void this.windowClosed(sessionId, context).catch(() => {}));
     this.windowContexts.set(sessionId, context);
@@ -332,14 +334,19 @@ export class BrowserManager {
       for (const row of rows.slice(0, 24)) {
         if (row.engine !== 'chromium' || !/^[a-f0-9]{16}$/.test(row.id)) continue;
         if (this.tabs.has(row.id)) continue;
-        const context = await this.context(sessionId), page = await this.newPage(context), tab = this.register(sessionId, page);
-        this.tabs.delete(tab.id); tab.id = row.id; tab.title = row.title || ''; this.tabs.set(tab.id, tab);
+        const context = await this.context(sessionId);
+        // The window stayed open through a restart: its tab is already there, loaded.
+        const kept = [...this.tabs.values()].find(t => t.sessionId === sessionId && t.adopted && t.page.url() === row.url);
+        const page = kept?.page || await this.newPage(context), tab = kept || this.register(sessionId, page);
+        tab.adopted = false;
+        this.tabs.delete(tab.id); tab.id = row.id; tab.title = row.title || tab.title || ''; this.tabs.set(tab.id, tab);
         if (!tab.window && row.viewport && Number.isInteger(row.viewport.width) && row.viewport.width >= 240 && row.viewport.width <= 1920 && Number.isInteger(row.viewport.height) && row.viewport.height >= 200 && row.viewport.height <= 1200) await page.setViewportSize(row.viewport);
         for (const download of (Array.isArray(row.downloads) ? row.downloads : []).slice(-20)) {
           if (!/^[a-f0-9]{16}$/.test(download.id || '') || typeof download.name !== 'string') continue;
           const path = join(this.directory, sessionId, 'downloads', `${download.id}-${basename(download.name)}`);
           tab.downloads.push({ ...download, name: basename(download.name), path, status: download.status === 'ready' && existsSync(path) ? 'ready' : 'failed' });
         }
+        if (kept) continue;
         // Loads in the background: the tab list answers now, and each page fills in as it arrives.
         let address = 'about:blank'; try { address = httpUrl(row.url); } catch { /* keep the tab available to retry */ }
         if (address !== 'about:blank') { tab.url = address; tab.ready = page.goto(address, { waitUntil: 'domcontentloaded' }).then(() => {}, () => {}); }
@@ -362,6 +369,10 @@ export class BrowserManager {
     this.owner(sessionId);
     const live = () => [...this.tabs.values()].filter(t => t.sessionId === sessionId).map(t => this.metadata(t));
     const answer = tabs => ({ tabs, bowser: !!bowserBin(), running: !!this.browser, canWindow: this.canWindow, open: this.windowContexts.has(sessionId) });
+    // A window left open through a Helm restart is taken back, tabs as they are.
+    if (this.canWindow && !this.contexts.has(sessionId) && !this.stopping && windowOpen(windowProfile(this.directory, sessionId))) {
+      try { await this.context(sessionId); await this.recover(sessionId); } catch { /* listed asleep below */ }
+    }
     // Listing never opens a window: a closed window's tabs are listed asleep.
     if (this.canWindow && !this.contexts.has(sessionId)) return answer([...live(), ...(await this.savedRows(sessionId)).filter(row => !this.tabs.has(row.id)).map(row => ({ ...row, asleep: true }))]);
     // The owner opened the browser panel: have the hidden Chromium up before
@@ -706,7 +717,9 @@ export class BrowserManager {
     if (this.browser && !this.headlessInUse() && !(this.warmUntil > this.now())) await this.shutdownBrowser();
   }
   async shutdownBrowser() { const browser = this.browser; this.browser = null; await browser?.close(); if (!this.tabs.size) { clearInterval(this.timer); this.timer = null; } }
-  async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } this.bowser.stop(); for (const context of this.windowContexts.values()) await context.close().catch(() => {}); this.windowContexts.clear(); await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
+  async stop() { this.stopping = true; for (const sid of this.contexts.keys()) { await this.save(sid).catch(() => {}); await this.persistTabs(sid).catch(() => {}); } this.bowser.stop(); // A window Helm can come back to stays open on the owner's screen.
+    for (const context of this.windowContexts.values()) await (context.helmDetach ? context.helmDetach() : context.close()).catch(() => {});
+    this.windowContexts.clear(); await this.shutdownBrowser(); this.tabs.clear(); this.contexts.clear(); clearInterval(this.timer); this.timer = null; }
 }
 
 export function browserNote() { return '[Helm browser: Agents and the owner can use the same browser tabs. Run helm browser open <url> inside this chat (isolated Chromium), or --engine bowser to reuse Bowser Computer Use on machines where installed. helm browser tabs lists your tabs. helm browser look <tab> returns text and numbered elements without screenshots. Plan the whole task as one batch; prefer direct URLs and plain targets: helm browser act <tab> \'{"actions":[{"click":"the Save button"},{"check":"Saved"}]}\'. Checks use literal page text or targets, not questions. Read the returned settled page; failed batches stop with candidates and element numbers. Save repeating tasks with actions using {{param}}, with values, save_as and note; helm browser flows lists them, helm browser run <tab> <name> key=value replays them. Existing kind/ref, selector, role/name and coordinate actions still work; kinds include key, scroll, hover, select, upload/files, evaluate/script, wait/selector, resize, dialog, console, network, back, forward and reload. helm browser screenshot <tab> --output <path> captures when visuals matter; close <tab> releases it. Browser tabs run on this machine: localhost reaches your dev servers. Use text views and batch actions to keep context small. On a machine with a screen your tabs are a real Chromium window beside Helm that never takes the owner\'s keyboard; they may use it too, and your steps wait while they click or type there. Without a screen the browser is hidden. When the owner asks to be shown or wants to do it themselves, do not click: helm browser point <tab> <ref|selector> --note "Click here to approve" shows them the spot without touching the page. When a site needs a login, suggest that the owner copy their browser profile logins using Logins in the viewer instead of asking for passwords. Respect the request when browsing authenticated sites.]'; }
