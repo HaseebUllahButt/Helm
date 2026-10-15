@@ -223,9 +223,9 @@ export class PeerHub {
     if (msg?.t === DC_CHUNK_TYPE && typeof msg.gid === 'string') {
       const full = this.#accumulate(peer, msg);
       if (full == null) return;
-      raw = full;
+      try { msg = JSON.parse(full); } catch { return; }
     }
-    this.#onMessage(peer, raw);
+    this.#onMessage(peer, msg);
   }
 
   #accumulate(peer, { gid, i, n, data }) {
@@ -256,9 +256,7 @@ export class PeerHub {
    * The data channel speaks the same RPC dialect as the relay path, so the
    * client's calls are identical whichever route they take.
    */
-  async #onMessage(peer, raw) {
-    let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
+  async #onMessage(peer, msg) {
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
     if (TUNNEL_TYPES.has(msg.t)) {
       if (!this.onTunnel) {

@@ -1644,11 +1644,8 @@ export class Client {
     };
     channel.onclose = () => this.dropDirect(env, peer);
     channel.onmessage = (ev) => {
-      const raw = this.accumulate(peer, ev.data);
-      if (raw == null) return;
-      let msg: any;
-      try { msg = JSON.parse(raw); } catch { return; }
-      if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+      const msg = this.accumulate(peer, ev.data);
+      if (msg == null) return;
       if (msg.t === 'rpcResult') {
         this.receiveRpc(msg, 'direct');
         return;
@@ -1716,14 +1713,16 @@ export class Client {
   }
 
   /**
-   * Reassemble a possibly-fragmented direct-channel frame. Returns the full
-   * JSON string once complete, or null while waiting for more pieces.
+   * Parse a possibly-fragmented direct-channel frame once. Returns the
+   * message when complete, or null while waiting for more pieces.
    */
-  private accumulate(peer: Peer, raw: any): string | null {
+  private accumulate(peer: Peer, raw: any): Record<string, any> | null {
     if (typeof raw !== 'string') return null;
     let msg: any;
     try { msg = JSON.parse(raw); } catch { return null; }
-    if (msg?.t !== DC_CHUNK_TYPE || typeof msg.gid !== 'string') return raw;
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return null;
+    if (msg.t !== DC_CHUNK_TYPE) return msg;
+    if (typeof msg.gid !== 'string') return null;
     const { gid, i, n, data } = msg;
     if (gid.length > 100 || typeof data !== 'string' || data.length > DC_CHUNK_AT) return null;
     if (!Number.isInteger(n) || n <= 1 || n > 2000) return null;
@@ -1742,7 +1741,8 @@ export class Client {
     }
     if (entry.got < entry.n) return null;
     peer.fragments.delete(gid);
-    return entry.parts.join('');
+    try { msg = JSON.parse(entry.parts.join('')); } catch { return null; }
+    return msg && typeof msg === 'object' && !Array.isArray(msg) ? msg : null;
   }
 
   dropDirect(env: string, expected?: Peer) {

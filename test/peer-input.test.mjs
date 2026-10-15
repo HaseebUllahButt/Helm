@@ -8,6 +8,7 @@ const bundle = await build({ entryPoints: [new URL('../packages/connect/src/peer
 
 async function harness() {
   const maps = [], calls = [], sent = [];
+  let parses = 0;
   let pc;
   class Connection {
     constructor() { pc = this; }
@@ -17,6 +18,7 @@ async function harness() {
     close() {}
   }
   const context = { module: { exports: {} }, exports: {}, setTimeout, clearTimeout,
+    JSON: { stringify: JSON.stringify, parse: (...args) => { parses++; return JSON.parse(...args); } },
     Map: class extends Map { constructor(...args) { super(...args); maps.push(this); } },
     require: () => ({ RTCPeerConnection: Connection }) };
   vm.runInNewContext(bundle.outputFiles[0].text, context);
@@ -24,8 +26,17 @@ async function harness() {
   await hub.signal('browser', { type: 'offer', sdp: 'test' }, null, 'device');
   const channel = { readyState: 'open', bufferedAmount: 0, close() {}, send: raw => sent.push(JSON.parse(raw)) };
   pc.ondatachannel({ channel });
-  return { hub, calls, sent, fragments: maps.at(-1), send: frame => channel.onmessage({ data: JSON.stringify(frame) }) };
+  return { hub, calls, sent, fragments: maps.at(-1), parses: () => parses,
+    send: frame => channel.onmessage({ data: JSON.stringify(frame) }) };
 }
+
+test('an ordinary daemon RPC frame is parsed once', async t => {
+  const h = await harness(); t.after(() => h.hub.stop());
+  h.send({ t: 'rpc', id: 'one', method: 'ping' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.sent[0].result, 'ok');
+  assert.equal(h.parses(), 1);
+});
 
 test('invalid fragment indexes cannot allocate unbounded daemon buffers', async t => {
   const h = await harness(); t.after(() => h.hub.stop());
