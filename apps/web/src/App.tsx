@@ -31,6 +31,7 @@ import { Subagents } from './session/Subagents';
 import { NativeAgentView } from './session/NativeAgentView';
 import { StartingChatView } from './session/StartingChatView';
 import { beginChat, forgetChat, onStartingChat, type StartingChat } from './startingChats';
+import { cloneJob, onCloneJobs } from './cloneJobs';
 import { plainProblem } from './session/problem';
 import { ExternalSessionNotice } from './session/ExternalSessionNotice';
 import { useSessionLog } from './session/useSessionLog';
@@ -1925,6 +1926,7 @@ function Shell({ client, conn, onSignOut }: {
           key={`${newChat.envId ?? ''}:${newChat.folder ?? ''}:${newChat.quick ? 'quick' : ''}`}
           client={client} envs={envs} envId={newChat.envId} initialFolder={newChat.folder} quick={newChat.quick} near={selected} engineOf={engineOf}
           onFolder={rememberChatFolder}
+          onCloned={(envId, folder) => navigate([{ kind: 'env' }, { kind: 'start', cwd: folder }], envId)}
           onClose={() => setNewChat(null)}
           onStarting={(info, run) => { const chat = beginChat(client, info, run); navigate([{ kind: 'env' }, { kind: 'starting', startId: chat.id }], info.envId); }}
         />
@@ -4784,6 +4786,12 @@ function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
   const [choosing, setChoosing] = useState(false);
   // The agent picked on purpose as this machine's default; null when none is.
   const [preferred, setPreferred] = useState<string | null>(null);
+  // A repo still coming down into this folder: its bar shows here, and an
+  // agent waits for it to land.
+  const [, setCloneTick] = useState(0);
+  useEffect(() => onCloneJobs(() => setCloneTick((n) => n + 1)), []);
+  const clone = quick ? undefined : cloneJob(env.id, cwd);
+  const cloning = clone?.state === 'cloning';
 
   const savePicker = (change: Partial<PickerPrefs>) => {
     if (onMachine.current) {
@@ -4887,6 +4895,18 @@ function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
         )}
       </div>
       <div className="scroll"><div className="pad column">
+        {clone && clone.state !== 'done' && (
+          <div className={`clone-card${clone.state === 'failed' ? ' failed' : ''}`} role="status">
+            <span className="pglyph"><Icon name="github" size={18} /></span>
+            <span className="grow">
+              <span className="clone-title">{clone.state === 'failed' ? 'Could not clone' : 'Cloning'} {clone.repo.split('/')[1]} <span className="dim">· {clone.repo.split('/')[0]}</span></span>
+              {clone.state === 'failed'
+                ? <span className="error" style={{ margin: 0 }}>{clone.error || 'Clone failed.'}</span>
+                : <span className="clone-progress"><i style={{ width: `${Math.max(4, clone.percent)}%` }} /></span>}
+            </span>
+            {cloning && <span className="clone-percent">{clone.percent}%</span>}
+          </div>
+        )}
         <div className="section">agent</div>
         {accounts === null && <div className="empty quiet">{env.online ? 'looking for agents…' : `${env.name} cannot be reached right now`}</div>}
         {shown?.length === 0 && (accounts?.length ?? 0) > 0 && (
@@ -4932,10 +4952,10 @@ function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
         <div className="startbar">
           <button
             className="primary big"
-            disabled={busy}
+            disabled={busy || cloning || clone?.state === 'failed'}
             onClick={start}
           >
-            {busy ? 'starting…' : `Start ${eng?.label}`}
+            {busy ? 'starting…' : cloning ? `Cloning… ${clone!.percent}%` : `Start ${eng?.label}`}
           </button>
         </div>
       )}

@@ -124,9 +124,16 @@ async function hold() {
   const s = state();
   const { chromium } = await import('@playwright/test');
   const desktop = !!s.browser.desktop;
-  const context = await chromium.launchPersistentContext(join(s.root, 'browser'), {
+  const options = {
     headless: true, args: [`--remote-debugging-port=${s.browser.cdp}`],
     viewport: desktop ? DESKTOP : PHONE, isMobile: !desktop, hasTouch: !desktop, deviceScaleFactor: desktop ? 1 : 2,
+  };
+  // Playwright's own Chromium may not be downloaded (or downloadable here);
+  // the machine's Chromium does the same job.
+  const system = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].find((p) => existsSync(p));
+  const context = await chromium.launchPersistentContext(join(s.root, 'browser'), options).catch((e) => {
+    if (!system || !/Executable doesn't exist/.test(e.message)) throw e;
+    return chromium.launchPersistentContext(join(s.root, 'browser'), { ...options, executablePath: system });
   });
   const page = context.pages()[0] ?? await context.newPage();
   const errors = join(s.root, 'errors.log');

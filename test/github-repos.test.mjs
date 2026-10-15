@@ -5,13 +5,13 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createGithubRepos } from '../packages/connect/src/github-repos.js';
+import { createGithubRepos, parseStatus } from '../packages/connect/src/github-repos.js';
 
 /**
  * "Clone from GitHub" in the new chat box. What has to hold: the app sees
  * repo and account names but never a token, a bad repo name can never
  * reach a path, a folder already holding that repo opens instead of
- * failing, and a sign-in hands back gh's code and later its result.
+ * failing, and an older gh without --json is still read as signed in.
  */
 
 const status = (logins) => JSON.stringify({ hosts: { 'github.com': logins.map((login, i) => ({ login, active: i === 0, state: 'success' })) } });
@@ -87,21 +87,32 @@ test('clone: runs gh, reports progress, and tells the folder index', async () =>
   assert.deepEqual(noted, [join(parent, 'site'), true]);
 });
 
-test('sign-in: hands back gh\'s code, then who signed in', async () => {
-  const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill() {} });
-  const g = createGithubRepos({ command: gh().command, start: () => {
-    setTimeout(() => child.stderr.emit('data', '\n! First copy your one-time code: AB12-CD34\nOpen this URL to continue in your web browser: https://github.com/login/device\n'), 10);
-    return child;
-  } });
-  const first = await g.signIn({ start: true });
-  assert.equal(first.state, 'waiting');
-  assert.equal(first.code, 'AB12-CD34');
-  assert.equal(first.url, 'https://github.com/login/device');
-  assert.equal((await g.signIn({ start: true })).code, 'AB12-CD34', 'a second tap shows the same code');
-  child.stderr.emit('data', '✓ Logged in as octo\n');
-  child.emit('close', 0);
-  const done = await g.signIn();
-  assert.equal(done.state, 'done');
-  assert.equal(done.login, 'octo');
-  assert.equal((await g.signIn()).state, 'idle');
+test('repos: an organization\'s repo is marked as one', async () => {
+  const fetch = async () => new Response(JSON.stringify([repo('me', 'app', { owner: { login: 'me', type: 'User' } }), repo('acme', 'site', { owner: { login: 'acme', type: 'Organization' } })]), { status: 200 });
+  const r = await createGithubRepos({ command: gh().command, fetch }).repos();
+  assert.deepEqual(r.repos.map((x) => [x.full, x.org]), [['me/app', false], ['acme/site', true]]);
+});
+
+test('accounts: a gh too old for --json is read from its own words', async () => {
+  const words = 'github.com\n  ✓ Logged in to github.com account Me (/home/u/.config/gh/hosts.yml)\n  - Active account: true\n  - Token: gho_****\n';
+  const command = async (cmd, args) => {
+    if (args.includes('--json')) throw Object.assign(new Error('Command failed'), { code: 1, stdout: '', stderr: 'unknown flag: --json\n' });
+    if (args[1] === 'status') return { stdout: words, stderr: '' };
+    if (args[1] === 'token') return { stdout: 'secret\n' };
+    throw new Error(`unexpected ${cmd} ${args.join(' ')}`);
+  };
+  const fetch = async () => new Response('[]', { status: 200 });
+  const r = await createGithubRepos({ command, fetch }).repos();
+  assert.equal(r.login, 'Me');
+  assert.deepEqual(r.accounts, [{ login: 'Me', active: true }]);
+});
+
+test('parseStatus: both wordings, the active one, and failed logins left out', () => {
+  assert.deepEqual(parseStatus('github.com\n  ✓ Logged in to github.com as old (~/.config/gh/hosts.yml)\n'), [{ login: 'old', active: true }]);
+  assert.deepEqual(parseStatus([
+    '  ✓ Logged in to github.com account a (keyring)', '  - Active account: false',
+    '  X Failed to log in to github.com account gone (keyring)', '  - Active account: false',
+    '  ✓ Logged in to github.com account b (keyring)', '  - Active account: true',
+  ].join('\n')), [{ login: 'a', active: false }, { login: 'b', active: true }]);
+  assert.deepEqual(parseStatus('You are not logged into any GitHub hosts. To log in, run: gh auth login'), []);
 });

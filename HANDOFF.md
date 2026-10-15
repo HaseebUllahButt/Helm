@@ -16,6 +16,10 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-15 — Clone from GitHub, reworked after the owner tried it
+
+**Done and proven:** owner pills gone; repos sit under "Yours", each org's name, then "Shared with you". No "Sign in to GitHub" any more: Helm only uses the machine's gh, and with no login says to run `gh auth login` there. The folder is chosen after the repo ("Where should X go?", search or type a path). Picking it closes the box and opens that folder's New session page, where the clone's bar runs and Start waits for it (`apps/web/src/cloneJobs.ts`). The keys row only shows keys that work right now. Found while checking: the VM's gh 2.45 has no `auth status --json`, so Helm thought it was signed out; now read from gh's plain words. Driven in a private Helm: signed-out screen, 447-repo list with org headings, a real clone of octocat/Hello-World into a scratch folder, bar then Start. `verify-helm` now falls back to the system Chromium when Playwright's own cannot download. **Not driven:** phone size, a machine with two gh accounts.
+
 ## 2026-10-15 — Clone from GitHub in the new chat box
 
 **Done and proven (8902f1f):** New chat → machine → "Clone from GitHub": repos the machine's own `gh` login can reach, search, owner chips (All, Mine, orgs), "Into ~/dev" (changeable, remembered per machine), account + add account, refresh. Typing `owner/name` clones any repo by name. Picking shows a progress bar, then the agent step in that folder; a folder already holding that repo just opens. Signed out: gh's sign-in code + "Open GitHub". Driven in a private Helm at phone and desktop size: signed-out screen, code screen and Cancel (gh process gone), 447-repo list, search, owner filter, real clone of octocat/Hello-World, re-clone opens it, missing repo shows "GitHub says that repo is not there…", fake chat started in the clone. **Not driven:** finishing a real sign-in (would add a login to the owner's keyring), more than one account, a machine with no gh. Deliberately left out: Helm's own GitHub login, token and SSH key screens.

@@ -1576,7 +1576,6 @@ export class Daemon {
       case M.GIT_ACCOUNTS: return this.github.accounts(p.cwd);
       case M.GIT_ACCOUNT: return this.github.selectAccount(p.cwd, p.login);
       case M.GITHUB_REPOS: return this.githubRepos.repos({ login: typeof p.login === 'string' ? p.login : undefined, refresh: p.refresh === true });
-      case M.GITHUB_SIGNIN: return this.githubRepos.signIn({ start: p.start === true, cancel: p.cancel === true });
       case M.GITHUB_CLONE: return this.githubRepos.clone({ repo: p.repo, parent: p.parent, login: typeof p.login === 'string' ? p.login : undefined, job: typeof p.job === 'string' ? p.job : undefined });
 
       // The coding tools on this machine. Updating answers at once and runs
