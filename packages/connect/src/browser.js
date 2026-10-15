@@ -263,7 +263,10 @@ export class BrowserManager {
   }
   async saveContext(sessionId, context) {
     const folder = join(this.directory, sessionId); mkdirSync(folder, { recursive: true, mode: 0o700 }); await chmod(this.directory, 0o700); await chmod(folder, 0o700);
-    await this.writePrivate(join(folder, 'storage.json'), await context.storageState({ indexedDB: true }));
+    // A window keeps its own sign-ins in its profile folder; only its cookies
+    // are copied here. Reading site storage visits every framed site in a
+    // hidden tab, which flashes on the owner's screen.
+    await this.writePrivate(join(folder, 'storage.json'), context.helmWindow ? { cookies: await context.cookies(), origins: [] } : await context.storageState({ indexedDB: true }));
   }
   register(sessionId, page) {
     const existing = [...this.tabs.values()].find(t => t.page === page); if (existing) return existing;

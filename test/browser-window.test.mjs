@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-browser-window-'));
 process.env.HELM_NO_SERVICE = '1';
-test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true }));
+test.after(() => rmSync(process.env.HELM_DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 const { BrowserManager } = await import('../packages/connect/src/browser.js');
 const { canOpenWindow, windowName, windowProfile, windowOpen, launchWindow } = await import('../packages/connect/src/browser-window.js');
 const { chromium } = await import('playwright');
@@ -107,6 +107,26 @@ test('Show window opens an empty thread with one blank tab; without a screen it 
   assert.equal((await headless.list('one')).canWindow, false);
 });
 
+test('saving a window’s sign-ins never flashes a tab, even with frames from other sites', { timeout: 60000 }, async t => {
+  const { manager, url } = await setup(t);
+  // The same server under another name is another site, framed in the page.
+  const framed = url.replace('127.0.0.1', 'localhost');
+  const opened = await manager.open('one', { url });
+  await manager.run('one', opened.tab.id, { kind: 'evaluate', script: `new Promise(done => { const f = document.createElement('iframe'); f.src = ${JSON.stringify(framed)}; f.onload = done; document.body.append(f); })` });
+  const context = await manager.contexts.get('one'), page = context.pages()[0];
+  await page.frames().find(f => f.url().startsWith(framed)).evaluate(() => localStorage.setItem('k', 'v'));
+  await page.evaluate(() => { document.cookie = 'who=owner'; });
+  // Playwright hides the tab it opens to read storage; Chromium itself is asked.
+  const cdp = await context.newCDPSession(page), flashed = [];
+  cdp.on('Target.targetCreated', ({ targetInfo }) => { if (targetInfo.type === 'page') flashed.push(targetInfo.url); });
+  await cdp.send('Target.setDiscoverTargets', { discover: true });
+  await new Promise(done => setTimeout(done, 200)); flashed.length = 0;
+  await manager.save('one');
+  await new Promise(done => setTimeout(done, 300));
+  assert.deepEqual(flashed, []);
+  assert.ok(JSON.parse(readFileSync(join(manager.directory, 'one', 'storage.json'), 'utf8')).cookies.some(c => c.name === 'who'));
+});
+
 const realChromium = ['/usr/bin/chromium', '/usr/bin/google-chrome'].find(existsSync);
 test('a Helm restart leaves the window open; the next Helm takes its tabs back without reloading them', { timeout: 90000, skip: !realChromium && 'no system Chromium' }, async t => {
   // The real way of starting a window, kept off the screen for the test.
@@ -131,6 +151,7 @@ test('a Helm restart leaves the window open; the next Helm takes its tabs back w
     const port = Number(readFileSync(join(folder, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
     const browser = await pw.connectOverCDP(`http://127.0.0.1:${port}`).catch(() => null);
     await browser?.newBrowserCDPSession().then(s => s.send('Browser.close')).catch(() => {});
+    for (let i = 0; i < 50 && windowOpen(folder); i++) await new Promise(done => setTimeout(done, 100));
   });
   const listed = await next.list('one');
   assert.equal(listed.open, true, 'the open window is taken back, not listed asleep');
