@@ -16,6 +16,13 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-15 — Agents can prove their own work (ideas from pstack)
+
+**Done and proven:** `scripts/verify-helm.mjs` + the `verify-helm` skill: a private Helm (own HELM_DIR, home, sockets, port; no systemd units) with two free fake accounts, driven in a hidden 390x844 browser. Ran it end to end: send and reply, approval card (Approve/Decline), file attach, `#devices` start screen, `down` leaves no process. A helper drove most of the app with it and wrote `docs/features/` (13 areas; undriven steps are marked).
+**Done:** `AGENTS.md` now holds the owner's rules from the memory notes, and `CLAUDE.md` imports it: Claude chats never read AGENTS.md before. `pause-and-pickup` skill: new HANDOFF entries are short notes like this one. Codex accounts got the plain-English rule in `~/.codex*/AGENTS.md` (not in git).
+**Next:** drive the entries marked "steps not yet driven", starting with rewind and Git.
+**Traps:** `helm delegate --wait` and `delegate-result --wait` returned "done" while the helper was still working (its own helper finishing seems to end the wait). `helm thread` prints the hidden agent brief as if the owner wrote it. Not fixed.
+
 ## 2026-10-11 — Keyboard chat controls, quick chats, connectors, transfers, helper rules
 
 A "delegator and reviewer" round: four `helm delegate` helpers (two Claude
