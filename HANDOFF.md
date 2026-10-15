@@ -16,6 +16,11 @@ on the day its section is dated; none are estimates unless they say so.
 
 ---
 
+## 2026-10-15 — Clone from GitHub in the new chat box
+
+**Done and proven (8902f1f):** New chat → machine → "Clone from GitHub": repos the machine's own `gh` login can reach, search, owner chips (All, Mine, orgs), "Into ~/dev" (changeable, remembered per machine), account + add account, refresh. Typing `owner/name` clones any repo by name. Picking shows a progress bar, then the agent step in that folder; a folder already holding that repo just opens. Signed out: gh's sign-in code + "Open GitHub". Driven in a private Helm at phone and desktop size: signed-out screen, code screen and Cancel (gh process gone), 447-repo list, search, owner filter, real clone of octocat/Hello-World, re-clone opens it, missing repo shows "GitHub says that repo is not there…", fake chat started in the clone. **Not driven:** finishing a real sign-in (would add a login to the owner's keyring), more than one account, a machine with no gh. Deliberately left out: Helm's own GitHub login, token and SSH key screens.
+**Trap hit while deploying:** `~/.helm-release` sat on another chat's unpushed Pi commit (08569bd); moving it to 8902f1f took that fix off. That chat (cb91b1) is putting it back on top. Check `merge-base --is-ancestor HEAD <sha>` there before moving.
+
 ## 2026-10-15 — Helper results arrive once; where helper usage goes
 
 **Done and proven (aa3cdf4):** a parent waiting with `helm delegate --wait` no longer also gets the "A delegated task finished" notice (it lost a sub-second race every time the parent was idle). `--wait` now waits for the end by default (it gave up at 5 min and parents took progress lines for the result). Driven in a private Helm: waited result arrives once, unwaited helper still reports, `--timeout 1` says "Not finished" with exit 3. **Not deployed:** needs a release and a daemon restart, which the owner has not approved yet.
