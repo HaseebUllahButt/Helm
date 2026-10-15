@@ -405,7 +405,9 @@ export function makeHttpHandler({ online, kick, connectedDevices = () => new Set
 
     if (path === '/api/health') {
       const net = loadNetwork();
-      return json(res, 200, { ok: true, network: net?.id ?? null });
+      // `machine`: which of the network's machines this is, so the app window
+      // on it can open a terminal here (Ctrl+Alt+T) with nothing selected.
+      return json(res, 200, { ok: true, network: net?.id ?? null, machine: net?.self ?? null });
     }
 
     // The local key, for a page this machine itself is serving. `helm open`

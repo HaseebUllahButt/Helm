@@ -564,6 +564,8 @@ function Shell({ client, conn, onSignOut }: {
    */
   const nav = useRef<{ stack: MainView[]; selected: string | null; depth: number }>(
     { stack, selected, depth: 0 });
+  /** A machine the wide layout showed by itself, not one you went to. */
+  const autoPicked = useRef<string | null>(null);
 
   /**
    * Leaving an unused chat should not leave an empty row behind. The machine
@@ -609,6 +611,7 @@ function Shell({ client, conn, onSignOut }: {
 
   /** A real move: new view, new history entry, phone-back returns from it. */
   const navigate = (next: MainView[], sel = nav.current.selected) => {
+    autoPicked.current = null;
     discardEmpty(nav.current, next);
     const depth = nav.current.depth + 1;
     nav.current = { stack: next, selected: sel, depth };
@@ -622,6 +625,7 @@ function Shell({ client, conn, onSignOut }: {
 
   /** Same place, fresher snapshot: session records change under a view. */
   const restate = (next: MainView[], sel = nav.current.selected) => {
+    autoPicked.current = null;
     nav.current = { ...nav.current, stack: next, selected: sel };
     setStack(next);
     setSelected(sel);
@@ -888,7 +892,7 @@ function Shell({ client, conn, onSignOut }: {
   }, [liveIds, loadSessions]);
 
   useEffect(() => {
-    if (wide && !selected && envs.length) setSelected(envs[0].id);
+    if (wide && !selected && envs.length) { autoPicked.current = envs[0].id; setSelected(envs[0].id); }
   }, [wide, selected, envs]);
 
   // Keys, on a keyboard. Ctrl/Cmd+K opens the palette; "/" opens it too;
@@ -1386,6 +1390,51 @@ function Shell({ client, conn, onSignOut }: {
       .catch(() => { /* the machine is off or has no shell; nothing to open */ })
       .finally(() => { terminalOpening.current = false; });
   }, [sessions, openSession, client, loadSessions]);
+  // The machine this window runs on, when it is one of yours: the laptop's
+  // own app window is served by the laptop at a loopback address.
+  const [hereId, setHereId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!LOOPBACK_HOST.test(location.hostname)) return;
+    fetch(`${location.origin}/api/health`, { signal: AbortSignal.timeout(5000) })
+      .then((r) => r.ok ? r.json() : null)
+      .then((health) => setHereId(typeof health?.machine === 'string' ? health.machine : null))
+      .catch(() => { /* an older machine does not say; the other choices still work */ });
+  }, []);
+  // Ctrl/Cmd+Alt+T: a new terminal right away, like a desktop's own key.
+  // On the machine you are in; with none chosen, this computer when the app
+  // runs on one of your machines, else where you last used a terminal, else
+  // the first machine that is on.
+  const instantTerminal = useRef<() => void>(() => {});
+  instantTerminal.current = () => {
+    const online = envs.filter((e) => e.online);
+    const current = nav.current.stack.at(-1);
+    const global = !current || ['usage', 'brain', 'links', 'updates', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
+      && !(current.kind === 'usage' && current.envId);
+    const chosen = !global && nav.current.selected !== autoPicked.current ? nav.current.selected : null;
+    const lastUsed = (e: Environment) => Math.max(0, ...(sessions[e.id] ?? []).filter(ownTerminal).map((s) => s.updatedAt ?? 0));
+    const machine = online.find((e) => e.id === chosen)
+      ?? online.find((e) => e.id === hereId)
+      ?? [...online].sort((a, b) => lastUsed(b) - lastUsed(a)).find((e) => lastUsed(e) > 0)
+      ?? online[0];
+    if (!machine || terminalOpening.current) return;
+    const chat = current?.kind === 'session' && !current.session.quick && current.session.engine !== 'shell' && machine.id === chosen ? current.session : null;
+    terminalOpening.current = true;
+    client.rpc<{ session: Session }>(machine.id, 'session.start', { cwd: chat?.cwd || '~', profileId: 'shell' }, 45_000)
+      .then((r) => { loadSessions(machine.id); if (r?.session) openSession(machine.id, r.session); })
+      .catch(() => { /* the machine is off or has no shell; nothing to open */ })
+      .finally(() => { terminalOpening.current = false; });
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== 'KeyT' || !(event.ctrlKey || event.metaKey) || !event.altKey || event.shiftKey || event.isComposing
+          || document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      instantTerminal.current();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
   // Ctrl/Cmd+Shift+T: pick a device, land in its terminal. Only the Helm app
   // window gets this key; an ordinary browser tab keeps it for "reopen tab".
   const [terminalPicker, setTerminalPicker] = useState(false);
