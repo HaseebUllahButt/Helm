@@ -3211,7 +3211,12 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   text-decoration: underline dotted; text-decoration-color: var(--icon);
   text-decoration-thickness: 2px; text-underline-offset: 7px; overflow-wrap: anywhere;
 }
-.empty-chat-sub { margin: 10px 0 0; font-size: var(--t-body); color: var(--mutedfg); }
+.empty-chat-sub {
+  margin: 12px 0 0; font-size: var(--t-meta); line-height: 1.4; letter-spacing: 0.01em;
+  color: var(--mutedfg); text-wrap: balance;
+}
+.empty-chat-machine { color: var(--text); font-weight: 500; }
+.empty-chat-dot { color: var(--icon); opacity: 0.6; padding: 0 2px; }
 @keyframes empty-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .empty-chat { animation: none; } }
 .empty-chat.still { animation: none; }

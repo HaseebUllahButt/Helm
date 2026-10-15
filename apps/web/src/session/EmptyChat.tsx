@@ -2,6 +2,13 @@ import { useLayoutEffect, useRef } from 'react';
 
 const folderName = (p = '') => p.replace(/\/+$/, '').split('/').pop() || '~';
 
+/** "claude-opus-5-5" reads as "Opus 5.5"; names that are already words stay as they are. */
+const modelName = (m: string) => {
+  const claude = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/i.exec(m);
+  if (claude) return `${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`;
+  return m;
+};
+
 /**
  * What a chat with nothing said yet looks like: a big question over the
  * composer, which sits in the middle of the page instead of at the bottom.
@@ -24,7 +31,12 @@ export function EmptyChat({ cwd, quick, brain, machine, agent, model, note, stil
           ? <>What should we build in <span className="empty-chat-folder" title={cwd}>{folder}</span>?</>
           : quick ? 'What is on your mind?' : brain ? 'What should we work on?' : 'What should we build?'}
       </h2>
-      <p className="empty-chat-sub">{[machine, agent, model].filter(Boolean).join(' · ')}{note}</p>
+      <p className="empty-chat-sub">
+        {[machine, agent, model && modelName(model)].filter(Boolean).map((part, i) => (
+          <span key={i} className={i ? undefined : 'empty-chat-machine'}>{i > 0 && <span className="empty-chat-dot" aria-hidden> · </span>}{part}</span>
+        ))}
+        {note}
+      </p>
     </div>
   );
 }

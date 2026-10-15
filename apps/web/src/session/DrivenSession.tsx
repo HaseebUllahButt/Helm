@@ -707,7 +707,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       <ExternalSessionNotice session={session}
         onTakeOver={(cancel) => client.rpc(env.id, 'session.takeover', { id: session.id, cancel }, 20_000)} />
       <span ref={dockAnchor} hidden />
-      {firstMessage && <EmptyChat cwd={session.cwd} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={modelNow} still={cameUpEmpty} />}
+      {firstMessage && <EmptyChat cwd={session.cwd} quick={session.quick} brain={session.brain} machine={env.name} agent={engine} model={options?.labels?.[modelNow] ?? modelNow} still={cameUpEmpty} />}
       <Transcript
         turns={transcriptTurns} status={status} loaded={log.loaded}
         readVisual={readVisual} openAgent={openAgent}
