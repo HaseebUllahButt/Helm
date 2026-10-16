@@ -14,6 +14,12 @@ import { cacheRatesFor } from './pricing.js';
  * thing a tap can cost, and it happens silently: the turn just comes back more
  * expensive. So the tap says so first.
  *
+ * Whether a change breaks the cache is the CLI's to say, not Helm's guess.
+ * A model switch always does (caches belong to one model). A thinking-level
+ * change does not on Claude Opus 5.5 and its peers when the CLI sends effort
+ * inside the conversation; Claude says so in its start-up message
+ * (`per_turn_effort_active`), and the app warns only when it says false.
+ *
  * Measured across this owner's whole history, mid-thread switches accounted
  * for about 0.53M cache-write tokens - real, but small. This exists to keep it
  * small on the thread where it would not be.
@@ -44,8 +50,11 @@ export function cachedTokens(turns = []) {
  * saying. A model with no published rate gives a token figure and no dollar
  * figure, rather than an invented one.
  */
-export function recacheCost(turns, model, engine, asOfDate = new Date().toISOString().slice(0, 10)) {
-  const tokens = cachedTokens(turns);
+export function recacheCost(turns, model, engine, asOfDate = new Date().toISOString().slice(0, 10), size) {
+  // The size the CLI reports for the conversation now beats the last turn's
+  // cache reads: those are summed over every request in the turn, and they
+  // still show the old size after a compaction.
+  const tokens = typeof size === 'number' ? size : cachedTokens(turns);
   if (tokens < WORTH_SAYING) return null;
   const rates = cacheRatesFor(model, engine, asOfDate);
   return { tokens, costUsd: rates ? (tokens * rates.cacheWrite) / 1e6 : null };
@@ -58,7 +67,7 @@ const fmtTokens = (n) =>
 export function recacheWarning(kind, r) {
   const what = kind === 'model'
     ? "Switching model starts this conversation's prompt cache again - caches belong to one model."
-    : "Changing the thinking level invalidates this conversation's prompt cache.";
+    : "The agent says changing the thinking level now rewrites this conversation's prompt cache.";
   const price = r.costUsd == null
     ? `About ${fmtTokens(r.tokens)} cached tokens would be written again (this model has no published rate, so the cost is not known).`
     : `About ${fmtTokens(r.tokens)} cached tokens would be written again, roughly $${r.costUsd.toFixed(2)} on the next turn.`;

@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
  */
 // The update lock lives in HELM_DIR; never the real one from a test.
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-update-dir-'));
-const { selfUpdate, unsafeRestartSessions, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted } = await import('../packages/connect/src/update.js');
+const { selfUpdate, unsafeRestartSessions, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, watchCheckout } = await import('../packages/connect/src/update.js');
 const { codexProcId } = await import('../packages/connect/src/hosted-process.js');
 
 const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
@@ -372,4 +372,21 @@ test('unsaved edits never take a synced version, and a version saved here is bui
   assert.equal(built.updated, true);
   assert.equal(git(a, ['rev-parse', 'HEAD']), next, 'the saved change stays where it is');
   assert.equal((await rebuildIfCommitted(next, a, { rebuild: false, restart: false })).reason, 'nothing new');
+});
+
+test('a version checked out in the install is noticed in seconds, and a status that changes nothing is not', async (t) => {
+  const { remote, installed } = make();
+  commit(remote, 'two');
+  git(installed, ['fetch', '-q', 'origin']);
+  const moves = [];
+  const stop = watchCheckout((sha) => moves.push(sha), installed);
+  t.after(stop);
+  await new Promise((r) => setTimeout(r, 300));
+  git(installed, ['status']);
+  await new Promise((r) => setTimeout(r, 2200));
+  assert.deepEqual(moves, [], 'an index refresh is not a new version');
+  git(installed, ['checkout', '-q', '--detach', 'origin/main']);
+  const until = Date.now() + 5000;
+  while (!moves.length && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(moves, [git(installed, ['rev-parse', 'HEAD'])]);
 });

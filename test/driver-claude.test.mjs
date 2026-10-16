@@ -751,7 +751,7 @@ async function contextFeed(t, { settings, modelUsage }) {
   const reply = (usage, extra = {}) => feed({ type: 'assistant', parent_tool_use_id: null,
     message: { model: 'claude-opus-5-5[1m]', content: [], usage }, ...extra });
   const result = () => feed({ type: 'result', subtype: 'success', is_error: false, modelUsage, usage: { input_tokens: 999_999, output_tokens: 1 } });
-  return { log, reply, result, feed };
+  return { log, reply, result, feed, driver };
 }
 
 test('Claude reports context from the last top-level reply, sized by the compaction window in settings', async (t) => {
@@ -779,6 +779,18 @@ test('compacting drops the ring to what is left at once, not after the next repl
   // A Claude that does not say empties the ring until the next reply does.
   feed({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto' } });
   assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 0, window: 1_000_000, compacted: true });
+});
+
+test("whether a thinking-level change keeps the cache is Claude's word, and a refusal turns it off", async (t) => {
+  const { feed, driver } = await contextFeed(t, {});
+  const inits = [];
+  driver.on('init', (info) => inits.push(info.effortKeepsCache));
+  feed({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-5-5', effort: 'high', per_turn_effort_active: true });
+  feed({ type: 'system', subtype: 'per_turn_effort_changed', per_turn_effort_active: false, uuid: 'u', session_id: 's' });
+  // A Claude too old to say leaves it unknown, never a guess.
+  feed({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-5-5', effort: 'high' });
+  assert.deepEqual(inits, [true, false, null]);
+  assert.equal(driver.info.model, 'claude-opus-5-5');
 });
 
 test('Claude uses the model window when settings say nothing', async (t) => {

@@ -437,16 +437,18 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     mode: 'session.mode', speed: 'session.speed',
   };
   /**
-   * Model and thinking level are the two that cost something to change here:
-   * both break the provider's prompt-cache prefix, so the whole conversation
-   * is written to cache again on the next turn. Mode and speed do not, and are
-   * not worth a confirmation. Below the threshold in `recache.ts` none of them
-   * are - a short thread costs nothing to re-cache and a dialog would be noise.
+   * A model switch always breaks the provider's prompt cache: caches belong
+   * to one model. A thinking-level change only does when the CLI says so
+   * (`effortKeepsCache === false`); Claude on Opus 5.5 keeps the cache, and
+   * Helm does not guess for a CLI that says nothing. The size is the one the
+   * CLI reports now, so a compacted chat is not priced at its old size.
+   * Below the threshold in `recache.ts` none of this is worth a dialog.
    */
   const [ask, setAsk] = useState<null | 'kill' | 'rename' | { kind: Kind; value: string; warn: string }>(null);
   const pick = (kind: Kind, value: string) => {
-    if (kind === 'model' || kind === 'effort') {
-      const cost = recacheCost(log.turns, modelNow, session.engine);
+    if (kind === 'model' || (kind === 'effort' && session.effortKeepsCache === false)) {
+      const size = session.context ? (session.context.compacted ? 0 : session.context.used) : undefined;
+      const cost = recacheCost(log.turns, modelNow, session.engine, undefined, size);
       if (cost) { setAsk({ kind, value, warn: recacheWarning(kind, cost) }); return; }
     }
     void call(async () => {

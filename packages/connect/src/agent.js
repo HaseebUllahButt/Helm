@@ -50,7 +50,7 @@ import { TaskTransfers } from './task-transfer.js';
 import { TunnelSender, TunnelReceiver, TUNNEL_SOCKET_LIMIT } from './tunnel-flow.js';
 import { Transfers } from './transfers.js';
 import { CliUpdater } from './cli-updates.js';
-import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted } from './update.js';
+import { selfUpdate, currentVersion, makeBundle, syncFromBundle, rebuildIfCommitted, watchCheckout } from './update.js';
 import { synchronizeVersion } from './version-sync.js';
 import * as gitq from './git.js';
 import { createGithubMonitor } from './github.js';
@@ -323,12 +323,16 @@ export class Daemon {
   #versionP = null;
   #about = null;
   #wake = null;
+  #stopWatchCheckout = null;
   #syncing = false;
+  #syncAgain = false;
   /** Set when this machine and another both have their own changes. */
   syncNote = null;
 
   async #syncVersions() {
-    if (this.#syncing || process.env.HELM_NO_UPDATE === '1' || process.env.HELM_NO_SERVICE === '1') return;
+    // A version checked out mid-round is looked at again once the round ends.
+    if (this.#syncing) { this.#syncAgain = true; return; }
+    if (process.env.HELM_NO_UPDATE === '1' || process.env.HELM_NO_SERVICE === '1') return;
     // Only a daemon the service manager started can restart itself into a
     // new version: systemd on Linux, the LaunchAgent on macOS.
     if (!process.env.INVOCATION_ID && process.env.XPC_SERVICE_NAME !== 'dev.helm.serve') return;
@@ -339,10 +343,13 @@ export class Daemon {
       const r = await synchronizeVersion({ running, currentVersion, rebuildIfCommitted,
         selfUpdate, syncFromBundle, net, id: this.id, rpc: hubRpc });
       this.syncNote = r.note ?? null;
-      if (r.updated) console.log('[helm] updated Helm - restarting when safe');
+      if (r.updated) { this.#syncAgain = false; console.log('[helm] updated Helm - restarting when safe'); }
     } catch (err) {
       console.error('[helm] version sync:', err?.message || err);
-    } finally { this.#syncing = false; }
+    } finally {
+      this.#syncing = false;
+      if (this.#syncAgain && !this.#stopped) { this.#syncAgain = false; void this.#syncVersions(); }
+    }
   }
   #offlineSince = null;
   #tunnels = new Map();
@@ -599,6 +606,10 @@ export class Daemon {
     first.unref?.();
     this.#wake = setInterval(() => { if (!this.#stopped) void this.#syncVersions(); }, SYNC_EVERY_MS);
     this.#wake.unref?.();
+    // A version checked out here is taken at once, not on the next round.
+    if (process.env.HELM_NO_UPDATE !== '1' && process.env.HELM_NO_SERVICE !== '1') {
+      this.#stopWatchCheckout = watchCheckout(() => { if (!this.#stopped) void this.#syncVersions(); });
+    }
 
     // Test runs and `HELM_NO_UPDATE` machines never touch the coding tools.
     if (process.env.HELM_NO_UPDATE !== '1' && process.env.HELM_NO_SERVICE !== '1') this.cliUpdates.start();
@@ -677,6 +688,7 @@ export class Daemon {
     clearInterval(this.#brainTimer);
     clearInterval(this.#reconcile);
     clearInterval(this.#wake);
+    this.#stopWatchCheckout?.();
     this.cliUpdates?.stop();
     this.taskTransfers?.stop();
     await this.sendEngine?.stop();

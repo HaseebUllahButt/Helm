@@ -109,3 +109,11 @@ test('the threshold is where it says it is', () => {
   assert.equal(recacheCost(threadWith(WORTH_SAYING - 1), 'claude-opus-5', 'claude', at), null);
   assert.ok(recacheCost(threadWith(WORTH_SAYING), 'claude-opus-5', 'claude', at));
 });
+
+test("the conversation's size as the CLI reports it beats the last turn's cache reads", () => {
+  // Cache reads add up over every request in a turn and keep the old size
+  // after a compaction; the size the CLI reports now does neither.
+  assert.equal(recacheCost(threadWith(1_300_000), 'claude-opus-5', 'claude', at, 8_538), null);
+  assert.equal(recacheCost(threadWith(1_300_000), 'claude-opus-5', 'claude', at, 0), null);
+  assert.equal(recacheCost(threadWith(100), 'claude-opus-5', 'claude', at, 400_000).tokens, 400_000);
+});

@@ -2522,7 +2522,7 @@ export class Sessions extends EventEmitter {
     d.on('init', (info) => {
       if (!info) return;
       let changed = false;
-      for (const [key, target] of [['model', 'engineModel'], ['effort', 'engineEffort']]) {
+      for (const [key, target] of [['model', 'engineModel'], ['effort', 'engineEffort'], ['effortKeepsCache', 'effortKeepsCache']]) {
         // A partial init must not erase settings another provider event reported.
         if (info[key] === undefined) continue;
         if (s[target] !== info[key]) { s[target] = info[key]; changed = true; }

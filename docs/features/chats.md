@@ -67,10 +67,17 @@ quick chat with the Fake agent (see [README](README.md)).
 - **Reach:** tap a chip. Keys: Shift+Tab next mode, Ctrl/⌘+Shift+M next
   model (favourites first), Ctrl/⌘+Shift+E next thinking level. "?" lists
   every key.
+- **Cache warning:** on a long chat, switching model asks first, priced at
+  the size the CLI reports now (small right after a compact). Changing
+  thinking level asks only when the CLI itself says it rewrites the cache:
+  Claude sends `per_turn_effort_active` at start-up and
+  `per_turn_effort_changed` if that stops (Opus 5.5 on 2.1.301 says true,
+  checked 2026-10-16). A CLI that says nothing gets no warning.
 - **Prove:** steps not yet driven. `$V click "permissions: yolo"`, pick a
   mode, then `text` should show the new mode name on the chip.
 - **Tests:** `test/browser/chat-shortcuts`, `global-keys`, `effort-default`,
-  `slash-model-context`; `test/chat-keys`, `modes`, `session-settings`.
+  `slash-model-context`; `test/chat-keys`, `modes`, `session-settings`,
+  `recache`, `driver-claude`.
 
 ## @ chats and / commands
 - **Sees:** typing `@` lists up to three other chats to add as context;

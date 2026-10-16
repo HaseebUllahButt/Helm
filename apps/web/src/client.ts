@@ -131,6 +131,8 @@ export interface Session {
   /** What the CLI said it actually started with, when nothing was picked. */
   engineModel?: string | null;
   engineEffort?: string | null;
+  /** The CLI's word on whether a thinking-level change keeps the prompt cache; null or absent when it has not said. */
+  effortKeepsCache?: boolean | null;
   permissionControl?: 'bash-guard' | 'none' | null;
   mode?: string | null;
   speed?: string | null;

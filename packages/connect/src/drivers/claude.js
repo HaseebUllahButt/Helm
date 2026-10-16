@@ -562,7 +562,18 @@ export class ClaudeDriver extends Driver {
       this.#commands = (m.slash_commands ?? [])
         .filter((name) => typeof name === 'string' && name)
         .map((name) => ({ name, source: 'Claude' }));
-      this.info = { model: m.model, permissionMode: m.permissionMode, version: m.claude_code_version, effort: m.effort };
+      // Whether a thinking-level change keeps the prompt cache is Claude's to
+      // say: true when it sends effort inside the conversation, false when a
+      // change rewrites the cached prefix, absent when it does not know.
+      this.info = { model: m.model, permissionMode: m.permissionMode, version: m.claude_code_version, effort: m.effort,
+        effortKeepsCache: typeof m.per_turn_effort_active === 'boolean' ? m.per_turn_effort_active : null };
+      this.emit('init', this.info);
+      return;
+    }
+    // Claude stopped sending effort per turn (the server refused it): from
+    // now on a thinking-level change does rewrite the cache.
+    if (m.subtype === 'per_turn_effort_changed') {
+      this.info = { ...(this.info ?? { model: this.model, effort: this.effort }), effortKeepsCache: m.per_turn_effort_active === true };
       this.emit('init', this.info);
       return;
     }

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { hasActiveTransfers } from '@helm/protocol/transfer-activity';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync, openSync, closeSync, statSync, watch } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -215,6 +215,38 @@ export async function rebuildIfCommitted(running, dir = ROOT, { rebuild = true, 
     if (!running || head === running) return { updated: false, reason: 'nothing new' };
     return applyCommit(dir, git, { head: running, tip: head, rebuild, restart, rollback: false });
   });
+}
+
+/**
+ * Calls `onMove` soon after this checkout's commit changes - a new version
+ * checked out or committed here - instead of on the next two-minute check.
+ * Other machines only copy a version once this one runs it, so that wait
+ * used to hold up every machine. Git rewrites HEAD and index for a checkout
+ * or a commit; reading the commit back filters out index refreshes that
+ * change nothing (git status writes the index too).
+ */
+export function watchCheckout(onMove, dir = ROOT) {
+  let timer = null, last = null, watcher = null, stopped = false;
+  const head = () => exec('git', ['-C', dir, 'rev-parse', 'HEAD']).then((r) => r.stdout.trim(), () => null);
+  const check = async () => {
+    const now = await head();
+    if (stopped || !now) return;
+    if (last && now !== last) onMove(now);
+    last = now;
+  };
+  exec('git', ['-C', dir, 'rev-parse', '--absolute-git-dir']).then(({ stdout }) => {
+    if (stopped) return;
+    void check();
+    watcher = watch(stdout.trim(), (_event, name) => {
+      if (name && !['HEAD', 'index', 'ORIG_HEAD'].includes(String(name))) return;
+      clearTimeout(timer);
+      timer = setTimeout(check, 1500);
+      timer.unref?.();
+    });
+    watcher.on('error', () => {});
+    watcher.unref?.();
+  }).catch(() => {});
+  return () => { stopped = true; clearTimeout(timer); watcher?.close(); };
 }
 
 /** An update that died mid-way must not block the next one forever. */

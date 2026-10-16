@@ -21,6 +21,8 @@ export function recacheCost(
   model: string,
   engine: string,
   asOfDate?: string,
+  /** The conversation's size as the CLI reports it now; preferred over the turns. */
+  size?: number,
 ): Recache | null;
 
 export function recacheWarning(kind: 'model' | 'effort', r: Recache): string;
