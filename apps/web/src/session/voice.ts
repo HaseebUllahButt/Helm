@@ -31,7 +31,7 @@ function pickFormat(): string {
 }
 
 /** Bytes to base64 without blowing the stack on a minute of audio. */
-function toBase64(buf: ArrayBuffer): string {
+export function toBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
   let out = '';
   for (let i = 0; i < bytes.length; i += 0x8000) {
@@ -78,7 +78,44 @@ export const canRecord = () =>
  * when it ends: the app uses it to time the machines that could do the work,
  * so the recording goes to the quickest one.
  */
-export type Transcribe = ((audio: string, mime: string) => Promise<string>) & { warm?: () => () => void };
+export type Transcribe = ((audio: Blob, mime: string) => Promise<string>) & { warm?: () => () => void };
+
+/**
+ * Groq, called from this device. A machine hands over its key once
+ * (`voice.direct`); after that a recording goes straight from here to Groq,
+ * with no machine in the way - on a phone that trip was most of the wait.
+ */
+export interface DirectVoice { key: string; model: string; prompt: string; endpoint: string }
+const KEPT = 'helm.voice.direct';
+
+export function keptVoice(): DirectVoice | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(KEPT) || 'null');
+    return v && typeof v.key === 'string' && typeof v.endpoint === 'string' ? v : null;
+  } catch { return null; }
+}
+
+export function keepVoice(v: DirectVoice | null) {
+  try { if (v) localStorage.setItem(KEPT, JSON.stringify(v)); else localStorage.removeItem(KEPT); } catch { /* the machine route still works */ }
+}
+
+/** Groq picks the decoder from the file name, as in voice.js. */
+const EXT: Record<string, string> = { 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'mp4', 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/aac': 'aac', 'audio/x-m4a': 'm4a', 'audio/m4a': 'm4a' };
+
+/** A refused key says so (`status`), so the caller can fetch a fresh one. */
+export async function groqDirect(v: DirectVoice, audio: Blob, mime: string): Promise<string> {
+  const form = new FormData();
+  form.append('file', audio, `speech.${EXT[mime.split(';')[0].trim().toLowerCase()] ?? 'webm'}`);
+  form.append('model', v.model);
+  form.append('response_format', 'json');
+  form.append('prompt', v.prompt);
+  const res = await fetch(v.endpoint, { method: 'POST', headers: { authorization: `Bearer ${v.key}` }, body: form, signal: AbortSignal.timeout(45_000) });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw Object.assign(new Error(body?.error?.message || `Groq answered ${res.status}`), { status: res.status });
+  // Whisper answers silence with a stray "." - not something a person said.
+  const text = String(body?.text ?? '').trim();
+  return /[\p{L}\p{N}]/u.test(text) ? text : '';
+}
 
 export function useDictation({ transcribe, onText }: {
   transcribe: Transcribe;
@@ -185,7 +222,7 @@ export function useDictation({ transcribe, onText }: {
         if (blob.size > MAX_AUDIO_BYTES) { setState('idle'); setError('that recording is too long'); return; }
         setState('working');
         try {
-          const text = (await transcribe(toBase64(await blob.arrayBuffer()), type)).trim();
+          const text = (await transcribe(blob, type)).trim();
           if (text) onText(text); else setError('nothing was said');
         } catch (e: any) {
           setError(e?.message || 'could not transcribe that');

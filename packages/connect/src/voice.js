@@ -10,11 +10,12 @@ import { loadSettings } from './settings.js';
  * composer has a microphone. The recording is made on the device and the
  * words come back as text; what happens in between is here.
  *
- * **The key never leaves the machine.** A device sends audio to a machine in
- * the network and gets a transcript back - the same bargain as every other
- * credential in helm, where a profile references a secret that stays where
- * the work runs. Nothing about the phone ever holds a Groq key, so a paired
- * device that is lost cannot spend anyone's credit.
+ * **The device calls Groq itself** (owner's choice, 2026-10-16). Sending the
+ * audio through a machine cost seconds on a phone, all of it in the trip;
+ * Groq answers in well under one. So a paired device asks a machine once for
+ * the key (`voice.direct`), keeps it, and posts the recording straight to
+ * Groq. The price: a lost device holds the key until it is changed in
+ * Settings. The machine route (`transcribe` below) stays as the fallback.
  *
  * Transcription is Groq's hosted Whisper, because that is what the owner
  * already uses: `~/.config/groq-api-key` is what their Super+D dictation
@@ -30,6 +31,18 @@ const KEY_FILES = [
 
 const MODEL = process.env.HELM_VOICE_MODEL || 'whisper-large-v3-turbo';
 const ENDPOINT = 'https://api.groq.com/openai/v1/audio/transcriptions';
+// What the speaker is likely to say. Names that Whisper has never heard -
+// helm, herdr, Codex, sslip - come back mangled without it.
+const PROMPT = 'helm, herdr, Codex, Claude Code, opencode, OpenCode 2, Devin, sslip.io, PWA, repo, daemon.';
+
+/** What a device needs to call Groq itself: one place for model and prompt. */
+export function directVoice() {
+  const key = groqKey();
+  if (!key) {
+    throw Object.assign(new Error('no Groq key on this machine - add one in Settings, under Dictation'), { code: 'no_key' });
+  }
+  return { key, model: MODEL, prompt: PROMPT, endpoint: ENDPOINT };
+}
 
 /**
  * A minute of speech is a long prompt; ten is a mistake, and it would be paid
@@ -120,9 +133,7 @@ export async function transcribe({ audio, mime = 'audio/webm', prompt, signal } 
   form.append('file', new Blob([bytes], { type: mime }), `speech.${extensionFor(mime)}`);
   form.append('model', MODEL);
   form.append('response_format', 'json');
-  // What the speaker is likely to say. Names that Whisper has never heard -
-  // helm, herdr, Codex, sslip - come back mangled without it.
-  form.append('prompt', prompt || 'helm, herdr, Codex, Claude Code, opencode, OpenCode 2, Devin, sslip.io, PWA, repo, daemon.');
+  form.append('prompt', prompt || PROMPT);
 
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);

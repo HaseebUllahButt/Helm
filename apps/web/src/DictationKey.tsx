@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { Client, Environment } from './client';
 import { Icon } from './Icon';
+import { keepVoice } from './session/voice';
 
 /**
  * The Groq key dictation runs on. Pasted once here, checked with Groq, and
@@ -41,6 +42,8 @@ export function DictationKey({ client, envs, onSaved }: {
         }
       }
       if (!saved.length) throw new Error(failed.length ? `Could not save it: ${failed.join(', ')}` : 'No machine is on to keep it');
+      // This device called Groq with the old key; the next dictation asks for the new one.
+      keepVoice(null);
       onSaved(saved);
       const names = online.filter((env) => saved.includes(env.id)).map((env) => env.name);
       const off = envs.filter((env) => !env.online).map((env) => env.name);

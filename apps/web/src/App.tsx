@@ -1,5 +1,6 @@
 import { useCopySelection } from './useCopySelection';
 import { knownInside, listFolder, loadFolders } from './folderIndex';
+import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice, type Transcribe } from './session/voice';
 import { useDismiss } from './useDismiss';
 import { reloadApp } from './reload';
 import { openPrivateLink } from './privateLink';
@@ -1278,27 +1279,55 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const voiceEnvs = envs.filter((e) => e.online && e.info.voice);
-  // Any machine with a key gives the same words, so the recording goes to the
-  // one quickest to reach from this device - not the chat's own machine, which
-  // may sit behind a slow VPN while another is a few milliseconds away. The
-  // chat's machine wins a tie and is the guess while nothing is measured.
+  /**
+   * Speech to text runs on this device: it calls Groq itself with the key a
+   * machine handed over once (see voice.ts). A machine is only asked for the
+   * key, or - when the direct call cannot be made - to transcribe as before,
+   * the quickest one to reach first and the chat's own machine on a tie.
+   */
   const transcribeVia = (preferred?: string) => {
-    if (!voiceEnvs.length) return undefined;
-    const run = async (audio: string, mime: string) => {
+    if (!voiceEnvs.length && !keptVoice()) return undefined;
+    const byReach = () => {
       const speed = (id: string) => client.latency(id) ?? Infinity;
-      const order = [...voiceEnvs].sort((a, b) => speed(a.id) - speed(b.id)
+      return [...voiceEnvs].sort((a, b) => speed(a.id) - speed(b.id)
         || Number(b.id === preferred) - Number(a.id === preferred));
+    };
+    let asking: Promise<DirectVoice | null> | null = null;
+    const fetchKey = () => asking ??= (async () => {
+      for (const e of byReach()) {
+        try { const v = await client.rpc<DirectVoice>(e.id, 'voice.direct', {}, 20_000); keepVoice(v); return v; }
+        catch { /* an older machine, or no key there */ }
+      }
+      return null;
+    })().finally(() => { asking = null; });
+    const run = async (audio: Blob, mime: string) => {
+      let direct = keptVoice() ?? await fetchKey();
+      if (direct) {
+        try { return await groqDirect(direct, audio, mime); }
+        catch (err: any) {
+          // A changed key: ask again once. Anything else falls back below.
+          if (err?.status === 401 || err?.status === 403) {
+            keepVoice(null);
+            direct = await fetchKey();
+            if (direct) { try { return await groqDirect(direct, audio, mime); } catch { /* fall back */ } }
+          }
+        }
+      }
+      const data = toBase64(await audio.arrayBuffer());
       let last = '';
-      for (const e of order) {
+      for (const e of byReach()) {
         try {
-          const r = await client.rpc<{ text: string }>(e.id, 'voice.transcribe', { audio, mime }, 60_000);
+          const r = await client.rpc<{ text: string }>(e.id, 'voice.transcribe', { audio: data, mime }, 60_000);
           return r.text;
         } catch (err: any) { last = err?.message ?? 'transcription failed'; }
       }
       throw new Error(last || 'no machine could transcribe that');
     };
-    // Timed while you speak, so the choice is made on numbers, not a guess.
+    // While you speak: fetch the key if this device has none yet, and time
+    // the machines in case the direct call has to fall back.
     const warm = () => {
+      if (keptVoice()) return () => {};
+      void fetchKey();
       const stops = voiceEnvs.map((e) => client.watchLatency(e.id));
       return () => stops.forEach((stop) => stop());
     };
@@ -5061,7 +5090,7 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
   onNewTerminal?: () => Promise<void>;
   onBack: () => void; onClosed: () => void; onArchived: () => void; onSession: (s: Session) => void;
   /** Absent when no machine in the network holds a Groq key. */
-  onTranscribe?: (audio: string, mime: string) => Promise<string>;
+  onTranscribe?: Transcribe;
 }) {
   const isShell = session.engine === 'shell';
   const isExternal = !!session.external;

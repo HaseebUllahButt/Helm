@@ -112,16 +112,37 @@ test('a machine with no key says so instead of calling out', async () => {
     // paths.js reads HOME once at import, so this runs in a child.
     const { execFileSync } = await import('node:child_process');
     const out = execFileSync(process.execPath, ['--input-type=module', '-e', `
-      const { canTranscribe, transcribe } = await import('${new URL('../packages/connect/src/voice.js', import.meta.url).pathname}');
+      const { canTranscribe, transcribe, directVoice } = await import('${new URL('../packages/connect/src/voice.js', import.meta.url).pathname}');
       console.log('can:', canTranscribe());
       try { await transcribe({ audio: Buffer.from('x') }); } catch (e) { console.log('err:', e.code, e.message); }
+      try { directVoice(); } catch (e) { console.log('direct:', e.code); }
     `], { env: { ...process.env, HOME: home, HELM_DIR: join(home, '.helm') }, encoding: 'utf8' });
     assert.match(out, /can: false/);
     assert.match(out, /err: no_key/);
+    assert.match(out, /direct: no_key/);
   } finally {
     process.env.HOME = saved.HOME;
     if (saved.k1) process.env.GROQ_API_KEY = saved.k1;
     if (saved.k2) process.env.HELM_GROQ_KEY = saved.k2;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a device gets what it needs to call Groq itself: the key, the model and the prompt', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-voice-direct-'));
+  const home = join(dir, 'home');
+  mkdirSync(join(home, '.config'), { recursive: true });
+  writeFileSync(join(home, '.config', 'groq-api-key'), 'gsk_test_direct_key\n');
+  try {
+    const { execFileSync } = await import('node:child_process');
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', `
+      const { directVoice } = await import('${new URL('../packages/connect/src/voice.js', import.meta.url).pathname}');
+      console.log(JSON.stringify(directVoice()));
+    `], { env: { ...process.env, HOME: home, HELM_DIR: join(home, '.helm'), GROQ_API_KEY: '', HELM_GROQ_KEY: '' }, encoding: 'utf8' });
+    const v = JSON.parse(out);
+    assert.equal(v.key, 'gsk_test_direct_key');
+    assert.equal(v.endpoint, 'https://api.groq.com/openai/v1/audio/transcriptions');
+    assert.equal(v.model, 'whisper-large-v3-turbo');
+    assert.match(v.prompt, /Claude Code/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
