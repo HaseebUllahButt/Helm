@@ -1389,8 +1389,10 @@ export class Client {
     // Image uploads can fill the data channel's send buffer while its
     // synchronous chunk loop is still running. Use the hub for these writes
     // when connected, choosing the route before sending any prompt bytes.
-    const imageUpload = ['session.input', 'session.deliver', 'session.queue-edit'].includes(method)
-      && params.attachments?.some((image: { data?: string }) => (image.data?.length ?? 0) > DC_CHUNK_AT);
+    // A recording is the same shape of write: one large frame.
+    const imageUpload = (['session.input', 'session.deliver', 'session.queue-edit'].includes(method)
+      && params.attachments?.some((image: { data?: string }) => (image.data?.length ?? 0) > DC_CHUNK_AT))
+      || (method === 'voice.transcribe' && (params.audio?.length ?? 0) > DC_CHUNK_AT);
     const direct = peer?.ready && peer.channel.readyState === 'open'
       && !((settingsWrite || imageUpload) && this.connected);
     if (!direct && !this.connected) {

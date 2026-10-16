@@ -73,8 +73,15 @@ export const canRecord = () =>
   && !!navigator.mediaDevices?.getUserMedia
   && typeof (window as any).MediaRecorder === 'function';
 
+/**
+ * Words from a recording. `warm` is called as recording starts and its return
+ * when it ends: the app uses it to time the machines that could do the work,
+ * so the recording goes to the quickest one.
+ */
+export type Transcribe = ((audio: string, mime: string) => Promise<string>) & { warm?: () => () => void };
+
 export function useDictation({ transcribe, onText }: {
-  transcribe: (audio: string, mime: string) => Promise<string>;
+  transcribe: Transcribe;
   onText: (text: string) => void;
 }) {
   const [state, setState] = useState<DictationState>(() => (canRecord() ? 'idle' : 'unsupported'));
@@ -93,8 +100,10 @@ export function useDictation({ transcribe, onText }: {
    * shows a recording indicator and, on a phone, some other apps cannot use
    * the microphone at all. Every exit path comes through here.
    */
+  const cool = useRef<(() => void) | null>(null);
   const release = useCallback(() => {
     if (timer.current) { clearInterval(timer.current); timer.current = null; }
+    cool.current?.(); cool.current = null;
     rec.current?.stream.getTracks().forEach((t) => t.stop());
     rec.current = null;
     audioCtx.current?.close().catch(() => {});
@@ -123,7 +132,10 @@ export function useDictation({ transcribe, onText }: {
     }
     const mime = pickFormat();
     let r: MediaRecorder;
-    try { r = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined); }
+    // Speech, not music: the browser's default is about 128 kbps, which made
+    // a short note hundreds of kilobytes to push up a phone link before Groq
+    // even saw it. Whisper hears 16 kHz; 32 kbps loses nothing it uses.
+    try { r = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), audioBitsPerSecond: 32_000 }); }
     catch { stream.getTracks().forEach((t) => t.stop()); setError('this browser cannot record audio'); return; }
 
     // Watch the loudness of the stream as it records. An AudioContext that
@@ -159,23 +171,29 @@ export function useDictation({ transcribe, onText }: {
       const blob = new Blob(chunks.current, { type });
       const heard = loudest.current;
       const measured = !!audioCtx.current;
+      // The timings are read by `transcribe`, so they stop after it, not here.
+      const stopTiming = cool.current;
+      cool.current = null;
       release();
-      if (!blob.size) { setState('idle'); setError('nothing was recorded'); return; }
-      if (measured && heard < SILENCE_RMS) {
-        setState('idle');
-        setError('nothing was said — is the microphone muted?');
-        return;
-      }
-      if (blob.size > MAX_AUDIO_BYTES) { setState('idle'); setError('that recording is too long'); return; }
-      setState('working');
       try {
-        const text = (await transcribe(toBase64(await blob.arrayBuffer()), type)).trim();
-        if (text) onText(text); else setError('nothing was said');
-      } catch (e: any) {
-        setError(e?.message || 'could not transcribe that');
-      } finally { setState('idle'); }
+        if (!blob.size) { setState('idle'); setError('nothing was recorded'); return; }
+        if (measured && heard < SILENCE_RMS) {
+          setState('idle');
+          setError('nothing was said — is the microphone muted?');
+          return;
+        }
+        if (blob.size > MAX_AUDIO_BYTES) { setState('idle'); setError('that recording is too long'); return; }
+        setState('working');
+        try {
+          const text = (await transcribe(toBase64(await blob.arrayBuffer()), type)).trim();
+          if (text) onText(text); else setError('nothing was said');
+        } catch (e: any) {
+          setError(e?.message || 'could not transcribe that');
+        } finally { setState('idle'); }
+      } finally { stopTiming?.(); }
     };
     r.start();
+    cool.current?.(); cool.current = transcribe.warm?.() ?? null;
     setState('recording');
     setSeconds(0);
     timer.current = setInterval(() => {

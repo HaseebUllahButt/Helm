@@ -30,7 +30,18 @@
   seconds. Ctrl+Shift+Space dictates. Silent recordings are not sent.
   Settings → Dictation key → **Change**.
 - **CLI:** `helm dictate [--to <chat-id>]`.
-- **Prove:** steps not yet driven; the hidden browser has no microphone.
+- **Where it goes:** recorded at 32 kbps (speech, not music), sent to the
+  machine with a key that is quickest to reach from the device (timed while
+  you speak; the chat's machine wins a tie), over the hub rather than the
+  direct link. Each machine logs `voice: <size>, Groq answered in <ms>`, so a
+  slow one splits into the trip and Groq's part.
+- **Prove (driven 2026-10-16):** copy a Groq key to the private copy
+  (`cp ~/.config/groq-api-key /tmp/helm-verify-<you>/helm/`), open a chat,
+  then `eval` a fake microphone: an `AudioContext` oscillator into
+  `createMediaStreamDestination()`, returned from
+  `navigator.mediaDevices.getUserMedia`. Click "speak a prompt", wait, click
+  "stop recording"; `$V logs | grep voice` shows the size and Groq's time
+  (46KB for 7 s, 1.8 s at Groq). A tone gives no words, so the box stays empty.
 - **Traps:** speech goes through a machine's key; the VM's key was invalid
   in an old note.
 - **Tests:** `test/voice`, `voice-key`.

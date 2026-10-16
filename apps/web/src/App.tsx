@@ -1278,13 +1278,16 @@ function Shell({ client, conn, onSignOut }: {
   };
 
   const voiceEnvs = envs.filter((e) => e.online && e.info.voice);
+  // Any machine with a key gives the same words, so the recording goes to the
+  // one quickest to reach from this device - not the chat's own machine, which
+  // may sit behind a slow VPN while another is a few milliseconds away. The
+  // chat's machine wins a tie and is the guess while nothing is measured.
   const transcribeVia = (preferred?: string) => {
-    const order = [
-      ...voiceEnvs.filter((e) => e.id === preferred),
-      ...voiceEnvs.filter((e) => e.id !== preferred),
-    ];
-    if (!order.length) return undefined;
-    return async (audio: string, mime: string) => {
+    if (!voiceEnvs.length) return undefined;
+    const run = async (audio: string, mime: string) => {
+      const speed = (id: string) => client.latency(id) ?? Infinity;
+      const order = [...voiceEnvs].sort((a, b) => speed(a.id) - speed(b.id)
+        || Number(b.id === preferred) - Number(a.id === preferred));
       let last = '';
       for (const e of order) {
         try {
@@ -1294,6 +1297,12 @@ function Shell({ client, conn, onSignOut }: {
       }
       throw new Error(last || 'no machine could transcribe that');
     };
+    // Timed while you speak, so the choice is made on numbers, not a guess.
+    const warm = () => {
+      const stops = voiceEnvs.map((e) => client.watchLatency(e.id));
+      return () => stops.forEach((stop) => stop());
+    };
+    return Object.assign(run, { warm });
   };
 
   // The brain always belongs to the VM, even while it is asleep. Saved

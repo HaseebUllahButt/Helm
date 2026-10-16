@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
-import { useDictation } from './voice';
+import { useDictation, type Transcribe } from './voice';
 import type { Turn } from './types';
 import { isBigPaste, stashPaste } from './pasteStore';
 import { Icon } from '../Icon';
@@ -106,7 +106,7 @@ export function Composer({ banner, shoulder, ask, compacting, draft, setDraft, o
    * when no machine in the network has one, and then there is no microphone:
    * a button that cannot work should not be drawn.
    */
-  onTranscribe?: (audio: string, mime: string) => Promise<string>;
+  onTranscribe?: Transcribe;
   onEditQueued?: (turn: Turn) => void;
   onRemoveQueued?: (turn: Turn) => void;
   onMoveQueued?: (turn: Turn, direction: -1 | 1) => void;

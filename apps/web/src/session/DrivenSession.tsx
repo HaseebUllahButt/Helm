@@ -17,6 +17,7 @@ import { loadDraft, saveDraft } from '../draftStore';
 import { loadedChat, startedEmpty } from '../startingChats';
 import { useDraftImages } from './useDraftImages';
 import { recacheCost, recacheWarning } from '@helm/usage/recache';
+import type { Transcribe } from './voice';
 import { messageDelivery } from '@helm/protocol/message-delivery';
 import { newMessageId, retryableDelivery } from '@helm/protocol/reliable-input';
 import { money, busyStatus } from '../format';
@@ -66,7 +67,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   conn?: { online: boolean; reachable: boolean };
   onBack: () => void; onClosed: () => void; onArchived: () => void; onSession: (s: Session) => void;
   /** Absent when no machine in the network holds a Groq key. */
-  onTranscribe?: (audio: string, mime: string) => Promise<string>;
+  onTranscribe?: Transcribe;
   /** Only on the brain: the way to what it is made of. */
   onSettings?: () => void;
   /** Open a branch, subagent, or its parent conversation. */

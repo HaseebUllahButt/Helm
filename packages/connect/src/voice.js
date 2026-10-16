@@ -126,6 +126,9 @@ export async function transcribe({ audio, mime = 'audio/webm', prompt, signal } 
 
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
+  // How long Groq itself took, so a slow dictation can be split into the
+  // trip here and the work there.
+  const started = Date.now();
   signal?.addEventListener?.('abort', () => abort.abort(), { once: true });
   let res;
   try {
@@ -140,6 +143,7 @@ export async function transcribe({ audio, mime = 'audio/webm', prompt, signal } 
   } finally { clearTimeout(timer); }
 
   const body = await res.json().catch(() => null);
+  console.log(`[helm] voice: ${Math.round(bytes.length / 1024)}KB ${mime.split(';')[0]}, Groq answered in ${Date.now() - started}ms`);
   if (!res.ok) {
     // Groq says exactly what is wrong - an expired key, a format it will not
     // take - and passing that through beats "transcription failed".
