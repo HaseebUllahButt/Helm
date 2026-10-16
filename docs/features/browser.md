@@ -11,7 +11,10 @@ page in Helm. Full notes: `docs/browser-use.md`.
   reload, "Search or type an address", **New tab**, a key icon for logins.
   Empty: "No tabs yet. Agents on <machine> browse here, out of sight;
   localhost reaches servers there." On a wide screen it docks on the right.
-- **Reach:** **Browser** or Ctrl/⌘+Shift+B.
+- **Reach:** **Browser** or Ctrl/⌘+Shift+B. The header button is on
+  computers only: on a phone (touch screen) it is hidden, since the owner
+  does not watch the browser from the phone. Thread details → Browser
+  still opens the panel there.
 - **CLI:** `helm browser open <url> [--engine bowser]`, `helm browser tabs`,
   `look <tab>`, `act <tab> '<json>'`, `screenshot`, `point`, `close`.
 - **Prove (panel driven 2026-10-15, tabs not yet driven):**

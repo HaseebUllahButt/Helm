@@ -5395,7 +5395,7 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
           </span>
         </div>
         <StatusChip status={compacting && status === 'working' ? 'compacting' : status} at={statusAt} />
-        {!isShell && <button className="iconbtn" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
+        {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />

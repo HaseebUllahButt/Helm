@@ -1049,6 +1049,9 @@ pre.snippet {
 .termkeys button:active { background: var(--accent); }
 .termkeys button[aria-pressed="true"] { background: var(--primary); border-color: transparent; color: #fff; }
 @media (pointer: fine) { .termkeys { display: none; } }
+/* The chat's browser is a window on the agent's machine; a phone has no
+   use for its remote, so the header button stays on computers. */
+@media (pointer: coarse) { .browser-launch { display: none; } }
 .selection-copied {
   position: fixed; left: 0; right: 0; margin: 0 auto; width: fit-content;
   bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 80; pointer-events: none;

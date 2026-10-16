@@ -674,7 +674,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         )}
         <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents and scheduled tasks"
           onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
-        <button className="iconbtn" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
+        <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
         {/* The brain has no folder to go back to and no siblings to compare
             it with, so what it is made of has to be reachable from inside it.
             Ordinary threads keep the ⋯ menu alone. */}
