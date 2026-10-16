@@ -85,9 +85,18 @@ quick chat with the Fake agent (see [README](README.md)).
 - **Sees:** work between two agent messages folds into one line ("Read 1
   file · Ran 2 commands"); "working 12s · 97 tok/s" while it runs (an
   estimate); a copy button under each answer; up/down arrows that jump
-  between your own messages.
+  between your own messages. Selecting text copies it: with the mouse on
+  letting go, on a phone once the selection stops moving, with "Copied"
+  shown low on the screen. Safari only lets a tap write the clipboard, so
+  there it is copied on the next touch.
 - **Reach:** "Copy answer", "previous message of yours", "next message of
   yours" buttons.
 - **Prove:** steps not yet driven beyond seeing these buttons in a fake chat.
+  Phone copy (driven 2026-10-16): verify clicks are mouse clicks, so press
+  with a touch first, then select the reply in `eval`, after swapping
+  `navigator.clipboard.write`/`writeText` for ones that record:
+  `n.dispatchEvent(new PointerEvent('pointerdown',{pointerType:'touch',bubbles:true}))`,
+  then a Range over `.md p`. About half a second later the text is
+  recorded and `.selection-copied` says "Copied".
 - **Tests:** `test/browser/activity-fold`, `chat-fold`,
   `history-pagination`, `transcript-performance`, `copy-selection`.

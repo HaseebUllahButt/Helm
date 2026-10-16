@@ -302,13 +302,15 @@ test('a typed name that is not a folder offers a new-folder row that makes it an
 test('Ctrl+Shift+Enter makes the folder beside the highlighted one, or inside it once opened',async t=>{
   const page=await pageFor(t);
   const box=await folderStep(page);
-  // Cursor on "project" (closed): the new folder goes beside it.
+  // Cursor on "project" (closed), past "Clone from GitHub": the new folder goes beside it.
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await box.fill('beside');
   await page.getByRole('option').filter({hasText:'New folder "beside" in work'}).waitFor();
   assert.equal(await page.getByRole('option').last().locator('.palette-sub').innerText(),'/work/beside');
   // Opened with →: inside it.
   await box.fill('');
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowRight');
   await box.fill('inner');
@@ -330,6 +332,7 @@ test('a name the machine refuses is explained in the box and nothing starts',asy
   assert.equal(await page.getByRole('combobox',{name:'Which folder on vm?'}).count(),1);
   // Not offered for a folder that is already there.
   await box.fill('');
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowRight');
   await page.getByRole('option').filter({hasText:'existing'}).waitFor();

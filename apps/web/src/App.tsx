@@ -1,4 +1,5 @@
 import { useCopySelection } from './useCopySelection';
+import { knownInside, listFolder, loadFolders } from './folderIndex';
 import { useDismiss } from './useDismiss';
 import { reloadApp } from './reload';
 import { openPrivateLink } from './privateLink';
@@ -4468,8 +4469,10 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
   /** Offered on the way in: a chat that needs no folder at all. */
   onQuick?: () => void;
 }) {
-  const [entries, setEntries] = useState<DirEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  // What this device already knows is inside shows at once; the machine's
+  // own answer replaces it when it lands.
+  const [entries, setEntries] = useState<DirEntry[]>(() => knownInside(env.id, path ?? '~') ?? []);
+  const [loading, setLoading] = useState(() => !knownInside(env.id, path ?? '~'));
   const [sendPath, setSendPath] = useState('');
   const [here, setHere] = useState(path ?? '~');
   const [error, setError] = useState('');
@@ -4494,9 +4497,18 @@ function Browse({ client, env, path, title = 'Where?', action = 'Start here', on
   };
 
   const load = useCallback(() => {
-    setError(''); setLoading(true);
-    client.rpc(env.id, 'fs.list', { path: path ?? '~' })
-      .then((r: any) => { setEntries(r.entries); setHere(r.path); })
+    setError('');
+    const known = knownInside(env.id, path ?? '~');
+    if (known) setEntries(known);
+    setLoading(!known);
+    let answered = false;
+    // The folder list this device keeps may still be on its way from storage.
+    if (!known) void loadFolders(env.id).then(() => {
+      const held = knownInside(env.id, path ?? '~');
+      if (held && !answered) { setEntries(held); setLoading(false); }
+    });
+    listFolder(client, env.id, path ?? '~')
+      .then((r) => { answered = true; setEntries(r.entries); setHere(r.path); })
       .catch((e) => setError(e.message)).finally(() => setLoading(false));
   }, [client, env.id, path, sendFiles]);
 

@@ -19,6 +19,14 @@
   ```
 - **Proof:** an empty chat titled "Quick chat", "· quick chat" under it,
   "What is on your mind?", and the account name on the last line.
+- **Folders open at once:** → on a folder shows what is inside straight
+  away, from the folder list the device keeps (and the last answer for that
+  folder); the machine's own answer replaces it a moment later. The
+  "New session" / "Add project" / "Send" folder screens do the same.
+  Prove it with the machine made slow: `$V eval` a wrapper on
+  `WebSocket.prototype.send` that holds any message with `fs.list` for 3 s,
+  then open two levels with "open <name>"; both show their folders in
+  under 3 s (driven 2026-10-16).
 - **Traps:** the folder list starts at the private copy's own home, so
   making folders there is safe. With `up --real` it is the owner's home: do
   not make folders there.

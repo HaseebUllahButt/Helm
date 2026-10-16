@@ -1,5 +1,5 @@
 import { txn } from './idb';
-import type { Client } from './client';
+import type { Client, DirEntry } from './client';
 
 /**
  * A machine's folders, kept on the device so a picker searches as fast as
@@ -97,4 +97,46 @@ export function searchFolders(folders: Folder[], query: string, limit = 30): Fol
   }
   scored.sort((a, b) => a.score - b.score || a.f.path.length - b.f.path.length || a.f.path.localeCompare(b.f.path));
   return scored.slice(0, limit).map((s) => s.f);
+}
+
+/**
+ * What is inside one folder, at once, without asking the machine.
+ *
+ * Opening a folder used to wait on a trip to the machine, most of a second
+ * over a VPN, with "looking…" in between. The last answer for that folder
+ * comes first; failing that, the folder list this device already holds.
+ * That list leaves out containers like node_modules and stops ten levels
+ * down, so an empty answer from it means "not known", and the machine's own
+ * answer (listFolder) still replaces it.
+ */
+const listed = new Map<string, DirEntry[]>();
+const kids = new WeakMap<FolderIndex, Map<string, DirEntry[]>>();
+
+export function knownInside(env: string, path: string): DirEntry[] | null {
+  const seen = listed.get(`${env}\n${path}`);
+  if (seen) return seen;
+  const index = memory.get(env);
+  if (!index) return null;
+  let byParent = kids.get(index);
+  if (!byParent) {
+    byParent = new Map();
+    for (const f of index.folders) {
+      const parent = f.path.slice(0, f.path.lastIndexOf('/'));
+      let list = byParent.get(parent);
+      if (!list) byParent.set(parent, list = []);
+      list.push({ name: f.name, path: f.path, isRepo: f.repo, skip: false });
+    }
+    // The machine's order: repos first, then by name.
+    for (const list of byParent.values()) list.sort((a, b) => Number(b.isRepo) - Number(a.isRepo) || a.name.localeCompare(b.name));
+    kids.set(index, byParent);
+  }
+  return byParent.get(path.replace(/\/+$/, '') || '/') ?? null;
+}
+
+/** Ask the machine what is inside a folder, and remember the answer. */
+export async function listFolder(client: Client, env: string, path: string): Promise<{ path: string; entries: DirEntry[] }> {
+  const r = await client.rpc<{ path: string; entries: DirEntry[] }>(env, 'fs.list', { path });
+  listed.set(`${env}\n${path}`, r.entries);
+  if (r.path !== path) listed.set(`${env}\n${r.path}`, r.entries);
+  return r;
 }

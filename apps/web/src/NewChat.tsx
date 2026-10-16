@@ -5,7 +5,7 @@ import { Icon } from './Icon';
 import type { Client, DirEntry, Environment, Session } from './client';
 import { watchAccounts } from './accountsCache';
 import { accountsFrom, loadPrefs, rememberFolder, savePrefs, type Account, type PickerPrefs } from './accounts';
-import { fetchFolders, loadFolders, rememberFolderMade, searchFolders, type FolderIndex } from './folderIndex';
+import { fetchFolders, knownInside, listFolder, loadFolders, rememberFolderMade, searchFolders, type FolderIndex } from './folderIndex';
 import type { StartInfo } from './startingChats';
 
 /**
@@ -181,11 +181,17 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
     setHome(null); setAccounts(null); setPicker(null); setViewHidden(false); setOpened(new Set()); setInside({}); setAnchor(null);
     setIndex(null); setCreating(null);
     setGh(null); setGhLogin(undefined); setChosen(''); setCloneFrom(null); setFinding(null); setCloneParent(savedParent(machine.id));
-    client.rpc<{ entries: DirEntry[] }>(machine.id, 'fs.list', { path: '~' })
-      .then((r) => { if (!stale) setHome(r.entries); }).catch((e) => { if (!stale) { setHome([]); setError(e.message); } });
+    // Home as this device last saw it, at once; the machine's answer replaces it.
+    setHome(knownInside(machine.id, '~'));
+    listFolder(client, machine.id, '~')
+      .then((r) => { if (!stale) setHome(r.entries); }).catch((e) => { if (!stale) { setHome((now) => now ?? []); setError(e.message); } });
     // The folders this device remembers first, then the machine's own list
     // as it is now: it looks at its disk again when asked.
-    void loadFolders(machine.id).then((held) => { if (!stale && held) setIndex((now) => now ?? held); });
+    void loadFolders(machine.id).then((held) => {
+      if (stale || !held) return;
+      setIndex((now) => now ?? held);
+      setHome((now) => now ?? knownInside(machine.id, '~'));
+    });
     setIndexing(true);
     fetchFolders(client, machine.id)
       .then((fresh) => { if (!stale) { setIndex(fresh); setNow(Date.now()); } })
@@ -206,10 +212,12 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   const expand = (path: string, id: string) => {
     setOpened((all) => new Set(all).add(id));
     if (!machine || path in inside) return;
-    setInside((all) => ({ ...all, [path]: null }));
-    client.rpc<{ entries: DirEntry[] }>(machine.id, 'fs.list', { path })
+    // What this device already knows is inside shows at once; the machine's
+    // own answer replaces it when it lands.
+    setInside((all) => ({ ...all, [path]: knownInside(machine.id, path) }));
+    listFolder(client, machine.id, path)
       .then((r) => setInside((all) => ({ ...all, [path]: r.entries })))
-      .catch((e) => { setInside((all) => ({ ...all, [path]: [] })); setError(e.message); });
+      .catch((e) => { setInside((all) => ({ ...all, [path]: all[path] ?? [] })); setError(e.message); });
   };
   const collapse = (id: string) => setOpened((all) => {
     // Closing a folder closes everything opened inside it too.

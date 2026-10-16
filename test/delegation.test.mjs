@@ -721,6 +721,7 @@ test('delegation instructions stay compact and independent of the account roster
   assert.match(note, /Inspect package scripts/);
   assert.match(note, /--cwd <folder>/);
   assert.match(note, /--worktree gives it its own checkout/);
+  assert.match(note, /clean them up once everything is merged/);
   assert.match(note, /Keep every helper attached to this chat/);
   assert.match(note, /not as a separate chat in Running/);
   assert.match(note, /Never leave chats you started only to test something/);

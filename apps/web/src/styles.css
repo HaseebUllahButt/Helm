@@ -1049,6 +1049,14 @@ pre.snippet {
 .termkeys button:active { background: var(--accent); }
 .termkeys button[aria-pressed="true"] { background: var(--primary); border-color: transparent; color: #fff; }
 @media (pointer: fine) { .termkeys { display: none; } }
+.selection-copied {
+  position: fixed; left: 0; right: 0; margin: 0 auto; width: fit-content;
+  bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 80; pointer-events: none;
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px;
+  color: var(--text); background: color-mix(in srgb, var(--raised) 92%, transparent);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%); font-size: var(--t-meta);
+  animation: copied-in 0.14s var(--ease);
+}
 .terminal-copied {
   position: absolute; right: 18px; bottom: 52px; z-index: 5; pointer-events: none;
   padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
@@ -1685,7 +1693,7 @@ button.sheet-editlink:hover { color: var(--text); }
   .fold-toggle { min-height: 36px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .toast, .terminal-copied, .undo, .changes, .lightbox { animation: none; }
+  .toast, .terminal-copied, .selection-copied, .undo, .changes, .lightbox { animation: none; }
   .toast-timer { display: none; }
 }
 
