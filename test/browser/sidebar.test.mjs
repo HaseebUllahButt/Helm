@@ -414,7 +414,11 @@ test('One search control opens the palette, keys work, selection has no left bar
   await page.keyboard.press('Escape');
   await palette.waitFor({ state: 'hidden' });
   await page.evaluate(() => document.activeElement.blur());
+  // A bare "/" opens nothing: every shortcut needs Ctrl/Cmd.
   await page.keyboard.press('/');
+  await page.waitForTimeout(150);
+  assert.equal(await palette.count(), 0);
+  await page.keyboard.press('Control+k');
   await palette.waitFor();
   await page.keyboard.press('Control+k');
   await palette.waitFor({ state: 'hidden' });
