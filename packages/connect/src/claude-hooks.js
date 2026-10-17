@@ -132,8 +132,16 @@ export async function startHookServer(onEvent, path = hookSocketPath()) {
       catch { reply(null); }
     });
   });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(path, resolve); });
-  chmodSync(path, 0o600);
+  try {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(path, resolve); });
+    chmodSync(path, 0o600);
+  } catch (error) {
+    // A replaced/unlinked socket can fail permission setup after listen
+    // succeeds. Do not leave that server alive without a returned owner.
+    for (const socket of sockets) socket.destroy();
+    await new Promise(resolve => server.close(resolve));
+    throw error;
+  }
   return { server, close: () => {
     const closed = new Promise((resolve) => server.close(resolve));
     // server.close alone leaves approval sockets (and the old daemon) alive.

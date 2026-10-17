@@ -76,8 +76,12 @@
 ## Connectors & skills
 - **Sees:** machine screen → **Connectors & skills**: the account at the top
   (tap to change), then Connectors, Skills and Plugins. Each row has a logo
-  tile (the real logo for known services, a coloured first letter for the
-  rest) and one short line ("Runs on this machine", "Online service").
+  tile with the real logo of what is behind it: a connector's service (by
+  name, address or the package it starts), else the app that installed it
+  (OpenAI, Claude) or what runs it (Node.js, Python, Docker); a skill's brand
+  or where it lives (Omarchy), else its CLI's mark; a plugin's brand, else
+  its marketplace's vendor. Only an unknown command gets a coloured first
+  letter. One short line follows ("Runs on this machine", "Online service").
   **+ Add** sits beside each heading. Tapping a row opens its details: the
   full address or command, **Sign in** for online services (opens a
   terminal), and **Remove**. More than six skills fold behind "Show all N".
@@ -88,5 +92,8 @@
   tap a row for its details. Look only; never Remove the owner's items. For
   the fake account it says "Connector management is not supported for this
   CLI yet."
+  To see the logos without `--real`, add a Codex profile to the copy's
+  `helm/profiles.json` whose `CODEX_HOME` is a seeded folder inside the copy
+  (a `config.toml` with `[mcp_servers.*]` and `[plugins.*]`, and `skills/`).
 - **Tests:** `test/browser/integrations`; `test/integrations`. See
   `docs/integrations.md`.
