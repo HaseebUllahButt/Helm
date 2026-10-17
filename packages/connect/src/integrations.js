@@ -61,9 +61,44 @@ export function maskTarget(value) {
   }
   return value.replace(/[\r\n\x00]/g, '').slice(0, 500);
 }
-const row = (name, c, scope, cwd) => ({ name, scope, ...(cwd ? { cwd } : {}), transport: c.type ?? (c.url || c.httpUrl || c.serverUrl ? 'http' : 'stdio'),
-  // Arguments, headers and environment values can be arbitrary secrets. Never send them.
-  target: maskTarget(c.url ?? c.httpUrl ?? c.serverUrl ?? (typeof c.command === 'string' ? c.command.trim().split(/\s+/)[0] : '')), status: c.enabled === false ? 'disabled' : 'configured' });
+// Runners that start a package named in their arguments, and the word that
+// comes before it ('' when the package is the first plain argument).
+const RUNNERS = { npx: '', bunx: '', uvx: '', pipx: 'run', pnpm: 'dlx', yarn: 'dlx', docker: 'run', podman: 'run' };
+const VALUE_FLAGS = new Set(['-e', '--env', '--env-file', '-v', '--volume', '--mount', '-p', '--publish', '--package', '--name', '--network', '-w', '--workdir', '-u', '--user', '--entrypoint', '-l', '--label', '--from', '--with', '--python', '--index-url']);
+/**
+ * The package a connector's command starts (`npx -y @playwright/mcp`, `uvx
+ * mcp-server-git`, `docker run … ghcr.io/github/github-mcp-server`), without
+ * its version, so the page can show that service's logo. Arguments can hold
+ * secrets, so only that one word is ever read, and only when it looks like a
+ * package: lowercase, short parts, no long run of digits.
+ */
+export function packageOf(command, args = []) {
+  if (typeof command !== 'string' || !Array.isArray(args)) return undefined;
+  const [program = '', ...inline] = command.trim().split(/\s+/);
+  const verb = RUNNERS[program.split('/').pop()];
+  if (verb === undefined) return undefined;
+  const list = [...inline, ...args];
+  let i = verb ? list.indexOf(verb) + 1 : 0;
+  if (verb && !i) return undefined;
+  for (; i < list.length; i++) {
+    const word = list[i];
+    if (typeof word !== 'string') return undefined;
+    if (!word.startsWith('-')) {
+      const name = word.replace(/(?<=.)@[^/]*$/, '').replace(/:[\w.-]*$/, '').replace(/[=<>~![].*$/, '');
+      return /^@?[a-z0-9][a-z0-9._-]*(\/[a-z0-9._-]+)*$/.test(name) && name.length <= 100 && !/\d{5}/.test(name)
+        && name.split(/[/._-]/).every((part) => part.length <= 24) ? name : undefined;
+    }
+    if (VALUE_FLAGS.has(word)) i++;
+  }
+  return undefined;
+}
+const row = (name, c, scope, cwd) => {
+  const pkg = packageOf(c.command, c.args);
+  return { name, scope, ...(cwd ? { cwd } : {}), transport: c.type ?? (c.url || c.httpUrl || c.serverUrl ? 'http' : 'stdio'),
+    // Arguments, headers and environment values can be arbitrary secrets. Never send them.
+    target: maskTarget(c.url ?? c.httpUrl ?? c.serverUrl ?? (typeof c.command === 'string' ? c.command.trim().split(/\s+/)[0] : '')),
+    ...(pkg ? { package: pkg } : {}), status: c.enabled === false ? 'disabled' : 'configured' };
+};
 export function parseClaudeConfig(text, projectText = '{}', cwd) {
   const config = JSON.parse(text), project = JSON.parse(projectText);
   return [ ...Object.entries(config.mcpServers ?? {}).map(([n, c]) => row(n, c, 'user')),
@@ -165,7 +200,8 @@ export async function listAccount(profile, { cwd } = {}) {
   const byFolder = new Map();
   for (const { real, ...r } of [...own, ...shared]) {
     const key = r.shared ? r.name : real, seen = byFolder.get(key);
-    if (seen) seen.links.push(r.path); else byFolder.set(key, { ...r, links: [r.path] });
+    // Where a linked skill really lives tells whose it is (an Omarchy skill, say).
+    if (seen) seen.links.push(r.path); else byFolder.set(key, { ...r, ...(real !== r.path ? { source: real } : {}), links: [r.path] });
   }
   const skills = [...byFolder.values()];
   return { profileId: profile.id, label: profile.label ?? profile.id, engine: profile.engine, mcp, skills, plugins,

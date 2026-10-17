@@ -8,7 +8,7 @@ process.env.HOME = sandbox;
 process.env.HELM_DIR = join(sandbox, '.helm');
 process.env.HELM_SSH_DIR = join(sandbox, '.ssh');
 process.env.HELM_NO_SERVICE = '1';
-const { CONNECTORS, maskTarget, parseClaudeConfig, parseCodexConfig, listAccount, listIntegrations, addMcp, removeMcp, connectMcp, changePlugin, addSkills, removeSkill } = await import('../packages/connect/src/integrations.js');
+const { CONNECTORS, maskTarget, packageOf, parseClaudeConfig, parseCodexConfig, listAccount, listIntegrations, addMcp, removeMcp, connectMcp, changePlugin, addSkills, removeSkill } = await import('../packages/connect/src/integrations.js');
 after(() => rm(sandbox, { recursive: true, force: true }));
 const fixture = (name) => readFile(new URL(`./fixtures/integrations/${name}`, import.meta.url), 'utf8');
 async function fake(engine, suffix = '') {
@@ -36,6 +36,16 @@ test('real TOML syntax handles quoted names, multiline arrays and nested environ
   assert.equal(mcp[1].target, 'node'); assert.equal(plugins[0].name, 'example@market');
   assert.doesNotMatch(JSON.stringify(mcp), /password|hidden|secret-/);
   assert.throws(() => parseCodexConfig('[mcp_servers'), /./);
+});
+test('a command connector names the package it starts and nothing else from its arguments', () => {
+  assert.equal(packageOf('npx', ['-y', '@playwright/mcp@latest']), '@playwright/mcp');
+  assert.equal(packageOf('uvx', ['mcp-server-sqlite', '--db-path', '/private/db']), 'mcp-server-sqlite');
+  assert.equal(packageOf('docker', ['run', '-i', '--rm', '-e', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'ghcr.io/github/github-mcp-server:v1']), 'ghcr.io/github/github-mcp-server');
+  assert.equal(packageOf('npx -y figma-developer-mcp --stdio'), 'figma-developer-mcp');
+  for (const [command, args] of [['node', ['server.js']], ['/usr/bin/python3', ['/x/run_mcp.py']], ['npx', ['sk-Live4Secret']], ['npx', ['-y', 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6']], ['npx', ['ghp_1234567890abcdef']], ['pipx', ['install', 'x']], ['npx', 'not-a-list']]) assert.equal(packageOf(command, args), undefined, `${command} ${args}`);
+  const [row] = parseClaudeConfig(JSON.stringify({ mcpServers: { pw: { command: 'npx', args: ['-y', '@playwright/mcp', '--token', 'secret-value'] } } }));
+  assert.equal(row.package, '@playwright/mcp'); assert.doesNotMatch(JSON.stringify(row), /secret-value/);
+  assert.equal(parseClaudeConfig(JSON.stringify({ mcpServers: { r: { url: 'https://x.test/mcp' } } }))[0].package, undefined);
 });
 test('URL masking removes userinfo, all query values and fragments', () => {
   assert.equal(maskTarget('https://a:b@x.test/mcp?innocent=credential#secret'), 'https://x.test/mcp?innocent=***');
@@ -111,7 +121,7 @@ test('a skill linked from two places lists once and Remove clears both links', a
   await mkdir(join(codex.env.CODEX_HOME, 'skills'), { recursive: true }); await mkdir(join(sandbox, '.agents/skills'), { recursive: true });
   await symlink(system, join(codex.env.CODEX_HOME, 'skills/crash')); await symlink(system, join(sandbox, '.agents/skills/crash'));
   const rows = (await listAccount(codex)).skills.filter((s) => s.name === 'crash');
-  assert.equal(rows.length, 1); assert.equal(rows[0].links.length, 2);
+  assert.equal(rows.length, 1); assert.equal(rows[0].links.length, 2); assert.equal(rows[0].source, await realpath(system), 'where the skill really lives');
   await removeSkill({ profileId: codex.id, name: 'crash', folder: 'crash' }, [codex]);
   for (const link of [join(codex.env.CODEX_HOME, 'skills/crash'), join(sandbox, '.agents/skills/crash')]) await assert.rejects(lstat(link), /ENOENT/);
   assert.ok(await lstat(join(system, 'SKILL.md')), 'the folder both links pointed at stays');
