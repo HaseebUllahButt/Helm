@@ -1,4 +1,4 @@
-import { usageResetAt, recoveryDue, isUsageLimit, mergeUsageLimits } from './usage-recovery.js';
+import { usageResetAt, isUsageLimit, mergeUsageLimits } from './usage-recovery.js';
 import { reportedMode } from './native-settings.js';
 import { piChatArgs, BASH_GUARD_MODES } from './pi-settings.js';
 import { nativeAccount } from './native-account.js';
@@ -49,6 +49,7 @@ import { SessionRewind } from './session-rewind.js';
 import { SessionSubagents } from './session-subagents.js';
 import { SessionDelegation } from './session-delegation.js';
 import { SessionViewers } from './session-viewers.js';
+import { LimitRecovery } from './session-limits.js';
 
 export { DRIVERS, wire } from './session-wire.js';
 export { driverTakesImages, acceptAttachments, saveUploads, acceptImages } from './session-attachments.js';
@@ -326,6 +327,7 @@ export class Sessions extends EventEmitter {
   #subagents;
   #delegation;
   #viewers;
+  #limitRecovery;
   #makeParts() {
     const core = {
       index: this.#index,
@@ -345,25 +347,25 @@ export class Sessions extends EventEmitter {
       bindDriver: this.#bindDriver.bind(this),
       refreshExternalActivity: this.#refreshExternalActivity.bind(this),
       importExternalTranscript: this.#importExternalTranscript.bind(this),
+      pump: this.#pump.bind(this),
     };
     core.titles = this.#titles = new SessionTitles(this, core);
     core.rewinder = this.#rewinder = new SessionRewind(this, core);
     core.subagents = this.#subagents = new SessionSubagents(this, core);
     core.delegation = this.#delegation = new SessionDelegation(this, core);
     core.viewers = this.#viewers = new SessionViewers(this, core);
+    core.limitRecovery = this.#limitRecovery = new LimitRecovery(this, core);
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
 
-  async accountLimits(profiles) {
-    this.limitsSeed ??= this.limits.seed(this.#index.values(), profiles, this.events.dir)
-      .catch(err => this.log(`account limits: ${err.message}`));
-    await this.limitsSeed;
-    const nativeProfiles = new Set([...this.#index.values()]
-      .filter(s => s.nativeCli && s.engine === 'claude' && this.nativeTerminals.has(s.id)).map(s => s.profileId));
-    await this.limits.refreshClaude(profiles.filter(p => nativeProfiles.has(p.id)));
-    return this.limits.report(profiles);
-  }
+  // Usage limits (session-limits.js)
+  accountLimits(profiles) { return this.#limitRecovery.accountLimits(profiles); }
+  setAutoResumeLimited(id, on) { return this.#limitRecovery.setAutoResumeLimited(id, on); }
+  cancelLimitContinuation(session) { return this.#limitRecovery.cancelLimitContinuation(session); }
+  startLimitRecovery() { return this.#limitRecovery.startLimitRecovery(); }
+  tickLimitRecovery(now) { return this.#limitRecovery.tickLimitRecovery(now); }
+  recover(id, options) { return this.#limitRecovery.recover(id, options); }
 
   /** requestId -> { id, reply, raw }: a terminal Claude's question, waiting in its hook. */
   #hookAsks = new Map();
@@ -3721,94 +3723,6 @@ export class Sessions extends EventEmitter {
 
   findAutomationSession(identity) {
     return [...this.#index.values()].find(s => s.originAutomationId === identity) || null;
-  }
-
-  setAutoResumeLimited(id, on) {
-    const s = this.get(id);
-    if (!s.driver || s.external || s.delegation || s.nativeChat || s.nativeCli) throw new Error('choose a Helm thread');
-    if (typeof on !== 'boolean') throw new Error('on must be true or false');
-    s.autoResumeLimited = on;
-    if (!on) this.cancelLimitContinuation(s);
-    if (s.recovery) {
-      if (on && s.recovery.kind === 'limited' && !s.recovery.resetAt) s.recovery.resetAt = usageResetAt({ error: s.recovery.message }, s.lastLimits, s.recovery.at);
-      delete s.recovery.autoResumeError; delete s.recovery.autoResumeCancelled;
-    }
-    this.#save(); this.emit('session', s);
-    return { ok: true, session: wire(s) };
-  }
-
-  cancelLimitContinuation(session) {
-    const r = session.recovery;
-    if (r?.kind !== 'limited' || !r.resetAt) return;
-    const identity = `${session.id}:${r.turnId || r.at}:${r.resetAt}`;
-    const turnId = `local-limit-${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`;
-    if (this.#outbox.get(session.id)?.some(item => item.turnId === turnId)) this.dequeue(session.id, turnId);
-  }
-
-  startLimitRecovery() {
-    if (this.limitRecoveryTimer) return;
-    this.limitRecoveryTimer = setInterval(() => void this.tickLimitRecovery().catch(error => this.log(`usage-limit recovery: ${error.message}`)), 15000);
-    this.limitRecoveryTimer.unref?.();
-    void this.tickLimitRecovery().catch(error => this.log(`usage-limit recovery: ${error.message}`));
-  }
-
-  async tickLimitRecovery(now = Date.now()) {
-    if (this.limitRecoveryBusy) return;
-    this.limitRecoveryBusy = true;
-    try {
-      for (const s of this.#index.values()) {
-        if (!recoveryDue(s, now)) continue;
-        if (!['idle', 'done', 'error'].includes(s.status) || this.events.pending(s.id).length
-          || this.events.activeTurn(s.id) || this.#sending.has(s.id) || this.#settling.has(s.id) || this.hasActiveDelegations(s.id)) continue;
-        try { await this.recover(s.id, { automatic: true, now }); }
-        catch (error) {
-          if (s.recovery?.kind === 'limited') {
-            s.recovery.autoResumeError = error.message;
-            this.#save(); this.emit('session', s);
-          }
-        }
-      }
-    } finally { this.limitRecoveryBusy = false; }
-  }
-
-  async recover(id, { automatic = false, now = Date.now() } = {}) {
-    const session = this.get(id);
-    if (!session.driver || ['working', 'blocked', 'starting'].includes(session.status)
-      || this.events.pending(id).length || this.hasActiveDelegations(id)) throw new Error('this thread is still active or awaiting approval');
-    const recovery = session.recovery;
-    if (automatic && !recoveryDue(session, now)) return { skipped: true };
-    const generation = session.stopGeneration ?? 0;
-    const queued = this.#outbox.get(id)?.length;
-    // Leave the durable failure in place until the continuation ticket exists.
-    // Retrying after a crash uses the same ticket, never a second prompt.
-    if (automatic && (!queued || recovery.retryTurnId)) {
-      const identity = `${id}:${recovery.turnId || recovery.at}:${recovery.resetAt}`;
-      const turnId = `local-limit-${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`;
-      let prompt = 'Continue the previous task from the saved conversation. Check what already finished before taking further action.';
-      let attachments = [];
-      if (recovery.retryTurnId) {
-        const failed = this.events.tail(id, 0).findLast(e => e.type === 'turn.start' && e.turnId === recovery.retryTurnId);
-        if (!failed) throw new Error('The refused message is no longer available. Resume manually.');
-        prompt = `${failed.text}${failed.referenceContext ? `\n\n${failed.referenceContext}` : ''}`;
-        attachments = (failed.attachments || []).map(a => ({ mime: a.mime, filename: a.filename, data: a.data || this.events.attachment(id, a.ref) }));
-        if (attachments.some(a => !a.data)) throw new Error('A refused attachment is no longer available. Resume manually.');
-      }
-      await this.input(id, prompt, { turnId, attachments, delivery: 'queue', source: 'usage-reset' });
-      if (recovery.retryTurnId && this.#outbox.get(id)?.some(item => item.turnId === turnId)) {
-        this.reorderQueue(id, [turnId, ...this.#outbox.get(id).filter(item => item.turnId !== turnId).map(item => item.turnId)]);
-      }
-      if (!recoveryDue(session, now) || session.stoppedAt || generation !== (session.stopGeneration ?? 0) || session.recovery !== recovery) {
-        this.dequeue(id, turnId);
-        return { skipped: true };
-      }
-    }
-    delete session.stoppedAt;
-    delete session.recovery;
-    session.queuePaused = false;
-    this.#save(); this.emit('session', session);
-    if (this.#outbox.get(id)?.length) this.#pump(session);
-    else if (!automatic) await this.input(id, 'Continue the previous task from the saved conversation. Check what already finished before taking further action.');
-    return { ok: true, session: wire(session) };
   }
 
 
