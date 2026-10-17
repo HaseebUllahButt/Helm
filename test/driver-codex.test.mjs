@@ -434,7 +434,28 @@ test('plain: initialize, thread/start, turn/start; text streams as deltas', asyn
   // mode changed mid-session real rather than cosmetic.
   assert.deepEqual(sent[3].params.sandboxPolicy, { type: 'workspaceWrite' });
   assert.equal(sent[3].params.approvalPolicy, 'on-request');
+  // Codex shares its thinking only when asked, as its own app asks.
+  assert.equal(sent[3].params.summary, 'detailed');
   await driver.kill();
+});
+
+test('Codex thinking notes stream in, one paragraph per part', async (t) => {
+  const { driver, log } = make('plain');
+  t.after(() => driver.kill());
+  await driver.send('Reply with exactly the words: hello from helm');
+  await log.until((e) => e.type === 'turn.done');
+  const at = { threadId: driver.threadId, turnId: 'turn-notes' };
+  driver.onNotification('item/started', { ...at, item: { type: 'reasoning', id: 'think-1', summary: [], content: [] } });
+  driver.onNotification('item/reasoning/summaryPartAdded', { ...at, itemId: 'think-1', summaryIndex: 0 });
+  driver.onNotification('item/reasoning/summaryTextDelta', { ...at, itemId: 'think-1', summaryIndex: 0, delta: '**Reading the code**' });
+  driver.onNotification('item/reasoning/summaryPartAdded', { ...at, itemId: 'think-1', summaryIndex: 1 });
+  driver.onNotification('item/reasoning/summaryTextDelta', { ...at, itemId: 'think-1', summaryIndex: 1, delta: 'Then the tests.' });
+  driver.flush();
+  assert.equal(log.of('item.delta').filter((e) => e.id === 'think-1').map((e) => e.text).join(''), '**Reading the code**\n\nThen the tests.');
+  // A note that only shows up finished still carries its words.
+  driver.onNotification('item/completed', { ...at, item: { type: 'reasoning', id: 'think-2', summary: ['**Checking**', 'Done.'], content: [] } });
+  driver.flush();
+  assert.equal(log.of('item.delta').filter((e) => e.id === 'think-2').map((e) => e.text).join(''), '**Checking**\n\nDone.');
 });
 
 test('Helm-managed Codex threads keep native multi-agent on start and resume', async (t) => {

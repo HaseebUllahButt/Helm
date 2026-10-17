@@ -238,8 +238,17 @@ function todoWords(it: Item): Words {
   return same(todos ? `Updated the to-do list (${todos.filter((t) => t.state === 'completed').length}/${todos.length})` : 'Updating the to-do list');
 }
 
+/** The bold title a thinking note opens with, if it has one. */
+export const thoughtTitle = (text?: string) => /^\s*\*\*([^*\n]{1,80})\*\*/.exec(text ?? '')?.[1].trim() || undefined;
+
+/** A thinking note to read: the bold marks are for the title line, not the eye. */
+export const thoughtBody = (text = '') => text.replace(/\*\*([^*\n]+)\*\*/g, '$1');
+
 export function stepWords(it: Item): Words {
   if (it.kind === 'thinking') {
+    // Codex heads each thinking note with a bold title, the way its own app shows it.
+    const title = thoughtTitle(it.text);
+    if (title) return same(title);
     const took = it.doneAt && it.startedAt ? it.doneAt - it.startedAt : 0;
     return { now: 'Thinking', past: took > 1500 ? `Thought for ${Math.round(took / 1000)}s` : 'Thought' };
   }

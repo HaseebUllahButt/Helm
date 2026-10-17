@@ -28,6 +28,8 @@ import { formatReset, planName, quotaBar, windowLabel } from '../quota.js';
 
 export const CODEX_MIN_VERSION = '0.154.0';
 
+/** Codex keeps its thinking to itself unless asked; its own app asks for the full notes. */
+const THINKING_NOTES = 'detailed';
 const MAX_OUTPUT = 32_000;
 /** A diff is read in a fold on a phone, and `events.js` caps it there too. */
 const MAX_DIFF = 8_000;
@@ -813,6 +815,7 @@ export class CodexDriver extends Driver {
       ...(this.model ? { model: this.model } : {}),
       ...(this.effort ? { effort: this.effort } : {}),
       ...(this.speed ? { serviceTier: this.speed } : {}),
+      summary: THINKING_NOTES,
     };
     const wasWorking = this.status === 'working';
     if (!this.pending.size) this.push('status', { status: 'working' });
@@ -1120,6 +1123,7 @@ export class CodexDriver extends Driver {
       ...(this.model ? { model: this.model } : {}),
       ...(this.effort ? { effort: this.effort } : {}),
       ...(this.speed ? { serviceTier: this.speed } : {}),
+      summary: THINKING_NOTES,
     };
     const wasWorking = this.status === 'working';
     if (!this.pending.size) this.push('status', { status: 'working' });
@@ -1288,6 +1292,9 @@ export class CodexDriver extends Driver {
         }
         case 'item/started': return this.#onItemStarted(p.item, this.#turnId, parentId);
         case 'item/completed': return this.#onItemCompleted(p.item);
+        case 'item/reasoning/summaryPartAdded':
+          if (p.summaryIndex > 0) this.push('item.delta', { id: p.itemId, text: '\n\n' });
+          return;
         case 'item/agentMessage/delta':
         case 'item/reasoning/textDelta':
         case 'item/reasoning/summaryTextDelta':
@@ -1326,6 +1333,9 @@ export class CodexDriver extends Driver {
       }
       case 'item/started': return this.#onItemStarted(p.item, p.turnId);
       case 'item/completed': return this.#onItemCompleted(p.item);
+      case 'item/reasoning/summaryPartAdded':
+        if (p.summaryIndex > 0) this.push('item.delta', { id: p.itemId, text: '\n\n' });
+        return;
       case 'item/agentMessage/delta':
       case 'item/reasoning/textDelta':
       case 'item/reasoning/summaryTextDelta':
@@ -1572,6 +1582,8 @@ export class CodexDriver extends Driver {
       // A resumed or summarised item we never saw start: show it whole.
       this.#onItemStarted(item);
       if (item.type === 'agentMessage' && item.text) this.push('item.delta', { id: item.id, text: item.text });
+      const notes = item.type === 'reasoning' && Array.isArray(item.summary) ? item.summary.filter((t) => typeof t === 'string' && t).join('\n\n') : '';
+      if (notes) this.push('item.delta', { id: item.id, text: notes });
     }
     const status = item.status === 'failed' ? 'error' : item.status === 'declined' ? 'declined' : 'ok';
     switch (item.type) {

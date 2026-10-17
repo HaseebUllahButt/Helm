@@ -12,7 +12,7 @@ import { ContextCard } from './ContextCard';
 import { TodoCard, isTodoItem, parseTodos } from './Todos';
 import { parseContextUsage } from './contextUsage';
 import { Reveal, WorkingLine, ChangedFiles, changedFiles, testResult } from './TurnPulse';
-import { stepWords, toolSummary, tryParse, rawCommand, toolChanges, changesOf, changeStats, unifiedDiff, diffCounts } from './stepWords';
+import { stepWords, thoughtBody, thoughtTitle, toolSummary, tryParse, rawCommand, toolChanges, changesOf, changeStats, unifiedDiff, diffCounts } from './stepWords';
 import { money } from '../format';
 
 /** The session is still working, so an open compaction is really running. */
@@ -77,7 +77,7 @@ function TextItem({ item, commandOutput }: { item: Item; commandOutput?: boolean
 function ThinkingItem({ item }: { item: Item }) {
   const live = item.status === 'streaming';
   const took = item.doneAt && item.startedAt ? item.doneAt - item.startedAt : 0;
-  const label = live ? 'Thinking' : took > 1500 ? `Thought for ${seconds(took)}` : 'Thought';
+  const label = thoughtTitle(item.text) ?? (live ? 'Thinking' : took > 1500 ? `Thought for ${seconds(took)}` : 'Thought');
   if (!live && !item.text) return <div className="act quiet"><span className="aicon"><Icon name="think" size={15} /></span><span className="alabel">{label}</span></div>;
   return (
     <details className="actgroup think">
@@ -86,7 +86,7 @@ function ThinkingItem({ item }: { item: Item }) {
         <span className={`alabel${live ? ' shine' : ''}`}>{label}</span>
         {item.text && <span className="achev"><Icon name="forward" size={13} /></span>}
       </summary>
-      {item.text && <div className="think-body">{item.text}</div>}
+      {item.text && <div className="think-body">{thoughtBody(item.text)}</div>}
     </details>
   );
 }
@@ -151,6 +151,13 @@ function stepIcon(it: Item): IconName {
     : it.kind === 'subagent' ? 'subagents' : isTodoItem(it) ? 'plan' : toolKind(it.name ?? '');
 }
 
+/**
+ * A finished thought with nothing in it. Codex thinks before nearly every
+ * command and only shares notes when asked, so these were most of its steps
+ * and pushed what it said off the screen.
+ */
+const blankThought = (it: Item) => it.kind === 'thinking' && it.status !== 'streaming' && !it.text?.trim();
+
 /** Rows are for plain steps; a helper keeps its own card, and prose stays prose. */
 const rowable = (it: Item) => !isTextish(it) && !isApart(it) && it.kind !== 'subagent';
 
@@ -179,7 +186,7 @@ function StepDetail({ item, byParent }: { item: Item; byParent: Map<string, Item
   }
   if (item.kind === 'edit' || changesOf(item).length) return <ItemContent item={item} byParent={byParent} />;
   if (isTodoItem(item)) return <TodoCard item={item} />;
-  if (item.kind === 'thinking') return <div className="think-body">{item.text}</div>;
+  if (item.kind === 'thinking') return <div className="think-body">{thoughtBody(item.text)}</div>;
   const summary = toolSummary(item);
   return (
     <div className="step-raw">
@@ -251,6 +258,10 @@ function Work({ turn, items, byParent, live, label, blocked }: {
     const hidden = open ? 0 : Math.max(0, stepAt.length - LIVE_STEPS);
     const from = hidden ? stepAt[stepAt.length - LIVE_STEPS] : 0;
     const shown = items.slice(from);
+    // The last thing it said stays in view while newer steps scroll past.
+    let lastSaid = items.length - 1;
+    while (lastSaid >= 0 && !(items[lastSaid].kind === 'text' && items[lastSaid].text?.trim())) lastSaid -= 1;
+    const said = hidden && lastSaid >= 0 && lastSaid < from ? items[lastSaid] : null;
     // A helper's card on screen carries its own "Answer question" button;
     // a second one here would be the same request twice.
     const cards = new Set(shown.filter((it) => it.kind === 'subagent').map((it) => it.id));
@@ -261,6 +272,7 @@ function Work({ turn, items, byParent, live, label, blocked }: {
         {hidden > 0 && <button type="button" className="steps-earlier" aria-expanded={false} onClick={() => setOpen(true)}>+{hidden} earlier {hidden === 1 ? 'step' : 'steps'}</button>}
         {open && stepAt.length > LIVE_STEPS && <button type="button" className="steps-earlier" aria-expanded onClick={() => setOpen(false)}>Show fewer steps</button>}
         <div className="steps-live">
+          {said && <div key={said.id} className="live-step"><ItemView item={said} byParent={byParent} plain /></div>}
           {shown.map((it) => <div key={it.id} className="live-step"><ItemView item={it} byParent={byParent} plain /></div>)}
         </div>
         {ask(unseen)}
@@ -653,6 +665,7 @@ const TurnView = memo(function TurnView({ turn, items, head = true, tail = true,
   const ids = new Set(list.map((i) => i.id));
   const byParent = new Map<string, Item[]>();
   const roots = list.filter((it) => {
+    if (blankThought(it)) return false;
     if (!it.parentId || !ids.has(it.parentId)) return true;
     const kids = byParent.get(it.parentId) ?? [];
     kids.push(it);

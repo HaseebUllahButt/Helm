@@ -52,6 +52,17 @@ before(async () => {
         bash('c3', { command: "bash -lc 'cd /repo && git status --short'" }),
         bash('c4', { description: 'Build the project', command: 'npm run build' }, { status: 'streaming', doneAt: undefined, output: undefined }),
       ] }],
+      codexLive: () => {
+        const cmd = (id) => step(id, { kind: 'command', command: 'ls ' + id, output: 'x', exitCode: 0 });
+        const blank = (id) => step(id, { kind: 'thinking' });
+        return [{ id: 't1', text: 'Go', at: t0, items: [
+          text('said', 'Checking why copy fails.'),
+          cmd('c1'), blank('k1'), cmd('c2'), blank('k2'), cmd('c3'), blank('k3'), cmd('c4'), blank('k4'),
+          step('k5', { kind: 'thinking', text: '**Reading the tests**\\n\\nThe copy test runs first.' }),
+          cmd('c5'),
+          step('k6', { kind: 'thinking', status: 'streaming', doneAt: undefined }),
+        ] }];
+      },
       long: () => {
         const turns = [];
         for (let i = 0; i < 14; i += 1) turns.push({ id: 'p' + i, text: 'Question ' + i, at: t0 + i * 10, done: { status: 'ok' }, items: [text('a' + i, 'Answer number ' + i + '. '.repeat(30))] });
@@ -145,6 +156,18 @@ test('a running turn shows Claude steps in plain words; failed ones get a red x,
   await page.locator('.step-head').filter({ hasText: 'Ran git status' }).click();
   assert.match(await page.locator('.step-cmd').innerText(), /^bash -lc/, 'the raw command is kept for the expanded view');
   if (shots) await page.screenshot({ path: join(shots, 'chat-fold-running.png') });
+});
+
+test('a busy Codex keeps its last words on screen; blank thoughts are not steps', async (t) => {
+  const page = await pageFor(t);
+  await page.evaluate(() => window.show('codexLive', 'working'));
+  await page.locator('.work.live .step').nth(2).waitFor();
+  assert.equal(await page.locator('.work.live .prose').innerText(), 'Checking why copy fails.');
+  assert.deepEqual((await page.locator('.work.live .step .alabel').allInnerTexts()).map((x) => x.trim()), ['Reading the tests', 'Listed c5/', 'Thinking']);
+  assert.equal(await page.locator('.steps-earlier').innerText(), '+4 earlier steps');
+  await page.locator('.step-head').filter({ hasText: 'Reading the tests' }).click();
+  assert.equal(await page.locator('.think-body').innerText(), 'Reading the tests\n\nThe copy test runs first.');
+  if (shots) await page.screenshot({ path: join(shots, 'chat-fold-codex-live.png') });
 });
 
 test('the fold holds the narration too; only the last words stay out as the answer', async (t) => {
