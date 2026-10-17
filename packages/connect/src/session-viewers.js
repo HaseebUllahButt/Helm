@@ -248,13 +248,13 @@ export class SessionViewers {
           const session = this.#core.index.get(id);
           if (session?.external && session.driver) {
             const began = Date.now();
-            await this.#core.importExternalTranscript(session);
+            await this.#core.external.importExternalTranscript(session);
             const took = Date.now() - began;
             if (took > TRANSCRIPT_POLL_MS / 2) t.rest = Date.now() + took * 3;
           }
         }
         const monitored = this.#core.index.get(id);
-        if (monitored?.external) await this.#core.refreshExternalActivity(monitored);
+        if (monitored?.external) await this.#core.external.refreshExternalActivity(monitored);
         t.size = stamp;
       } catch { /* transcript not written yet */ } finally { t.busy = false; }
     }, TRANSCRIPT_POLL_MS);
