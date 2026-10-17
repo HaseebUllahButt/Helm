@@ -29,6 +29,8 @@ import { HELM_DIR } from './paths.js';
 export const EVENTS_DIR = join(HELM_DIR, 'events');
 const KEEP = 2000;
 export const EVENT_KEEP = KEEP;
+/** How many of a chat's visuals outlive the KEEP tail (see retain). */
+const KEEP_VISUALS = 100;
 
 /**
  * What one reply may weigh, and what one event may weigh inside it.
@@ -184,6 +186,18 @@ function retain(tail, older) {
     if (event.turnId) owners.add(event.turnId); else implicit = true;
     context.push(anchor(event));
   }
+  // A visual is a few hundred bytes here (its page is kept beside the log)
+  // and nothing else remembers it - the CLI's own transcript never had it -
+  // so the newest ones stay however far the tail has moved past them.
+  const visuals = new Set();
+  for (const event of older()) {
+    if (visuals.size >= KEEP_VISUALS) break;
+    if (event.type !== 'item.start' || event.kind !== 'visual' || starts.has(event.id)) continue;
+    starts.add(event.id); visuals.add(event.id);
+    if (event.turnId) owners.add(event.turnId); else implicit = true;
+    context.push(anchor(event));
+  }
+  if (visuals.size) for (const event of older()) if (event.type === 'item.done' && visuals.has(event.id)) context.push(anchor(event));
   for (const event of older()) {
     if (!TURN_CONTEXT.has(event.type)) continue;
     const fallback = implicit && event.type === 'turn.start';

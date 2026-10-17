@@ -336,6 +336,28 @@ test('disk compaction retains compact item anchors without carrying old tool pay
   assert.equal(window.logFirst, 103);
 });
 
+test('a visual and its page survive a long chat being trimmed, including restart', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-visual-')), log = new EventLog(dir);
+  const ref = log.putAttachment('s', { filename: 'v.html', mime: 'text/html', data: Buffer.from('<p>hi</p>').toString('base64') }).ref;
+  log.append('s', { type: 'turn.start', turnId: 't0', text: 'draw it' });
+  log.append('s', { type: 'item.start', id: 'visual-1', turnId: 't0', kind: 'visual', visual: { ref, title: 'Picture', height: 400, bytes: 9 } });
+  log.append('s', { type: 'item.done', id: 'visual-1', turnId: 't0', status: 'ok' });
+  log.append('s', { type: 'turn.done', turnId: 't0', status: 'ok' });
+  for (let turn = 1; turn < 3; turn++) {
+    log.append('s', { type: 'turn.start', turnId: `t${turn}`, text: 'more' });
+    log.append('s', { type: 'item.start', id: `reply${turn}`, turnId: `t${turn}`, kind: 'text' });
+    for (let i = 0; i < 2100; i++) log.append('s', { type: 'item.delta', id: `reply${turn}`, text: 'x' });
+    log.append('s', { type: 'turn.done', turnId: `t${turn}`, status: 'ok' });
+  }
+  for (const reader of [log, new EventLog(dir)]) {
+    const events = reader.since('s');
+    assert.equal(events.find(e => e.id === 'visual-1' && e.type === 'item.start')?.visual?.ref, ref);
+    assert.ok(events.some(e => e.id === 'visual-1' && e.type === 'item.done'));
+    assert.ok(events.some(e => e.type === 'turn.start' && e.turnId === 't0'));
+    assert.equal(Buffer.from(reader.attachment('s', ref), 'base64').toString(), '<p>hi</p>');
+  }
+});
+
 test('old owner anchors disappear when no retained event needs them', () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-events-bound-')), log = new EventLog(dir);
   for (let turn = 0; turn < 3; turn++) {
