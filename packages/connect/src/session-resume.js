@@ -91,7 +91,7 @@ export class SessionResume {
       this.#sessions.emit('session', s);
       this.#core.save();
     }
-    this.#core.pump(s);
+    this.#core.delivery.pump(s);
   }
 
   /** Whether the record is holding work because its agent could not be checked. */
@@ -252,7 +252,7 @@ export class SessionResume {
       d.status = s.status;
       await d.start();
       this.reconnected(s);
-      this.#core.pump(s);
+      this.#core.delivery.pump(s);
       this.#core.reap(s, d.status);
     } catch (err) {
       if (!this.#core.index.has(s.id)) return;
@@ -369,7 +369,7 @@ export class SessionResume {
       }
       s.lastSeq = this.#sessions.events.last(s.id);
       if (s.nativeAgents) { delete s.nativeAgents; this.#core.delegation.refreshTeam(s); }
-      this.#core.pump(s);
+      this.#core.delivery.pump(s);
     }
     this.#core.save();
     await Promise.allSettled(reattaching);

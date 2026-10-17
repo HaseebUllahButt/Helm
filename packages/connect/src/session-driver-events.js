@@ -155,16 +155,16 @@ export class DriverEvents {
       if (e.status === 'idle' && this.#finishing(s)) this.#awaitTurnDone(s);
       else {
         this.#core.settled(s.id);
-        if (status === 'idle') this.#core.pump(s);
+        if (status === 'idle') this.#core.delivery.pump(s);
       }
       if (e.status === 'exited') return;
     }
     // The CLI used a message handed to it mid-turn: from here it is part of
     // the conversation, at this point in it.
-    if (e.type === 'input.consumed') return this.#core.consumed(s, e.text, e.inputId);
+    if (e.type === 'input.consumed') return this.#core.delivery.consumed(s, e.text, e.inputId);
     // The CLI refused or lost a message handed to it mid-turn. It fails as
     // its own bubble rather than leaving it "sent" with nothing behind it.
-    if (e.type === 'input.failed') return this.#core.consumed(s, e.text, e.inputId, e.error || 'The CLI did not take this message.');
+    if (e.type === 'input.failed') return this.#core.delivery.consumed(s, e.text, e.inputId, e.error || 'The CLI did not take this message.');
     // Compacting is part of where the thread stands - its row, its chip and
     // the bar over the composer say so, for every CLI - from the compaction
     // item's start until it ends, or the CLI stops or exits.
@@ -181,7 +181,7 @@ export class DriverEvents {
       const steps = this.#core.steps.get(s.id) ?? new Set();
       steps.add(e.id);
       this.#core.steps.set(s.id, steps);
-      void this.#core.handOver(s);
+      void this.#core.delivery.handOver(s);
     }
     if (e.type === 'item.done') this.#core.steps.get(s.id)?.delete(e.id);
     if (e.type === 'turn.done') this.#core.steps.delete(s.id);
@@ -292,13 +292,13 @@ export class DriverEvents {
     }
     // A CLI that reads input inside its running loop takes a waiting
     // message as soon as it is working again (see `messageDelivery`).
-    if (e.type === 'status' && e.status === 'working') void this.#core.handOver(s);
+    if (e.type === 'status' && e.status === 'working') void this.#core.delivery.handOver(s);
     if (e.type === 'turn.done') {
       this.#sessions.emit('session', s);
       if (s.delegation && !card) void this.#core.delegation.notifyParent(s, event);
       if (this.#core.settling.has(s.id) && !this.#finishing(s)) {
         this.#core.settled(s.id);
-        if (s.status === 'idle') this.#core.pump(s);
+        if (s.status === 'idle') this.#core.delivery.pump(s);
       }
     }
   }
@@ -340,7 +340,7 @@ export class DriverEvents {
       if (this.#core.settling.get(s.id) !== timer) return;
       this.#core.settling.delete(s.id);
       this.#sessions.log(`[${s.id}] idle without finishing its turn; sending what is queued`);
-      if (s.status === 'idle') this.#core.pump(s);
+      if (s.status === 'idle') this.#core.delivery.pump(s);
     }, this.#sessions.turnSettleMs);
     timer.unref?.();
     this.#core.settling.set(s.id, timer);

@@ -280,7 +280,7 @@ export class NativeSessions {
           this.#core.save();
           this.#sessions.emit('session', { ...wire(session), alive: false, pending: 0, ask: null });
           // With a daemon to reopen it, what was queued behind the turn goes.
-          if (result.value) this.#core.pump(session);
+          if (result.value) this.#core.delivery.pump(session);
         }
         if (!result.value) continue;
         for (const thread of result.value.threads) {
@@ -340,7 +340,7 @@ export class NativeSessions {
               // starting from the recorded state makes any change a real one.
               if (!d.nativeConnected) d.status = s.status;
               await d.start();
-              if (s.recovery?.kind === 'error') { this.#core.resumer.reconnected(s); this.#core.pump(s); }
+              if (s.recovery?.kind === 'error') { this.#core.resumer.reconnected(s); this.#core.delivery.pump(s); }
             } catch (err) {
               this.#core.drivers.delete(s.id);
               this.#sessions.log(`codex native attach: ${err.message}`);

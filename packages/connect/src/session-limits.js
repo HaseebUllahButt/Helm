@@ -107,7 +107,7 @@ export class LimitRecovery {
     delete session.recovery;
     session.queuePaused = false;
     this.#core.save(); this.#sessions.emit('session', session);
-    if (this.#core.outbox.get(id)?.length) this.#core.pump(session);
+    if (this.#core.outbox.get(id)?.length) this.#core.delivery.pump(session);
     else if (!automatic) await this.#sessions.input(id, 'Continue the previous task from the saved conversation. Check what already finished before taking further action.');
     return { ok: true, session: wire(session) };
   }
