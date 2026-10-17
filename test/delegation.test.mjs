@@ -690,13 +690,14 @@ test('configured restrictions and explicit choices survive default YOLO, without
   assert.equal(delegationMode('claude', 'full', 'default', null, 'codex'), 'default');
 });
 
-test('nesting is bounded and empty tasks fail before starting a CLI', async (t) => {
+test('helpers nest as deep as the task needs, and empty tasks fail before starting a CLI', async (t) => {
   const { sessions } = setup(t);
   await assert.rejects(() => sessions.delegate({ task: '' }), /task/);
   let parent = (await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'One' })).session;
-  parent = (await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Two' })).session;
-  parent = (await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Three' })).session;
-  await assert.rejects(() => sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Four' }), /three levels/);
+  for (const task of ['Two', 'Three', 'Four', 'Five']) {
+    parent = (await sessions.delegate({ id: parent.id, profileId: 'claude-main', task })).session;
+  }
+  assert.equal(parent.delegation.depth, 5);
 });
 
 test('helm delegate same runs the helper on the account this chat runs as', async () => {

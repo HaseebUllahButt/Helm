@@ -262,7 +262,7 @@ export function createWsLayer() {
       throw new Error('invalid handoff request digest');
     }
     const payload = JSON.stringify(params);
-    if (payload.length > MAX_DISPATCH_BYTES) throw new Error('a handoff is too large to queue');
+    if (Buffer.byteLength(payload) > MAX_DISPATCH_BYTES) throw new Error('a handoff is too large to queue');
     return { params, payload, targetId: wrap.targetMachineId };
   }
 

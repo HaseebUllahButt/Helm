@@ -142,9 +142,14 @@ export class SessionDelegation {
     // parent's checkout); otherwise the child works where its parent does.
     let folder = cwd ?? parent?.cwd;
     if (typeof folder !== 'string' || !folder.trim()) throw new Error('delegation needs a working folder');
+    // No depth cap (the owner's rule: no hidden limits on agents). Depth is
+    // still counted for display, and a chain that leads back to itself - a
+    // damaged index, never a real request - stops the walk.
     let depth = 1, ancestor = parent;
-    while (ancestor?.delegation) {
-      if (++depth > 3) throw new Error('subagents can nest at most three levels');
+    const seen = new Set();
+    while (ancestor?.delegation && !seen.has(ancestor.id)) {
+      seen.add(ancestor.id);
+      depth++;
       ancestor = this.#core.index.get(ancestor.delegation.parentId);
     }
     const profile = (await getProfiles()).find((p) => p.id === profileId && !p.disabled);

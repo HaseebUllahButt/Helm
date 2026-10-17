@@ -164,6 +164,32 @@ test('reconnects run a few at a time, not all at once', async () => {
   await again.stop();
 });
 
+test('one account reconnecting slowly does not hold back another account', async () => {
+  const { make, drivers } = setup('per-account', { reattachConcurrency: 1 });
+  const first = await make();
+  for (const profileId of ['claudea', 'claudea', 'codex', 'codex']) {
+    const s = await first.start({ cwd: '/tmp', profileId });
+    await first.input(s.id, 'hi'); drivers.get(s.id).finish('t1');
+  }
+  await first.stop();
+  let running = 0, peak = 0;
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const again = new Sessions(new StubRuntime(), {
+    events: new EventLog(join(process.env.HELM_DIR, 'events-per-account')),
+    procHost: Object.assign(new EventEmitter(), { hasProc: () => true, procPipe: () => null }),
+    reattachConcurrency: 1,
+    makeDriver: (engine, opts) => {
+      const d = new FakeDriver({ engine, ...opts });
+      d.start = async () => { running++; peak = Math.max(peak, running); await new Promise((r) => setTimeout(r, 15)); running--; };
+      return d;
+    },
+  });
+  await again.resume();
+  assert.equal(peak, 2, 'each account reconnects one at a time, and the two accounts at once');
+  await again.stop();
+});
+
 test('a turn that reports tokens but no price is priced at list rates, and a Claude total is not double counted', async () => {
   const { make, drivers } = setup('cost');
   const sessions = await make();

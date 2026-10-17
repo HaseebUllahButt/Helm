@@ -90,11 +90,20 @@ test('Ctrl+Shift+E opens a terminal in the open chat\'s folder, and goes back fr
 
 test('the shortcuts list names both keys', async t => {
   const page = await pageFor(t);
-  await page.keyboard.press('?');
+  await page.keyboard.press('Control+Slash');
   const text = await page.locator('.shortcuts').innerText();
   assert.match(text, /Settings/);
   assert.match(text, /Usage, limits and cost/);
   assert.match(text, /Terminal/);
+});
+
+test('bare keys open nothing: every shortcut needs Ctrl/Cmd', async t => {
+  const page = await pageFor(t);
+  await page.keyboard.press('?');
+  await page.keyboard.press('/');
+  await page.waitForTimeout(150);
+  assert.equal(await page.locator('.shortcuts').count(), 0, 'a bare "?" opened the key list');
+  assert.equal(await page.locator('.palette-box').count(), 0, 'a bare "/" opened search');
 });
 
 test('New session paints the agents it remembers before a slow machine answers', async t => {

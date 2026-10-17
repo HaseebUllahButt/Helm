@@ -717,7 +717,7 @@ imports; the suite has bounded timeouts and uses fake providers and temporary re
 Cache keepalive is deferred: this release installs no warmer, sends no
 background cache pings, and exposes no keepalive toggle. Providers' native
 prompt caching remains unchanged. The sidebar search has no shortcut badge;
-Ctrl/Cmd+K and `/` still open search.
+Ctrl/Cmd+K still opens search.
 
 The open thread is highlighted in Running and Done. Done is a rolling list of
 threads with replies that are not running or needing attention, updated within

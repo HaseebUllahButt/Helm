@@ -621,18 +621,19 @@ function Shell({ client, conn, onSignOut }: {
     if (wide && !selected && envs.length) { autoPicked.current = envs[0].id; setSelected(envs[0].id); }
   }, [wide, selected, envs]);
 
-  // Keys, on a keyboard. Ctrl/Cmd+K opens the palette; "/" opens it too;
-  // Ctrl/Cmd+N starts a new chat - never a bare "n", which the owner hit by
-  // accident. In an ordinary browser tab the browser keeps Ctrl+N, so
-  // Ctrl/Cmd+Shift+O does the same there. Ctrl/Cmd+[ and ] walk back and
-  // forward; "?" lists them. The single keys never fire while you are typing
-  // into something, and a phone never sends any of them.
+  // Keys, on a keyboard. Every one needs Ctrl/Cmd - never a bare key, which
+  // the owner hit by accident. Ctrl/Cmd+K opens the palette; Ctrl/Cmd+N
+  // starts a new chat. In an ordinary browser tab the browser keeps Ctrl+N,
+  // so Ctrl/Cmd+Shift+O does the same there. Ctrl/Cmd+[ and ] walk back and
+  // forward; Ctrl/Cmd+/ lists them. A phone never sends any of them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
-      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName ?? '') || !!el?.isContentEditable;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); setPalette((v) => !v); return; }
+      // The key list. Every shortcut needs Ctrl/Cmd (the owner's rule); with
+      // Shift held, some layouts report "/" as "?".
+      if (mod && !e.altKey && (e.key === '/' || e.key === '?') && !el?.closest?.('.xterm')) { e.preventDefault(); setPalette(false); setHelp((v) => !v); return; }
       // A terminal keeps Ctrl+N: it is "next line" to a shell.
       const ctrlN = !e.shiftKey && (e.key === 'n' || e.key === 'N') && !el?.closest?.('.xterm');
       if (mod && (ctrlN || (e.shiftKey && (e.key === 'o' || e.key === 'O')))) { e.preventDefault(); setPalette(false); setNewChat({}); return; }
@@ -647,9 +648,6 @@ function Shell({ client, conn, onSignOut }: {
         // locked the owner's screen.
         if (e.code === 'Digit4' || e.key === '$') { e.preventDefault(); setPalette(false); navigate([{ kind: 'usage' }]); return; }
       }
-      if (typing || mod || e.altKey) return;
-      if (e.key === '?') { e.preventDefault(); setHelp(true); return; }
-      if (e.key === '/') { e.preventDefault(); setPalette(true); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

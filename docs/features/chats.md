@@ -84,8 +84,8 @@ quick chat with the Fake agent (see [README](README.md)).
   A riskier mode takes two taps and colours the box.
 - **Reach:** tap a chip. Keys: Shift+Tab next mode (every mode, bypass
   included, then round again), Ctrl/⌘+Shift+M next
-  model (favourites first), Ctrl/⌘+Shift+Y next thinking level. "?" lists
-  every key.
+  model (favourites first), Ctrl/⌘+Shift+Y next thinking level. Ctrl/⌘+/
+  lists every key.
 - **Cache warning:** a running Claude (2.1.300 or newer) prices a model
   switch itself in its PreModelSwitch hook (`prompt_cache_warm`,
   `context_tokens`, `estimated_cache_write_usd`); Helm asks only when Claude

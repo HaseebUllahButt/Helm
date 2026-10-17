@@ -394,7 +394,9 @@ export class EventLog {
     if (since > 0) list = list.filter((e) => e.seq > since);
 
     const shaped = (e) => forWire(this.#hydrate(id, e));
-    const sizeOf = (e) => JSON.stringify(e).length;
+    // Bytes on the wire, not string units: Urdu or Chinese text is up to
+    // three bytes a character, and a page of it was three times its budget.
+    const sizeOf = (e) => Buffer.byteLength(JSON.stringify(e));
     let events = [];
     let hasMore = false;
     let contiguous = 0;

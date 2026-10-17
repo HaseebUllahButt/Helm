@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { once } from 'node:events';
+import { once, EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { startWork } from '../packages/connect/src/work-command.js';
 import { ExecutionJobs } from '../packages/connect/src/execution.js';
@@ -65,6 +65,19 @@ test('heavy work never waits: two heavy commands run at the same time', async ()
   const lines = readFileSync(log, 'utf8').trim().split('\n');
   assert.deepEqual(lines.slice(0, 2).map(l => l.split(' ')[1]), ['start', 'start'], lines.join(','));
   assert.ok(!messages.some(m => m.status === 'queued'));
+});
+
+test('no command is refused for being one too many; only finished results are dropped', async t => {
+  // A launcher whose commands never finish, so every one stays running.
+  const fake = () => {
+    const child = new EventEmitter();
+    // Cancel arrives as a message; the fake then closes like a real one.
+    Object.assign(child, { stdout: new PassThrough(), stderr: new PassThrough(), stdin: { end() {} }, pid: 1, connected: true,
+      send: () => { child.connected = false; setImmediate(() => child.emit('close', 130)); } });
+    return child;
+  };
+  const jobs = new ExecutionJobs({ launch: fake }); t.after(() => jobs.stop());
+  for (let n = 1; n <= 70; n++) assert.equal(jobs.start({ id: id(1000 + n), ...spec('') }, 'owner').status, 'starting');
 });
 
 test('output retention is bounded and paged with an explicit truncation marker', async t => {

@@ -143,7 +143,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['Ctrl/⌘ Shift E', 'Terminal (in a chat: its folder); again to go back'],
     ['Ctrl/⌘ Shift T', 'Terminal on a device you pick'],
     ['Ctrl/⌘ Alt T', 'New terminal now, on the machine you are in'],
-    ['?', 'This list'],
+    ['Ctrl/⌘ /', 'This list'],
   ]],
   ['In a terminal (the Helm app window)', [
     ['Ctrl/⌘ T', 'New terminal'],

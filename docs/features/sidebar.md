@@ -57,14 +57,13 @@ until `text` starts with "helm / Search anything".
   palette also lists actions: New chat, Quick chat, Settings, Updates,
   Devices & pairing, What it has cost, CLI defaults, Public links, themes,
   Keyboard shortcuts.
-- **Reach:** the search box, Ctrl/⌘+K, or "/" when not typing. "?" shows
-  the key list.
+- **Reach:** the search box or Ctrl/⌘+K. Ctrl/⌘+/ shows the key list.
 - **Prove (driven):**
   ```sh
   $V key Control+k; $V text | tail -15; $V key Escape
-  $V key "?"; $V text | tail -30; $V key Escape
+  $V key Control+Slash; $V text | tail -30; $V key Escape
   ```
-- **Proof:** the action list above; "?" shows "This list", "IN THE NEW-CHAT
+- **Proof:** the action list above; Ctrl/⌘+/ shows "This list", "IN THE NEW-CHAT
   BOX", "IN A CHAT".
 - **Traps:** search results include real chats from this machine.
 - **Tests:** `test/browser/ui`, `global-keys`; `test/palette`.

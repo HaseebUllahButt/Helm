@@ -286,7 +286,14 @@ export class SessionResume {
   /** Re-watch every surviving pane after a daemon restart. */
   async resume() {
     const reattaching = [];
-    const reattachSlot = limiter(this.#sessions.reattachConcurrency);
+    // One gate per account, not one for the machine: the crowd that timed
+    // out was forty threads on one app-server, and a slow account must not
+    // hold back the others' reconnects.
+    const gates = new Map();
+    const reattachSlot = (s, job) => {
+      if (!gates.has(s.profileId)) gates.set(s.profileId, limiter(this.#sessions.reattachConcurrency));
+      return gates.get(s.profileId)(job);
+    };
     const profiles = loadProfiles()?.profiles ?? [];
     // Native Codex belongs to its terminal daemon, not Helm's proc host.
     // Discover its real loaded threads before deciding which turns survived.
@@ -334,10 +341,10 @@ export class SessionResume {
         // Listen immediately, including to unattended threads. Otherwise a
         // turn that finishes during the update stays busy until someone opens
         // the thread, and its queued messages never get delivered.
-        // A few at a time: forty threads asking one app-server at once on a
-        // busy machine all timed out together, and every one of them read
-        // as a failed task.
-        reattaching.push(reattachSlot(() => this.#reattach(s, 0)));
+        // A few at a time per account: forty threads asking one app-server at
+        // once on a busy machine all timed out together, and every one of
+        // them read as a failed task.
+        reattaching.push(reattachSlot(s, () => this.#reattach(s, 0)));
         continue;
       }
       // The process that asked died with the previous daemon; a prompt it

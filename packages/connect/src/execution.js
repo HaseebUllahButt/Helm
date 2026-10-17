@@ -7,7 +7,10 @@ const OUTPUT_BYTES = 256 * 1024;
 const PAGE_BYTES = 64 * 1024;
 // Long enough to read a result back after a laptop sleeps through it.
 const RETAIN_MS = 60 * 60_000;
-const MAX_JOBS = 64;
+// Finished results kept beyond this are dropped oldest first. Running
+// commands never count against it: no command is ever refused for being
+// one too many (the owner's rule - no hidden limits on agents).
+const KEEP_FINISHED = 64;
 
 /** Commands use the existing authenticated machine RPC, without SSH or a login shell. */
 export class ExecutionJobs {
@@ -38,11 +41,8 @@ export class ExecutionJobs {
       return { id, status: existing.status };
     }
     for (const [key, job] of this.#jobs) if (job.finishedAt && Date.now() - job.finishedAt > this.retainMs) this.#forget(key);
-    if (this.#jobs.size >= MAX_JOBS) {
-      const oldest = [...this.#jobs.values()].find(job => job.finishedAt);
-      if (!oldest) throw new Error('too many commands are already pending');
-      this.#forget(oldest.id);
-    }
+    const finished = [...this.#jobs.values()].filter(job => job.finishedAt);
+    for (const job of finished.slice(0, Math.max(0, finished.length - KEEP_FINISHED + 1))) this.#forget(job.id);
     const job = { id, owner, fingerprint, status: 'starting', seq: 0, chunks: [], bytes: 0, waiters: new Set(), exitCode: null };
     this.#jobs.set(id, job);
     const wake = () => { for (const waiter of job.waiters) waiter(); job.waiters.clear(); };
