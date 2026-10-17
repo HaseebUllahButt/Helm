@@ -18,7 +18,7 @@ import { localDigest, pathWithShim } from './brain.js';
 import { forWire } from './events.js';
 import { optionArgs, peekModels, followNewModels } from './models.js';
 import { modelPrefs, startPrefs, saveModelPrefs, accountKey } from './settings.js';
-import { EventLog, activeTurnFromEvents, EVENT_KEEP } from './events.js';
+import { EventLog, EVENT_KEEP } from './events.js';
 import { permissionCard } from './drivers/claude.js';
 import { canInspectExternalCodex, codexTurnOutcome, nativeCodexThreads, nativeCodexSocket } from './drivers/codex.js';
 import { devinUsageReport } from './devin-usage.js';
@@ -50,14 +50,13 @@ import { SessionSubagents } from './session-subagents.js';
 import { SessionDelegation } from './session-delegation.js';
 import { SessionViewers } from './session-viewers.js';
 import { LimitRecovery } from './session-limits.js';
+import { SessionResume } from './session-resume.js';
 
 export { DRIVERS, wire } from './session-wire.js';
 export { driverTakesImages, acceptAttachments, saveUploads, acceptImages } from './session-attachments.js';
 export { transcriptEvents } from './session-transcript-events.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
-/** How a recovery note says the agent's state could not be checked. */
-const RECONNECT_FAILED = 'Could not reconnect to the agent:';
 // A headless agent that has been idle this long is closed; the next message
 // resumes the same conversation, so nothing is lost but the warm process.
 const IDLE_REAP_MS = 30 * 60_000;
@@ -74,17 +73,6 @@ export function priceTurn(engine, model, usage) {
   return priced && priced.total > 0 ? Math.round(priced.total * 1e6) / 1e6 : null;
 }
 
-/** Run async jobs at most `n` at a time: `slot(() => work())` returns the job's promise. */
-const limiter = (n) => {
-  let running = 0;
-  const waiting = [];
-  const next = () => { running--; waiting.shift()?.(); };
-  return (job) => new Promise((resolve, reject) => {
-    const run = () => { running++; Promise.resolve().then(job).then(resolve, reject).finally(next); };
-    if (running < n) run(); else waiting.push(run);
-  });
-};
-
 /**
  * Rows helm does not own: a herdr pane it did not start (`pane:`), and a past
  * session read out of a CLI's own history (`found:`). They are real work and
@@ -94,12 +82,6 @@ const limiter = (n) => {
 const EXTERNAL = /^(pane:|found:)/;
 /** A look at a chat Helm did not start is forgotten after this long. */
 const SEEN_KEEP_MS = 30 * 86_400_000;
-
-/** A helper's newest finished turn, from its recent events; local status cards do not count. */
-const lastTaskResult = (tail) => {
-  const cards = new Set(tail.filter((event) => event.type === 'turn.start' && event.local === true).map((event) => event.turnId));
-  return tail.findLast((event) => event.type === 'turn.done' && !String(event.turnId).startsWith('local-') && !cards.has(event.turnId)) ?? null;
-};
 
 const EXTERNAL_INFO_COMMANDS = [
   { name: 'status', description: 'Show this session configuration and usage', source: 'helm' },
@@ -259,7 +241,7 @@ export class Sessions extends EventEmitter {
     });
     // An agent process that dies while no driver holds it still leaves the
     // record: close what it left open so the session stops reading as busy.
-    this.procs.on('proc.exit', ({ id }) => this.#procGone(id));
+    this.procs.on('proc.exit', ({ id }) => this.#resumer.procGone(id));
     const footers = new Map();
     this.nativeTerminals.on('data', (d) => {
       this.emit('data', d);
@@ -328,10 +310,12 @@ export class Sessions extends EventEmitter {
   #delegation;
   #viewers;
   #limitRecovery;
+  #resumer;
   #makeParts() {
     const core = {
       index: this.#index,
       drivers: this.#drivers,
+      reapers: this.#reapers,
       outbox: this.#outbox,
       sending: this.#sending,
       steered: this.#steered,
@@ -339,12 +323,17 @@ export class Sessions extends EventEmitter {
       settling: this.#settling,
       closedTurns: this.#closedTurns,
       terminal: this.#terminal.bind(this),
+      nativeLoaded: this.#nativeLoaded,
+      nativeUnknown: this.#nativeUnknown,
+      discoverNativeCodex: this.#discoverNativeCodex.bind(this),
       handle: this.#handle.bind(this),
       save: this.#save.bind(this),
       startDriven: this.#startDriven.bind(this),
       driverStarts: this.#driverStarts,
       driver: this.#driver.bind(this),
       bindDriver: this.#bindDriver.bind(this),
+      settled: this.#settled.bind(this),
+      reap: this.#reap.bind(this),
       refreshExternalActivity: this.#refreshExternalActivity.bind(this),
       importExternalTranscript: this.#importExternalTranscript.bind(this),
       pump: this.#pump.bind(this),
@@ -355,6 +344,7 @@ export class Sessions extends EventEmitter {
     core.delegation = this.#delegation = new SessionDelegation(this, core);
     core.viewers = this.#viewers = new SessionViewers(this, core);
     core.limitRecovery = this.#limitRecovery = new LimitRecovery(this, core);
+    core.resumer = this.#resumer = new SessionResume(this, core);
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
@@ -614,7 +604,7 @@ export class Sessions extends EventEmitter {
           const pending = this.events.pending(session.id);
           const open = this.events.activeTurn(session.id);
           const turn = open && !String(open.turnId).startsWith('local-') ? open : null;
-          const unreachable = this.#unreachable(session);
+          const unreachable = this.#resumer.unreachable(session);
           // Checked every few seconds: an offline thread already settled
           // here is not saved and announced to every device again.
           if (!driver && session.status === 'idle' && !pending.length && !turn && !unreachable && this.#nativeOffline.has(session.id)) continue;
@@ -649,7 +639,7 @@ export class Sessions extends EventEmitter {
           }
           session.status = 'idle';
           if (session.delegation) this.#delegation.updateTeam(session);
-          this.#reconnected(session);
+          this.#resumer.reconnected(session);
           this.#save();
           this.emit('session', { ...wire(session), alive: false, pending: 0, ask: null });
           // With a daemon to reopen it, what was queued behind the turn goes.
@@ -713,7 +703,7 @@ export class Sessions extends EventEmitter {
               // starting from the recorded state makes any change a real one.
               if (!d.nativeConnected) d.status = s.status;
               await d.start();
-              if (s.recovery?.kind === 'error') { this.#reconnected(s); this.#pump(s); }
+              if (s.recovery?.kind === 'error') { this.#resumer.reconnected(s); this.#pump(s); }
             } catch (err) {
               this.#drivers.delete(s.id);
               this.log(`codex native attach: ${err.message}`);
@@ -4221,356 +4211,9 @@ export class Sessions extends EventEmitter {
     return { ok: true, session: wire(s) };
   }
 
-  /**
-   * Find out which terminals outlived this daemon.
-   *
-   * The host holds them, so an upgrade or a crash leaves them running - but
-   * not forever, and not if the host itself was stopped. Anything the host
-   * does not have is genuinely gone, and its record goes with it rather than
-   * offering a phone a terminal that no longer exists.
-   */
-  async adoptTerminals() {
-    const ok = await this.terminals.ensure({ spawn: false }).catch(() => false);
-    await this.nativeTerminals.ensure({ spawn: false }).catch(() => false);
-    // The proc host's hello carries which agent processes survived; resume()
-    // reads that list to leave their open turns and questions standing.
-    await this.procs.ensure({ spawn: false }).catch(() => false);
-    let changed = false;
-    for (const s of [...this.#index.values()]) {
-      if (!s.pty) continue;
-      if (this.#terminal(s).has(s.id)) continue;
-      this.#index.delete(s.id);
-      changed = true;
-      this.emit('session', { ...s, status: 'exited', alive: false });
-    }
-    if (changed) this.#save();
-    return ok;
-  }
-
-  /**
-   * A hosted agent process died while detached, or with no driver ever
-   * bound after a restart. The turns and questions it left open are
-   * unanswerable now - close them the way `resume` does for a dead process.
-   */
-  #procGone(id) {
-    const s = this.#index.get(id);
-    if (!s?.driver || this.#drivers.has(id)) return;
-    const tail = this.events.tail(id, 0);
-    const closed = new Set(tail.filter((e) => ['turn.done', 'turn.remove'].includes(e.type)).map((e) => e.turnId));
-    // A message still waiting in the queue never reached the dead process:
-    // it stays queued, and goes to the next one.
-    const waiting = new Set((this.#outbox.get(id) ?? []).map((item) => item.turnId));
-    for (const e of tail) {
-      if (e.type !== 'turn.start' || closed.has(e.turnId) || waiting.has(e.turnId)) continue;
-      closed.add(e.turnId);
-      this.events.append(id, { type: 'turn.done', turnId: e.turnId, status: 'interrupted', error: 'agent exited' });
-    }
-    for (const p of this.events.pending(id)) {
-      this.events.append(id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
-    }
-    this.#settled(id);
-    if (s.status !== 'idle') {
-      s.status = 'idle';
-      s.updatedAt = Date.now();
-      const event = this.events.append(id, { type: 'status', status: 'idle' });
-      s.lastSeq = event.seq;
-      this.emit('event', { id, event });
-      this.emit('session', s);
-      this.#save();
-    }
-    this.#pump(s);
-  }
-
-  /** Whether the record is holding work because its agent could not be checked. */
-  #unreachable(s) {
-    return s.recovery?.kind === 'error' && !!s.recovery.message?.startsWith(RECONNECT_FAILED);
-  }
-
-  /** A failed reattach that has since succeeded no longer needs attention. */
-  #reconnected(s) {
-    if (!this.#unreachable(s)) return;
-    delete s.recovery;
-    s.queuePaused = false;
-    this.#save();
-    this.emit('session', s);
-  }
-
-  /** Rebuild unsent tickets from the log and settle turns that cannot resume. */
-  #restoreOpenTurns(s, tail, processAlive) {
-    const edits = new Map(tail.filter((event) => event.type === 'turn.edit').map((event) => [event.turnId, event]));
-    tail = tail.map((event) => {
-      const edit = event.type === 'turn.start' && edits.get(event.turnId);
-      return edit ? { ...event, text: edit.text, ...(edit.attachments ? { attachments: edit.attachments } : {}) } : event;
-    });
-    const closed = new Set(tail.filter((e) => e.type === 'turn.done').map((e) => e.turnId));
-    const removed = new Set(tail.filter((e) => e.type === 'turn.remove').map((e) => e.turnId));
-    const accepted = new Set(tail.filter((e) => e.type === 'turn.accept').map((e) => e.turnId));
-    const delivered = new Set(tail.filter((e) => e.type === 'turn.deliver').map((e) => e.turnId));
-    const echoes = tail.filter((e) => e.type === 'turn.start'
-      && !e.wake && !String(e.turnId).startsWith('local-') && e.queued !== true);
-    const open = tail.filter((e) => e.type === 'turn.start'
-      && !closed.has(e.turnId) && !removed.has(e.turnId));
-    // A hosted process may still be in its current real turn. Queued local
-    // turns can follow it in the log, so use the last real turn, not simply
-    // the last open turn, as the one to leave running.
-    const active = processAlive ? activeTurnFromEvents(tail) : null;
-    // The provider moved past any of its turns older than its newest one;
-    // those finished with the run that followed, whatever became of it.
-    const latest = echoes.findLast((e) => !e.local);
-    const revive = [];
-    // A delegated task finishes with its newest work, not with whichever
-    // old card happens to be tidied first - and not at all while its live
-    // turn is being kept.
-    let finished = null;
-    const settle = (turnId, status, error, { ends = true } = {}) => {
-      if (ends) finished = status;
-      const event = this.events.append(s.id, { type: 'turn.done', turnId, status, ...(error ? { error } : {}) });
-      s.lastSeq = event.seq;
-      this.emit('event', { id: s.id, event });
-    };
-
-    for (const e of open) {
-      // A local status card is not work held by the surviving CLI. Older
-      // logs can contain an unfinished card; settle it without manufacturing
-      // either an active provider turn or a restart recovery warning.
-      if (e.local === true) { settle(e.turnId, 'ok', null, { ends: false }); continue; }
-      // A queued ticket under a caller-chosen id is still a ticket.
-      const local = String(e.turnId).startsWith('local-') || e.queued === true;
-      const mine = (e.text ?? '').trim();
-      const echoIndex = local ? echoes.findIndex((x) => x.seq > e.seq && (x.inputId != null
-        ? x.inputId === e.turnId
-        : (x.text ?? '').trim() === mine || (mine && (x.text ?? '').trim().startsWith(mine + '\n'))
-      )) : -1;
-      const echoed = echoIndex >= 0;
-      if (echoed) echoes.splice(echoIndex, 1);
-
-      if (local && (accepted.has(e.turnId) || delivered.has(e.turnId))) {
-        // `turn.accept` records a successful steer into a live turn; never
-        // send that ticket again if the daemon restarted before its echo.
-        // A ticket handed over but not yet used went to the CLI all the same.
-        if (!accepted.has(e.turnId)) {
-          const event = this.events.append(s.id, { type: 'turn.accept', turnId: e.turnId });
-          s.lastSeq = event.seq;
-          this.emit('event', { id: s.id, event });
-        }
-        settle(e.turnId, 'ok', null, { ends: false });
-        continue;
-      }
-      if (local && e.queued === true && !echoed) {
-        if (this.#delegation.discardConsumedResult(s, e.turnId)) continue;
-        // The event log is the queue. Recover the text, compact command, and
-        // image bytes from it in sequence order; the small attachment refs
-        // themselves are deliberately not enough to send to a driver.
-        let text = e.text ?? '';
-        if (s.brain) {
-          const body = text.replace(/^\[helm [^\]\n]*\]\n\n/, '');
-          const line = this.brief?.();
-          text = line ? `${line}\n\n${body}` : body;
-        }
-        const images = (e.attachments ?? [])
-          .map((a) => ({
-            filename: a.filename,
-            mime: a.mime,
-            data: a.data ?? (a.ref ? this.events.attachment(s.id, a.ref) : null),
-          }))
-          .filter((a) => a.data);
-        if (!text && !images.length) {
-          settle(e.turnId, 'interrupted', 'queued message could not be restored after restart', { ends: false });
-          continue;
-        }
-        revive.push({
-          source: e.source,
-          turnId: e.turnId,
-          text,
-          images,
-          compact: e.compact ?? null,
-          delivery: e.delivery ?? 'auto',
-          references: e.references ?? [],
-          referenceContext: e.referenceContext,
-          introduce: e.introduce === true,
-          stopGeneration: s.stopGeneration ?? 0,
-        });
-        continue;
-      }
-      if (processAlive && active?.turnId === e.turnId) continue;
-      if (latest && latest.seq > e.seq) { settle(e.turnId, 'ok', null, { ends: false }); continue; }
-      // Helm never owned a native thread's process, so its restart did not
-      // stop it; the daemon check settles those turns from Codex's record.
-      // An echoed ticket is a leftover; the echo is the turn that counts.
-      settle(e.turnId, echoed ? 'ok' : 'interrupted', echoed ? null : s.nativeSocket ? 'Codex is no longer running this turn.' : 'helm restarted', { ends: !echoed });
-      if (!echoed && !processAlive && !s.nativeSocket) s.recovery = { kind: 'restart', message: 'The agent stopped. Resume from the saved conversation.', at: Date.now() };
-    }
-    if (finished && !(processAlive && active) && s.delegation && !['done', 'error', 'interrupted'].includes(s.delegation.status)) {
-      s.delegation.status = finished === 'ok' ? 'done' : finished;
-    }
-
-    if (revive.length) {
-      const order = new Map((s.queueOrder ?? []).map((turnId, index) => [turnId, index]));
-      revive.sort((left, right) => (order.get(left.turnId) ?? Infinity) - (order.get(right.turnId) ?? Infinity));
-      this.#outbox.set(s.id, [...(this.#outbox.get(s.id) ?? []), ...revive]);
-    }
-  }
-
-  /**
-   * Work the agent still owes: a turn the log has not seen the end of, a
-   * question, or queued messages. The log is asked as well as the status,
-   * because a native thread's status is only what its daemon last said.
-   */
-  #inFlight(s) {
-    return ['working', 'blocked', 'starting'].includes(s.status)
-      || this.events.pending(s.id).length > 0
-      || (this.#outbox.get(s.id)?.length ?? 0) > 0
-      || !!activeTurnFromEvents(this.events.tail(s.id, 0));
-  }
-
-  /**
-   * Listen again to an agent process that outlived the daemon. A failed
-   * check is not a failed task: an idle thread with nothing in flight stays
-   * idle and attaches on its next message, quietly. One that was working,
-   * asking, or holding queued messages is held and marked until a retry
-   * (three, ninety seconds apart) reaches it - a machine busy enough to time
-   * out a read is usually fine a minute later.
-   */
-  async #reattach(s, attempt) {
-    try {
-      const d = await this.#driver(s);
-      // Drivers start idle and suppress duplicate status events. Seed the
-      // persisted state so an adopted idle process corrects a stale busy row.
-      d.status = s.status;
-      await d.start();
-      this.#reconnected(s);
-      this.#pump(s);
-      this.#reap(s, d.status);
-    } catch (err) {
-      if (!this.#index.has(s.id)) return;
-      this.log(`[${s.id}] could not reattach surviving agent: ${err.message}`);
-      this.#drivers.delete(s.id);
-      const busy = this.#inFlight(s);
-      if (busy && attempt < 3) {
-        const timer = setTimeout(() => { this.#reapers.delete(`reattach:${s.id}`); void this.#reattach(s, attempt + 1); }, this.reattachRetryMs);
-        timer.unref?.();
-        this.#reapers.set(`reattach:${s.id}`, timer);
-      }
-      // An account process may be alive while this thread cannot be
-      // checked. Hold the queue so nothing replays into work that may still
-      // be running, and say so - but only when there is work to hold.
-      s.status = 'idle';
-      if (busy) {
-        s.queuePaused = true;
-        s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} ${err.message}`, at: Date.now() };
-      } else if (this.#unreachable(s)) {
-        // A mark left by an earlier restart, on a thread with nothing to hold.
-        delete s.recovery; s.queuePaused = false;
-      }
-      const event = this.events.append(s.id, { type: 'status', status: 'idle' });
-      s.lastSeq = event.seq;
-      this.#save();
-      this.emit('event', { id: s.id, event });
-      this.emit('session', s);
-    }
-  }
-
-  /** Re-watch every surviving pane after a daemon restart. */
-  async resume() {
-    const reattaching = [];
-    const reattachSlot = limiter(this.reattachConcurrency);
-    const profiles = loadProfiles()?.profiles ?? [];
-    // Native Codex belongs to its terminal daemon, not Helm's proc host.
-    // Discover its real loaded threads before deciding which turns survived.
-    if (this.nativeDiscovery) await this.#discoverNativeCodex(profiles);
-    for (const s of this.#index.values()) {
-      // A terminal lives in the host process, which outlives us - so its
-      // record stays until `adoptTerminals()` has asked what really survived.
-      if (s.pty) continue;
-      if (s.external) { await this.#refreshExternalActivity(s); continue; }
-      if (!s.driver) { this.runtime.watch(this.#handle(s)); continue; }
-      // An agent process the host kept is still running whatever it was
-      // running: its active turn and questions are still answerable. Any
-      // unmatched queued tickets are rebuilt from the log for when it settles.
-      const profile = profiles.find((p) => p.id === s.profileId);
-      const procId = hostedProcId(s, s.driver === 'codex' && profile ? materialize(profile) : null);
-      // A thread its terminal still has open is alive even when attaching
-      // to it just failed: settling its turn or replaying its queue would
-      // put a second writer on work that is still running.
-      const nativeAlive = s.nativeSocket && (this.#drivers.get(s.id)?.nativeConnected || this.#nativeLoaded.has(s.engineSessionId));
-      if (s.nativeSocket && !nativeAlive && this.#nativeUnknown.has(s.profileId)) {
-        // Its daemon is there but did not answer, so whether the thread is
-        // still working is unknown. Keep its turn, question and status as
-        // they were; hold the queue so nothing is sent into work that may
-        // still be running. The next answer from the daemon settles it.
-        if (s.recovery?.kind === 'restart') delete s.recovery;
-        this.#restoreOpenTurns(s, this.events.tail(s.id, 0), true);
-        // Only a thread with work in flight has anything to hold or to warn
-        // about; an idle one simply carries on at its next message.
-        if (this.#inFlight(s)) {
-          s.queuePaused = true;
-          s.recovery = { kind: 'error', message: `${RECONNECT_FAILED} Codex did not answer, so this thread could not be checked.`, at: Date.now() };
-        } else if (this.#unreachable(s)) {
-          // A mark left by an earlier restart, on a thread with nothing to hold.
-          delete s.recovery; s.queuePaused = false;
-        }
-        s.lastSeq = this.events.last(s.id);
-        this.emit('session', s);
-        continue;
-      }
-      if (nativeAlive || !s.nativeSocket && procId && this.procs.hasProc(procId)) {
-        if (s.recovery?.kind === 'restart') delete s.recovery;
-        const tail = this.events.tail(s.id, 0);
-        this.#restoreOpenTurns(s, tail, true);
-        s.lastSeq = this.events.last(s.id);
-        // Listen immediately, including to unattended threads. Otherwise a
-        // turn that finishes during the update stays busy until someone opens
-        // the thread, and its queued messages never get delivered.
-        // A few at a time: forty threads asking one app-server at once on a
-        // busy machine all timed out together, and every one of them read
-        // as a failed task.
-        reattaching.push(reattachSlot(() => this.#reattach(s, 0)));
-        continue;
-      }
-      // The process that asked died with the previous daemon; a prompt it
-      // left open cannot be answered any more, so close it out here rather
-      // than show a phone a question nobody can act on.
-      // Only its turns and questions matter here, and most threads have
-      // neither open: glancing at them leaves the rest of each log unread.
-      const seen = this.events.glance(s.id);
-      for (const p of seen.pending) {
-        this.events.append(s.id, { type: 'permission.resolved', requestId: p.requestId, decision: 'cancelled' });
-      }
-      // The active turn died with the old daemon. Unsent queued tickets are
-      // different: `#restoreOpenTurns` puts them back into the outbox rather
-      // than closing them as though the agent had already seen them.
-      this.#restoreOpenTurns(s, seen.turns, false);
-      // The process a failed reconnect was about is gone; so is the mark.
-      // Anything it was doing is settled just above, as "restart" if need be.
-      if (this.#unreachable(s)) { delete s.recovery; s.queuePaused = false; }
-      if (s.status !== 'idle') {
-        s.status = 'idle';
-        s.updatedAt = Date.now();
-        // The log is what a viewer replays for status: closing the turns
-        // above without recording the settle leaves the last `working`
-        // standing, and the session reads as busy until the next turn.
-        const event = this.events.append(s.id, { type: 'status', status: 'idle' });
-        s.lastSeq = event.seq;
-        this.emit('event', { id: s.id, event });
-        this.emit('session', s);
-      }
-      s.lastSeq = this.events.last(s.id);
-      if (s.nativeAgents) { delete s.nativeAgents; this.#delegation.refreshTeam(s); }
-      this.#pump(s);
-    }
-    this.#save();
-    await Promise.allSettled(reattaching);
-    for (const child of this.#index.values()) {
-      if (!child.delegation) continue;
-      this.#delegation.updateTeam(child);
-      // Seqs are contiguous in a log's tail, so these are its last 500 events' turns.
-      const { seq, turns } = this.events.glance(child.id);
-      const completed = lastTaskResult(turns.filter((event) => event.seq > seq - 500));
-      if (completed && !this.hasActiveDelegations(child.id) && !['working', 'blocked', 'starting'].includes(child.status)) {
-        void this.#delegation.notifyParent(child, completed);
-      }
-    }
-  }
+  // After a daemon restart (session-resume.js)
+  adoptTerminals() { return this.#resumer.adoptTerminals(); }
+  resume() { return this.#resumer.resume(); }
 
   /** Daemon going away: hosted procs stay up, local ones die as before. */
   async stop() {
