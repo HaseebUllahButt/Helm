@@ -29,8 +29,8 @@ const PATHS: Record<IconName, JSX.Element> = {
   plus: <path d="M12 5v14M5 12h14" />,
   check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
   checkbox: <><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M7.5 12l3 3L17 8.5" /></>,
-  // An agent: a small robot head. Two stacked squares read as "copy".
-  subagents: <><rect x="4.5" y="8" width="15" height="11.5" rx="3" /><path d="M12 8V4.5M2.5 12.5v3M21.5 12.5v3" /><circle cx="12" cy="3.6" r="1" /><circle cx="9.3" cy="13.2" r="1.1" fill="currentColor" stroke="none" /><circle cx="14.7" cy="13.2" r="1.1" fill="currentColor" stroke="none" /></>,
+  // Echo: a dot with two fading arcs behind it - you, sent out in several places.
+  subagents: <><circle cx="14.6" cy="12" r="3.8" fill="currentColor" stroke="none" /><path d="M10.1 6.64A7 7 0 0010.1 17.36" opacity=".7" /><path d="M7.85 3.96A10.5 10.5 0 007.85 20.04" opacity=".4" /></>,
   git: <><circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="9" r="2" /><path d="M6 7v10M18 11c0 4-6 3-10 7" /></>,
   branch: <><circle cx="6" cy="18" r="2" /><circle cx="6" cy="6" r="2" /><circle cx="18" cy="8" r="2" /><path d="M6 8v8M18 10c0 4-4 4-10.5 6.5" /></>,
   terminal: <><rect x="3" y="4.5" width="18" height="15" rx="2.5" /><path d="M7.5 9.5l3 2.5-3 2.5M12.5 15h4" /></>,
