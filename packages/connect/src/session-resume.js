@@ -290,7 +290,7 @@ export class SessionResume {
     const profiles = loadProfiles()?.profiles ?? [];
     // Native Codex belongs to its terminal daemon, not Helm's proc host.
     // Discover its real loaded threads before deciding which turns survived.
-    if (this.#sessions.nativeDiscovery) await this.#core.discoverNativeCodex(profiles);
+    if (this.#sessions.nativeDiscovery) await this.#core.natives.discoverNativeCodex(profiles);
     for (const s of this.#core.index.values()) {
       // A terminal lives in the host process, which outlives us - so its
       // record stays until `adoptTerminals()` has asked what really survived.
@@ -305,8 +305,8 @@ export class SessionResume {
       // A thread its terminal still has open is alive even when attaching
       // to it just failed: settling its turn or replaying its queue would
       // put a second writer on work that is still running.
-      const nativeAlive = s.nativeSocket && (this.#core.drivers.get(s.id)?.nativeConnected || this.#core.nativeLoaded.has(s.engineSessionId));
-      if (s.nativeSocket && !nativeAlive && this.#core.nativeUnknown.has(s.profileId)) {
+      const nativeAlive = s.nativeSocket && (this.#core.drivers.get(s.id)?.nativeConnected || this.#core.natives.nativeLoaded.has(s.engineSessionId));
+      if (s.nativeSocket && !nativeAlive && this.#core.natives.nativeUnknown.has(s.profileId)) {
         // Its daemon is there but did not answer, so whether the thread is
         // still working is unknown. Keep its turn, question and status as
         // they were; hold the queue so nothing is sent into work that may

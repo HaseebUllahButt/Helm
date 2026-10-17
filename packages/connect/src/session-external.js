@@ -305,7 +305,7 @@ export class ExternalSessions {
       const opened = await this.#sessions.nativeTerminals.open(moved, { cmd, args, cwd: proc.cwd || expand(s.cwd), cols: 120, rows: 36,
         exactEnv: true, env: { ...proc.env, HELM_NATIVE_SESSION: moved },
         native: { engine: s.engine, configHome, conversation: s.engineSessionId, nativeChat } });
-      this.#core.adoptNative({ id: moved, engine: s.engine, cwd: proc.cwd || expand(s.cwd), configHome, nativePid: opened.pid, nativeChat, createdAt: Date.now() });
+      this.#core.natives.adoptNative({ id: moved, engine: s.engine, cwd: proc.cwd || expand(s.cwd), configHome, nativePid: opened.pid, nativeChat, createdAt: Date.now() });
       const next = this.#core.index.get(moved);
       Object.assign(next, { engineSessionId: s.engineSessionId, transcript: s.transcript, profileId: s.profileId,
         title: s.title, titleBy: s.titleBy, status: wasWorking ? 'working' : 'idle' });
