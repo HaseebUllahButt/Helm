@@ -161,7 +161,7 @@ export class SessionSubagents {
       if (sig === n.sig) return;
       n.sig = sig;
       n.cards = agents;
-      this.#core.refreshTeam(s);
+      this.#core.delegation.refreshTeam(s);
     } catch (err) { this.#sessions.log(`native subagents: ${err.message}`); }
   }
 
