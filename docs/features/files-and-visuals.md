@@ -50,8 +50,10 @@
 - **Tests:** `test/voice`, `voice-key`.
 
 ## Visuals in a chat
-- **Sees:** a framed page inside the chat with its title and **Expand**,
-  **Source**, **Save**. It stays after the agent finishes or Helm restarts.
+- **Sees:** a framed page inside the chat, with no title bar: one small
+  corner button ("Expand <title>", shown on hover, always on touch) opens it
+  full size, where **Source** and **Save** are. It stays after the agent
+  finishes or Helm restarts.
 - **CLI:** `helm preview <file.html> [--output x.png] [--width 390]`, then
   `helm render <file.html> --title "<t>" [--session <id>]`.
 - **Prove (driven):**
@@ -61,8 +63,8 @@
   # then open that chat in the app (Home → Settled → its title)
   $V wait "my visual"; $V shot /tmp/vis.png
   ```
-- **Proof:** the card titled "my visual" with "my visual ok" inside and
-  Expand / Source / Save.
+- **Proof:** "my visual ok" inside the chat, and "Expand my visual" opening
+  it with Source / Save.
 - **Traps:** without `HELM_DIR` and `--session`, `render` posts into the
   owner's real chat. Pages are capped at 512 KiB; images at 2 MiB each.
 - **Tests:** `test/visual-replies`; `test/browser/visual-replies`. See

@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { visualDocument } from '@helm/protocol/visual';
 import { useDialog } from '../useDialog';
+import { Icon } from '../Icon';
 import type { Visual } from './types';
 
 export type VisualReader = (ref: string) => Promise<{ html: string }>;
@@ -36,11 +37,12 @@ function VisualFrame({ html, title, height = 420, expanded = false, onEscape }: 
   return <iframe key={html} ref={ref} className="visual-frame" title={title} src="/helm/visual-frame" onLoad={() => ref.current?.contentWindow?.postMessage({ type: 'helm.visual.load', html: doc }, '*')} sandbox="allow-scripts" referrerPolicy="no-referrer" style={expanded ? undefined : { height: measured }} />;
 }
 
-function VisualDialog({ html, visual, source, onClose, onSave }: { html: string; visual: Visual; source: boolean; onClose: () => void; onSave: () => void }) {
+function VisualDialog({ html, visual, onClose, onSave }: { html: string; visual: Visual; onClose: () => void; onSave: () => void }) {
   const ref = useDialog(onClose);
+  const [source, setSource] = useState(false);
   return <div className="modal-back visual-back" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
     <div ref={ref} className="visual-dialog" role="dialog" aria-modal="true" aria-label={source ? `${visual.title} source` : visual.title} tabIndex={-1}>
-      <div className="visual-bar"><strong>{visual.title}{source ? ' · Source' : ''}</strong><span className="visual-actions"><button onClick={onSave}>Save</button><button onClick={onClose} aria-label="Close visual">Close</button></span></div>
+      <div className="visual-bar"><strong>{visual.title}{source ? ' · Source' : ''}</strong><span className="visual-actions"><button aria-pressed={source} onClick={() => setSource(!source)}>{source ? 'Picture' : 'Source'}</button><button onClick={onSave}>Save</button><button onClick={onClose} aria-label="Close visual">Close</button></span></div>
       {source ? <pre className="visual-source" tabIndex={0}><code>{html}</code></pre> : <VisualFrame html={html} title={visual.title} expanded onEscape={onClose} />}
     </div>
   </div>;
@@ -54,7 +56,7 @@ export function VisualReply({ visual, read: supplied }: { visual: Visual; read?:
   const [html, setHtml] = useState<string>();
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
-  const [dialog, setDialog] = useState<'expand' | 'source' | null>(null);
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { setVisible(true); observer.disconnect(); } }, { rootMargin: '300px' });
     if (ref.current) observer.observe(ref.current);
@@ -76,14 +78,12 @@ export function VisualReply({ visual, read: supplied }: { visual: Visual; read?:
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000);
   };
   return <div ref={ref} className="visual-reply">
-    <div className="visual-bar"><strong>{visual.title}</strong><span className="visual-actions">
-      <button disabled={!html} onClick={() => setDialog('expand')}>Expand</button>
-      <button disabled={!html} onClick={() => setDialog('source')}>Source</button>
-      <button disabled={!html} onClick={save}>Save</button>
-    </span></div>
+    {/* No title bar: the picture is the reply. One small corner button
+        opens it full size, where its source and Save live. */}
+    {html && <button className="visual-open" aria-label={`Expand ${visual.title}`} title="Expand" onClick={() => setOpen(true)}><Icon name="popout" size={14} /></button>}
     {html ? <VisualFrame html={html} title={visual.title} height={visual.height} /> : <div className="visual-placeholder" style={{ minHeight: Math.min(visual.height, 420) }} role={error ? 'alert' : 'status'}>
       {error ? <><span>{error}</span><button onClick={() => setRetry(value => value + 1)}>Retry</button></> : 'Loading visual…'}
     </div>}
-    {dialog && html && <VisualDialog html={html} visual={visual} source={dialog === 'source'} onClose={() => setDialog(null)} onSave={save} />}
+    {open && html && <VisualDialog html={html} visual={visual} onClose={() => setOpen(false)} onSave={save} />}
   </div>;
 }

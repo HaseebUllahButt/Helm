@@ -109,6 +109,7 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       await view.goto('http://helm-dispatch-test/');
       await view.addStyleTag({content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'')});
       await view.addScriptTag({content:bundle.outputFiles[0].text});
+      await view.getByRole('button',{name:'New task'}).click();
       await view.getByRole('button',{name:'CLI account: Parent account'}).waitFor();
       await view.getByLabel('Task',{exact:true}).fill('Inspect this task');
       assert.equal(await view.evaluate(()=>window.calls.find(c=>c.method==='agent.list').params.models),false);
@@ -142,6 +143,7 @@ test('the parent picker is ready before model discovery; helper defaults and ove
       assert.ok(await view.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
       await view.getByRole('button',{name:'Close subagents'}).click();
       await view.evaluate(()=>window.mount());
+      await view.getByRole('button',{name:'New task'}).click();
       await view.getByRole('button',{name:'model: model'}).waitFor();
       await view.getByRole('button',{name:/^model:/}).click();
       await view.getByRole('button',{name:'Helper Model is the default for subagents'}).waitFor();
@@ -312,9 +314,14 @@ test('desktop and phone headers open unified details with accessible Git navigat
 test('launch options stay folded until asked for, then create a linked child and expose its approval', async () => {
   await page.locator('#launcher').focus();
   await page.evaluate(() => window.showSubagents());
+  // The task form is a folded bar until asked for, even in an empty panel.
+  const newTask = page.getByRole('button', {name:'New task'});
+  await newTask.waitFor();
+  assert.equal(await page.getByLabel('Task', {exact:true}).count(), 0);
+  await newTask.click();
   const taskBox = page.getByLabel('Task', {exact:true});
   await taskBox.waitFor();
-  assert.equal(await isFocused(taskBox), true, 'an empty panel goes straight to the task');
+  assert.equal(await isFocused(taskBox), true, 'opening it goes straight to the task');
   // The message box's own chips: account, then model and permissions.
   const accountChip = page.getByRole('button', {name:/^CLI account:/});
   await page.getByRole('button', {name:'CLI account: Codex personal'}).waitFor();
@@ -337,7 +344,7 @@ test('launch options stay folded until asked for, then create a linked child and
   await models.getByRole('option', {name:/^opus/}).click();
   await page.getByRole('button', {name:'model: opus'}).waitFor();
   await capture(page, 'subagents-launch.png');
-  assert.equal(await page.getByRole('button', {name:'Cancel'}).count(), 0, 'with no tasks there is nothing to go back to');
+  assert.equal(await page.getByRole('button', {name:'Cancel'}).count(), 1, 'Cancel always shows in the task form');
   await taskBox.fill('Review the vulnerability');
   const startsBeforeComposition = await page.evaluate(() => window.calls.filter((call) => call.method === 'session.delegate').length);
   await taskBox.dispatchEvent('keydown', {key:'Enter',ctrlKey:true,isComposing:true});

@@ -29,7 +29,12 @@ export function FilesPanel({ client, env, cwd, refreshKey, changed, wrap, open, 
     let live = true;
     setError('');
     client.rpc<Tree>(env.id, 'git.files', { cwd }, 30_000)
-      .then((t) => { if (!live) return; setTree(t); setDir((d) => d ?? t.start); })
+      .then((t) => {
+        if (!live) return;
+        // An older Helm on that machine answers without a file list.
+        if (!Array.isArray(t?.files)) { setError('This machine cannot list files yet. Update Helm on it.'); return; }
+        setTree(t); setDir((d) => d ?? t.start);
+      })
       .catch((e: any) => { if (live) setError(e?.message || 'Could not list the files.'); });
     return () => { live = false; };
   }, [client, env.id, cwd, refreshKey]);

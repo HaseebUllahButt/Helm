@@ -37,9 +37,8 @@ export function AgentMessages({ client, envId, parent, children }: { client: Cli
   return <section className="agent-exchanges">
     <button className="delegation-new" aria-expanded={open} onClick={() => setOpen(!open)}>Messages between agents</button>
     {open && <div className="agent-exchanges-body">
-      <p className="note">Each agent keeps its own conversation. Only these messages are shared.</p>
       {error && <p className="error" role="alert">{error}</p>}
-      {!listing.messages.length && !error && <p className="note">No exchanges yet. Agents can send with <code>helm say</code> and answer with <code>helm reply</code>.</p>}
+      {!listing.messages.length && !error && <p className="note">No messages yet.</p>}
       <ol className="agent-exchange-list">{listing.messages.map(message => <li key={message.id}>
         <b>{message.asUser ? 'You' : `${message.from.title} (${message.from.engine})`} → {message.to.title} ({message.to.engine})</b>
         <small>{new Date(message.at).toLocaleString()} · {message.status === 'delivered' ? 'Delivered to chat' : message.status === 'sending' ? 'Awaiting delivery confirmation' : 'Delivery unconfirmed'}{message.replyTo ? ' · Reply' : ''}</small>

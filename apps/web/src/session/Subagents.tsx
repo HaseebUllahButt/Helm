@@ -143,7 +143,6 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
         setSessions(listing.sessions);
         if (!firstList.current) {
           firstList.current = true;
-          if (!nativeOnly && !listing.sessions.some(belongsHere) && !parent.nativeCards?.length) setComposing(true);
           if (reviewAttention) {
             const tasks = listing.sessions.filter(belongsHere);
             const attention = tasks.find((task) => stateOf(task) === 'blocked')
@@ -453,13 +452,9 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
             footer={<button type="button" className="moderow more" disabled={loading} onClick={() => void loadAgents(true)}>
               <span className="grow"><span className="rt">{loading ? 'Looking again…' : 'Look for accounts again'}</span></span></button>} />
             : controls.sheet}
-          <p className="delegation-inherit note">{model ? 'Model chosen for this task.' : savedDefaults.model
-            ? 'Using your subagent default.' : `Using the default on ${env.name}.`}</p>
-          {agent && !agent.modes.length && <p className="note">This CLI controls its own permissions.</p>}
           {errorBox('form')}
           <div className="delegation-start">
-            <span>{readOnly ? 'Read only, in this thread’s folder.' : 'Works in this thread’s folder.'}</span>
-            {children.length > 0 && <button type="button" className="ghost" disabled={busy} onClick={() => { setComposing(false); setFocus('new'); }}>Cancel</button>}
+            <button type="button" className="ghost" disabled={busy} onClick={() => { setComposing(false); setFocus('new'); }}>Cancel</button>
             <button className="primary" disabled={busy || loading || !agent?.available || !task.trim()}>{busy ? 'Starting…' : 'Start subagent'}</button>
           </div>
         </form>

@@ -120,68 +120,69 @@ export function Pipeline({ client, env, cwd, sessionId, data, error, loading, re
     finally { setAgentBusy(false); }
   };
   const pr = data?.pr;
+  const failed = (...sections: string[]) => !!data?.errors.some(e => [...sections, 'GitHub'].includes(e.section));
+  const quiet = data?.supported && !data.checks?.length && !data.runs?.length && !data.deployments?.length && !failed('Checks', 'Workflows', 'Deployments');
+  const at = (time: number) => new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return <div className="pipeline">
-    <div className="pipeline-heading"><div><h2>CI / CD</h2><p>{data?.repository || 'GitHub checks and deployments'}{data?.sha && <> · <code>{data.sha.slice(0, 7)}</code></>}</p></div>
+    <div className="pipeline-heading"><div><h2>CI / CD</h2>{data?.supported && <p>{data.repository || 'GitHub'}{data.sha && <> · <code>{data.sha.slice(0, 7)}</code></>}{data.checkedAt && <> · {loading ? 'refreshing…' : at(data.checkedAt)}</>}</p>}</div>
       <button className="iconbtn" aria-label="Refresh CI / CD" onClick={() => refresh()} disabled={loading || !env.online}><Icon name="refresh" size={17} /></button>
     </div>
-    {accounts && <div className="pipeline-account"><label htmlFor="pipeline-account">GitHub account</label><select id="pipeline-account" value={accounts.selected}
-      disabled={accountBusy || !env.online} onChange={event => void selectAccount(event.target.value)}><option value="auto">Machine default / environment</option>
-      {accounts.accounts.map(a => <option key={a.login} value={a.login} disabled={!a.valid}>{a.login}{a.active ? ' · active in gh' : ''}{!a.valid ? ' · sign in again' : ''}</option>)}</select>
-      <p>Uses this machine’s gh sign-ins. This choice applies to this repository and does not switch your CLI account.</p></div>}
+    {/* Who it reads GitHub as and what it tells you: set once, so it stays folded. */}
+    {(accounts || (sessionId && data?.supported)) && <details className="fold">
+      <summary>Settings{data?.watching || data?.agentWatch?.enabled ? <span className="fold-meta">{[data.watching && 'notifying', data.agentWatch?.enabled && 'waking agent'].filter(Boolean).join(' · ')}</span> : null}</summary>
+      {accounts && accounts.accounts.length > 0 && <div className="pipeline-account"><label htmlFor="pipeline-account">GitHub account</label><select id="pipeline-account" value={accounts.selected}
+        disabled={accountBusy || !env.online} onChange={event => void selectAccount(event.target.value)}><option value="auto">Machine default</option>
+        {accounts.accounts.map(a => <option key={a.login} value={a.login} disabled={!a.valid}>{a.login}{!a.valid ? ' · sign in again' : ''}</option>)}</select></div>}
+      {sessionId && data?.supported && <div className="pipeline-watch"><div><b>Notify this chat</b></div>
+        <button className={`switch${data.watching ? ' on' : ''}`} role="switch" aria-label="Notify this thread about CI / CD" aria-checked={!!data.watching}
+          disabled={watchBusy || !env.online} onClick={watch}><i /></button></div>}
+      {sessionId && data?.supported && <div className="pipeline-watch"><div><b>Wake the agent on changes</b>
+        {data.agentWatch?.enabled && <label>Wakes per day <input type="number" min={1} max={20} value={data.agentWatch.maxWakes} disabled={agentBusy || !env.online} onChange={e => { const n = Number(e.target.value); if (n >= 1 && n <= 20) void agentWatch(true, n); }} /></label>}
+        {data.agentWatch?.enabled && (data.agentWatch.wakes > 0 || data.agentWatch.lastError) && <p>{data.agentWatch.wakes} today{data.agentWatch.lastError ? ` · ${data.agentWatch.lastError}` : ''}</p>}</div>
+        <button className={`switch${data.agentWatch?.enabled ? ' on' : ''}`} role="switch" aria-label="Wake agent on GitHub changes" aria-checked={!!data.agentWatch?.enabled} disabled={agentBusy || !env.online} onClick={() => void agentWatch(!data.agentWatch?.enabled)}><i /></button></div>}
+    </details>}
     {accountError && <div className="pipeline-notice failure" role="status">{accountError}</div>}
-    {sessionId && data?.supported && <div className="pipeline-watch"><div><b>Notify this thread</b><p>Checks fail, reviews change, PR merges, or deployment finishes. Continues when you close Helm.</p></div>
-      <button className={`switch${data.watching ? ' on' : ''}`} role="switch" aria-label="Notify this thread about CI / CD" aria-checked={!!data.watching}
-        disabled={watchBusy || !env.online} onClick={watch}><i /></button></div>}
-    {sessionId && data?.supported && <div className="pipeline-watch"><div><b>Wake the agent on GitHub changes</b><p>Checks finish, reviews or comments change, or conflicts appear. Waits for idle threads and approvals. Five-minute cooldown.</p>
-      {data.agentWatch?.enabled && <label>Maximum wakes per day <input type="number" min={1} max={20} value={data.agentWatch.maxWakes} disabled={agentBusy || !env.online} onChange={e => { const n = Number(e.target.value); if (n >= 1 && n <= 20) void agentWatch(true, n); }} /></label>}
-      {data.agentWatch?.enabled && <p>{data.agentWatch.wakes} wakes today{data.agentWatch.pending ? ' · Changes waiting' : ''}{data.agentWatch.lastError ? ` · ${data.agentWatch.lastError}` : ''}</p>}</div>
-      <button className={`switch${data.agentWatch?.enabled ? ' on' : ''}`} role="switch" aria-label="Wake agent on GitHub changes" aria-checked={!!data.agentWatch?.enabled} disabled={agentBusy || !env.online} onClick={() => void agentWatch(!data.agentWatch?.enabled)}><i /></button></div>}
     {agentError && <p className="error" role="alert">{agentError}</p>}
-    {!env.online && <div className="pipeline-notice" role="status">This machine is offline. Reconnect to update GitHub status.</div>}
+    {!env.online && <div className="pipeline-notice" role="status">This machine is offline.</div>}
     {error && <div className="pipeline-notice failure" role="status">{error}<button className="linkish" onClick={() => refresh()}>Try again</button></div>}
-    {loading && !data && <p className="note" role="status">Reading GitHub status…</p>}
-    {data && !data.supported && !data.errors.length && <p className="note">Monitoring is available for GitHub repositories. Configure a GitHub remote for this project.</p>}
+    {loading && !data && <p className="note" role="status">Reading GitHub…</p>}
+    {data && !data.supported && !data.errors.length && <p className="note">Not a GitHub project.</p>}
     {data?.errors.map((e, i) => <div className="pipeline-notice failure" role="status" key={`${e.section}:${i}`}><b>{e.section}</b> · {e.message}
-      {!!e.retryAt && <span> Resumes after {new Date(e.retryAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.</span>}</div>)}
-    {data?.stale && <p className="note">Showing the last available results. GitHub could not confirm them on this refresh.</p>}
-    {data?.unpublished && <div className="pipeline-notice">The PR is on a different commit. Checks below are for this checkout; push your changes to run CI for them.</div>}
-    {data?.truncated && <div className="pipeline-notice">Some results exceed the display limit. Open GitHub for the full list; incomplete checks are never marked passed.</div>}
+      {!!e.retryAt && <span> Retrying at {at(e.retryAt)}.</span>}</div>)}
+    {data?.stale && <p className="note">Could not refresh; showing the last results.</p>}
+    {data?.unpublished && <div className="pipeline-notice">The PR is on another commit. Push to run CI on this one.</div>}
+    {data?.truncated && <div className="pipeline-notice">Some results are hidden. See GitHub for all.</div>}
     {data?.supported && <>
-      <PullRequests client={client} env={env} cwd={cwd} account={data.account} onChanged={() => refresh(true)} />
-      <section className="pipeline-section"><h3>Pull request</h3>
-        {pr ? <><div className="pipeline-row"><External url={pr.url}>#{pr.number} {pr.title}</External><span className={`pipeline-state ${pr.state === 'MERGED' ? 'success' : ''}`}>{pr.draft ? 'Draft' : pr.state.toLowerCase()}</span></div>
-          <div className="pipeline-pr-meta"><span>{pr.review === 'APPROVED' ? 'Reviews approved' : pr.review === 'CHANGES_REQUESTED' ? 'Changes requested' : pr.review === 'REVIEW_REQUIRED' ? 'Review required' : 'Review status unavailable'}</span>
-            {pr.state === 'OPEN' && <span>{data.stale ? 'Merge readiness not confirmed' : pr.draft ? 'Draft needs to be marked ready' : pr.mergeable === 'CONFLICTING' ? 'Merge conflicts' : pr.mergeState === 'CLEAN' ? 'GitHub reports ready to merge' : pr.mergeState === 'BLOCKED' ? 'Merge blocked' : pr.mergeState === 'BEHIND' ? 'Branch behind base' : 'Merge readiness not confirmed'}</span>}</div></>
-          : <p className="note">{data.errors.some(e => ['Pull request', 'GitHub'].includes(e.section)) ? 'PR status could not be confirmed.' : 'No pull request for this branch.'}</p>}
-      </section>
-      <section className="pipeline-section"><div className="pipeline-section-head"><h3>Checks</h3><Status state={data.checksState || 'unknown'} /></div>
+      {pr && <section className="pipeline-section"><h3>Pull request</h3>
+        <div className="pipeline-row"><External url={pr.url}>#{pr.number} {pr.title}</External><span className={`pipeline-state ${pr.state === 'MERGED' ? 'success' : ''}`}>{pr.draft ? 'Draft' : pr.state.toLowerCase()}</span></div>
+        <div className="pipeline-pr-meta">{pr.review === 'APPROVED' ? <span>Approved</span> : pr.review === 'CHANGES_REQUESTED' ? <span>Changes requested</span> : pr.review === 'REVIEW_REQUIRED' ? <span>Needs review</span> : null}
+          {pr.state === 'OPEN' && !data.stale && !pr.draft && (pr.mergeable === 'CONFLICTING' ? <span>Conflicts</span> : pr.mergeState === 'CLEAN' ? <span>Ready to merge</span> : pr.mergeState === 'BLOCKED' ? <span>Merge blocked</span> : pr.mergeState === 'BEHIND' ? <span>Behind base</span> : null)}</div>
+      </section>}
+      {quiet && <p className="note">No checks, workflows or deployments for this commit.</p>}
+      {(!!data.checks?.length || failed('Checks')) && <section className="pipeline-section"><div className="pipeline-section-head"><h3>Checks</h3><Status state={data.checksState || 'unknown'} /></div>
         {data.checks?.map(c => <div className="pipeline-row" key={c.id}><div><External url={c.url}>{c.name}</External>{c.summary && <p>{c.summary}</p>}</div><Status state={c.state} /></div>)}
-        {!data.checks?.length && <p className="note">{data.errors.some(e => ['Checks', 'GitHub'].includes(e.section)) ? 'Checks could not be confirmed.' : 'No checks reported for this commit yet.'}</p>}
-      </section>
-      <section className="pipeline-section"><h3>Workflows{data.deploymentSha && data.deploymentSha !== data.sha && <> · merged commit <code>{data.deploymentSha.slice(0, 7)}</code></>}</h3>
+      </section>}
+      {(!!data.runs?.length || failed('Workflows')) && <section className="pipeline-section"><h3>Workflows{data.deploymentSha && data.deploymentSha !== data.sha && <> · <code>{data.deploymentSha.slice(0, 7)}</code></>}</h3>
         {data.runs?.map(r => <div className="pipeline-run" key={r.id}>
           <div className="pipeline-row"><button className="pipeline-run-toggle" aria-expanded={open === r.id} onClick={() => { setOpen(n => n === r.id ? null : r.id); if (!jobs[r.id] || jobs[r.id] === 'failed') void loadJobs(r.id); }}>
-            <Icon name={open === r.id ? "down" : "forward"} size={14} /><span>{r.name}<small>{r.event} · attempt {r.attempt}</small></span></button><Status state={r.state} /></div>
-          {open === r.id && <div className="pipeline-jobs"><External url={r.url}>Open workflow and logs</External>
-            {jobs[r.id] === 'loading' && <p role="status">Reading workflow jobs…</p>}
+            <Icon name={open === r.id ? "down" : "forward"} size={14} /><span>{r.name}{r.attempt > 1 && <small>attempt {r.attempt}</small>}</span></button><Status state={r.state} /></div>
+          {open === r.id && <div className="pipeline-jobs"><External url={r.url}>Logs</External>
+            {jobs[r.id] === 'loading' && <p role="status">Reading jobs…</p>}
             {jobs[r.id] === 'failed' && <p role="status">Could not read jobs. <button className="linkish" onClick={() => void loadJobs(r.id)}>Try again</button></p>}
             {typeof jobs[r.id] === 'object' && <JobList value={jobs[r.id] as { jobs: Job[]; truncated?: boolean }} />}
           </div>}
         </div>)}
-        {!data.runs?.length && <p className="note">{data.errors.some(e => ['Workflows', 'GitHub'].includes(e.section)) ? 'Workflow status could not be confirmed.' : 'No GitHub Actions runs reported for this commit.'}</p>}
-      </section>
-      <section className="pipeline-section"><h3>Deployments{data.deploymentSha && data.deploymentSha !== data.sha && <> · <code>{data.deploymentSha.slice(0, 7)}</code></>}</h3>
+      </section>}
+      {(!!data.deployments?.length || failed('Deployments')) && <section className="pipeline-section"><h3>Deployments{data.deploymentSha && data.deploymentSha !== data.sha && <> · <code>{data.deploymentSha.slice(0, 7)}</code></>}</h3>
         {data.deployments?.map(d => <div className="pipeline-deployment" key={d.id}><div className="pipeline-row"><External url={d.url}>{d.environment}</External><Status state={d.state} /></div>
-          {d.description && <p>{d.description}</p>}{d.environmentUrl && <External url={d.environmentUrl}>Open deployed app</External>}</div>)}
-        {!data.deployments?.length && <p className="note">{data.errors.some(e => ['Deployments', 'GitHub'].includes(e.section)) ? 'Deployment status could not be confirmed.' : 'No deployments reported to GitHub for this commit. A successful workflow alone does not confirm deployment.'}</p>}
-        <p className="pipeline-footnote">Deployment results come from GitHub. App health is not verified here.</p>
-      </section>
+          {d.description && <p>{d.description}</p>}{d.environmentUrl && <External url={d.environmentUrl}>Open app</External>}</div>)}
+      </section>}
+      <PullRequests client={client} env={env} cwd={cwd} account={data.account} onChanged={() => refresh(true)} />
     </>}
-    {data?.checkedAt && <p className="pipeline-footnote">Last checked {new Date(data.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}{loading ? ' · refreshing…' : ''}</p>}
   </div>;
 }
 function JobList({ value }: { value: { jobs: Job[]; truncated?: boolean } }) {
   return <>{value.jobs.map(j => <div key={j.id} className="pipeline-job"><div className="pipeline-row"><External url={j.url}>{j.name} · logs</External><Status state={j.state} /></div>
     {j.steps.filter(s => s.state === 'failure').map(s => <p className="pipeline-failed-step" key={s.number}>Failed step: {s.name}</p>)}</div>)}
-    {!value.jobs.length && <p>No jobs reported yet.</p>}{value.truncated && <p>More jobs are available in GitHub.</p>}</>;
+    {!value.jobs.length && <p>No jobs yet.</p>}{value.truncated && <p>More jobs on GitHub.</p>}</>;
 }

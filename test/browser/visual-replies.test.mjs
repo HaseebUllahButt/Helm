@@ -91,24 +91,27 @@ test('a picture followed by more steps stays in view, while working and after th
   await page.getByText('All done.').waitFor();
 });
 
-test('Expand, Source, Escape, and Save work with focus restored to the launcher', async t => {
+test('the picture has no title bar; Expand opens it, Source and Save live there, focus comes back', async t => {
   const page = await open(t, 1100);
-  await page.getByRole('button', { name: 'Expand', exact: true }).click();
+  assert.equal(await page.locator('.visual-reply .visual-bar').count(), 0, 'no bar above the picture');
+  const launcher = page.getByRole('button', { name: /^Expand / });
+  await launcher.click();
   const expanded = page.getByRole('dialog');
   await expanded.waitFor();
   assert.ok((await expanded.boundingBox()).width > 900);
   await page.frameLocator('.visual-dialog iframe').locator('input').focus();
   await page.keyboard.press('Escape');
   await expanded.waitFor({ state: 'detached' });
-  assert.equal(await page.getByRole('button', { name: 'Expand', exact: true }).evaluate(el => el === document.activeElement), true);
-  await page.getByRole('button', { name: 'Source', exact: true }).click();
+  assert.equal(await launcher.evaluate(el => el === document.activeElement), true);
+  await launcher.click();
+  await expanded.getByRole('button', { name: 'Source', exact: true }).click();
   assert.match(await page.locator('.visual-source').innerText(), /slider.oninput/);
-  await page.keyboard.press('Escape');
   const downloading = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expanded.getByRole('button', { name: 'Save', exact: true }).click();
   const download = await downloading;
   assert.equal(download.suggestedFilename(), 'Desk clamp clearance.html');
   assert.match(await readFile(await download.path(), 'utf8'), /Desk thickness/);
+  await page.keyboard.press('Escape');
 });
 
 test('an offline read has an explicit retry; forged resize messages cannot control the frame', async t => {
@@ -138,7 +141,7 @@ test('CLI preview screenshots the same sandbox and reports JavaScript errors', a
 test('native CLI conversations load their saved visual from the correct remote machine', async t => {
   const page = await open(t);
   await page.evaluate(() => window.native());
-  await page.getByRole('button', { name: 'Expand', exact: true }).waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: /^Expand / }).waitFor({ state: 'visible' });
   await page.frameLocator('.visual-frame').getByText('Isolated').waitFor();
   assert.deepEqual(await page.evaluate(() => window.lastVisualRead), { env: 'remote', id: 'native1', ref: 'ref' });
   assert.equal(await page.locator('.working').count(), 0);

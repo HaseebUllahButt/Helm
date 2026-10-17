@@ -46,9 +46,11 @@ export function PullRequests({ client, env, cwd, account, onChanged }: { client:
     finally { setBusy(false); }
   };
   const needsCommit = ['commit', 'publish'].includes(publishAction), needsPR = ['create', 'publish'].includes(publishAction);
-  return <section className="pipeline-section pull-requests" aria-label="Pull requests">
-    <div className="pipeline-section-head"><h3>Pull requests</h3><button disabled={busy || !env.online} onClick={() => setRevision(r => r + 1)}>Refresh</button></div>
+  // Every PR and the publish form are a second look, so they start folded.
+  return <details className="fold pipeline-section pull-requests" aria-label="Pull requests">
+    <summary>Pull requests{list.length > 0 && <span className="fold-meta">{list.length}{more ? '+' : ''}</span>}</summary>
     <div className="team-actions"><label>State <select aria-label="State" value={state} onChange={e => { setState(e.target.value); setPage(1); }}><option value="open">Open</option><option value="closed">Closed / merged</option><option value="all">All</option></select></label>
+      <button disabled={busy || !env.online} onClick={() => setRevision(r => r + 1)}>Refresh</button>
       <button disabled={busy || !env.online} onClick={() => setPublishing(v => !v)}>{publishing ? 'Close publishing' : 'Commit / push / create PR'}</button></div>
     {publishing && <form className="schedule-form" onSubmit={e => { e.preventDefault(); void act('git.publish', { action: publishAction, paths: [...new Set(paths.flatMap(path => { const file = files.find(f => f.path === path); return file?.originalPath ? [path, file.originalPath] : [path]; }))], message, title, body: description, base: base || undefined, draft }); }}>
       <label>Action<select aria-label="Action" value={publishAction} onChange={e => setPublishAction(e.target.value)}><option value="publish">Commit selected files, push, create PR</option><option value="commit">Commit selected files</option><option value="push">Push current branch</option><option value="create">Create PR for pushed branch</option></select></label>
@@ -56,26 +58,25 @@ export function PullRequests({ client, env, cwd, account, onChanged }: { client:
         <fieldset><legend>Files to commit</legend>{files.map(({ path, originalPath }) => <label className="automation-option" key={path}><input type="checkbox" checked={paths.includes(path)} onChange={e => setPaths(ps => e.target.checked ? [...ps, path] : ps.filter(p => p !== path))} /><code>{originalPath ? `${originalPath} → ${path}` : path}</code></label>)}{!files.length && <p>No changed files.</p>}</fieldset></>}
       {needsPR && <><label>PR title<input required maxLength={256} value={title} onChange={e => setTitle(e.target.value)} /></label><label>Description<textarea rows={4} maxLength={32000} value={description} onChange={e => setDescription(e.target.value)} /></label>
         <label>Base branch<input maxLength={200} value={base} placeholder="Repository default" onChange={e => setBase(e.target.value)} /></label><label className="automation-option"><input type="checkbox" checked={draft} onChange={e => setDraft(e.target.checked)} /> Draft PR</label></>}
-      <p className="note">Uses the selected GitHub account. Push keeps remote history intact. If a later step fails, completed commits and pushes remain available.</p>
       <button className="primary" disabled={busy || !env.online || needsCommit && !paths.length}>{busy ? 'Working…' : publishAction === 'publish' ? 'Commit, push and create PR' : publishAction === 'commit' ? 'Commit selected files' : publishAction === 'push' ? 'Push branch' : 'Create PR'}</button>
     </form>}
     {list.map(pr => <div className="pipeline-row" key={pr.number}><button className="linkish" onClick={() => setNumber(pr.number)} aria-pressed={number === pr.number}>#{pr.number} {pr.title}</button><span>{pr.draft ? 'Draft' : pr.state.toLowerCase()}</span></div>)}
-    {!list.length && <p className="note">No pull requests in this view.</p>}
-    <div className="team-actions"><button disabled={page === 1 || busy} onClick={() => setPage(p => p - 1)}>Previous</button><span>Page {page}</span><button disabled={!more || busy} onClick={() => setPage(p => p + 1)}>Next</button></div>
+    {!list.length && <p className="note">None.</p>}
+    {(page > 1 || more) && <div className="team-actions"><button disabled={page === 1 || busy} onClick={() => setPage(p => p - 1)}>Previous</button><span>Page {page}</span><button disabled={!more || busy} onClick={() => setPage(p => p + 1)}>Next</button></div>}
     {number && !detail && <p role="status">Reading PR #{number}…</p>}
     {detail && <article className="pr-detail"><h4>#{detail.pr.number} {detail.pr.title}</h4>
-      <p>{detail.pr.author} · {detail.pr.head} → {detail.pr.base} · {detail.pr.state.toLowerCase()} · Head <code>{detail.pr.headSha.slice(0, 8)}</code></p>
+      <p>{detail.pr.author} · {detail.pr.head} → {detail.pr.base} · {detail.pr.state.toLowerCase()}</p>
       {detail.pr.url && <a href={detail.pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>}
       <p className="pr-prose">{detail.pr.body}</p>
-      <p>{detail.pr.mergeable === 'CONFLICTING' ? 'Merge conflicts require resolution.' : `Merge state: ${detail.pr.mergeState || 'Unknown'}`}</p>
-      {detail.truncated && <p className="note">Some files or activity exceed the display limit. Open GitHub for the complete PR.</p>}
+      {detail.pr.mergeable === 'CONFLICTING' && <p>Conflicts</p>}
+      {detail.truncated && <p className="note">Some of it is hidden. See GitHub for all.</p>}
       <details><summary>Checks ({detail.checks.length})</summary>{detail.checks.map(c => <p key={c.id}>{c.name} · {c.state}</p>)}</details>
       <details><summary>Changed files ({detail.files.length})</summary>{detail.files.map(f => <details key={f.path}><summary>{f.path} · +{f.additions} −{f.deletions}</summary><pre className="pr-patch">{f.patch || 'Diff unavailable; open GitHub to view this file.'}</pre></details>)}</details>
       <details open><summary>Comments and reviews ({detail.comments.length})</summary>{detail.comments.map(c => <article className="pr-comment" key={`${c.kind}:${c.id}`}><strong>{c.author}</strong> · {c.state || c.kind} · {new Date(c.at).toLocaleString()}{c.path && <small>{c.path}:{c.line}</small>}<p className="pr-prose">{c.body}</p></article>)}</details>
       <form className="schedule-form" onSubmit={e => { e.preventDefault(); void act('git.pr-action', { number: detail.pr.number, action: 'comment', body }); }}>
         <label>Comment / review<textarea required={verdict !== 'APPROVE'} rows={4} maxLength={32000} value={body} onChange={e => setBody(e.target.value)} /></label>
         <div className="team-actions"><button disabled={busy || !env.online || !body.trim()}>Post comment</button><label>Review<select aria-label="Review" value={verdict} onChange={e => setVerdict(e.target.value)}><option value="COMMENT">Comment</option><option value="APPROVE">Approve</option><option value="REQUEST_CHANGES">Request changes</option></select></label></div>
-        <details><summary>Optional inline review comment</summary><label>File<select aria-label="File" value={inlinePath} onChange={e => setInlinePath(e.target.value)}><option value="">None</option>{detail.files.map(f => <option key={f.path}>{f.path}</option>)}</select></label><label>Line<input type="number" min={1} value={line} onChange={e => setLine(Number(e.target.value))} /></label><label>Side<select aria-label="Side" value={side} onChange={e => setSide(e.target.value)}><option value="RIGHT">New version</option><option value="LEFT">Old version</option></select></label><p className="note">The text above is also used for the inline comment.</p></details>
+        <details><summary>Optional inline review comment</summary><label>File<select aria-label="File" value={inlinePath} onChange={e => setInlinePath(e.target.value)}><option value="">None</option>{detail.files.map(f => <option key={f.path}>{f.path}</option>)}</select></label><label>Line<input type="number" min={1} value={line} onChange={e => setLine(Number(e.target.value))} /></label><label>Side<select aria-label="Side" value={side} onChange={e => setSide(e.target.value)}><option value="RIGHT">New version</option><option value="LEFT">Old version</option></select></label></details>
         <button type="button" disabled={busy || !env.online || detail.pr.state !== 'OPEN' || verdict !== 'APPROVE' && !body.trim() || !!inlinePath && !body.trim()} onClick={() => void act('git.pr-action', { number: detail.pr.number, action: 'review', event: verdict, body, headSha: detail.pr.headSha,
           comments: inlinePath ? [{ path: inlinePath, line, side, body }] : [] })}>Submit review</button>
       </form>
@@ -86,5 +87,5 @@ export function PullRequests({ client, env, cwd, account, onChanged }: { client:
       </form>}
     </article>}
     {error && <p className="error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-  </section>;
+  </details>;
 }

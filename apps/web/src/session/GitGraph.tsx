@@ -300,8 +300,11 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
       )}
       {data && !data.repo && empty('folder', 'Not a Git repository', 'This folder is not a Git repository.')}
       {data?.repo && <>
-        {/* Where things are checked out, and who is working in each. */}
-        {working.length > 0 ? (
+        {/* Where things are checked out, and who is working in each: folded
+            to one bar so the history comes first. */}
+        {working.length > 0 && (
+          <details className="fold git-fold">
+          <summary>Agents<span className="fold-meta">{working.reduce((n, w) => n + w.agents.length, 0)}</span></summary>
           <section className="git-checkouts" aria-label="Where agents are working">
             {working.map((worktree) => (
               <div key={worktree.path} className={`git-checkout${worktree.current ? ' current' : ''}`}>
@@ -312,11 +315,12 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
                   {worktree.current && <span className="git-here">This chat</span>}
                 </div>
                 <div className="git-agents">{worktree.agents.map(agentRow)}</div>
-                {worktree.agents.length > 1 && <div className="git-shared"><Icon name="alert" size={13} />{worktree.agents.length} agents share this folder, so their edits can collide.</div>}
+                {worktree.agents.length > 1 && <div className="git-shared"><Icon name="alert" size={13} />{worktree.agents.length} agents share this folder</div>}
               </div>
             ))}
           </section>
-        ) : <div className="git-none">No agents are working in this repository right now.</div>}
+          </details>
+        )}
 
         {!rows.length && empty('git', 'No commits yet', 'Your first commit will appear here.')}
         {!!rows.length && <div className="git-history" ref={list} aria-label="Commit history, newest first">
@@ -376,7 +380,6 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
                           <div className="git-files-head">
                             {d.files.length} file{d.files.length === 1 ? '' : 's'}
                             <span className="gcount"><i className="add">+{d.files.reduce((sum, file) => sum + file.add, 0)}</i> <i className="del">−{d.files.reduce((sum, file) => sum + file.del, 0)}</i></span>
-                            {d.parents.length > 1 && <span className="quiet">against the first parent</span>}
                           </div>
                           {d.files.map((f) => {
                             const shown = fileDiff?.hash === d.hash && fileDiff.path === f.path;
@@ -401,7 +404,6 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
             </div>;
           })}
         </div>}
-        {data.truncated && <div className="note git-tail">Showing the latest 80 commits.</div>}
       </>}
     </div>
   );
