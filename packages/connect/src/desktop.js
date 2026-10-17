@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, copyFileSync, writeFileSync, rmSync, accessSync, constants } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, accessSync, constants } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { HELM_DIR } from './paths.js';
 
 /**
  * helm as a desktop application: its own window, its own icon, opening the
@@ -94,6 +95,27 @@ function installIcons() {
 }
 
 /**
+ * The window gets a browser profile of its own, set to "use system title bar
+ * and borders". Chromium's own bar on an app window only repeated the chat's
+ * name; with this, a window manager that draws no title bars (niri with
+ * prefer-no-csd, Hyprland, sway) shows none, and one that does (GNOME, KDE)
+ * shows its usual one. The owner's everyday browser profile is left alone.
+ * Helm signs this window in with the machine's local key, so the separate
+ * profile costs nothing to sign into.
+ */
+const windowProfile = () => join(HELM_DIR, 'app-window');
+
+function seedWindowProfile(dir) {
+  const file = join(dir, 'Default', 'Preferences');
+  let prefs = {};
+  try { prefs = JSON.parse(readFileSync(file, 'utf8')); } catch { /* new profile */ }
+  // A choice made in the window's own settings stands.
+  if (prefs?.browser?.custom_chrome_frame !== undefined) return;
+  mkdirSync(join(dir, 'Default'), { recursive: true });
+  writeFileSync(file, JSON.stringify({ ...prefs, browser: { ...prefs.browser, custom_chrome_frame: false } }));
+}
+
+/**
  * The window class a chromium app window reports, so the launcher can match
  * the window to this entry and show its icon rather than a generic one.
  * Best-effort: it is only ever cosmetic, and getting it wrong costs an icon
@@ -115,8 +137,10 @@ export function installApp({ url, browser, profile = 'Default' }) {
   // Without a chromium-family browser there is no bare window to be had, but
   // an entry that opens the right address in the right browser still beats
   // remembering a port.
+  const dir = windowProfile();
+  if (bin) seedWindowProfile(dir);
   const exec = bin
-    ? `${bin} --profile-directory=${profile} --app=${url}`
+    ? `${bin} --user-data-dir=${dir} --profile-directory=${profile} --no-first-run --app=${url}`
     : `xdg-open ${url}`;
 
   const entry = [

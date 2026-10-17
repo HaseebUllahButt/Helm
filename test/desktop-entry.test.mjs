@@ -9,6 +9,7 @@ import { join } from 'node:path';
 // never touches the desktop of whoever is running the tests.
 const HOME = mkdtempSync(join(tmpdir(), 'helm-desktop-'));
 process.env.XDG_DATA_HOME = HOME;
+process.env.HELM_DIR = join(HOME, 'helm');
 test.after(() => rmSync(HOME, { recursive: true, force: true }));
 
 const entry = () => join(HOME, 'applications', 'helm-app.desktop');
@@ -46,6 +47,11 @@ test('a windowed entry only claims to be one when it can be', async (t) => {
   assert.equal(r.browser, 'no-such-browser-9000');
   assert.match(text, /^Exec=no-such-browser-9000 .*--app=http:/m);
   assert.match(text, /^StartupWMClass=chrome-127\.0\.0\.1__-Default$/m);
+  // Its own profile, set to the system title bar, so a tiling desktop shows
+  // no bar repeating the chat's name; the everyday browser profile is untouched.
+  assert.match(text, new RegExp(`--user-data-dir=${join(HOME, 'helm', 'app-window')} `));
+  const prefs = JSON.parse(readFileSync(join(HOME, 'helm', 'app-window', 'Default', 'Preferences'), 'utf8'));
+  assert.equal(prefs.browser.custom_chrome_frame, false);
 });
 
 test('removing it takes the icons with it', async (t) => {
