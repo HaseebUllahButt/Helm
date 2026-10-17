@@ -509,11 +509,11 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   const all = options?.modes ?? [];
   const mode = all.find((m) => m.id === session.mode);
 
-  // shift+tab, the way Claude Code does it at the keyboard. Only the safe
-  // modes are on the ring: handing over the whole machine is a deliberate
-  // act, not something you land on while tabbing.
+  // shift+tab, the way Claude Code does it at the keyboard. Every mode the
+  // agent offers is on the ring, bypass included: the owner asked for it,
+  // and the composer turns red the moment it lands there.
   const cycle = useCallback(() => {
-    const ring = all.filter((m) => !m.danger);
+    const ring = all;
     if (ring.length < 2) return;
     const at = ring.findIndex((m) => m.id === session.mode);
     pick('mode', ring[(at + 1) % ring.length].id);

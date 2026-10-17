@@ -5372,7 +5372,7 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
       if (event.key !== 'Tab' || !event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
         || settingBusy || sending || status === 'blocked' || !env.online
         || document.querySelector('[aria-modal="true"]')) return;
-      const ring = (nativeOptions?.modes ?? []).filter(mode => !mode.danger && mode.id !== 'plan');
+      const ring = (nativeOptions?.modes ?? []).filter(mode => mode.id !== 'plan');
       if (ring.length < 2) return;
       event.preventDefault();
       const at = ring.findIndex(mode => mode.id === session.mode);

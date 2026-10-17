@@ -200,17 +200,19 @@ test('native permissions show only confirmed state and require two taps for bypa
   assert.equal(await page.locator('textarea').count(), 1);
 });
 
-test('native Shift Tab cycles safe permissions and blocked approvals prevent changes', async t => {
+test('native Shift Tab cycles every permission, bypass included, and blocked approvals prevent changes', async t => {
   const page = await pageFor(t);
   await page.evaluate(() => window.updateSession({mode:'default'}));
   await page.getByRole('button', {name:'permissions: ask',exact:true}).waitFor();
   await page.locator('textarea').focus(); await page.keyboard.press('Shift+Tab');
   await page.getByRole('button', {name:'permissions: edit',exact:true}).waitFor();
   await page.locator('textarea').focus(); await page.keyboard.press('Shift+Tab');
+  await page.getByRole('button', {name:'permissions: yolo',exact:true}).waitFor();
+  await page.locator('textarea').focus(); await page.keyboard.press('Shift+Tab');
   await page.getByRole('button', {name:'permissions: ask',exact:true}).waitFor();
   await page.evaluate(() => { window.sessionStatus = 'blocked'; window.emit('session.update', {session:{...window.currentSession,status:'blocked'}}); });
   await page.getByRole('button', {name:'permissions: ask',exact:true}).click();
   assert.equal(await page.getByRole('option', {name:'Edit freely',exact:true}).isDisabled(), true);
   await page.locator('textarea').focus(); await page.keyboard.press('Shift+Tab');
-  assert.deepEqual(await page.evaluate(() => window.calls.map(c => c.params.mode)), ['acceptEdits','default']);
+  assert.deepEqual(await page.evaluate(() => window.calls.map(c => c.params.mode)), ['acceptEdits','bypassPermissions','default']);
 });

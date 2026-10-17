@@ -64,7 +64,8 @@ quick chat with the Fake agent (see [README](README.md)).
 - **Sees:** chips under the box: model ("model: …") and permissions
   (ask · edit · auto · yolo for Claude; ask · edit · yolo · read for Codex).
   A riskier mode takes two taps and colours the box.
-- **Reach:** tap a chip. Keys: Shift+Tab next mode, Ctrl/⌘+Shift+M next
+- **Reach:** tap a chip. Keys: Shift+Tab next mode (every mode, bypass
+  included, then round again), Ctrl/⌘+Shift+M next
   model (favourites first), Ctrl/⌘+Shift+E next thinking level. "?" lists
   every key.
 - **Cache warning:** on a long chat, switching model asks first, priced at
@@ -73,8 +74,9 @@ quick chat with the Fake agent (see [README](README.md)).
   Claude sends `per_turn_effort_active` at start-up and
   `per_turn_effort_changed` if that stops (Opus 5.5 on 2.1.301 says true,
   checked 2026-10-16). A CLI that says nothing gets no warning.
-- **Prove:** steps not yet driven. `$V click "permissions: yolo"`, pick a
-  mode, then `text` should show the new mode name on the chip.
+- **Prove (Shift+Tab driven 2026-10-17):** in a fake chat at 1280 wide,
+  `$V key Shift+Tab` three times; the chip reads edit, read, then yolo
+  again (`$V eval` the `.slab` buttons' aria-labels).
 - **Tests:** `test/browser/chat-shortcuts`, `global-keys`, `effort-default`,
   `slash-model-context`; `test/chat-keys`, `modes`, `session-settings`,
   `recache`, `driver-claude`.

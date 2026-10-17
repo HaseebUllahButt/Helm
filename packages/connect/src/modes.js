@@ -6,7 +6,7 @@
  * flags. YOLO is the default unless an account explicitly configures another
  * mode. `short` is the one word the
  * composer's chip shows; `danger` marks a mode the app makes the owner
- * confirm and never reaches by the cycle shortcut.
+ * confirm when picked from the menu. The shift+tab cycle reaches it too.
  *
  * Codex carries two spellings of the same sandbox: `sandbox` is the string
  * `thread/start` takes, `sandboxPolicy` the object `turn/start` takes to

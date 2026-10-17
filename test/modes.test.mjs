@@ -16,7 +16,7 @@ test('every mode the app can show has a label, a one-word short and a hint', () 
     assert.equal(defaultMode(engine), list.find((m) => m.short === 'yolo').id);
     assert.ok(!list.some((m) => m.id === 'plan'));
     assert.ok(!list[0].danger);
-    // Something to cycle through with shift+tab without arming anything.
+    // More than one safe mode, so the ring is not just "on" and "bypass".
     assert.ok(list.filter((m) => !m.danger).length >= 2, `${engine} has nothing safe to cycle`);
   }
 });
