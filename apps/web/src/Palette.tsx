@@ -162,7 +162,7 @@ const SHORTCUTS: [string, [string, string][]][] = [
     ['↑ ↓', 'Earlier messages, in the box'],
     ['Ctrl Shift Space', 'Dictate a message'],
     ['Shift Tab', 'Next permission mode'],
-    ['Ctrl/⌘ Shift L', 'Next thinking level'],
+    ['Ctrl/⌘ Shift Y', 'Next thinking level'],
     ['Ctrl/⌘ Shift M', 'Next model (favorites first)'],
     ['Ctrl/⌘ Shift A', 'Open or close agents'],
     ['Ctrl/⌘ Shift B', 'Open or close the browser'],

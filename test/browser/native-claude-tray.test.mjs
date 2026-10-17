@@ -109,7 +109,7 @@ test('the chat keys reach a taken-over Claude chat the same way its chips do', a
   await page.keyboard.press('Control+Shift+M');
   await page.waitForFunction(() => window.calls.some((c) => c.method === 'session.model'));
   await page.getByText(/Sent .* to Claude/).waitFor();
-  await page.keyboard.press('Control+Shift+L');
+  await page.keyboard.press('Control+Shift+Y');
   await page.waitForFunction(() => window.calls.some((c) => c.method === 'session.effort'));
   const calls = await page.evaluate(() => window.calls.filter((c) => ['session.model', 'session.effort'].includes(c.method)).map((c) => c.params));
   assert.deepEqual(calls, [{id:'native-test', model:'claude-sonnet-5-5', pick:true, ask:true}, {id:'native-test', effort:'low'}]);
