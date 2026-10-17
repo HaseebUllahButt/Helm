@@ -3191,8 +3191,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .ask-kind { flex: none; font-size: var(--t-micro); font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--amber-text); }
 .sheet.question.banner .ask-kind { color: var(--text-dim); }
 .sheet.banner .sheet-head { flex-wrap: nowrap; }
-.sheet.banner .sheet-head b { flex: 1 1 auto; font-size: var(--t-meta); font-weight: 550; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sheet.banner .sheet-head .tag { flex: none; }
+.sheet-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sheet-title b {
+  font-size: var(--t-body); font-weight: 600; color: var(--text); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.sheet-links { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .sheet.banner .sheet-cmd { font: 12.5px/1.55 var(--mono); max-height: 26dvh; overflow: auto; }
 .sheet.banner .sheet-note { padding: 7px 10px; }
 .sheet.banner .sheet-actions { justify-content: flex-end; gap: 6px; }
@@ -3200,7 +3205,9 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .sheet.banner .q-text { margin-bottom: 12px; }
 .sheet.banner .q-actions button { min-height: 36px; }
 @media (max-width: 599px) {
-  .sheet.banner { max-height: 46dvh; padding: 12px 12px 10px; }
+  .sheet.banner { max-height: 46dvh; padding: 12px 12px 10px; gap: 8px; }
+  /* About five lines; the rest scrolls inside. */
+  .sheet.banner .sheet-cmd { max-height: 8.5em; padding: 8px 10px; }
   .todo-strip { margin: 0 20px -19px; }
   .sheet.banner .sheet-actions button { flex: 1 1 auto; min-height: 44px; }
 }

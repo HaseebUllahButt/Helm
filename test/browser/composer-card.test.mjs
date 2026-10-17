@@ -209,6 +209,22 @@ test('a command approval is the top of the card with the command in a mono block
   assert.equal((await decisionOf(page)).option, 'deny');
 });
 
+test('on the card the title has its own line and the note box opens only when asked for', async (t) => {
+  const page = await open(t, 'command', 390);
+  const banner = page.locator('.slab .sheet.banner.command');
+  await banner.waitFor();
+  assert.equal(await banner.locator('.sheet-title b').textContent(), 'Run the tests');
+  assert.equal(await banner.locator('.sheet-head .tag').count(), 0, 'no Bash tag beside "Command approval"');
+  assert.equal(await banner.locator('.sheet-note').count(), 0);
+  await banner.getByRole('button', { name: 'add a note' }).click();
+  await banner.locator('.sheet-note').fill('use the fast suite');
+  await banner.getByRole('button', { name: 'Decline', exact: true }).click();
+  await answered(page);
+  const decision = await decisionOf(page);
+  assert.equal(decision.option, 'deny');
+  assert.equal(decision.message, 'use the fast suite');
+});
+
 test('edit before allowing still works from the card', async (t) => {
   const page = await open(t, 'command');
   await page.getByRole('button', { name: 'edit before allowing' }).click();

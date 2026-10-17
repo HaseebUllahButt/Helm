@@ -4,8 +4,10 @@ Use the "Fake agent (asks)" account: pick **fake-ask** in New chat. Every
 message it gets asks to "Run a command" (`echo hi`) before it answers.
 
 ## Tool approval card
-- **Sees:** a card above the box: "TOOL APPROVAL · Run a command", what it
-  wants to run, a note field, and **Approve**, **Always allow**, **Decline**.
+- **Sees:** a card above the box: "TOOL APPROVAL" and how long it has
+  waited, the title ("Run a command") on its own line, what it wants to run
+  (about five lines on a phone, the rest scrolls), an "add a note" link that
+  opens a note box, and **Approve**, **Always allow**, **Decline**.
   The box says "Decide above, or reply instead". The header shows "waiting".
 - **Reach:** appears by itself. Card types: command, file change, tool,
   plan, question.

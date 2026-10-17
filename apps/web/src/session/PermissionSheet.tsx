@@ -39,6 +39,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
   // and the button says what actually happens: allow *this* version.
   const [editing, setEditing] = useState(false);
   const [edited, setEdited] = useState('');
+  const [noting, setNoting] = useState(false);
   const now = useNow();
   const answer = (option: Decision['option'], updatedInput?: any) =>
     onAnswer({ option, message: note.trim() || undefined, ...(updatedInput ? { updatedInput } : {}) });
@@ -70,15 +71,35 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
 
   return (
     <div className={`sheet ${p.kind}${banner ? ' banner' : ''}`}>
-      <div className="sheet-head">
-        <i className="sdot blocked" />
-        {banner && <span className="ask-kind">{ASK_LABEL[p.kind]}</span>}
-        <b>{p.title}</b>
-        {p.tool && p.kind !== 'plan' && <span className="tag">{p.tool}</span>}
-        {p.parentId && <span className="tag">subagent</span>}
-        {p.at && <span className="tag waiting">waiting {waitingSince(p.at, now)}</span>}
-      </div>
-      {p.reason && <div className="sheet-reason">{p.reason}</div>}
+      {banner ? (
+        // On the card: what kind of ask and how long it has waited, then
+        // the title on a line of its own so a phone never cuts it short.
+        // A command's tool tag ("Bash") says nothing the label does not.
+        <>
+          <div className="sheet-head">
+            <i className="sdot blocked" />
+            <span className="ask-kind">{ASK_LABEL[p.kind]}</span>
+            {p.tool && p.kind !== 'plan' && p.kind !== 'command' && p.tool.toLowerCase() !== p.kind && <span className="tag">{p.tool}</span>}
+            {p.parentId && <span className="tag">subagent</span>}
+            {p.at && <span className="q-wait">{waitingSince(p.at, now)}</span>}
+          </div>
+          <div className="sheet-title">
+            <b>{p.title}</b>
+            {p.reason && <span className="sheet-reason">{p.reason}</span>}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="sheet-head">
+            <i className="sdot blocked" />
+            <b>{p.title}</b>
+            {p.tool && p.kind !== 'plan' && <span className="tag">{p.tool}</span>}
+            {p.parentId && <span className="tag">subagent</span>}
+            {p.at && <span className="tag waiting">waiting {waitingSince(p.at, now)}</span>}
+          </div>
+          {p.reason && <div className="sheet-reason">{p.reason}</div>}
+        </>
+      )}
       <div className="sheet-body">
         {p.kind === 'command' && !editing && <pre className="sheet-cmd">{banner ? '' : '❯ '}{original}</pre>}
         {p.kind === 'plan' && !editing && <Markdown text={original} className="prose plan" />}
@@ -92,20 +113,31 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
         {p.kind === 'edit' && <EditDetail detail={p.detail} />}
         {p.kind === 'tool' && p.detail && <pre className="sheet-json">{typeof p.detail === 'string' ? p.detail : JSON.stringify(p.detail, null, 2)}</pre>}
       </div>
-      {editable && !editing && (
-        <button className="sheet-editlink" onClick={() => { setEdited(original); setEditing(true); }}>
-          edit before {p.kind === 'plan' ? 'approving' : 'allowing'}
-        </button>
-      )}
-      {editing && (
-        <button className="sheet-editlink" onClick={() => setEditing(false)}>back to the original</button>
+      {/* On the card the extras are one quiet row of links; the note box
+          opens when asked for, since the composer below takes a reply too. */}
+      {(editable || banner) && (
+        <div className="sheet-links">
+          {editable && !editing && (
+            <button className="sheet-editlink" onClick={() => { setEdited(original); setEditing(true); }}>
+              edit before {p.kind === 'plan' ? 'approving' : 'allowing'}
+            </button>
+          )}
+          {editing && (
+            <button className="sheet-editlink" onClick={() => setEditing(false)}>back to the original</button>
+          )}
+          {banner && !noting && (
+            <button className="sheet-editlink" onClick={() => setNoting(true)}>add a note</button>
+          )}
+        </div>
       )}
       {/* "No, do it differently" is the most common answer to a permission
           prompt - every denial takes a reason, not only plans. */}
-      <input
-        className="sheet-note" value={note} onChange={(e) => setNote(e.target.value)}
-        placeholder={p.kind === 'plan' ? 'What should change? (optional)' : 'Add a note (optional)'}
-      />
+      {(!banner || noting) && (
+        <input
+          className="sheet-note" value={note} onChange={(e) => setNote(e.target.value)} autoFocus={banner}
+          placeholder={p.kind === 'plan' ? 'What should change? (optional)' : 'Add a note (optional)'}
+        />
+      )}
       {/* Built in the order it is seen, so Tab walks the buttons the way the
           eye does. A prompt whose safe answer is "no" leads with Deny; it
           used to get there with row-reverse, which left Allow first in the
