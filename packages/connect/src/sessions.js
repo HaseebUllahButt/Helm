@@ -3719,6 +3719,12 @@ export class Sessions extends EventEmitter {
   async interrupt(id, visited = new Set()) {
     this.#assertRewindUnlocked(id);
     if (visited.has(id)) return { ok: true };
+    // Stop with a message waiting means "drop this reply, take my next
+    // one": only the reply ends, and the waiting message goes straight out.
+    if (!visited.size) {
+      const next = await this.#stopReplyForNext(id);
+      if (next) return next;
+    }
     visited.add(id);
     const session = this.#index.get(id);
     if (session) {
@@ -5093,6 +5099,37 @@ export class Sessions extends EventEmitter {
     }
   }
 
+  /**
+   * Stop pressed while the owner has a message waiting. The reply in flight
+   * is cancelled and nothing else: no stopped thread, no "Continue" card, no
+   * delegated tasks stopped. A message already handed to the CLI mid-reply
+   * goes back to the front of the line, because the CLI drops it with the
+   * reply; then the line drains as usual. Returns null when there is
+   * nothing waiting, or the CLI cannot be stopped this way - a full Stop.
+   */
+  async #stopReplyForNext(id) {
+    const s = this.#index.get(id);
+    const d = this.#drivers.get(id);
+    if (!s || !d || s.nativeCli || s.stoppedAt || this.#sending.has(id)) return null;
+    if (!['working', 'blocked'].includes(s.status)) return null;
+    const handed = this.#steered.get(id) ?? [];
+    // A CLI that keeps a handed message after its reply is stopped would run it twice.
+    if (handed.length && !d.dropsHandedOnInterrupt) return null;
+    if (!handed.length && !this.#outbox.get(id)?.length) return null;
+    // Held so no handover or pump can take the line while the reply stops.
+    this.#sending.add(id);
+    try {
+      this.#steered.delete(id);
+      const back = handed.map((entry) => entry.item).filter(Boolean);
+      if (back.length) this.#outbox.set(id, [...back, ...(this.#outbox.get(id) ?? [])]);
+      try { await this.#interruptReply(s, d); }
+      catch (err) { this.log(`[${id}] stop for the next message: ${err.message}`); }
+      return { ok: true, next: true };
+    } finally {
+      this.#releaseSending(s);
+    }
+  }
+
   /** A Stop, a kill or a stop generation moved on cancels a waiting message. */
   #checkDelivery(s, item) {
     if (s.stoppedAt || !this.#index.has(s.id) || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0))) {
@@ -5184,7 +5221,8 @@ export class Sessions extends EventEmitter {
     if (!q.length) this.#outbox.delete(s.id);
     const prompt = this.#promptOf(s, d, item);
     const steered = this.#steered.get(s.id) ?? [];
-    const entry = { turnId: item.turnId, text: prompt };
+    // The ticket rides along so a Stop can put it back in line.
+    const entry = { turnId: item.turnId, text: prompt, item };
     steered.push(entry);
     this.#steered.set(s.id, steered);
     try {

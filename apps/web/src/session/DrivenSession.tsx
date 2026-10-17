@@ -835,7 +835,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <CloneCard clone={session.clone} agent={engine} waiting={queuedTurns.length} busy={busy} offline={!env.online}
             onRetry={() => void call(() => client.rpc(env.id, 'session.cloneRetry', { id: session.id }, 60_000))} />
         )}
-        {session.recovery && !working && !pending && (
+        {/* A reply you stopped already says so in the chat ("You stopped
+            after…"); a card asking to continue it was one more thing to dismiss. */}
+        {session.recovery && session.recovery.kind !== 'interrupted' && !working && !pending && (
           <RecoveryCard key={session.recovery.at} recovery={session.recovery} busy={busy} offline={!env.online} onRetry={retry} autoResume={session.autoResumeLimited}
             onAutoResume={on => { void client.rpc(env.id, 'session.auto-resume', { id: session.id, on }).catch((e: any) => setError(e.message)); }} />
         )}
