@@ -4,6 +4,8 @@ import DOMPurify from 'dompurify';
 let highlighting: typeof import('./highlight') | null = null;
 let pending: Promise<void> | null = null;
 export const hasHighlighting = () => highlighting !== null;
+/** Coloured HTML for code once highlighting has loaded, else null. */
+export const highlightCode = (text: string, language: string) => highlighting?.highlight(text, language) ?? null;
 
 /** Failure keeps formatted, escaped code readable without an unhandled rejection. */
 export function loadHighlighting(): Promise<void> {

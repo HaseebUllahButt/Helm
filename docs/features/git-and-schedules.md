@@ -1,24 +1,44 @@
-# Git, CI / CD and schedules
+# Git and CI / CD
 
-Git needs a folder chat; quick chats have no Git tab. None of the Git steps
-were driven yet. The private copy's home is its own
-(`/tmp/helm-verify-<you>/home`); make a throwaway repo there first.
+Git needs a folder chat; quick chats have no Git button. The private copy's
+home is its own (`/tmp/helm-verify-<you>/home`); make a throwaway repo there
+first.
 
-## Git: graph and changes
+## Git: graph, changes and files
 - **Sees:** a **Git** button in a folder chat's header ("Git: 3 changed
-  files") → Thread details → **Git** with Graph and Changes. Graph: the last
-  80 commits; tap one for details, a file for its diff. Changes: +/- counts,
-  each diff, a "viewed" tick. Commit, push and create PR, one step at a time
-  or all in order; push never forces.
-- **Prove:** steps not yet driven.
+  files") opens the Git screen with tabs **Graph**, **Changes**, **Files**,
+  **CI / CD**. Graph: the last 80 commits; tap one for details, a file for
+  its diff. Changes: +/- counts, each diff, a "viewed" tick. Commit, push and
+  create PR, one step at a time or all in order; push never forces.
+- **Diffs:** numbered, coloured rows; a wrapped line stays in the code
+  column. On a phone the indent every line shares is trimmed and the diff
+  runs edge to edge. **Wrap** in the top bar folds long lines (on by
+  default on a phone). Each open diff has **Open whole file**.
+- **Files (read only):** the repo's files (tracked plus new, not ignored),
+  opening in the chat's folder. "Find a file" searches every path. A green
+  dot marks changed files and folders. Secrets (`.env`, keys, `.pem`…)
+  show "hidden" and never leave the machine. A file opens with line
+  numbers and colours, **Copy path**, **See changes** when it changed, and
+  "Read only". Binary files say "This is not a text file".
+- **Prove (driven 2026-10-17):**
   ```sh
-  git init /tmp/helm-verify-<you>/work/demo && echo hi > /tmp/helm-verify-<you>/work/demo/a.txt
-  # New chat → verify-<you> → that folder → fake; then the Git button
+  W=/tmp/helm-verify-<you>/work/demo; mkdir -p $W/src && cd $W && git init -q
+  printf 'a\nb\n' > src/x.ts; printf 'S=1\n' > .env; git add -A; git -c user.email=a@b -c user.name=t commit -qm base
+  printf 'a\nB\n' > src/x.ts; cd -
+  ID=$($V rpc session.start "{\"cwd\":\"$W\",\"profileId\":\"fake\",\"title\":\"demo\"}" | grep -o '"id": "[^"]*"' | head -1 | cut -d'"' -f4)
+  $H say $ID hello                          # an unsent chat does not show
+  $V open; $V click verify-<you>; $V click "Devin · …/work/demo"
+  $V click "Git: 1 changed files"; $V click x.ts; $V shot /tmp/diff.png
+  $V click "Open whole file"; $V shot /tmp/file.png
+  $V click "Back to the files"; $V click .env; $V text | grep Hidden
   ```
-- **Proof:** "a.txt" listed under Changes with "+1".
+- **Proof:** the diff with line numbers and a red "2 −" and green "2 +" row;
+  the file screen with "Read only"; "Hidden: this file may hold passwords
+  or keys."
 - **Traps:** commit by path in real repos; other sessions leave edits in the
   same tree.
-- **Tests:** `test/git`, `git-head`; `test/browser/inline-diff`.
+- **Tests:** `test/git` (file list, secrets, links out of the repo),
+  `git-head`; `test/browser/inline-diff`.
 
 ## CI / CD
 - **Sees:** a "CI / CD" section: PR reviews, checks, workflow runs, failed
@@ -32,17 +52,7 @@ were driven yet. The private copy's home is its own
   `git-notifications`. Run with `npm run test:automation`.
 
 ## Schedules (automations)
-- **Sees:** Thread details → **Schedules** → "Automations": "Runs on
-  <machine> with this thread's account, model and permissions…", the
-  switch "Continue automatically when this account's usage limit resets",
-  "No automations for this thread." and **New automation**. Kinds: interval
-  (5 min or more), fixed time (time zone, weekdays), webhook. Each has
-  pause, edit, **Run now**, delete, and "Start a fresh thread for each run".
-- **Prove (screen driven 2026-10-15, adding one not yet driven):**
-  ```sh
-  $V click Agents; $V click Schedules; $V text | sed -n '/Thread details/,$p'
-  ```
-- **Proof:** "No automations for this thread." and "New automation".
-- **Traps:** a failed run pauses the schedule. Webhooks need the public hub
-  online. Rotating a webhook address cancels queued runs.
+- **Removed from the app 2026-10-17** (the owner found them unnecessary).
+  The machine side (`schedule.*`, webhooks) is still there and existing
+  automations keep running; nothing in the app lists them any more.
 - **Tests:** `test/schedules`, `usage-recovery`, `shell-task-alarm`.

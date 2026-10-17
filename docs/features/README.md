@@ -20,7 +20,7 @@ from the code and notes. Run them once and remove the mark.
 | Settings, appearance, usage, limits, updates | [settings.md](settings.md) |
 | Rewind: Edit / Branch from here | [rewind.md](rewind.md) |
 | Files, images, voice, visuals | [files-and-visuals.md](files-and-visuals.md) |
-| Git, CI / CD, schedules | [git-and-schedules.md](git-and-schedules.md) |
+| Git: graph, changes, files, CI / CD | [git-and-schedules.md](git-and-schedules.md) |
 
 ## The loop
 

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { stat, readFile, realpath } from 'node:fs/promises';
+import { stat, readFile, realpath, open } from 'node:fs/promises';
 import { existsSync, statSync, readFileSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { expand, collapse } from './paths.js';
@@ -183,6 +183,67 @@ export async function diff(cwd, path) {
   }
   const truncated = out.length > DIFF_LIMIT;
   return { path: rel, diff: truncated ? out.slice(0, DIFF_LIMIT) : out, truncated };
+}
+
+/** Past this many paths the Files list stops; search still finds what was listed. */
+const TREE_LIMIT = 50_000;
+/** Enough of one file to read on a phone. */
+const TEXT_LIMIT = 400_000;
+/** Files that usually hold passwords or keys: listed, never sent. */
+const SECRET = /(^|\/)(\.env(\..*)?|\.npmrc|\.netrc|\.pgpass|id_(rsa|dsa|ecdsa|ed25519)|credentials(\.json)?|[^/]*\.(pem|key|p12|pfx|keystore|jks))$/i;
+export const isSecretPath = (p) => SECRET.test(p) && !/\.(example|sample|template)$/i.test(p);
+
+/** A path the phone named, checked to stay inside the repo. */
+function inside(path) {
+  const rel = String(path ?? '');
+  if (!rel || rel.includes('\0') || rel.startsWith('/') || rel.split('/').includes('..')) {
+    throw new Error('that is not a path inside the folder');
+  }
+  return rel;
+}
+
+/**
+ * Every file git would show for the repo - tracked, plus new files that are
+ * not ignored - for the read-only Files view. `start` is the chat's own
+ * folder inside the repo, where the list opens.
+ */
+export async function files(cwd) {
+  const dir = await folder(cwd);
+  const root = await toplevel(dir);
+  if (!root) throw new Error('not a git repository');
+  const out = await exec('git', ['-C', root, 'ls-files', '-co', '--exclude-standard', '-z'], { ...OPTS, maxBuffer: 64 * 1024 * 1024 })
+    .then((r) => r.stdout);
+  const all = [...new Set(out.split('\0').filter(Boolean))].sort();
+  const realRoot = await realpath(root).catch(() => root);
+  const realDir = await realpath(dir).catch(() => dir);
+  const start = realDir.startsWith(realRoot + '/') ? realDir.slice(realRoot.length + 1) : '';
+  return {
+    root: collapse(root), start, truncated: all.length > TREE_LIMIT,
+    files: all.slice(0, TREE_LIMIT), secret: all.slice(0, TREE_LIMIT).filter(isSecretPath),
+  };
+}
+
+/** One file's text, read only. Secrets, pictures and other binary files say what they are instead. */
+export async function file(cwd, path) {
+  const dir = await folder(cwd);
+  const rel = inside(path);
+  const root = await toplevel(dir);
+  if (!root) throw new Error('not a git repository');
+  if (isSecretPath(rel)) return { path: rel, hidden: true };
+  const realRoot = await realpath(root);
+  const full = await realpath(join(root, rel)).catch(() => null);
+  // A link that leads out of the repo is not "a file in this folder".
+  if (!full || !full.startsWith(realRoot + '/')) throw new Error('no such file in this folder');
+  const s = await stat(full);
+  if (!s.isFile()) throw new Error('that is not a file');
+  const handle = await open(full, 'r');
+  try {
+    const buf = Buffer.alloc(Math.min(s.size, TEXT_LIMIT));
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    const head = buf.subarray(0, bytesRead);
+    if (head.subarray(0, 8000).includes(0)) return { path: rel, size: s.size, binary: true };
+    return { path: rel, size: s.size, text: head.toString('utf8'), truncated: s.size > TEXT_LIMIT };
+  } finally { await handle.close(); }
 }
 
 /**

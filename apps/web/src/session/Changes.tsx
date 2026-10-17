@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Client, Environment, Session } from '../client';
-import { Diff } from './Transcript';
+import { DiffView } from './CodeView';
+import { FilesPanel } from './Files';
 import { GitGraph } from './GitGraph';
 import { BackIcon, Icon } from '../Icon';
 import { Route } from '../Route';
@@ -50,7 +51,7 @@ const splitPath = (p: string) => {
 };
 
 const STATUS_NAME: Record<GitFile['status'], string> = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', '?': 'Untracked' };
-const TABS = ['graph', 'changes', 'pipeline'] as const;
+const TABS = ['graph', 'changes', 'files', 'pipeline'] as const;
 type Tab = typeof TABS[number];
 
 export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen, sessionId }: {
@@ -67,6 +68,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
   const key = viewedKey(env.id, status.root ?? cwd);
   const [viewed, setViewed] = useState<Record<string, string>>(() => readViewed(key));
   const [open, setOpen] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, { text: string; truncated: boolean } | 'loading' | 'failed'>>({});
   const monitor = usePipeline(client, env, cwd, status.branch, status.head?.commit, sessionId);
   const pr = monitor.snapshot?.pr;
@@ -86,12 +88,19 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
       .catch(() => setDiffs((current) => ({ ...current, [path]: 'failed' })));
   };
 
-  const expand = (f: GitFile) => {
+  const expand = (f: GitFile, show?: boolean) => {
     const path = f.path;
-    setOpen((o) => (o === path ? null : path));
+    setOpen((o) => (show || o !== path ? path : null));
     const cached = diffs[path];
     if (cached && cached !== 'failed') return;
     fetchDiff(path);
+  };
+  const changedPaths = new Set(files.map((f) => f.path));
+  const openFile = (path: string) => { setViewing(path); setTab('files'); };
+  const showChanges = (path: string) => {
+    const f = files.find((x) => x.path === path);
+    setTab('changes');
+    if (f) { expand(f, true); requestAnimationFrame(() => document.getElementById(`change-${path}`)?.scrollIntoView({ block: 'start' })); }
   };
 
   const add = files.reduce((n, f) => n + f.add, 0);
@@ -114,7 +123,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
           <h1>Git</h1>
           <span className="sub"><Route machine={env.name} folder={cwd} /></span>
         </div>
-        <button className="git-wrap" aria-label="Wrap diff lines" aria-pressed={wrap} onClick={() => setWrap(value => !value)}>Wrap</button>
+        <button className="git-wrap" aria-label="Wrap long lines" aria-pressed={wrap} onClick={() => setWrap(value => !value)}>Wrap</button>
         <button className="iconbtn" title="Refresh Git" aria-label="Refresh Git" onClick={() => { reload(); monitor.refresh(); setRefresh((n) => n + 1); }}><Icon name="refresh" size={17} /></button>
       </div>
       <div className="git-head"><div className="git-toolbar">
@@ -151,7 +160,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
               // Only the open view's panel is drawn; pointing at the others
               // sent screen readers to an element that does not exist.
               aria-controls={tab === name ? `git-${name}-panel` : undefined} onClick={() => pick(name)}>
-              {name === 'graph' ? 'Graph' : name === 'changes' ? 'Changes' : 'CI / CD'}
+              {name === 'graph' ? 'Graph' : name === 'changes' ? 'Changes' : name === 'files' ? 'Files' : 'CI / CD'}
               {name === 'changes' && total > 0 && <>{' '}<span className="git-count">{total}</span></>}
               {name === 'pipeline' && monitor.snapshot?.checksState && ['failure', 'pending'].includes(monitor.snapshot.checksState) && <span className={`pipeline-dot ${monitor.snapshot.checksState}`} aria-label={monitor.snapshot.checksState === 'failure' ? 'checks failed' : 'checks running'} />}
             </button>
@@ -160,7 +169,10 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
       </div></div>
       <div className="scroll"><div className="pad column">
         {tab === 'graph' ? <div id="git-graph-panel" role="tabpanel" aria-labelledby="git-graph-tab">
-          <GitGraph client={client} env={env} cwd={cwd} refreshKey={`${status.head?.commit}:${refresh}`} onOpen={onOpen} />
+          <GitGraph client={client} env={env} cwd={cwd} refreshKey={`${status.head?.commit}:${refresh}`} onOpen={onOpen} wrap={wrap} />
+        </div> : tab === 'files' ? <div id="git-files-panel" role="tabpanel" aria-labelledby="git-files-tab">
+          <FilesPanel client={client} env={env} cwd={cwd} refreshKey={`${status.head?.commit}:${refresh}`} changed={changedPaths} wrap={wrap}
+            open={viewing} onOpen={setViewing} onChanges={showChanges} />
         </div> : tab === 'pipeline' ? <div id="git-pipeline-panel" role="tabpanel" aria-labelledby="git-pipeline-tab">
           <Pipeline client={client} env={env} cwd={cwd} sessionId={sessionId} data={monitor.snapshot} error={monitor.error} loading={monitor.loading}
             refresh={monitor.refresh} watch={monitor.watch} watchBusy={monitor.watchBusy} />
@@ -189,7 +201,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
                 const d = diffs[f.path];
                 const shown = open === f.path;
                 return (
-                  <div key={f.path} className={`fileRow${isViewed(f) ? ' viewed' : ''}${shown ? ' open' : ''}`}>
+                  <div key={f.path} id={`change-${f.path}`} className={`fileRow${isViewed(f) ? ' viewed' : ''}${shown ? ' open' : ''}`}>
                     <div className="row tall">
                       <button className="rowmain filemain" onClick={() => expand(f)} aria-expanded={shown} title={f.path}>
                         <span className={`gst s${f.status === '?' ? 'u' : f.status}`} title={STATUS_NAME[f.status]}>{f.status === '?' ? 'U' : f.status}</span>
@@ -212,8 +224,11 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
                               <button className="linkish" onClick={() => fetchDiff(f.path)}>Try again</button>
                             </div>
                           : <>
-                              <Diff text={d.text || '(no textual changes)'} />
+                              <DiffView text={d.text} path={f.path} wrap={wrap} />
                               {d.truncated && <div className="git-state">The rest is too long to show here.</div>}
+                              {f.status !== 'D' && <button className="files-chip filediff-open" onClick={() => openFile(f.path)}>
+                                <Icon name="read" size={13} />Open whole file
+                              </button>}
                             </>}
                       </div>
                     )}

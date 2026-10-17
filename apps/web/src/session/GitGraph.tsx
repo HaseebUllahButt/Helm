@@ -3,7 +3,7 @@ import type { Client, Environment, Session } from '../client';
 import { EngineMark } from '../EngineMark';
 import { Icon, type IconName } from '../Icon';
 import { agentLabel } from '@helm/protocol/notifications';
-import { Diff } from './Transcript';
+import { DiffView } from './CodeView';
 
 export interface GitCommit {
   hash: string; parents: string[]; subject: string; author: string; date: string; refs: string[];
@@ -173,8 +173,8 @@ function Through({ row, width }: { row: GraphRow; width: number }) {
   );
 }
 
-export function GitGraph({ client, env, cwd, refreshKey, onOpen }: {
-  client: Client; env: Environment; cwd: string; refreshKey: string; onOpen?: (s: Session) => void;
+export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }: {
+  client: Client; env: Environment; cwd: string; refreshKey: string; onOpen?: (s: Session) => void; wrap?: boolean;
 }) {
   const [data, setData] = useState<GitGraphData | null>(null);
   const [error, setError] = useState('');
@@ -390,7 +390,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen }: {
                               {shown && <div className="filediff">
                                 {fileDiff!.error ? <div className="git-state bad" role="status">{fileDiff!.error}</div>
                                   : fileDiff!.diff === null ? <div className="git-state" role="status">Reading the diff…</div>
-                                  : <><Diff text={fileDiff!.diff || '(no text changes)'} />{fileDiff!.truncated && <div className="git-state">The rest is too long to show here.</div>}</>}
+                                  : <><DiffView text={fileDiff!.diff ?? ''} path={fileDiff!.path} wrap={wrap} />{fileDiff!.truncated && <div className="git-state">The rest is too long to show here.</div>}</>}
                               </div>}
                             </div>;
                           })}

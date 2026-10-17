@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
  * status says what changed and by how much, a diff is only ever of a file
  * inside the folder, and a worktree is a new folder on a new derived branch.
  */
-const { status, diff, addWorktree, graph, commit } = await import('../packages/connect/src/git.js');
+const { status, diff, addWorktree, graph, commit, files, file } = await import('../packages/connect/src/git.js');
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 
 const repo = () => {
@@ -243,4 +243,32 @@ test('SSH GitHub account aliases resolve through SSH configuration, without open
   const hosts = [];
   const value = await githubContext(dir, { resolveHost: async host => { hosts.push(host); return 'github.com'; } });
   assert.deepEqual(hosts, ['github-personal']); assert.equal(value.host, 'github.com'); assert.equal(value.repository, 'owner/project');
+});
+
+test('the file viewer lists tracked and new files, opening in the chat\'s own folder', async () => {
+  const dir = repo();
+  mkdirSync(join(dir, 'src'));
+  writeFileSync(join(dir, 'src', 'new.js'), 'x\n');
+  writeFileSync(join(dir, '.gitignore'), 'skip.log\n');
+  writeFileSync(join(dir, 'skip.log'), 'noise\n');
+  writeFileSync(join(dir, '.env'), 'SECRET=1\n');
+  const t = await files(join(dir, 'src'));
+  assert.deepEqual(t.files, ['.env', '.gitignore', 'a.txt', 'b.txt', 'src/new.js']);
+  assert.equal(t.start, 'src');
+  assert.deepEqual(t.secret, ['.env']);
+});
+
+test('the file viewer reads text, but never secrets, binaries or anything outside the repo', async () => {
+  const dir = repo();
+  writeFileSync(join(dir, '.env'), 'SECRET=1\n');
+  writeFileSync(join(dir, 'pic.bin'), Buffer.from([1, 0, 2]));
+  symlinkSync('/etc/hostname', join(dir, 'out'));
+  assert.equal((await file(dir, 'a.txt')).text, 'one\ntwo\nthree\n');
+  const secret = await file(dir, '.env');
+  assert.equal(secret.hidden, true);
+  assert.equal(secret.text, undefined);
+  assert.equal((await file(dir, 'pic.bin')).binary, true);
+  await assert.rejects(file(dir, '../proj/a.txt'), /not a path inside/);
+  await assert.rejects(file(dir, '/etc/passwd'), /not a path inside/);
+  await assert.rejects(file(dir, 'out'), /no such file/);
 });
