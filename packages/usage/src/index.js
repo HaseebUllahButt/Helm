@@ -216,9 +216,9 @@ export class UsageReader {
    * offers as facets. `by` names the dimensions worth grouping - anything not
    * asked for is summed away here rather than on the phone.
    */
-  async report(profiles, { model = null, since = null, until = null, by = ['engine', 'model'], rebuild = false } = {}) {
+  async report(profiles, { model = null, since = null, until = null, by = ['engine', 'model'], rebuild = false, tz = 0 } = {}) {
     const { buckets, stats, accounts } = await this.collect(profiles, { rebuild });
-    return foldBuckets(buckets, { model, since, until, by, accounts, scan: stats });
+    return foldBuckets(buckets, { model, since, until, by, accounts, scan: stats, tz });
   }
 }
 
@@ -230,24 +230,30 @@ export class UsageReader {
  */
 export function foldBuckets(buckets, {
   since = null, until = null, model: selectedModel = null, by = ['engine', 'model'],
-  accounts = [], scan = {}, at = null,
+  accounts = [], scan = {}, at = null, tz = 0,
 } = {}) {
   const daily = new Map();
   const groups = new Map();
   const totals = blankTotals();
+  const days = new Map();
+  const offset = Number.isFinite(Number(tz)) ? Number(tz) : 0;
 
   const entries = buckets instanceof Map ? buckets.entries() : Object.entries(buckets ?? {});
   for (const [full, b] of entries) {
     const key = full.slice(full.indexOf('\x00') + 1);
-    const { date, model, project } = splitKey(key);
+    const { date: stamp, model, project } = splitKey(key);
+    let date = days.get(stamp);
+    if (date === undefined) days.set(stamp, date = localDay(stamp, offset));
     if (selectedModel !== null && model !== selectedModel) continue;
     if (since && date < since) continue;
     if (until && date > until) continue;
 
+    // Rates change on a UTC date, so pricing reads the bucket's own day.
+    const utcDay = stamp.slice(0, 10);
     const cost = b.billedUsd != null && b.billedUsd > 0
       ? { total: b.billedUsd, billed: true }
-      : priceBucket(b.engine, model, b, date);
-    const rates = cacheRatesFor(model, b.engine, date);
+      : priceBucket(b.engine, model, b, utcDay);
+    const rates = cacheRatesFor(model, b.engine, utcDay);
 
     addInto(totals, b, cost, rates);
 
@@ -276,6 +282,21 @@ export function foldBuckets(buckets, {
     scan,
     at: at ?? Date.now(),
   };
+}
+
+/**
+ * The calendar day a bucket falls on for someone `tz` minutes east of UTC.
+ *
+ * Buckets are kept per UTC hour ("2026-10-17T19") so each asker can cut days
+ * at their own midnight: a phone in Pakistan at 00:30 asked for "today" and
+ * got nothing until 05:00, because every bucket was still dated yesterday in
+ * UTC. Day-only buckets - an index or a hub's copy from a machine not yet
+ * updated - stay on their UTC day. A half-hour zone is off by that half hour.
+ */
+export function localDay(stamp, tz = 0) {
+  if (stamp.length < 13 || !tz) return stamp.slice(0, 10);
+  const ms = Date.parse(`${stamp}:00:00Z`) + tz * 60_000;
+  return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 10) : stamp.slice(0, 10);
 }
 
 function blankTotals() {

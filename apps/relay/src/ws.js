@@ -140,6 +140,7 @@ export function createWsLayer() {
         model: typeof params.model === 'string' ? params.model : null,
         since: params.since ?? null,
         until: params.until ?? null,
+        tz: Number(params.tz) || 0,
         by: Array.isArray(params.by) && params.by.length ? params.by : ['engine', 'model'],
         accounts: JSON.parse(row.accounts || '[]'),
         scan: JSON.parse(row.scan || '{}'),

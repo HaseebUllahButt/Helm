@@ -1333,7 +1333,9 @@ export class Client {
    * generous for exactly that first call.
    */
   usage(env: string, opts: { model?: string; since?: string; until?: string; by?: string[]; rebuild?: boolean } = {}) {
-    return this.rpc<UsageReport>(env, 'usage.report', opts, 120_000);
+    // Days are cut at this device's midnight, not the machine's or UTC's.
+    const tz = -new Date().getTimezoneOffset();
+    return this.rpc<UsageReport>(env, 'usage.report', { ...opts, tz }, 120_000);
   }
 
   /** Pull a machine to the newest helm. It restarts a few seconds after answering. */

@@ -81,7 +81,7 @@ test('resuming a grown transcript counts exactly what a cold read would', async 
     Object.fromEntries(incremental.fold()), Object.fromEntries(cold.fold()),
     'an incremental fold and a cold fold must agree exactly',
   );
-  assert.equal(incremental.fold().get(bucketKey({ date: '2026-09-10', model: 'claude-opus-5', project: '/work/repo' })).turns, 35);
+  assert.equal(incremental.fold().get(bucketKey({ date: '2026-09-10T10', model: 'claude-opus-5', project: '/work/repo' })).turns, 35);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -104,7 +104,7 @@ test('a Codex rollout keeps its model across an incremental boundary', async () 
   await cache.scan([f]);
 
   const keys = [...cache.fold().keys()];
-  assert.deepEqual(keys, [bucketKey({ date: '2026-09-10', model: 'gpt-5.6-sol', project: '/srv/app' })],
+  assert.deepEqual(keys, [bucketKey({ date: '2026-09-10T09', model: 'gpt-5.6-sol', project: '/srv/app' })],
     'the appended turns must not fall back to the default model');
   assert.equal(cache.fold().get(keys[0]).turns, 4);
   rmSync(dir, { recursive: true, force: true });
@@ -368,6 +368,26 @@ test('a bucket key round-trips, including a folder with no value', () => {
   assert.deepEqual(splitKey(k), { date: '2026-09-10', model: 'claude-opus-5', project: '/a/b' });
   assert.deepEqual(splitKey(bucketKey({ date: '2026-09-10', model: 'm' })),
     { date: '2026-09-10', model: 'm', project: '' });
+});
+
+test("today ends at the asker's midnight, not UTC's", () => {
+  // 00:30 on the 18th in Pakistan (UTC+5) is 19:30 on the 17th in UTC.
+  // Work done in that half hour is "today" for the phone asking.
+  const bucket = (total) => ({ engine: 'claude', account: 'one', input: total, output: 0, total, turns: 1 });
+  const rows = {
+    ['one\x002026-10-17T18|claude-opus-5|/work']: bucket(100),
+    ['one\x002026-10-17T19|claude-opus-5|/work']: bucket(200),
+    // A machine not yet updated still sends whole UTC days.
+    ['one\x002026-10-16|claude-opus-5|/work']: bucket(5),
+  };
+  const pk = foldBuckets(rows, { since: '2026-10-18', tz: 300 });
+  assert.equal(pk.totals.total, 200);
+  assert.deepEqual(pk.daily.map(d => d.date), ['2026-10-18']);
+  const all = foldBuckets(rows, { tz: 300 });
+  assert.deepEqual(all.daily.map(d => [d.date, d.total]), [['2026-10-16', 5], ['2026-10-17', 100], ['2026-10-18', 200]]);
+  assert.equal(foldBuckets(rows, { since: '2026-10-18' }).totals.total, 0, 'without a zone, days stay UTC');
+  assert.equal(foldBuckets(rows, { since: '2026-10-18', tz: -420 }).totals.total, 0,
+    'west of UTC the same hours are still the 17th, before noon');
 });
 
 test('model drill-down filters totals, daily series and groups before folding', () => {

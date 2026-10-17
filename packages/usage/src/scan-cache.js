@@ -387,7 +387,8 @@ export class ResultCache {
  */
 // 2: Claude lines sharing a message id credit their growth, Codex skips
 // repeated token_counts - buckets built by 1 are wrong, not just stale.
-export const INDEX_VERSION = 2;
+// 3: buckets per UTC hour, so "today" can end at the asker's midnight.
+export const INDEX_VERSION = 3;
 
 export async function loadIndex(file, caches) {
   if (!existsSync(file)) return false;

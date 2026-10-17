@@ -2103,6 +2103,7 @@ export class Daemon {
           model: typeof p.model === 'string' ? p.model : null,
           since: p.since ?? null,
           until: p.until ?? null,
+          tz: Number(p.tz) || 0,
           by: Array.isArray(p.by) && p.by.length ? p.by : ['engine', 'model'],
           accounts: rollup.accounts,
           scan: rollup.scan,

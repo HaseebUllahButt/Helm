@@ -45,7 +45,8 @@ export const claudeParser = {
     const ts = typeof rawTs === 'number'
       ? new Date(rawTs > 1e12 ? rawTs : rawTs * 1000).toISOString()
       : String(rawTs || '');
-    const date = ts.slice(0, 10);
+    // The UTC hour, not the day: whose midnight ends "today" is the asker's.
+    const date = ts.slice(0, 13);
     if (!date) return;
 
     let input = Number(u.input_tokens ?? u.inputTokens) || 0;
@@ -108,7 +109,7 @@ export const codexParser = {
     }
     if (p.type !== 'token_count') return;
 
-    const date = String(d.timestamp || '').slice(0, 10);
+    const date = String(d.timestamp || '').slice(0, 13);
     if (!date) return;
 
     // Codex sometimes writes the same token_count twice with the running
@@ -175,7 +176,7 @@ function opencodeRows(dbPath, engine = 'opencode') {
     for (const r of rows) {
       const ms = Number(r.time_created) || 0;
       if (!ms) continue;
-      const date = new Date(ms > 1e12 ? ms : ms * 1000).toISOString().slice(0, 10);
+      const date = new Date(ms > 1e12 ? ms : ms * 1000).toISOString().slice(0, 13);
       let model = r.model || 'unknown';
       if (typeof model === 'string' && model.startsWith('{')) {
         try { model = JSON.parse(model).id ?? 'unknown'; } catch { model = 'unknown'; }
@@ -239,7 +240,7 @@ function devinRows(dbPath) {
       let ts = Number(r.ts);
       if (!ts || !Number.isFinite(ts)) continue;
       if (ts > 1e12) ts = Math.floor(ts / 1000);
-      const date = new Date(ts * 1000).toISOString().slice(0, 10);
+      const date = new Date(ts * 1000).toISOString().slice(0, 13);
       const key = bucketKey({ date, model: r.model || 'unknown' });
       const b = buckets.get(key) || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, turns: 0 };
       b.input += Number(r.input) || 0;
