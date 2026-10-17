@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { writeFileSync, readFileSync, chmodSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fakeCli, collect } from './helpers.mjs';
-import { CodexDriver, CODEX_COMMANDS, formatAccountUsage, formatRateLimits } from '../packages/connect/src/drivers/codex.js';
+import { CodexDriver, CodexServer, CODEX_COMMANDS, formatAccountUsage, formatRateLimits } from '../packages/connect/src/drivers/codex.js';
 
 // One app-server is shared per account home; every test gets its own so the
 // fake replays the right recording.
@@ -16,6 +16,45 @@ const make = (name, opts = {}) => {
   });
   return { fake, driver, log: collect(driver) };
 };
+
+test('Codex opens one thread when startup and the first send overlap', { timeout: 5000 }, async () => {
+  const { fake, driver, log } = make('plain');
+  try {
+    await Promise.all([driver.start(), driver.start(), driver.send('hello')]);
+    await log.until(e => e.type === 'turn.done');
+    assert.equal(fake.stdinLines().filter(m => m.method === 'thread/start').length, 1);
+    assert.equal(fake.stdinLines().filter(m => m.method === 'turn/start').length, 1);
+  } finally { await driver.kill(); rmSync(fake.dir, { recursive: true, force: true }); }
+});
+
+test('a pending Codex thread keeps the shared server alive when another detaches', async () => {
+  let ended = 0;
+  const pipe = { onData() {}, onExit() {}, end() { ended++; }, kill() {} };
+  const server = new CodexServer('unused', {}, () => {}, { hasProc: () => true, procPipe: () => pipe });
+  const first = { threadId: null }, second = { threadId: null };
+  server.attach(first); server.attach(second);
+  await server.ensure();
+  server.detach(second);
+  assert.equal(ended, 0, 'the first thread is still initializing');
+  server.detach(first);
+  assert.equal(ended, 1);
+});
+
+test('Codex startup does not wait for the advisory version command', { timeout: 5000 }, async () => {
+  const { fake, driver } = make('plain');
+  const script = readFileSync(fake.cmd, 'utf8');
+  // The diagnostic is held until startup has completed. The former await
+  // would deadlock here; no wall-clock speed assertion is needed.
+  writeFileSync(fake.cmd, script.replace('#!/bin/sh\n', '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  while [ ! -f "$CODEX_HOME/release-version" ]; do sleep 0.05; done\n  echo "codex-cli 0.154.0"\n  exit\nfi\n'));
+  try { await driver.start(); assert.ok(driver.engineSessionId); }
+  finally {
+    writeFileSync(join(fake.dir, 'home', 'release-version'), '');
+    // Let the held child leave before removing its release marker.
+    const { cliVersion } = await import('../packages/connect/src/drivers/index.js');
+    await cliVersion(fake.cmd, driver.env);
+    await driver.kill(); rmSync(fake.dir, { recursive: true, force: true });
+  }
+});
 
 test('codex exposes the commands Helm can execute through app-server', async () => {
   const driver = new CodexDriver({ cmd: 'codex', env: {}, cwd: '/x', mode: 'ask' });

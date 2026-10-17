@@ -61,6 +61,14 @@ quick chat with the Fake agent (see [README](README.md)).
   `restart-delivery`.
 
 ## Permission mode, model and thinking
+- **Saving:** model, thinking and speed chips show the selected value at
+  once with “saving…” until the machine answers. A failed save restores the
+  accepted value and shows the error. Permission chips keep the accepted
+  policy while saving. The model list stays available during refresh.
+- **Prove a slow save:** `test/browser/settings-latency.test.mjs` holds the
+  machine's reply, checks the new chip and saving indicator, pushes an
+  unrelated session update, then accepts or rejects the choice. It also
+  holds the next catalog refresh open while choosing another model.
 - **Sees:** chips under the box: model ("model: …") and permissions
   (ask · edit · auto · yolo for Claude; ask · edit · yolo · read for Codex).
   A riskier mode takes two taps and colours the box.

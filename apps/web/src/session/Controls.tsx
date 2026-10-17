@@ -41,11 +41,12 @@ export interface Choice {
  * The sheet docks in the same slot a permission prompt uses, because that is
  * where your eyes already are.
  */
-export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs, onDefault, onNewsSeen, onNativeControl, defaultsFor = 'new chats' }: {
+export function Controls({ options, session, busy, pending, onPick, onFavs, onEffortFavs, onDefault, onNewsSeen, onNativeControl, defaultsFor = 'new chats' }: {
   options: ModelList | null;
   onNativeControl?: (kind: NativeControl) => void;
   session: Session;
   busy?: boolean;
+  pending?: Kind;
   onPick: (kind: Kind, id: string) => void;
   /** Save favorite models on the machine, so every device shows the same list. */
   onFavs?: (next: string[]) => void;
@@ -108,10 +109,12 @@ export function Controls({ options, session, busy, onPick, onFavs, onEffortFavs,
             key={g.kind}
             className={`chip-pick${open === g.kind ? ' on' : ''}${g.danger ? ' danger' : ''}`}
             title={`${g.title}: ${g.currentLabel}`} aria-label={`${g.title}: ${g.currentLabel}`}
+            aria-busy={pending === g.kind || undefined}
             onClick={() => setOpen(open === g.kind ? null : g.kind)}
           >
             {g.glyph && <i className={`cg ${g.kind}`}><Icon name={g.glyph} size={13} /></i>}
             <span className="chip-label">{g.currentLabel}</span>
+            {pending === g.kind && <span className="muted">saving…</span>}
           </button>
         ))}
         {(['model', 'effort', 'mode'] as const).filter(kind => !groups.some(g => g.kind === kind) && !options?.nativeControls?.includes(kind)).map(kind => {

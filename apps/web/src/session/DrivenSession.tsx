@@ -199,9 +199,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // The catalogue this device last heard, then the machine's answer behind it.
   // Without the first half the model chip reads "default" and the picker is
   // empty until a CLI has been spawned and a round trip has come back.
+  useEffect(() => { setOptions(null); }, [client, env.id, session.profileId, session.id]);
   useEffect(() => {
     let stale = false;
-    setOptions(null);
     loadModels(env.id, session.profileId).then((cached) => {
       if (!stale && cached) setOptions((now) => now ?? cached);
     });
@@ -452,12 +452,28 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
    * `recache.ts` none of this is worth a dialog.
    */
   const [ask, setAsk] = useState<null | 'kill' | 'rename' | { kind: Kind; value: string; warn: string }>(null);
-  const change = (kind: Kind, value: string, extra: Record<string, unknown> = {}) => call(async () => {
-    const r: any = await client.rpc(env.id, RPC[kind], { id: session.id, [kind]: value, ...extra });
-    if (r?.ask) { setAsk({ kind, value, warn: recacheWarning('model', r.ask, true) }); return; }
-    if (r?.noSignal && kind === 'model') { estimate(kind, value); return; }
-    onSession(r.session);
-  });
+  const [savingSetting, setSavingSetting] = useState<{ kind: Kind; value: string; preview: boolean } | null>(null);
+  const settingInFlight = useRef(false);
+  const change = async (kind: Kind, value: string, extra: Record<string, unknown> = {}) => {
+    if (settingInFlight.current) return;
+    settingInFlight.current = true;
+    // Keep the choice local until acknowledged; other devices and the
+    // permission policy still see the machine's accepted settings.
+    setSavingSetting({ kind, value, preview: !extra.ask && (kind === 'model' || kind === 'effort' || kind === 'speed') });
+    let noSignal = false;
+    try {
+      await call(async () => {
+        const r: any = await client.rpc(env.id, RPC[kind], { id: session.id, [kind]: value, ...extra });
+        if (r?.ask) { setAsk({ kind, value, warn: recacheWarning('model', r.ask, true) }); return; }
+        if (r?.noSignal && kind === 'model') { noSignal = true; return; }
+        if (r?.session) onSession(r.session);
+      });
+    } finally {
+      settingInFlight.current = false;
+      setSavingSetting(null);
+    }
+    if (noSignal) estimate('model', value);
+  };
   const estimate = (kind: 'model' | 'effort', value: string) => {
     const size = session.context ? (session.context.compacted ? 0 : session.context.used) : undefined;
     const cost = recacheCost(log.turns, modelNow, session.engine, undefined, size);
@@ -565,7 +581,9 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   };
 
   const prefs = trayPrefs({ client, env: env.id, engine: session.engine, profileId: session.profileId, options, setOptions, setError });
-  const controls = Controls({ options, session, busy, onPick: pick, ...prefs });
+  const controls = Controls({ options,
+    session: savingSetting?.preview ? { ...session, [savingSetting.kind]: savingSetting.value } : session,
+    pending: savingSetting?.kind, busy, onPick: pick, ...prefs });
   // Pressed again over its own panel, the agents key closes it; over the
   // Git tab it switches to agents.
   useChatKeys({

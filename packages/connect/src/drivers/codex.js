@@ -254,12 +254,13 @@ export class CodexServer {
 
   attach(driver) {
     // A fresh driver connects before thread/start gives it an id. Replace its
-    // temporary null registration once the server returns the real thread.
+    // temporary per-driver registration once the server returns the real
+    // thread. Several chats can be starting before any has an id.
     for (const [threadId, existing] of this.#drivers) if (existing === driver) this.#drivers.delete(threadId);
-    this.#drivers.set(driver.threadId, driver);
+    this.#drivers.set(driver.threadId ?? driver, driver);
   }
   detach(driver, { stop = true } = {}) {
-    this.#drivers.delete(driver.threadId);
+    for (const [key, existing] of this.#drivers) if (existing === driver) this.#drivers.delete(key);
     for (const [tid, d] of this.#aliases) if (d === driver) this.#aliases.delete(tid);
     if (stop && !this.#drivers.size) this.#stop();
   }
@@ -319,7 +320,10 @@ export class CodexServer {
         this.notify('initialized');
         return false;
       }
-      await checkVersion('codex', this.cmd, this.env, CODEX_MIN_VERSION, this.log);
+      // Diagnostic only: a slow wrapper's --version must not hold up a
+      // usable app-server (or reconnection to one that is already running).
+      void checkVersion('codex', this.cmd, this.env, CODEX_MIN_VERSION, this.log)
+        .catch((err) => this.log(`codex version check: ${err.message}`));
       // The server exits if its home does not exist yet.
       if (this.env.CODEX_HOME) mkdirSync(expand(this.env.CODEX_HOME), { recursive: true });
       if (this.procHost) {
@@ -627,7 +631,16 @@ export class CodexDriver extends Driver {
     };
   }
 
+  #starting = null;
+
   async start() {
+    if (this.#starting) return this.#starting;
+    this.#starting = this.#start();
+    try { return await this.#starting; }
+    finally { this.#starting = null; }
+  }
+
+  async #start() {
     if (this.#started && (!this.nativeSocket || this.#nativeSubscribed)) return;
     const server = await this.#connectOnly();
     const startRevision = this.#turnStateRevision;
