@@ -24,7 +24,7 @@ test('opening the website and installed app inherits the terminal join without p
     stdin: { contents: `
       import React from 'react';
       import { createRoot } from 'react-dom/client';
-      import { Login, AddMachine } from './apps/web/src/App';
+      import { Login, AddMachine } from './apps/web/src/screens/Login';
       import { Client } from './apps/web/src/client';
       import { loadAuthSync, saveAuth } from './apps/web/src/store';
       const root = createRoot(document.getElementById('root'));
@@ -43,10 +43,9 @@ test('opening the website and installed app inherits the terminal join without p
       };
       window.showAdd = () => root.render(<AddMachine client={window.localClient()} />);
     `, resolveDir: process.cwd(), loader: 'tsx' },
-    plugins: [{ name: 'login-test-exports', setup(b) {
-      b.onLoad({ filter: /\/App\.tsx$/ }, async ({ path }) => ({
-        contents: (await readFile(path, 'utf8')).replace("'http://127.0.0.1:8787'", `'http://127.0.0.1:${hubPort}'`)
-          + '\nexport { Login, AddMachine };', loader: 'tsx',
+    plugins: [{ name: 'login-test-hub', setup(b) {
+      b.onLoad({ filter: /\/screens\/Login\.tsx$/ }, async ({ path }) => ({
+        contents: (await readFile(path, 'utf8')).replace("'http://127.0.0.1:8787'", `'http://127.0.0.1:${hubPort}'`), loader: 'tsx',
       }));
     }}],
     bundle: true, write: false, format: 'iife', jsx: 'automatic',
