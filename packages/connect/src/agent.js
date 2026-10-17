@@ -1971,7 +1971,7 @@ export class Daemon {
       case M.SESSION_NOTIFY:   return this.sessions.setNotifyDone(p.id, p.on !== false);
       case M.SESSION_CONTROL: return this.sessions.control(p.id, p.kind);
       case M.SESSION_MODE:    return this.sessions.setMode(p.id, p.mode);
-      case M.SESSION_MODEL:   return this.sessions.setModel(p.id, p.model);
+      case M.SESSION_MODEL:   return this.sessions.setModel(p.id, p.model, { pick: p.pick === true, ask: p.ask === true });
       case M.SESSION_EFFORT:  return this.sessions.setEffort(p.id, p.effort);
       case M.SESSION_SPEED:   return this.sessions.setSpeed(p.id, p.speed);
 

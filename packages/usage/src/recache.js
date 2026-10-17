@@ -20,6 +20,13 @@ import { cacheRatesFor } from './pricing.js';
  * inside the conversation; Claude says so in its start-up message
  * (`per_turn_effort_active`), and the app warns only when it says false.
  *
+ * A model switch is priced by Claude itself where it can be: Claude Code
+ * runs a PreModelSwitch hook before a switch, saying whether its cache is
+ * still warm and what writing it again costs (Helm's Claude driver and its
+ * terminal chats both listen). The estimate below is only for chats where
+ * no CLI says anything - Codex, the ACP agents, an older Claude, or a
+ * Claude chat whose process is not running.
+ *
  * Measured across this owner's whole history, mid-thread switches accounted
  * for about 0.53M cache-write tokens - real, but small. This exists to keep it
  * small on the thread where it would not be.
@@ -63,11 +70,17 @@ export function recacheCost(turns, model, engine, asOfDate = new Date().toISOStr
 const fmtTokens = (n) =>
   (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1e3)}k`);
 
-/** The sentence the confirmation asks: what happens, then what it costs. */
-export function recacheWarning(kind, r) {
-  const what = kind === 'model'
-    ? "Switching model starts this conversation's prompt cache again - caches belong to one model."
-    : "The agent says changing the thinking level now rewrites this conversation's prompt cache.";
+/**
+ * The sentence the confirmation asks: what happens, then what it costs.
+ * `fromCli` is a model switch Claude itself priced (its PreModelSwitch hook):
+ * it said the cache is still warm, and `r` holds its figures, not Helm's.
+ */
+export function recacheWarning(kind, r, fromCli = false) {
+  const what = fromCli
+    ? "Claude says this conversation's prompt cache is still warm, and switching model starts it again."
+    : kind === 'model'
+      ? "Switching model starts this conversation's prompt cache again - caches belong to one model."
+      : "The agent says changing the thinking level now rewrites this conversation's prompt cache.";
   const price = r.costUsd == null
     ? `About ${fmtTokens(r.tokens)} cached tokens would be written again (this model has no published rate, so the cost is not known).`
     : `About ${fmtTokens(r.tokens)} cached tokens would be written again, roughly $${r.costUsd.toFixed(2)} on the next turn.`;

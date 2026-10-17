@@ -68,8 +68,14 @@ quick chat with the Fake agent (see [README](README.md)).
   included, then round again), Ctrl/⌘+Shift+M next
   model (favourites first), Ctrl/⌘+Shift+E next thinking level. "?" lists
   every key.
-- **Cache warning:** on a long chat, switching model asks first, priced at
-  the size the CLI reports now (small right after a compact). Changing
+- **Cache warning:** a running Claude (2.1.300 or newer) prices a model
+  switch itself in its PreModelSwitch hook (`prompt_cache_warm`,
+  `context_tokens`, `estimated_cache_write_usd`); Helm asks only when Claude
+  says the cache is warm and big, with Claude's price, and never when it is
+  cold. Terminal Claude chats get the same through Helm's hooks, and Helm
+  answers Claude's own "Switch model?" question so it never sits hidden
+  behind the chat. Codex, ACP agents and a Claude that is not running keep
+  Helm's estimate, priced at the size the CLI reports now. Changing
   thinking level asks only when the CLI itself says it rewrites the cache:
   Claude sends `per_turn_effort_active` at start-up and
   `per_turn_effort_changed` if that stops (Opus 5.5 on 2.1.301 says true,
@@ -77,9 +83,15 @@ quick chat with the Fake agent (see [README](README.md)).
 - **Prove (Shift+Tab driven 2026-10-17):** in a fake chat at 1280 wide,
   `$V key Shift+Tab` three times; the chip reads edit, read, then yolo
   again (`$V eval` the `.slab` buttons' aria-labels).
+- **Prove the model warning:** add a profile to the private copy with
+  engine `claude`, the real `claude` command, and `ANTHROPIC_BASE_URL`
+  pointing at a small local stand-in API whose replies report a big
+  `cache_creation_input_tokens`; say hello, then pick another model: the
+  dialog reads "Claude says this conversation's prompt cache is still
+  warm" with Claude's price (driven 2026-10-17).
 - **Tests:** `test/browser/chat-shortcuts`, `global-keys`, `effort-default`,
   `slash-model-context`; `test/chat-keys`, `modes`, `session-settings`,
-  `recache`, `driver-claude`.
+  `recache`, `driver-claude`, `native-claude-chat`.
 
 ## @ chats and / commands
 - **Sees:** typing `@` lists up to three other chats to add as context;

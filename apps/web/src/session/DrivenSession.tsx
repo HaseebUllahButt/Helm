@@ -439,32 +439,41 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   };
   /**
    * A model switch always breaks the provider's prompt cache: caches belong
-   * to one model. A thinking-level change only does when the CLI says so
-   * (`effortKeepsCache === false`); Claude on Opus 5.5 keeps the cache, and
-   * Helm does not guess for a CLI that says nothing. The size is the one the
-   * CLI reports now, so a compacted chat is not priced at its old size.
-   * Below the threshold in `recache.ts` none of this is worth a dialog.
+   * to one model. Whether it is worth a question is Claude's to say where it
+   * can: a running Claude prices the switch in its PreModelSwitch hook (is
+   * the cache still warm, what writing it again costs), so the daemon asks
+   * it first and comes back with `ask` only when it is warm and big. Helm's
+   * own estimate below is only for chats no CLI speaks for - Codex, the ACP
+   * agents, an older Claude, or a Claude whose process is not running.
+   * A thinking-level change only asks when the CLI says it rewrites the
+   * cache (`effortKeepsCache === false`); Helm does not guess for a CLI that
+   * says nothing. The estimated size is the one the CLI reports now, so a
+   * compacted chat is not priced at its old size. Below the threshold in
+   * `recache.ts` none of this is worth a dialog.
    */
   const [ask, setAsk] = useState<null | 'kill' | 'rename' | { kind: Kind; value: string; warn: string }>(null);
+  const change = (kind: Kind, value: string, extra: Record<string, unknown> = {}) => call(async () => {
+    const r: any = await client.rpc(env.id, RPC[kind], { id: session.id, [kind]: value, ...extra });
+    if (r?.ask) { setAsk({ kind, value, warn: recacheWarning('model', r.ask, true) }); return; }
+    if (r?.noSignal && kind === 'model') { estimate(kind, value); return; }
+    onSession(r.session);
+  });
+  const estimate = (kind: 'model' | 'effort', value: string) => {
+    const size = session.context ? (session.context.compacted ? 0 : session.context.used) : undefined;
+    const cost = recacheCost(log.turns, modelNow, session.engine, undefined, size);
+    if (cost) setAsk({ kind, value, warn: recacheWarning(kind, cost) });
+    else void change(kind, value, kind === 'model' ? { pick: true } : {});
+  };
   const pick = (kind: Kind, value: string) => {
-    if (kind === 'model' || (kind === 'effort' && session.effortKeepsCache === false)) {
-      const size = session.context ? (session.context.compacted ? 0 : session.context.used) : undefined;
-      const cost = recacheCost(log.turns, modelNow, session.engine, undefined, size);
-      if (cost) { setAsk({ kind, value, warn: recacheWarning(kind, cost) }); return; }
-    }
-    void call(async () => {
-      const r: any = await client.rpc(env.id, RPC[kind], { id: session.id, [kind]: value });
-      onSession(r.session);
-    });
+    if (kind === 'model' && session.modelSwitchSignal) { void change(kind, value, { pick: true, ask: true }); return; }
+    if (kind === 'model' || (kind === 'effort' && session.effortKeepsCache === false)) { estimate(kind, value); return; }
+    void change(kind, value);
   };
   const confirmPick = () => {
     if (typeof ask === 'object' && ask) {
       const { kind, value } = ask;
       setAsk(null);
-      void call(async () => {
-        const r: any = await client.rpc(env.id, RPC[kind], { id: session.id, [kind]: value });
-        onSession(r.session);
-      });
+      void change(kind, value, kind === 'model' ? { pick: true } : {});
     }
   };
   const kill = async () => {

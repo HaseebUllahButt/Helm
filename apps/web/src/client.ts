@@ -133,6 +133,8 @@ export interface Session {
   engineEffort?: string | null;
   /** The CLI's word on whether a thinking-level change keeps the prompt cache; null or absent when it has not said. */
   effortKeepsCache?: boolean | null;
+  /** A running Claude prices a model switch itself (its PreModelSwitch hook). */
+  modelSwitchSignal?: boolean;
   permissionControl?: 'bash-guard' | 'none' | null;
   mode?: string | null;
   speed?: string | null;

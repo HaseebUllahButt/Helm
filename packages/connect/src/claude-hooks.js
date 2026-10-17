@@ -40,6 +40,7 @@ export function hookSettings(node = process.execPath, script = hookScript) {
   const run = (timeout) => [{ type: 'command', command: `${quote(node)} ${quote(script)}`, ...(timeout ? { timeout } : {}) }];
   return JSON.stringify({ hooks: {
     SessionStart: [{ hooks: run() }],
+    PreModelSwitch: [{ hooks: run() }],
     PostModelSwitch: [{ hooks: run() }],
     UserPromptSubmit: [{ hooks: run() }],
     PermissionRequest: [{ matcher: '*', hooks: run(ANSWER_WAIT_S) }],

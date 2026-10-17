@@ -58,6 +58,18 @@ process.stdin.on('data', (d) => {
     const msg = JSON.parse(line);
     // Recovery reads live state without consuming the next recorded command
     // response or resuming the hosted writer.
+    // Like the CLI, claude answers `initialize` (hook registration) at once,
+    // so it never stands in for a recorded interrupt receipt.
+    if (kind === 'claude' && msg.type === 'control_request' && msg.request?.subtype === 'initialize') {
+      out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id,
+        response: { claude_code_version: process.env.FAKE_CLAUDE_VERSION ?? '2.1.302' } } });
+      continue;
+    }
+    // An old claude that does not know the context request says so at once.
+    if (kind === 'claude' && msg.type === 'control_request' && msg.request?.subtype === 'get_context_usage') {
+      out({ type: 'control_response', response: { subtype: 'error', request_id: msg.request_id, error: 'Unsupported control request subtype: get_context_usage' } });
+      continue;
+    }
     if (kind === 'codex' && msg.method === 'thread/read') {
       out({ id: msg.id, result: { thread: liveThreads.get(msg.params.threadId)
         ?? { id: msg.params.threadId, status: { type: 'idle' }, turns: [] } } });
