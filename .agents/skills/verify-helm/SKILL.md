@@ -54,6 +54,8 @@ agents never share one. `--name <name>` picks another.
   Decline), for approval cards.
 - **fake-pics** takes pictures (`upload` them), for how a sent picture
   looks.
+- **fake-slow** works for 2 minutes before answering, for anything that
+  shows a chat while it is working.
 - `up --real` adds the owner's real logins. Use one only when the change is
   about that CLI itself (its driver, its models, its output). A real chat
   costs money and lands in that account's history: keep it in a quick chat,

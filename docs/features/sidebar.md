@@ -3,6 +3,17 @@
 On a phone the sidebar is the Home screen. To get there, press `click Back`
 until `text` starts with "helm / Search anything".
 
+## Folded sidebar (computer only)
+- **Sees:** the sidebar icon at the top folds it to a thin strip: a **+**
+  for a new chat, then one tile per chat that needs you (amber dot) or is
+  working (blue dot), shown as its agent's mark. Hover names the chat and
+  machine. The open chat is outlined. Clicking a tile opens that chat.
+- **Prove (driven 2026-10-17):** `open --desktop`, start a **fake-ask**
+  chat and a **fake-slow** chat, `click "collapse sidebar"`, then
+  `eval '[...document.querySelectorAll(".side-rail button")].map(b=>b.ariaLabel)'`.
+- **Proof:** "…, needs you" and "…, working" tiles; clicking the amber one
+  shows TOOL APPROVAL.
+
 ## Home shelves
 - **Sees:** top to bottom: "Search anything", "New chat", "Helm brain",
   then shelves: **Needs you**, **Snoozed**, **Working**, **Settled** (chats

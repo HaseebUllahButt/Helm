@@ -1598,6 +1598,31 @@ function Shell({ client, conn, onSignOut }: {
           </span>
         </div>
 
+        {/* Folded, the sidebar keeps what is live: a new chat, then each
+            chat that needs you or is working, as its agent's mark. */}
+        {wide && sidebarCollapsed && (
+          <nav className="side-rail" aria-label="Active chats">
+            <button
+              type="button" className="iconbtn rail-new" onClick={() => setNewChat({})}
+              disabled={!envs.some((e) => e.online)} aria-label="New chat" title="New chat (Ctrl+N)"
+            ><Icon name="plus" size={17} /></button>
+            {[...blocked.map((x) => ({ ...x, need: true })), ...runningNow.map((x) => ({ ...x, need: false }))].map(({ env: e, s, need }) => {
+              const open = isOpen({ env: e, s });
+              const word = need ? 'needs you' : 'working';
+              return (
+                <button
+                  key={`${e.id}:${s.id}`} type="button" className={`rail-chat ${need ? 'rail-need' : 'rail-working'}${open ? ' active' : ''}`}
+                  aria-current={open ? 'page' : undefined} aria-label={`${s.title}, ${e.name}, ${word}`} title={`${s.title}\n${e.name} · ${word}`}
+                  onClick={() => openSession(e.id, s, need && s.status !== 'blocked' && !s.recovery && !!(s.team?.blocked || s.team?.failed))}
+                >
+                  <EngineMark engine={engineOf(s.engine).cls} />
+                  <i className="rail-dot" aria-hidden="true" />
+                </button>
+              );
+            })}
+          </nav>
+        )}
+
         <div className="scroll">
           <div className="side-pad">
             {!showMain && sends.notices.slice(-1).map(job => <SendNotice key={job.id} job={job}
