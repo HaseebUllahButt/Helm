@@ -112,9 +112,9 @@ export function Terminal({ client, env, sessionId }: {
       convertEol: true,
       scrollback: 5000,
       theme: {
-        background: '#0d0f12', foreground: '#e6e8eb', cursor: '#b4cbff', cursorAccent: '#0d0f12',
-        selectionBackground: '#3b4b6b',
-        black: '#1b1f25', red: '#f87171', green: '#6ee7b7', yellow: '#fbbf24',
+        background: '#0a0a0a', foreground: '#e8e8e8', cursor: '#b4cbff', cursorAccent: '#0a0a0a',
+        selectionBackground: '#3d3d3d',
+        black: '#1e1e1e', red: '#f87171', green: '#6ee7b7', yellow: '#fbbf24',
         blue: '#7aa7ff', magenta: '#c084fc', cyan: '#67e8f9', white: '#e6eaef',
         brightBlack: '#6b7280', brightRed: '#fca5a5', brightGreen: '#a7f3d0', brightYellow: '#fde68a',
         brightBlue: '#a5c4ff', brightMagenta: '#d8b4fe', brightCyan: '#a5f3fc', brightWhite: '#ffffff',

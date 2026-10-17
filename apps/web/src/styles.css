@@ -48,30 +48,30 @@
   /* Surfaces. Hull is the page, Deck a panel (a list, the desktop sidebar),
      Plate anything that floats (composer, menus, sheets, dialogs). Each is a
      step you can see on a phone in daylight; the old ladder was 1-3% apart
-     and read as one black. Near black with a faint warm violet in it: the
-     old slate read as blue. */
-  --bg:        #0b0b0e;
-  --card:      #131317;
-  --sidebar:   #131317;
-  --raised:    #1b1b21;
-  --code-bg:   #070709;
-  /* Fills and lines carry the same faint violet rather than white. */
-  --muted:     rgb(228 226 240 / 4%);
-  --accent:    rgb(228 226 240 / 7%);
-  --hover:     rgb(228 226 240 / 8%);
+     and read as one black. Plain neutral greys with no hue at all: a slate
+     and then a faint violet both still read as blue on a dark screen. */
+  --bg:        #0a0a0a;
+  --card:      #131313;
+  --sidebar:   #131313;
+  --raised:    #1c1c1c;
+  --code-bg:   #060606;
+  /* Fills and lines are plain white at low strength. */
+  --muted:     rgb(235 235 235 / 4%);
+  --accent:    rgb(235 235 235 / 7%);
+  --hover:     rgb(235 235 235 / 8%);
   --select:    rgb(154 134 255 / 15%);
-  --line:      rgb(228 226 240 / 9%);
-  --line-2:    rgb(228 226 240 / 15%);
-  --input:     rgb(228 226 240 / 14%);
+  --line:      rgb(235 235 235 / 9%);
+  --line-2:    rgb(235 235 235 / 15%);
+  --input:     rgb(235 235 235 / 14%);
 
   /* Text: four steps, and the main tool for hierarchy. Every one of them is
      at least 4.5:1 on every surface it can sit on, Plate included. */
-  --text:      #ecebf2;
-  --text-80:   rgb(236 235 242 / 86%);
-  --text-dim:  #bebcc9;
-  --mutedfg:   #9d9aab;
+  --text:      #ededed;
+  --text-80:   rgb(237 237 237 / 86%);
+  --text-dim:  #c0c0c0;
+  --mutedfg:   #9e9e9e;
   /* Glyphs only - never words. 5:1 on Plate. */
-  --icon:      #8c899a;
+  --icon:      #8c8c8c;
 
   /* The hub. The fill is for the few filled controls (a switch that is on,
      a checkbox); the quiet one is for text, focus rings and the mark on a
@@ -139,11 +139,11 @@
   --ease: cubic-bezier(0.2, 0, 0, 1);
   /* Colours that used to be written out where they were used. Named so a
      second theme can answer them. */
-  --scroll:    rgb(228 226 240 / 10%);
-  --scroll-h:  rgb(228 226 240 / 16%);
-  --dot-off:   rgb(228 226 240 / 22%);
+  --scroll:    rgb(235 235 235 / 10%);
+  --scroll-h:  rgb(235 235 235 / 16%);
+  --dot-off:   rgb(235 235 235 / 22%);
   --pill-bg:   var(--text);
-  --pill-fg:   #0b0b0e;
+  --pill-fg:   #0a0a0a;
   --toast-bg:  var(--raised);
   --shadow:    0 1px 0 rgb(255 255 255 / 4%) inset, 0 18px 48px -18px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 25%);
   --need-bg:   color-mix(in srgb, var(--amber) 7%, var(--raised));
@@ -1048,11 +1048,11 @@ pre.snippet {
    coloured for a dark background, light theme or not. */
 .xterm-host {
   flex: 1; min-height: 0; overflow: hidden;
-  background: #0d0f12; border: 1px solid color-mix(in srgb, var(--line) 70%, #000);
+  background: #0a0a0a; border: 1px solid color-mix(in srgb, var(--line) 70%, #000);
   border-radius: 12px;
 }
 .xterm-host .xterm { height: 100%; padding: 10px 6px 6px 12px; }
-.xterm-host .xterm-viewport { background: #0d0f12 !important; }
+.xterm-host .xterm-viewport { background: #0a0a0a !important; }
 .xterm-viewport { -webkit-overflow-scrolling: touch; }
 /* The keys a phone keyboard does not have, as T3 Code has them: one row
    that scrolls sideways, shown only while typing on a touch screen. */
