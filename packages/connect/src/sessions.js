@@ -3,7 +3,7 @@ import { reportedMode } from './native-settings.js';
 import { piChatArgs, BASH_GUARD_MODES } from './pi-settings.js';
 import { nativeAccount } from './native-account.js';
 import { nativeCommands, nativeControlCommand, nativeSettingCommand } from './native-controls.js';
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, readdirSync, readlinkSync, rmSync, lstatSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, rmSync, lstatSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
@@ -110,7 +110,6 @@ const TITLE_RANK = { auto: 1, agent: 2, user: 3 };
 
 /** A title cut to fit, with the cut said out loud. */
 const clip = (text, max) => (text.length > max ? text.slice(0, max - 1) + '…' : text);
-/** Run async jobs at most `n` at a time: `slot(() => work())` returns the job's promise. */
 /**
  * What one turn's tokens cost at list price, or null when the model is not
  * in the table. Codex counts cached tokens inside `input`; Claude does not.
@@ -123,6 +122,7 @@ export function priceTurn(engine, model, usage) {
   return priced && priced.total > 0 ? Math.round(priced.total * 1e6) / 1e6 : null;
 }
 
+/** Run async jobs at most `n` at a time: `slot(() => work())` returns the job's promise. */
 const limiter = (n) => {
   let running = 0;
   const waiting = [];
@@ -167,15 +167,15 @@ const EXTERNAL = /^(pane:|found:)/;
 /** A look at a chat Helm did not start is forgotten after this long. */
 const SEEN_KEEP_MS = 30 * 86_400_000;
 
+/** How many prompts wait, and what the newest one is about. */
+const pendingSummary = (pending) => ({ pending: pending.length,
+  ask: pending.length ? { ...askPreview(pending[pending.length - 1]), requestId: pending[pending.length - 1].requestId } : null });
+
 /**
  * What a session looks like on the wire: everything but helm's own notes.
  * Both ways out - `list()` and every `session` event - go through it, so a
  * note kept for naming a thread never rides along to every paired device.
  */
-/** How many prompts wait, and what the newest one is about. */
-const pendingSummary = (pending) => ({ pending: pending.length,
-  ask: pending.length ? { ...askPreview(pending[pending.length - 1]), requestId: pending[pending.length - 1].requestId } : null });
-
 export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, dismissedNativeFailures, nativeSent, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, lastLimits, rewindProcId, rewindFailure, ...s }) => ({
   ...s, rewindSupported: !!DRIVERS[s.driver]?.canRewind && !s.external && !nativeSocket && !s.nativeCli && !s.shared && !rewindFailure,
   ...(typeof s.title === 'string' && /\[(?:Image|Pasted text) #/.test(s.title) ? { title: bareTitle(s.title) || s.title } : {}),
@@ -220,16 +220,6 @@ const agentName = (profileId) =>
   (profileId.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^[^a-z]+/, 'a') +
     '-' + randomBytes(2).toString('hex')).slice(0, 32);
 
-/**
- * helm's view of sessions.
- *
- * Two kinds live here. Agent sessions are driven headless (`drivers/`):
- * helm owns the process, and what the agent does arrives as a stream of
- * events kept in `EventLog`. Terminal sessions, and agents someone started
- * at the keyboard, are herdr panes: herdr owns those processes and this
- * class only maps a helm session to the workspace/pane behind it, so that a
- * daemon restart reconnects to work that never stopped running.
- */
 /**
  * What a client may attach to one message.
  *
@@ -369,6 +359,16 @@ export function transcriptEvents(messages, { open = false } = {}) {
   return events;
 }
 
+/**
+ * helm's view of sessions.
+ *
+ * Two kinds live here. Agent sessions are driven headless (`drivers/`):
+ * helm owns the process, and what the agent does arrives as a stream of
+ * events kept in `EventLog`. Terminal sessions, and agents someone started
+ * at the keyboard, are herdr panes: herdr owns those processes and this
+ * class only maps a helm session to the workspace/pane behind it, so that a
+ * daemon restart reconnects to work that never stopped running.
+ */
 export class Sessions extends EventEmitter {
   // Session updates can arrive after archive from provider and recovery tasks.
   // Apply the same helper visibility rule as list() to every published update.
@@ -582,12 +582,6 @@ export class Sessions extends EventEmitter {
   /** Footer reads waiting for a native Claude to finish drawing its first screen. */
   #modeReads = new Set();
 
-  /**
-   * What a terminal Claude's hooks say it is doing (claude-hooks.js). The
-   * transcript is still where the conversation is read from; hooks add the
-   * three things it cannot say - which file it is, that Claude is waiting on
-   * a person, and when it is done.
-   */
   /** How full a conversation is: kept on its record, sent to clients as a session update. */
   #setContext(s, used, window, model, full, compacted = false) {
     if (!(window > 0)) return false;
@@ -609,6 +603,12 @@ export class Sessions extends EventEmitter {
     return true;
   }
 
+  /**
+   * What a terminal Claude's hooks say it is doing (claude-hooks.js). The
+   * transcript is still where the conversation is read from; hooks add the
+   * three things it cannot say - which file it is, that Claude is waiting on
+   * a person, and when it is done.
+   */
   #onHook(native, event, reply) {
     // The first hook can beat the host's "a terminal opened" notice.
     if (!this.#index.has(native)) {
@@ -3015,15 +3015,6 @@ export class Sessions extends EventEmitter {
     this.#reapers.set(s.id, t);
   }
 
-  /**
-   * Events after `since`, plus what is still waiting on a person.
-   *
-   * Capped per call: an old chat holds up to 2000 events and a single reply
-   * that large is megabytes - enough to exceed the WebRTC data-channel limit
-   * even fragmented (and slow over the relay too). Callers page with
-   * `since` until `hasMore` is false; each page's last `seq` is the next
-   * `since`.
-   */
 /**
    * Pick up a conversation this machine's CLI recorded on its own.
    *
@@ -3579,6 +3570,15 @@ export class Sessions extends EventEmitter {
     return null;
   }
 
+  /**
+   * Events after `since`, plus what is still waiting on a person.
+   *
+   * Capped per call: an old chat holds up to 2000 events and a single reply
+   * that large is megabytes - enough to exceed the WebRTC data-channel limit
+   * even fragmented (and slow over the relay too). Callers page with
+   * `since` until `hasMore` is false; each page's last `seq` is the next
+   * `since`.
+   */
   /**
    * The conversation as a client should see it.
    *
@@ -4826,7 +4826,6 @@ export class Sessions extends EventEmitter {
     })();
   }
 
-  /** Remember a message sent as a new turn until its echo names it. */
   /**
    * What a queued message says to the CLI: the owner's words, any files they
    * pointed at, and - the first time this CLI conversation hears from Helm -
@@ -4849,6 +4848,7 @@ export class Sessions extends EventEmitter {
     return `<helm_instructions>\n${note}\n</helm_instructions>\n\n<user_request>\n${request}\n</user_request>`;
   }
 
+  /** Remember a message sent as a new turn until its echo names it. */
   #expectEcho(s, driver, item, text) {
     const awaiting = this.#awaitingEcho.get(s.id) ?? [];
     const entry = { turnId: item.turnId, text: text.trim(), driver, checkpoint: item.checkpoint, source: item.source };
@@ -5453,7 +5453,6 @@ export class Sessions extends EventEmitter {
     return { ok: true, session };
   }
 
-  /** Hide a session from the active list without stopping or deleting it. */
   /**
    * The name the owner typed, which outranks anything helm or the agent
    * came up with and is never overwritten afterwards.
@@ -5503,6 +5502,7 @@ export class Sessions extends EventEmitter {
     return { ok: true, session: wire(s) };
   }
 
+  /** Hide a session from the active list without stopping or deleting it. */
   archive(id, archived = true) {
     this.#assertRewindUnlocked(id);
     // Nothing of helm's to write on, so the mark is the record. Archiving one
