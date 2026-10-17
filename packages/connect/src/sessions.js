@@ -23,15 +23,8 @@ import { forWire } from './events.js';
 import { optionArgs, peekModels, followNewModels } from './models.js';
 import { modelPrefs, startPrefs, subagentPrefs, saveModelPrefs, accountKey } from './settings.js';
 import { EventLog, activeTurnFromEvents, EVENT_KEEP } from './events.js';
-import { ClaudeDriver, permissionCard } from './drivers/claude.js';
-import { CodexDriver, canInspectExternalCodex, codexTurnOutcome, nativeCodexThreads, nativeCodexSocket } from './drivers/codex.js';
-import { OpencodeDriver, Opencode2Driver } from './drivers/opencode.js';
-import { DevinDriver } from './drivers/devin.js';
-import { GrokDriver } from './drivers/grok.js';
-import { CursorDriver } from './drivers/cursor.js';
-import { AgyDriver } from './drivers/agy.js';
-import { AntigravityDriver } from './drivers/antigravity.js';
-import { PiDriver, OmpDriver } from './drivers/pi.js';
+import { permissionCard } from './drivers/claude.js';
+import { canInspectExternalCodex, codexTurnOutcome, nativeCodexThreads, nativeCodexSocket } from './drivers/codex.js';
 import { devinUsageReport } from './devin-usage.js';
 import { MODES, defaultMode, modeFromAuto } from './modes.js';
 import { ModeFooter, MODE_LABELS, MODE_FROM_LABEL } from './native-mode.js';
@@ -46,14 +39,21 @@ import { priceBucket } from '@helm/usage/pricing';
 import { WORTH_SAYING } from '@helm/usage/recache';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
 import { openFiles, processArgv, processCwd } from './procinfo.js';
-import { GREETING, PLACEHOLDER, bareTitle, informative, promptTitle } from './titles.js';
-import { askPreview } from './notify.js';
+import { GREETING, PLACEHOLDER, informative, promptTitle } from './titles.js';
 import { claudeChatArgs, startHookServer } from './claude-hooks.js';
 import { gitBranch } from './git-head.js';
 import { AccountLimits } from './account-limits.js';
 import { CLAUDE_NATIVE_COMMANDS } from './commands.js';
 import { messageDelivery } from '@helm/protocol/message-delivery';
 import { validateVisual, withVisualMessages } from './visual.js';
+import { DRIVERS, pendingSummary, wire } from './session-wire.js';
+import { acceptAttachments, acceptImages, driverTakesImages, saveUploads } from './session-attachments.js';
+import { externalInput, transcriptEvents } from './session-transcript-events.js';
+import { clip, missingClaudeConversation, parentLink } from './session-text.js';
+
+export { DRIVERS, wire } from './session-wire.js';
+export { driverTakesImages, acceptAttachments, saveUploads, acceptImages } from './session-attachments.js';
+export { transcriptEvents } from './session-transcript-events.js';
 
 const INDEX_FILE = join(HELM_DIR, 'sessions.json');
 /** How a recovery note says the agent's state could not be checked. */
@@ -80,21 +80,6 @@ const logSubagents = (engine) => {
   return LOG_SUBAGENTS.get(engine);
 };
 
-/** engine id -> its headless driver class; ENGINES[id].driver names one. */
-export const DRIVERS = {
-  claude: ClaudeDriver,
-  codex: CodexDriver,
-  opencode: OpencodeDriver,
-  opencode2: Opencode2Driver,
-  devin: DevinDriver,
-  grok: GrokDriver,
-  cursor: CursorDriver,
-  agy: AgyDriver,
-  antigravity: AntigravityDriver,
-  pi: PiDriver,
-  omp: OmpDriver,
-};
-
 /**
  * A name for a session that is more than the folder it runs in.
  *
@@ -107,9 +92,6 @@ export const DRIVERS = {
  */
 const TITLE_AFTER = 2;
 const TITLE_RANK = { auto: 1, agent: 2, user: 3 };
-
-/** A title cut to fit, with the cut said out loud. */
-const clip = (text, max) => (text.length > max ? text.slice(0, max - 1) + '…' : text);
 /**
  * What one turn's tokens cost at list price, or null when the model is not
  * in the table. Codex counts cached tokens inside `input`; Claude does not.
@@ -133,30 +115,6 @@ const limiter = (n) => {
   });
 };
 
-const linkText = (value, max = 200) => typeof value === 'string' && value.length > 0
-  && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
-
-const parentLink = (value) => {
-  if (!value || typeof value !== 'object') return undefined;
-  const handoffId = linkText(value.handoffId, 80);
-  const machineId = linkText(value.machineId, 80);
-  const sessionId = linkText(value.sessionId, 80);
-  if (!handoffId || !machineId || !sessionId) return undefined;
-  return {
-    handoffId,
-    machineId,
-    sessionId,
-    sourceFolder: linkText(value.sourceFolder, 1024) || null,
-    digest: linkText(value.digest, 128) || null,
-  };
-};
-
-const missingClaudeConversation = (error, sessionId) => {
-  if (typeof error !== 'string' || !sessionId) return false;
-  const missing = /No conversation found with session ID:\s*(\S+)/i.exec(error);
-  return missing?.[1] === sessionId;
-};
-
 /**
  * Rows helm does not own: a herdr pane it did not start (`pane:`), and a past
  * session read out of a CLI's own history (`found:`). They are real work and
@@ -166,20 +124,6 @@ const missingClaudeConversation = (error, sessionId) => {
 const EXTERNAL = /^(pane:|found:)/;
 /** A look at a chat Helm did not start is forgotten after this long. */
 const SEEN_KEEP_MS = 30 * 86_400_000;
-
-/** How many prompts wait, and what the newest one is about. */
-const pendingSummary = (pending) => ({ pending: pending.length,
-  ask: pending.length ? { ...askPreview(pending[pending.length - 1]), requestId: pending[pending.length - 1].requestId } : null });
-
-/**
- * What a session looks like on the wire: everything but helm's own notes.
- * Both ways out - `list()` and every `session` event - go through it, so a
- * note kept for naming a thread never rides along to every paired device.
- */
-export const wire = ({ promptSample, unsent, transcript, externalHome, externalLock, externalPid, nativeHome, nativePid, nativeSocket, nativeAgents, dismissedNativeFailures, nativeSent, externalImported, externalSource, externalTail, externalImagesVersion, originHandoffId, delegationReply, taskReturnContext, lastLimits, rewindProcId, rewindFailure, ...s }) => ({
-  ...s, rewindSupported: !!DRIVERS[s.driver]?.canRewind && !s.external && !nativeSocket && !s.nativeCli && !s.shared && !rewindFailure,
-  ...(typeof s.title === 'string' && /\[(?:Image|Pasted text) #/.test(s.title) ? { title: bareTitle(s.title) || s.title } : {}),
-});
 
 /** A helper's newest finished turn, from its recent events; local status cards do not count. */
 const lastTaskResult = (tail) => {
@@ -220,144 +164,10 @@ const agentName = (profileId) =>
   (profileId.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^[^a-z]+/, 'a') +
     '-' + randomBytes(2).toString('hex')).slice(0, 32);
 
-/**
- * What a client may attach to one message.
- *
- * Image count is left to the CLI. The browser compresses image bytes, but that is a
- * courtesy, not a guarantee: `session.input` is reachable by anything
- * holding a device token, and whatever arrives is written to the event log
- * and piped into a CLI's stdin. So the limits are enforced here too, and an
- * attachment that breaks them fails the send loudly instead of being
- * quietly dropped on the way to the model.
- */
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const MAX_ATTACHED_BYTES = 24 * 1024 * 1024;
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
-
-const MB = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
-
-/**
- * Can this live driver be handed image bytes? One predicate, used both to
- * decide what to send and to tell the app whether to offer the clip, so the
- * two can never disagree.
- */
-export function driverTakesImages(d) {
-  if (!d || typeof d.sendWithAttachments !== 'function') return false;
-  return d.acceptsImages?.() ?? true;
-}
-
-/**
- * Split what the owner attached into pictures, which go to the model as
- * images, and every other file (a PDF, a spreadsheet, notes), which is saved
- * on the agent's machine for it to read with its own tools.
- */
-export function acceptAttachments(attachments) {
-  const list = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
-  const isImage = (a) => String(a.mime ?? '').toLowerCase().startsWith('image/');
-  const images = acceptImages(list.filter(isImage));
-  let total = images.reduce((sum, a) => sum + base64Bytes(a.data), 0);
-  const files = [];
-  for (const a of list.filter((a) => !isImage(a))) {
-    const filename = String(a.filename ?? 'file').slice(0, 120);
-    const data = String(a.data ?? '');
-    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 !== 0) throw new Error(`${filename} is not valid base64`);
-    const bytes = base64Bytes(data);
-    if (bytes > MAX_FILE_BYTES) throw new Error(`${filename} is ${MB(bytes)}; the limit is ${MB(MAX_FILE_BYTES)}`);
-    total += bytes;
-    if (total > MAX_ATTACHED_BYTES) throw new Error(`those attachments come to ${MB(total)}; the limit is ${MB(MAX_ATTACHED_BYTES)} a message`);
-    files.push({ filename, data });
-  }
-  return { images, files };
-}
-
-const base64Bytes = (data) => Math.floor(data.length * 3 / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0);
-
-/**
- * Write attached files under ~/.helm/uploads/<chat>/ and say where they are,
- * in the words the agent reads after the owner's message. Each message gets
- * its own folder, so two files with one name never overwrite each other.
- */
-export function saveUploads(sessionId, files, root = join(HELM_DIR, 'uploads')) {
-  if (!files.length) return '';
-  const dir = join(root, sessionId, randomBytes(6).toString('hex'));
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const lines = files.map(({ filename, data }) => {
-    const name = basename(filename).replace(/[\x00-\x1f/\\]/g, '_').replace(/^\.+/, '') || 'file';
-    const path = join(dir, name);
-    writeFileSync(path, Buffer.from(data, 'base64'), { mode: 0o600 });
-    return `[File: ${filename}]: ${JSON.stringify(path)}`;
-  });
-  return `The owner attached ${files.length === 1 ? 'a file' : `${files.length} files`}, saved on this machine. Read ${files.length === 1 ? 'it' : 'them'} before answering:\n${lines.join('\n')}`;
-}
-
-export function acceptImages(attachments) {
-  const list = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
-  if (!list.length) return [];
-  let total = 0;
-  const out = [];
-  for (const a of list) {
-    const mime = String(a.mime ?? '').toLowerCase().split(';')[0].trim();
-    const filename = String(a.filename ?? 'image').slice(0, 120);
-    if (!mime.startsWith('image/')) throw new Error(`${filename} is ${mime || 'of unknown type'}; only images can be attached`);
-    const data = String(a.data ?? '');
-    if (!data) throw new Error(`${filename} arrived with no image data`);
-    // Base64 is the wire form all the way to the CLIs, so it is validated
-    // rather than re-encoded - a malformed payload would otherwise surface
-    // as an opaque failure from inside the agent.
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data) || data.length % 4 !== 0) {
-      throw new Error(`${filename} is not valid base64`);
-    }
-    const bytes = Math.floor(data.length * 3 / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0);
-    if (bytes > MAX_IMAGE_BYTES) throw new Error(`${filename} is ${MB(bytes)}; the limit is ${MB(MAX_IMAGE_BYTES)}`);
-    total += bytes;
-    if (total > MAX_ATTACHED_BYTES) throw new Error(`those attachments come to ${MB(total)}; the limit is ${MB(MAX_ATTACHED_BYTES)} a message`);
-    out.push({ filename, mime, data });
-  }
-  return out;
-}
-
-/** A tool read from a CLI's own files: its one-line summary, plus what Claude said a command was for. */
-const externalInput = (tool) => (tool.name === 'Bash' && tool.description
-  ? { command: tool.input, description: tool.description } : tool.input);
-
 // The newest messages a native subagent's window shows; a long run is
 // thousands, and the end is what the owner opened it for.
 const NATIVE_MESSAGES = 600;
 const NATIVE_BYTES = 400_000;
-
-/**
- * Messages read from a CLI's own files as the events a chat is drawn from,
- * numbered from 1. `open` leaves the last turn running.
- */
-export function transcriptEvents(messages, { open = false } = {}) {
-  const events = [];
-  let seq = 0, turnId = null, n = 0;
-  const push = (event) => events.push({ ...event, seq: ++seq });
-  const close = () => { if (turnId) push({ type: 'turn.done', turnId, status: 'ok' }); turnId = null; };
-  for (const m of messages) {
-    const at = Date.parse(m.at ?? '') || undefined;
-    if (m.role === 'user') {
-      close();
-      turnId = `native-${++n}`;
-      push({ type: 'turn.start', turnId, text: m.text ?? '', at });
-      continue;
-    }
-    if (!turnId) { turnId = `native-${++n}`; push({ type: 'turn.start', turnId, text: '', at }); }
-    if (m.text) {
-      const id = `native-${++n}`;
-      push({ type: 'item.start', id, turnId, kind: 'text' });
-      push({ type: 'item.delta', id, turnId, text: m.text });
-      push({ type: 'item.done', id, turnId, status: 'ok' });
-    }
-    for (const tool of m.tools ?? []) {
-      const id = `native-${++n}`;
-      push({ type: 'item.start', id, turnId, kind: 'tool', name: tool.name, input: externalInput(tool) });
-      push({ type: 'item.done', id, turnId, status: 'ok' });
-    }
-  }
-  if (!open) close();
-  return events;
-}
 
 /**
  * helm's view of sessions.
