@@ -173,6 +173,10 @@ export const M = {
   SESSION_START: 'session.start',  // { cwd | quick: true, profileId, model?, effort?, mode?, speed?, title?, parent?, clone?: { repo, login? } } -> { session }  quick: no folder; runs in an empty ~/.helm/quick/<id> removed on delete. clone: the repo is cloned into cwd first; the chat is there at once with session.clone { repo, state, percent, error? }
   SESSION_CLONE_RETRY: 'session.cloneRetry', // { id } -> { ok }: clone again (or start the agent again) after session.clone failed
   SESSION_LINK:  'session.link',   // { id, child } -> { session }  durable parent/child handoff link
+  SESSION_AGENT_MESSAGES: 'session.agent-messages', // { id, before?, limit? } -> { messages, next }
+  SESSION_AGENT_ADDRESS: 'session.agent-address', // { id, callerThreadId? } -> { address }
+  SESSION_AGENT_SEND: 'session.agent-send', // { id, to?, replyTo?, text, messageId, asUser? } -> { message }
+  SESSION_AGENT_RECEIVE: 'session.agent-receive', // paired-machine delivery; { message } -> { ok }
   SESSION_DELEGATE: 'session.delegate', // { id?, cwd?, profileId, model?, mode?, effort?, task, worktree? } -> { session }; cwd beats the parent's folder; worktree: own checkout on a helm/ branch
   SESSION_DELEGATION_RESULT: 'session.delegation-result', // { id, consume?, parentId?, callerThreadId? } -> { session, status, complete, output, pending }
   SESSION_DELEGATION_MESSAGE: 'session.delegation-message', // { parentId, id, data } -> { ok }

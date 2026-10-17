@@ -2718,7 +2718,7 @@ export class Sessions extends EventEmitter {
       if (index >= 0) {
         const [entry] = awaiting.splice(index, 1);
         if (!awaiting.length) this.#awaitingEcho.delete(s.id);
-        forwarded = { ...forwarded, inputId: entry.turnId, ...(entry.checkpoint ? { checkpoint: entry.checkpoint } : {}) };
+        forwarded = { ...forwarded, inputId: entry.turnId, ...(entry.source === 'agent' ? { source: 'agent' } : {}), ...(entry.checkpoint ? { checkpoint: entry.checkpoint } : {}) };
       }
       // Handed over too late for the turn it was typed into, the CLI runs
       // it as the next one instead; the echo is the client's cue.
@@ -2881,6 +2881,10 @@ export class Sessions extends EventEmitter {
     // turn.done, a stale or empty turn id, or a restart reading the log back.
     const tail = this.events.tail(child.id, 2000);
     const turnId = event.turnId || tail.findLast((e) => e.type === 'turn.start' && !String(e.turnId).startsWith('local-'))?.turnId || null;
+    // Direct agent exchanges have their own reply address. A second automatic
+    // parent report would spend another turn for the same exchange.
+    const start = tail.findLast(e => e.type === 'turn.start' && e.turnId === turnId);
+    if (start?.source === 'agent') return;
     const told = child.delegation.notifiedTurns ?? [];
     const key = `${child.id}:${turnId}`;
     if (turnId && (told.includes(turnId) || this.#notifying.has(key))) return;
@@ -4557,14 +4561,14 @@ export class Sessions extends EventEmitter {
       let busy = !sideband && (s.queuePaused || this.#sending.has(s.id) || this.#settling.has(s.id) || s.status === 'working' || s.status === 'blocked' || this.#preparing(s));
       const commandText = compact != null ? `/compact${compact ? ` ${compact}` : ''}` : clean;
       if (s.stoppedAt || stopGeneration !== (s.stopGeneration ?? 0) || !this.#index.has(id)) throw new Error('message cancelled because the thread was stopped');
-      const item = { turnId, text: commandText, images, compact, delivery, references, referenceContext, stopGeneration, introduce };
+      const item = { turnId, text: commandText, images, compact, delivery, references, referenceContext, stopGeneration, introduce, source };
       // This event is both the optimistic chat bubble and the durable queue
       // ticket. Persist it before starting/resuming a driver, so a daemon
       // restart can recover a message accepted during that await.
       this.#assertRewindUnlocked(id);
       const event = this.events.append(id, {
         type: 'turn.start', turnId, text: commandText, queued: busy,
-        delivery, references, referenceContext,
+        delivery, references, referenceContext, ...(source === 'agent' ? { source } : {}),
         ...(introduce ? { introduce: true } : {}),
         ...(sideband ? { local: true } : {}),
         ...(compact != null ? { compact } : {}),
@@ -4841,7 +4845,7 @@ export class Sessions extends EventEmitter {
 
   #expectEcho(s, driver, item, text) {
     const awaiting = this.#awaitingEcho.get(s.id) ?? [];
-    const entry = { turnId: item.turnId, text: text.trim(), driver, checkpoint: item.checkpoint };
+    const entry = { turnId: item.turnId, text: text.trim(), driver, checkpoint: item.checkpoint, source: item.source };
     // A CLI that never echoes must not grow this without end.
     if (awaiting.push(entry) > 16) awaiting.shift();
     this.#awaitingEcho.set(s.id, awaiting);
@@ -5345,6 +5349,7 @@ export class Sessions extends EventEmitter {
       this.#dropQuickDir(s);
       this.#save();
       this.events.remove(id);
+      rmSync(join(HELM_DIR, 'agent-messages', id), { recursive: true, force: true });
       rmSync(join(HELM_DIR, 'uploads', id), { recursive: true, force: true });
       this.#updateTeam(s);
       this.emit('session', { ...s, status: 'exited', alive: false });
@@ -5638,6 +5643,7 @@ export class Sessions extends EventEmitter {
           continue;
         }
         revive.push({
+          source: e.source,
           turnId: e.turnId,
           text,
           images,

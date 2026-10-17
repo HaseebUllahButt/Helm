@@ -1131,3 +1131,20 @@ test('an orphaned background-command completion cannot become a failed native he
   assert.equal(events.find(e => e.type === 'item.update' && e.id === 'old-tool').agent.type, 'local_bash');
   assert.equal(events.find(e => e.type === 'item.done' && e.id === 'old-tool').status, 'error');
 });
+
+test('a direct agent exchange does not also wake the parent with a duplicate result', async t => {
+  const { sessions, drivers } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
+  // Finish the original task normally, then the parent reads that result.
+  drivers.get(child.id).finish();
+  await new Promise(resolve => setImmediate(resolve));
+  const before = sessions.history(parent.id).events.filter(e => e.type === 'turn.start').length;
+  const d = drivers.get(child.id);
+  d.engineSessionId = randomUUID(); // this fake uses the session ID as its next turn ID
+  await sessions.input(child.id, 'A peer asks whether tests passed', { source: 'agent', delivery: 'queue' });
+  d.finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sessions.history(parent.id).events.filter(e => e.type === 'turn.start').length, before);
+  assert.ok(sessions.history(child.id).events.some(e => e.type === 'turn.start' && e.source === 'agent' && e.inputId));
+});

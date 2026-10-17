@@ -63,6 +63,7 @@ import { ExecutionJobs } from './execution.js';
 import { ensureTcpRecovery } from './network-recovery.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { createBrowserRoutes } from './browser-routes.js';
+import { AgentMessages } from './agent-messages.js';
 import { InputDelivery } from './input-delivery.js';
 
 const RECONNECT_MIN = 250;
@@ -431,6 +432,9 @@ export class Daemon {
 
     this.sessions = new Sessions(this.runtime, { log: (m) => console.error(`[helm] ${m}`) });
     this.inputDelivery = new InputDelivery(this.sessions, { log: m => console.error(`[helm] ${m}`) });
+    this.agentMessages = new AgentMessages({ sessions: this.sessions, delivery: this.inputDelivery, self: this.id,
+      rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
+      emit: payload => this.#emit('agent.message', payload) });
     if (brainHost((loadNetwork() ?? this.net).machines)?.id !== this.id) this.sessions.retireBrains();
     this.github = createGithubMonitor({
       context: gitq.githubContext, watchFile: join(HELM_DIR, 'github-watches.json'),
@@ -1229,6 +1233,7 @@ export class Daemon {
       // machine accepts one copied ahead of its handoff (bulk-transfer.js).
       home: homedir(),
       precopiedHandoff: true,
+      agentMessages: true,
       sendV2: true,
       // Answers requests from other machines over a direct channel, checking
       // each one as a hub would (direct-mesh.js). Older machines leave this
@@ -1898,6 +1903,15 @@ export class Daemon {
       }
 
       case M.SESSION_LIST:    return { sessions: await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true }) };
+      case 'session.agent-address': return { address: this.agentMessages.address(p.id, p.callerThreadId) };
+      case 'session.agent-messages': return this.agentMessages.list(p.id, p);
+      case 'session.agent-send':
+        await this.sessionRecovery;
+        return this.agentMessages.send(p);
+      case 'session.agent-receive':
+        await this.sessionRecovery;
+        if (!(loadNetwork() ?? this.net).machines?.[caller]) throw new Error('Agent messages must come from a paired machine.');
+        return this.agentMessages.receive(p.message, caller);
       case M.SESSION_DELEGATE: return this.sessions.delegate(p);
       case M.SESSION_DELEGATION_RESULT: return this.sessions.delegationResult(p.id, p);
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);

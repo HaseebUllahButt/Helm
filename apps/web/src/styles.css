@@ -3539,3 +3539,11 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .pull-requests fieldset { border: 1px solid var(--line); border-radius: 6px; max-height: 300px; overflow: auto; }
 .pull-requests .team-actions { flex-wrap: wrap; }
 .pipeline-watch input[type=number] { width: 60px; }
+
+/* Agent exchanges stay inside the chat's existing Agents panel. */
+.agent-exchanges-body { display: grid; gap: 12px; min-width: 0; padding-top: 12px; }
+.agent-exchanges-body .note { margin: 0; }
+.agent-exchange-list { display: grid; gap: 12px; list-style: none; padding: 0; margin: 0; }
+.agent-exchange-list > li { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.agent-exchange-list small { display: block; color: var(--text-dim); margin: 5px 0 10px; }
+.agent-exchange-list details { margin: 8px 0; }

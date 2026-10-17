@@ -90,6 +90,10 @@ export function delegationNote() {
  *
  * Kept to a few lines: it rides along in every session.
  */
+export function agentMessageNote() {
+  return '[Helm agent messages: Send a short question or useful detail to another agent with helm say <chat-id> -- "text". It names you as the sender. Reply to a received message with helm reply <message-id> -- "text"; read exchanges with helm messages --json. Each agent keeps its own conversation. Messages wait for the next turn, without interrupting work. Reply only when useful; do not trade acknowledgements.]';
+}
+
 export function helmBrief(net) {
   const machines = Object.values(net?.machines ?? {});
   const self = net?.machines?.[net?.self];
@@ -97,14 +101,14 @@ export function helmBrief(net) {
   const others = machines
     .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
-  if (!self?.name || !others.length) return `${delegationNote()}\n${visualNote()}\n${browserNote()}`;
+  if (!self?.name || !others.length) return `${delegationNote()}\n${agentMessageNote()}\n${visualNote()}\n${browserNote()}`;
   return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}.
 - Run something on another machine: helm exec <machine> --cwd <absolute-path> -- <command> [args]. This uses Helm's managed connection; prefer it to SSH. For pipelines use -- sh -lc '<script>'. Pass environment explicitly with --env NAME=value. If it says the command may have started, never rerun it: read it with helm exec-status <machine> <command-id> --wait, or stop it with helm exec-cancel <machine> <command-id>.
 - Copy files there: helm copy <machine> <file-or-folder> [--target-folder <path>] (default: the same place; ~ is that machine's home).
 - Which machines are on and what is running where: helm digest. Read a session: helm thread <id>. Message it: helm say <id> <text>.
 - Start an agent on another machine: helm spawn <machine> <folder> <account> <task>.
 - Show the owner something running on a port (a dev server, a page, a preview, a UI change) from anywhere, phone included: helm share <port> [--name <name>] [--password] prints a public https link. Call these spins. A spin is short-lived: it ends by itself after 3 hours, so do not plan on it lasting longer. Add --keep only when the owner asks for a link that stays. Add --private when only the owner's own signed-in devices should open it. helm forward <machine> <port> opens a port another machine shared on this one's localhost. helm share list shows the links; helm share stop <name> ends one when it is no longer needed.]
-${delegationNote()}\n${visualNote()}\n${browserNote()}`;
+${delegationNote()}\n${agentMessageNote()}\n${visualNote()}\n${browserNote()}`;
 }
 
 export function visualNote() {

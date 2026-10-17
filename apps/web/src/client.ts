@@ -34,6 +34,8 @@ export interface Environment {
     terminals?: 'pty' | 'panes';
     /** This machine holds a Groq key, so it can transcribe what you say. */
     voice?: boolean;
+    /** Named agent messages and reply history. */
+    agentMessages?: boolean;
     runtime?: { version: string };
     /** Which helm this machine runs; null where it is not a git checkout. */
     version?: { commit: string; full?: string; time?: number; dirty?: boolean; dir?: string; branch: string; subject: string; updatable: boolean } | null;

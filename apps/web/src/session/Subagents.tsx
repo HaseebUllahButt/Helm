@@ -7,6 +7,8 @@ import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
 import { Markdown } from '../Markdown';
 import { useDialog } from '../useDialog';
+import { newMessageId } from '@helm/protocol/reliable-input';
+import { AgentMessages } from './AgentMessages';
 import { PermissionSheet } from './PermissionSheet';
 import type { Permission, Decision } from './types';
 
@@ -57,6 +59,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const messageAttempt = useRef<{ id: string; target: string; text: string } | null>(null);
   const [acting, setActing] = useState('');
   const [notice, setNotice] = useState('');
   const [revision, setRevision] = useState(0);
@@ -268,9 +271,19 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
     if (!message.trim() || sending) return;
     setSending(true); setError(null); setNotice('');
     try {
-      await client.rpc(env.id, 'session.delegation-message', { parentId: parent.id, id: selected, data: message.trim() });
+      if (!env.info?.agentMessages) {
+        await client.rpc(env.id, 'session.delegation-message', { parentId: parent.id, id: selected, data: message.trim() });
+      } else {
+        const text = message.trim();
+        if (messageAttempt.current?.target !== selected || messageAttempt.current?.text !== text) {
+          messageAttempt.current = { id: newMessageId(), target: selected, text };
+        }
+        await client.rpc(env.id, 'session.agent-send', { id: parent.id, to: { env: env.id, id: selected },
+          text, messageId: messageAttempt.current.id, asUser: true }, 70_000);
+        messageAttempt.current = null;
+      }
       setMessage('');
-      setNotice(result?.complete ? 'Message sent.' : 'Message sent. It reaches the agent mid-task or on its next turn.');
+      setNotice(result?.complete ? 'Message sent.' : 'Message sent. It reaches the agent on its next turn.');
       bump();
     } catch (failure: any) { fail(selected)(failure); }
     finally { setSending(false); }
@@ -451,6 +464,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
           </div>
         </form>
           : <button type="button" className="delegation-new" onClick={() => setComposing(true)}><Icon name="plus" size={16} />New task</button>}
+        {!nativeOnly && env.info?.agentMessages === true && <AgentMessages client={client} envId={env.id} parent={parent} children={children} />}
         <div className="delegation-branches" aria-label="Delegated tasks">
           {!listed ? <p className="note" role="status">Loading tasks…</p>
             : !children.length && !natives.length && !composing && <p className="note">No tasks yet.</p>}

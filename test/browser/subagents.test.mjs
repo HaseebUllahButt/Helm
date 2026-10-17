@@ -48,7 +48,7 @@ before(async () => {
     window.sendSessionUpdate = (env, session) => listeners.forEach(fn=>fn(env,'session.update',{session}));
     window.unrelatedChild = unrelated;
     window.child = child;
-    window.showSubagents = () => root.render(<Subagents client={client} env={{id:'local',name:'Laptop',online:true,info:{}}} parent={parent}
+    window.showSubagents = () => root.render(<Subagents client={client} env={{id:'local',name:'Laptop',online:true,info:{agentMessages:true}}} parent={parent}
       onClose={()=>root.render(null)} onOpen={(s)=>{window.opened=s.id}} />);
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   browser = await chromium.launch({ headless: true, ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
@@ -364,12 +364,12 @@ test('launch options stay folded until asked for, then create a linked child and
   await page.getByRole('button',{name:'Deny',exact:true}).click();
   assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.answer'&&c.params.id==='child'&&c.params.decision.option==='deny')));
   await page.getByLabel('Message subagent').fill('Keep the security checks intact');
-  const messagesBeforeComposition = await page.evaluate(() => window.calls.filter((call) => call.method === 'session.delegation-message').length);
+  const messagesBeforeComposition = await page.evaluate(() => window.calls.filter((call) => call.method === 'session.agent-send').length);
   await page.getByLabel('Message subagent').dispatchEvent('keydown', {key:'Enter',metaKey:true,isComposing:true});
-  assert.equal(await page.evaluate(() => window.calls.filter((call) => call.method === 'session.delegation-message').length), messagesBeforeComposition);
+  assert.equal(await page.evaluate(() => window.calls.filter((call) => call.method === 'session.agent-send').length), messagesBeforeComposition);
   await page.getByRole('button',{name:'Send message',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Message sent.'}).waitFor();
-  assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.delegation-message'&&c.params.parentId==='parent'&&c.params.id==='child'&&c.params.data==='Keep the security checks intact')));
+  assert.ok(await page.evaluate(()=>window.calls.some((c)=>c.method==='session.agent-send'&&c.params.id==='parent'&&c.params.to.id==='child'&&c.params.asUser===true&&c.params.text==='Keep the security checks intact')));
   assert.equal(await page.evaluate(()=>window.opened),undefined);
   await page.getByRole('button',{name:'Open conversation',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.opened),'child');
@@ -635,7 +635,7 @@ test('a terminal thread lists its CLI\'s subagents without a task form', async (
         return { ok:true };
       },
     };
-    createRoot(document.getElementById('root')).render(<Subagents nativeOnly client={client} env={{id:'local',name:'Laptop',online:true,info:{}}}
+    createRoot(document.getElementById('root')).render(<Subagents nativeOnly client={client} env={{id:'local',name:'Laptop',online:true,info:{agentMessages:true}}}
       parent={parent} onClose={()=>{ window.closed = true; }} />);
   `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true, write:false, format:'iife', jsx:'automatic' });
   const view = await browser.newPage({ viewport:{width:390,height:844} });

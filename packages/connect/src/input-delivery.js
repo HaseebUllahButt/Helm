@@ -33,6 +33,10 @@ export class InputDelivery {
     if (receipt.error) throw failure(receipt.error.message, receipt.error.code);
     return receipt.result;
   }
+  receipt(messageId, caller = 'local') {
+    const key = hash([caller, messageId]);
+    return this.#read(this.#paths(key).receipt);
+  }
   async deliver(params, caller = 'local') {
     if (this.#stopped) throw failure('Helm is restarting', 'delivery_pending');
     const { id, messageId, data, attachments = [], references = [], delivery = 'auto' } = params;
@@ -40,7 +44,8 @@ export class InputDelivery {
         || params.raw || !Array.isArray(attachments) || !Array.isArray(references)) {
       throw failure('invalid reliable message', 'invalid_argument');
     }
-    const request = { id, data, attachments, references, delivery };
+    const source = params.source === 'agent' ? 'agent' : 'user';
+    const request = { id, data, attachments, references, delivery, ...(source === 'agent' ? { source } : {}) };
     const digest = hash(request);
     // Bind an ID to both its sender and its original target/content.
     const key = hash([caller, messageId]);

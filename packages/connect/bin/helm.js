@@ -101,7 +101,9 @@ const usage = () => {
   helm brain                       open the network's brain on the VM
   helm digest [--json]              every machine, folder and running session
   helm thread <id> [-n 40]          the recent conversation of one session
-  helm say <id> <text...>           send a prompt into an existing session
+  helm say <id> <text...>           send a named message from this agent (a prompt outside a chat)
+  helm reply <message-id> <text...> reply to an agent message
+  helm messages [chat-id] [--json]  read exchanges in this chat and its Agents
   helm render <file.html> [--title <text>] [--height <px>] [--session <id>]
                                     save an interactive visual inside this chat
   helm preview <file.html> [--output <file.png>] [--width <px>] [--appearance dark|light]
@@ -939,6 +941,10 @@ async function printThread() {
 }
 
 async function say() {
+  if (process.env.HELM_SESSION_ID) {
+    const { runMessageCommand } = await import('../src/agent-message-cli.js');
+    return runMessageCommand('say', rest, { rpc: brainRpc, self: requireNetwork().self, findSession });
+  }
   const [id, ...words] = rest.filter((x) => !x.startsWith('--'));
   const text = words.join(' ');
   if (!text) die('what should it say? `helm say <id> <text>`');
@@ -2282,6 +2288,12 @@ try {
       await printThread();
       break;
 
+    case 'messages':
+    case 'reply': {
+      const { runMessageCommand } = await import('../src/agent-message-cli.js');
+      await runMessageCommand(cmd, rest, { rpc: brainRpc, self: requireNetwork().self, findSession });
+      break;
+    }
     case 'say':
       await say();
       break;

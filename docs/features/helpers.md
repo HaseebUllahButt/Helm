@@ -57,3 +57,35 @@ shows as a card inside its parent, never as its own row in Working.
   "Dismiss failure".
 - **Prove:** steps not yet driven.
 - **Tests:** `test/browser/orchestration`, `child-requests`.
+
+## Messages between agents
+- **Sees:** chat header **Agents** → **Messages between agents**. Each exchange
+  names the sender and recipient, shows delivery state, and links a reply to
+  its question. **Earlier messages** loads older exchanges. Helpers remain
+  inside Agents; no additional chat is created in Running.
+- **CLI:** inside a Helm chat, `helm say <chat-id> -- "question"` names the
+  sending agent. The recipient gets a reply address:
+  `helm reply <message-id> -- "answer"`. `helm messages --json` reads that
+  chat's exchanges and its immediate helpers' exchanges. Outside a chat,
+  `helm say` retains its ordinary owner-prompt behaviour.
+- **Delivery:** only the supplied message travels, not transcript history or
+  provider cache. It waits for the next turn; it never interrupts the current
+  one. A direct agent exchange does not also wake the parent with a result
+  report. Replies are explicit, not automatic acknowledgement loops.
+- **Retries:** reuse `--message-id <id>` with the same recipient and text
+  after an unconfirmed send. The saved receipt prevents duplicate input.
+  Delivered means accepted into the chat, not that the agent has read it.
+  Stopped or archived agents are not woken by peers. Owner follow-ups keep
+  their existing ability to resume a helper and are labelled **You**.
+- **Scope:** Helm-managed agent chats on paired machines. Native-only and
+  externally monitored CLI conversations do not support this messaging path.
+  Older daemons retain their existing owner-message UI until updated.
+- **Prove:** in the private verify-helm copy, create a fake parent and two fake
+  helpers. Run `helm say` as the first helper and `helm reply` as the second,
+  with the private HELM_DIR and each helper's HELM_SESSION_ID. Open the parent's
+  Agents panel on phone and desktop. Both messages must appear once, with the
+  right names and reply link; the parent must not get an extra result turn,
+  and the helpers must be absent from the main session list. Send an owner
+  follow-up from a helper's details and check the **You** label.
+- **Tests:** `test/agent-messages`, `test/input-delivery`, `test/delegation`,
+  `test/browser/agent-messages`, and the helper follow-up in `test/browser/subagents`.
