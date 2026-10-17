@@ -534,8 +534,8 @@ Children default to YOLO execution; `--mode` and
 `--effort` select supported settings. A read-only parent requires a read-only
 child; account defaults and explicit permission choices remain configurable.
 Plan mode is not offered: dispatch tasks directly instead of waiting for plan
-approval. Up to four children
-can run at once, with at most three levels of nesting.
+approval. Any number of children can run at once, nested as deep as the task
+needs.
 CLIs without a permission picker use their own configured permission policy.
 
 Completed children release their provider runtime after 30 seconds idle. Their
@@ -567,18 +567,8 @@ helm exec VM -- sh -lc 'uptime; free -h'
 helm exec VM --env SERVICE_NAME=example -- printenv SERVICE_NAME
 ```
 
-Heavy commands share one machine-wide slot across all sessions and Helm versions.
-Linux also waits for available memory to exceed the larger of 1 GiB or 15% of
-physical RAM. SQLite holds the permit in the command supervisor, so cancellation
-and process exit release it without a stale lease. Known Node, Vitest, Jest and
-Playwright invocations are capped at two workers; a lower explicit limit is kept.
-Node test scripts invoked through npm must set concurrency in their script;
-Helm's own test scripts set it to two, since npm appends flags after file names.
-Simple npm scripts receive the matching runner flag. Arbitrary shell/compound
-scripts require explicit worker flags; a compound npm script with file arguments
-is rejected because an earlier suite may still run unfiltered. These controls
-apply to wrapped commands; the standing instruction routes agent checks through
-the wrapper. Unwrapped commands retain their own execution behavior.
+Commands start at once: no shared slot, no wait for free memory and no cap on
+test workers. `--heavy` is still accepted from older agents and changes nothing.
 
 `helm exec` runs through Helm's authenticated machine connection, using one
 connection for output, status and cancellation. It starts no agent, terminal,
