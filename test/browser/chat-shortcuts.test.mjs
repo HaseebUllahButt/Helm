@@ -103,9 +103,8 @@ test('Ctrl+Shift+M steps favorites first, then the short list, never the long ta
 test('Ctrl+Shift+A opens and closes the agents panel; arrows and Enter open a child chat', async t => {
   const page = await open(t);
   await page.keyboard.press('Control+Shift+A');
-  const panel = page.getByRole('dialog', { name: 'Thread details' });
+  const panel = page.getByRole('dialog', { name: 'Agents' });
   await panel.waitFor();
-  await page.getByRole('tab', { name: 'Agents', selected: true }).waitFor();
   // A sheet is up: the other chat keys leave the chat alone.
   await page.keyboard.press('Control+Shift+Y');
   assert.deepEqual(await picked(page, 'session.effort'), []);

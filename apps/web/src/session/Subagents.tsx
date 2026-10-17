@@ -409,10 +409,11 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
 
   return <div className={embedded ? 'embedded-agents' : 'modal-back'} onClick={(event) => { if (!embedded && event.target === event.currentTarget && !busy) onClose(); }}>
     <div className={`${embedded ? '' : 'modal '}delegation-panel`} ref={ref} role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : true} aria-label="Subagents" tabIndex={-1}>
-      <div className="delegation-heading">
+      {/* Inside the Agents panel its own heading already names the chat. */}
+      {!embedded && <div className="delegation-heading">
         <div><h2>Subagents</h2><p>{env.name} · {parent.title}</p></div>
-        {!embedded && <button className="iconbtn" aria-label="Close subagents" disabled={busy} onClick={onClose}><Icon name="close" size={18} /></button>}
-      </div>
+        <button className="iconbtn" aria-label="Close subagents" disabled={busy} onClick={onClose}><Icon name="close" size={18} /></button>
+      </div>}
       <div className="delegation-body">
         {errorBox('')}
         {nativeOnly ? null : composing ? <form className="delegation-form" aria-label="New task" onSubmit={(event) => { event.preventDefault(); void start(); }}>

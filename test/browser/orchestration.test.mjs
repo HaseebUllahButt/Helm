@@ -40,7 +40,7 @@ before(async () => {
         onMoveQueued={(turn,direction)=>window.action=['move',turn.id,direction]}
         onSendQueued={turn=>window.action=['send',turn.id]} />;
     }
-    function Details() { const [tab,onTab]=useState('agents'); return <ThreadDetails client={client} env={env} session={session} tab={tab} onTab={onTab} git={null} reloadGit={()=>{}} onClose={()=>root.render(null)} />; }
+    function Details() { return <ThreadDetails client={client} env={env} session={session} tab='agents' git={null} reloadGit={()=>{}} onClose={()=>root.render(null)} />; }
     function ComposeImages() {
       const [draft,setDraft]=useState('Compare '); const [attachments,setAttachments]=useState([]);
       window.imageDraft=()=>draft;
@@ -156,25 +156,13 @@ test('pasted images are labelled where the cursor was and renumbered when one go
   assert.equal(await page.locator('.attach-preview').count(), 2);
 });
 
-test('thread details create, pause, run and delete a schedule on the selected machine', async (context) => {
+test('the agents panel is only agents: no Git, Schedules or Browser tabs, and it fits a phone', async (context) => {
   const page = await pageFor(context, 390);
   await page.evaluate(() => window.showDetails());
-  const dialog = page.getByRole('dialog', { name: 'Thread details' });
-  await dialog.getByRole('tab', { name: 'Schedules' }).click();
-  await dialog.getByRole('button', { name: 'New automation' }).click();
-  await dialog.getByLabel('Name', { exact: true }).fill('Morning review');
-  await dialog.getByLabel('Task', { exact: true }).fill('Review open changes');
-  await dialog.getByLabel('Every (minutes)').fill('1440');
-  await dialog.getByRole('button', { name: 'Save automation' }).click();
-  await dialog.getByRole('button', { name: 'Pause', exact: true }).click();
-  await dialog.getByRole('button', { name: 'Resume', exact: true }).waitFor();
-  await dialog.getByRole('button', { name: 'Run now' }).click();
-  await dialog.getByText('Task sent. Its result appears in the execution thread.').waitFor();
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  await capture(page, 'orchestration-schedules-phone.png');
-  assert.equal(await page.evaluate(() => window.calls.every(call => call.env === 'laptop')), true);
-  await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
-  await dialog.getByText('No automations for this thread.').waitFor();
+  const dialog = page.getByRole('dialog', { name: 'Agents' });
+  await dialog.getByRole('heading', { name: 'Agents' }).waitFor();
+  assert.equal(await dialog.getByRole('tab').count(), 0);
+  assert.equal(await dialog.getByText('Automations').count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 

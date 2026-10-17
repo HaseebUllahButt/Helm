@@ -750,13 +750,13 @@ for (const width of [1280, 390]) for (const childState of ['error', 'blocked']) 
   const card = page.locator('.sidebar .need').filter({ hasText: 'Game task' });
   await card.getByRole('button', { name: 'Snooze…' }).click();
   await card.getByRole('button', { name: '5 mins' }).waitFor();
-  assert.equal(await page.getByRole('dialog', { name: 'Thread details', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('dialog', { name: 'Agents', exact: true }).count(), 0);
   await card.getByRole('button', { name: 'cancel', exact: true }).click();
   await card.locator('.need-go').click();
-  const details = page.getByRole('dialog', { name: 'Thread details', exact: true });
-  await details.getByRole('tab', { name: 'Agents', selected: true }).waitFor();
+  const details = page.getByRole('dialog', { name: 'Agents', exact: true });
+  await details.getByRole('heading', { name: 'Agents' }).waitFor();
   await details.locator('.delegation-branch.selected').getByText('Provider request failed', { exact: true }).waitFor();
-  await details.getByRole('button', { name: 'Close thread details' }).click();
+  await details.getByRole('button', { name: 'Close agents' }).click();
   if (width < 500) await page.locator('.session-bar').getByRole('button', { name: 'Back', exact: true }).click();
   await card.locator('.need-main').click();
   await details.locator('.delegation-branch.selected').waitFor();
@@ -849,7 +849,7 @@ for (const width of [1280, 390]) test(`native child failure opens its older tran
   await page.locator('.sidebar .need-main').click();
   const native = page.locator('[data-item-id="native-helper"]');
   await native.getByText('Connection timed out during banner exchange', { exact: true }).waitFor();
-  assert.equal(await page.getByRole('dialog', { name: 'Thread details', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('dialog', { name: 'Agents', exact: true }).count(), 0);
   assert.equal(await native.locator('details').evaluate(element => element.open), true);
   assert.ok(await page.evaluate(() => window.nativeHistoryReads.some(params => params.before === 100)));
   await native.waitFor({ state: 'visible' });

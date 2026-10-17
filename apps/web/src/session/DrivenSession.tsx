@@ -702,7 +702,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
           <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
             onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         )}
-        <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents and scheduled tasks"
+        <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents"
           onClick={() => setDetails('agents')}><Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}</button>
         <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>
         {/* The brain has no folder to go back to and no siblings to compare
@@ -822,7 +822,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       </Composer>
 
       {browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
-      {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} onTab={(tab) => { if (tab !== 'browser') { setDetails(tab); return; } setDetails(null); browser.setOpen(true); }} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
+      {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
       {editingQueue && <QueueEdit turn={editingQueue} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSave={async (text, attachments) => {

@@ -60,10 +60,6 @@
 .browser-dock-loading{padding:16px}
 .iconbtn .browser-new{position:absolute;top:6px;right:6px;width:7px;height:7px;border-radius:50%;background:var(--primary-q);box-shadow:0 0 0 2px var(--bg)}
 
-/* Inside Thread details the panel shares the sheet with its heading. */
-.thread-details:has(.browser-panel){width:min(1100px,calc(100vw - 24px))}
-.details-content:has(>.browser-panel){display:flex;flex-direction:column;padding:0}
-.details-content>.browser-panel{flex:1;height:auto}
 @media(max-width:600px){.bp-nav{padding-inline:4px}}
 .bp-nav{position:relative}
 .bp-loading{position:absolute;left:0;right:0;bottom:0;height:2px;overflow:hidden;pointer-events:none}

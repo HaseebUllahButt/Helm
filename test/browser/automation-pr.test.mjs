@@ -10,7 +10,6 @@ before(async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
-    import { Schedules } from './apps/web/src/session/Schedules';
     import { PullRequests } from './apps/web/src/session/PullRequests';
     import { RecoveryCard } from './apps/web/src/session/RecoveryCard';
     import { Pipeline } from './apps/web/src/session/Pipeline';
@@ -31,7 +30,7 @@ before(async () => {
       }
       if(method==='schedule.run') return {ok:true,sessionId:'fresh'};
       if(method==='session.list') return {sessions:[{...session,id:'fresh',title:'Automation result'}]};
-      if(method==='session.auto-resume'){session.autoResumeLimited=params.on;window.showSchedules();return {session};}
+      if(method==='session.auto-resume'){session.autoResumeLimited=params.on;return {session};}
       if(method==='git.prs') return {pullRequests:[pr],more:false};
       if(method==='git.pr-detail') return {pr,account:'work',comments:[{id:1,kind:'comment',author:'reviewer',body:'Please add tests',at:new Date().toISOString()}],files:[{path:'App.tsx',additions:2,deletions:1,patch:'@@ -1 +1 @@\\n-before\\n+after'}],checks:[{id:1,name:'Unit tests',state:'success'}]};
       if(method==='git.pr-action') return {ok:true};
@@ -41,7 +40,6 @@ before(async () => {
       if(method==='git.watch'){if(params.agent!=null)window.agentEnabled=params.agent;else window.notifyEnabled=params.on;if(params.maxWakes)window.maxWakes=params.maxWakes;return {watching:window.notifyEnabled};}
       throw new Error('Unexpected UI request '+method);
     }};
-    window.showSchedules=()=>root.render(<Schedules client={client} env={env} session={{...session}} onOpen={s=>window.opened=s.id}/>);
     window.showPRs=()=>root.render(<PullRequests client={client} env={env} cwd='/project' account='work' onChanged={()=>{}}/>);
     window.showRecovery=()=>root.render(<RecoveryCard recovery={{kind:'limited',message:'Usage limit',at:1,resetAt:Date.now()+60000}} busy={false} offline={false} autoResume={session.autoResumeLimited}
       onAutoResume={on=>{window.calls.push({method:'session.auto-resume',params:{on}});session.autoResumeLimited=on;window.showRecovery();}} onRetry={()=>window.retried=true}/>);
@@ -60,23 +58,6 @@ async function pageFor(t, show) {
   await page.addStyleTag({ content: (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '') });
   await page.addScriptTag({ content: script }); await page.evaluate(name => window[name](), show); return page;
 }
-
-test('automation editor saves fixed times and webhooks with fresh-thread settings', { timeout: 15000 }, async t => {
-  const page = await pageFor(t, 'showSchedules');
-  await page.getByRole('button', { name: 'New automation', exact: true }).click();
-  await page.getByLabel('Name', { exact: true }).fill('Morning review'); await page.getByLabel('Task', { exact: true }).fill('Review changes');
-  await page.getByLabel('Trigger', { exact: true }).selectOption('fixed_time');
-  await page.getByLabel('Time', { exact: true }).fill('09:30'); await page.getByLabel('Time zone', { exact: true }).fill('America/New_York');
-  await page.getByLabel('Mon', { exact: true }).check(); await page.getByLabel('Start a fresh thread for each run', { exact: true }).check();
-  await page.getByRole('button', { name: 'Save automation', exact: true }).click();
-  await page.waitForFunction(() => window.schedules[0]?.type === 'fixed_time');
-  assert.deepEqual(await page.evaluate(() => ({ time: window.schedules[0].timeOfDay, days: window.schedules[0].weekdays, fresh: window.schedules[0].freshThread })), { time: '09:30', days: [1], fresh: true });
-  await page.getByRole('button', { name: 'Edit', exact: true }).click(); await page.getByLabel('Trigger', { exact: true }).selectOption('webhook');
-  await page.getByLabel('Task', { exact: true }).fill('Review {{body.action}}'); await page.getByLabel('Optional HMAC secret', { exact: true }).fill('a-secret-of-at-least-16-characters');
-  await page.getByRole('button', { name: 'Save automation', exact: true }).click(); await page.getByLabel('Secret webhook URL').waitFor();
-  assert.equal(await page.getByLabel('Secret webhook URL').inputValue(), 'https://helm-hooks-test.example.test/hooks/task/secret');
-  assert.equal(await page.getByRole('button', { name: 'Run now', exact: true }).count(), 0);
-});
 
 test('usage recovery opt-in sends a preference and keeps manual resume available', { timeout: 15000 }, async t => {
   const page = await pageFor(t, 'showRecovery'); await page.getByLabel('Continue automatically at reset', { exact: true }).check();

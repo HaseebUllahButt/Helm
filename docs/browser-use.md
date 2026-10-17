@@ -12,8 +12,7 @@ Press a chat’s **Browser** button or **Ctrl/⌘ Shift B**. On a wide screen
 (1000px and up) the browser docks on the right of the chat, which stays usable
 beside it; drag its left edge to resize it (double-click resets it). The width
 is remembered on this device, and open/closed is remembered per chat. On a
-phone it opens full screen with a close button. **Thread details → Browser**
-opens the same panel. When the agent opens a tab in the chat you are viewing,
+phone it opens full screen with a close button. When the agent opens a tab in the chat you are viewing,
 the dock opens by itself on a wide screen once per tab, unless you closed it
 in that chat; otherwise a dot appears on the Browser button.
 

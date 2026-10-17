@@ -3,32 +3,27 @@ import { useDialog } from '../useDialog';
 import { Icon } from '../Icon';
 import { Subagents } from './Subagents';
 import { ChangesPanel, type GitStatus } from './Changes';
-import { Schedules } from './Schedules';
-import { lazy, Suspense } from 'react';
-const BrowserPanel = lazy(() => import('./BrowserPanel'));
 
-export type DetailsTab = 'agents' | 'changes' | 'schedules' | 'browser';
+/** Git and the browser have their own buttons in the chat header; this panel is the agents. */
+export type DetailsTab = 'agents' | 'changes';
 
-export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit, onClose, onOpen, onOpenNative, reviewAttention = false, onNativeAttention }: {
-  client: Client; env: Environment; session: Session; tab: DetailsTab; onTab: (tab: DetailsTab) => void;
+export function ThreadDetails({ client, env, session, tab, git, reloadGit, onClose, onOpen, onOpenNative, reviewAttention = false, onNativeAttention }: {
+  client: Client; env: Environment; session: Session; tab: DetailsTab;
   git: GitStatus | null; reloadGit: () => void; onClose: () => void;
   onOpen?: (session: Session) => void; onOpenNative?: (agent: NativeAgent) => void; reviewAttention?: boolean; onNativeAttention?: () => void;
 }) {
   const ref = useDialog(onClose);
-  const all: { id: DetailsTab; label: string }[] = [{ id: 'changes', label: 'Git' }, { id: 'agents', label: 'Agents' }, { id: 'schedules', label: 'Schedules' }, { id: 'browser', label: 'Browser' }];
-  // A quick chat has no folder, so no Git.
-  const tabs = all.filter((item) => !(session.quick && item.id === 'changes'));
   if (tab === 'changes' && git?.repo) return <div className="thread-details-back" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="thread-details git-details" ref={ref} role="dialog" aria-modal="true" aria-label="Git" tabIndex={-1}>
       <ChangesPanel client={client} env={env} cwd={session.cwd} sessionId={session.id} status={git} reload={reloadGit} onClose={onClose} onOpen={onOpen} />
     </div>
   </div>;
   return <div className="thread-details-back" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="thread-details" ref={ref} role="dialog" aria-modal="true" aria-label="Thread details" tabIndex={-1}
+    <div className="thread-details" ref={ref} role="dialog" aria-modal="true" aria-label="Agents" tabIndex={-1}
       onKeyDown={(event) => {
         // Up and Down walk the agents from anywhere in the panel, Enter opens
         // the one in focus. Text fields and lists keep their own arrows.
-        if (tab !== 'agents' || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') || (event.target as HTMLElement).closest('input, textarea, select')) return;
+        if ((event.key !== 'ArrowDown' && event.key !== 'ArrowUp') || (event.target as HTMLElement).closest('input, textarea, select')) return;
         const tasks = [...event.currentTarget.querySelectorAll<HTMLElement>('button.delegation-task')];
         if (!tasks.length) return;
         event.preventDefault();
@@ -36,20 +31,11 @@ export function ThreadDetails({ client, env, session, tab, onTab, git, reloadGit
         const down = event.key === 'ArrowDown';
         tasks[at < 0 ? (down ? 0 : tasks.length - 1) : (at + (down ? 1 : tasks.length - 1)) % tasks.length].focus();
       }}>
-      <div className="details-heading"><div><h2>Thread details</h2><p>{session.title}</p></div><button className="iconbtn" aria-label="Close thread details" onClick={onClose}><Icon name="close" size={18} /></button></div>
-      <div className="details-tabs" role="tablist" aria-label="Thread details sections">
-        {tabs.map((item, index) => <button key={item.id} id={`details-${item.id}`} role="tab" aria-selected={tab === item.id} aria-controls="details-content" tabIndex={tab === item.id ? 0 : -1}
-          onClick={() => onTab(item.id)} onKeyDown={(event) => {
-            const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
-            if (next < 0) return;
-            event.preventDefault(); onTab(tabs[next].id); document.getElementById(`details-${tabs[next].id}`)?.focus();
-          }}>{item.label}</button>)}
-      </div>
-      <div className="details-content" role="tabpanel" id="details-content" aria-labelledby={`details-${tab}`}>
-        {tab === 'agents' && <Subagents embedded onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} onOpenNative={onOpenNative} />}
-        {tab === 'changes' && <p className="note">No Git repository available for this thread.</p>}
-        {tab === 'schedules' && <Schedules client={client} env={env} session={session} onOpen={onOpen} />}
-        {tab === 'browser' && <Suspense fallback={<p className="note">Opening browser…</p>}><BrowserPanel client={client} env={env} session={session} /></Suspense>}
+      <div className="details-heading"><div><h2>Agents</h2><p>{env.name} · {session.title}</p></div><button className="iconbtn" aria-label="Close agents" onClick={onClose}><Icon name="close" size={18} /></button></div>
+      <div className="details-content">
+        {tab === 'changes'
+          ? <p className="note">No Git repository available for this thread.</p>
+          : <Subagents embedded onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} onOpenNative={onOpenNative} />}
       </div>
     </div>
   </div>;

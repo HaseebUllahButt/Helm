@@ -6,25 +6,23 @@ hidden. The panel in Helm is its remote control; there is no picture of the
 page in Helm. Full notes: `docs/browser-use.md`.
 
 ## Open the browser panel
-- **Sees:** chat header **Browser** button (globe), or Thread details →
-  **Browser** tab. Panel: "Browser · Hidden, on <machine>", back / forward /
+- **Sees:** chat header **Browser** button (globe). Panel: "Browser · Hidden, on <machine>", back / forward /
   reload, "Search or type an address", **New tab**, a key icon for logins.
   Empty: "No tabs yet. Agents on <machine> browse here, out of sight;
   localhost reaches servers there." On a wide screen it docks on the right.
 - **Reach:** **Browser** or Ctrl/⌘+Shift+B. The header button is on
   computers only: on a phone (touch screen) it is hidden, since the owner
-  does not watch the browser from the phone. Thread details → Browser
-  still opens the panel there.
+  does not watch the browser from the phone, so a phone has no way in
+  (the Thread details → Browser tab was removed 2026-10-17).
 - **CLI:** `helm browser open <url> [--engine bowser]`, `helm browser tabs`,
   `look <tab>`, `act <tab> '<json>'`, `screenshot`, `point`, `close`.
 - **Prove (panel driven 2026-10-15, tabs not yet driven):**
   ```sh
-  $V click Agents; $V eval "[...document.querySelectorAll('.thread-details [role=tab]')].find(b=>b.innerText==='Browser').click()"
+  $V click Browser           # the header button; the phone-size browser is not a touch screen
   $V text                    # "No tabs yet. Agents on verify-<you> browse here…"
   ```
 - **Proof:** the empty panel text above.
-- **Traps:** `$V click Browser` skips covered buttons now, but if it still
-  picks the header one inside Thread details, use the `eval` above. Do not open tabs from the private
+- **Traps:** Do not open tabs from the private
   copy on the laptop: a tab may open a real Chromium window on the owner's
   screen. On niri the window needs the `helm-browser` window rule.
 - **Tests:** `test/browser/agent-browser`, `browser-window`,

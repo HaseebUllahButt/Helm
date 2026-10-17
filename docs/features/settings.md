@@ -45,8 +45,7 @@
 ## Limits and context
 - **Sees:** under the box, how full the chat's memory is and the account's
   usage windows ("Limits left"); a card when a limit is hit, with "Continue
-  automatically when this account's usage limit resets" (also in Thread
-  details → Schedules). A "Compact at" setting "For every chat on this
+  automatically when this account's usage limit resets". A "Compact at" setting "For every chat on this
   account, on every machine."
 - **Prove:** steps not yet driven; the fake agent reports tiny usage and no
   limits.
