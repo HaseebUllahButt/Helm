@@ -43,6 +43,7 @@ import { inventory, scratchFolder } from './inventory.js';
 import { claudeLiveSessions, claudeLiveStatus, descendsFrom, dedupeNativeConversations } from './external-process.js';
 import { hostedProcId } from './hosted-process.js';
 import { priceBucket } from '@helm/usage/pricing';
+import { WORTH_SAYING } from '@helm/usage/recache';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
 import { openFiles, processArgv, processCwd } from './procinfo.js';
 import { GREETING, PLACEHOLDER, bareTitle, informative, promptTitle } from './titles.js';
@@ -568,6 +569,12 @@ export class Sessions extends EventEmitter {
 
   /** requestId -> { id, reply, raw }: a terminal Claude's question, waiting in its hook. */
   #hookAsks = new Map();
+  /**
+   * session id -> a model change the app asked a terminal Claude for, until
+   * Claude's PreModelSwitch hook says what it costs. `ask`: hold it back if
+   * Claude says it rewrites a warm cache worth a question.
+   */
+  #modelSwitches = new Map();
   /** When a hook last said what a terminal Claude is doing. */
   #nativeStatusAt = new Map();
   /** Keep each pasted message and its Enter together across app clients. */
@@ -671,6 +678,7 @@ export class Sessions extends EventEmitter {
       setStatus('blocked');
       return;
     }
+    if (name === 'PreModelSwitch') return this.#onNativeModelSwitch(s, event, reply);
     reply(null);
     if (name === 'PostModelSwitch') {
       if (typeof event.to_model === 'string' && event.to_model) {
@@ -2522,7 +2530,7 @@ export class Sessions extends EventEmitter {
     d.on('init', (info) => {
       if (!info) return;
       let changed = false;
-      for (const [key, target] of [['model', 'engineModel'], ['effort', 'engineEffort'], ['effortKeepsCache', 'effortKeepsCache']]) {
+      for (const [key, target] of [['model', 'engineModel'], ['effort', 'engineEffort'], ['effortKeepsCache', 'effortKeepsCache'], ['modelSwitchSignal', 'modelSwitchSignal']]) {
         // A partial init must not erase settings another provider event reported.
         if (info[key] === undefined) continue;
         if (s[target] !== info[key]) { s[target] = info[key]; changed = true; }
@@ -4003,7 +4011,14 @@ export class Sessions extends EventEmitter {
     return d ? driverTakesImages(d) : null;
   }
 
-  async setModel(id, model) {
+  /**
+   * `pick`: the owner chose this in the app. `ask` (with `pick`): if Claude
+   * says the switch rewrites a warm cache worth a question, hold it back and
+   * return `{ ask }` with Claude's figures; `noSignal` means no running
+   * Claude can say, and the app falls back to its own estimate. A pick
+   * without `ask` is one the owner already confirmed.
+   */
+  async setModel(id, model, { pick = false, ask = false } = {}) {
     this.#assertRewindUnlocked(id);
     const s = this.get(id);
     if (s.nativeChat && s.engine === 'claude') {
@@ -4011,17 +4026,62 @@ export class Sessions extends EventEmitter {
       if (typeof value !== 'string' || value.length > 200 || !/^[a-zA-Z0-9][a-zA-Z0-9._:/+\[\]-]*$/.test(value)) throw new Error('invalid Claude model');
       // Claude may reject the model or ask for confirmation. Sending bytes
       // is not acknowledgment, so never persist it as the active setting.
-      return this.input(id, `/model ${value}`);
+      if (!pick) return this.input(id, `/model ${value}`);
+      return this.#nativeModelSwitch(s, value, ask);
     }
     if (s.nativeCli) return this.#nativeWrite(s, nativeSettingCommand(s.engine, 'model', model));
     if (!s.driver) throw new Error('not a headless session');
     const value = model || null;
     const d = this.#drivers.get(id);
-    if (d) await d.setModel(value);
+    if (ask && !d?.modelSwitchSignal) return { ok: false, noSignal: true, session: s };
+    if (d) {
+      const r = await d.setModel(value, { ask });
+      if (r?.ask) return { ok: false, ask: r.ask, session: s };
+    }
     s.model = d && ['pi', 'omp'].includes(s.engine) ? d.model : value;
     this.#save();
     this.emit('session', s);
     return { ok: true, session: s };
+  }
+
+  /**
+   * Type `/model` into a terminal Claude the app is showing as a chat, and
+   * let Claude's PreModelSwitch hook say what it costs. Claude's own
+   * "this re-caches the conversation" question would sit unseen in the
+   * terminal behind the chat, so Helm answers the hook: a confirmed pick or
+   * a cold cache goes ahead without it, and a warm one comes back as
+   * `{ ask }` for the app to ask. A Claude too old to run the hook just
+   * switches; after a few seconds the answer is the plain typing result.
+   */
+  async #nativeModelSwitch(s, value, ask) {
+    let settle;
+    const heard = new Promise((resolve) => { settle = resolve; });
+    const entry = { ask, settle };
+    this.#modelSwitches.set(s.id, entry);
+    const forget = () => { if (this.#modelSwitches.get(s.id) === entry) this.#modelSwitches.delete(s.id); };
+    try {
+      const typed = await this.input(s.id, `/model ${value}`);
+      const outcome = await Promise.race([heard, new Promise((resolve) => setTimeout(resolve, 5000, null).unref?.())]);
+      return outcome?.ask ? { ok: false, ask: outcome.ask, session: s } : typed;
+    } finally { forget(); }
+  }
+
+  #onNativeModelSwitch(s, event, reply) {
+    const entry = this.#modelSwitches.get(s.id);
+    // Typed at the keyboard: Claude asks there itself, where the person is.
+    if (!entry) return reply(null);
+    this.#modelSwitches.delete(s.id);
+    const tokens = Number(event.context_tokens);
+    if (entry.ask && event.prompt_cache_warm === true && tokens >= WORTH_SAYING) {
+      const usd = Number(event.estimated_cache_write_usd);
+      reply({ hookSpecificOutput: { hookEventName: 'PreModelSwitch', permissionDecision: 'deny',
+        permissionDecisionReason: 'Helm is asking the owner first: this switch rewrites a warm prompt cache.' } });
+      entry.settle({ ask: { tokens, costUsd: Number.isFinite(usd) ? usd : null,
+        ...(typeof event.cache_ttl === 'string' && { ttl: event.cache_ttl }) } });
+      return;
+    }
+    reply({ hookSpecificOutput: { hookEventName: 'PreModelSwitch', permissionDecision: 'allow' } });
+    entry.settle({});
   }
 
   /**

@@ -25,4 +25,4 @@ export function recacheCost(
   size?: number,
 ): Recache | null;
 
-export function recacheWarning(kind: 'model' | 'effort', r: Recache): string;
+export function recacheWarning(kind: 'model' | 'effort', r: Recache, fromCli?: boolean): string;

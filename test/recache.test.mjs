@@ -117,3 +117,9 @@ test("the conversation's size as the CLI reports it beats the last turn's cache 
   assert.equal(recacheCost(threadWith(1_300_000), 'claude-opus-5', 'claude', at, 0), null);
   assert.equal(recacheCost(threadWith(100), 'claude-opus-5', 'claude', at, 400_000).tokens, 400_000);
 });
+
+test("a switch Claude priced says it is Claude's word, with Claude's figures", () => {
+  const text = recacheWarning('model', { tokens: 300_008, costUsd: 0.75 }, true);
+  assert.match(text, /^Claude says this conversation's prompt cache is still warm/);
+  assert.match(text, /About 300k cached tokens would be written again, roughly \$0\.75/);
+});

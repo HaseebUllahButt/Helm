@@ -6,6 +6,7 @@ import { reloadApp } from './reload';
 import { openPrivateLink } from './privateLink';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Confirm, Sheet, TextPrompt } from './Modal';
+import { recacheWarning, type Recache } from '@helm/usage/recache';
 import { useNow, waitingSince } from './useNow';
 import { ThreadStatus, moodOf, isUnread, markSeen, seenHere, useSeenVersion, wrappedUp } from './threadStatus';
 import { Palette, ShortcutsHelp, type PaletteItem } from './Palette';
@@ -5150,11 +5151,17 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
     } catch (e: any) { setError(e.message); }
     finally { setSettingBusy(false); }
   };
-  const pickNative = async (kind: Kind, value: string) => {
+  // A model picked here is checked with Claude first: its PreModelSwitch
+  // hook says whether the switch rewrites a warm cache, and only then does
+  // Helm ask, with Claude's figures. Helm makes no estimate of its own here.
+  const [switchAsk, setSwitchAsk] = useState<{ value: string; warn: string } | null>(null);
+  const pickNative = async (kind: Kind, value: string, confirmed = false) => {
     if (settingBusy || sending || kind === 'speed' || status === 'blocked' || !env.online) return;
     setSettingBusy(true); setError('');
     try {
-      const r = await client.rpc<{ session?: Session }>(env.id, `session.${kind}`, { id: session.id, [kind]: value }, 70_000);
+      const check = kind === 'model' && session.nativeChat && session.engine === 'claude' ? { pick: true, ...(confirmed ? {} : { ask: true }) } : {};
+      const r = await client.rpc<{ session?: Session; ask?: Recache }>(env.id, `session.${kind}`, { id: session.id, [kind]: value, ...check }, 70_000);
+      if (r?.ask) { setSwitchAsk({ value, warn: recacheWarning('model', r.ask, true) }); return; }
       // The machine reads Claude's footer after each shift+tab, so a mode
       // that comes back is one Claude is showing.
       if (kind === 'mode') { if (r?.session) onSession(r.session); }
@@ -5415,6 +5422,15 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
       history={(messages ?? []).filter((message) => message.role === 'user').map((message) => message.text)}
     >
       {nativeControls.sheet}
+      {switchAsk && (
+        <Confirm
+          title="Change it anyway?"
+          body={switchAsk.warn}
+          confirmLabel="Change" busy={settingBusy}
+          onCancel={() => setSwitchAsk(null)}
+          onConfirm={() => { const { value } = switchAsk; setSwitchAsk(null); void pickNative('model', value, true); }}
+        />
+      )}
       {(error || (!messages && readError)) && <div className="error floating" role="alert" onClick={() => setError('')}>{error || readError}</div>}
     </Composer>
   );

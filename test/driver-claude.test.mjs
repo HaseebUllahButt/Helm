@@ -15,7 +15,7 @@ const make = (name, opts = {}) => {
   return { fake, driver, log: collect(driver) };
 };
 
-async function modelControl(t) {
+async function modelControl(t, version = '2.1.302') {
   let receive, exited;
   const writes = [];
   const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; },
@@ -26,9 +26,62 @@ async function modelControl(t) {
       hasProc: () => false, openProc: async () => {}, procPipe: () => pipe } });
   await driver.start();
   t.after(() => driver.kill());
-  return { driver, writes, reply: response => receive(JSON.stringify({ type: 'control_response',
-    response: { ...response, request_id: writes.at(-1).request_id } }) + '\n') };
+  // Helm registers its hooks first, and Claude answers with its version.
+  const init = writes.shift();
+  assert.equal(init.request.subtype, 'initialize');
+  assert.deepEqual(init.request.hooks, { PreModelSwitch: [{ hookCallbackIds: ['helm-model-switch'] }] });
+  receive(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: init.request_id,
+    response: { claude_code_version: version } } }) + '\n');
+  await new Promise(setImmediate);
+  return { driver, writes, exit: () => exited({ code: 0 }),
+    send: message => receive(JSON.stringify(message) + '\n'),
+    reply: response => receive(JSON.stringify({ type: 'control_response',
+      response: { ...response, request_id: writes.findLast(w => w.type === 'control_request').request_id } }) + '\n') };
 }
+
+/** What Claude Code 2.1.302 sent for a switch in a real run against a stand-in API. */
+const switchHook = (over = {}) => ({ type: 'control_request', request_id: 'hook-1', request: { subtype: 'hook_callback',
+  callback_id: 'helm-model-switch', input: { hook_event_name: 'PreModelSwitch', from_model: 'claude-opus-5-5',
+    to_model: 'claude-sonnet-5-5', requested_model: 'sonnet', source: 'sdk', context_tokens: 300008,
+    prompt_cache_warm: true, cache_ttl: '5m', estimated_cache_write_usd: 0.75, pricing: 'catalog', ...over } } });
+
+test('a model the owner picked over a warm cache waits for the owner, with Claude\'s own figures', async t => {
+  const { driver, writes, send, reply } = await modelControl(t);
+  assert.equal(driver.modelSwitchSignal, true);
+  const pending = driver.setModel('sonnet', { ask: true });
+  send(switchHook());
+  const answer = writes.at(-1);
+  assert.equal(answer.response.request_id, 'hook-1');
+  assert.equal(answer.response.response.hookSpecificOutput.permissionDecision, 'deny');
+  reply({ subtype: 'error', error: 'Model switch blocked by a PreModelSwitch hook: Helm is asking', error_code: 'blocked_by_hook' });
+  assert.deepEqual(await pending, { ask: { tokens: 300008, costUsd: 0.75, ttl: '5m' } });
+  assert.equal(driver.model, 'opus');
+});
+
+test('a cold cache, a small one, or a confirmed pick switches without a question', async t => {
+  for (const [over, ask] of [[{ prompt_cache_warm: false, estimated_cache_write_usd: 0 }, true],
+    [{ context_tokens: 20_000 }, true], [{}, false]]) {
+    const { driver, writes, send, reply } = await modelControl(t);
+    const pending = driver.setModel('sonnet', { ask });
+    send(switchHook(over));
+    assert.deepEqual(writes.at(-1).response.response, {}, 'Claude goes on as it decides');
+    reply({ subtype: 'success' });
+    assert.deepEqual(await pending, {});
+    assert.equal(driver.model, 'sonnet');
+  }
+});
+
+test('only a Claude known to run the switch hook is trusted to price it, and only while it runs', async t => {
+  const old = await modelControl(t, '2.1.299');
+  assert.equal(old.driver.modelSwitchSignal, false);
+  const now = await modelControl(t);
+  const said = [];
+  now.driver.on('init', info => said.push(info.modelSwitchSignal));
+  now.send({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-5-5' });
+  now.exit();
+  assert.equal(now.driver.modelSwitchSignal, false);
+  assert.deepEqual(said, [true, false]);
+});
 
 test('Claude model changes keep the conversation and wait for the provider acknowledgment', async t => {
   const { driver, writes, reply } = await modelControl(t);
@@ -279,8 +332,9 @@ test('a Claude question remains answerable after the daemon is replaced', async 
   await driver.start();
   assert.equal(driver.status, 'blocked');
   await driver.answer('question-before-update', { option: 'allow', answers: { 'Continue?': 'Yes' } });
-  assert.equal(writes[0].response.request_id, 'question-before-update');
-  assert.equal(writes[0].response.response.updatedInput.answers['Continue?'], 'Yes');
+  const answer = writes.find((w) => w.type === 'control_response');
+  assert.equal(answer.response.request_id, 'question-before-update');
+  assert.equal(answer.response.response.updatedInput.answers['Continue?'], 'Yes');
   await driver.suspend();
 });
 
@@ -510,7 +564,7 @@ test('interrupt: stops the turn and reports it as interrupted, not as an error',
   const done = await log.until((e) => e.type === 'turn.done');
   assert.equal(done.status, 'interrupted');
   assert.equal(done.error, undefined);
-  const sent = fake.stdinLines().find((l) => l.type === 'control_request');
+  const sent = fake.stdinLines().find((l) => l.type === 'control_request' && l.request.subtype !== 'initialize');
   assert.equal(sent.request.subtype, 'interrupt');
   assert.equal(sent.request.cancel_queued, true);
   await driver.kill();
@@ -741,7 +795,8 @@ async function contextFeed(t, { settings, modelUsage }) {
   t.after(() => rmSync(home, { recursive: true, force: true }));
   if (settings) writeFileSync(join(home, 'settings.json'), JSON.stringify(settings));
   let receive, exited;
-  const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; }, write() {}, end() { exited({ code: 0 }); }, detach() {}, kill() { exited({ code: 0 }); } };
+  const writes = [];
+  const pipe = { onData(fn) { receive = fn; }, onExit(fn) { exited = fn; }, write(raw) { writes.push(JSON.parse(raw)); }, end() { exited({ code: 0 }); }, detach() {}, kill() { exited({ code: 0 }); } };
   const driver = new ClaudeDriver({ cmd: 'unused', env: { CLAUDE_CONFIG_DIR: home }, cwd: '/tmp', mode: 'default',
     engineSessionId: 'existing-conversation', procId: 'hosted', procHost: { hasProc: () => false, openProc: async () => {}, procPipe: () => pipe } });
   await driver.start();
@@ -751,8 +806,25 @@ async function contextFeed(t, { settings, modelUsage }) {
   const reply = (usage, extra = {}) => feed({ type: 'assistant', parent_tool_use_id: null,
     message: { model: 'claude-opus-5-5[1m]', content: [], usage }, ...extra });
   const result = () => feed({ type: 'result', subtype: 'success', is_error: false, modelUsage, usage: { input_tokens: 999_999, output_tokens: 1 } });
-  return { log, reply, result, feed, driver };
+  return { log, reply, result, feed, driver, writes };
 }
+
+test("Claude's own count of its window wins over Helm's read of its settings", async (t) => {
+  const { log, reply, result, feed, writes } = await contextFeed(t, {
+    settings: { modelSettings: { 'claude-opus-5-5': { autoCompactWindow: 383_000 } } },
+    modelUsage: { 'claude-opus-5-5[1m]': { contextWindow: 1_000_000 } },
+  });
+  reply({ input_tokens: 5, cache_read_input_tokens: 300_000, cache_creation_input_tokens: 0, output_tokens: 3 });
+  result();
+  assert.equal(log.of('context').at(-1).window, 383_000, 'the settings read stands until Claude answers');
+  const ask = writes.findLast((w) => w.request?.subtype === 'get_context_usage');
+  assert.deepEqual(ask.request, { subtype: 'get_context_usage', detail: 'summary' });
+  // Set somewhere Helm does not read (an environment variable, managed settings).
+  feed({ type: 'control_response', response: { subtype: 'success', request_id: ask.request_id,
+    response: { totalTokens: 300_005, maxTokens: 350_000, rawMaxTokens: 350_000, autocompactSource: 'env', autoCompactThreshold: 317_000 } } });
+  await new Promise(setImmediate);
+  assert.deepEqual(log.of('context').at(-1), { type: 'context', used: 300_008, window: 350_000, full: 1_000_000, model: 'claude-opus-5-5' });
+});
 
 test('Claude reports context from the last top-level reply, sized by the compaction window in settings', async (t) => {
   const { log, reply, result } = await contextFeed(t, {

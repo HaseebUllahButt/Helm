@@ -4,6 +4,7 @@ import { Driver, checkVersion, assertFolder } from './index.js';
 import { modeFor } from '../modes.js';
 import { nonAgentClaudeTask } from '../claude-tasks.js';
 import { bareModel, compactWindow, configDir } from '../context-limit.js';
+import { WORTH_SAYING } from '@helm/usage/recache';
 
 // Messages that mean the CLI is working: outside a turn, a turn it began itself.
 // A bare `result` is not one: a result with no work before it is the last
@@ -26,6 +27,27 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  */
 
 export const CLAUDE_MIN_VERSION = '2.1.260';
+
+/**
+ * Claude Code runs a PreModelSwitch hook before it switches model, with
+ * what the switch costs: whether its prompt cache is still warm
+ * (`prompt_cache_warm`), the size it re-sends (`context_tokens`) and the
+ * price of writing that again on the new model (`estimated_cache_write_usd`).
+ * Helm registers for it when the process starts, so the app can ask with
+ * Claude's own figures instead of its own estimate.
+ *
+ * Claude does not say which hooks it knows, and an unknown one is accepted
+ * silently. 2.1.300 is the oldest version checked to send this one; on an
+ * older Claude the app keeps its estimate.
+ */
+const MODEL_SWITCH_HOOK = 'helm-model-switch';
+const MODEL_SWITCH_SINCE = '2.1.300';
+const atLeast = (version, min) => {
+  const a = String(version ?? '').split('.').map(Number), b = min.split('.').map(Number);
+  if (a.length < 3 || a.some(Number.isNaN)) return false;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return true;
+};
 
 const BASE_ARGS = [
   '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
@@ -85,7 +107,7 @@ export class ClaudeDriver extends Driver {
 
   async validateRewind() {
     await this.start();
-    const response = await this.#control({ subtype: 'initialize' });
+    const response = await this.#initialize();
     if (response?.subtype !== 'success') throw new Error(response?.error || 'Claude did not confirm the rewind boundary.');
   }
   /** helm's brief rides in the system prompt, not the first message. */
@@ -136,6 +158,10 @@ export class ClaudeDriver extends Driver {
   /** request_id -> resolve, for control requests we sent */
   #controls = new Map();
   #controlSeq = 0;
+  /** This process runs Helm's PreModelSwitch hook, so a switch can be priced by Claude. */
+  #modelSwitchSignal = false;
+  /** The model change Helm asked for, while Claude's hook may still ask about it. */
+  #switching = null;
 
   constructor(opts) {
     super({ engine: 'claude', ...opts });
@@ -284,10 +310,13 @@ export class ClaudeDriver extends Driver {
     } else {
       this.once('init', markReady);
     }
+    void this.#initialize();
     this.#exited = new Promise((resolve) => {
       pipe.onExit(({ code, signal, stderr }) => {
         this.#pipe = null;
         this.#inTurn = false;
+        // No process, no hook: a model picked now starts the next process.
+        if (this.#modelSwitchSignal) this.#setModelSwitchSignal(false);
         for (const resolve of this.#controls.values()) {
           resolve({ subtype: 'error', error: 'Claude exited before confirming the setting change.' });
         }
@@ -328,6 +357,34 @@ export class ClaudeDriver extends Driver {
       catch (e) { this.#controls.delete(request_id); reject(e); }
       setTimeout(() => { if (this.#controls.delete(request_id)) resolve(null); }, 15_000).unref?.();
     });
+  }
+
+  /**
+   * Register Helm's hooks with this process. Sent again on adoption: a
+   * process an older daemon started never had them, and registering twice
+   * only replaces the list.
+   */
+  #initialize() {
+    const request = this.#control({ subtype: 'initialize',
+      hooks: { PreModelSwitch: [{ hookCallbackIds: [MODEL_SWITCH_HOOK] }] } });
+    request.then((response) => {
+      const on = response?.subtype === 'success' && atLeast(response.response?.claude_code_version, MODEL_SWITCH_SINCE);
+      if (on !== this.#modelSwitchSignal) this.#setModelSwitchSignal(on);
+    }, () => {});
+    return request;
+  }
+
+  /**
+   * Said through `init`, like the other things Claude reports. Before
+   * Claude's own start-up message it waits for that message instead:
+   * `init` is also what marks the process ready.
+   */
+  #setModelSwitchSignal(on) {
+    this.#modelSwitchSignal = on;
+    if (this.info) {
+      this.info = { ...this.info, modelSwitchSignal: on };
+      this.emit('init', this.info);
+    }
   }
 
   // ----------------------------------------------------------------- verbs
@@ -441,15 +498,30 @@ export class ClaudeDriver extends Driver {
     await this.#control({ subtype: 'interrupt', cancel_queued: this.#capabilities.has('interrupt_cancel_queued_v1') });
   }
 
-  async setModel(model) {
+  /**
+   * `ask`: the owner picked this in the app, which wants to confirm first
+   * when Claude says the switch rewrites a warm cache worth mentioning. Then
+   * Claude's hook cancels the switch and this returns `{ ask }` with
+   * Claude's own figures; the app asks and sends the change again without
+   * `ask`. Every other change goes ahead exactly as Claude would make it.
+   */
+  async setModel(model, { ask = false } = {}) {
     if (this.#pipe) {
-      const response = await this.#control({ subtype: 'set_model', model: model || null });
+      const switching = this.#switching = { ask, asked: null };
+      let response;
+      try { response = await this.#control({ subtype: 'set_model', model: model || null }); }
+      finally { if (this.#switching === switching) this.#switching = null; }
+      if (switching.asked && response?.error_code === 'blocked_by_hook') return { ask: switching.asked };
       if (response?.subtype !== 'success') {
         throw new Error(response?.error || 'Claude did not confirm the model change. The previous model is still selected; try again.');
       }
     }
     this.model = model || null;
+    return {};
   }
+
+  /** Whether a model switch now would be priced by Claude itself. */
+  get modelSwitchSignal() { return this.#modelSwitchSignal && !!this.#pipe; }
 
   async setMode(id) {
     this.mode = id;
@@ -566,7 +638,8 @@ export class ClaudeDriver extends Driver {
       // say: true when it sends effort inside the conversation, false when a
       // change rewrites the cached prefix, absent when it does not know.
       this.info = { model: m.model, permissionMode: m.permissionMode, version: m.claude_code_version, effort: m.effort,
-        effortKeepsCache: typeof m.per_turn_effort_active === 'boolean' ? m.per_turn_effort_active : null };
+        effortKeepsCache: typeof m.per_turn_effort_active === 'boolean' ? m.per_turn_effort_active : null,
+        modelSwitchSignal: this.#modelSwitchSignal };
       this.emit('init', this.info);
       return;
     }
@@ -818,7 +891,9 @@ export class ClaudeDriver extends Driver {
   /**
    * The size Claude counts the conversation against. A smaller compaction
    * window in the account's settings is what its own /context shows, so it
-   * wins over the model's full window.
+   * wins over the model's full window. This is only the first answer: Claude
+   * then says its window itself (`#askWindow`), which also counts settings
+   * this does not read - project and managed settings, its environment.
    */
   #windowFrom(m) {
     // A helper on another model is listed too; ours is the one that replied.
@@ -832,9 +907,27 @@ export class ClaudeDriver extends Driver {
     if (compact > 0 && compact < this.#contextWindow) this.#contextWindow = compact;
   }
 
+  /**
+   * Claude's own word on the window, from the same count its /context shows
+   * (`get_context_usage`, the summary that makes no API call). `maxTokens`
+   * is the size it compacts against, wherever that size was set. A Claude
+   * that does not know the request leaves the settings read standing.
+   */
+  #askWindow() {
+    if (!this.#contextUsed) return;
+    this.#control({ subtype: 'get_context_usage', detail: 'summary' }).then((r) => {
+      const max = r?.subtype === 'success' ? Number(r.response?.maxTokens) : 0;
+      if (!(max > 0) || max === this.#contextWindow) return;
+      this.#contextWindow = max;
+      if (!(this.#contextFull >= max)) this.#contextFull = max;
+      this.#pushContext();
+    }, () => {});
+  }
+
   #onResult(m) {
     this.#windowFrom(m);
     this.#pushContext();
+    this.#askWindow();
     if (this.compacting) this.compactionEnded(m.is_error ? 'error' : 'ok');
     // A command answered with no echo ("/status isn't available here"):
     // its answer opens the turn under the words that asked for it.
@@ -872,8 +965,29 @@ export class ClaudeDriver extends Driver {
     this.push('status', { status: 'idle' });
   }
 
+  /**
+   * Claude's PreModelSwitch hook. Only a switch the owner picked in the app,
+   * with a warm cache big enough to be worth a question, is held back; its
+   * figures go to the app. Anything else - a cold cache, a small one, a
+   * confirmed pick, `/model` typed in the chat - goes on as Claude decides.
+   */
+  #onModelSwitch(requestId, input) {
+    const switching = this.#switching;
+    const tokens = Number(input.context_tokens);
+    let response = {};
+    if (switching?.ask && input.prompt_cache_warm === true && tokens >= WORTH_SAYING) {
+      const usd = Number(input.estimated_cache_write_usd);
+      switching.asked = { tokens, costUsd: Number.isFinite(usd) ? usd : null,
+        ...(typeof input.cache_ttl === 'string' && { ttl: input.cache_ttl }) };
+      response = { hookSpecificOutput: { hookEventName: 'PreModelSwitch', permissionDecision: 'deny',
+        permissionDecisionReason: 'Helm is asking the owner first: this switch rewrites a warm prompt cache.' } };
+    }
+    this.#write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } });
+  }
+
   #onControlRequest(m) {
     const r = m.request;
+    if (r?.subtype === 'hook_callback' && r.callback_id === MODEL_SWITCH_HOOK) return this.#onModelSwitch(m.request_id, r.input ?? {});
     if (r?.subtype !== 'can_use_tool') {
       this.log(`claude: unanswered control request ${r?.subtype}`);
       return;

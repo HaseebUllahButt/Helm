@@ -200,6 +200,37 @@ test('Claude model hooks update the reported setting only after the provider swi
   } finally { await sessions.stop(); }
 });
 
+test('a model picked in the app is checked with Claude first; a warm cache asks with its figures', async () => {
+  // Claude runs PreModelSwitch when `/model` is entered (fields from a real 2.1.302 run).
+  const host = new Host(), outputs = [];
+  let hook = {};
+  host.write = async (id, text) => {
+    host.writes.push(text);
+    if (text === '\r') outputs.push(await sendHook('native-test', { hook_event_name: 'PreModelSwitch', from_model: 'claude-opus-5-5',
+      to_model: 'claude-sonnet-5-5', source: 'command', context_tokens: 300008, prompt_cache_warm: true,
+      cache_ttl: '1h', estimated_cache_write_usd: 0.75, pricing: 'catalog', ...hook }));
+  };
+  const sessions = create(host);
+  try {
+    await sessions.hooks;
+    const warm = await sessions.setModel('native-test', 'sonnet', { pick: true, ask: true });
+    assert.deepEqual(warm.ask, { tokens: 300008, costUsd: 0.75, ttl: '1h' });
+    assert.equal(outputs.at(-1).hookSpecificOutput.permissionDecision, 'deny');
+    // Confirmed: Claude's own question, hidden behind the chat, is skipped.
+    const confirmed = await sessions.setModel('native-test', 'sonnet', { pick: true });
+    assert.equal(confirmed.ask, undefined);
+    assert.equal(outputs.at(-1).hookSpecificOutput.permissionDecision, 'allow');
+    hook = { prompt_cache_warm: false, estimated_cache_write_usd: 0 };
+    const cold = await sessions.setModel('native-test', 'sonnet', { pick: true, ask: true });
+    assert.equal(cold.ask, undefined);
+    assert.equal(outputs.at(-1).hookSpecificOutput.permissionDecision, 'allow');
+    // Typed at the keyboard, not picked in the app: Claude decides there itself.
+    hook = {};
+    await sessions.setModel('native-test', 'sonnet');
+    assert.equal(outputs.at(-1), null);
+  } finally { await sessions.stop(); }
+});
+
 test("a terminal Claude's own busy/idle word fixes what hooks miss, never a newer hook", async (t) => {
   // Stop does not run when a turn is interrupted, and nothing marks a turn
   // Claude starts by itself. Claude's session file says both.
