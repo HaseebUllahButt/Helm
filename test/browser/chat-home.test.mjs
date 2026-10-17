@@ -37,6 +37,7 @@ before(async () => {
       const client = {token,relay:'http://helm-test',
         environments:async()=>({environments:envs}), on:()=>()=>{}, subscribe:()=>{}, watchLatency:()=>()=>{},
         openDirect:async()=>{}, route:async()=>null,
+        input:(env,params)=>client.rpc(env,'session.input',params),
         rpc:async(env,method,params)=>{
           window.calls.push({env,method,params});
           if(method==='session.list') return {sessions:env==='laptop'?Object.values(window.sessions):[]};

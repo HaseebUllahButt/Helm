@@ -71,12 +71,12 @@ async function open(t, viewport = { width: 1280, height: 900 }) {
 }
 const picked = (page, method) => page.evaluate(m => window.calls.filter(c => c.method === m).map(c => Object.values(c.params)[1]), method);
 
-test('Ctrl+Shift+E steps the thinking level from the composer and wraps', async t => {
+test('Ctrl+Shift+L steps the thinking level from the composer and wraps', async t => {
   const page = await open(t);
   const composer = page.locator('textarea').first();
   await composer.focus();
   for (const level of ['medium', 'high', 'low']) {
-    await page.keyboard.press('Control+Shift+E');
+    await page.keyboard.press('Control+Shift+L');
     await page.getByRole('button', { name: `thinking: ${level}`, exact: true }).waitFor();
   }
   assert.deepEqual(await picked(page, 'session.effort'), ['medium', 'high', 'low']);
@@ -107,7 +107,7 @@ test('Ctrl+Shift+A opens and closes the agents panel; arrows and Enter open a ch
   await panel.waitFor();
   await page.getByRole('tab', { name: 'Agents', selected: true }).waitFor();
   // A sheet is up: the other chat keys leave the chat alone.
-  await page.keyboard.press('Control+Shift+E');
+  await page.keyboard.press('Control+Shift+L');
   assert.deepEqual(await picked(page, 'session.effort'), []);
   await page.keyboard.press('Control+Shift+A');
   await panel.waitFor({ state: 'hidden' });

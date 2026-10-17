@@ -3,14 +3,15 @@ import { useEffect, useRef } from 'react';
 /**
  * The keys that change a chat without the mouse. All three carry
  * Ctrl/Cmd+Shift: the owner types in the composer most of the time, and a
- * bare letter there is a letter.
+ * bare letter there is a letter. Thinking is L (level): E is the terminal
+ * key everywhere in the app, and that one is caught first.
  */
 export type ChatKey = 'effort' | 'model' | 'agents';
 
 export function chatKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'> & { isComposing?: boolean }): ChatKey | null {
   if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey || e.isComposing) return null;
   const key = e.key.toLowerCase();
-  return key === 'e' ? 'effort' : key === 'm' ? 'model' : key === 'a' ? 'agents' : null;
+  return key === 'l' ? 'effort' : key === 'm' ? 'model' : key === 'a' ? 'agents' : null;
 }
 
 /** The choice after `current`, wrapping; the first when `current` is not on the ring. */

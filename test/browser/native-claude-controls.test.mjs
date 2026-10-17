@@ -81,7 +81,7 @@ test('native model and thinking choices preserve chat and keep unconfirmed setti
   assert.equal(await page.locator('textarea').count(), 1);
   assert.equal(await page.getByText('Existing conversation', {exact:true}).count(), 1);
   assert.deepEqual(await page.evaluate(() => window.calls[0]), {
-    env:'laptop', method:'session.model', params:{id:'native-test',model:'sonnet'},
+    env:'laptop', method:'session.model', params:{id:'native-test',model:'sonnet',pick:true,ask:true},
   });
   // A write is not a provider acknowledgment: the picker still reports opus.
   await page.getByRole('button', {name:'model: opus', exact:true}).waitFor();

@@ -39,7 +39,7 @@ for (const width of [1440, 390]) test(`navy is optional, persistent, and indepen
     prefs: window.loadAppearance(),
   }));
   await open();
-  assert.equal((await state()).bg, 'rgb(20, 22, 27)');
+  assert.equal((await state()).bg, 'rgb(11, 11, 14)');
   await page.getByRole('button', { name: 'Compact', exact: true }).click();
   const bounds = await page.locator('#sample').boundingBox();
   await page.getByRole('button', { name: 'Navy', exact: true }).click();
@@ -57,7 +57,7 @@ for (const width of [1440, 390]) test(`navy is optional, persistent, and indepen
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.screenshot({ path: `/tmp/helm-navy-theme-${width}.png` });
   await page.getByRole('button', { name: 'Dark', exact: true }).click();
-  assert.equal((await state()).bg, 'rgb(20, 22, 27)');
+  assert.equal((await state()).bg, 'rgb(11, 11, 14)');
   await page.getByRole('button', { name: 'Light', exact: true }).click();
   assert.equal((await state()).bg, 'rgb(243, 244, 247)');
   assert.equal((await state()).bar, '#f3f4f7');
@@ -65,5 +65,5 @@ for (const width of [1440, 390]) test(`navy is optional, persistent, and indepen
   assert.equal((await state()).theme, 'light');
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
-  assert.equal((await state()).bg, 'rgb(20, 22, 27)');
+  assert.equal((await state()).bg, 'rgb(11, 11, 14)');
 });

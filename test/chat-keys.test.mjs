@@ -8,12 +8,13 @@ const { chatKey, nextInRing, modelRing } = await import('data:text/javascript;ba
 const key = (k, mods = {}) => ({ key: k, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...mods });
 
 test('the chat keys need Ctrl or Cmd with Shift, never a bare letter', () => {
-  assert.equal(chatKey(key('E', { ctrlKey: true, shiftKey: true })), 'effort');
+  assert.equal(chatKey(key('L', { ctrlKey: true, shiftKey: true })), 'effort');
   assert.equal(chatKey(key('M', { metaKey: true, shiftKey: true })), 'model');
   assert.equal(chatKey(key('a', { ctrlKey: true, shiftKey: true })), 'agents');
-  for (const k of [key('e'), key('E', { shiftKey: true }), key('e', { ctrlKey: true }),
-    key('e', { ctrlKey: true, shiftKey: true, altKey: true }), key('x', { ctrlKey: true, shiftKey: true }),
-    { ...key('e', { ctrlKey: true, shiftKey: true }), isComposing: true }]) assert.equal(chatKey(k), null);
+  for (const k of [key('l'), key('L', { shiftKey: true }), key('l', { ctrlKey: true }),
+    key('l', { ctrlKey: true, shiftKey: true, altKey: true }), key('x', { ctrlKey: true, shiftKey: true }),
+    key('e', { ctrlKey: true, shiftKey: true }),
+    { ...key('l', { ctrlKey: true, shiftKey: true }), isComposing: true }]) assert.equal(chatKey(k), null);
 });
 
 test('stepping wraps, and starts at the top when the current one is not listed', () => {
