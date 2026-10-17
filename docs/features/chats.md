@@ -43,7 +43,17 @@ quick chat with the Fake agent (see [README](README.md)).
 
 ## Stop a reply
 - **Sees:** a square stop button replaces send while the agent works. After
-  stopping: "Task stopped · You stopped this task." and **Continue**.
+  stopping: "You stopped after Xs" on the reply, and no card asking to
+  continue. With a message of yours waiting (queued, or handed to the CLI
+  mid-reply), Stop ends only the reply and that message goes out next; the
+  chat itself is not stopped. With nothing waiting it is a full stop.
+- **Proof of the waiting case (driven 2026-10-18, real Claude, `up --real`):**
+  ask for `python3 -c 'import time; time.sleep(45)'` in the foreground, send
+  "Reply with only the word LEMON." while it runs, click "stop the agent":
+  the log shows LEMON `turn.deliver`, the long turn `interrupted`, then LEMON
+  sent as its own turn and answered once. Codex reads a handed message
+  within seconds, so its handed case keeps the full stop (no
+  `dropsHandedOnInterrupt`) rather than risk sending it twice.
 - **Reach:** the stop button ("stop the agent"). While an approval waits there
   is no stop button; **Decline** ends the turn instead.
 - **Prove (half driven):** the plain fake reply takes 0.8 s, too fast for two

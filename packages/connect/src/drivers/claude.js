@@ -492,6 +492,9 @@ export class ClaudeDriver extends Driver {
     this.push('status', { status: 'working' });
   }
 
+  /** With `cancel_queued`, a message handed over mid-reply is dropped with the reply. */
+  get dropsHandedOnInterrupt() { return this.#capabilities.has('interrupt_cancel_queued_v1'); }
+
   async interrupt() {
     if (!this.#pipe) return;
     this.#interrupting = true;

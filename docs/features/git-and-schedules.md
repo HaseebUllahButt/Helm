@@ -10,7 +10,8 @@ the Git sheet says so. The private copy's home is its own
 ## Git: graph, changes and files
 - **Sees:** a **Git** button in every chat's header ("Git: 3 changed
   files") opens the Git screen with tabs **Graph**, **Changes**, **Files**,
-  **CI / CD**. Graph: the last 80 commits; tap one for details, a file for
+  **CI / CD**. Graph: a folded "Agents N" bar (where agents work, closed by
+  default), then the last 80 commits; tap one for details, a file for
   its diff. Changes: +/- counts, each diff, a "viewed" tick. Commit, push and
   create PR, one step at a time or all in order; push never forces.
 - **Diffs:** numbered, coloured rows; a wrapped line stays in the code
@@ -44,10 +45,13 @@ the Git sheet says so. The private copy's home is its own
   `git-head`; `test/browser/inline-diff`.
 
 ## CI / CD
-- **Sees:** a "CI / CD" section: PR reviews, checks, workflow runs, failed
-  steps with log links, deployments; "Refresh CI / CD"; switches "Notify this
-  thread about CI / CD" and "Wake agent on GitHub changes". Review and merge
-  from the panel (merge needs an explicit choice).
+- **Sees:** a "CI / CD" section: the branch's PR, then only the sections
+  that have something (checks, workflow runs with failed steps and log
+  links, deployments; one line when there is none); "Refresh CI / CD". A
+  folded **Settings** bar holds the GitHub account and the switches "Notify
+  this thread about CI / CD" and "Wake agent on GitHub changes". A folded
+  **Pull requests** bar at the bottom lists every PR, publishing, review and
+  merge (merge needs an explicit choice). No explanation paragraphs.
 - **Prove:** steps not yet driven; needs a GitHub repo and account.
 - **Traps:** a passing check does not prove a deploy. GitHub text is
   treated as untrusted for the agent.

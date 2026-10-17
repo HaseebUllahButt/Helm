@@ -1482,22 +1482,37 @@ test('messages sent mid-turn queue in order; stop and withdraw take theirs with 
   assert.equal(back.text, 'fourth');
   assert.equal(sessions.dequeue(s.id, turnId).found, false, 'gone is gone');
 
-  // More tickets, then stop: the queue is part of what stops, so the
-  // interrupt does not fire the next message the moment it lands.
+  // More tickets, then stop: with messages waiting, Stop ends only the
+  // reply in flight, and the next message goes out as soon as it has.
   await sessions.input(s.id, 'fifth');
   await sessions.input(s.id, 'sixth');
-  await sessions.interrupt(s.id);
+  const stopping = sessions.interrupt(s.id);
+  await tick();
   assert.equal(d.interrupted, true);
   d.push('turn.done', { turnId: 't1', status: 'interrupted' });
   d.push('status', { status: 'idle' });
+  assert.deepEqual(await stopping, { ok: true, next: true });
   await tick(); await tick();
-  assert.deepEqual(d.sent, ['first', 'second', 'third', 'while you were asking']);
-
-  // The agent never saw these messages, so their bubbles are removed rather
-  // than rendered as stopped turns. The real turn above still ends stopped.
+  assert.deepEqual(d.sent, ['first', 'second', 'third', 'while you were asking', 'fifth']);
+  const after = sessions.get(s.id);
+  assert.equal(after.stoppedAt, undefined, 'the chat itself is not stopped');
+  assert.notEqual(after.recovery?.kind, 'interrupted', 'no card asking to continue');
   const removed = sessions.history(s.id).events.filter((e) => e.type === 'turn.remove');
-  assert.equal(removed.length, 3);
-  assert.ok(removed.some((e) => e.turnId === turnId));
+  assert.ok(removed.some((e) => e.turnId === turnId), 'the withdrawn one is still gone');
+  assert.ok(!removed.some((e) => ['fifth', 'sixth'].includes(sessions.history(s.id).events.find((x) => x.turnId === e.turnId && x.type === 'turn.start')?.text)));
+
+  // With nothing waiting, Stop is the full stop it always was.
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+  await tick(); await tick();
+  d.push('turn.done', { turnId: 't1', status: 'ok' });
+  d.push('status', { status: 'idle' });
+  await tick(); await tick();
+  assert.deepEqual(d.sent.slice(-2), ['fifth', 'sixth']);
+  d.interrupted = false;
+  assert.deepEqual(await sessions.interrupt(s.id), { ok: true });
+  assert.equal(d.interrupted, true);
+  assert.ok(sessions.get(s.id).stoppedAt);
 });
 
 test('a message typed mid-turn is held until a step runs, then handed over like the CLI does', async () => {
@@ -1590,6 +1605,30 @@ test('stop drops a message handed over but not yet used', async () => {
   const id = sessions.history(s.id).events.find((e) => e.text === 'never mind').turnId;
   await sessions.interrupt(s.id);
   assert.ok(sessions.history(s.id).events.some((e) => e.type === 'turn.remove' && e.turnId === id));
+});
+
+test('stop puts a handed-over message back in line when the CLI drops it with the reply', async () => {
+  const { Sessions } = await import('../packages/connect/src/sessions.js');
+  const { EventLog } = await import('../packages/connect/src/events.js');
+  const events = new EventLog(join(process.env.HELM_DIR, 'events-steer-stop-next'));
+  const sessions = new Sessions(new StubRuntime(), { events, makeDriver: (engine, opts) => Object.assign(new FakeDriver({ engine, ...opts }), { dropsHandedOnInterrupt: true }) });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const s = await sessions.start({ cwd: '/tmp', profileId: 'claudea' });
+  const d = FakeDriver.made.at(-1);
+  await sessions.input(s.id, 'first');
+  d.push('item.start', { id: 'cmd1', kind: 'command', turnId: 't1' });
+  await sessions.input(s.id, 'do this instead');
+  await tick(); await tick();
+  assert.equal(d.steered?.length, 1, 'handed over at the step');
+  const stopping = sessions.interrupt(s.id);
+  await tick();
+  d.push('turn.done', { turnId: 't1', status: 'interrupted' });
+  d.push('status', { status: 'idle' });
+  await stopping;
+  await tick(); await tick();
+  assert.equal(d.sent.at(-1), 'do this instead', 'sent as the next message');
+  const id = sessions.history(s.id).events.find((e) => e.type === 'turn.start' && e.text === 'do this instead').turnId;
+  assert.ok(!sessions.history(s.id).events.some((e) => e.type === 'turn.remove' && e.turnId === id));
 });
 
 /** Codex's real order: the thread reports idle a few ms before its turn completes. */

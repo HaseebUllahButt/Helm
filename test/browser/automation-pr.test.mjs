@@ -66,7 +66,7 @@ test('usage recovery opt-in sends a preference and keeps manual resume available
 });
 
 test('PR actions send comments, head-bound reviews and an explicitly confirmed merge', { timeout: 15000 }, async t => {
-  const page = await pageFor(t, 'showPRs'); await page.getByRole('button', { name: '#42 New feature', exact: true }).click();
+  const page = await pageFor(t, 'showPRs'); await page.locator('details.pull-requests > summary').click(); await page.getByRole('button', { name: '#42 New feature', exact: true }).click();
   await page.getByLabel('Comment / review', { exact: true }).fill('Please add coverage'); await page.getByRole('button', { name: 'Post comment', exact: true }).click();
   await page.waitForFunction(() => window.calls.some(c => c.method === 'git.pr-action' && c.params.action === 'comment'));
   await page.getByLabel('Review', { exact: true }).selectOption('APPROVE'); await page.getByRole('button', { name: 'Submit review', exact: true }).click();
@@ -79,7 +79,7 @@ test('PR actions send comments, head-bound reviews and an explicitly confirmed m
 });
 
 test('publishing sends selected files and complete PR metadata', { timeout: 15000 }, async t => {
-  const page = await pageFor(t, 'showPRs'); await page.getByRole('button', { name: 'Commit / push / create PR', exact: true }).click();
+  const page = await pageFor(t, 'showPRs'); await page.locator('details.pull-requests > summary').click(); await page.getByRole('button', { name: 'Commit / push / create PR', exact: true }).click();
   await page.getByLabel('Commit message', { exact: true }).fill('Add feature'); await page.getByLabel('App.tsx', { exact: true }).check();
   await page.getByLabel('PR title', { exact: true }).fill('Feature PR'); await page.getByLabel('Description', { exact: true }).fill('Feature details');
   await page.getByRole('button', { name: 'Commit, push and create PR', exact: true }).click(); await page.waitForFunction(() => window.calls.some(c => c.method === 'git.publish'));
@@ -87,7 +87,7 @@ test('publishing sends selected files and complete PR metadata', { timeout: 1500
 });
 
 test('agent wake and notification controls toggle independently', { timeout: 15000 }, async t => {
-  const page = await pageFor(t, 'showPipeline'); await page.getByRole('switch', { name: 'Wake agent on GitHub changes', exact: true }).click();
+  const page = await pageFor(t, 'showPipeline'); await page.locator('.pipeline > details.fold > summary', { hasText: 'Settings' }).click(); await page.getByRole('switch', { name: 'Wake agent on GitHub changes', exact: true }).click();
   await page.waitForFunction(() => window.agentEnabled); assert.equal(await page.getByRole('switch', { name: 'Notify this thread about CI / CD', exact: true }).getAttribute('aria-checked'), 'false');
   await page.getByRole('switch', { name: 'Notify this thread about CI / CD', exact: true }).click(); await page.waitForFunction(() => window.notifyEnabled);
   assert.equal(await page.getByRole('switch', { name: 'Wake agent on GitHub changes', exact: true }).getAttribute('aria-checked'), 'true');

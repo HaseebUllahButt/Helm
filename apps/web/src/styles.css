@@ -2,7 +2,15 @@
 @import './session/browser.css';
 
 /* Saved visual replies: controls belong to Helm; the page stays isolated. */
-.visual-reply { margin: 12px 0; border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.visual-reply { position: relative; margin: 12px 0; border: 1px solid var(--line-2); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.visual-open {
+  position: absolute; top: 6px; right: 6px; z-index: 1; display: grid; place-items: center; width: 30px; height: 30px;
+  border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--card) 88%, transparent);
+  color: var(--text-dim); opacity: 0; transition: opacity 0.15s var(--ease); cursor: pointer;
+}
+.visual-reply:hover .visual-open, .visual-open:focus-visible { opacity: 1; }
+.visual-open:hover { color: var(--text); }
+@media (hover: none) { .visual-open { opacity: 0.85; } }
 .visual-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; padding: 9px 12px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 12px; }
 .visual-bar strong { flex: 1; min-width: 100px; font-weight: 550; overflow-wrap: anywhere; }
 .visual-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
@@ -3577,3 +3585,36 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .agent-exchange-list > li { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
 .agent-exchange-list small { display: block; color: var(--text-dim); margin: 5px 0 10px; }
 .agent-exchange-list details { margin: 8px 0; }
+
+/* A folded bar: one quiet row that opens to what is behind it. Used where a
+   screen had more than its main job on show (Git's agents, CI / CD settings). */
+.fold { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+.fold > summary {
+  display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; cursor: pointer;
+  list-style: none; color: var(--text-dim); font-size: var(--t-body); font-weight: 550;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::after {
+  content: ''; margin-left: auto; width: 7px; height: 7px; border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor;
+  transform: rotate(-45deg); transition: transform 0.15s var(--ease); opacity: 0.7;
+}
+.fold[open] > summary::after { transform: rotate(45deg); }
+.fold > summary:hover { color: var(--text); }
+.fold-meta { color: var(--mutedfg); font-size: var(--t-meta); font-weight: 450; }
+.fold[open] { padding-bottom: 6px; }
+.fold > :not(summary) { margin-left: 12px; margin-right: 12px; }
+.git-fold { margin-bottom: 10px; }
+.git-fold > .git-checkouts { border: 0; background: none; margin: 0; }
+.pipeline > .fold { margin-top: 14px; }
+.pipeline .fold .pipeline-watch { margin: 8px 12px; }
+.pipeline-section.fold { border-top: 1px solid var(--line); padding-top: 0; margin-top: 22px; }
+
+/* Installed as an app on a desktop, Helm draws into the window's title bar
+   instead of under a bar that only repeated the chat's name. The window's
+   own buttons float over the top right corner, so the bars keep clear of
+   them, and the bars are where the window is dragged from. */
+@media (display-mode: window-controls-overlay) {
+  .bar { app-region: drag; -webkit-app-region: drag; padding-right: calc(10px + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)); }
+  .sidebar .bar.side { padding-right: 10px; }
+  .bar button, .bar a, .bar input, .bar select, .bar textarea, .bar [role="button"] { app-region: no-drag; -webkit-app-region: no-drag; }
+}

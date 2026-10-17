@@ -6,6 +6,8 @@ import { chromium } from '@playwright/test';
 import { build } from 'esbuild';
 
 let browser, page;
+/** An added diff line. Its "+" sign is a piece of its own, so match the code after it. */
+const addedLine = (scope, text) => scope.locator('.cv-row.add .cv-c', {hasText:new RegExp(`^${text}$`)});
 const shot = (name) => process.env.HELM_TEST_SCREENSHOT_DIR
   ? page.screenshot({path:join(process.env.HELM_TEST_SCREENSHOT_DIR,name),animations:'disabled'}) : null;
 before(async () => {
@@ -61,6 +63,7 @@ before(async () => {
         if(method === 'git.account') {window.githubAccount=params.login;return {selected:params.login};}
         if(method === 'git.watch') {window.pipelineWatching=params.on;return {watching:params.on};}
         if(method === 'git.jobs') return {jobs:[{id:7,name:'Build',state:'failure',url:'https://example.test/job/7',steps:[{number:2,name:'Compile application',state:'failure'}]}]};
+        if(method === 'git.files') return {root:'/project',start:'',files:['App.tsx','apps/web/src/session/GitGraph.tsx'],secret:[],truncated:false};
         if(method === 'session.list') return {sessions:agents};
         if(method === 'git.diff') {
           if(window.diffFails > 0){window.diffFails--;throw new Error('diff failed');}
@@ -105,7 +108,7 @@ test('a workflow rerun discards cached jobs from the previous attempt', async ()
   const before = await page.evaluate(()=>window.calls.filter(c=>c.method==='git.jobs').length);
   await page.evaluate(()=>{window.monitorAttempt=2});
   await page.getByRole('button',{name:'Refresh CI / CD',exact:true}).click();
-  await page.getByText('push · attempt 2',{exact:true}).waitFor();
+  await page.getByText('attempt 2',{exact:true}).waitFor();
   assert.equal(await workflow.getAttribute('aria-expanded'),'false');
   await workflow.click();
   await page.waitForFunction(n=>window.calls.filter(c=>c.method==='git.jobs').length>n,before);
@@ -113,6 +116,18 @@ test('a workflow rerun discards cached jobs from the previous attempt', async ()
   await page.evaluate(()=>{window.monitorAttempt=1});
 });
 after(async () => {await browser?.close()});
+/** Where agents work is a bar folded under the graph's title; open it. */
+async function openAgents(page) {
+  const fold = page.locator('details.git-fold');
+  await fold.waitFor();
+  if (await fold.getAttribute('open') === null) await fold.locator('summary').click();
+}
+/** CI / CD's account and notification switches live in a folded Settings bar. */
+async function openSettings(page) {
+  const fold = page.locator('.pipeline > details.fold').first();
+  await fold.waitFor();
+  if (await fold.getAttribute('open') === null) await fold.locator('summary').click();
+}
 
 test('graph shows merges and live agents on their checkouts, and opens the selected thread', async () => {
   await page.evaluate(()=>window.showGit());
@@ -124,6 +139,7 @@ test('graph shows merges and live agents on their checkouts, and opens the selec
   assert.equal(await pr.getAttribute('href'),'https://example.test/pull/42');
   assert.equal(await page.locator('.bar .sub').innerText().then((text)=>text.includes('main')),false,'the branch is not repeated under the title');
   await page.getByRole('tab',{name:'Graph',exact:true}).click();
+  await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();
   assert.equal(await page.locator('.git-dot').count(),4);
   assert.equal(await page.locator('.git-dot.merge').count(),1);
@@ -162,12 +178,16 @@ test('Git tabs remain keyboard accessible and preserve the file diff view', asyn
   assert.equal(await page.getByRole('tab',{name:'Graph',exact:true}).getAttribute('aria-selected'),'true');
   await page.keyboard.press('End');
   assert.equal(await page.getByRole('tab',{name:'CI / CD',exact:true}).getAttribute('aria-selected'),'true');
+  // Files sits between Changes and CI / CD, so one step back from CI / CD lands there.
+  await page.keyboard.press('ArrowLeft');
+  assert.equal(await page.getByRole('tab',{name:'Files',exact:true}).getAttribute('aria-selected'),'true');
   await page.keyboard.press('ArrowLeft');
   assert.equal(await page.getByRole('tab',{name:'Changes 2'}).getAttribute('aria-selected'),'true');
   await page.locator('.filemain').first().click();
-  await page.getByText('+after',{exact:true}).waitFor();
+  await addedLine(page,'after').waitFor();
   await shot('git-desktop-changes.png');
   await page.getByRole('tab',{name:'Graph',exact:true}).click();
+  await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();
   const before = await page.evaluate(()=>window.calls.filter((c)=>c.method==='git.graph').length);
   await page.evaluate(()=>window.notifyChange());
@@ -179,7 +199,7 @@ test('a commit opens to its message and files, and a file to its diff', async ()
   await page.getByText('Agents appear on the commit they have checked out.').waitFor();
   assert.ok(await page.locator('.git-through').count() >= 1, 'lanes carry on beside the opened commit');
   await page.locator('.git-file-row').click();
-  await page.getByText('+new line',{exact:true}).waitFor();
+  await addedLine(page,'new line').waitFor();
   await shot('git-desktop-commit.png');
   const asked = await page.evaluate(()=>window.calls.filter((c)=>c.method==='git.commit').map((c)=>c.params));
   assert.deepEqual(asked.map((p)=>p.path ?? null),[null,'apps/web/src/GitGraph.tsx']);
@@ -218,7 +238,7 @@ test('files can be marked viewed, and a failed diff can be retried', async () =>
   await page.locator('.filemain').nth(1).click();
   await page.getByText('Could not read this diff.').waitFor();
   await page.getByRole('button',{name:'Try again'}).click();
-  await page.getByText('+after',{exact:true}).waitFor();
+  await addedLine(page,'after').waitFor();
 });
 
 test('a clean folder and an unreachable history each say what is going on', async () => {
@@ -228,6 +248,7 @@ test('a clean folder and an unreachable history each say what is going on', asyn
   await page.getByText('Could not load Git history').waitFor();
   await page.getByText('git is busy').waitFor();
   await page.getByRole('button',{name:'Try again'}).click();
+  await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();
   await page.getByRole('tab',{name:'Changes',exact:true}).click();
   await page.getByText('Working tree clean').waitFor();
@@ -240,6 +261,7 @@ test('graph and branded notifications fit a phone, and dismissal does not naviga
   await page.evaluate(()=>window.showGit());
   await page.locator('.changes').waitFor({state:'visible'});
   await page.getByRole('tab',{name:'Graph',exact:true}).click();
+  await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();
   await page.evaluate(()=>window.showToast());
   await page.getByRole('button',{name:'Dismiss notification'}).waitFor();
@@ -273,7 +295,7 @@ test('on a phone the Git screen keeps to the width and its controls stay easy to
   await shot('git-mobile-graph.png');
   await page.locator('.git-line').filter({hasText:'Show where each agent is working'}).click();
   await page.locator('.git-file-row').click();
-  await page.getByText('+new line',{exact:true}).waitFor();
+  await addedLine(page,'new line').waitFor();
   assert.equal(await fits(),true,'an opened commit keeps to the width');
   await page.locator('.git-row.open').scrollIntoViewIfNeeded();
   await shot('git-mobile-commit-expanded.png');
@@ -283,7 +305,7 @@ test('on a phone the Git screen keeps to the width and its controls stay easy to
   await page.locator('.filemain').first().waitFor();
   await shot('git-mobile-changes-collapsed.png');
   await page.locator('.filemain').first().click();
-  await page.getByText('+after',{exact:true}).waitFor();
+  await addedLine(page,'after').waitFor();
   assert.equal(await fits(),true,'nothing in the file list spills off the side');
   for (const toggle of await page.locator('.viewedbox').all()) {
     const box = await toggle.boundingBox();
@@ -301,13 +323,13 @@ test('CI / CD shows PR readiness, failing steps, deployment boundaries, refresh 
   await page.setViewportSize({width:1280,height:900});
   await page.evaluate(()=>window.showGit());
   await page.getByRole('tab',{name:'CI / CD',exact:true}).click();
-  await page.getByText('GitHub reports ready to merge',{exact:true}).waitFor();
-  await page.getByText('Reviews approved',{exact:true}).waitFor();
+  await page.getByText('Ready to merge',{exact:true}).waitFor();
+  await page.getByText('Approved',{exact:true}).waitFor();
   await page.getByText('Unit tests',{exact:true}).waitFor();
   await page.getByRole('button',{name:/Build and deploy/}).click();
   await page.getByText('Failed step: Compile application',{exact:true}).waitFor();
   assert.equal(await page.getByRole('link',{name:'Build · logs'}).getAttribute('href'),'https://example.test/job/7');
-  await page.getByText('Deployment results come from GitHub. App health is not verified here.').waitFor();
+  await openSettings(page);
   const toggle = page.getByRole('switch',{name:'Notify this thread about CI / CD'});
   await toggle.click(); await page.waitForFunction(()=>window.pipelineWatching === true);
   assert.equal(await toggle.getAttribute('aria-checked'),'true');
@@ -346,8 +368,8 @@ for (const width of [320, 390, 768]) test(`the actual Git dialog fills a ${width
   assert.equal(await dialog.getByRole('heading',{name:'Git',exact:true}).count(),1);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true);
   await dialog.locator('.filemain').click();
-  await dialog.getByText('+after',{exact:true}).waitFor();
-  const wrap = dialog.getByRole('button',{name:'Wrap diff lines'});
+  await addedLine(dialog,'after').waitFor();
+  const wrap = dialog.getByRole('button',{name:'Wrap long lines'});
   assert.equal(await wrap.getAttribute('aria-pressed'),width < 600 ? 'true' : 'false');
   await wrap.click();
   assert.equal(await wrap.getAttribute('aria-pressed'),width < 600 ? 'false' : 'true');

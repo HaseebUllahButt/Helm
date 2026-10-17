@@ -5,8 +5,9 @@ shows as a card inside its parent, never as its own row in Working.
 
 ## Start a subagent from the app
 - **Sees:** chat header **Agents** button (the echo icon: a dot with two fading arcs) → an "Agents" sheet (no tabs; Git
-  and Browser have their own header buttons). It has a **Task** box, account / model / permission chips, "Works
-  in this thread's folder", and **Start subagent**. Running ones list under
+  and Browser have their own header buttons). A folded **New task** bar (closed even when there are no
+  tasks) opens a **Task** box, account / model / permission chips, **Cancel** and **Start subagent**; no hint
+  lines. Running ones list under
   "ACTIVE" with their own approval card (**Allow**, **Always allow**,
   **Deny**), "Message subagent", "Open conversation", "Stop subagent".
   Finished ones move to "FINISHED" with "Hide task".
