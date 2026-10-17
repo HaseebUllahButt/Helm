@@ -1030,6 +1030,9 @@ export class Sessions extends EventEmitter {
     try {
       const raw = JSON.parse(readFileSync(INDEX_FILE, 'utf8'));
       for (const s of raw.sessions || []) {
+        // Saved outside history uses the same chat and tray as live history.
+        // This only chooses its view; the provider stays lazy until input.
+        if (s.external && !s.driver && ENGINES[s.engine]?.driver) s.driver = s.engine;
         // Completion notifications are the normal behaviour for driven
         // threads. Preserve an explicit opt-out from an older client.
         if (s.driver && s.notifyDone == null) s.notifyDone = !s.delegation;
@@ -3102,6 +3105,7 @@ export class Sessions extends EventEmitter {
         externalHome: homeOf(profile),
         externalSource: true,
         externalActive: false,
+        driver: engine,
         adopted: true,
         status: found.status ?? 'idle',
         turns: found.turns ?? 0,
@@ -3111,6 +3115,7 @@ export class Sessions extends EventEmitter {
       this.#index.set(session.id, session);
       this.#save();
       this.emit('session', session);
+      await this.#importExternalTranscript(session);
       this.#watchTranscript(session.id, session.transcript);
       return session;
     }
@@ -3643,7 +3648,7 @@ export class Sessions extends EventEmitter {
   /** Backfill images when an existing imported chat is opened after upgrade. */
   async prepareHistory(id) {
     const s = this.get(id);
-    if (s.engine === 'codex' && s.externalSource && s.transcript && s.externalImagesVersion !== 1) {
+    if (s.external || s.engine === 'codex' && s.externalSource && s.transcript && s.externalImagesVersion !== 1) {
       await this.#importExternalTranscript(s);
     }
   }

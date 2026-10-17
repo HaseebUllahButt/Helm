@@ -59,10 +59,21 @@ machines with care.
   `copy-transport`, `bulk-transfer`.
 
 ## Take over a CLI that was open before Helm
+- **Sees (saved history):** opening a saved Claude, Codex, OpenCode or Pi
+  conversation shows its messages and the normal chat tray. The next
+  message resumes that conversation. Opening alone starts no agent. A
+  terminal in the same folder does not hide the saved conversation.
 - **Sees:** a notice in that chat with **Take over**; mid-task it waits for
   the current step.
 - **CLI:** `helm integrate [--remove]` makes normal `claude` / `codex`
   commands run under Helm.
-- **Prove:** steps not yet driven; needs a real CLI.
+- **Prove:** use `test/helpers/external-fixtures.mjs` to put outside histories
+  in the private copy's home and add its profiles. Open each history from
+  the machine screen at phone and desktop size; check its answer, model
+  picker and other supported tray controls, then reload and check again.
+  Keep its working folder outside `/tmp` (those histories are hidden).
+  This proves saved-history display without using a real account. Taking
+  over an actual provider still needs a real CLI.
 - **Tests:** `test/takeover`, `native-cli`, `native-launchers`,
-  `native-claude-chat`.
+  `native-claude-chat`, `external-open`; `test/browser/external-open` and
+  `test/browser/native-cli-tray`.

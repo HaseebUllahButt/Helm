@@ -300,22 +300,12 @@ const foundRow = (x: InventorySession): Session => ({
 /**
  * The threads a machine's CLIs recorded on their own minus the ones this
  * screen already shows: helm's own record of the same thread (its
- * engineSessionId is the CLI's id), or the history file of an agent that is
- * live right now in the same folder - that one is the live row above, not a
- * second thread.
+ * engineSessionId is the CLI's id). A terminal in the same folder is not
+ * proof of identity: hiding history for it leaves only a terminal to open.
  */
 function dedupeDetected(list: Session[], found: InventorySession[]): InventorySession[] {
   const own = new Set(list.filter((s) => s.engineSessionId).map((s) => `${s.engine}:${s.engineSessionId}`));
-  const live = list.filter((s) => s.alive && s.paneId && !s.engineSessionId);
-  const now = Date.now();
-  return found.filter((x) => {
-    if (own.has(`${x.engine}:${x.id}`)) return false;
-    if ((x.updatedAt ?? 0) > now - 15 * 60_000 &&
-        live.some((s) => s.engine === x.engine && collapseCwd(s.cwd) === collapseCwd(x.cwd))) {
-      return false;
-    }
-    return true;
-  });
+  return found.filter((x) => !own.has(`${x.engine}:${x.id}`));
 }
 
 /**

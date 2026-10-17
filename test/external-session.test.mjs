@@ -132,6 +132,9 @@ test('already imported completed Codex images recover once, survive reopening, a
   const { Sessions } = await import('../packages/connect/src/sessions.js');
   const sessions = new Sessions(new Runtime(), { makeDriver: () => { throw Error('history must not start an agent'); } });
   const session = await sessions.resumeExternal({ engine: 'codex', account: 'codex', id });
+  // Recreate the log written by the old parser, before opening imported images.
+  sessions.events.remove(session.id);
+  delete session.externalImagesVersion;
   const turnId = 'imported-old-image';
   sessions.events.append(session.id, { type: 'turn.start', turnId, text, imported: true });
   sessions.events.append(session.id, { type: 'item.start', id: 'old-answer', turnId, kind: 'text' });
@@ -362,9 +365,10 @@ test('an inactive Devin history opens without starting a provider process', asyn
     engine: 'devin', account: found.account, id: devinId, cwd: '/tmp/Maser', title: found.title,
   });
   assert.equal(opened.external, true);
-  assert.equal(opened.driver, undefined);
+  assert.equal(opened.driver, 'devin');
   assert.equal(started, false, 'opening history must not start Devin');
-  assert.deepEqual((await sessions.messages(opened.id)).messages.map((m) => m.text), ['old prompt', 'old answer']);
+  assert.ok(sessions.history(opened.id).events.some(e => e.type === 'turn.start' && e.text === 'old prompt'));
+  assert.ok(sessions.history(opened.id).events.some(e => e.type === 'item.delta' && e.text === 'old answer'));
 });
 
 
