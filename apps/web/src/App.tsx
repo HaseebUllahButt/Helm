@@ -2,7 +2,6 @@ import { useCopySelection } from './useCopySelection';
 import { knownInside, listFolder, loadFolders } from './folderIndex';
 import { groqDirect, keepVoice, keptVoice, toBase64, type DirectVoice, type Transcribe } from './session/voice';
 import { useDismiss } from './useDismiss';
-import { reloadApp } from './reload';
 import { openPrivateLink } from './privateLink';
 import { useCallback, useEffect, useRef, useState, lazy, Suspense, type FormEvent, type ReactNode } from 'react';
 import { Confirm, Sheet, TextPrompt } from './Modal';
@@ -53,15 +52,20 @@ import { loadAuthSync, loadAuthDurable, saveAuth, clearAuth, type StoredAuth } f
 import { loadBrains, saveBrain, forgetBrain, type RememberedBrain } from './brainStore';
 import { brainHost } from '@helm/protocol/brain-host';
 import {
-  Client, login, validMachineName, MACHINE_NAME_RULE, LOOPBACK_HOST, isCleartext, CLEARTEXT_NOTE,
-  type Environment, type Profile, type Session, type SendJob, type DirEntry, type Message, type ModelList, type NativeControl, type ModelPrefs, type ModelNote,
-  type InventorySession, type Device, type Project, type MediaRoot, type MediaEntry, type NativeAgent,
+  Client, login, validMachineName, MACHINE_NAME_RULE, LOOPBACK_HOST, isCleartext, CLEARTEXT_NOTE, type Environment, type Session,
+  type SendJob, type DirEntry, type Message, type ModelList, type NativeControl, type ModelNote, type InventorySession, type Device,
+  type Project, type MediaRoot, type MediaEntry, type NativeAgent,
 } from './client';
 import { money, bytes, busyWord, needsAttention, runningThread, settledThread, unknownThread, listedThread } from './format';
 import { loadModels, saveModels } from './modelCache';
 import { followModelRefresh } from './modelRefresh';
 import { loadMessages, saveMessages } from './session/logCache';
 import { loadWorkspace, loadWorkspaceDurable, saveWorkspace, updateWorkspaceSession, forgetWorkspace, workspaceScope } from './workspaceCache';
+import { engineOf } from './engines';
+import { useLiveInterval } from './useLiveInterval';
+import { shortPath, ownTerminal, byRecent, ago, startSummary } from './screens/common';
+import { Gear, Play, Meter, Sliders } from './screens/icons';
+
 
 type Auth = StoredAuth;
 type PairingTarget = { endpoint: string; password: string };
@@ -154,26 +158,6 @@ function useWide() {
   return wide;
 }
 
-// ------------------------------------------------------------------ engines
-
-// The badge itself is EngineMark; this is what an engine is called.
-const ENGINE: Record<string, { label: string; cls: string }> = {
-  claude:   { label: 'Claude Code', cls: 'claude' },
-  codex:    { label: 'Codex',       cls: 'codex' },
-  opencode: { label: 'opencode',    cls: 'opencode' },
-  opencode2:{ label: 'OpenCode 2',  cls: 'opencode2' },
-  devin:    { label: 'Devin',       cls: 'devin' },
-  grok:     { label: 'Grok',        cls: 'grok' },
-  cursor:   { label: 'Cursor',      cls: 'cursor' },
-  pi:       { label: 'Pi',          cls: 'pi' },
-  omp:      { label: 'OMP',         cls: 'omp' },
-  agy:      { label: 'Antigravity CLI', cls: 'agy' },
-  antigravity: { label: 'Antigravity', cls: 'agy' },
-  gemini:   { label: 'Gemini',      cls: 'gemini' },
-  kimi:     { label: 'Kimi',        cls: 'kimi' },
-  muse:     { label: 'Muse',        cls: 'muse' },
-  shell:    { label: 'Terminal',    cls: 'shell' },
-};
 /**
  * xterm is a third of this app's JavaScript and matters only once a terminal
  * is open, so it is fetched then rather than on every cold start. The wait is
@@ -201,43 +185,6 @@ function ViewLoading({ title, onBack }: { title: string; onBack: () => void }) {
 
 const DONE_FOR_MS = 3 * 24 * 60 * 60_000;
 
-const engineOf = (id?: string) => ENGINE[id ?? ''] ?? { label: id ?? 'agent', cls: 'other' };
-
-/**
- * Settings, drawn rather than typed. `⚙` is U+2699, which most systems render
- * from the emoji font - so the quietest button on the bar came out as a
- * full-colour cyan gear, the brightest thing on the screen.
- */
-const Meter = () => (
-  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-    <path d="M5 20V10M12 20V5M19 20v-7" />
-  </svg>
-);
-
-const Sliders = () => (
-  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-    <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
-    <circle cx="16" cy="7" r="2.2" /><circle cx="10" cy="17" r="2.2" />
-  </svg>
-);
-
-const Play = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
-    <path d="M8 5.5v13l11-6.5z" />
-  </svg>
-);
-
-const Gear = () => (
-  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-    <path strokeLinejoin="round" d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" />
-    <circle cx="12" cy="12" r="3" />
-  </svg>
-);
-
 /**
  * A folder's short name, and the path only when it says something extra.
  *
@@ -251,16 +198,7 @@ const projectNote = (cwd: string) => {
   return name === cwd ? undefined : cwd;
 };
 
-const shortPath = (p: string) => {
-  const parts = p.replace(/\/$/, '').split('/');
-  return parts.length > 3 ? '…/' + parts.slice(-2).join('/') : p;
-};
 const pathOf = (s: Session) => (s.quick ? 'quick chat' : shortPath(s.cwd));
-
-const byRecent = (a: Session, b: Session) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-
-/** A terminal helm opened and still holds - not a shell someone runs at the keyboard. */
-const ownTerminal = (s: Session) => s.engine === 'shell' && !s.archived && s.alive !== false && !s.adopted;
 
 /**
  * How far back a machine screen looks, and what the window does not apply to.
@@ -421,32 +359,6 @@ function supportedViews(views: MainView[]): MainView[] {
 /** A request answered elsewhere, or a session that just started waiting -
     the toast the sidebar cannot show while it is hidden behind a session. */
 interface Toast { envId: string; session: Session; at: number }
-
-/**
- * An interval that pauses while the page is hidden and catches up the
- * moment it comes back.
- *
- * Every poll in the app - session lists, transcripts, a machine's last
- * word - used to keep asking while the phone sat in a pocket with the
- * screen off, on a metered connection that did not care nobody was
- * looking. A hidden tab needs no fresher answer than the one it has, and
- * on wake the first tick comes immediately rather than up to `ms` late.
- * `ms` of null means do not poll at all.
- */
-function useLiveInterval(ms: number | null, fn: () => void, deps: readonly unknown[] = []) {
-  const ref = useRef(fn);
-  ref.current = fn;
-  useEffect(() => {
-    if (ms == null) return;
-    const tick = () => { if (!document.hidden) ref.current(); };
-    const timer = setInterval(tick, ms);
-    const wake = () => { if (!document.hidden) ref.current(); };
-    document.addEventListener('visibilitychange', wake);
-    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', wake); };
-    // The callback is read through a ref; deps are the caller's own
-    // interests, like any other effect.
-  }, deps); // eslint-disable-line react-hooks/exhaustive-deps
-}
 
 function Shell({ client, conn, onSignOut }: {
   client: Client; conn: { online: boolean; reachable: boolean; error?: string }; onSignOut: () => void;
@@ -4069,16 +3981,6 @@ function MachineKind({ client, env, onChanged }: {
   );
 }
 
-const startSummary = (a: Account) => {
-  const values = [
-    a.prefs?.default?.replace(/^[^/]+\//, ''),
-    a.defaults?.effort,
-    a.defaults?.mode,
-    a.defaults?.speed,
-  ].filter(Boolean);
-  return values.length ? `starts ${values.join(' · ')}` : "starts with the CLI's defaults";
-};
-
 /**
  * The settings page: everything that used to fill the bottom of the home
  * screen.
@@ -4875,7 +4777,6 @@ function MediaView({ client, env, onBack }: {
 
 // -------------------------------------------------------------------- start
 
-
 /**
  * One screen, one decision: which account runs here.
  *
@@ -5414,7 +5315,6 @@ function SessionView({ client, env, machines, session, terminals = [], onSwitch,
     return () => window.removeEventListener('keydown', onKey);
   }, [session.nativeChat, session.mode, raw, nativeOptions, settingBusy, sending, status, env.online]);
 
-
   const composer = (ask: { banner?: ReactNode; ask?: 'question' | 'approval' } = {}) => (
     <Composer
       {...ask}
@@ -5598,16 +5498,6 @@ function NativeClaudeApprovals({ client, env, sessionId, handle, children }: {
     {pending && <PermissionSheet key={pending.requestId} permission={pending} busy={busy} onAnswer={d => void answer(d)} />}
     {error && <div className="error" role="alert">{error}</div>}
   </div></div>;
-}
-
-
-function ago(ts: number | null | undefined) {
-  if (!ts || !Number.isFinite(ts)) return '';
-  const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 0 || s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }
 
 function Chat({ messages, status, compacting = false, readVisual }: { messages: Message[] | null; status: string; compacting?: number | boolean; readVisual?: VisualReader }) {
