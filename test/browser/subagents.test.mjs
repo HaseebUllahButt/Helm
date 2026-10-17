@@ -296,7 +296,7 @@ test('desktop and phone headers open unified details with accessible Git navigat
       await dialog.getByRole('tabpanel', {name:'Graph',exact:true}).waitFor();
       assert.deepEqual(await dialog.getByRole('tab').evaluateAll(tabs => tabs.map(tab => [tab.textContent.trim(), tab.getAttribute('aria-selected'),
         !tab.hasAttribute('aria-controls') || !!document.getElementById(tab.getAttribute('aria-controls'))])),
-        [['Graph', 'true', true], ['Changes 2', 'false', true], ['CI / CD', 'false', true]], 'every tab points only at a panel that exists');
+        [['Graph', 'true', true], ['Changes 2', 'false', true], ['Files', 'false', true], ['CI / CD', 'false', true]], 'every tab points only at a panel that exists');
       await dialog.getByRole('tab', {name:'Graph',exact:true}).press('ArrowRight');
       await dialog.getByRole('tabpanel', {name:/^Changes/}).waitFor();
       assert.equal(await view.getByRole('dialog').count(), 1);
@@ -779,6 +779,72 @@ test('a subagent whose parent can pass messages on takes one from its chat', asy
         && c.params.agentId === 'kid' && c.params.data === 'Check the quote path too')));
       assert.equal(await box.inputValue(), '');
       await capture(view, `native-message-${width}.png`);
+    } finally { await view.close(); }
+  }
+});
+
+// The Git button went missing more than once because it showed only for a
+// chat whose own folder is a Git project. It is always in the header now;
+// a chat in a config folder that edits a project elsewhere shows that project.
+test('the Git button is always in the header, and follows the project a chat edited', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { DrivenSession } from './apps/web/src/session/DrivenSession';
+    const env = { id:'git-test', name:'Laptop', online:true, info:{} };
+    const chat = (id, edits) => ({ session:{ id, title:'Config chat', cwd:'/home/me/.config/tool', engine:'codex', profileId:'codex', status:'idle', driver:true },
+      events: edits ? [
+        { seq:1, at:1, type:'turn.start', turnId:'t1', text:'fix it' },
+        { seq:2, at:2, type:'item.start', turnId:'t1', id:'e1', kind:'edit', changes:[{ path:'/home/me/code/tool/src/web.py', kind:'update', diff:'' }] },
+        { seq:3, at:3, type:'item.done', id:'e1', status:'ok' },
+        { seq:4, at:4, type:'turn.done', turnId:'t1', status:'ok' },
+      ] : [] });
+    const scene = chat(location.hash.slice(1), location.hash === '#edited');
+    window.asked = [];
+    const client = { on: () => () => {}, subscribe: () => {},
+      rpc: async (env, method, params) => {
+        if (method === 'model.list') return { models:[], modes:[] };
+        if (method === 'agent.list') return { agents:[] };
+        if (method === 'session.list') return { sessions:[] };
+        if (method === 'session.watch') return { last:0 };
+        if (method === 'session.events') return { session:scene.session, events:scene.events, pending:[], last:scene.events.length };
+        if (method === 'git.status') {
+          window.asked.push(params.cwd);
+          return params.cwd.startsWith('/home/me/code/tool') ? { repo:true, root:'/home/me/code/tool', branch:'main', head:{commit:'abc'},
+            files:[{path:'src/web.py',status:'M',add:3,del:1}] } : { repo:false };
+        }
+        if (method === 'git.graph') return { repo:true, commits:[], worktrees:[] };
+        if (method === 'git.pr') return { pr:null };
+        return { ok:true };
+      },
+    };
+    createRoot(document.getElementById('root')).render(<DrivenSession client={client} env={env} session={scene.session} onBack={()=>{}} onClosed={()=>{}} onArchived={()=>{}} onSession={()=>{}} />);
+  `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true, write:false, format:'iife', jsx:'automatic' });
+  const styles = (await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'');
+  for (const scene of ['edited', 'untouched']) {
+    const view = await browser.newPage({ viewport:{width:390,height:844} });
+    view.setDefaultTimeout(10_000);
+    try {
+      await view.route('http://helm-git-test/**', route => route.fulfill({contentType:'text/html',body:'<meta name="viewport" content="width=device-width, initial-scale=1"><div class="session" id="root"></div>'}));
+      await view.goto(`http://helm-git-test/#${scene}`);
+      await view.addStyleTag({ content:styles });
+      await view.addScriptTag({ content:bundle.outputFiles[0].text });
+      const bar = view.locator('.session-bar');
+      if (scene === 'edited') {
+        const git = bar.getByRole('button', {name:'Git: 1 changed files',exact:true});
+        await git.waitFor();
+        await git.click();
+        const dialog = view.getByRole('dialog', {name:'Git',exact:true});
+        await dialog.getByRole('tab', {name:/^Changes/}).waitFor();
+        assert.ok((await view.evaluate(() => window.asked)).includes('/home/me/code/tool/src'), 'Git is read where the chat edited');
+      } else {
+        const git = bar.getByRole('button', {name:'Git',exact:true});
+        await git.waitFor();
+        await git.click();
+        const dialog = view.getByRole('dialog', {name:'Git',exact:true});
+        await dialog.getByText('This folder is not a Git project, and the chat has not changed files in one yet.').waitFor();
+      }
+      assert.equal(await bar.getByRole('button', {name:'Agents',exact:true}).count(), 1);
     } finally { await view.close(); }
   }
 });

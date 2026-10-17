@@ -4,7 +4,7 @@ A helper (subagent) is a second chat started by a chat, on any account. It
 shows as a card inside its parent, never as its own row in Working.
 
 ## Start a subagent from the app
-- **Sees:** chat header **Agents** button → an "Agents" sheet (no tabs; Git
+- **Sees:** chat header **Agents** button (a small robot head) → an "Agents" sheet (no tabs; Git
   and Browser have their own header buttons). It has a **Task** box, account / model / permission chips, "Works
   in this thread's folder", and **Start subagent**. Running ones list under
   "ACTIVE" with their own approval card (**Allow**, **Always allow**,

@@ -22,6 +22,8 @@ export interface GitStatus {
   ahead?: number; behind?: number; worktree?: boolean;
   head?: { commit: string; subject: string } | null;
   files?: GitFile[]; more?: number;
+  /** The machine could not be asked; said in the Git sheet rather than hiding the button. */
+  error?: string;
 }
 
 /** The folder's git state, refreshed when `key` changes - a turn ending is the usual reason. */
@@ -29,7 +31,8 @@ export function useGitStatus(client: Client, env: Environment, cwd: string, key:
   const [status, setStatus] = useState<GitStatus | null>(null);
   const load = useCallback(() => {
     if (!env.online || !cwd) return;
-    client.rpc<GitStatus>(env.id, 'git.status', { cwd }, 20_000).then(setStatus).catch(() => {});
+    client.rpc<GitStatus>(env.id, 'git.status', { cwd }, 20_000).then(setStatus)
+      .catch((error) => setStatus((now) => now?.repo ? now : { repo: false, error: error instanceof Error ? error.message : String(error) }));
   }, [client, env.id, env.online, cwd]);
   useEffect(load, [load, key]);
   return { status, reload: load };

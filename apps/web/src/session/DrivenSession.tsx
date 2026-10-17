@@ -11,6 +11,7 @@ import { RecoveryCard } from './RecoveryCard';
 import { Controls, trayPrefs, type Kind } from './Controls';
 import { Transcript, splitNote, isCompaction } from './Transcript';
 import { useGitStatus } from './Changes';
+import { changesOf } from './stepWords';
 import { expandPastes } from './pasteStore';
 import { Confirm, TextPrompt, Sheet } from '../Modal';
 import { loadDraft, saveDraft } from '../draftStore';
@@ -57,6 +58,23 @@ const rejectedDelivery = (error: { code?: string }) => !!error.code && !retryabl
  * the prompt sheet when the agent is waiting, and the model and permission
  * mode changeable from the header while it runs.
  */
+const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
+
+/** The folder of the newest file a chat changed, by its full path. */
+function lastEditedDir(turns: Turn[]): string {
+  for (let t = turns.length - 1; t >= 0; t -= 1) {
+    const items = turns[t].items;
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const item = items[i];
+      // Only edit steps are read: a command's input is never parsed here.
+      if (item.kind !== 'edit' && !(item.kind === 'tool' && EDIT_TOOLS.has(item.name ?? ''))) continue;
+      const path = changesOf(item).map((change) => change.path).reverse().find((p) => p?.startsWith('/'));
+      if (path) return path.slice(0, path.lastIndexOf('/')) || '/';
+    }
+  }
+  return '';
+}
+
 export function DrivenSession({ client, env, machines, session, conn, onBack, onClosed, onArchived, onSession, onTranscribe, onSettings, onOpenSession, onSendTask, onSendFolder, onOpenMachineSession, onOpenNative, reviewChildren }: {
   client: Client; env: Environment; session: Session;
   /** Every machine, for settings that belong to the account and so apply on all of them. */
@@ -627,7 +645,17 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
   // What the folder looks like to git. Asked again whenever a turn ends,
   // which is when something has usually just changed. A quick chat has no
   // folder of its own to ask about.
-  const git = useGitStatus(client, env, session.quick ? '' : session.cwd, working ? 'working' : `rest:${session.updatedAt ?? 0}`);
+  const gitKey = working ? 'working' : `rest:${session.updatedAt ?? 0}`;
+  const ownGit = useGitStatus(client, env, session.quick ? '' : session.cwd, gitKey);
+  // A chat started in a folder that is not a Git project (a config folder, a
+  // quick chat) often edits one somewhere else. That project is its Git.
+  // The log is updated in place, so this is a walk back from the newest step
+  // on each render, stopping at the first edit.
+  const editedDir = lastEditedDir(log.turns);
+  const otherGit = useGitStatus(client, env, ownGit.status?.repo ? '' : editedDir, gitKey);
+  const git = !ownGit.status?.repo && otherGit.status?.repo ? otherGit : ownGit;
+  // Empty when there is nowhere to read Git: a quick chat that has not edited anything.
+  const gitCwd = git === otherGit ? otherGit.status?.root ?? editedDir : session.quick ? editedDir : session.cwd;
   const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
 
   // The clip is only offered when the running model can see images;
@@ -697,8 +725,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
         </div>
         {cloning ? <span className="chip working" role="status"><i />cloning {session.clone!.percent}%</span> : chip(status)}
         {/* Git gets its own button with the count of changed files: it is
-            the thing most often checked. The other opens agents and repeats. */}
-        {git.status?.repo && !session.brain && (
+            the thing most often checked. The other opens agents and repeats.
+            It is always there, Git project or not: hiding it when a folder was
+            not one made it vanish more than once. The sheet says why instead. */}
+        {!session.brain && (
           <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
             onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         )}
@@ -822,7 +852,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       </Composer>
 
       {browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
-      {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} reloadGit={git.reload} onClose={() => setDetails(null)}
+      {details && <ThreadDetails onNativeAttention={() => { setDetails(null); setReviewNative(true); }} reviewAttention={!!reviewChildren} key={reviewChildren} client={client} env={env} session={session} tab={details} git={git.status} gitCwd={gitCwd} reloadGit={git.reload} onClose={() => setDetails(null)}
         onOpen={onOpenSession ? (item) => { setDetails(null); onOpenSession(item); } : undefined}
         onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
       {editingQueue && <QueueEdit turn={editingQueue} busy={!!queueBusy} onCancel={() => setEditingQueue(null)} onSave={async (text, attachments) => {

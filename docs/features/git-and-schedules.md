@@ -1,11 +1,14 @@
 # Git and CI / CD
 
-Git needs a folder chat; quick chats have no Git button. The private copy's
-home is its own (`/tmp/helm-verify-<you>/home`); make a throwaway repo there
-first.
+Every chat has a **Git** button (not the Helm brain). It vanished more
+than once when it showed only for chats whose own folder is a Git project;
+keep it unconditional. A chat whose folder is not a project (a config
+folder, a quick chat) shows the project it last edited files in; with none,
+the Git sheet says so. The private copy's home is its own
+(`/tmp/helm-verify-<you>/home`); make a throwaway repo there first.
 
 ## Git: graph, changes and files
-- **Sees:** a **Git** button in a folder chat's header ("Git: 3 changed
+- **Sees:** a **Git** button in every chat's header ("Git: 3 changed
   files") opens the Git screen with tabs **Graph**, **Changes**, **Files**,
   **CI / CD**. Graph: the last 80 commits; tap one for details, a file for
   its diff. Changes: +/- counts, each diff, a "viewed" tick. Commit, push and
