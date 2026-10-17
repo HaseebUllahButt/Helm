@@ -84,7 +84,7 @@ export class SessionTitles {
    * came up with and is never overwritten afterwards.
    */
   rename(id, title) {
-    this.#core.assertRewindUnlocked(id);
+    this.#core.rewinder.assertRewindUnlocked(id);
     const s = this.#sessions.get(id);
     if (s.adopted) throw new Error('an external session is named by the program that started it');
     const clean = String(title ?? '').replace(/\s+/g, ' ').trim();

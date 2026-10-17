@@ -3,15 +3,13 @@ import { reportedMode } from './native-settings.js';
 import { piChatArgs, BASH_GUARD_MODES } from './pi-settings.js';
 import { nativeAccount } from './native-account.js';
 import { nativeCommands, nativeControlCommand, nativeSettingCommand } from './native-controls.js';
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, rmSync, lstatSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { HELM_DIR, expand, quickDir, isQuickDir } from './paths.js';
 import { Checkpoints } from './checkpoints/store.js';
-import { overlaps, workspace, validateRestore, readSnapshot } from './checkpoints/files.js';
-import { realpathSync } from 'node:fs';
 import { getProfiles, loadProfiles, materialize } from './profiles.js';
 import { locate, messages as readMessages, sessionSnapshot, sessionActivity } from './transcript.js';
 import { findSubagentsDir, nativeActive, nativeAgentFile, nativeSubagent, nativeSubagents, nativeWorking, subagentsDir } from './native-subagents.js';
@@ -51,6 +49,7 @@ import { acceptAttachments, acceptImages, driverTakesImages, saveUploads } from 
 import { externalInput, transcriptEvents } from './session-transcript-events.js';
 import { clip, missingClaudeConversation, parentLink } from './session-text.js';
 import { SessionTitles } from './session-titles.js';
+import { SessionRewind } from './session-rewind.js';
 
 export { DRIVERS, wire } from './session-wire.js';
 export { driverTakesImages, acceptAttachments, saveUploads, acceptImages } from './session-attachments.js';
@@ -179,10 +178,6 @@ export class Sessions extends EventEmitter {
   #adopted = new Map();
   /** sessionId -> live driver */
   #drivers = new Map();
-  #rewinding = new Set();
-  #restoreRoots = new Set();
-  #captureRoots = new Map();
-  #providerRevisions = new Map();
   checkpoints = new Checkpoints();
   /** sessionId -> an in-flight managed connection shared by joining clients */
   #connections = new Map();
@@ -362,13 +357,25 @@ export class Sessions extends EventEmitter {
    * from outside the way a public field would be.
    */
   #titles;
+  #rewinder;
   #makeParts() {
     const core = {
       index: this.#index,
+      drivers: this.#drivers,
+      outbox: this.#outbox,
+      sending: this.#sending,
+      steered: this.#steered,
+      awaitingEcho: this.#awaitingEcho,
+      settling: this.#settling,
+      closedTurns: this.#closedTurns,
       save: this.#save.bind(this),
-      assertRewindUnlocked: this.#assertRewindUnlocked.bind(this),
+      startDriven: this.#startDriven.bind(this),
+      driverStarts: this.#driverStarts,
+      driver: this.#driver.bind(this),
+      bindDriver: this.#bindDriver.bind(this),
     };
     core.titles = this.#titles = new SessionTitles(this, core);
+    core.rewinder = this.#rewinder = new SessionRewind(this, core);
   }
 
   #terminal(s) { return s.nativeCli ? this.nativeTerminals : this.terminals; }
@@ -1536,193 +1543,10 @@ export class Sessions extends EventEmitter {
       && !this.events.activeTurn(id) && !this.events.pending(id).length && !this.hasActiveDelegations(id);
   }
 
-  #assertRewindUnlocked(id, cwd = this.#index.get(id)?.cwd) {
-    if (this.#index.get(id)?.rewindFailure) throw new Error('Rewind recovery must finish before this conversation can change.');
-    if (this.#rewinding.has(id)) throw new Error('This conversation is being rewound.');
-    if (cwd && (this.#restoreRoots.size || this.#captureRoots.size)) {
-      const path = realpathSync(expand(cwd));
-      if ([...this.#restoreRoots].some(root => overlaps(root, path))) throw new Error('This workspace is being restored.');
-      if ([...this.#captureRoots].some(([root, owner]) => owner !== id && overlaps(root, path))) throw new Error('This workspace is being checkpointed.');
-    }
-  }
-
-  #captureWorkspace(s) {
-    const root = realpathSync(s.cwd);
-    const dotGit = join(root, '.git');
-    if (!existsSync(dotGit)) throw new Error('File restore requires an isolated Git worktree at its root.');
-    if (lstatSync(dotGit).isDirectory()) throw new Error('File restore requires an isolated Git worktree; the main checkout cannot be restored.');
-    if (!lstatSync(dotGit).isFile()) throw new Error('File restore requires an isolated Git worktree.');
-    if (this.hasActiveDelegations(s.id)) throw new Error('Descendants are still using this workspace.');
-    for (const other of this.#index.values()) {
-      if (other.id === s.id || !other.cwd || !(other.driver || other.nativeCli || other.externalActive || ['working', 'blocked', 'starting', 'shell'].includes(other.status))) continue;
-      let path;
-      try { path = realpathSync(expand(other.cwd)); }
-      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      if (overlaps(root, path)) throw new Error('This workspace is shared with another session; file capture is unavailable.');
-    }
-    return root;
-  }
-
-  #rewindTarget(id, turnId) {
-    const s = this.#index.get(id);
-    if (!s?.driver) throw new Error('No such driven conversation.');
-    if (!DRIVERS[s.driver]?.canRewind || s.external || s.nativeSocket || s.nativeCli || s.shared) throw new Error('This provider does not support safe rewind in Helm.');
-    if (!['idle', 'done', 'exited'].includes(s.status) || this.#sending.has(id) || this.#settling.has(id)
-      || this.#driverStarts.has(id) || this.#outbox.get(id)?.length || this.#steered.get(id)?.length
-      || this.events.pending(id).length || this.hasActiveDelegations(id)) throw new Error('Wait for this conversation, queued messages, and descendants to finish before rewinding.');
-    const events = this.events.tail(id, 0);
-    const turn = events.find(e => e.type === 'turn.start' && e.turnId === turnId && !e.local && !e.wake && !e.queued);
-    const checkpointId = turn?.checkpoint ?? events.find(e => e.type === 'turn.checkpoint' && e.turnId === turnId)?.checkpoint;
-    if (!turn || !checkpointId) throw new Error('This message has no saved rewind checkpoint.');
-    return { s, turn, checkpoint: this.checkpoints.get(checkpointId, id) };
-  }
-
-  #restoreSafety(s, checkpoint, detected = []) {
-    if (!checkpoint.files) throw new Error(checkpoint.filesReason || 'No file checkpoint is available.');
-    const { root } = workspace(s.cwd);
-    for (const other of [...this.#index.values(), ...detected]) {
-      if (other.id === s.id || !other.cwd) continue;
-      // An idle conversation can start a new turn at any time. Require an
-      // exclusive workspace even for idle/archived conversations still owned.
-      const active = other.driver || other.nativeCli || other.externalActive || ['working', 'blocked', 'starting', 'shell'].includes(other.status);
-      if (!active) continue;
-      let path;
-      try { path = realpathSync(expand(other.cwd)); }
-      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      if (overlaps(root, path)) throw new Error('This worktree is shared with another session. Rewind without restoring files.');
-    }
-    if (this.hasActiveDelegations(s.id)) throw new Error('Descendants are still using this workspace.');
-    validateRestore(s.cwd, join(this.checkpoints.path(checkpoint.id), 'files'));
-    return root;
-  }
-
-  async rewindCheck(id, turnId) {
-    const { s, checkpoint } = this.#rewindTarget(id, turnId);
-    try { this.#restoreSafety(s, checkpoint, await this.list({ includeDetected: true, includeDelegations: true })); return { restoreFiles: true }; }
-    catch (error) { return { restoreFiles: false, reason: error.message }; }
-  }
-
-  async rewind(id, turnId, { restoreFiles: restore = false } = {}) {
-    if (typeof restore !== 'boolean') throw new Error('restoreFiles must be a boolean.');
-    this.#assertRewindUnlocked(id);
-    const { s, turn, checkpoint } = this.#rewindTarget(id, turnId);
-    const root = restore ? this.#restoreSafety(s, checkpoint) : null;
-    this.#rewinding.add(id);
-    if (root) this.#restoreRoots.add(root);
-    let candidate = null, recoveryId = null, recovery = null, original = null, committed = false, applying = false;
-    try {
-      // Validate the draft before making any provider or workspace changes.
-      const attachments = checkpoint.attachments.map(a => {
-        const data = a.data ?? this.events.attachment(id, a.ref);
-        if (!data) throw new Error('An attachment is no longer stored; rewind cannot restore this draft safely.');
-        return { filename: a.filename, mime: a.mime, data };
-      });
-      original = await this.#driver(s);
-      if (typeof original.prepareRewind !== 'function') throw new Error('This provider cannot prepare a safe rewind.');
-      recoveryId = await this.checkpoints.archive(s, this.events, false);
-      recovery = JSON.parse(readFileSync(join(this.checkpoints.path(recoveryId), 'recovery.json'), 'utf8'));
-      recovery.restore = restore;
-      if (restore) recovery.owned = readSnapshot(join(this.checkpoints.path(checkpoint.id), 'files')).files.map(file => file.name);
-      const options = await original.prepareRewind({ ...checkpoint, turnId: turn.turnId });
-      const profile = (await getProfiles()).find(p => p.id === s.profileId);
-      if (!profile) throw new Error('The account for this conversation is no longer available.');
-      const spec = materialize(profile);
-      const procId = `${id}-rewind-${recoveryId}`;
-      candidate = this.makeDriver(s.driver, { cmd: spec.cmd, env: { ...spec.env, PATH: pathWithShim(spec.env?.PATH), HELM_SESSION_ID: id,
-        HELM_PROFILE_ID: s.profileId, HELM_ENGINE: s.engine, HELM_CWD: s.cwd }, args: spec.args,
-        cwd: s.cwd, model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
-        instructions: original.instructions, delegated: !!s.delegation, procHost: this.procs, procId, ...options });
-      await candidate.validateRewind();
-      if (['working', 'blocked', 'exited'].includes(candidate.status)) throw new Error('The provider did not prepare an idle rewind.');
-      if (!candidate.engineSessionId || candidate.engineSessionId === recovery.session.engineSessionId) throw new Error('The provider did not confirm a separate rewind conversation.');
-      if (root) this.#restoreSafety(s, checkpoint, await this.list({ includeDetected: true, includeDelegations: true }));
-      this.#rewindTarget(id, turnId);
-      if (this.events.last(id) !== recovery.events.at(-1)?.seq || s.engineSessionId !== recovery.session.engineSessionId) throw new Error('The conversation changed while rewind was being prepared; try again after it settles.');
-      if (restore) {
-        await this.checkpoints.captureRecoveryFiles(recoveryId, s.cwd);
-        this.#restoreSafety(s, checkpoint, await this.list({ includeDetected: true, includeDelegations: true }));
-        this.#rewindTarget(id, turnId);
-        if (this.events.last(id) !== recovery.events.at(-1)?.seq || s.engineSessionId !== recovery.session.engineSessionId) throw new Error('The conversation changed while rewind was being prepared; try again after it settles.');
-      }
-      // No await from the journal through the commit: a new Helm turn cannot
-      // enter this workspace between the final safety check and publication.
-      this.checkpoints.write(recoveryId, 'recovery.json', { ...recovery, phase: 'applying' });
-      applying = true;
-      if (restore) this.checkpoints.restore(s.cwd, join(this.checkpoints.path(checkpoint.id), 'files'), { lockToken: recoveryId });
-      Object.assign(s, options, { engineSessionId: candidate.engineSessionId, rewindProcId: procId, status: 'idle', updatedAt: Date.now(), queuePaused: false });
-      for (const key of ['context', 'lastUsage', 'recovery', 'nativeAgents', 'nativeCards', 'team', 'stoppedAt', 'externalSource', 'costTotalUsd']) delete s[key];
-      const next = this.events.rewind(id, checkpoint.history);
-      s.lastSeq = next.at(-1).seq;
-      this.#save();
-      this.checkpoints.write(recoveryId, 'recovery.json', { ...recovery, phase: 'committed', newEngineSessionId: s.engineSessionId });
-      committed = true;
-      this.#bindDriver(s, candidate, profile);
-      this.#awaitingEcho.delete(id); this.#closedTurns.delete(id);
-      this.emit('session', s);
-      // The reset event also invalidates every connected device's old history.
-      for (const event of next) this.emit('event', { id, event });
-      return { session: { ...wire(s) }, draft: { text: checkpoint.text, attachments, references: checkpoint.references }, recoveryId };
-    } catch (error) {
-      if (recovery && applying && !committed) {
-        try {
-          if (restore) this.checkpoints.restore(recovery.session.cwd, join(this.checkpoints.path(recoveryId), 'recovery-files'), { owned: recovery.owned, lockToken: recoveryId });
-          this.events.replace(id, recovery.events);
-          for (const key of Object.keys(s)) delete s[key];
-          Object.assign(s, recovery.session);
-          this.#save();
-          this.checkpoints.write(recoveryId, 'recovery.json', { ...recovery, phase: 'rolled-back', error: error.message });
-        } catch (rollbackError) {
-          // Keep the applying journal for startup recovery and block sends.
-          s.rewindFailure = recoveryId;
-          throw new Error(`Rewind recovery is required (${recoveryId}): ${rollbackError.message}`, { cause: error });
-        }
-      }
-      throw error;
-    } finally {
-      if (!committed && candidate) await candidate.kill().catch(error => this.log(`rewind candidate cleanup: ${error.message}`));
-      if (committed && original) await original.kill().catch(error => this.log(`rewind old provider cleanup: ${error.message}`));
-      if (!committed && s.rewindFailure && original) {
-        // A failed compensation must not leave an agent able to write into
-        // partially restored files while startup recovery is still required.
-        original.removeAllListeners?.('event');
-        this.#drivers.delete(id);
-        await original.kill().catch(error => this.log(`rewind recovery provider cleanup: ${error.message}`));
-      }
-      this.#rewinding.delete(id);
-      if (root && !s.rewindFailure) this.#restoreRoots.delete(root);
-    }
-  }
-
-  /**
-   * Branch a conversation: a new thread that starts as this one was just
-   * before `turnId`, so the same question can be put differently.
-   *
-   * Only the conversation is rewound, and only in the copy. This thread is
-   * left exactly as it is, and the files in the folder are not touched - the
-   * branch sees them as they are now, which is the point of keeping them.
-   * Claude Code only: it is the CLI that can cut a conversation at a message.
-   */
-  async fork(id, turnId) {
-    const s = this.#index.get(id);
-    if (!s?.driver) throw new Error('no such thread');
-    if (s.engine !== 'claude') throw new Error('only Claude Code threads can be branched so far');
-    let at = null;
-    let seen = false;
-    for (const e of this.events.tail(id, 100_000)) {
-      if (e.type === 'turn.start' && e.turnId === turnId) { seen = true; break; }
-      if (e.type === 'turn.done' && e.resumeAt) at = e.resumeAt;
-    }
-    if (!seen) throw new Error('that message is not in this conversation');
-    if (!at) throw new Error('nothing comes before that message, so there is nothing to branch from');
-    if (!s.engineSessionId) throw new Error('this thread has no conversation to branch yet');
-    const profile = (await getProfiles()).find((p) => p.id === s.profileId);
-    if (!profile) throw new Error(`unknown profile: ${s.profileId}`);
-    return this.#startDriven({
-      cwd: s.cwd, quick: !!s.quick, profile, title: `${s.title} (branch)`,
-      model: s.model, effort: s.effort, mode: s.mode, speed: s.speed,
-      forkFrom: { sessionId: s.engineSessionId, at },
-    });
-  }
+  // Rewind and fork (session-rewind.js)
+  rewindCheck(id, turnId) { return this.#rewinder.rewindCheck(id, turnId); }
+  rewind(id, turnId, options) { return this.#rewinder.rewind(id, turnId, options); }
+  fork(id, turnId) { return this.#rewinder.fork(id, turnId); }
 
   async start({ cwd, quick = false, profileId, title, model, auto, effort, mode, speed, brain = false, parent = null, originHandoffId = null, delegation = null, originAutomationId = null, clone = null }) {
     if (originAutomationId != null) {
@@ -1735,7 +1559,7 @@ export class Sessions extends EventEmitter {
     }
     if (quick && cwd) throw new Error('a quick chat has no folder: send quick or cwd, not both');
     if (!quick && !cwd) throw new Error('which folder? send cwd, or quick for a chat with no folder');
-    this.#assertRewindUnlocked(null, cwd ? expand(cwd) : null);
+    this.#rewinder.assertRewindUnlocked(null, cwd ? expand(cwd) : null);
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === profileId);
     if (!profile) throw new Error(`unknown profile: ${profileId}`);
@@ -2022,7 +1846,7 @@ export class Sessions extends EventEmitter {
   }
 
   async #startTerminal({ dir, profileId, title, env, parent = null, originHandoffId = null }) {
-    this.#assertRewindUnlocked(null, dir);
+    this.#rewinder.assertRewindUnlocked(null, dir);
     const session = {
       id: randomBytes(6).toString('hex'),
       pty: true,
@@ -2055,7 +1879,7 @@ export class Sessions extends EventEmitter {
   // ---------------------------------------------------------- headless agents
 
   async #startDriven({ cwd, quick = false, profile, title, model, effort, mode, speed, auto, brain = false, engineSessionId = null, transcript = null, parent = null, originHandoffId = null, forkFrom = null, delegation = null, originAutomationId = null, cloning = null }) {
-    this.#assertRewindUnlocked(null, cwd ? expand(cwd) : null);
+    this.#rewinder.assertRewindUnlocked(null, cwd ? expand(cwd) : null);
     const id = randomBytes(6).toString('hex');
     // A quick chat's folder is made for it, empty, and named by its id. A
     // branch of one keeps its parent's: the CLI files a conversation under
@@ -2372,7 +2196,7 @@ export class Sessions extends EventEmitter {
   #onDriverEvent(s, d, e) {
     const current = this.#drivers.get(s.id);
     if (current !== d && (current || e.type !== 'status')) return;
-    if (!['limits', 'title', 'settings', 'context'].includes(e.type)) this.#providerRevisions.set(s.id, (this.#providerRevisions.get(s.id) ?? 0) + 1);
+    if (!['limits', 'title', 'settings', 'context'].includes(e.type)) this.#rewinder.providerRevisions.set(s.id, (this.#rewinder.providerRevisions.get(s.id) ?? 0) + 1);
     // A command card (/status, /usage) answers beside the task. It is not
     // the task's reply, and its end is not the task's end.
     if (e.type === 'turn.start' && e.local === true) {
@@ -3478,7 +3302,7 @@ export class Sessions extends EventEmitter {
   }
 
   async interrupt(id, visited = new Set()) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     if (visited.has(id)) return { ok: true };
     // Stop with a message waiting means "drop this reply, take my next
     // one": only the reply ends, and the waiting message goes straight out.
@@ -3621,7 +3445,7 @@ export class Sessions extends EventEmitter {
   }
 
   async setMode(id, mode) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     if (mode === 'plan') throw new Error('plan mode is not supported; dispatch the task directly');
     const s = this.get(id);
     if (s.nativeCli && s.engine === 'pi') {
@@ -3730,7 +3554,7 @@ export class Sessions extends EventEmitter {
   }
 
   async setEffort(id, effort) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     const s = this.get(id);
     if (s.nativeChat && s.engine === 'claude') {
       const level = effort || 'auto';
@@ -3750,7 +3574,7 @@ export class Sessions extends EventEmitter {
   }
 
   async setSpeed(id, speed) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     const s = this.get(id);
     if (!s.driver) throw new Error('not a headless session');
     s.speed = speed || null;
@@ -3795,7 +3619,7 @@ export class Sessions extends EventEmitter {
    * without `ask` is one the owner already confirmed.
    */
   async setModel(id, model, { pick = false, ask = false } = {}) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     const s = this.get(id);
     if (s.nativeChat && s.engine === 'claude') {
       const value = model || 'default';
@@ -4124,7 +3948,7 @@ export class Sessions extends EventEmitter {
    * wants a whole message handed to the agent as a prompt.
    */
   async input(id, text, { raw = false, attachments = [], turnId: requestedTurnId = null, delivery = 'auto', references = [], source = 'user' } = {}) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     const s = this.get(id);
     const stopGeneration = s.stopGeneration ?? 0;
     if (!['auto', 'queue', 'steer'].includes(delivery)) throw new Error('invalid message delivery mode');
@@ -4332,7 +4156,7 @@ export class Sessions extends EventEmitter {
       // This event is both the optimistic chat bubble and the durable queue
       // ticket. Persist it before starting/resuming a driver, so a daemon
       // restart can recover a message accepted during that await.
-      this.#assertRewindUnlocked(id);
+      this.#rewinder.assertRewindUnlocked(id);
       const event = this.events.append(id, {
         type: 'turn.start', turnId, text: commandText, queued: busy,
         delivery, references, referenceContext, ...(source === 'agent' ? { source } : {}),
@@ -4447,7 +4271,7 @@ export class Sessions extends EventEmitter {
    * but it says so out loud rather than dropping them silently.
    */
   async #deliver(s, item, d = null) {
-    this.#assertRewindUnlocked(s.id);
+    this.#rewinder.assertRewindUnlocked(s.id);
     if (this.#discardConsumedResult(s, item.turnId)) return;
     if (this.#retiring.has(s.id)) d = null;
     let echo = null;
@@ -4470,13 +4294,13 @@ export class Sessions extends EventEmitter {
       if (s.stoppedAt || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0)) || !this.#index.has(s.id)) throw new Error('message cancelled because the thread was stopped');
       if (!item.text.trimStart().startsWith('/') && DRIVERS[s.driver]?.canRewind && d.status === 'idle' && !s.nativeSocket && !s.external) {
         let root = null, filesReason = null;
-        const revision = this.#providerRevisions.get(s.id) ?? 0;
-        try { root = this.#captureWorkspace(s); this.#captureRoots.set(root, s.id); }
+        const revision = this.#rewinder.providerRevisions.get(s.id) ?? 0;
+        try { root = this.#rewinder.captureWorkspace(s); this.#rewinder.captureRoots.set(root, s.id); }
         catch (error) { filesReason = error.message; }
         let checkpoint;
         try { checkpoint = await this.checkpoints.capture(s, item, this.events, { filesReason }); }
-        finally { if (root) this.#captureRoots.delete(root); }
-        if (this.#drivers.get(s.id) !== d || revision !== (this.#providerRevisions.get(s.id) ?? 0)
+        finally { if (root) this.#rewinder.captureRoots.delete(root); }
+        if (this.#drivers.get(s.id) !== d || revision !== (this.#rewinder.providerRevisions.get(s.id) ?? 0)
           || s.stoppedAt || (item.stopGeneration != null && item.stopGeneration !== (s.stopGeneration ?? 0)) || !this.#index.has(s.id)) throw new Error('The conversation changed while checkpointing; send again after it settles.');
         item.checkpoint = checkpoint.id;
         const event = this.events.append(s.id, { type: 'turn.checkpoint', turnId: item.turnId, checkpoint: checkpoint.id });
@@ -4553,7 +4377,7 @@ export class Sessions extends EventEmitter {
    * the order the messages were typed.
    */
   #pump(s) {
-    if (this.#rewinding.has(s.id) || this.#sending.has(s.id) || this.#settling.has(s.id) || s.queuePaused || s.stoppedAt || this.#preparing(s)) return;
+    if (this.#rewinder.rewinding.has(s.id) || this.#sending.has(s.id) || this.#settling.has(s.id) || s.queuePaused || s.stoppedAt || this.#preparing(s)) return;
     const q = this.#outbox.get(s.id);
     if (!q?.length) return;
     if (s.status === 'working' || s.status === 'blocked') return;
@@ -4636,7 +4460,7 @@ export class Sessions extends EventEmitter {
    * `found: false` rather than an error.
    */
   dequeue(id, turnId) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     const s = this.get(id);
     const q = this.#outbox.get(id) ?? [];
     const i = q.findIndex((x) => x.turnId === turnId);
@@ -4653,7 +4477,7 @@ export class Sessions extends EventEmitter {
 
   /** `attachments`, when given, replaces the message's images: added, kept or removed. */
   editQueued(id, turnId, text, attachments) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     const session = this.get(id);
     const images = attachments === undefined ? null : acceptImages(attachments);
     if (typeof text !== 'string' || text.length > 32000 || (!text.trim() && !images?.length)) throw new Error('queued messages need 1–32000 characters');
@@ -4671,7 +4495,7 @@ export class Sessions extends EventEmitter {
   }
 
   reorderQueue(id, turnIds) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     const session = this.get(id);
     const queue = this.#outbox.get(id) ?? [];
     if (this.#sending.has(id)) throw new Error('a message is being delivered; try again');
@@ -4814,7 +4638,7 @@ export class Sessions extends EventEmitter {
    * follows when the CLI says it used the message.
    */
   async sendNow(id, turnId) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     const s = this.get(id);
     const item = (this.#outbox.get(id) ?? []).find((x) => x.turnId === turnId);
     if (!item) return { ok: true, found: false, sent: false };
@@ -5103,7 +4927,7 @@ export class Sessions extends EventEmitter {
   }
 
   async kill(id) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     // A row read out of a CLI's own history: there is no process to stop and
     // nothing of ours to delete. "Delete" here means stop listing it - the
     // CLI's own transcript is its data, not helm's, and stays where it is.
@@ -5141,7 +4965,7 @@ export class Sessions extends EventEmitter {
       this.#settled(id);
       this.#commandCards.delete(id);
       this.#closedTurns.delete(id);
-      this.#providerRevisions.delete(id);
+      this.#rewinder.providerRevisions.delete(id);
       clearTimeout(this.#reapers.get(id));
       if (d) await d.kill();
       this.#index.delete(id);
@@ -5254,7 +5078,7 @@ export class Sessions extends EventEmitter {
 
   /** Hide a session from the active list without stopping or deleting it. */
   archive(id, archived = true) {
-    this.#assertRewindUnlocked(id);
+    this.#rewinder.assertRewindUnlocked(id);
     // Nothing of helm's to write on, so the mark is the record. Archiving one
     // of these is the only way to get a machine's own terminal panes and a
     // CLI's year of history out of the way without pretending they are gone.
