@@ -59,7 +59,11 @@
   --muted:     rgb(235 235 235 / 4%);
   --accent:    rgb(235 235 235 / 7%);
   --hover:     rgb(235 235 235 / 8%);
-  --select:    rgb(154 134 255 / 15%);
+  --select:    rgb(255 255 255 / 8%);
+  /* What marks "this one" and "how full": the open row, usage bars, the
+     context ring, a finished tick. White here; the other themes use their
+     accent. */
+  --hi:        #e6e6e6;
   --line:      rgb(235 235 235 / 9%);
   --line-2:    rgb(235 235 235 / 15%);
   --input:     rgb(235 235 235 / 14%);
@@ -159,6 +163,7 @@
 
 /* Optional navy palette; the default dark theme stays graphite. */
 :root[data-theme="navy"] {
+  --hi: var(--primary-q);
   --bg: #081b26;
   --card: #102c38;
   --sidebar: #102c38;
@@ -243,7 +248,7 @@ code, pre, kbd { font-family: var(--mono); }
     border: 1px solid var(--line); background: var(--raised); color: var(--text);
   }
   .rail-chat:hover { background: var(--select); }
-  .rail-chat.active { background: var(--select); border-color: var(--primary-q); }
+  .rail-chat.active { background: var(--select); border-color: color-mix(in srgb, var(--hi) 55%, transparent); }
   .rail-chat.rail-working { color: var(--mutedfg); }
   .rail-dot {
     position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%;
@@ -457,17 +462,17 @@ code, pre, kbd { font-family: var(--mono); }
 .row.active, .rows .row.active { position: relative; background: var(--select); color: var(--text); }
 .row.active::after {
   content: ''; position: absolute; left: 0; top: 11px; bottom: 11px; width: 3px;
-  border-radius: 0 3px 3px 0; background: var(--primary-q);
+  border-radius: 0 3px 3px 0; background: var(--hi);
 }
 .row.active .rt { font-weight: 600; }
-.row.active:hover:not(:disabled) { background: color-mix(in srgb, var(--primary-q) 17%, transparent); }
-.sidebar .thread-row.active { box-shadow: inset 0 0 0 1px var(--primary-q); }
+.row.active:hover:not(:disabled) { background: color-mix(in srgb, var(--hi) 12%, transparent); }
+.sidebar .thread-row.active { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hi) 55%, transparent); }
 .sidebar .thread-row.active::after { display: none; }
 /* In the sidebar the row's body is a button beside its ⋯: the body carries the highlight, not the wrapper. */
 .sidebar .row.rowx.tri-row.active { background: none; }
 .sidebar .row.rowx.tri-row.active::after { display: none; }
-.sidebar .rowx .rowmain.thread-row.active { background: var(--select); box-shadow: inset 0 0 0 1px var(--primary-q); }
-.sidebar .rowx .rowmain.thread-row.active:hover { background: color-mix(in srgb, var(--primary-q) 17%, transparent); }
+.sidebar .rowx .rowmain.thread-row.active { background: var(--select); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hi) 55%, transparent); }
+.sidebar .rowx .rowmain.thread-row.active:hover { background: color-mix(in srgb, var(--hi) 12%, transparent); }
 /* Picked in select mode. */
 .rows .row.tall.sel { background: var(--select); }
 
@@ -1353,7 +1358,7 @@ pre.snippet {
 .limits-line .lw { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .limits-line .lw b { color: var(--text-dim); font-weight: 550; }
 .limits-meter { width: 28px; height: 3px; background: var(--line-2); border-radius: 3px; overflow: hidden; }
-.limits-meter i { display: block; height: 100%; background: var(--primary-q); }
+.limits-meter i { display: block; height: 100%; background: var(--hi); }
 .limits-line .lw.warn, .limits-line .lw.warn b { color: var(--amber-text); }
 .limits-line .lw.bad, .limits-line .lw.bad b { color: var(--red); }
 .lw.warn .limits-meter i { background: var(--amber); } .lw.bad .limits-meter i { background: var(--red); }
@@ -1916,6 +1921,7 @@ button.sheet-editlink:hover { color: var(--text); }
    =========================================================================== */
 
 :root[data-theme="light"] {
+  --hi: var(--primary-q);
   /* The same slate, by day: a cool paper page, white panels, a sidebar one
      step down. Every text step is at least 4.5:1 on every one of them. */
   --bg:        #f3f4f7;
@@ -2776,7 +2782,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tstat.working { color: var(--sky); }
 .tstat.needs { color: var(--amber-text); font-weight: 650; }
 .tstat.failed { color: var(--red); }
-.tstat.unread { color: var(--emerald); }
+.tstat.unread { color: var(--hi); }
+:root:is([data-theme="light"], [data-theme="navy"]) .tstat.unread { color: var(--emerald); }
 .tstat.quiet { color: var(--mutedfg); font-weight: 450; }
 .tspin { animation: tspin 1.6s linear infinite; }
 @keyframes tspin { to { transform: rotate(360deg); } }
@@ -2845,7 +2852,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   background: color-mix(in oklab, var(--primary) 14%, transparent);
   overflow: hidden;
 }
-.usage-meter span { display: block; height: 100%; border-radius: 999px; background: var(--primary-t); }
+.usage-meter span { display: block; height: 100%; border-radius: 999px; background: var(--hi); }
+:root:is([data-theme="light"], [data-theme="navy"]) .usage-meter span { background: var(--primary-t); }
 .usage-account-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 28px; margin-top: 14px; }
 .usage-allowance {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 6px 10px;
@@ -3031,7 +3039,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .ctx-meter svg { display: block; flex: none; }
 .ctx-ring-bg, .ctx-ring { fill: none; stroke-width: 2; }
 .ctx-ring-bg { stroke: var(--line-2); }
-.ctx-ring { stroke: var(--primary-q); stroke-linecap: round; }
+.ctx-ring { stroke: var(--hi); stroke-linecap: round; }
 .ctx-pct { color: var(--text-dim); font-weight: 550; font-variant-numeric: tabular-nums; }
 .ctx-detail { display: none; }
 .ctx-meter.warn .ctx-ring { stroke: var(--amber); } .ctx-meter.warn .ctx-pct { color: var(--amber-text); }
