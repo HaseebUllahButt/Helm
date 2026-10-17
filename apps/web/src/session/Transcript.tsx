@@ -5,6 +5,7 @@ import type { Change, Item, Turn, Permission } from './types';
 import { seconds } from '../format';
 import { Icon, toolKind, type IconName } from '../Icon';
 import { userMessage } from './userMessage';
+import { splitAgentMessage } from './agentMessage';
 import { stripBrief } from '@helm/protocol/brief';
 import { plainError } from './problem';
 import { VisualReply, Visuals, type VisualReader } from './VisualReply';
@@ -574,7 +575,9 @@ const HELM_NOTE = /^((?:\[helm [^\]\n]*\]\n\n)+)([\s\S]*)$/;
 export function splitNote(text?: string): { note?: string; text?: string } {
   if (text) text = stripBrief(text);
   const m = text ? HELM_NOTE.exec(text) : null;
-  return m ? { note: m[1].trim(), text: m[2] } : { text };
+  const shown = splitAgentMessage(m ? m[2] : text);
+  const note = [m?.[1].trim(), shown.note].filter(Boolean).join('\n');
+  return note ? { note, text: shown.text } : shown;
 }
 
 /** How long ago a bubble was sent, in the transcript's own quiet type. */

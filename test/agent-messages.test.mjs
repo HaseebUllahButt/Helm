@@ -12,14 +12,15 @@ const { InputDelivery } = await import('../packages/connect/src/input-delivery.j
 const { runMessageCommand } = await import('../packages/connect/src/agent-message-cli.js');
 const mid = n => n.toString(16).padStart(32,'0');
 function setup(t) {
-  const dir = mkdtempSync(join(root,'case-')), sent=[], updates=[];
+  const dir = mkdtempSync(join(root,'case-')), sent=[], updates=[], queued=new Map();
   const rows=new Map(['parent','one','two','other'].map(id=>[id,{id,title:id,driver:'claude',engine:'claude',model:'opus',status:'idle',
     ...(id==='one'||id==='two'?{delegation:{parentId:'parent'}}:{})}]));
   const sessions={ get:id=>{if(!rows.has(id))throw Error('No such chat');return rows.get(id);},list:async()=>[...rows.values()],
-    turnState:()=>null, input:async(id,text,options)=>{sent.push({id,text,options});return {ok:true};} };
+    turnState:()=>null, input:async(id,text,options)=>{sent.push({id,text,options});queued.set(options.turnId,{id,text});return {ok:true};},
+    dequeue:(id,turnId)=>({ok:true,found:queued.get(turnId)?.id===id && queued.delete(turnId)}) };
   const delivery=new InputDelivery(sessions,{dir:join(dir,'delivery')});
   const make=()=>new AgentMessages({sessions,delivery,self:'local',dir:join(dir,'messages'),rpc:()=>assert.fail('unexpected remote'),emit:p=>updates.push(p)});
-  return {service:make(),make,dir,rows,sent,updates,sessions,delivery};
+  return {service:make(),make,dir,rows,sent,updates,sessions,delivery,queued};
 }
 test('siblings exchange short named messages and replies; parent sees each once, unrelated chats see none',async t=>{
   const f=setup(t);
@@ -101,4 +102,86 @@ test('different payloads cannot share an in-flight message ID before its record 
   const sending=f.service.send(p);
   await assert.rejects(f.service.send({...p,text:'Different'}),{code:'delivery_conflict'});
   await sending;assert.equal(f.sent.length,1);
+});
+
+test('reading the inbox clears only returned incoming agent tickets, not history reads or owner prompts',async t=>{
+  const f=setup(t);
+  for(let n=1;n<=5;n++)await f.service.send({id:'one',to:{env:'local',id:'parent'},text:`Update ${n}`,messageId:mid(n)});
+  await f.service.send({id:'parent',to:{env:'local',id:'one'},text:'Owner followup',messageId:mid(6),asUser:true});
+  await f.service.list('parent');
+  assert.equal(f.queued.size,6,'the Agents panel does not consume input');
+  await assert.rejects(f.service.list('parent',{consume:true,callerThreadId:'wrong'}),/does not match/);
+  const page=await f.service.list('parent',{consume:true,limit:2});
+  assert.equal(f.queued.size,5,'only one incoming message in this page; owner input stays');
+  assert.equal(page.messages.filter(m=>m.readAt).length,1);
+  await f.make().list('parent',{consume:true});
+  assert.equal(f.queued.size,1);
+  await f.make().send({id:'one',to:{env:'local',id:'parent'},text:'Update 1',messageId:mid(1)});
+  assert.equal(f.queued.size,1,'an acknowledged ticket is not requeued after restart');
+});
+
+test('collecting a helper result returns every unread reply and removes its queued copies once',async t=>{
+  const f=setup(t);
+  for(let n=1;n<=55;n++)await f.service.send({id:'one',to:{env:'local',id:'parent'},text:`Update ${n}`,messageId:mid(n)});
+  await f.service.send({id:'two',to:{env:'local',id:'parent'},text:'Unrelated progress',messageId:mid(60)});
+  assert.deepEqual(await f.service.collectResult({id:'one',parentId:'parent'}),[]);
+  const messages=await f.service.collectResult({id:'one',parentId:'parent',consume:true});
+  assert.equal(messages.length,55,'no silent loss at the history page boundary');
+  assert.equal(messages[0].text,'Update 1');assert.equal(messages.at(-1).text,'Update 55');
+  assert.equal(f.queued.size,1,'other helpers remain queued');
+  assert.deepEqual(await f.make().collectResult({id:'one',parentId:'parent',consume:true}),[]);
+  assert.equal((await f.service.list('parent')).messages.length,30,'history is preserved');
+  f.rows.get('parent').stopGeneration=1;
+  assert.deepEqual(await f.service.collectResult({id:'two',parentId:'parent',consume:true}),[]);
+  assert.equal(f.queued.size,1,'stale result collectors cannot clear new work');
+});
+
+test('identical replies with new IDs deliver once, while changed answers and different questions survive',async t=>{
+  const f=setup(t);
+  await f.service.send({id:'parent',to:{env:'local',id:'one'},text:'Status?',messageId:mid(1)});
+  const reply={id:'one',replyTo:mid(1),text:'All checks passed.'};
+  const results=await Promise.all([2,3,4,5,6].map(n=>f.service.send({...reply,messageId:mid(n)})));
+  assert.equal(f.sent.length,2,'one question and one reply');
+  assert.equal(new Set(results.map(r=>r.message.id)).size,1);
+  assert.equal((await f.make().send({...reply,messageId:mid(7)})).duplicate,true);
+  await f.service.send({...reply,text:'One check now fails.',messageId:mid(8)});
+  await f.service.send({id:'parent',to:{env:'local',id:'one'},text:'Status?',messageId:mid(9)});
+  await f.service.send({...reply,replyTo:mid(9),messageId:mid(10)});
+  assert.equal(f.sent.length,5);
+});
+
+test('CLI inbox reads acknowledge only its own chat, with the native caller identity',async()=>{
+  const calls=[];
+  const deps={self:'local',senderId:'parent',callerThreadId:'native-thread',findSession:async()=>({env:'remote',session:{id:'other'}}),
+    rpc:async(env,method,p)=>{calls.push({env,method,p});return {messages:[]};},write:()=>{}};
+  await runMessageCommand('messages',['--json'],deps);
+  assert.deepEqual(calls[0].p,{id:'parent',consume:true,callerThreadId:'native-thread'});
+  await runMessageCommand('messages',['other','--json'],deps);
+  assert.deepEqual(calls[1].p,{id:'other'});
+});
+
+test('a reply retried with a fresh ID after a lost remote acknowledgement reuses the original delivery',async t=>{
+ const f=setup(t),g=setup(t);let loseReply=true;
+ const local=new AgentMessages({sessions:f.sessions,delivery:f.delivery,self:'local',dir:join(f.dir,'local'),rpc:async(_env,method,p)=>method==='session.agent-address'?{address:remote.address(p.id)}:remote.receive(p.message,'local')});
+ const remote=new AgentMessages({sessions:g.sessions,delivery:g.delivery,self:'remote',dir:join(g.dir,'remote'),rpc:async(_env,method,p)=>{
+  if(method==='session.agent-address')return {address:local.address(p.id)};
+  const result=await local.receive(p.message,'remote');
+  if(loseReply){loseReply=false;throw Error('Acknowledgement lost');}return result;
+ }});
+ await local.send({id:'one',to:{env:'remote',id:'two'},text:'Status?',messageId:mid(1)});
+ const reply={id:'two',replyTo:mid(1),text:'All passed.'};
+ await assert.rejects(remote.send({...reply,messageId:mid(2)}),/unconfirmed/);
+ await remote.send({...reply,messageId:mid(3)});
+ assert.equal(f.sent.length,1);
+ assert.equal((await remote.list('two')).messages.find(m=>m.replyTo)?.id,mid(2));
+});
+
+test('a deduplicated CLI reply prints the original usable reply ID',async()=>{
+ const lines=[];
+ await runMessageCommand('reply',[mid(1),'--message-id',mid(9),'--','Same answer'],{
+  self:'local',senderId:'one',callerThreadId:undefined,write:s=>lines.push(s),
+  rpc:async()=>({duplicate:true,message:{id:mid(2),to:{title:'Parent'}}})
+ });
+ assert.match(lines[0],new RegExp(`Message ${mid(2)} already delivered`));
+ assert.ok(!lines[0].includes(mid(9)));
 });

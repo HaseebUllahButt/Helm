@@ -8,7 +8,9 @@ export async function runMessageCommand(command, args, { rpc, self, findSession,
   if (command === 'messages') {
     if (words.length > 1 || (!words[0] && !senderId)) throw new Error('helm messages <chat-id> [--json]');
     const target = words[0] ? await findSession(words[0]) : { env: self, session: { id: senderId } };
-    const result = await rpc(target.env, 'session.agent-messages', { id: target.session.id });
+    const own = target.env === self && target.session.id === senderId;
+    const result = await rpc(target.env, 'session.agent-messages', { id: target.session.id,
+      ...(own ? { consume: true, ...(callerThreadId ? { callerThreadId } : {}) } : {}) });
     if (options.json) write(JSON.stringify(result));
     else {
       for (const m of result.messages.toReversed()) write(`${m.id}  ${m.asUser ? 'You' : m.from.title} → ${m.to.title} (${m.status})${m.replyTo ? ` · reply to ${m.replyTo}` : ''}\n${m.text}`);
@@ -31,5 +33,5 @@ export async function runMessageCommand(command, args, { rpc, self, findSession,
   try { result = await rpc(self, 'session.agent-send', { id: senderId, to, text, messageId,
     ...(command === 'reply' ? { replyTo: target } : {}), ...(callerThreadId ? { callerThreadId } : {}) }, 70_000); }
   catch (error) { throw new Error(`${error.message}\nRetry this same message with: helm ${command} ${target} --message-id ${messageId} -- <same text>`); }
-  write(options.json ? JSON.stringify(result) : `Message ${messageId} delivered to ${result.message.to.title}. It will be read at the next turn.`);
+  write(options.json ? JSON.stringify(result) : `Message ${result.message.id ?? messageId} ${result.duplicate ? 'already delivered' : 'delivered'} to ${result.message.to.title}. It will be read at the next turn.`);
 }

@@ -103,6 +103,7 @@ export async function runAgentCommand(command, args, { rpc, self, cwd = process.
     if (where) write(`worked in ${where.path} on branch ${where.branch} (from ${where.base})`);
     if (result.timedOut && result.progress) write(`Progress so far:\n${result.progress}`);
     if (result.output) write(result.output);
+    for (const message of result.messages ?? []) write(`Message from ${message.from.title}:\n${message.text}`);
     if (result.error) write(result.error);
     if (result.pending) write(`Needs approval in Helm: ${result.pending.title ?? result.pending.kind}`);
   }

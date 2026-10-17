@@ -1913,7 +1913,16 @@ export class Daemon {
         if (!(loadNetwork() ?? this.net).machines?.[caller]) throw new Error('Agent messages must come from a paired machine.');
         return this.agentMessages.receive(p.message, caller);
       case M.SESSION_DELEGATE: return this.sessions.delegate(p);
-      case M.SESSION_DELEGATION_RESULT: return this.sessions.delegationResult(p.id, p);
+      case M.SESSION_DELEGATION_RESULT: {
+        await this.sessionRecovery;
+        const result = this.sessions.delegationResult(p.id, p);
+        // Polls that are not returned to the CLI must not consume replies.
+        if (result.complete || result.status === 'blocked') {
+          const messages = await this.agentMessages.collectResult(p);
+          if (messages.length) result.messages = messages;
+        }
+        return result;
+      }
       case M.SESSION_DELEGATION_MESSAGE: return this.sessions.messageDelegation(p.parentId, p.id, p.data);
       case M.SESSION_NATIVE_AGENT: return this.sessions.nativeAgent(p.id, p.agentId, { full: p.full === true });
       case M.SESSION_NATIVE_MESSAGE: return this.sessions.messageNative(p.id, p.agentId, p.data);

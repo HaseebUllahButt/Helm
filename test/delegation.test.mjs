@@ -55,7 +55,10 @@ function setup(t, make = (opts) => new FakeDriver(opts), options = {}) {
   const sessions = new Sessions(runtime, { ...options, makeDriver: (_engine, opts) => {
     const d = make(opts); drivers.set(opts.env.HELM_SESSION_ID, d); return d;
   } });
-  t.after(async () => { for (const id of drivers.keys()) await sessions.kill(id).catch(() => {}); });
+  t.after(async () => {
+    for (const id of drivers.keys()) await sessions.kill(id).catch(() => {});
+    await sessions.stop();
+  });
   return { sessions, drivers };
 }
 
@@ -200,6 +203,7 @@ test('Codex delegates to Claude with the selected model, folder, lineage and dur
   assert.equal(sessions.delegationResult(child.id).output, 'Opus reviewed the task.');
   assert.equal(sessions.delegationResult(child.id).status, 'done');
   const restarted = new Sessions(new EventEmitter(), { makeDriver: () => assert.fail('reading must not launch a CLI') });
+  t.after(() => restarted.stop());
   assert.equal(restarted.get(child.id).delegation.parentId, parent.id);
   assert.equal(restarted.delegationResult(child.id).complete, true);
 });
@@ -562,6 +566,7 @@ test('legacy child results do not wake old threads on completion or daemon resta
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(drivers.get(parent.id).sent, undefined);
   const restarted = new Sessions(new EventEmitter(), { makeDriver: () => assert.fail('historical results must not launch a CLI') });
+  context.after(() => restarted.stop());
   await restarted.resume();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(restarted.get(child.id).delegation.status, 'interrupted');
@@ -595,6 +600,7 @@ test('archived tasks disappear from their parent list and badge without losing h
   assert.deepEqual(updates.findLast((s) => s.id === parent.id).delegations, []);
   assert.equal(sessions.delegationResult(child.id).output, 'Opus reviewed the task.');
   const restarted = new Sessions(new EventEmitter());
+  t.after(() => restarted.stop());
   restarted.runtime.listLive = async () => new Map();
   assert.deepEqual(await restarted.list({ parentId: parent.id }), []);
   sessions.archive(child.id, false);
@@ -609,6 +615,7 @@ test('a long streamed reply survives event trimming and a daemon restart', async
   for (let i = 0; i < 2100; i++) d.push('item.delta', { id: 'reply', text: 'x'.repeat(20) });
   d.finish();
   const restarted = new Sessions(new EventEmitter());
+  t.after(() => restarted.stop());
   const result = restarted.delegationResult(session.id);
   assert.equal(result.complete, true);
   assert.equal(result.status, 'done');
@@ -973,6 +980,10 @@ test('the real CLI discovers accounts and delegates through an authenticated rel
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
   const daemon = new Daemon({ name: 'test-box', port });
   daemon.sessions = sessions;
+  const { InputDelivery } = await import('../packages/connect/src/input-delivery.js');
+  const { AgentMessages } = await import('../packages/connect/src/agent-messages.js');
+  daemon.inputDelivery = new InputDelivery(sessions);
+  daemon.agentMessages = new AgentMessages({ sessions, delivery: daemon.inputDelivery, self: net.self, rpc: () => assert.fail('local messages only') });
   await daemon.dispatch(M.PROFILE_DEFAULTS, { profileId: 'claude-main', scope: 'subagent', model: 'sonnet', effort: 'high' });
   const helperOptions = await daemon.dispatch(M.MODEL_LIST, { profileId: 'claude-main' });
   assert.deepEqual(helperOptions.subagentDefaults, { model: 'sonnet', effort: 'high' });
@@ -1147,4 +1158,26 @@ test('a direct agent exchange does not also wake the parent with a duplicate res
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(sessions.history(parent.id).events.filter(e => e.type === 'turn.start').length, before);
   assert.ok(sessions.history(child.id).events.some(e => e.type === 'turn.start' && e.source === 'agent' && e.inputId));
+});
+
+test('reading five helper replies removes their real parent queue tickets without requeuing on retry',async t=>{
+  const {AgentMessages}=await import('../packages/connect/src/agent-messages.js');
+  const {InputDelivery}=await import('../packages/connect/src/input-delivery.js');
+  const {sessions,drivers}=setup(t);
+  const parent=await sessions.start({cwd:process.env.HELM_DIR,profileId:'codex-main'});
+  await sessions.input(parent.id,'Keep working');
+  const {session:child}=await sessions.delegate({id:parent.id,profileId:'claude-main',task:'Review'});
+  const delivery=new InputDelivery(sessions,{dir:join(process.env.HELM_DIR,`receipts-${parent.id}`)});
+  const messages=new AgentMessages({sessions,delivery,self:'local',dir:join(process.env.HELM_DIR,`messages-${parent.id}`),rpc:()=>assert.fail('local only')});
+  const ids=Array.from({length:5},(_,i)=>(i+1).toString(16).padStart(32,'0'));
+  for(const [n,messageId]of ids.entries())await messages.send({id:child.id,to:{env:'local',id:parent.id},text:`Update ${n}`,messageId});
+  const tickets=sessions.events.tail(parent.id,0).filter(e=>e.type==='turn.start'&&e.source==='agent');
+  assert.equal(tickets.length,5);assert.ok(tickets.every(e=>e.queued));
+  drivers.get(child.id).finish();
+  const read=await messages.collectResult({id:child.id,parentId:parent.id,consume:true});
+  assert.equal(read.length,5);
+  assert.ok(tickets.every(e=>sessions.turnState(parent.id,e.turnId)==='removed'));
+  await messages.send({id:child.id,to:{env:'local',id:parent.id},text:'Update 0',messageId:ids[0]});
+  assert.equal(sessions.events.tail(parent.id,0).filter(e=>e.type==='turn.start'&&e.source==='agent').length,5);
+  assert.deepEqual(await messages.collectResult({id:child.id,parentId:parent.id,consume:true}),[]);
 });

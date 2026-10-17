@@ -160,3 +160,20 @@ test('an application rejection is not retried merely because its text mentions a
     throw Object.assign(new Error('provider socket refused the message'), { code: 'delivery_failed' });
   }, request, { sleep: () => assert.fail('application failures must be shown immediately') }), /provider socket/);
 });
+
+test('inbox acknowledgement waits for acceptance and removes only its queued ticket; retries stay accepted',async t=>{
+  let finish, ticket, sends=0;
+  const f=setup(t,async(_id,_text,opts)=>{sends++;ticket=opts.turnId;await new Promise(r=>finish=r);return {ok:true};});
+  const removed=[];
+  f.sessions.dequeue=(id,turnId)=>{removed.push({id,turnId});return {found:true};};
+  const send=f.inbox.deliver(request,'agent:local:reviewer');
+  await new Promise(r=>setImmediate(r));
+  const read=f.inbox.acknowledge(request.id,request.messageId,'agent:local:reviewer');
+  assert.equal(removed.length,0);
+  finish();await send;
+  assert.equal(await read,true);
+  assert.deepEqual(removed,[{id:request.id,turnId:ticket}]);
+  assert.equal(await f.inbox.acknowledge(request.id,request.messageId,'different-sender'),false);
+  await new InputDelivery(f.sessions,{dir:f.dir}).deliver(request,'agent:local:reviewer');
+  assert.equal(sends,1);
+});

@@ -37,6 +37,16 @@ export class InputDelivery {
     const key = hash([caller, messageId]);
     return this.#read(this.#paths(key).receipt);
   }
+  /** Reading an agent's inbox in a tool replaces its still-waiting prompt. */
+  async acknowledge(id, messageId, caller) {
+    const key = hash([caller, messageId]);
+    // Acceptance can still be writing its ticket. Never remove a different
+    // message, or interrupt one the driver has already taken.
+    await this.#active.get(key);
+    const receipt = this.#read(this.#paths(key).receipt);
+    if (!receipt || receipt.error) return false;
+    return this.sessions.dequeue(id, `local-message-${key}`).found;
+  }
   async deliver(params, caller = 'local') {
     if (this.#stopped) throw failure('Helm is restarting', 'delivery_pending');
     const { id, messageId, data, attachments = [], references = [], delivery = 'auto' } = params;

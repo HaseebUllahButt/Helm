@@ -11,6 +11,7 @@ const same = (a, b) => a.env === b.env && a.id === b.id;
 /** Short, attributed exchanges. Provider sessions/history never move between agents. */
 export class AgentMessages {
   #active = new Map();
+  #replies = new Map();
   constructor({ sessions, delivery, self, rpc, emit = () => {}, dir = join(HELM_DIR, 'agent-messages') }) {
     Object.assign(this, { sessions, delivery, self, rpc, emit, dir });
   }
@@ -42,13 +43,14 @@ export class AgentMessages {
       const folder = this.#folder(id);
       mkdirSync(folder, { recursive: true, mode: 0o700 });
       const file = join(folder, `${String(record.at).padStart(16, '0')}-${record.id}.json`), temp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
-      try { writeFileSync(temp, JSON.stringify(record), { mode: 0o600, flag: 'wx' }); renameSync(temp, file); }
+      const readAt = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')).readAt : undefined;
+      try { writeFileSync(temp, JSON.stringify({ ...record, ...(readAt ? { readAt } : {}) }), { mode: 0o600, flag: 'wx' }); renameSync(temp, file); }
       finally { rmSync(temp, { force: true }); }
     }
     this.emit({ sessionIds: [...local] }); // Text stays in the requested history, not every device's event stream.
   }
-  async list(id, { before, limit = 30 } = {}) {
-    this.address(id);
+  async list(id, { before, limit = 30, consume = false, callerThreadId, from, unread = false } = {}) {
+    const owner = this.address(id, consume ? callerThreadId : undefined);
     const children = await this.sessions.list({ parentId: id });
     const ids = new Set([id, ...children.filter(s => s.delegation?.parentId === id).map(s => s.id)]);
     // Sort small filenames first, then read only this page's bodies. Opening
@@ -65,16 +67,46 @@ export class AgentMessages {
     }
     const size = Math.max(1, Math.min(50, Number(limit) || 30));
     const keys = [...paths.keys()].sort().reverse();
-    const messages = keys.slice(0, size).map(cursor => {
+    const messages = [];
+    let more = false;
+    for (const cursor of keys) {
       let record = JSON.parse(readFileSync(paths.get(cursor), 'utf8'));
+      if (from && (!same(record.from, from) || !same(record.to, owner) || record.asUser)) continue;
+      if (unread && record.readAt) continue;
+      if (messages.length === size) { more = true; break; }
       // Recovery may have delivered input after this ledger's writer left.
       if (record.to.env === this.self && record.status !== 'delivered') {
         const receipt = this.delivery.receipt(record.id, `agent:${record.from.env}:${record.from.id}`);
         if (receipt && !receipt.error) { record = { ...record, status: 'delivered', error: undefined }; this.#save(record); }
       }
-      return record;
-    });
-    return { messages, next: keys.length > size ? key(messages.at(-1)) : null };
+      if (consume && same(record.to, owner) && !record.asUser) {
+        await this.delivery.acknowledge(id, record.id, `agent:${record.from.env}:${record.from.id}`);
+        // Dequeue persists turn.remove first. A crash before this ledger
+        // write still cannot replay the prompt: its receipt remains intact.
+        if (!record.readAt) { record = { ...record, readAt: Date.now() }; this.#save(record); }
+      }
+      messages.push(record);
+    }
+    return { messages, next: more ? key(messages.at(-1)) : null };
+  }
+
+  /** Return all unread helper replies with the result, not as extra turns. */
+  async collectResult({ id, parentId, consume, callerThreadId }) {
+    if (!consume || !parentId) return [];
+    const child = this.sessions.get(id), parent = this.sessions.get(parentId);
+    if (child.delegation?.parentId !== parentId
+      || (child.delegation.parentGeneration ?? 0) !== (parent.stopGeneration ?? 0)
+      || callerThreadId && (parent.engine !== 'codex' || parent.engineSessionId !== callerThreadId)) return [];
+    this.address(parentId, callerThreadId);
+    const messages = [];
+    let before;
+    do {
+      const page = await this.list(parentId, { consume: true, callerThreadId,
+        from: { env: this.self, id }, unread: true, limit: 50, before });
+      messages.push(...page.messages);
+      before = page.next;
+    } while (before);
+    return messages.reverse();
   }
 
   async send({ id, to, text, messageId, replyTo, callerThreadId, asUser = false }) {
@@ -98,6 +130,22 @@ export class AgentMessages {
       if (active.fingerprint !== fingerprint) throw fail('This message ID already belongs to another message.', 'delivery_conflict');
       return active.promise;
     }
+    // A CLI retry often generates a new ID. The same answer to the same
+    // question is still one reply; changed answers and new questions remain
+    // separate. Persisted history makes this work across daemon restarts.
+    if (replyTo) {
+      if (this.#replies.has(fingerprint)) return this.#replies.get(fingerprint).then(result => ({ ...result, duplicate: true }));
+      const folder = this.#folder(id);
+      if (existsSync(folder)) for (const name of readdirSync(folder)) {
+        if (!/^\d{16}-[a-f0-9]{32}\.json$/.test(name)) continue;
+        const priorReply = JSON.parse(readFileSync(join(folder, name), 'utf8'));
+        if (same(priorReply.from, from) && same(priorReply.to, target)
+          && priorReply.replyTo === replyTo && priorReply.text === text.trim() && priorReply.asUser === asUser) {
+          if (priorReply.status === 'delivered') return { message: priorReply, duplicate: true };
+          if (priorReply.id !== messageId) return this.send({ id, to, text, messageId: priorReply.id, replyTo, callerThreadId, asUser });
+        }
+      }
+    }
     const running = Promise.resolve().then(async () => {
       const recipient = old?.to ?? (target.env === this.self ? this.address(target.id)
         : (await this.rpc(target.env, 'session.agent-address', { id: target.id })).address);
@@ -114,8 +162,9 @@ export class AgentMessages {
         this.#save({ ...record, status: 'unconfirmed', error: String(error.message) });
         throw fail(`${error.message}; message ${messageId} is unconfirmed. Retry with the same message ID.`, error.code || 'delivery_failed');
       }
-    }).finally(() => this.#active.delete(messageId));
+    }).finally(() => { this.#active.delete(messageId); if (replyTo) this.#replies.delete(fingerprint); });
     this.#active.set(messageId, { fingerprint, promise: running });
+    if (replyTo) this.#replies.set(fingerprint, running);
     return running;
   }
   async receive(message, caller) {
@@ -131,7 +180,9 @@ export class AgentMessages {
     if (previous?.status === 'delivered') return { ok: true };
     const target = this.sessions.get(message.to.id);
     if (!message.asUser && (target.stoppedAt || target.archived)) throw fail('The recipient is stopped or archived; it was not woken.', 'delivery_cancelled');
-    const record = { ...message, status: 'sending' };
+    // A remote sender cannot claim that the recipient has read its message.
+    const { id, from, to, text, replyTo, asUser, at } = message;
+    const record = { id, from, to, text, replyTo, asUser, at, status: 'sending' };
     this.#save(record);
     const author = record.asUser ? `the owner, from chat ${record.from.title}`
       : `${record.from.engine} agent ${record.from.title}`;

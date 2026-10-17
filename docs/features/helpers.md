@@ -77,6 +77,16 @@ shows as a card inside its parent, never as its own row in Working.
   Delivered means accepted into the chat, not that the agent has read it.
   Stopped or archived agents are not woken by peers. Owner follow-ups keep
   their existing ability to resume a helper and are labelled **You**.
+- **Read once:** `helm messages` in an agent's own chat acknowledges the
+  incoming messages it returns. `helm delegate-result` includes unread replies
+  from that helper in `messages` (also printed without `--json`) when it returns
+  a completed or blocked result. Their waiting prompt copies are removed;
+  the exchange history remains in Agents. Looking at the Agents panel or
+  another chat's history does not acknowledge input. Messages already going
+  to the CLI are never interrupted. An identical reply to the same question
+  reuses its saved reply even if the sender generates a new message ID;
+  changed answers and different questions still travel separately.
+  Queue previews show the message body, with sender details in the transcript.
 - **Scope:** Helm-managed agent chats on paired machines. Native-only and
   externally monitored CLI conversations do not support this messaging path.
   Older daemons retain their existing owner-message UI until updated.
@@ -89,3 +99,8 @@ shows as a card inside its parent, never as its own row in Working.
   follow-up from a helper's details and check the **You** label.
 - **Tests:** `test/agent-messages`, `test/input-delivery`, `test/delegation`,
   `test/browser/agent-messages`, and the helper follow-up in `test/browser/subagents`.
+- **Read-once proof (2026-10-18):** private `fake-slow` parent, `fake` helper,
+  five distinct `session.agent-send` replies to the working parent. At 390×844
+  the composer showed **5 waiting**. Collecting `session.delegation-result`
+  with the owning `parentId` and `consume:true` returned all five messages,
+  cleared the queued copies, and a repeated collection returned none.
