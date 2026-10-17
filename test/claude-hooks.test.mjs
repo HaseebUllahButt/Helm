@@ -1,13 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const root = mkdtempSync(join(tmpdir(), 'helm-hooks-'));
 process.env.HELM_DIR = join(root, 'helm');
+Object.assign(process.env, { HELM_DB: join(root, 'db'), HELM_SSH_DIR: join(root, 'ssh'),
+  HELM_PROCS_SOCKET: join(root, 'procs.sock'), HELM_TERMINALS_SOCKET: join(root, 'terminals.sock'),
+  HELM_NATIVE_SOCKET: join(root, 'native.sock'), HELM_NO_SERVICE: '1' });
+test.after(() => rmSync(root, { recursive: true, force: true }));
 const { claudeChatArgs, hookSettings, startHookServer, sendHook } = await import('../packages/connect/src/claude-hooks.js');
 const path = join(root, 'hooks.sock');
+
+test('failed hook setup closes its listening server so the process exits naturally', async () => {
+  const module = new URL('../packages/connect/src/claude-hooks.js', import.meta.url).href;
+  const socket = join(root, 'failed-start.sock');
+  // listen() binds the socket before its callback. Removing it in that gap
+  // reproduces another fixture closing/replacing the shared hook socket.
+  await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', `
+    import { unlinkSync } from 'node:fs';
+    import assert from 'node:assert/strict';
+    const { startHookServer } = await import(${JSON.stringify(module)});
+    const opening = startHookServer(() => {}, ${JSON.stringify(socket)});
+    unlinkSync(${JSON.stringify(socket)});
+    await assert.rejects(opening, { code: 'ENOENT' });
+  `], { timeout: 5000, env: { ...process.env } });
+});
 
 test('chat hooks retain explicit settings and existing hooks, including a relative settings file', () => {
   const settings = { permissions: { deny: ['Read(.env)'] }, hooks: { Stop: [{ hooks: [{ type: 'command', command: 'my-hook' }] }] } };
