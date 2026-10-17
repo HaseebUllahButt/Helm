@@ -105,6 +105,17 @@ test('shared skill install, duplicate protection and removal preserve unrelated 
   await assert.rejects(addSkills({ source }, profiles), /name/);
   await assert.rejects(removeSkill({ profileId: p.id, name: '../escape' }, profiles), /name/);
 });
+test('a skill linked from two places lists once and Remove clears both links', async () => {
+  const codex = await fake('codex', '-twice'), system = join(sandbox, 'system-skills/crash');
+  await mkdir(system, { recursive: true }); await writeFile(join(system, 'SKILL.md'), '---\nname: crash\ndescription: From the system\n---');
+  await mkdir(join(codex.env.CODEX_HOME, 'skills'), { recursive: true }); await mkdir(join(sandbox, '.agents/skills'), { recursive: true });
+  await symlink(system, join(codex.env.CODEX_HOME, 'skills/crash')); await symlink(system, join(sandbox, '.agents/skills/crash'));
+  const rows = (await listAccount(codex)).skills.filter((s) => s.name === 'crash');
+  assert.equal(rows.length, 1); assert.equal(rows[0].links.length, 2);
+  await removeSkill({ profileId: codex.id, name: 'crash', folder: 'crash' }, [codex]);
+  for (const link of [join(codex.env.CODEX_HOME, 'skills/crash'), join(sandbox, '.agents/skills/crash')]) await assert.rejects(lstat(link), /ENOENT/);
+  assert.ok(await lstat(join(system, 'SKILL.md')), 'the folder both links pointed at stays');
+});
 test('unsupported engines are explicit and never spawn their CLIs', async () => {
   const p = { id: 'gemini', engine: 'gemini', label: 'Gemini' };
   assert.equal((await listIntegrations({}, [p])).accounts[0].support.mcp, false);

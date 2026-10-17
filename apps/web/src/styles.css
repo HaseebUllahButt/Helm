@@ -512,6 +512,36 @@ code, pre, kbd { font-family: var(--mono); }
 /* The marks are inline SVG inheriting currentColor, so each engine's tint
    above colours its logo with nothing further to set. */
 .mark svg { display: block; }
+
+/* Connectors, skills and plugins: a tile with the service's logo, or its
+   first letter, so a long list scans by shape and colour, not by reading. */
+.clogo {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 9px; background: var(--accent); color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.clogo.tinted {
+  background: color-mix(in srgb, var(--tint) 15%, var(--card)); color: var(--tint);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tint) 24%, transparent);
+}
+.clogo svg { display: block; }
+.clogo-letter { font: 650 14px/1 var(--display, inherit); letter-spacing: -0.01em; }
+.integrations .row .mark { width: 32px; height: 32px; border-radius: 9px; }
+.integrations .section .quiet { color: var(--mutedfg); font-weight: 500; }
+.integrations .section .linkish { font-size: var(--t-meta); }
+.integrations .rows .row .rm { white-space: nowrap; }
+.integrations .more-row .rt { color: var(--primary-q); font-weight: 500; justify-content: center; }
+.integrations .project-link { align-self: flex-start; margin: 8px 4px 0; font-size: var(--t-meta); }
+.detail-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.detail-head .grow { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.detail-head .modal-title { margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.detail-head .note { margin: 0; }
+.detail-text { margin: 0 0 12px; color: var(--text-dim); line-height: 1.5; }
+.detail-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0 0 14px; font-size: var(--t-meta); }
+.detail-list dt { color: var(--mutedfg); }
+.detail-list dd { margin: 0; color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.detail-list dd.mono { font-family: var(--mono); font-size: 12px; }
+.modal-actions .danger-text { color: var(--red); margin-right: auto; }
 .mark.claude   { background: color-mix(in srgb, var(--claude) 12%, transparent);   color: var(--claude); }
 .mark.codex    { background: color-mix(in srgb, var(--codex) 11%, transparent);    color: var(--codex); }
 .mark.opencode { background: color-mix(in srgb, var(--opencode) 12%, transparent); color: var(--opencode); }

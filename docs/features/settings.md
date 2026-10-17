@@ -74,10 +74,19 @@
   `version-sync`, `cli-updates`.
 
 ## Connectors & skills
-- **Sees:** machine screen → **Connectors & skills**: per account,
-  Connectors (MCP servers: **Add connector**, **Connect**, **Remove**),
-  Skills and Plugins. "Connect" opens a terminal to sign in.
-- **Prove:** steps not yet driven. For the fake account it should say
-  "Connector management is not supported for this CLI yet."
+- **Sees:** machine screen → **Connectors & skills**: the account at the top
+  (tap to change), then Connectors, Skills and Plugins. Each row has a logo
+  tile (the real logo for known services, a coloured first letter for the
+  rest) and one short line ("Runs on this machine", "Online service").
+  **+ Add** sits beside each heading. Tapping a row opens its details: the
+  full address or command, **Sign in** for online services (opens a
+  terminal), and **Remove**. More than six skills fold behind "Show all N".
+  A skill reachable by two links shows once; Remove clears both links.
+- **Prove (driven):** `$V up --real`, `$V click "verify-<you>"`,
+  `$V click "Connectors & skills"`, `$V click "Choose account"`, pick a
+  Claude or Codex account, then `$V click "Add connector"` for the logos and
+  tap a row for its details. Look only; never Remove the owner's items. For
+  the fake account it says "Connector management is not supported for this
+  CLI yet."
 - **Tests:** `test/browser/integrations`; `test/integrations`. See
   `docs/integrations.md`.

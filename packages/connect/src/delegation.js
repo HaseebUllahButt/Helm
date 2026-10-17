@@ -101,14 +101,23 @@ export function helmBrief(net) {
   const others = machines
     .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
-  if (!self?.name || !others.length) return `${delegationNote()}\n${agentMessageNote()}\n${visualNote()}\n${browserNote()}`;
+  if (!self?.name || !others.length) return `${delegationNote()}\n${agentMessageNote()}\n${visualNote()}\n${browserNote()}\n${writingNote()}`;
   return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}.
 - Run something on another machine: helm exec <machine> --cwd <absolute-path> -- <command> [args]. This uses Helm's managed connection; prefer it to SSH. For pipelines use -- sh -lc '<script>'. Pass environment explicitly with --env NAME=value. If it says the command may have started, never rerun it: read it with helm exec-status <machine> <command-id> --wait, or stop it with helm exec-cancel <machine> <command-id>.
 - Copy files there: helm copy <machine> <file-or-folder> [--target-folder <path>] (default: the same place; ~ is that machine's home).
 - Which machines are on and what is running where: helm digest. Read a session: helm thread <id>. Message it: helm say <id> <text>.
 - Start an agent on another machine: helm spawn <machine> <folder> <account> <task>.
 - Show the owner something running on a port (a dev server, a page, a preview, a UI change) from anywhere, phone included: helm share <port> [--name <name>] [--password] prints a public https link. Call these spins. A spin is short-lived: it ends by itself after 3 hours, so do not plan on it lasting longer. Add --keep only when the owner asks for a link that stays. Add --private when only the owner's own signed-in devices should open it. helm forward <machine> <port> opens a port another machine shared on this one's localhost. helm share list shows the links; helm share stop <name> ends one when it is no longer needed.]
-${delegationNote()}\n${agentMessageNote()}\n${visualNote()}\n${browserNote()}`;
+${delegationNote()}\n${agentMessageNote()}\n${visualNote()}\n${browserNote()}\n${writingNote()}`;
+}
+
+/**
+ * How every agent writes to the owner: Simplified Technical English (the
+ * ASD-STE100 rules), cut down to what fits in every session. It covers
+ * words meant for people, never code, commands or quoted output.
+ */
+export function writingNote() {
+  return '[Helm writing: Write to the owner in Simplified Technical English (ASD-STE100). Keep sentences short: at most 20 words for a step, 25 for an explanation. Put one instruction in each sentence and start it with the verb. Use the active voice and simple tenses. Use common words, and use one word for one meaning: call a thing by the same name each time. Do not use jargon; when a technical name is necessary, explain it in a few plain words. Tell the owner what they will see, not how the code does it. Use a list for steps that follow in sequence. These rules apply to replies, summaries and notes for people, not to code, commands, file contents or quoted output.]';
 }
 
 export function visualNote() {

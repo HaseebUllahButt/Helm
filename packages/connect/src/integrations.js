@@ -141,7 +141,7 @@ async function skillRows(dir, sharedRoot) {
     const path = join(dir, entry.name);
     try { const meta = skillMeta(await readFile(join(path, 'SKILL.md'), 'utf8'));
       const target = await realpath(path);
-      rows.push({ ...meta, path, folder: entry.name, shared: target.startsWith(`${sharedRoot}/`), removable: true });
+      rows.push({ ...meta, path, real: target, folder: entry.name, shared: target.startsWith(`${sharedRoot}/`), removable: true });
     } catch { /* not every entry is a skill */ }
   }
   return rows;
@@ -160,8 +160,14 @@ export async function listAccount(profile, { cwd } = {}) {
   } catch { throw new Error('Could not read this account’s configuration. Check its config file.'); }
   const own = await skillRows(join(a.home, 'skills'), sharedRoot);
   const shared = profile.engine === 'codex' ? await skillRows(sharedRoot, sharedRoot) : [];
-  const seen = new Set();
-  const skills = [...own, ...shared].filter((r) => { const key = r.shared ? r.name : r.path; if (seen.has(key)) return false; seen.add(key); return true; });
+  // One skill is often reachable twice: an account link and a shared link to
+  // the same folder. Show it once and keep every link so Remove clears both.
+  const byFolder = new Map();
+  for (const { real, ...r } of [...own, ...shared]) {
+    const key = r.shared ? r.name : real, seen = byFolder.get(key);
+    if (seen) seen.links.push(r.path); else byFolder.set(key, { ...r, links: [r.path] });
+  }
+  const skills = [...byFolder.values()];
   return { profileId: profile.id, label: profile.label ?? profile.id, engine: profile.engine, mcp, skills, plugins,
     support: { mcp: true, skills: true, plugins: true, auth: 'terminal' } };
 }
@@ -324,6 +330,6 @@ async function removeSkillUnlocked(p, profiles) {
   const skill = (await listAccount(profile)).skills.find((s) => s.folder === folder && s.name === p.name);
   if (!skill) throw new Error('That skill is no longer installed.');
   if (skill.shared) await removeSharedSkill(skill, sharedRoot, all);
-  else await rm(skill.path, { recursive: true, force: true });
+  else for (const path of skill.links) await rm(path, { recursive: true, force: true });
   return { ok: true };
 }

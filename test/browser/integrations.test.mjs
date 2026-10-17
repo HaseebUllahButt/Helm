@@ -31,9 +31,13 @@ before(async () => {
 });
 after(async () => browser?.close());
 test('lists account connectors, shared skills and plugins at phone and desktop widths', async () => {
-  await page.getByText('notion', { exact: true }).waitFor();
+  await page.getByText('Notion', { exact: true }).waitFor();
+  await page.getByText('Online service', { exact: true }).waitFor();
   await page.getByText('helpful-skill', { exact: false }).waitFor();
-  await page.getByText('example@market', { exact: true }).waitFor();
+  await page.getByText('example', { exact: true }).waitFor();
+  await page.getByText('from market', { exact: true }).waitFor();
+  assert.equal(await page.locator('.clogo svg').count() >= 3, true, 'a logo for the connector and glyphs for the skill and plugin');
+  assert.equal(await page.getByText('https://mcp.notion.com/mcp').count(), 0, 'the address waits behind a tap');
   for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 844 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no horizontal overflow');
@@ -42,7 +46,7 @@ test('lists account connectors, shared skills and plugins at phone and desktop w
 });
 test('catalog and custom form add to the chosen machine and account', async () => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole('button', { name: 'Add connector…', exact: true }).click();
+  await page.getByRole('button', { name: 'Add connector', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Add connector', exact: true });
   await dialog.getByText('Gmail', { exact: true }).waitFor();
   await dialog.getByText('Needs sign-in').waitFor();
@@ -57,13 +61,16 @@ test('catalog and custom form add to the chosen machine and account', async () =
   assert.deepEqual(await page.evaluate(() => window.calls.find(c=>c.method==='integrations.mcp.add')), {machine:'machine-a',method:'integrations.mcp.add',params:{name:'new-connector',transport:'http',scope:'user',url:'https://example.test/mcp',profileId:'claudea'}});
 });
 test('Connect opens returned terminal; account changes expose supported actions only', async () => {
-  await page.getByRole('button', { name: 'Connect', exact: true }).first().click();
+  await page.getByRole('button', { name: /^Notion/ }).click();
+  const detail = page.getByRole('dialog', { name: 'Notion' });
+  await detail.getByText('https://mcp.notion.com/mcp').waitFor();
+  await detail.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.waitForFunction(() => window.opened?.id === 'auth-terminal');
   assert.equal(await page.evaluate(() => window.calls.find(c=>c.method==='integrations.mcp.connect').params.profileId), 'claudea');
   await page.getByRole('button', { name: 'Choose account', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: /Codex work/ }).click();
   await page.getByText('No connectors configured.').waitFor();
-  await page.getByRole('button', { name: 'Add skill…' }).click();
+  await page.getByRole('button', { name: 'Add skill', exact: true }).click();
   await page.getByRole('dialog', { name: 'Add skill', exact: true }).getByLabel('Git URL or absolute folder').fill('/skills');
   await page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
@@ -71,5 +78,5 @@ test('Connect opens returned terminal; account changes expose supported actions 
   await page.getByRole('button', { name: 'Choose account', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: /Gemini/ }).click();
   await page.getByText('Connector management is not supported for this CLI yet.').waitFor();
-  assert.equal(await page.getByRole('button', { name: 'Add connector…', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: 'Add connector', exact: true }).count(), 0);
 });
