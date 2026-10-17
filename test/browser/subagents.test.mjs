@@ -217,7 +217,7 @@ test('main task click opens the full child conversation and Back returns to its 
       await view.addScriptTag({ content:bundle.outputFiles[0].text });
       await view.getByText('parent full conversation response', {exact:true}).waitFor();
       await view.getByRole('button', {name:'Agents',exact:true}).click();
-      await view.getByRole('tab', {name:'Agents',exact:true}).click();
+      await view.getByRole('dialog', {name:'Agents',exact:true}).waitFor();
       await view.getByRole('button', {name:/Inspect child conversation/}).click();
       await view.getByRole('heading', {name:'Inspect child conversation',exact:true}).waitFor();
       await view.getByRole('dialog', {name:'Subagents'}).waitFor({state:'detached'});
@@ -516,7 +516,7 @@ test('Shell back history leaves parent and child chats without cycling between t
       await heading('Parent history chat').waitFor();
       const openChild = async title=>{
         await view.getByRole('button',{name:'Agents',exact:true}).click();
-        await view.getByRole('tab',{name:'Agents',exact:true}).click();
+        await view.getByRole('dialog',{name:'Agents',exact:true}).waitFor();
         await view.getByRole('button',{name:new RegExp(title)}).click();
         await heading(title).waitFor();
       };
@@ -587,7 +587,7 @@ test('a CLI\'s own subagents show beside delegated tasks, looking the same', asy
       await launcher.locator('.cbadge').filter({hasText:/^4$/}).waitFor();
       await view.locator('.chip.working').waitFor();
       await launcher.click();
-      await view.getByRole('tab', {name:'Agents',exact:true}).click();
+      await view.getByRole('dialog', {name:'Agents',exact:true}).waitFor();
       const active = view.locator('.delegation-group.active');
       const finished = view.locator('.delegation-group.finished');
       await active.getByRole('heading').filter({hasText:'2'}).waitFor();
