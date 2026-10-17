@@ -20,21 +20,28 @@ export function selectionClipboard(selection: Selection, root: HTMLElement) {
   // Browser selections omit CSS list markers. Retain each original ordinal,
   // even when the selection starts halfway through a list. Ancestor items
   // aren't cloned when only their contents are selected.
-  const originalItems = Array.from(root.querySelectorAll('li')).filter(li =>
+  const scope = range.commonAncestorContainer;
+  const originalItems = Array.from(scope instanceof Element ? scope.querySelectorAll('li') : []).filter(li =>
     range.intersectsNode(li) && !li.contains(range.commonAncestorContainer));
   const copiedItems = Array.from(container.querySelectorAll('li'));
+  const ordinals = new Map<Element, Map<Element, number>>();
   originalItems.forEach((li, index) => {
     const list = li.parentElement;
     if (list?.tagName !== 'OL' || !copiedItems[index]) return;
-    const items = Array.from(list.children).filter(child => child.tagName === 'LI');
-    const reversed = list.hasAttribute('reversed');
-    let number = Number(list.getAttribute('start') ?? (reversed ? items.length : 1));
-    for (const item of items) {
-      if (item.hasAttribute('value')) number = Number(item.getAttribute('value'));
-      if (item === li) break;
-      number += reversed ? -1 : 1;
+    let numbers = ordinals.get(list);
+    if (!numbers) {
+      numbers = new Map();
+      const items = Array.from(list.children).filter(child => child.tagName === 'LI');
+      const reversed = list.hasAttribute('reversed');
+      let number = Number(list.getAttribute('start') ?? (reversed ? items.length : 1));
+      for (const item of items) {
+        if (item.hasAttribute('value')) number = Number(item.getAttribute('value'));
+        numbers.set(item, number);
+        number += reversed ? -1 : 1;
+      }
+      ordinals.set(list, numbers);
     }
-    copiedItems[index].setAttribute('value', String(number));
+    copiedItems[index].setAttribute('value', String(numbers.get(li)));
   });
   container.querySelectorAll('ol').forEach(list => {
     const first = list.querySelector(':scope > li');
@@ -78,5 +85,20 @@ export async function writeSelectionClipboard(data: { text: string; html: string
       return;
     } catch { /* Plain text still carries the list markers if rich copy is blocked. */ }
   }
-  await navigator.clipboard?.writeText(data.text);
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(data.text); return; }
+    catch { /* Try the selection-based path while a user gesture is still active. */ }
+  }
+  // LAN HTTP pages have no navigator.clipboard. Copy the existing selection
+  // without moving focus, opening the keyboard, or losing the drag handles.
+  const copy = (event: ClipboardEvent) => {
+    if (!event.clipboardData) return;
+    event.clipboardData.setData('text/plain', data.text);
+    event.clipboardData.setData('text/html', data.html);
+    event.preventDefault();
+  };
+  document.addEventListener('copy', copy, true);
+  try { if (document.execCommand('copy')) return; }
+  finally { document.removeEventListener('copy', copy, true); }
+  throw new Error('The browser blocked copying this selection.');
 }

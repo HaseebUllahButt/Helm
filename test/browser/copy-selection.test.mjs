@@ -165,3 +165,81 @@ test('code copy keeps blank lines and excludes the copy toolbar', async t => {
   assert.doesNotMatch(data.html, /button|codehead/);
   assert.match(data.html, /<pre><code>/);
 });
+
+test('phone handles copy without pointer events and retry a blocked write on touchend', async t => {
+  const page = await fixture(t, 'Phone selection');
+  await page.evaluate(() => {
+    window.copies = [];
+    window.blockCopy = false;
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async text => {
+      if (window.blockCopy) throw Error('gesture required');
+      window.copies.push(text);
+    } } });
+    document.execCommand = () => false;
+    const range = document.createRange(); range.selectNodeContents(document.getElementById('reply'));
+    window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+  });
+  await page.waitForFunction(() => window.copies.length === 1);
+  assert.equal(await page.locator('.selection-copied').innerText(), 'Copied');
+  await page.evaluate(() => {
+    window.blockCopy = true;
+    window.getSelection().removeAllRanges();
+    document.getElementById('reply').textContent = 'New selection';
+    const range = document.createRange(); range.selectNodeContents(document.getElementById('reply'));
+    window.getSelection().addRange(range);
+  });
+  await page.waitForTimeout(550);
+  assert.equal(await page.evaluate(() => window.copies.length), 1);
+  await page.evaluate(() => { window.blockCopy = false; document.dispatchEvent(new Event('touchend')); });
+  await page.waitForFunction(() => window.copies.at(-1) === 'New selection');
+  // Clearing it must not leave stale text waiting for the next tap.
+  await page.evaluate(() => { window.getSelection().removeAllRanges(); });
+  await page.waitForTimeout(30);
+  await page.evaluate(() => document.dispatchEvent(new Event('touchend')));
+  assert.equal(await page.evaluate(() => window.copies.length), 2);
+});
+
+test('missing clipboard API uses existing selection and never reports blocked copy as success', async t => {
+  const page = await fixture(t, '<strong>LAN selection</strong>');
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined });
+    window.allowCopy = false;
+    window.copies = [];
+    document.execCommand = command => {
+      if (!window.allowCopy || command !== 'copy') return false;
+      const clipboardData = new DataTransfer();
+      document.dispatchEvent(new ClipboardEvent('copy', { clipboardData, bubbles: true, cancelable: true }));
+      window.copies.push({ text: clipboardData.getData('text/plain'), html: clipboardData.getData('text/html') });
+      return true;
+    };
+    const range = document.createRange(); range.selectNodeContents(document.querySelector('strong'));
+    window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+  });
+  await page.waitForTimeout(550);
+  assert.equal(await page.locator('.selection-copied').count(), 0);
+  await page.evaluate(() => { window.allowCopy = true; document.dispatchEvent(new Event('touchend')); });
+  await page.waitForFunction(() => window.copies.length === 1);
+  assert.deepEqual(await page.evaluate(() => window.copies[0]), { text: 'LAN selection', html: '<p><strong>LAN selection</strong></p>' });
+  assert.equal(await page.evaluate(() => window.getSelection().toString()), 'LAN selection');
+});
+
+test('copying a list numbers each sibling once and a short selection ignores unrelated history', async t => {
+  const page = await fixture(t, '<div class="md"><ol reversed start="12"><li>First</li><li value="5">Second</li><li>Third</li></ol></div>');
+  const result = await page.evaluate(() => {
+    const range = document.createRange(); range.selectNodeContents(document.querySelector('.md'));
+    const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    const list = window.selectionClipboard(selection, document.getElementById('root'));
+    const history = document.createElement('div');
+    history.innerHTML = '<ol>' + '<li>Unrelated</li>'.repeat(3000) + '</ol>';
+    document.getElementById('root').append(history);
+    let scans = 0;
+    const original = Range.prototype.intersectsNode;
+    Range.prototype.intersectsNode = function(node) { scans++; return original.call(this, node); };
+    range.selectNodeContents(document.querySelector('.md li'));
+    const short = window.selectionClipboard(selection, document.getElementById('root'));
+    return { list, short, scans };
+  });
+  assert.equal(result.list.text, '12. First\n5. Second\n4. Third');
+  assert.equal(result.short.text, 'First');
+  assert.equal(result.scans, 0, 'selecting prose must not walk the rest of the chat');
+});

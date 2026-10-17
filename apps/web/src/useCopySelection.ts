@@ -12,55 +12,50 @@ function showCopied() {
   noteTimer = setTimeout(() => note?.remove(), 1100);
 }
 
-/**
- * Copy a completed selection, just as the terminal does.
- *
- * A phone selects with a long press and the drag handles. The page gets no
- * pointerup for either, so on touch it copies once the selection has sat
- * still for a moment. A browser that only lets a tap write the clipboard
- * (Safari) gets it on the next touch instead.
- */
+/** Copy after a drag, keyboard selection or the phone's selection handles settle. */
 export function useCopySelection(root: RefObject<HTMLElement>) {
   useEffect(() => {
+    let dragging = false;
     let selecting = false;
-    let touch = matchMedia('(pointer: coarse)').matches;
     let settle: ReturnType<typeof setTimeout> | undefined;
     let last = '';
-    let waiting: { text: string; html: string } | null = null;
+    let pending = '';
+    let revision = 0;
+    const editable = (node: Node | null) => (node instanceof Element ? node : node?.parentElement)
+      ?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
     const selected = () => {
       const selection = window.getSelection();
       const node = root.current;
-      if (!node || !selection || selection.isCollapsed) return;
+      if (!node || !selection?.rangeCount || selection.isCollapsed) return;
       if (!node.contains(selection.anchorNode) || !node.contains(selection.focusNode)) return;
-      const target = selection.anchorNode?.parentElement;
-      if (target?.closest('input, textarea, [contenteditable="true"]')) return;
+      if (editable(document.activeElement) || editable(selection.anchorNode) || editable(selection.focusNode)) return;
       if (!selection.toString().trim()) return;
       return selectionClipboard(selection, node);
     };
     const copy = () => {
       const data = selected();
-      if (data) void writeSelectionClipboard(data).catch(() => {});
-    };
-    const copyTouch = () => {
-      const data = selected();
-      if (!data || data.text === last) return;
-      last = data.text;
-      writeSelectionClipboard(data).then(() => { waiting = null; showCopied(); }, () => { waiting = data; });
+      if (!data) return;
+      const key = JSON.stringify(data);
+      if (key === last || key === pending) return;
+      pending = key;
+      const attempt = ++revision;
+      void writeSelectionClipboard(data).then(() => {
+        if (attempt !== revision) return;
+        last = key;
+        showCopied();
+      }, () => {
+        // Keep it retryable: the next touch/key can supply browser activation.
+      }).finally(() => { if (attempt === revision) pending = ''; });
     };
     const changed = () => {
       clearTimeout(settle);
-      if (!touch) return;
-      if (window.getSelection()?.isCollapsed) { last = ''; return; }
-      settle = setTimeout(copyTouch, 450);
-    };
-    const touched = () => {
-      if (!waiting) return;
-      const data = waiting;
-      waiting = null;
-      void writeSelectionClipboard(data).then(showCopied, () => {});
+      // Native phone handles do not always send pointer events to the page.
+      // Observe selection changes on every device, including hybrid laptops.
+      if (!window.getSelection()?.toString().trim()) { last = ''; pending = ''; revision++; return; }
+      if (!dragging) settle = setTimeout(copy, 450);
     };
     const onCopy = (event: ClipboardEvent) => {
-      if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (event.defaultPrevented || editable(event.target instanceof Node ? event.target : null)) return;
       const data = selected();
       if (!data || !event.clipboardData) return;
       event.clipboardData.setData('text/plain', data.text);
@@ -68,25 +63,37 @@ export function useCopySelection(root: RefObject<HTMLElement>) {
       event.preventDefault();
     };
     const down = (event: PointerEvent) => {
-      touch = event.pointerType === 'touch';
+      clearTimeout(settle);
       const target = event.target instanceof Element ? event.target : null;
       selecting = !!target && !!root.current?.contains(target)
-        && !target.closest('button, a, input, textarea, select, [contenteditable="true"]');
+        && !target.closest('button, a') && !editable(target);
+      if (selecting) { last = ''; pending = ''; revision++; }
+      dragging = selecting && event.pointerType === 'mouse';
     };
-    const up = () => { if (selecting) copy(); selecting = false; };
-    const key = (event: KeyboardEvent) => { if (event.key === 'Shift' || event.shiftKey) copy(); };
+    const up = (event: Event) => {
+      dragging = false;
+      if (selecting || (event.type === 'touchend' && (event.target === document || root.current?.contains(event.target as Node)))) copy();
+      selecting = false;
+    };
+    const cancel = () => { selecting = false; dragging = false; changed(); };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Shift' || event.shiftKey || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a')) copy();
+    };
     document.addEventListener('pointerdown', down);
     document.addEventListener('pointerup', up);
+    document.addEventListener('pointercancel', cancel);
     document.addEventListener('keyup', key);
     document.addEventListener('copy', onCopy);
     document.addEventListener('selectionchange', changed);
-    document.addEventListener('touchend', touched);
+    document.addEventListener('touchend', up);
     return () => {
+      revision++;
       clearTimeout(settle);
       document.removeEventListener('selectionchange', changed);
-      document.removeEventListener('touchend', touched);
+      document.removeEventListener('touchend', up);
       document.removeEventListener('pointerdown', down);
       document.removeEventListener('pointerup', up);
+      document.removeEventListener('pointercancel', cancel);
       document.removeEventListener('keyup', key);
       document.removeEventListener('copy', onCopy);
     };
