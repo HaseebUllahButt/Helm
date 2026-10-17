@@ -39,6 +39,8 @@ before(async () => {
       options:[{id:'allow',role:'allow',label:'Allow'},{id:'always',role:'allow-always',label:'Always allow npm'},{id:'deny',role:'deny',label:'Deny'}]};
     const scenes={
       idle:{events:done(base())},
+      edits:{events:done(base()),session:{mode:'acceptEdits'}},
+      yolo:{events:done(base()),session:{mode:'bypassPermissions'}},
       tasks:{events:withTodos(list),status:'working'},
       allDone:{events:done(withTodos(list.map(([c,,a])=>[c,'completed',a])))},
       stopped:{events:done(withTodos(list))},
@@ -55,7 +57,7 @@ before(async () => {
       const s=scenes[window.scene];
       if(method==='session.list')return {sessions:[session,other]};
       if(method==='session.commands')return {commands:[{name:'review',description:'Review the change'}]};
-      if(method==='model.list')return {default:'claude-opus-5-5',models:['claude-opus-5-5'],labels:{'claude-opus-5-5':'Opus 5.5'},modes:[{id:'default',label:'Ask first',short:'Ask'},{id:'acceptEdits',label:'Accept edits',short:'Edits'}]};
+      if(method==='model.list')return {default:'claude-opus-5-5',models:['claude-opus-5-5'],labels:{'claude-opus-5-5':'Opus 5.5'},modes:[{id:'default',label:'Ask first',short:'Ask'},{id:'acceptEdits',label:'Accept edits',short:'Edits'},{id:'bypassPermissions',label:'Bypass all checks',short:'yolo',danger:true}]};
       if(method==='session.watch')return {last:0};
       if(method==='session.events'){
         const events=params.since?[]:s.events.map((ev,i)=>({seq:i+1,at:t0+i,...ev}));
@@ -65,7 +67,7 @@ before(async () => {
       return {ok:true};
     }};
     window.mount=(name)=>{window.scene=name;window.answered=false;window.calls=[];
-      createRoot(document.getElementById('root')).render(<DrivenSession client={client} env={env} session={{...session,status:scenes[name].status??'idle'}} onBack={()=>{}} onClosed={()=>{}} onArchived={()=>{}} onSession={()=>{}} />);};
+      createRoot(document.getElementById('root')).render(<DrivenSession client={client} env={env} session={{...session,...scenes[name].session,status:scenes[name].status??'idle'}} onBack={()=>{}} onClosed={()=>{}} onArchived={()=>{}} onSession={()=>{}} />);};
   `, resolveDir: process.cwd(), loader: 'tsx' }, bundle: true, write: false, format: 'iife', jsx: 'automatic' });
   styles = (await readFile('apps/web/src/styles.css', 'utf8')).replace(/^@import[^;]+;/gm, '');
   browser = await chromium.launch({ headless: true, ...(process.env.HELM_TEST_CHROMIUM ? { executablePath: process.env.HELM_TEST_CHROMIUM } : {}) });
@@ -178,6 +180,18 @@ test('several questions go one by one; a multi-select needs its own Send', async
   await multi.getByRole('button', { name: 'Send', exact: true }).click();
   await answered(multi);
   assert.deepEqual((await decisionOf(multi)).answers, { 'Which checks should run?': 'Types, Lint' });
+});
+
+test('Shift Tab walks every permission mode, bypass included, and comes back round', async (t) => {
+  const modeAfterShiftTab = async (scene) => {
+    const page = await open(t, scene);
+    await page.waitForFunction(() => document.querySelector('.slab textarea').placeholder.includes('/ for commands'));
+    await page.keyboard.press('Shift+Tab');
+    await page.waitForFunction(() => window.calls.some((c) => c.method === 'session.mode'));
+    return page.evaluate(() => window.calls.find((c) => c.method === 'session.mode').params.mode);
+  };
+  assert.equal(await modeAfterShiftTab('edits'), 'bypassPermissions');
+  assert.equal(await modeAfterShiftTab('yolo'), 'default');
 });
 
 test('a command approval is the top of the card with the command in a mono block', async (t) => {

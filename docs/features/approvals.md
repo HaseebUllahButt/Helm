@@ -24,8 +24,14 @@ message it gets asks to "Run a command" (`echo hi`) before it answers.
   `test/local-answer`, `driver-acp`, `driver-claude`, `driver-codex`.
 
 ## Questions (pick an answer)
-- **Sees:** a "Question" card with the choices as buttons. A request with
-  several questions is sent only when all are answered.
+- **Sees:** a "Question" card: the question in large type, then the
+  answers as one numbered list with thin lines between them. Hovering a row
+  turns its number violet and shows an arrow; a tap is the answer. Pick-many
+  questions show a tick box on the right and a Send button. On a keyboard the
+  number is the key. A request with several questions is sent only when all
+  are answered.
+- **Look without a real chat:** `test/browser/composer-card` draws the card
+  with screenshots when `HELM_TEST_SCREENSHOT_DIR` is set.
 - **CLI:** in a terminal chat, `/allow`, `/always`, `/deny`,
   `/answer <n> <choice>`.
 - **Prove:** steps not yet driven. The fake agent never asks questions; it

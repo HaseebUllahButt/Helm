@@ -324,12 +324,15 @@ function QuestionSheet({ permission: p, onAnswer, busy, variant, onHandle }: {
             return (
               <button key={o.label} role={q.multiSelect ? 'checkbox' : 'radio'} aria-checked={on} disabled={busy}
                 className={`q-opt${on ? ' on' : ''}${q.multiSelect ? ' multi' : ''}`} onClick={() => choose(q, o.label)}>
-                {q.multiSelect && <span className="q-box">{on && <Icon name="check" size={11} />}</span>}
+                {/* Its number is its key on a keyboard, and a plain count on a phone. */}
+                <kbd className="q-num">{i + 1}</kbd>
                 <span className="grow">
                   <span className="q-label">{o.label}</span>
                   {o.description && <span className="q-desc">{o.description}</span>}
                 </span>
-                <kbd className="q-num">{i + 1}</kbd>
+                {q.multiSelect
+                  ? <span className="q-box">{on && <Icon name="check" size={11} />}</span>
+                  : <span className="q-go" aria-hidden="true"><Icon name="forward" size={14} /></span>}
               </button>
             );
           })}

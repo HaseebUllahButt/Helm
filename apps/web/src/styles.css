@@ -48,36 +48,37 @@
   /* Surfaces. Hull is the page, Deck a panel (a list, the desktop sidebar),
      Plate anything that floats (composer, menus, sheets, dialogs). Each is a
      step you can see on a phone in daylight; the old ladder was 1-3% apart
-     and read as one black. */
-  --bg:        #14161b;
-  --card:      #1b1e24;
-  --sidebar:   #1b1e24;
-  --raised:    #242831;
-  --code-bg:   #0f1115;
-  /* Fills and lines carry the slate's own cool tint rather than white. */
-  --muted:     rgb(190 200 225 / 4%);
-  --accent:    rgb(190 200 225 / 7%);
-  --hover:     rgb(190 200 225 / 8%);
-  --select:    rgb(133 144 255 / 13%);
-  --line:      rgb(190 200 225 / 9%);
-  --line-2:    rgb(190 200 225 / 15%);
-  --input:     rgb(190 200 225 / 14%);
+     and read as one black. Near black with a faint warm violet in it: the
+     old slate read as blue. */
+  --bg:        #0b0b0e;
+  --card:      #131317;
+  --sidebar:   #131317;
+  --raised:    #1b1b21;
+  --code-bg:   #070709;
+  /* Fills and lines carry the same faint violet rather than white. */
+  --muted:     rgb(228 226 240 / 4%);
+  --accent:    rgb(228 226 240 / 7%);
+  --hover:     rgb(228 226 240 / 8%);
+  --select:    rgb(154 134 255 / 15%);
+  --line:      rgb(228 226 240 / 9%);
+  --line-2:    rgb(228 226 240 / 15%);
+  --input:     rgb(228 226 240 / 14%);
 
   /* Text: four steps, and the main tool for hierarchy. Every one of them is
      at least 4.5:1 on every surface it can sit on, Plate included. */
-  --text:      #e8eaef;
-  --text-80:   rgb(232 234 239 / 86%);
-  --text-dim:  #b9bfcb;
-  --mutedfg:   #9ba2b1;
-  /* Glyphs only - never words. 4.6:1 on Plate. */
-  --icon:      #8a91a0;
+  --text:      #ecebf2;
+  --text-80:   rgb(236 235 242 / 86%);
+  --text-dim:  #bebcc9;
+  --mutedfg:   #9d9aab;
+  /* Glyphs only - never words. 5:1 on Plate. */
+  --icon:      #8c899a;
 
   /* The hub. The fill is for the few filled controls (a switch that is on,
      a checkbox); the quiet one is for text, focus rings and the mark on a
      selected row. */
-  --primary:   oklch(0.585 0.17 270);
-  --primary-t: oklch(0.65 0.15 272);
-  --primary-q: #8590ff;
+  --primary:   oklch(0.58 0.19 290);
+  --primary-t: oklch(0.70 0.15 292);
+  --primary-q: #a693ff;
   --amber:     #e8b23f;
   /* Amber as text, which in the light theme has to be darker than amber as a
      fill to be read at all. */
@@ -138,15 +139,15 @@
   --ease: cubic-bezier(0.2, 0, 0, 1);
   /* Colours that used to be written out where they were used. Named so a
      second theme can answer them. */
-  --scroll:    rgb(190 200 225 / 10%);
-  --scroll-h:  rgb(190 200 225 / 16%);
-  --dot-off:   rgb(190 200 225 / 22%);
+  --scroll:    rgb(228 226 240 / 10%);
+  --scroll-h:  rgb(228 226 240 / 16%);
+  --dot-off:   rgb(228 226 240 / 22%);
   --pill-bg:   var(--text);
-  --pill-fg:   #14161b;
+  --pill-fg:   #0b0b0e;
   --toast-bg:  var(--raised);
   --shadow:    0 1px 0 rgb(255 255 255 / 4%) inset, 0 18px 48px -18px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 25%);
   --need-bg:   color-mix(in srgb, var(--amber) 7%, var(--raised));
-  --link:      #8fb4ff;
+  --link:      #b7a9ff;
   --diff-add:  var(--emerald);
   --diff-del:  var(--red);
   --diff-add-fg: #a7f3d0;
@@ -1201,8 +1202,9 @@ pre.snippet {
 .sheet-actions button.primary:hover:not(:disabled) { filter: brightness(1.07); }
 .sheet-actions button.primary:disabled { background: var(--accent); color: var(--mutedfg); }
 
-/* Questions: a quiet card - who asks, the question, the answers as rows.
-   No amber wash: one small dot says it is waiting on you. */
+/* Questions: a quiet card - who asks, the question, then the answers as one
+   list with hairlines between them, each led by its number. No amber wash:
+   one small dot says it is waiting on you; violet marks where you point. */
 .sheet.question {
   background: var(--card); border-color: var(--line-2); gap: 12px; padding: 14px 14px 30px;
 }
@@ -1213,45 +1215,63 @@ pre.snippet {
 .q-dot {
   width: 7px; height: 7px; min-height: 0; padding: 0; margin: 0; border: 0; border-radius: 50%;
   background: var(--line-2); flex: none; cursor: pointer;
+  transition: width 0.2s var(--ease), background 0.2s var(--ease);
 }
 .q-dot.done { background: var(--mutedfg); }
-.q-dot.on { background: var(--text); width: 16px; border-radius: 4px; }
-.q-count { font-size: var(--t-micro); color: var(--mutedfg); margin-left: 3px; font-variant-numeric: tabular-nums; }
-.q-wait { margin-left: auto; font-size: var(--t-micro); color: var(--mutedfg); white-space: nowrap; }
-.q-text { font-size: var(--t-read); color: var(--text); font-weight: 600; line-height: 1.4; letter-spacing: -0.01em; margin: 0 0 12px; }
-.q-hint { font-size: var(--t-micro); color: var(--mutedfg); margin: -8px 0 10px; }
-.q-options { display: flex; flex-direction: column; gap: 6px; width: 100%; }
-.q-opt {
-  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; margin: 0;
-  padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; text-align: left;
-  background: var(--muted); color: var(--text);
-  transition: background 0.12s var(--ease), border-color 0.12s var(--ease);
+.q-dot.on { background: var(--primary-q); width: 18px; border-radius: 4px; }
+.q-count { font: 500 var(--t-micro) var(--mono); color: var(--mutedfg); margin-left: 3px; font-variant-numeric: tabular-nums; }
+.q-wait { margin-left: auto; font: 500 var(--t-micro) var(--mono); color: var(--mutedfg); white-space: nowrap; }
+.q-text {
+  font-size: 17px; color: var(--text); font-weight: 600; line-height: 1.35; letter-spacing: -0.015em;
+  margin: 2px 0 14px; text-wrap: pretty;
 }
-.q-opt:hover:not(:disabled) { background: var(--hover); border-color: var(--line-2); }
-.q-opt.on { border-color: var(--text-dim); background: var(--select); }
-.q-opt .grow { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.q-label { font-size: var(--t-body); font-weight: 550; color: var(--text); }
+.q-hint { font-size: var(--t-micro); color: var(--mutedfg); margin: -10px 0 10px; }
+.q-options {
+  display: flex; flex-direction: column; width: 100%;
+  border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--muted);
+}
+.q-opt {
+  display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: baseline; align-content: center; column-gap: 12px;
+  width: 100%; min-height: 52px; margin: 0; padding: 11px 14px 11px 12px;
+  border: 0; border-radius: 0; text-align: left; background: transparent; color: var(--text);
+  transition: background 0.15s var(--ease);
+}
+.q-opt + .q-opt { border-top: 1px solid var(--line); }
+.q-opt:hover:not(:disabled) { background: var(--hover); }
+.q-opt:active:not(:disabled) { background: var(--accent); }
+.q-opt:focus-visible { outline: 2px solid var(--primary-q); outline-offset: -2px; }
+.q-opt.on { background: var(--select); }
+.q-opt .grow { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.q-label { font-size: var(--t-body); font-weight: 550; color: var(--text); letter-spacing: -0.005em; }
 .q-desc { font-size: var(--t-meta); color: var(--mutedfg); line-height: 1.4; }
 .q-num {
-  flex: none; font: 500 var(--t-micro) var(--mono); color: var(--mutedfg); opacity: 0;
+  justify-self: start;
+  font: 500 12px/20px var(--mono); color: var(--mutedfg); font-variant-numeric: tabular-nums;
   background: none; border: 0; box-shadow: none; padding: 0; min-width: 0;
-  transition: opacity 0.12s var(--ease);
+  transition: color 0.15s var(--ease);
 }
-.q-options:hover .q-num, .q-opt:focus-visible .q-num { opacity: 0.8; }
-@media (hover: none) { .q-num { display: none; } }
+.q-opt:hover:not(:disabled) .q-num, .q-opt:focus-visible .q-num, .q-opt.on .q-num { color: var(--primary-q); }
+/* The arrow says "this goes": a tap on a single answer is the answer. */
+.q-go {
+  display: inline-flex; align-self: center; color: var(--primary-q); opacity: 0; transform: translateX(-4px);
+  transition: opacity 0.15s var(--ease), transform 0.15s var(--ease);
+}
+.q-opt:hover:not(:disabled) .q-go, .q-opt:focus-visible .q-go, .q-opt.on .q-go { opacity: 1; transform: none; }
+@media (hover: none) { .q-go { display: none; } }
 .q-box {
-  flex: none; width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--line-2);
-  display: inline-flex; align-items: center; justify-content: center; color: var(--bg);
+  flex: none; align-self: center; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--line-2);
+  display: inline-flex; align-items: center; justify-content: center; color: #fff;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
 }
-.q-opt.on .q-box { background: var(--text); border-color: var(--text); }
+.q-opt.on .q-box { background: var(--primary); border-color: var(--primary); }
 .q-box svg { display: block; }
 .q-free { margin-top: 8px; }
 .q-free input {
-  width: 100%; margin: 0; padding: 10px 12px; border-radius: 12px; font-size: var(--t-body);
-  background: transparent; border: 1px dashed var(--line-2); color: var(--text); box-shadow: none; outline: none;
+  width: 100%; margin: 0; padding: 12px 14px; border-radius: 14px; font-size: var(--t-body);
+  background: transparent; border: 1px solid var(--line); color: var(--text); box-shadow: none; outline: none;
 }
 .q-free input::placeholder { color: var(--mutedfg); }
-.q-free input:focus, .q-free.on input { border-style: solid; border-color: var(--text-dim); }
+.q-free input:focus, .q-free.on input { border-color: var(--primary-q); }
 .q-preview {
   margin: 10px 0 0; padding: 10px 12px; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere;
   background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius); color: var(--text-dim); max-height: 30dvh; overflow: auto;
@@ -1885,7 +1905,7 @@ button.sheet-editlink:hover { color: var(--text); }
   --muted:     rgb(26 29 36 / 3%);
   --accent:    rgb(26 29 36 / 6%);
   --hover:     rgb(26 29 36 / 6%);
-  --select:    rgb(68 80 200 / 10%);
+  --select:    rgb(91 63 214 / 10%);
   --line:      rgb(26 29 36 / 10%);
   --line-2:    rgb(26 29 36 / 16%);
   --input:     rgb(26 29 36 / 18%);
@@ -1894,9 +1914,9 @@ button.sheet-editlink:hover { color: var(--text); }
   --text-dim:  #3d4350;
   --mutedfg:   #5a6170;
   --icon:      #6b7280;
-  --primary:   oklch(0.52 0.18 270);
-  --primary-t: oklch(0.52 0.17 272);
-  --primary-q: #4450c8;
+  --primary:   oklch(0.50 0.20 290);
+  --primary-t: oklch(0.50 0.19 292);
+  --primary-q: #5b3fd6;
   /* Amber as a fill keeps its colour; amber as words is darkened until it
      can be read in sunlight. Text on an amber fill is dark in both themes. */
   --amber:     #c98a1a;
@@ -3156,20 +3176,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .sheet.banner .sheet-note { padding: 7px 10px; }
 .sheet.banner .sheet-actions { justify-content: flex-end; gap: 6px; }
 .sheet.banner .sheet-actions button { flex: 0 1 auto; min-height: 36px; padding: 6px 14px; font-size: var(--t-meta); border-radius: 10px; }
-.sheet.banner .q-text { margin-bottom: 10px; }
-.sheet.banner .q-opt { min-height: 44px; padding: 8px 12px; }
-.sheet.banner .q-num {
-  opacity: 1; min-width: 20px; height: 20px; padding: 0 5px; display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--line-2); border-radius: 5px; background: var(--card); color: var(--text-dim);
-}
-.sheet.banner .q-opt.on .q-num { color: var(--text); border-color: var(--text-dim); }
+.sheet.banner .q-text { margin-bottom: 12px; }
 .sheet.banner .q-actions button { min-height: 36px; }
 @media (max-width: 599px) {
   .sheet.banner { max-height: 46dvh; padding: 12px 12px 10px; }
   .todo-strip { margin: 0 20px -19px; }
   .sheet.banner .sheet-actions button { flex: 1 1 auto; min-height: 44px; }
 }
-@media (hover: none) { .sheet.banner .q-num { display: none; } }
 
 /* ------------------------------------------------- chat header, as a path */
 
