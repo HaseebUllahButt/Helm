@@ -24,6 +24,18 @@ export interface QuestionHandle { submit: (text: string) => 'sent' | 'wait' }
 /** Said the way people say it, whatever the CLI's own word was. */
 const plainLabel = (label: string, banner: boolean) => banner ? (label === 'Allow' ? 'Approve' : label === 'Deny' ? 'Decline' : label) : label;
 
+/**
+ * What a tool was given, as "name: value" lines a person can read; only a
+ * nested value keeps its JSON. `{"command": "echo hi"}` reads "command: echo hi".
+ */
+export function plainDetail(detail: unknown): string {
+  if (typeof detail === 'string') return detail;
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return JSON.stringify(detail, null, 2) ?? '';
+  return Object.entries(detail as Record<string, unknown>)
+    .map(([name, value]) => `${name}: ${typeof value === 'string' ? value : JSON.stringify(value, null, 2)}`)
+    .join('\n');
+}
+
 const ASK_LABEL: Record<Permission['kind'], string> = {
   command: 'Command approval', edit: 'File change approval', tool: 'Tool approval', plan: 'Plan approval', question: 'Question',
 };
@@ -90,7 +102,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
           />
         )}
         {p.kind === 'edit' && <EditDetail detail={p.detail} />}
-        {p.kind === 'tool' && p.detail && <pre className="sheet-json">{typeof p.detail === 'string' ? p.detail : JSON.stringify(p.detail, null, 2)}</pre>}
+        {p.kind === 'tool' && p.detail && <pre className="sheet-json">{plainDetail(p.detail)}</pre>}
       </div>
       {editable && !editing && (
         <button className="sheet-editlink" onClick={() => { setEdited(original); setEditing(true); }}>
@@ -173,7 +185,7 @@ function EditDetail({ detail }: { detail: any }) {
       </>
     );
   }
-  return <pre className="sheet-json">{JSON.stringify(detail, null, 2)}</pre>;
+  return <pre className="sheet-json">{plainDetail(detail)}</pre>;
 }
 
 // --------------------------------------------------------------- questions

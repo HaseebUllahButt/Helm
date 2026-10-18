@@ -37,8 +37,11 @@ before(async () => {
     const cmd={requestId:'cmd',kind:'command',tool:'Bash',title:'Run the tests',detail:'npm exec --workspace @helm/web -- tsc --noEmit && node --test --test-concurrency=2 test/browser/composer-card.test.mjs',
       reason:'Not in your allowed commands',defaultTo:'deny',allowEdit:true,input:{command:'npm test'},
       options:[{id:'allow',role:'allow',label:'Allow'},{id:'always',role:'allow-always',label:'Always allow npm'},{id:'deny',role:'deny',label:'Deny'}]};
+    const toolAsk={requestId:'tool',kind:'tool',tool:'devin',title:'Run a command',detail:{command:'echo hi',cwd:'/work'},
+      options:[{id:'allow',role:'allow',label:'Allow'},{id:'deny',role:'deny',label:'Deny'}]};
     const scenes={
       idle:{events:done(base())},
+      tool:{events:base(),status:'blocked',pending:[toolAsk]},
       edits:{events:done(base()),session:{mode:'acceptEdits'}},
       yolo:{events:done(base()),session:{mode:'bypassPermissions'}},
       tasks:{events:withTodos(list),status:'working'},
@@ -207,6 +210,14 @@ test('a command approval is the top of the card with the command in a mono block
   await banner.getByRole('button', { name: 'Decline', exact: true }).click();
   await answered(page);
   assert.equal((await decisionOf(page)).option, 'deny');
+});
+
+test('a tool approval shows what the tool was given as plain lines, not JSON', async (t) => {
+  const page = await open(t, 'tool');
+  const banner = page.locator('.slab .sheet.banner.tool');
+  await banner.waitFor();
+  assert.equal(await banner.locator('.ask-kind').textContent(), 'Tool approval');
+  assert.equal(await banner.locator('.sheet-json').innerText(), 'command: echo hi\ncwd: /work');
 });
 
 test('edit before allowing still works from the card', async (t) => {
