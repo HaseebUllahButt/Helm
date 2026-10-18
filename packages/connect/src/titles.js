@@ -21,11 +21,15 @@ export function informative(text) {
     /<(environment_context|recommended_plugins|system_reminder|instructions|[\w-]+_instructions)\b[^>]*>[\s\S]*?<\/\1>/gi,
     '',
   );
+  // "hello there" is not a chat about "there": when the opener was most of
+  // a line, the line as it was said is kept, for when nothing better follows.
+  let short = null;
   for (const raw of body.split('\n')) {
     let line = raw.trim().replace(/^#{1,6}\s+/, '').replace(/^(?:[-*]|\d+[.)])\s+/, '');
     if (!line || GREETING.test(line) || PLACEHOLDER.test(line) || /^<[^>]+>$/.test(line) || /^```/.test(line)) continue;
     // Headers introduce the actual request on the following line.
     if (/^(?:(?:please\s+)?(?:help me with|do)\s+)?(?:the following|instructions|task|request|context)\s*:?$/i.test(line)) continue;
+    const said = line;
     line = line
       .replace(/^(?:hi|hey|hello|alright|okay)[!,.:]?\s+(?:so[, ]+)?/i, '')
       .replace(/^what I (?:want|need) you to do is\s+(?:that\s+)?/i, '')
@@ -33,9 +37,11 @@ export function informative(text) {
       .replace(/^(?:I (?:want|need|would like) you to|I'd like you to)\s+/i, '')
       .replace(/^please\s+/i, '')
       .trim();
-    if (line && !GREETING.test(line)) return line;
+    if (!line || GREETING.test(line)) continue;
+    if (/\s/.test(line) || line === said) return line;
+    short ??= said;
   }
-  return null;
+  return short;
 }
 
 /** Keep a readable phrase instead of chopping a word in half. */
