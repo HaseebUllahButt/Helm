@@ -15,8 +15,10 @@ import { Icon } from './Icon';
 
 export interface PaletteItem {
   id: string;
-  group: 'thread' | 'machine' | 'action';
+  group: 'thread' | 'machine' | 'action' | 'said';
   title: string;
+  /** Another item's id this one stands for: a chat found by its words is not shown twice when its title matched too. */
+  same?: string;
   sub?: string;
   /** An engine, for a thread: its mark is drawn exactly as everywhere else. */
   engine?: string;
@@ -27,7 +29,11 @@ export interface PaletteItem {
   run: () => void;
 }
 
-const GROUP = { thread: 'Threads', machine: 'Machines', action: 'Actions' } as const;
+const GROUP = { thread: 'Threads', machine: 'Machines', action: 'Actions', said: 'Said in chats' } as const;
+
+/** Typing pauses this long before the machines are asked what was said. */
+const SAID_AFTER_MS = 250;
+const SAID_MIN_CHARS = 2;
 
 /** 0 for no match; higher is better. Every word must match somewhere. */
 function score(item: PaletteItem, q: string): number {
@@ -46,8 +52,10 @@ function score(item: PaletteItem, q: string): number {
   return total;
 }
 
-export function Palette({ items, onClose, engineOf, heading = 'Go anywhere', placeholder = 'Search threads, machines, actions' }: {
+export function Palette({ items, onClose, engineOf, search, heading = 'Go anywhere', placeholder = 'Search threads, machines, actions' }: {
   items: PaletteItem[]; onClose: () => void; engineOf: (id?: string) => { cls: string };
+  /** Asks the machines which chats said these words; the answers are listed under "Said in chats". */
+  search?: (query: string) => Promise<PaletteItem[]>;
   /** The same box, narrowed to one job (Ctrl+Shift+T: pick a device for a terminal). */
   heading?: string; placeholder?: string;
 }) {
@@ -56,8 +64,22 @@ export function Palette({ items, onClose, engineOf, heading = 'Go anywhere', pla
   const [q, setQ] = useState('');
   const [at, setAt] = useState(0);
   const list = useRef<HTMLDivElement>(null);
+  // What the machines found for the words typed, and whether they are still looking.
+  const [said, setSaid] = useState<{ q: string; items: PaletteItem[] }>({ q: '', items: [] });
+  const asking = !!search && q.trim().length >= SAID_MIN_CHARS && said.q !== q.trim();
 
-  const shown = useMemo(() => {
+  useEffect(() => {
+    const query = q.trim();
+    if (!search || query.length < SAID_MIN_CHARS) return;
+    let stale = false;
+    const timer = setTimeout(() => {
+      search(query).then((found) => { if (!stale) setSaid({ q: query, items: found }); })
+        .catch(() => { if (!stale) setSaid({ q: query, items: [] }); });
+    }, SAID_AFTER_MS);
+    return () => { stale = true; clearTimeout(timer); };
+  }, [q, search]);
+
+  const local = useMemo(() => {
     if (!q.trim()) {
       // Nothing typed: the actions, then the newest threads - what you are
       // most likely to have opened the palette for.
@@ -73,6 +95,12 @@ export function Palette({ items, onClose, engineOf, heading = 'Go anywhere', pla
       .slice(0, 40)
       .map((x) => x.item);
   }, [items, q]);
+  // Chats found by their words come after the title matches, once, newest first.
+  const shown = useMemo(() => {
+    if (!q.trim() || said.q !== q.trim() || !said.items.length) return local;
+    const have = new Set(local.map((item) => item.id));
+    return [...local, ...said.items.filter((item) => !item.same || !have.has(item.same))];
+  }, [local, said, q]);
 
   const selected = Math.max(0, Math.min(at, shown.length - 1));
   useEffect(() => {
@@ -101,7 +129,9 @@ export function Palette({ items, onClose, engineOf, heading = 'Go anywhere', pla
           }}
         />
         <div className="palette-list" ref={list} role="listbox" id={listId} aria-label="Search results">
-          {shown.length === 0 && <div className="empty quiet">No matches. Try a machine, folder, or thread name.</div>}
+          {shown.length === 0 && (asking
+            ? <div className="empty quiet" role="status">Looking for those words in your chats…</div>
+            : <div className="empty quiet">No matches. Try a machine, folder, chat name, or words said in a chat.</div>)}
           {shown.map((item, i) => {
             const head = i === 0 || shown[i - 1].group !== item.group;
             return (
@@ -114,7 +144,7 @@ export function Palette({ items, onClose, engineOf, heading = 'Go anywhere', pla
                   {item.engine ? <EngineMark engine={engineOf(item.engine).cls} /> : <span className={`pglyph ${item.group}`}><Icon name={item.group === 'machine' ? 'machine' : 'forward'} size={15} /></span>}
                   <span className="grow">
                     <span className="palette-title">{item.title}</span>
-                    {item.sub && <span className="palette-sub">{item.sub}</span>}
+                    {item.sub && <span className={`palette-sub${item.group === 'said' ? ' said' : ''}`}>{item.sub}</span>}
                   </span>
                 </button>
               </div>

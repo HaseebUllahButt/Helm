@@ -715,6 +715,33 @@ function Shell({ client, conn, onSignOut }: {
     return items;
   };
 
+  /**
+   * The search box, past titles: every online machine is asked which of its
+   * chats said these words (`session.search`, from search-index.js). A chat
+   * found this way opens like any other row; one whose title already matched
+   * is marked `same` so the palette shows it once.
+   */
+  const searchSaid = useCallback(async (query: string): Promise<PaletteItem[]> => {
+    type Hit = { id: string; title: string; cwd: string; quick: boolean; engine: string; archived: boolean; who: 'you' | 'agent' | 'title'; snippet: string; at: number; updatedAt: number };
+    const live = envs.filter((e) => e.online);
+    const found = await Promise.all(live.map(async (e) => {
+      try {
+        const r = await client.rpc<{ results: Hit[] }>(e.id, 'session.search', { query, limit: 12 }, 8000);
+        return (r.results ?? []).map((hit): PaletteItem => {
+          const known = sessionsNow.current[e.id]?.find((s) => s.id === hit.id);
+          const session = known ?? ({ id: hit.id, title: hit.title, cwd: hit.cwd, quick: hit.quick, engine: hit.engine, archived: hit.archived, updatedAt: hit.updatedAt } as Session);
+          const who = hit.who === 'you' ? 'You: ' : hit.who === 'agent' ? 'Agent: ' : '';
+          return {
+            id: `said:${e.id}:${hit.id}`, same: `t:${e.id}:${hit.id}`, group: 'said', title: hit.title || 'Untitled chat', engine: hit.engine, at: hit.at,
+            sub: `${hit.snippet ? `${who}${hit.snippet}` : hit.quick ? 'quick chat' : hit.cwd} · ${e.name}${hit.archived ? ' · archived' : ''}`,
+            run: () => openSessionRef.current(e.id, session),
+          };
+        });
+      } catch { return []; }
+    }));
+    return found.flat().sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+  }, [envs, client]);
+
   // The sidebar's ⋯: the machine screen's three, plus carrying on. The list
   // is reloaded either way, so a row that would not go stays and says so.
   const threadActions = (e: Environment, s: Session) => {
@@ -823,6 +850,8 @@ function Shell({ client, conn, onSignOut }: {
     navigate([{ kind: 'env' }], id);
   };
   const attentionVisit = useRef(0);
+  // Reached from callbacks made earlier (the search box), so they always open with today's screens.
+  const openSessionRef = useRef<(envId: string, s: Session) => void>(() => {});
   const openSession = (envId: string, s: Session, reviewChildren = false) => {
     if (s.id.startsWith('found:')) {
       // The tap is the look. Opening a chat Helm did not start can be slow
@@ -833,6 +862,7 @@ function Shell({ client, conn, onSignOut }: {
     }
     navigate([{ kind: 'env' }, { kind: 'session', session: s, reviewChildren: reviewChildren ? ++attentionVisit.current : undefined }], envId);
   };
+  openSessionRef.current = openSession;
   // A session that changed under an open view: refresh the machine's list and
   // fold the new record into the stack, so the title in the bar and the title
   // in the history entry behind it do not disagree.
@@ -1697,7 +1727,7 @@ function Shell({ client, conn, onSignOut }: {
           <button onClick={() => { setSnooze(snoozeUndo.key, null); setSnoozeUndo(null); }}>Undo</button>
         </div>
       )}
-      {palette && <Palette items={paletteItems()} onClose={() => setPalette(false)} engineOf={engineOf} />}
+      {palette && <Palette items={paletteItems()} search={searchSaid} onClose={() => setPalette(false)} engineOf={engineOf} />}
       {terminalPicker && <Palette heading="Open a terminal" placeholder="Pick a device" engineOf={engineOf}
         onClose={() => setTerminalPicker(false)}
         items={envs.filter((e) => e.online).map((e) => {

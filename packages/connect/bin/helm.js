@@ -100,6 +100,7 @@ const usage = () => {
 
   helm brain                       open the network's brain on the VM
   helm digest [--json]              every machine, folder and running session
+  helm search <words...> [--json]   chats on every machine where those words were said, newest first
   helm thread <id> [-n 40]          the recent conversation of one session
   helm pickup [chat-id] [-n 3]      where earlier chats in this project stopped, on every machine:
                                     their ask, what their final reply left, commits, uncommitted files
@@ -887,6 +888,36 @@ async function gather() {
   const roster = Object.fromEntries(Object.values(net.machines ?? {}).map((m) =>
     [m.id, { name: m.name, online: now - (snap.machines?.[m.id]?.at ?? 0) < 90_000 }]));
   return { snap, roster };
+}
+
+/**
+ * `helm search <words>`: which chat, on which machine, said these words. Every
+ * machine answers from its own index (search-index.js); an offline one is
+ * named as such rather than silently missing.
+ */
+async function printSearch() {
+  const json = rest.includes('--json');
+  const query = rest.filter((a) => a !== '--json').join(' ').trim();
+  if (!query) { console.error('usage: helm search <words...> [--json]'); process.exitCode = 2; return; }
+  const net = requireNetwork();
+  const machines = Object.values(net.machines ?? {});
+  const results = []; const offline = [];
+  await Promise.all(machines.map(async (m) => {
+    try {
+      const r = await hubRpc(net, m.id, M.SESSION_SEARCH, { query, limit: 20 }, { timeout: 15_000, budget: 10_000 });
+      for (const hit of r.results ?? []) results.push({ ...hit, machine: m.name, machineId: m.id });
+    } catch { offline.push(m.name); }
+  }));
+  results.sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+  if (json) { console.log(JSON.stringify({ query, results, offline }, null, 2)); return; }
+  if (!results.length) console.log(`Nothing said about "${query}"${offline.length ? ` on the machines that answered` : ''}.`);
+  for (const hit of results) {
+    const where = hit.quick ? 'quick chat' : hit.cwd.replace(/^\/(home|Users)\/[^/]+/, '~');
+    const who = hit.who === 'you' ? 'you' : hit.who === 'agent' ? 'agent' : 'title';
+    console.log(`${hit.id.slice(0, 6)}  ${hit.machine}  ${where}  ${hit.title}${hit.archived ? '  (archived)' : ''}`);
+    if (hit.snippet) console.log(`        ${who}: ${hit.snippet}`);
+  }
+  if (offline.length) console.log(`\nNot asked (offline): ${offline.join(', ')}`);
 }
 
 async function printDigest() {
@@ -2284,6 +2315,10 @@ try {
 
     case 'digest':
       await printDigest();
+      break;
+
+    case 'search':
+      await printSearch();
       break;
 
     case 'thread':

@@ -209,6 +209,7 @@ export const M = {
   SESSION_VISUAL: 'session.visual',   // { id, ref } -> { html } lazy authenticated snapshot read
   SESSION_WATCH: 'session.watch',     // { id } -> { ok, last }   start/renew E.SESSION_EVENT pushes
   SESSION_UNWATCH: 'session.unwatch', // { id }
+  SESSION_SEARCH: 'session.search',   // { query, limit? } -> { results[] }  chats here whose words (yours or the agent's) hold every word typed
   SESSION_ANSWER: 'session.answer',   // { id, requestId, decision: { option, message?, answers? } }
   SESSION_INTERRUPT: 'session.interrupt', // { id }
   SESSION_DEQUEUE: 'session.dequeue',   // { id, turnId } -> { found, text? }  pull a queued message back

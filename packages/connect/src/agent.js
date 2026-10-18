@@ -59,6 +59,7 @@ import { createGithubRepos } from './github-repos.js';
 import { agentCatalog, markShown, helmBrief } from './delegation.js';
 import { loadOwner, mergeOwner, ownerHash, editOwner } from '../../protocol/owner.js';
 import { OwnerKeeper, ownerWords, askHidden } from './owner-keeper.js';
+import { SearchIndex } from './search-index.js';
 import { EVENTS_DIR } from './events.js';
 import { SendEngine } from './send-engine.js';
 import { CopyReceiver } from './copy-transport.js';
@@ -461,6 +462,8 @@ export class Daemon {
       publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     this.sessions.delegationBrief = () => helmBrief(loadNetwork() ?? this.net);
+    // What was said in every chat here, for the search box (search-index.js).
+    this.search = new SearchIndex({ log: (line) => console.log(`[helm] ${line}`) });
     this.keeper = new OwnerKeeper({
       self: () => this.id, name: () => this.name, network: () => loadNetwork() ?? this.net,
       words: async (p) => ownerWords(await this.sessions.list(), { dir: EVENTS_DIR, since: Number(p.since) || 0, read: p.read }),
@@ -551,6 +554,7 @@ export class Daemon {
     });
     this.sessions.on('event', ({ id, event }) => {
       this.#queueEvent(id, event);
+      this.search.note(id, event);
       if (event?.type === 'permission.request') {
         this.#notify(id, event);
         // The list only hears "blocked"; this says what about, so the
@@ -725,6 +729,7 @@ export class Daemon {
     this.taskTransfers?.stop();
     await this.sendEngine?.stop();
     this.schedules?.stop();
+    this.search?.close();
     this.github?.stop();
     this.#stopWatch?.();
     this.lan?.stop();
@@ -1728,6 +1733,13 @@ export class Daemon {
       }
       case M.OWNER_KEEP:
         return { record: loadOwner(), keeper: this.keeper.runNow() };
+      case M.SESSION_SEARCH: {
+        // The first search after install reads every chat log once (a second
+        // or two); after that the index follows live events and only logs that grew.
+        const list = await this.sessions.list();
+        await this.search.ready(list);
+        return { results: this.search.search(String(p.query ?? ''), list, { limit: Math.min(50, Number(p.limit) || 20) }) };
+      }
       case M.OWNER_WORDS:
         return ownerWords(await this.sessions.list(), {
           dir: EVENTS_DIR, since: Number(p.since) || 0, read: p.read && typeof p.read === 'object' ? p.read : {},
