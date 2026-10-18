@@ -1,40 +1,27 @@
 ---
 name: pause-and-pickup
-description: Stop Helm work at a clean point and leave a short note the next agent can act on, or pick up where another session left off. Use when the owner says stop, pause, hand over, write the report or handoff, wrap up, or asks to continue, resume or pick up earlier work.
+description: Stop Helm work at a clean point, or continue earlier work. Use when the owner says stop, pause, hand over, wrap up, or asks to continue, resume or pick up earlier work.
 ---
 
 # Pause and pick up
 
-HANDOFF.md holds open work only: short notes the next agent can act on in a
-minute. What was done belongs in commit messages, which `git log` keeps.
+There is no handoff file. Commits hold what was done; your final reply
+holds what is left. Helm keeps both, and `helm pickup` reads them back.
 
 ## Pause
 
-1. **Stop at a clean point.** Finish or undo the half-made edit. Nothing
-   half-applied stays in the tree: another agent's commit may sweep it up.
-2. **Commit what is verified,** by path (`git commit -- <files>`), after
-   checking `git status` for files that are not yours. Leave unverified work
-   uncommitted and say so in the note.
-3. **Clean up what you started:** private Helm copies
-   (`node scripts/verify-helm.mjs down`), helpers you no longer need, test
-   chats, spins (`helm share stop <name>`).
-4. **Write the note** at the top of the "Open" list in HANDOFF.md, at most
-   8 lines: what is left, uncommitted files and their state, the first thing
-   to do next, and any trap that will cost time again. Do not list what is
-   done. If an older note covers the same work, rewrite it; delete notes
-   whose work you finished.
-5. **Tell the owner** in two or three plain sentences what is done, what is
-   not, and what comes next.
+1. **Stop at a clean point.** Finish or undo the half-made edit.
+2. **Commit what is verified,** by path, after reading `git status`.
+   Leave unverified work uncommitted.
+3. **Clean up what you started:** private Helms
+   (`node scripts/verify-helm.mjs down`), helpers, test chats, spins.
+4. **End with a short reply:** what is done, then a "Left:" part with what
+   is not, uncommitted files, the first next step, and any trap.
 
 ## Pick up
 
-1. Read only the newest note in HANDOFF.md, not the whole file.
-2. `git log --oneline <note's last commit>..HEAD` and `git status`: what
-   changed since, and what is uncommitted (it may belong to an agent still
-   working - `helm digest` shows who is running).
-3. If the owner names the previous chat, `helm thread <id>` shows its last
-   messages.
-4. Check before trusting: re-run what the note calls proven if your work
-   builds on it (`verify-helm` for anything the owner sees).
-5. Start with the note's next step, unless the owner asked for something
-   else. Delete the note when its work is done.
+1. `helm pickup` (or `helm pickup <chat-id>`): the earlier chats here, what
+   they left, commits since, uncommitted files, and chats running now.
+2. `helm thread <id>` shows more of one chat. Re-run what it calls proven if
+   your work builds on it.
+3. Leave files a running chat is editing alone; `helm say <id>` asks it.

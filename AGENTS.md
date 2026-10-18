@@ -101,6 +101,13 @@ Devin). Before committing, read `git status` and leave files you did not touch.
 - Roster cleaning must leave a valid record exactly as it is, or machines
   re-send rosters forever. Validate and reject; normalise where it is used.
 - A latency number is only real after about 10 seconds of samples.
+- A worktree without a built node-pty hangs in `proc-host.test.mjs`. Fix:
+  `npx node-gyp rebuild` in the pty package.
+- On the laptop, the four "native launch" tests in `native-cli.test.mjs` time
+  out whatever the change. On `why`, 5 tests in `browser-window.test.mjs` fail
+  the same way (not looked into yet).
+- On the VM, Codex's sandbox needs both `/etc/apparmor.d/bwrap` and
+  `/etc/apparmor.d/codex-bwrap`: Codex runs its own bundled bwrap.
 
 ## Docs
 
@@ -112,10 +119,9 @@ Devin). Before committing, read `git status` and leave files you did not touch.
 
 ## Pausing and handing over
 
-When the owner says stop, pause, or hand over, use the `pause-and-pickup`
-skill: stop at a clean point and write a short note at the top of
-HANDOFF.md. When picking up someone else's work, read only the newest note,
-then `git log` since it.
+No handoff file. To pause, stop at a clean point, commit verified work, and
+end with a short reply that says what is left. To continue earlier work, run
+`helm pickup`. The `pause-and-pickup` skill has the steps.
 
 ## Words the owner uses
 
