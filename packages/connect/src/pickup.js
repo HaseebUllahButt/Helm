@@ -1,5 +1,6 @@
 /**
- * `helm pickup`: where earlier work in this folder got to, built on demand.
+ * `helm pickup`: where earlier work in this project got to, on every machine,
+ * built on demand.
  *
  * Helm used to keep a hand-written HANDOFF.md for this, and it grew to
  * 30,000 words: a file every agent may add to only grows, however strict its
@@ -16,6 +17,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { M } from '@helm/protocol';
 import { stripBrief } from '@helm/protocol/brief';
 import { fold, shortId, ago } from './brain.js';
+import { projectKeys, sameProject } from './project-key.js';
 
 const RUNNING = new Set(['working', 'blocked']);
 const flat = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -170,19 +172,34 @@ export function gitState(cwd, chats, { git = run, since = null } = {}) {
   return out;
 }
 
+// A machine its snapshot saw this recently is up but slow, not asleep.
+const LATELY_MS = 2 * 60_000;
+const silence = (at, now) => (now - at < LATELY_MS ? `not answering just now, seen ${ago(at, now)}` : `offline, last seen ${ago(at, now)}`);
+
+/** Where a chat is: this machine, another one now, or one seen a while ago. */
+const where = ({ machine, offlineAt }, now) => (offlineAt ? `${machine} (${silence(offlineAt, now)})` : machine);
+
 /** The page an agent reads. Short on purpose: it lands in its context. */
-export function renderPickup({ chats, running, git, now = Date.now() }) {
+export function renderPickup({ chats, running, git, unchecked = [], now = Date.now() }) {
   const out = [];
-  if (!chats.length) out.push('No earlier chat in this folder. `helm pickup <chat-id>` reads a named one.');
-  for (const { machine, session: s, summary } of chats) {
-    out.push(`Chat ${shortId(s.id)} on ${machine}: ${s.title || 'untitled'} (${s.engine}, ${s.status}, ${ago(s.updatedAt, now)}) in ${s.cwd}`);
+  if (!chats.length) out.push('No earlier chat in this project. `helm pickup <chat-id>` reads a named one.');
+  for (const c of chats) {
+    const { session: s, summary } = c;
+    out.push(`Chat ${shortId(s.id)} on ${where(c, now)}: ${s.title || 'untitled'} (${s.engine}, ${s.status}, ${ago(s.updatedAt, now)}) in ${s.cwd}`);
+    if (!summary) {
+      // An offline machine's chat: only the line its digest saved.
+      if (s.last) out.push(`  Last seen doing: ${cap(flat(s.last), 300)}`);
+      out.push(`  Its replies are on ${c.machine}; \`helm pickup ${shortId(s.id)}\` reads them when it is back.`);
+      out.push('');
+      continue;
+    }
     if (summary.asked) out.push(`  Asked: ${summary.asked}`);
     if (summary.lastAsked) out.push(`  Last asked: ${summary.lastAsked}`);
     if (summary.ended) out.push(`  Its last turn ended: ${summary.ended}.`);
     if (summary.left) {
       out.push(summary.found ? '  Its final reply says what is left:' : '  The end of its final reply:');
       for (const l of summary.left.split('\n')) out.push(`    ${l}`);
-    } else out.push('  It never replied.');
+    } else out.push(summary.unread ? `  Could not read it from ${c.machine} just now.` : '  It never replied.');
     out.push('');
   }
   if (git.log) {
@@ -190,44 +207,125 @@ export function renderPickup({ chats, running, git, now = Date.now() }) {
     for (const l of git.log) out.push(`  ${l}`);
   }
   for (const f of git.folders) {
-    const where = f.own ? `This checkout (${f.branch})` : `${f.dir} (${f.branch})`;
+    const at = f.own ? `This checkout (${f.branch})` : `${f.dir} (${f.branch})`;
     if (f.unmerged.length) {
-      out.push(`${where} has commits not in this one:`);
+      out.push(`${at} has commits not in this one:`);
       for (const l of f.unmerged) out.push(`  ${l}`);
     }
     if (f.dirty.length) {
-      out.push(`${where}, uncommitted (may belong to a running chat):`);
+      out.push(`${at}, uncommitted (may belong to a running chat):`);
       for (const l of f.dirty) out.push(`  ${l}`);
-    } else if (f.own) out.push(`${where}: nothing uncommitted.`);
+    } else if (f.own) out.push(`${at}: nothing uncommitted.`);
   }
   if (running.length) {
-    out.push('Running here now - do not edit the same files; `helm say <id>` asks them:');
-    for (const s of running) out.push(`  ${shortId(s.id)}  ${s.title || 'untitled'} (${s.status}) in ${s.cwd}`);
+    out.push('Running now - do not edit the same files; `helm say <id>` asks them:');
+    for (const r of running) {
+      const state = r.offlineAt ? `${r.session.status} when last seen` : r.session.status;
+      out.push(`  ${shortId(r.session.id)}  ${r.session.title || 'untitled'} (${state}) on ${where(r, now)} in ${r.session.cwd}`);
+    }
   }
+  const away = [...new Set([...chats, ...running].filter((c) => !c.here).map((c) => c.machine))];
+  if (away.length) {
+    out.push(`Not shown: commits not pushed, or files not committed, on ${away.join(', ')}.`
+      + ' `helm exec <machine> --cwd <folder> -- git status` shows them.');
+  }
+  const why = new Map();
+  for (const u of unchecked) why.set(u.why, [...(why.get(u.why) ?? []), u.seen ? `${u.machine} (${u.seen})` : u.machine]);
+  for (const [reason, names] of why) out.push(`Not checked, ${reason}: ${names.join(', ')}.`);
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 
+const OLD_HELM = 'an older Helm there cannot say which project a folder holds';
+
 /**
- * Gather and render. `rpc(env, method, params)` reaches a machine's Helm;
- * `find(id)` resolves a typed chat id across the network the way
- * `helm thread` does.
+ * One machine's chats in this project.
+ *
+ * A machine that answers names the project of each of its chats' folders
+ * itself (`projects`, from project-key.js), because the same repo sits at a
+ * different path on each machine. This machine also matches by path, which
+ * keeps folders outside git and older local daemons working. A machine that
+ * does not answer is read from the last snapshot of it, marked offline.
  */
-export async function pickup({ id = null, cwd = process.cwd(), self, selfName = 'this machine', sessionId = null, limit = 3, rpc, find, git = run, now = Date.now() }) {
+export function machineChats({ env, machine, here, listed, saved, keys, roots, sessionId, limit, now = Date.now() }) {
+  if (listed) {
+    const { sessions = [], projects } = listed;
+    if (!projects && !here) return { unchecked: OLD_HELM };
+    const matched = Object.entries(projects ?? {}).filter(([, k]) => sameProject(k, keys)).map(([dir]) => resolve(dir));
+    const picked = chooseChats(sessions, { roots: here ? [...roots, ...matched] : matched, self: sessionId, limit });
+    const tag = (session) => ({ env, machine, here, session });
+    return { earlier: picked.earlier.map(tag), running: picked.running.map(tag) };
+  }
+  if (!saved?.at) return { unchecked: 'not answering and nothing saved' };
+  const sessions = saved.sessions ?? [];
+  if (keys.length && sessions.length && !sessions.some((s) => s.project)) {
+    return { unchecked: 'not answering, and its saved list does not say which project a folder holds', seen: silence(saved.at, now) };
+  }
+  const ours = sessions.filter((s) => s.id !== sessionId && sameProject(s.project, keys));
+  const tag = (session) => ({ env, machine, here: false, offlineAt: saved.at, session });
+  const newest = (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+  return {
+    earlier: ours.filter((s) => !isRunning(s) && !s.delegation?.parentId).sort(newest).slice(0, limit).map(tag),
+    running: ours.filter(isRunning).sort(newest).map(tag),
+  };
+}
+
+/**
+ * Gather and render, across every machine.
+ *
+ * `rpc(env, method, params)` reaches a machine's Helm patiently (this one);
+ * `peerRpc` reaches another one quickly, so one asleep machine cannot hold
+ * the page up. `find(id)` resolves a typed chat id across the network the
+ * way `helm thread` does. `snapshots` are saved digests of every machine
+ * (this machine's and the brain's; values or promises), for machines that
+ * do not answer.
+ */
+export async function pickup({
+  id = null, cwd = process.cwd(), self, selfName = 'this machine', machines = null, sessionId = null, limit = 3,
+  rpc, peerRpc = rpc, find, snapshots = [], git = run, now = Date.now(),
+}) {
   const roots = repoRoots(cwd, git);
-  const listed = (await rpc(self, M.SESSION_LIST, { includeDelegations: true })).sessions ?? [];
-  const { earlier, running } = chooseChats(listed, { roots, self: sessionId, limit });
-  const picked = id ? [await find(id)] : earlier.map((session) => ({ env: self, machine: selfName, session }));
-  const chats = await Promise.all(picked.map(async ({ env, machine, session }) => {
-    const [head, tail] = await Promise.all([
-      rpc(env, M.SESSION_EVENTS, { id: session.id, since: 0, limit: 40 }),
-      rpc(env, M.SESSION_EVENTS, { id: session.id, tail: 400 }),
-    ]);
-    const summary = chatSummary(head.events ?? [], tail.events ?? []);
-    return { machine, session: { ...session, ...(tail.session ?? {}) }, summary };
+  const keys = await projectKeys(cwd, git);
+  const names = { ...Object.fromEntries(Object.entries(machines ?? {}).map(([env, m]) => [env, m?.name ?? env])), [self]: selfName };
+  const ask = (env) => (env === self ? rpc : peerRpc)(env, M.SESSION_LIST, { includeDelegations: true, projects: true });
+  const lists = await Promise.all(Object.keys(names).map(async (env) => [env, env === self ? await ask(env) : await ask(env).catch(() => null)]));
+  const snaps = await Promise.all(snapshots ?? []);
+  const saved = (env) => snaps.map((s) => s?.machines?.[env]).filter(Boolean).sort((a, b) => (b.at ?? 0) - (a.at ?? 0))[0];
+  const earlier = [];
+  const running = [];
+  const unchecked = [];
+  for (const [env, listed] of lists) {
+    const here = env === self;
+    const got = machineChats({ env, machine: names[env], here, listed, saved: here ? null : saved(env), keys, roots, sessionId, limit, now });
+    if (got.unchecked) { unchecked.push({ machine: names[env], why: got.unchecked, seen: got.seen }); continue; }
+    earlier.push(...got.earlier);
+    running.push(...got.running);
+  }
+  const newest = (a, b) => (b.session.updatedAt ?? 0) - (a.session.updatedAt ?? 0);
+  running.sort(newest);
+  let picked = earlier.sort(newest).slice(0, limit);
+  if (id) {
+    const hit = await find(id);
+    picked = [{ ...hit, here: hit.env === self }];
+  }
+  const chats = await Promise.all(picked.map(async (c) => {
+    if (c.offlineAt) return { ...c, summary: null };
+    const read = c.here ? rpc : peerRpc;
+    try {
+      const [head, tail] = await Promise.all([
+        read(c.env, M.SESSION_EVENTS, { id: c.session.id, since: 0, limit: 40 }),
+        read(c.env, M.SESSION_EVENTS, { id: c.session.id, tail: 400 }),
+      ]);
+      return { ...c, session: { ...c.session, ...(tail.session ?? {}) }, summary: chatSummary(head.events ?? [], tail.events ?? []) };
+    } catch (err) {
+      if (c.here) throw err;
+      return { ...c, summary: { left: '', unread: true } };
+    }
   }));
-  const starts = chats.map((c) => c.session.createdAt ?? c.summary.startedAt).filter(Boolean);
+  const local = chats.filter((c) => c.here);
+  const starts = local.map((c) => c.session.createdAt ?? c.summary?.startedAt).filter(Boolean);
   // Running chats' checkouts too: their unmerged and uncommitted work is
-  // exactly what the next agent must not trip over.
-  const state = gitState(cwd, [...chats.map((c) => c.session), ...running], { git, since: starts.length ? Math.min(...starts) : null });
-  return renderPickup({ chats, running, git: state, now });
+  // exactly what the next agent must not trip over. Only this machine's: a
+  // path on another machine may name a different folder here.
+  const state = gitState(cwd, [...local, ...running.filter((r) => r.here)].map((c) => c.session), { git, since: starts.length ? Math.min(...starts) : null });
+  return renderPickup({ chats, running, git: state, unchecked, now });
 }

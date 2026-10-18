@@ -24,6 +24,7 @@ import { readProcess } from './takeover.js';
 import { usableProfiles, authStatuses } from './auth.js';
 import { listCommands } from './commands.js';
 import { contextLimit } from './context-limit.js';
+import { projectKeysFor } from './project-key.js';
 import { accountKey, modelPrefs, modelWatch, dismissModelNews, saveModelPrefs, startPrefs, saveStartPrefs, subagentPrefs, saveSubagentPrefs, pickerPrefs, savePickerPrefs, applyModelPrefs, loadSettings, listProjects, saveProject, removeProject, cliAutoUpdate, saveCliAutoUpdate } from './settings.js';
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
@@ -1902,7 +1903,14 @@ export class Daemon {
         return { ok: true };
       }
 
-      case M.SESSION_LIST:    return { sessions: await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true }) };
+      case M.SESSION_LIST: {
+        const sessions = await this.sessions.list({ parentId: p.parentId, includeDelegations: p.includeDelegations === true, includeDetected: p.includeDetected === true });
+        if (p.projects !== true) return { sessions };
+        // `helm pickup` from another machine: which project each chat's
+        // folder holds, worked out here where the folder is.
+        const dirs = sessions.flatMap((s) => [s.cwd, s.delegation?.worktree?.repo]);
+        return { sessions, projects: await projectKeysFor(dirs) };
+      }
       case 'session.agent-address': return { address: this.agentMessages.address(p.id, p.callerThreadId) };
       case 'session.agent-messages': return this.agentMessages.list(p.id, p);
       case 'session.agent-send':

@@ -44,6 +44,7 @@ import { ExternalSessions } from './session-external.js';
 import { NativeSessions } from './session-native.js';
 import { DriverEvents } from './session-driver-events.js';
 import { SessionDelivery } from './session-delivery.js';
+import { projectKeysFor } from './project-key.js';
 
 export { DRIVERS, wire } from './session-wire.js';
 export { driverTakesImages, acceptAttachments, saveUploads, acceptImages } from './session-attachments.js';
@@ -1337,7 +1338,11 @@ export class Sessions extends EventEmitter {
    * schedule for people who are not asking for it.
    */
   async digest() {
-    return { sessions: localDigest(await this.list({ includeDelegations: true }), this.events) };
+    const sessions = localDigest(await this.list({ includeDelegations: true }), this.events);
+    // Saved in every machine's snapshot, so `helm pickup` can still match an
+    // offline machine's chats to a project.
+    const keys = await projectKeysFor(sessions.map((s) => s.cwd));
+    return { sessions: sessions.map((s) => (keys[s.cwd]?.length ? { ...s, project: keys[s.cwd] } : s)) };
   }
 
   /** Preserve former machine brains as ordinary conversations. */

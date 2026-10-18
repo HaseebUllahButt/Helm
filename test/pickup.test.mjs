@@ -8,6 +8,7 @@ import { join } from 'node:path';
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'helm-pickup-')));
 process.env.HELM_DIR = join(scratch, 'helm');
 const { chatSummary, chooseChats, pickup } = await import('../packages/connect/src/pickup.js');
+const { normaliseRemote, projectKeys, projectKeysFor, sameProject } = await import('../packages/connect/src/project-key.js');
 const { M } = await import('@helm/protocol');
 test.after(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -127,11 +128,100 @@ test('pickup reads the chats and git: commits since, unmerged worktree work, unc
   assert.doesNotMatch(page, /Before the chat/);
   assert.match(page, /This checkout \(main\), uncommitted \(may belong to a running chat\):\n {3}M b\.txt/);
   assert.match(page, /repo-wt \(helm\/phone\) has commits not in this one:\n {2}\w+ Phone view, not merged/);
-  assert.match(page, /Running here now.*\n {2}busy11 {2}Other work \(working\)/);
+  assert.match(page, /Running now.*\n {2}busy11 {2}Other work \(working\) on why in /);
+  assert.doesNotMatch(page, /Not shown|Not checked/, 'one machine: nothing on others to warn about');
   assert.doesNotMatch(page, /me0000/, 'the chat asking is not listed');
   assert.ok(page.split('\n').length < 25, 'short enough to land in an agent\'s context');
 
   const named = await pickup({ id: 'busy11', cwd: repo, self: 'why', sessionId: 'me0000000000', rpc,
     find: async () => ({ env: 'vm', machine: 'VM', session: sessions[1] }) });
   assert.match(named, /^Chat busy11 on VM: Other work/);
+});
+
+test('a remote names one place however it is written; a local path is no place', () => {
+  for (const url of ['git@github.com:Me/Helm.git', 'https://github.com/me/helm', 'ssh://git@github.com:22/Me/Helm.git/', 'https://u:secret@github.com/Me/Helm']) {
+    assert.equal(normaliseRemote(url), 'github.com/me/helm', url);
+  }
+  for (const url of ['/home/me/Helm', '../Helm', 'file:///home/me/Helm', 'C:\\src\\Helm', '']) assert.equal(normaliseRemote(url), null, url);
+});
+
+test('two copies of one repo at different paths are one project; another repo is not', async () => {
+  const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: 'pipe' });
+  const a = join(scratch, 'keys-a');
+  execFileSync('git', ['init', '-q', '-b', 'main', a]);
+  git(a, 'config', 'user.email', 't@t'); git(a, 'config', 'user.name', 't');
+  git(a, 'commit', '-q', '--allow-empty', '-m', 'first');
+  const b = join(scratch, 'elsewhere', 'keys-b');
+  execFileSync('git', ['clone', '-q', a, b]);
+  const other = join(scratch, 'keys-other');
+  execFileSync('git', ['init', '-q', other]);
+  git(other, 'config', 'user.email', 'x@x'); git(other, 'config', 'user.name', 'x');
+  git(other, 'commit', '-q', '--allow-empty', '-m', 'another start');
+  const [ka, kb, ko] = await Promise.all([a, b, other].map((d) => projectKeys(d)));
+  assert.ok(sameProject(ka, kb), 'a clone elsewhere shares its first commit');
+  assert.ok(!sameProject(ka, ko));
+  assert.deepEqual(kb.filter((k) => k.startsWith('remote:')), [], 'a path remote is left out');
+  git(other, 'remote', 'add', 'origin', 'git@github.com:Me/Helm.git');
+  git(b, 'remote', 'set-url', 'origin', 'https://github.com/me/helm.git');
+  assert.ok(sameProject(await projectKeys(other), await projectKeys(b)), 'or the same remote, written differently');
+  assert.deepEqual(await projectKeys(join(scratch, 'gone')), []);
+  let calls = 0;
+  const counted = async (...x) => { calls++; return null; };
+  await projectKeysFor([a, a, b], { run: counted, now: 1 });
+  await projectKeysFor([a, b], { run: counted, now: 2 });
+  assert.equal(calls, 4, 'each folder once, then from the cache');
+});
+
+test('pickup reads every machine by project: other paths, busy chats, offline snapshots, older Helms', async () => {
+  const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: 'pipe' });
+  const repo = join(scratch, 'net-repo');
+  execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+  git(repo, 'config', 'user.email', 't@t'); git(repo, 'config', 'user.name', 't');
+  git(repo, 'commit', '-q', '--allow-empty', '-m', 'first');
+  const keys = await projectKeys(repo);
+  const now = Date.now();
+  const lists = {
+    why: { sessions: [], projects: {} },
+    laptop: {
+      sessions: [
+        { id: 'lapdone00000', cwd: '/home/u/code/helm', title: 'Phone view', engine: 'codex', status: 'idle', updatedAt: now - 120_000 },
+        { id: 'lapbusy00000', cwd: '/home/u/code/helm', title: 'Sidebar', engine: 'claude', status: 'working', updatedAt: now },
+        { id: 'lapother0000', cwd: '/home/u/notes', title: 'Notes', engine: 'claude', status: 'idle', updatedAt: now },
+      ],
+      projects: { '/home/u/code/helm': keys, '/home/u/notes': ['root:0000'] },
+    },
+    pc: { sessions: [{ id: 'pcchat000000', cwd: '/x', title: 'X', engine: 'claude', status: 'idle', updatedAt: now }] },
+  };
+  const snapshot = { machines: {
+    home: { at: now - 3 * 3600_000, sessions: [
+      { id: 'homedone0000', cwd: 'D:/helm', title: 'Windows build', engine: 'claude', status: 'idle', updatedAt: now - 4 * 3600_000, project: keys, last: 'Built the installer' },
+      { id: 'homebusy0000', cwd: 'D:/helm', title: 'Long run', engine: 'codex', status: 'working', updatedAt: now - 4 * 3600_000, project: keys },
+      { id: 'homenot00000', cwd: 'D:/else', title: 'Else', engine: 'codex', status: 'idle', updatedAt: now, project: ['root:0000'] },
+    ] },
+    slow: { at: now - 30_000, sessions: [{ id: 'slowbusy0000', cwd: '/srv/helm', title: 'Quick fix', engine: 'pi', status: 'working', updatedAt: now - 60_000, project: keys }] },
+  } };
+  const events = turn('Make the phone view', 'Done.\n\nWhat is left:\n- Check it on a real phone.');
+  const asked = [];
+  const rpc = async (env, method, params) => {
+    asked.push(`${env} ${method}`);
+    if (method === M.SESSION_LIST) {
+      assert.equal(params.projects, true);
+      if (env === 'home' || env === 'gone' || env === 'slow') throw Object.assign(new Error('unreachable'), { code: 'unreachable' });
+      return lists[env];
+    }
+    if (method === M.SESSION_EVENTS && env === 'laptop') return { events };
+    throw new Error(`${env} ${method}`);
+  };
+  const machines = { why: { name: 'why' }, laptop: { name: 'Laptop' }, pc: { name: 'HomePC' }, home: { name: 'haseeb' }, gone: { name: 'VM' }, slow: { name: 'Pi' } };
+  const page = await pickup({ cwd: repo, self: 'why', selfName: 'why', machines, rpc, find: null, snapshots: [snapshot, Promise.resolve(null)], now });
+  assert.match(page, /^Chat lapdon on Laptop: Phone view \(codex, idle, 2m ago\) in \/home\/u\/code\/helm$/m, 'matched by project, not path');
+  assert.match(page, /Its final reply says what is left:\n {4}What is left:\n {4}- Check it on a real phone\./);
+  assert.match(page, /^Chat homedo on haseeb \(offline, last seen 3h ago\): Windows build .*\n {2}Last seen doing: Built the installer\n {2}Its replies are on haseeb/m);
+  assert.match(page, /Running now.*\n {2}lapbus {2}Sidebar \(working\) on Laptop in \/home\/u\/code\/helm\n {2}slowbu {2}Quick fix \(working when last seen\) on Pi \(not answering just now, seen 30s ago\) in \/srv\/helm\n {2}homebu {2}Long run \(working when last seen\) on haseeb \(offline, last seen 3h ago\) in D:\/helm\n/);
+  assert.match(page, /^Not shown: commits not pushed, or files not committed, on Laptop, haseeb, Pi\./m);
+  assert.match(page, /^Not checked, an older Helm there cannot say which project a folder holds: HomePC\.$/m);
+  assert.match(page, /^Not checked, not answering and nothing saved: VM\.$/m);
+  assert.doesNotMatch(page, /Notes|homenot|Else|pcchat/);
+  assert.doesNotMatch(page, /\/home\/u\/code\/helm \(/, 'no git state read for another machine\'s path');
+  assert.ok(!asked.includes('home session.events'), 'an offline chat is not asked for its log');
 });

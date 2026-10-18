@@ -101,8 +101,8 @@ const usage = () => {
   helm brain                       open the network's brain on the VM
   helm digest [--json]              every machine, folder and running session
   helm thread <id> [-n 40]          the recent conversation of one session
-  helm pickup [chat-id] [-n 3]      where earlier chats in this repo stopped: their ask,
-                                    what their final reply left, commits, uncommitted files
+  helm pickup [chat-id] [-n 3]      where earlier chats in this project stopped, on every machine:
+                                    their ask, what their final reply left, commits, uncommitted files
   helm say <id> <text...>           send a named message from this agent (a prompt outside a chat)
   helm reply <message-id> <text...> reply to an agent message
   helm messages [chat-id] [--json]  read exchanges in this chat and its Agents
@@ -2295,11 +2295,28 @@ try {
       const n = rest.findIndex((x) => x === '-n' || x === '--limit');
       const id = rest.find((x, i) => !x.startsWith('-') && (n < 0 || i !== n + 1));
       const net = requireNetwork();
+      // Another machine gets 2.5 s in all: an asleep one is read from the
+      // saved snapshots instead (this machine's, and the brain's which it
+      // keeps fresh), so the page still comes back in a few seconds. Not
+      // hubRpc's own budget: it splits the time over every address a machine
+      // has, and a busy relay then misses an online VM. Tries still going on
+      // dead addresses are left behind; the command exits once it printed.
+      const peerRpc = (env, method, params) => Promise.race([
+        hubRpc(net, env, method, params, { timeout: 2500 }),
+        new Promise((_, fail) => setTimeout(() => fail(Object.assign(new Error('no answer in time'), { code: 'unreachable' })), 2500)),
+      ]);
+      const brain = brainHost(net.machines);
+      const snapshots = [readSnapshot()];
+      if (brain && brain.id !== net.self) {
+        snapshots.push(peerRpc(brain.id, M.BRAIN_SNAPSHOT, { cached: true }).then((r) => r.snapshot, () => null));
+      }
       console.log(await pickup({
-        id, self: net.self, selfName: net.machines?.[net.self]?.name, sessionId: process.env.HELM_SESSION_ID ?? null,
+        id, self: net.self, selfName: net.machines?.[net.self]?.name, machines: net.machines,
+        sessionId: process.env.HELM_SESSION_ID ?? null,
         limit: n < 0 ? 3 : Math.max(1, Number(rest[n + 1]) || 3),
-        rpc: brainRpc, find: findSession,
+        rpc: brainRpc, peerRpc, find: findSession, snapshots,
       }));
+      process.stdout.write('', () => exit(0));
       break;
     }
 
