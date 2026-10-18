@@ -102,6 +102,14 @@ Devin). Before committing, read `git status` and leave files you did not touch.
   re-send rosters forever. Validate and reject; normalise where it is used.
 - A latency number is only real after about 10 seconds of samples.
 
+## Docs
+
+- Most changes need no doc change. Agents can read the code.
+- Docs keep only decisions and why, rules that cross components, and traps the
+  code does not show. No feature lists, flag lists, step-by-step code tours,
+  change logs, plans or reports. `git log` is the record.
+- When something changes, rewrite or delete the old text. Never append.
+
 ## Pausing and handing over
 
 When the owner says stop, pause, or hand over, use the `pause-and-pickup`

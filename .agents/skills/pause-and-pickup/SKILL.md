@@ -5,9 +5,8 @@ description: Stop Helm work at a clean point and leave a short note the next age
 
 # Pause and pick up
 
-HANDOFF.md is the owner's session report. Old entries were thousands of
-words and nobody reads them whole. A new entry is a short note: the next
-agent reads it in a minute and knows what is safe to build on.
+HANDOFF.md holds open work only: short notes the next agent can act on in a
+minute. What was done belongs in commit messages, which `git log` keeps.
 
 ## Pause
 
@@ -19,22 +18,11 @@ agent reads it in a minute and knows what is safe to build on.
 3. **Clean up what you started:** private Helm copies
    (`node scripts/verify-helm.mjs down`), helpers you no longer need, test
    chats, spins (`helm share stop <name>`).
-4. **Write the note** at the top of HANDOFF.md, under the intro and above the
-   newest dated entry, in this shape and no longer than 30 lines:
-
-```markdown
-## YYYY-MM-DD - <what this session was for, in a few words>
-
-**Done and proven:** <change> (<commit>) - <what you ran and what you saw>.
-**Done, not proven:** <change> - <why it could not be run>.
-**Not done:** <what is left>, <uncommitted files and their state>.
-**Next:** <the first thing the next agent should do>.
-**Decisions:** <choice> - <why> - <what showed it was right>.
-**Traps:** <anything that cost time and will cost it again>.
-```
-
-   Leave out lines that have nothing. Details belong in commit messages,
-   which `git log` keeps next to the code.
+4. **Write the note** at the top of the "Open" list in HANDOFF.md, at most
+   8 lines: what is left, uncommitted files and their state, the first thing
+   to do next, and any trap that will cost time again. Do not list what is
+   done. If an older note covers the same work, rewrite it; delete notes
+   whose work you finished.
 5. **Tell the owner** in two or three plain sentences what is done, what is
    not, and what comes next.
 
@@ -48,5 +36,5 @@ agent reads it in a minute and knows what is safe to build on.
    messages.
 4. Check before trusting: re-run what the note calls proven if your work
    builds on it (`verify-helm` for anything the owner sees).
-5. Start with the note's **Next** line, unless the owner asked for something
-   else.
+5. Start with the note's next step, unless the owner asked for something
+   else. Delete the note when its work is done.
