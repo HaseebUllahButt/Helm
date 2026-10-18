@@ -5,9 +5,9 @@ description: Prove a Helm change works by driving the real app - a private Helm 
 
 # Verify Helm for real
 
-Passing tests do not show that the phone streams, that a send lands, or
-that a button does what it says. The owner trusts a change only after it
-has been run. This skill is how you run it without touching their Helm.
+Passing tests do not show that a send lands or a button works. The owner
+trusts a change only after it has been run. This runs it without touching
+their Helm.
 
 ## The loop
 
@@ -18,71 +18,63 @@ $V open                     # hidden browser, 390x844 phone, signed in
 $V click "New chat"         # by visible text, label or placeholder
 $V click "verify-<name>"    # the machine
 $V click "No folder · quick chat"
-$V click "fake"             # the Fake agent account ("fake-ask" asks first)
+$V click "fake"
 $V click "Ask anything"; $V type "hello"; $V click send
-$V wait "done."            # the fake agent's reply: "working on it done."
+$V wait "done."             # the fake reply: "working on it done."
 $V shot                     # prints the PNG path; look at it with Read
-$V errors                   # page errors and console errors seen so far
+$V errors                   # page and console errors seen so far
 $V down                     # stops only what this copy started, deletes it
 ```
 
-Other commands: `text` (visible page text), `key <key>` (`Enter`,
-`Control+n`, `Escape`), `upload <file>...` (attach files), `eval <js>`,
-`size <w> <h>`, `open '#open=<machine>/<chat>'` (start on a screen),
-`open --desktop` (1280x800, not a phone), `logs [n]` (the daemon's log), and
-`rpc <method> [json]` to ask the private Helm directly (`session.list`, for
-example) when setting up state by clicking would be slow.
-
-Each chat gets its own copy, named after its Helm session, so parallel
-agents never share one. `--name <name>` picks another.
+Also: `text`, `key <key>`, `upload <file>...`, `eval <js>`, `size <w> <h>`,
+`open '#open=<machine>/<chat>'` or `open '#devices'`, `open --desktop`
+(1280x800), `logs [n]`, `status`, and `rpc <method> [json]` to set up state
+without clicks (methods are in `packages/protocol/index.js`). Each chat gets
+its own copy, named after its Helm session; `--name <name>` picks another.
 
 ## What to check
 
-1. Find the feature in `docs/features/` - where the owner reaches it and
-   what counts as proof.
-2. Drive the change the way the owner would, at phone size first, then
-   `size 1280 800` if it also has a desktop layout.
-3. Look at every screenshot you take. Read `errors` before saying done.
-4. Report what you drove and what you saw, and name anything you could not
-   drive. "Tests pass" is not "it works".
+1. Find the feature in `docs/features/`: how to reach it, what is proof.
+2. Drive it as the owner would, at phone size first, then `size 1280 800`
+   if it has a desktop layout.
+3. Look at every screenshot. Read `errors` before saying done.
+4. Report what you drove and saw, and name what you could not drive.
+   "Tests pass" is not "it works".
 
 ## Accounts
 
-- **fake** answers every message after 0.8 s ("working on it done.") and
-  costs nothing.
+- **fake** answers after 0.8 s and costs nothing.
 - **fake-ask** first asks to run `echo hi` (Approve / Always allow /
-  Decline), for approval cards.
-- **fake-pics** takes pictures (`upload` them), for how a sent picture
-  looks.
-- **fake-slow** works for 2 minutes before answering, for anything that
-  shows a chat while it is working.
+  Decline).
+- **fake-pics** takes pictures.
+- **fake-slow** works for 2 minutes before answering.
 - `up --real` adds the owner's real logins. Use one only when the change is
-  about that CLI itself (its driver, its models, its output). A real chat
-  costs money and lands in that account's history: keep it in a quick chat,
-  and delete it after.
+  about that CLI itself. A real chat costs money and lands in that account's
+  history: keep it in a quick chat, and delete it after.
 
 ## Traps
 
-- The private copy has its own home folder, so it shows none of the
-  owner's chats. With `up --real` it shows **the owner's real chats and
-  terminals**: never delete, stop, rename or message anything you did not
-  create.
-- A yellow "Helm updates need attention" banner shows while the checkout
-  has uncommitted edits. Ignore it, and never press "Replace with GitHub's
-  version" there: the private copy runs from the real checkout.
-- On phone size, Enter and Ctrl+Enter in the composer make a new line.
-  Press the button labelled `send`. Its placeholder changes, so click
-  "Ask anything".
-- The fake agent ignores Stop and never asks questions (only tool
-  approvals); only fake-pics takes images. Prove Stop and questions with
-  a real chat or the tests.
-- `wait` reads page text, not what is inside a text box.
+- The copy has its own home (`/tmp/helm-verify-<name>/home`). With
+  `up --real` it uses the real home and shows **the owner's real chats,
+  terminals, spend and search results**: never delete, stop, rename or
+  message anything you did not create.
+- Run `helm` against the copy only with its `HELM_DIR` (see
+  `docs/features/README.md`); without it you talk to the owner's real Helm.
+- Ignore the yellow "Helm updates need attention" banner, and never press
+  "Replace with GitHub's version": the copy runs from the real checkout.
+- On phone size Enter makes a new line; press `send`. The placeholder
+  changes, so click "Ask anything" (a part match). `type` refuses when
+  nothing has focus.
+- `click` prefers exact matches and skips things under a sheet or menu.
+  `open` always reloads. `text` can miss an open menu; `wait` does not read
+  text boxes.
+- The fake agent ignores Stop, never asks questions, and asks again after
+  "Always allow". Prove those with a real chat or the tests.
 - The folder step does not take a full path; use the quick-chat row.
 - Never stop Helm processes by name (`pkill -f`, `systemctl stop
-  helm-...`): those names match the owner's real Helm too. `down` finds
-  this copy's processes by its folder.
-- Speed numbers from the private copy are not the owner's numbers: there is
-  no network between machines here.
+  helm-...`): that matches the owner's real Helm. `down` finds this copy's
+  processes by its folder.
+- Speed here is not the owner's speed: there is no network between machines.
 
 When the steps for a feature are wrong or missing, fix them in
 `docs/features/` in the same change.

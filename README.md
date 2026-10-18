@@ -24,8 +24,6 @@ purchase, or DNS account is needed.
 Coding agents often stop to ask a question. Helm lets you see the question and
 answer it without returning to the computer running the agent.
 
-The hierarchy is simple:
-
 ```text
 computer → directory → session
 ```
@@ -33,70 +31,9 @@ computer → directory → session
 Sessions show which computer, directory, CLI, and account they use. A blocked
 session moves to the top.
 
-Threads include a shared [browser](docs/browser-use.md) for agent actions and
-live owner control. It starts only when needed. Supported idle Claude/Codex threads offer [Edit from here](docs/rewind.md),
-with optional file restore in an exclusive Git worktree.
-
-For a slow phone connection, browser Preview can adapt automatically or use
-Low data / Text only. [Controller performance](docs/controller-performance.md)
-explains which operations stay local and how chat recovery avoids extra traffic.
-
-Thread schedules can run at a fixed time, on an interval, or from an authenticated
-webhook, including starting a fresh thread. Usage-limit recovery offers an opt-in
-to continue automatically at the provider's reset time. GitHub watches can wake
-an idle agent for PR review and check changes.
-
-## GitHub pull requests, checks and deployments
-
-Open a thread's **Git → CI / CD** tab for its PR reviews and merge status,
-commit checks, GitHub Actions workflows, failed steps with links to job logs,
-and deployments reported to GitHub. Checks belong to the checkout's exact
-commit. For a merged PR whose head is still checked out, post-merge workflows
-and deployments follow the merge commit, labelled separately. A successful
-workflow is not treated as proof of deployment or app health.
-
-Helm uses the project's machine's GitHub CLI sign-ins. Run `gh auth login`
-there for each account you want to use; choose **GitHub account** in the
-CI / CD tab. The choice is saved per repository and never changes the active
-CLI account. The default also accepts that machine's `GH_TOKEN` or
-`GITHUB_TOKEN`. Tokens stay on the machine and are never sent to the app or
-saved by Helm. SSH GitHub aliases are resolved through local SSH configuration.
-
-Enable **Notify this thread** to keep monitoring with the app closed. Existing
-results establish a baseline; subsequent check failures, review changes,
-merges, and deployment success/failure reach the same push and desktop
-notification paths as thread notifications. Watches survive daemon restarts
-and stop when disabled or the thread is archived. The machine must stay online,
-and notifications must be enabled for the receiving device.
-
-The same panel lists open, closed and merged pull requests, shows their description,
-latest comments/reviews, changed-file patches and head checks, and provides comment,
-review (including an optional inline comment), and merge actions. Reviews and merges
-are tied to the displayed head SHA; refresh when the head changes. GitHub enforces
-repository permissions and merge requirements. Merge requires an explicit selection
-of the PR/head and merge method in the panel.
-
-**Commit / push / create PR** can run each step separately, or commit selected files,
-push the feature branch, and create a PR in sequence. Existing staged files outside
-the selection stay staged. Push uses HTTPS with the repository's selected `gh`
-credential, even for an SSH origin, and never forces history. A failed later step
-keeps completed commits/pushes and reports which steps finished. Use the individual
-remaining action to continue without repeating a successful step.
-
-**Wake the agent on GitHub changes** is a separate opt-in from notifications. It
-wakes an idle Helm thread when checks finish, reviews/comments change, or conflicts
-appear. Initial results establish a baseline. Pending changes coalesce while the
-thread is working or awaiting approval. Durable turn IDs prevent duplicate delivery
-across restarts. The default limit is five wakes per UTC day (configurable from one
-to twenty), with a five-minute cooldown. Stop discards pending wakes; archiving or
-turning off the watch cancels it. Watches never bypass a usage-limit recovery card,
-user stop, or approval. GitHub text is untrusted context for the agent.
-
-Requests share an account-scoped cache and in-flight reads on each machine.
-REST reads revalidate with ETags; PR lookups use GraphQL with a REST fallback.
-Polling pauses when GitHub throttles it, reserves quota for other actions, and
-slows for unchanged watches. Results unavailable because of permissions,
-pagination limits, or network failures remain visibly incomplete or stale.
+More in [docs/](docs/): the shared [browser](docs/browser-use.md),
+[Edit from here](docs/rewind.md) and [visual replies](docs/visual-replies.md),
+plus [why Helm is built this way](docs/intent.md).
 
 ## How it connects
 
@@ -110,17 +47,9 @@ phone or browser ──▶ your VM ◀── laptop
                          └──────── another machine
 ```
 
-The VM introduces a device to the computer it wants. Session traffic tries a
-direct WebRTC connection first and falls back through the VM when direct
-connection is unavailable.
-
-The VM belongs to the user. Different users run different Helm homes and never
-share a database, key, or account.
-
-A network can have **more than one** always-on VM. Each advertises its own
-HTTPS address; every computer dials all of them, and each device attaches to
-whichever home currently reaches the most machines, failing over to another if
-one goes down. Add a second home with `helm setup --join` (below).
+Different users run different Helm homes and never share a database, key, or
+account. A network can have **more than one** always-on VM; every computer
+dials all of them, and devices fail over if one goes down.
 
 ## Adding things
 
@@ -133,256 +62,102 @@ helm add pc            a laptop or desktop: runs agents, and controls others
 helm add vm            another always-on machine, dialled by the rest
 ```
 
-Add a phone, browser, or computer from **Settings** on any paired device.
-Computer invites contain one private join link with the secret already in it.
-The terminal commands above produce the same invites. On the new computer:
+**Settings** on any paired device makes the same invites. On the new computer:
 
 ```bash
 helm join
 # Paste: https://helm.example.com/#join=ABCD-1234
 ```
 
-The code remembers which kind you asked for. A pc dials out to the home and
-needs no address of its own; a vm additionally claims a free HTTPS address,
-configures Caddy and starts serving, so the rest of the network can dial it
-too. Controllers already paired need no new link; they simply gain a second
-home to fall back on.
+The link remembers which kind you asked for. A pc dials out and needs no
+address of its own; a vm also claims a free HTTPS address and configures Caddy.
+Join links are single-use and expire after ten minutes. `helm join` installs
+Helm as a background service; pass `--foreground` to run it in the terminal
+instead. The old `helm join CODE https://home.example` format still works.
 
 If you already own a domain, run `helm setup https://helm.your-domain.com`
 after pointing it at the VM and configuring Caddy.
 
-### The app on a machine
-
-A computer that has joined does not need a pairing link to open the app — it
-already holds the network key:
-
-```bash
-helm open
-```
-
-The curl installer starts Helm immediately. Joining replaces its temporary
-local network and keeps Helm running in the background. The Linux application
-launcher is installed automatically; opening it or `127.0.0.1:8787` signs in
-without a pairing link. macOS runs Helm as a LaunchAgent at login.
-
-Opening the network's website on the joined computer also inherits its local
-membership and saves it at that website's origin, so installing the web app
-keeps the sign-in. The browser may request local network access; allow it so
-the website can talk to Helm on this computer. If access is blocked, `helm open`
-opens the local app signed in.
+On a computer that has joined, `helm open` (or `127.0.0.1:8787`, or the Linux
+app launcher) opens the app signed in with no link. macOS runs Helm as a
+LaunchAgent at login. If the browser asks for local network access, allow it.
 
 The older `helm up`, `helm invite`, `helm link` and `helm login` commands
 remain available for scripts and existing setups.
 
 ### Pair a phone
 
-Run this anywhere that can reach the Helm home:
-
 ```bash
 helm add controller
 ```
 
-It prints a QR code and one private link such as:
+It prints a QR code and one private link such as
+`https://helm.example.com/#pair=abc123`. Scan it or open it on the phone.
+**Settings → Devices → Pair another device** shows the same code in the app.
+The link expires after ten minutes; the paired device stays until removed.
 
-```text
-https://helm.example.com/#pair=abc123
-```
+- **Android/Chrome:** open the link, pair, then choose **Install Helm app**.
+- **iPhone/iPad:** the order matters, because the installed app does not share
+  Safari's storage. Open the Helm address, use **Share → Add to Home Screen**
+  first, then open the installed app and paste the pairing link there.
 
-Scan the code with the phone's camera, or open the link on the device you want
-to use. **Settings → Devices → Pair another device** shows the same QR code in
-the app, and the **Getting started** card on Home links straight to it. The link expires after ten minutes; the
-paired device stays connected until removed.
-
-### Add another computer
-
-Create a computer invite from Settings on any paired phone, browser or app,
-or run `helm add pc` on an existing computer. Install Helm on the new computer,
-then run:
-
-```bash
-helm join
-# Paste the private join link when prompted.
-# Or: helm join 'https://helm.example.com/#join=ABCD-1234'
-```
-
-The join code is single-use and expires after ten minutes. `helm join` installs
-Helm as a background service on that computer, so it stays in the network
-after the terminal closes; pass `--foreground` to run it in the terminal instead.
-There is no separate `helm up`, `helm leave`, or browser pairing step for a
-fresh install. The old `helm join CODE https://home.example` format still works.
-
-## Mobile PWA
-
-Recently opened chats and their machine/thread lists are saved on the device.
-Reopening paints that saved view before refreshing it; a disconnected view is
-labelled as saved and catches up when the app resumes or a route recovers.
-The device retains up to 25 event-log chats and 50 imported transcripts, with
-a bounded in-memory cache for quick switching. Older uncached chats still
-need a reachable machine, and browser storage eviction can remove saved data.
-
-An installed PWA updates without reinstalling or clearing its pairing. Choose
-Reload in the update notice to request the fresh app shell, even on a slow
-network. Saved lists retain imported-chat metadata; the Done section identifies
-saved lists until they can reconcile with the machines, so an offline count is
-not presented as a fresh network-wide total.
-
-Slow or stuck sockets reconnect automatically. Read-only chat snapshots can
-also use authenticated HTTP when WebSockets are blocked, trying another known
-hub when necessary. Prompts, approvals, and other actions require a live
-transport and are never automatically replayed over the fallback.
-
-Opening the app races a socket to the page's hub against HTTP discovery;
-reconnecting races the last working hub instead. A slow discovery response
-does not hold up a working socket, and an unreachable remembered hub does not
-block alternatives. Hub upgrades open the replacement before retiring the
-working connection; in-flight replies can finish on the old socket without
-resending actions.
-
-Idle recovery does not depend on receiving a browser online/close event: a
-watchdog restarts abandoned attempts, and returning from sleep checks the
-connection immediately. Project lists use the same safe read fallback as chat
-snapshots; reconnecting refreshes the list and clears obsolete timeout errors.
-
-Local hubs reuse their daemon's existing outbound links to reach machines
-attached to another hub. Machine presence, session lists, chat reads, actions,
-and subscribed events follow that route without making the browser open a new
-connection to the public hub. Forwarding is one hop to a directly attached
-machine, preserves the original caller, and never replays an uncertain action.
-Disconnected links withdraw their routes; reconnecting restores routes and
-subscriptions automatically. WebRTC introductions also cross this route, so
-peers can still establish fast direct connections on the same Wi-Fi instead
-of carrying terminal traffic through the public hub. Hub WebSockets compress
-larger messages without shared compression history to reduce slow-link traffic.
-Older hubs continue to work through direct attachments until updated.
-
-While open, the browser also rechecks reachability every fifteen seconds and
-moves to a hub that can reach more machines. A local hub saying a machine is
-offline does not prevent safe chat reads from trying another hub. Direct
-connections rebuild failed negotiations and discard stale signalling when
-retrying after sleep or a network change.
-
-On Android/Chrome: open the pairing link, pair, then choose **Install Helm
-app**. The installed app keeps the pairing.
-
-On iPhone or iPad the order matters, because the installed app gets its own
-storage and does not inherit a pairing made in Safari: open the Helm address,
-use **Share → Add to Home Screen** first, then open the installed app and
-paste the pairing link (or type the code) there.
-
-Installed to the home screen, the PWA is the app: same interface everywhere,
-and a device stays paired until you remove it.
-
-## The app
-
-Open the app on any machine in the network and add it to your home screen or
-dock; it installs as a PWA and stays paired until you remove the device. There
-is no separate desktop build to keep in step - one app, one interface.
+Prompts and approvals need a live connection and are never replayed
+automatically.
 
 ## How a session runs
 
-Claude Code and Codex sessions run **headless**: helm starts the CLI in its
-streaming mode (`claude -p` with stream-json, `codex app-server`) and turns
-what it says into one stream of events - text as it is written, each tool
-call and its result, every permission prompt with the choices the CLI
-offered. OpenCode, OpenCode 2 and Devin use their ACP interfaces. The app
-renders the same structured conversation for all five CLIs, including streamed
-text, tool calls, permission prompts, models, modes, images and slash commands.
-Stop interrupts the turn.
+Claude Code and Codex chats started in Helm run **headless** (`claude -p`
+with stream-json, `codex app-server`); OpenCode, OpenCode 2 and Devin use ACP.
+Closing Helm does not end a conversation; it resumes on the next message under
+the same account.
 
-Agents can also publish [interactive visual replies](docs/visual-replies.md):
-`helm render page.html --title "Diagram"` saves an isolated HTML page inside the
-chat, with Expand, Source, and Save controls. `helm preview page.html` screenshots
-it before publication. Visuals remain available after the agent finishes.
+**How much the agent may do without asking** is a chip next to Send:
+`ask` · `edit` · `auto` · `yolo` for Claude Code, `ask` · `edit` · `yolo` ·
+`read` for Codex. New sessions default to YOLO unless the account is
+configured otherwise; plan mode is not supported. A change mid-conversation
+really changes what the agent may do.
 
-**How much the agent may do without asking** is a chip in the composer, next
-to Send: `ask` · `edit` · `auto` · `yolo` for Claude Code, `ask` ·
-`edit` · `yolo` · `read` for Codex. Tap it for the list with what each one
-means. New sessions default to YOLO unless the account is configured otherwise;
-plan mode is not supported. Shift+tab cycles the restricted modes from the
-keyboard. Switching to a mode that removes
-the guardrails takes two taps and then colours the chip and the box you type
-in, so it is never a surprise. Changing it mid-conversation is real, not
-cosmetic: Claude gets `set_permission_mode`, and every Codex turn carries the
-approval policy *and* the sandbox.
-
-Closing helm does not end a conversation: sessions resume on the next message
-(`claude --resume`, `codex thread/resume`) under the same account.
-
-Plain terminals, and agents you started at the keyboard, still run in
+Plain terminals, and agents started at the keyboard, run in
 [herdr](https://herdr.dev) panes and show as a terminal.
 
 ### Conversations started outside Helm
 
-Helm discovers saved conversations in the CLI accounts configured on each
-connected machine. Live external CLIs appear in **Running**, including ones
-waiting at their prompt, labelled **idle**. Opening a conversation reads its
-live transcript without launching another agent or stopping the original.
-Claude's local session registry identifies each terminal by its native session
-ID, process ID and process start time, even when several terminals share a
-folder and their transcripts are closed between writes. Codex uses its writer
-lock or an open rollout file. Process ownership is checked on Linux (/proc)
-and macOS (ps and lsof); other systems may only expose saved history.
+Live external CLIs appear in **Running**. Opening one reads its transcript
+without starting another agent or stopping it. This works on Linux and macOS;
+other systems may show only saved history.
 
-A CLI that was already open before Helm shows **Open in a terminal** with a
-**Take over** button. Taking over never cuts work off: at the prompt (or at a
-permission question) it moves at once; mid-task it waits until the current
-step - a command, an edit - has landed in the conversation. Helm then closes
-that process, reopens the same conversation with the same command, settings,
-account and folder in a terminal both sides share, and sends "continue" if it
-was working. The app follows to the new thread, and the old window says
-`claude -c` (or `codex resume --last`) there joins the same live terminal.
+A CLI open before Helm started shows **Take over**. It never cuts work off: at
+the prompt it moves at once; mid-task it waits until the current step has
+landed. Helm then closes that process and reopens the same conversation in a
+terminal both sides share. In the old window, `claude -c` (or
+`codex resume --last`) joins the same live terminal.
 
 ### One live session from terminal and app
 
-Keep using `claude`, `codex`, and aliases such as `claudea` or `codexx`.
-Recent Codex versions already use a shared local app-server daemon. Helm joins
-its loaded local threads directly, preserving the same conversation, running
-turn and pending approvals. Prompts and approval/question answers work in
-Helm's chat interface and in Codex's terminal. Local desktop threads are covered
-when that app uses the same reachable daemon and exposes direct input.
+Keep using `claude`, `codex`, and aliases such as `claudea`. Recent Codex
+versions share a local app-server, and Helm joins its threads directly.
 
-For Claude Code and the other supported terminal CLIs (Pi, OMP, Devin,
-OpenCode 1/2, Grok, Cursor, Antigravity CLI, Gemini, Kimi and Muse),
-Helm puts a small launcher for each installed command in `~/.helm/bin` and
-adds that folder to the front of PATH in your shell's startup file (bash, zsh
-or fish). Nothing of the CLI's own is replaced: each launcher finds the real
-command after itself on every run, so provider self-updates and reinstalls
-need no repair. Open a new terminal after the first start. Interactive launches run the **unmodified
-provider CLI** inside a persistent terminal, with the arguments, account
-environment and working folder supplied by your shell. No provider login is added.
+For Claude Code and the other terminal CLIs (Pi, OMP, Devin, OpenCode 1/2,
+Grok, Cursor, Antigravity CLI, Gemini, Kimi and Muse), Helm puts a small
+launcher for each in `~/.helm/bin` and adds that folder to the front of PATH in
+your shell's startup file. Nothing of the CLI's own is replaced: each launcher
+finds the real command after itself, so provider updates need no repair. Open a
+new terminal after the first start. No provider login is added.
 
-Sessions appear automatically in Helm. Only actively working sessions appear
-in **Running**; idle sessions remain available in the recent list and on their
-machine. Open one on any paired
-device to type, choose options, answer questions and grant or deny permissions
-through the same native CLI interface. The laptop and app are clients of one
-process. Closing either view leaves it running; **End session** stops that
-process, and one nobody is watching that has sat at its prompt for 30 minutes
-ends on its own (its conversation stays in the CLI's history). The host
-computer must stay awake and reachable. Whoever typed last sets the terminal's
-size, so looking from a phone never shrinks the laptop's. An update to Helm's
-terminal code starts a new terminal host for new CLIs; running ones stay in
-the old host until they end.
+The laptop and app share one process. Closing either view leaves it running;
+**End session** stops it. An unwatched session idle at its prompt for 30
+minutes ends by itself; its conversation stays in the CLI's history.
 
-Shared Claude chats also offer slash-command suggestions and model/thinking
-pickers. Commands go to the same running CLI while the conversation stays
-open. **View in terminal** lets you inspect command results and interactive
-panels when needed; switching views keeps approval requests available.
-**Claude permissions** and **Claude settings** in the thread menu send the
-corresponding native commands. Newly launched sessions report confirmed model changes
-through Claude's hooks; existing sessions keep their original hook settings.
+Not covered: Claude Desktop, cloud sessions, `claude --bg`, CLIs called by an
+explicit binary path, and noninteractive scripts.
 
-These CLI paths retain the provider's native terminal interface.
-Claude Desktop, cloud sessions, `claude --bg`, and CLIs called
-by an explicit binary path outside the integrated command are not covered.
-Noninteractive scripts, login/update commands, and Helm's own headless drivers
-retain their provider path. `HELM_NATIVE_BYPASS=1` bypasses integration for one
-command. `helm integrate --remove` removes the launchers and the PATH line and
-keeps it off; `helm integrate` turns it back on. Commands replaced in place by
-earlier Helm versions are restored automatically.
+```bash
+HELM_NATIVE_BYPASS=1 claude    # skip Helm for one command
+helm integrate --remove        # remove the launchers and PATH line
+helm integrate                 # turn it back on
+```
 
-For Helm's structured chat interface, the optional managed terminal client
-also remains available:
+For Helm's structured chat in a terminal:
 
 ```bash
 helm chat claude
@@ -391,102 +166,90 @@ helm chat --attach <Helm-session-ID>
 helm chat claude --resume <native-session-ID>
 ```
 
-Use the exact account ID when you have several logins. Login stays in the
-provider CLI; Helm adds no provider sign-in. `--resume` requires the original
-CLI to be closed. The terminal client and paired web/mobile apps control one
-backend process and the same native conversation, including messages, tool
-permissions, structured questions and interruptions. Idle sessions leave
-**Running** but remain available to continue. Ctrl+C or `/detach` disconnects this frontend without
-stopping the agent; reconnect with the printed session ID. `/stop` interrupts
-the turn. `/end` stops the agent and deletes its Helm thread.
-
-At a permission prompt use `/allow`, `/always` (only when offered), or `/deny`,
-optionally followed by the request ID. For questions use
-`/answer <question number> <choice number or text>`; include the request ID
-first if several requests are pending. Answer all questions in a request before
-it is submitted. A response in the app resolves the same request in the terminal.
-
-The headless adapters follow [T3 Code's managed provider design](https://github.com/pingdotgg/t3code):
-its Codex adapter owns an app-server connection; its Claude adapter maintains a
-streaming query and pending tool/question callbacks. Helm uses its existing
-Codex app-server and unmodified Claude Code stream-json drivers for the same
-control flow. It does not import T3's SDK, dependencies or authentication flow.
-See [CodexAdapterV2](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts)
-and [ClaudeAdapterV2](https://github.com/pingdotgg/t3code/blob/main/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts).
-
-The T3 comparison above describes this optional managed provider path. T3's
-code is not evidence of universal attachment to arbitrary terminal or desktop
-processes; the normal-command integration keeps the live terminal instead.
+`--resume` needs the original CLI to be closed. Ctrl+C or `/detach` leaves the
+agent running; `/stop` interrupts the turn; `/end` stops the agent and deletes
+its Helm thread. At a permission prompt use `/allow`, `/always` or `/deny`. For
+questions use `/answer <question number> <choice number or text>`.
 
 ## Updates
 
-Helm is yours to change: tell your agent to change it, and it does. Development
-finishes by committing, pushing, and updating every reachable installed machine.
-Offline machines catch up when they reconnect. At startup, on reconnect, and every
-couple of minutes each service-managed machine checks:
+Helm is yours to change: tell your agent to change it. Each machine checks
+every couple of minutes, and on start and reconnect, and starts a newer
+version when it finds one:
 
-- a new version **saved** (committed) in its own Helm checkout is built and
-  started;
-- a new release pushed to GitHub is built and started, including on clean
-  detached release checkouts;
-- a newer saved version on another of your machines is copied over your own
-  Helm network and started.
+- a new version **saved** (committed) in its own Helm checkout;
+- a new release pushed to GitHub;
+- a newer saved version on another of your machines.
 
-Unsaved edits never spread, and a machine only ever moves forward from what it
-has: if two machines both have their own changes, neither is overwritten, and
-an update notice links to **Settings → Updates** with the reason. Open apps reload by themselves at a quiet
-moment when a new version lands.
+Unsaved edits never spread, and a machine only moves forward. If two machines
+both have their own changes, neither is overwritten; an update notice links to
+**Settings → Updates** with the reason. There you choose:
 
-GitHub's version is a choice in **Settings → Updates**:
-
-- **Let my agent update it** starts an agent on your newest machine that
-  merges GitHub's version into yours, keeps your changes, runs the tests and
-  saves the result. Your other machines follow.
+- **Let my agent update it** starts an agent that merges GitHub's version into
+  yours, keeps your changes, runs the tests and saves the result.
 - **Replace with GitHub's version** overrides your changes on every machine.
   They are kept on a `helm-backup-…` branch (and a stash, if unsaved).
+  `helm update --replace` does the same from a terminal.
 
-`helm update --replace` is the same replacement from a terminal.
+## Threads
 
-Folder search keeps a private directory index in `~/.helm/folder-index.json`,
-loads it after restart, and refreshes it in the background every ten minutes
-when searched. New folders made in Helm are added immediately. Old cached
-results stay available while the walk refreshes; hidden and dependency trees
-remain excluded.
+A message sent while the agent works waits, and says when its CLI will read
+it. **Send now** pushes it in at once; on CLIs that cannot take a message
+mid-turn it stops only the current response. Waiting messages can be edited,
+reordered or removed until delivery starts. Type **@** to attach short excerpts
+of up to three other threads; the excerpts go to this conversation's
+account/model.
+
+**Done** lists recent threads that are not running or waiting on you. It is
+not a count of successful tasks.
+
+### Scheduled tasks
+
+In **Thread details → Schedules**, run a prompt on an interval (five-minute
+minimum), at a fixed time, or from a webhook. A task can reuse the thread or
+start a fresh thread each run. Busy, stopped or archived threads never get
+scheduled work. Automation does not bypass permissions, and every run uses
+provider usage: only schedule trusted tasks.
+
+Webhooks get a secret POST URL; the machine and home must be online. Optional
+HMAC uses `X-Hub-Signature-256`. Prompts can use `{{body}}`, `{{body.field}}`,
+`{{query.field}}` and `{{headers.name}}`. **Payloads are untrusted input**: the
+template decides what the agent sees.
+
+Schedules, including webhook secrets, are saved in `~/.helm/schedules.json`
+(mode 0600).
+
+**Continue automatically when this account's usage limit resets** is opt-in
+per thread. Helm resumes once at the provider's reset time, with no browser
+open. An unknown or unclear reset time never starts a retry loop.
+
+Test this area with `helm run -- npm run test:automation`. It uses temporary
+Helm state, fake providers and temporary repos.
+
+### GitHub pull requests, checks and deployments
+
+**Git → CI / CD** shows PRs, checks, workflow runs and deployments, and can
+comment, review, merge, commit and push. A passing workflow is not treated as
+proof that a deploy worked. Push never forces history.
+
+Helm uses the GitHub CLI logins on the project's machine: run `gh auth login`
+there for each account. `GH_TOKEN` or `GITHUB_TOKEN` also work. Tokens stay on
+that machine and are never sent to the app or saved by Helm.
+
+**Notify this thread** keeps watching with the app closed. **Wake the agent on
+GitHub changes** is a separate opt-in that wakes an idle thread when checks
+finish, reviews change or conflicts appear; the default is five wakes per UTC
+day. Wakes never skip an approval, a stop or a usage-limit card. GitHub text is
+untrusted context for the agent.
 
 ## CLI subagents
 
-Open **Thread details → Agents** (or **Subagents** in the thread menu) to choose a CLI account, model,
-permissions, and a bounded task. Tasks stay attached to that orchestrator
-and do not appear as separate recent chats, search results, or provider-history
-rows. Inspect replies, stop work, send follow-up messages, and answer any
-explicitly configured approval prompts in the parent task panel.
+Open **Thread details → Agents** to give a task to another CLI account and
+model. Tasks stay attached to the parent thread; follow them, stop them, and
+answer their approvals there. Subagents that Claude Code starts itself appear
+as **native** and are read-only.
 
-The inline **Team** panel shows nested tasks, model, status, elapsed time,
-and a short result. Child approvals and failures also surface on the parent
-in the sidebar. Finished child tasks return a bounded result to their parent;
-only tasks created with automatic result delivery enabled participate. Older
-task history is not replayed into conversations when the daemon restarts.
-**Stop all** stops descendants and clears pending messages. Late results from
-stopped children do not restart the parent. Archiving hides a task without
-stopping its process.
-
-Subagents Claude Code starts itself (its `Agent`/`Task` tool) appear in the
-same list marked **native**: in a terminal or monitored Claude thread, and in
-Helm chats where those tools are allowed. A terminal thread gets an **Agents**
-button beside its title for them. Helm reads them from the files Claude keeps
-beside the conversation (`<session>/subagents/agent-*.jsonl`), so they are
-read-only: expand one for its latest reply and recent steps; there is nothing
-to message, stop or open. Running ones count in the Agents badge and keep the
-thread marked working. A finished reply reads **Finished** after a few quiet
-seconds; one that stops writing without finishing reads **Stopped** after ten
-minutes. A Helm chat that already shows a subagent inline does not repeat it
-as a card, and the newest 24 per thread are listed. When the chat itself
-reports on the same subagent, its card shows that state instead: **Needs
-approval** while it waits on you, **Failed** if the chat says it failed.
-
-Helm-managed agents receive a short introduction to these tools on their next
-ordinary message. Any local CLI with shell access can also use them directly
-on a joined machine with the Helm daemon running:
+Any CLI with shell access on a joined machine can use them directly:
 
 ```bash
 helm agents --json
@@ -494,253 +257,55 @@ helm delegate claudea --model opus --wait --json -- "Review the security changes
 helm delegate-result <child-id> --wait --json
 ```
 
-`helm agents` reports discovered accounts, sign-in status, and model IDs
-without publishing credentials or launcher environments. Use `--refresh`
-after logging in or installing a CLI. Unknown sign-in state is shown as
-unverified; a signed-out account cannot be delegated to. Use an exact account
-ID when more than one profile uses the same CLI.
+`helm agents` lists accounts, sign-in status and model IDs, never secret
+values; use `--refresh` after a new login. `--model` picks the child's model
+through its own CLI, so Codex can ask Claude Opus with an existing login.
 
-It also reports potential credential sources: file locations, environment
-variable names, and available account/expiry metadata, never token values.
-These diagnostics honor profile overrides, saved secret references, and
-explicit unsets. An expired access token may still be refreshable; the CLI's
-sign-in status remains authoritative. Wrapper-managed credential files and
-OS keychains are not inspected.
+The task text is all the child knows; the parent conversation is not copied.
+Children share the folder (or `--cwd <folder>`), so give them distinct work.
+Children default to YOLO; a read-only parent needs a read-only child.
 
-Inside a Helm session, `helm delegate` automatically links the task to that
-session and uses its folder. From an ordinary terminal or native Codex CLI,
-it uses the current folder; `--cwd <folder>` chooses another. `--model` selects
-the child's model through its own CLI, so Codex can ask Claude Opus for work
-using an existing Claude login. The supplied task is the child's context;
-the parent conversation is not copied automatically. Children share the
-folder, so assign distinct work when delegating edits.
+`--wait` returns when the child is done, or at once if it needs approval. Exit
+codes: 0 success, 1 failure, 2 approval pending, 3 wait timeout (the child
+keeps working).
 
-Helm adds a short, stable delegation instruction, not an account roster or a
-copy of its manual. Accounts and models are discovered with `helm agents --json`
-only when needed. Codex and Claude receive it as standing instructions; other
-adapters introduce it once, not on every message. Helm-managed Codex threads
-disable `features.multi_agent` and `features.multi_agent_v2`; Claude launches
-deny the native `Agent` and legacy `Task` tools. These use the provider's
-[Codex feature configuration](https://developers.openai.com/codex/config-reference)
-and [Claude tool restrictions](https://code.claude.com/docs/en/cli-reference).
-Other adapters currently rely on the instruction, not a verified tool block.
-Existing processes preserved across an update keep their prior configuration
-until a fresh provider launch or Codex thread resume; Helm does not interrupt
-active work to apply this policy. Externally monitored sessions are not
-reconfigured. This routes ordinary delegation, not a security boundary against
-an agent launching a separate CLI through its shell.
+Helm-managed Codex and Claude threads have their own built-in subagents turned
+off, so delegation goes through Helm. This is routing, not a security
+boundary: an agent can still start a CLI through its shell.
 
-Children default to YOLO execution; `--mode` and
-`--effort` select supported settings. A read-only parent requires a read-only
-child; account defaults and explicit permission choices remain configurable.
-Plan mode is not offered: dispatch tasks directly instead of waiting for plan
-approval. Any number of children can run at once, nested as deep as the task
-needs.
-CLIs without a permission picker use their own configured permission policy.
-
-Completed children release their provider runtime after 30 seconds idle. Their
-conversation, reply, permissions and lineage remain saved; a follow-up resumes
-the same provider conversation. Cleanup waits for unfinished replies, queued
-messages, approvals and active descendants. Ordinary shared terminal chats stay
-connected. Codex children detach their own thread from the shared account server.
-
-A completed turn reports to its parent once, including after a restart. Work
-the provider starts by itself is recorded separately and sends only new written
-updates, while preserving the task's original result. Claude, Codex, Pi/OMP and
-agy use their own turn or cycle completion events; silence alone is never
-treated as completion. ACP providers without an unsolicited-work completion
-signal keep their existing behavior. Pi and agy history-only wake replays are
-not yet deduplicated across a restart.
-
-### Machine capacity and remote commands
-
-Agents receive a shared-capacity instruction: parallelize reading and coding,
-use focused checks in children, and run broad validation once in the parent after
-integration. Inspect package scripts before assuming file arguments restrict a
-suite, and repeat validation only when changed code or a failure calls for it.
+### Remote commands
 
 ```sh
-helm run --heavy -- npm run test:client -- path/to/changed.test.tsx
-helm run --heavy -- env RPC_TEST_DATABASE_NAME=isolated_test npm run test:integration -- path/to/changed.test.ts
-helm exec Laptop --cwd /home/haseeb/dev/project --heavy -- npm run check
+helm exec Laptop --cwd /home/haseeb/dev/project -- npm run check
 helm exec VM -- sh -lc 'uptime; free -h'
 helm exec VM --env SERVICE_NAME=example -- printenv SERVICE_NAME
+helm exec-status VM <command-id> --wait --json
+helm exec-cancel VM <command-id>
 ```
 
-Commands start at once: no shared slot, no wait for free memory and no cap on
-test workers. `--heavy` is still accepted from older agents and changes nothing.
+`helm exec` runs over Helm's own connection, not SSH. Arguments stay separate;
+use `sh -lc` for pipelines. Your local environment is never copied; pass
+`--env NAME=value`. `--cwd` takes an absolute path on the target. Default
+timeout is 15 minutes; a timeout exits 124.
 
-`helm exec` runs through Helm's authenticated machine connection, using one
-connection for output, status and cancellation. It starts no agent, terminal,
-login shell or SSH connection. Arguments stay separate; use `sh -lc` explicitly
-for pipelines. Remote commands inherit the target daemon's environment; local
-shell environment is never copied there. Pass required overrides with repeatable
-`--env NAME=value`; `--cwd` uses an absolute target path (default: target home).
-`helm run` preserves the local shell's working folder and environment.
-
-`--timeout <milliseconds>` bounds capacity waiting and execution together
-(default: 15 minutes). Ctrl+C cancels the command. The exit code is the remote
-command's own; a timeout exits 124 and a cancelled command 130. Stopping a
-command stops its whole process group on Linux and macOS. Output retains a
-bounded 256 KiB tail for an hour; truncation is reported. If the connection
-drops, the CLI resumes reading the same job, without restarting it. An
-unacknowledged start is not automatically replayed; the CLI prints the command
-id, and the command can be read or stopped from any terminal on that machine:
-
-```sh
-helm exec-status VM <command-id>               output so far; exit 3 while it runs
-helm exec-status VM <command-id> --wait --json  wait for the end, as one JSON object
-helm exec-cancel VM <command-id>               stop it
-```
-
-`helm exec-result` is the older name for `exec-status` and still works. Daemon
-shutdown cancels managed commands; after a restart, a missing command is
-reported instead of silently running it again. `helm run` without a command
-remains the legacy alias for `helm up`.
-
-`--wait` returns the reply when finished, or returns immediately when the
-child needs approval. Read it again after answering in Helm. It waits until
-the child's turn has really ended; `--timeout <milliseconds>` sets a limit.
-Timing out stops waiting while the child continues; the reply then says it
-is not finished and keeps the text so far under `progress`. While a parent
-is waiting, Helm does not also send it the result as a separate message. Exit codes are 0 for success,
-1 for failure or interruption, 2 for a pending approval, and 3 for a wait
-timeout. JSON includes the full child ID and its status; replies are bounded
-to the last 32,000 characters. Open the thread for the full conversation.
-
-### Thread controls
-
-**Thread details** groups machine, folder, account, model, permissions, Git
-changes, agents, schedules, and task transfer in one panel. It opens as a
-side panel on desktop and a bottom sheet on phones.
-
-There is no message-delivery selector. Native terminal sessions pass input
-straight to the CLI, retaining that CLI's own queue and interruption behavior.
-In managed chats a message sent while the agent works follows its CLI's own
-timing, and each waiting message says which: Codex reads it after its next
-tool call, Claude when its current tools finish, OpenCode at the next step of
-its running loop, and Devin, OpenCode 2 and the rest after the current
-response. Scheduled prompts and delegated results say **After this task**;
-a message the CLI has taken says **Sent to CLI**. Messages with attached
-thread context wait for the response to end.
-
-**Send now** works on every CLI. Codex, Claude and OpenCode take the message
-inside the running turn. Other CLIs stop only the current response and then
-send it - the other waiting messages, delegated tasks and the thread carry
-on. A delegated task without steering is not cut short; it reads the message
-when its response ends. A message being sent this way cannot be withdrawn
-halfway, and **Stop** still cancels it. If a CLI refuses a message or exits
-before reading it, that message shows as failed in the chat, ready to resend,
-rather than disappearing.
-
-Queued messages can be edited, reordered,
-removed, or withdrawn into the composer until delivery starts. Edits, order,
-attachments, and attached context survive a daemon restart. Delivery already
-accepted by a CLI is not automatically replayed.
-
-Type **@** to attach up to three other threads from the same machine. Helm
-snapshots bounded text excerpts, not their entire histories or attachments.
-These excerpts are sent to the account/model of the receiving conversation.
-Recovery banners distinguish failures, usage limits, stops, and restarts;
-**Resume task** releases held messages or asks the agent to continue from its
-saved conversation. Usage-limit failures pause queued work instead of retrying
-automatically.
-
-### Scheduled tasks
-
-In **Thread details → Schedules**, create an interval, fixed-time or webhook
-automation, pause/resume it, edit it, run it now, or delete it. Interval tasks have a
-five-minute minimum. Fixed-time tasks choose an IANA time zone, time of day and
-optional weekdays (none means daily); daylight-saving transitions use real local
-clock occurrences. A fixed slot missed by more than ten minutes advances to its
-next occurrence, while a missed interval coalesces into one run.
-
-Tasks use the selected thread's account, model, folder and permissions. Choose
-**Start a fresh thread for each run** for independent executions. Each result appears
-as a normal thread in the session list; its ID and last dispatch time are shown on
-the automation card. Durable execution identities reuse the same thread and message
-when recovering an uncertain dispatch. The next fresh run waits for its previous
-result thread to finish; stopping that result or leaving it needing attention also
-holds future runs. Automation does not bypass permissions. Normal agent turns
-consume provider usage; only schedule trusted tasks.
-
-Webhook tasks expose a secret POST URL through Helm's existing public share routing
-on `helm-hooks-<machine-id-hash>.<public-host>`. The loopback listener exposes only
-webhook routes and is advertised only when a webhook task exists. No separate port
-forwarding is needed, but the machine, daemon and public hub must be online. Optional
-HMAC authentication uses `X-Hub-Signature-256: sha256=<hex digest>` over the request
-body. Rotating the URL cancels queued deliveries and immediately invalidates the old
-token. Editing the task template, target, execution mode or HMAC secret also cancels
-queued payloads. Pausing holds existing deliveries and rejects new ones.
-
-Prompts support `{{body}}`, `{{body.field}}`, `{{query.field}}` and `{{headers.name}}`.
-JSON and form bodies support own-property lookups; missing fields become empty.
-Credential-named headers/query fields are excluded. Payloads are untrusted input:
-the template controls what the agent sees. Request bodies are capped at 16 KiB,
-rendered prompts at 32,000 characters, and headers at 8 KiB. A task accepts at most
-thirty deliveries per minute and eight pending deliveries; recent receipts are
-bounded to thirty-two. `X-GitHub-Delivery` or `Idempotency-Key` deduplicates deliveries
-within that receipt history. Over-limit requests return 413/429; senders should retry
-429 after waiting. The task card shows delivery receipts and dispatch errors.
-
-Schedules persist atomically with mode 0600 in `~/.helm/schedules.json`, including
-queued rendered payloads and webhook secrets. Dispatch errors pause the automation
-and keep its durable dispatch ID for safe recovery. Busy, stopped, archived and
-attention-needed targets never receive scheduled work. Fixed-time zones belong to
-the task; next/last timestamps are displayed in the browser's local zone.
-
-**Continue automatically when this account's usage limit resets** is opt-in per
-thread and is also offered in the usage-limit card. Helm persists the provider's
-absolute reset timestamp and resumes once when due, with no browser required. It
-retries a request refused before delivery, otherwise uses existing queued messages
-first or sends one durable continuation. An
-unknown, stale or ambiguous reset time never starts a retry loop. Working/blocked
-threads, pending approvals and active child agents wait. Manual input, Stop, archive
-or switching the option off cancels the pending continuation. After an archive,
-explicitly toggle the option to re-arm a still-visible limit failure. Restart recovery
-reuses the same failure and continuation identity.
-
-Validate this workflow with `helm run --heavy -- npm run test:automation`. The
-preload sets temporary Helm state, database, SSH and process socket paths before
-imports; the suite has bounded timeouts and uses fake providers and temporary repos.
-
-Cache keepalive is deferred: this release installs no warmer, sends no
-background cache pings, and exposes no keepalive toggle. Providers' native
-prompt caching remains unchanged. The sidebar search has no shortcut badge;
-Ctrl/Cmd+K still opens search.
-
-The open thread is highlighted in Running and Done. Done is a rolling list of
-threads with replies that are not running or needing attention, updated within
-the last three days; it is not a count of successful tasks. Its count can change
-as threads resume, age out, or sync from another machine. In the model picker,
-stars only favorite choices. **Set default** separately controls new chats;
-neither action changes the model of the current conversation.
+**If a start was not confirmed, do not rerun it.** The CLI prints the command
+id; read it with `exec-status` or stop it with `exec-cancel`. `--heavy` is
+accepted and does nothing.
 
 ## Helm brain
 
-One persistent conversation for the whole network, hosted on the always-on VM.
-Open **Helm brain** in the app or start it from any joined machine:
+One persistent conversation for the whole network, hosted on the always-on VM:
 
 ```bash
 helm brain --account claudea
 ```
 
-The app and CLI choose the same VM, including older networks whose VM is named
-`VM` but has no kind yet. An offline VM stays the brain's home; Helm never
-creates a replacement on a laptop. Without a VM, designate one with
-`helm redesignate <machine> vm`. Older brains on other machines become ordinary
-conversations, retaining their history.
+An offline VM stays the brain's home; Helm never moves it to a laptop. Without
+a VM, pick one with `helm redesignate <machine> vm`. Tell it "go to why, then
+this folder, do this." It keeps a network map in `~/.helm/snapshot.json` and
+owner-confirmed notes in `~/.helm/brain/KNOWLEDGE.md`.
 
-Tell it “go to why, then this folder, do this.” It checks that destination and
-works there over SSH or through a Helm session. Its initial context includes
-the network map; `helm digest` refreshes machines, known folders and sessions,
-with last-observed state retained for sleeping machines. Project paths remain
-in the map after chats are archived, but are verified before use. The VM keeps
-this map in `~/.helm/snapshot.json` and owner-confirmed notes in
-`~/.helm/brain/KNOWLEDGE.md`. The conversation keeps the usual model and
-permission controls.
-
-The same verbs work from any terminal in the network:
+The same verbs work from any terminal:
 
 ```bash
 helm digest                       every machine, folder and running session
@@ -754,212 +319,111 @@ helm receive <machine> [minutes]  grant this machine one folder from it
 helm send <machine> [folder] --grant <token>
 ```
 
-`helm digest` keeps the last answer from every machine, so one that is asleep
-is listed with when it was last seen rather than left out.
+`helm digest` lists a sleeping machine with when it was last seen.
 
-**Send task** is available in a managed conversation's header. Completion
-notification settings live in its **⋯** menu. Sending pauses the
-source agent, copies the project and recent conversation, and starts a
-continuation using an agent account on the destination. In **Send a project**,
-enable **Send a task with this project** to start a new task instead.
-Choose **Send task to another machine**, pick the machine, and send. Project
-`.env` files are included automatically and written with `0600` permissions;
-there is no environment checkbox in the task UI. Files and task context are
-encrypted to the destination and signed by the source. No GitHub checkout,
-fetch or Git history restoration is performed for this flow.
+### Sending a task to another machine
 
-After a successful completed turn (with no outstanding questions or delegated
-work), changes return automatically when the original machine is online.
-Reconnection triggers a check; Helm also checks every 30 seconds. A running
-original thread is never overwritten: return waits until it is idle.
-Private Git checkpoints identify changed files and deletions, so unchanged
-files are not uploaded again. Git must be installed on both machines; a Git
-repository or GitHub account is not required. Checkpoints live in Helm's
-private storage, not your project history, and may contain project secrets.
-Nothing is committed or pushed to your project's Git remote by a task transfer.
+**Send task** (in a thread's header) pauses the agent, copies the project and
+recent conversation, and continues on the other machine. When the task
+finishes, the changes come back to the original machine once it is online and
+idle. Your own edits are kept; overlapping edits stop with **Returned changes
+need review**. Nothing is committed or pushed to your project's Git remote.
 
-Non-overlapping local edits are preserved. Overlapping changes pause the return
-with a **Returned changes need review** banner and a separate complete returned
-copy. Resolve the files and recheck, or choose **Keep my conflicting edits**.
-The original conversation receives the result and continuation context; the
-destination thread becomes read-only once its return snapshot is sealed.
+Things that surprise people:
 
-Task and project transfers try a direct WebRTC data channel with
-bounded send buffering, using a hub for signalling. If a direct connection
-cannot be established, the same encrypted request travels through the hub.
-If task delivery loses connectivity, an independent machine's hub can store
-the encrypted request for later delivery; the laptop's own hub alone is not
-enough. A **Running** receipt means the destination has started a session and
-accepted its first prompt, so the source laptop can close. It does not mean
-dependency setup or the task itself has finished.
+- Project `.env` files **are included** automatically (written `0600`). Use
+  `helm send-task --no-env` to leave them out.
+- Git must be installed on both machines. Helm keeps private checkpoints
+  outside your project history; they may contain project secrets.
+- It is a snapshot, not a live move. Logins, services, virtual environments
+  and installed dependencies stay behind. The other agent rebuilds
+  dependencies.
+- Limits: 32 MiB total, 16 MiB per file, 20,000 files. Use `helm copy` for
+  bigger folders.
+- Retry with the same arguments and `--handoff-id <id>` to reuse the saved
+  snapshot without starting another session.
 
-`helm send-task` uses the current folder and, inside a managed session, its
-conversation. Use `--source-folder`, `--target-folder`, `--session`, `--model`
-or `--mode` to choose explicitly, `--no-env` to exclude project environment
-files, and `--allow-skipped` after reviewing any omitted sensitive files or
-symlinks. The command prints a handoff ID before sending; retry with the same
-arguments and `--handoff-id <id>` to reuse the saved snapshot without starting
-another session. Source and destination both need this Helm version.
+`helm dispatch` queues work for a machine that may be offline; it picks it up
+when it connects. Update homes and targets before sources, because the queue
+format changed.
 
-This is a project snapshot plus a bounded conversation continuation, not a
-live process migration. The destination agent is instructed to recreate
-dependencies from project instructions, manifests and lockfiles. Provider
-logins, machine-wide environment variables, services, virtual environments
-and generated dependencies stay on the source. Required runtimes and agent
-authentication must be available on the destination. Snapshot limits remain
-32 MiB total, 16 MiB per file and 20,000 files; larger directory copies use
-`helm copy`.
-
-`helm dispatch` runs from any joined machine - inside a session or from a
-plain shell. It packs the current folder, encrypts it to the target's own
-key and queues it on every reachable home, so a machine that is offline
-picks the work up the next time it connects; `dispatch-status` asks the same
-question later. Retries are idempotent: the same handoff resumes its steps
-rather than repeating them, and provider credentials stay on the machine the
-work runs on. Source and target must both run this protocol version - the
-envelope compression, request signing and queue frames are a wire change -
-so update homes and targets first, then sources.
-
-`helm receive` and `helm send` move one folder while both machines are
-online - no queue, no session. `receive` mints a single-use grant, signed
-by the target machine and bound to the named source, its one-time key and
-a few minutes of life; `send` checks that signature against the roster,
-seals the folder to the key inside, and the signed request itself is what
-authorizes the write on the target.
-`--include-env` carries `.env` files explicitly - they land owner-only
-(`0600`) - and `--target-folder` chooses where it lands.
-
-## What it costs
-
-Every agent CLI records its own token usage next to its transcripts, and that
-record is the complete one: it covers sessions helm never started, and it
-survives helm's own event log being trimmed. **Usage** in the sidebar reads
-those and adds them up - across every machine, or one machine on its own from
-the meter beside its settings.
-
-```text
-$1.1k        API-equivalent, 7 days · 3.0B tokens · 19,857 turns
-97.7%        of input served from cache — saved $7.6k
-```
-
-The prompt-cache figure is the one worth watching. A cached input token bills
-at a fraction of a fresh one, so on agent sessions - where the same context is
-resent every turn - the hit rate is most of the difference between the bill and
-what it could have been. It is reported after the cache-write premium, because
-writing the cache is billed above the fresh rate.
-
-Break the spend down by **model**, **CLI**, **provider** or **folder**; the
-folder view is usually the one that answers "where did the month go".
-
-Two things the numbers are careful about. Costs are published rates × real
-tokens, which on a subscription is not what you paid - it is what the same work
-would have cost on the API, and the screen says `API-equivalent` rather than
-"spent". A model with no published rate is counted in tokens and reported
-`unpriced`, never costed at zero. And a machine that does not answer is not
-zero: the footer says how many of your machines reported, the same way `helm
-digest` lists a sleeping machine with when it was last seen rather than leaving
-it out.
-
-Reading is incremental. The first pass on a machine with a long history reads
-every transcript its CLIs ever wrote; after that only the bytes a session
-appended are read, and the index survives a daemon restart. On a machine with
-1.8GB of Codex rollouts that is 7.6s once, then about 25ms.
-
-## Profiles and secrets
-
-Helm reads shell aliases and functions and turns them into profiles. This makes
-different Codex, Claude, OpenCode, OpenCode 2 and Devin accounts selectable per
-session.
-
-Profiles reference secret locations; they do not upload provider credentials.
-Agents and credentials stay on the computer where the work runs.
-
-## Security model
-
-- Every user owns a separate Helm home.
-- Pairing links last a few minutes.
-- Joined devices remain until explicitly removed. Removal also closes the
-  device's live connections, not just its next sign-in.
-- Machine invites are single-use.
-- The network key stays in files readable only by the local user.
-- Provider credentials never go to the VM unless the agent itself runs there.
-- Queued code is encrypted to the target machine; the task text and settings
-  ride readable through your own home, the same as a live call.
-- A `helm send` transfer is end-to-end encrypted to a one-time key the
-  target issued inside a signed, single-use, short-lived grant bound to
-  the named source machine as well as the target; `.env`
-  files move only when the sender passes `--include-env` and land `0600`.
-- What a handoff leaves behind is decided by filename - a conservative
-  filter, not a promise that nothing sensitive is inside the code itself.
-- Only HTTPS should be exposed publicly; port `8787` stays behind Caddy.
-
-The current design is for one trusted owner per Helm home. Do not put unrelated
-users into the same network.
-
-## Project layout
-
-| | |
-|---|---|
-| `packages/protocol` | membership, credentials, and wire messages |
-| `packages/connect` | daemon, CLI, profiles, SSH, brains, and local runtime |
-| `apps/relay` | the VM home and connection relay |
-| `packages/usage` | what each CLI recorded spending, priced and rolled up |
-| `apps/web` | the mobile PWA and shared interface |
-
-## Development
-
-Requirements: Node 22+ and
-[herdr](https://herdr.dev) for terminals. Claude Code 2.1.260+ and
-codex-cli 0.154+ on any machine that runs agents (`packages/connect/src/drivers`
-is written against those; older CLIs get a warning at start).
-
-```bash
-npm install
-npm run check
-```
-
-`npm run check` type-checks and builds the web app, then runs only the
-tests that can reach your changes (`scripts/test-smart.mjs`; add `--list`
-to see which and why). `npm run check:full` runs every test.
-
-Browser regressions cover Markdown safety, dialog focus, the command palette,
-CLI subagents, thread details, queue controls, references, and schedules:
-
-```bash
-npm exec --workspace @helm/web -- playwright install chromium
-npm run test:browser
-```
-
-To use an installed Chromium instead, run
-`HELM_TEST_CHROMIUM=/usr/bin/chromium npm run test:browser`.
-These checks use isolated fixtures and do not connect to your Helm network.
+`helm receive` and `helm send` move one folder while both machines are online.
+`.env` files move only with `--include-env`.
 
 ### Large folder copies
-
-`helm copy` streams a file or complete directory through Helm's managed
-connection, with signed requests and encrypted data. Both computers need
-`rsync` 3.2.3 or newer. It tries direct and relay routes automatically;
-`--direct` or `--relay` selects one, and `--ssh` uses the older SSH transport
-when an SSH server is available. This command does not install system services.
-
-Without `--target-folder`, files land in the same place on the other machine:
-a folder under your home goes under that machine's home, anything else keeps
-its path. `~/...` and plain relative targets mean the other machine's home.
-Copies between updated machines keep up to 16 MiB in flight, so a far-away
-machine is not held back by the round trip.
 
 ```sh
 helm copy why ./my-project
 helm copy why ./my-project --target-folder ~/dev/my-project --exclude node_modules --exclude .cache
 ```
 
-Unlike the filtered, size-limited code handoff, this copies hidden files and Git
-history too. Existing matching files can be replaced; unrelated destination
-files are not deleted. Use `--exclude .env` when environment files should stay
-here. Rerun the same command after interruption: completed files are skipped and
-partial files are reused. Compression streams in memory, without writing an
-archive on either disk. Filesystem permissions, symlinks and timestamps are
-preserved; source files are retained.
+Both computers need `rsync` 3.2.3 or newer. Without `--target-folder`, files
+land in the same place on the other machine (under its home if they were
+under yours). This copies hidden files and Git history too, and can replace
+matching files; unrelated files are not deleted. Use `--exclude .env` to keep
+environment files here. Rerun after an interruption to continue. `--ssh` uses
+the older SSH path.
+
+## What it costs
+
+**Usage** in the sidebar adds up the token records each CLI keeps on every
+machine, including sessions Helm never started.
+
+Costs are published rates × real tokens. On a subscription that is not what
+you paid, so the screen says `API-equivalent`. A model with no published rate
+shows `unpriced`, never zero. A machine that does not answer is not counted as
+zero: the footer says how many machines reported.
+
+## Profiles and secrets
+
+Helm reads shell aliases and functions and turns them into profiles, so
+different Codex, Claude, OpenCode and Devin accounts can be chosen per session.
+Profiles point at secret locations; they do not upload credentials. Agents and
+credentials stay on the computer where the work runs.
+
+## Security model
+
+- Every user owns a separate Helm home.
+- Pairing links last a few minutes. Machine invites are single-use.
+- Joined devices remain until removed. Removal also closes their live
+  connections.
+- The network key stays in files readable only by the local user. Never copy
+  `~/.helm/network.json`.
+- Provider credentials never go to the VM unless the agent itself runs there.
+- Queued code is encrypted to the target machine; the task text and settings
+  pass readable through your own home, the same as a live call.
+- A `helm send` transfer is end-to-end encrypted to a one-time key in a
+  signed, single-use, short-lived grant from the target.
+- What a handoff leaves behind is decided by filename. It is a careful filter,
+  not a promise that nothing secret is inside the code.
+- Only HTTPS should be public; port `8787` stays behind Caddy.
+
+The design is for one trusted owner per Helm home. Do not put unrelated users
+into the same network.
+
+## Development
+
+Requirements: Node 22+ and [herdr](https://herdr.dev) for terminals. Claude
+Code 2.1.260+ and codex-cli 0.154+ on machines that run agents (older CLIs get
+a warning).
+
+```bash
+npm install
+npm run check
+```
+
+`npm run check` type-checks, builds the web app, and runs only the tests your
+changes can reach (`--list` shows which and why). `npm run check:full` runs
+every test.
+
+```bash
+npm exec --workspace @helm/web -- playwright install chromium
+npm run test:browser
+```
+
+To use an installed Chromium, run
+`HELM_TEST_CHROMIUM=/usr/bin/chromium npm run test:browser`. These checks use
+isolated fixtures and do not connect to your Helm network.
 
 ### Claude account compaction policy
 
@@ -969,20 +433,7 @@ Apply the owner's Claude 5.5 thresholds separately on each machine:
 node scripts/configure-claude-compaction.mjs ~/.claude-personal
 ```
 
-The script keeps existing settings and writes a backup before any change.
-It enables auto-compaction at 350k tokens for Opus 5.5, 250k for Sonnet 5.5,
-and 99k for Haiku 5.5. The saved windows include Claude Code's 33k output and
-summary reserve, verified with version 2.1.295. The account's native settings
-apply to both Helm and CLI sessions; credentials are never copied. Accounts
-that share this config directory share the compaction policy too.
-
-Updated SSH tunnels negotiate a 512 KiB window per direction. The receiver
-acknowledges data after writing it, so a fast sender cannot grow an unlimited
-hub queue while a destination is slow. Old peers remain compatible through the
-legacy tunnel path; update both ends and the hub to get flow control. A running
-SSH connection is never silently replayed on a different route after failure.
-
-Helm's safe updater waits for active transfers before restarting the sender,
-receiver or relay. Runtime activity markers expire after a crash, so an
-abandoned transfer cannot block updates indefinitely. Incoming data and credit
-frames count as liveness; a delayed pong alone does not end a busy transfer.
+It keeps existing settings and writes a backup first. It sets auto-compaction
+at 350k tokens for Opus 5.5, 250k for Sonnet 5.5 and 99k for Haiku 5.5
+(verified with Claude Code 2.1.295). Accounts that share a config directory
+share the policy.

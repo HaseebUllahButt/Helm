@@ -60,26 +60,17 @@ sudo journalctl -u caddy -n 50
 Also open the `/api/health` path under the address Helm printed. Do not report
 success until it returns HTTP 200.
 
-On Linux, Helm enables and saves TCP packet-size recovery when it has root or
-passwordless sudo access. This lets a connection recover when a Wi-Fi, campus,
-or VPN route silently drops larger packets. It checks again every two minutes
-and preserves an existing stronger recovery setting. Tests never change this
-system setting.
-
-If `helm status` reports that packet recovery needs setup, run:
+On Linux, Helm turns on TCP packet-size recovery when it has root or
+passwordless sudo. This helps connections on Wi-Fi, campus or VPN routes that
+silently drop large packets. Tests never change this system setting. If
+`helm status` says packet recovery needs setup, run:
 
 ```bash
 helm network-repair
 ```
 
-This may ask for your sudo password. The repair takes effect without restarting
-Helm and survives reboot; background services never ask for a password.
-
-Helm also watches Linux route, policy, interface and DNS changes, with a polling
-fallback and a wake-from-sleep check. When a VPN or Wi-Fi path changes it probes
-existing connections, reconnects silent hubs after five seconds, refreshes LAN
-discovery and measures routes again. Healthy connections and running chats stay
-in place. A write that may already have arrived is never automatically replayed.
+This may ask for your sudo password. It works without a restart and survives
+reboot; background services never ask for a password.
 
 ## 4. Return the link
 
@@ -126,16 +117,12 @@ helm join
 # Paste the private link made for this VM.
 ```
 
-The code says "vm", so that machine also takes an address of its own and
-starts serving. (`helm setup --join <CODE> --at <url>` still does the same
-thing, for existing scripts.)
-
-This joins the existing network instead of founding a new one, assigns the new
-VM its own free HTTPS address (or pass an explicit `https://…` at the end),
-adds an isolated Helm site to its Caddy, and installs the background service.
-No new pairing link is needed — paired devices discover the second home from
-the shared roster. Re-running the command on a VM that is already a member just
-re-advertises it; to move a VM to a different network, run `helm leave` first.
+The link says "vm", so that machine also takes its own free HTTPS address
+(or pass an explicit `https://…`), adds a Helm site to its Caddy, and starts
+serving. (`helm setup --join <CODE> --at <url>` does the same, for existing
+scripts.) Paired devices find the second home by themselves. Running it again
+on a member VM only re-advertises it; to move a VM to another network, run
+`helm leave` first.
 
 ## Verification checklist for agents
 

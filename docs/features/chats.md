@@ -1,151 +1,93 @@
 # Chats and the composer
 
-`V="node scripts/verify-helm.mjs --name <you>"`, then `$V up && $V open` and a
-quick chat with the Fake agent (see [README](README.md)).
+Start with a quick chat on the Fake agent (see [README](README.md)).
 
-## Send a message, see the reply
-- **Sees:** your message as a bubble with the time, then the agent's reply.
-  The chat gets a title from your words.
-- **Reach:** the box at the bottom ("Ask anything, …"), then the round send
-  button. On a keyboard, Enter sends and Shift+Enter makes a new line; on a
-  phone, Enter makes a new line.
-- **CLI:** `helm say <chat-id> <text>`; `helm chat <account> [-- text]`
-  shares one live chat between a terminal and the app.
+## Send and reply
 - **Prove (driven 2026-10-15):**
-  ```sh
-  $V click "Ask anything"; $V type "hello from me"; $V click send; $V wait "done."
-  ```
-- **Proof:** `text` shows "hello from me", a time, and "working on it done.".
-  The header title changes from "Quick chat".
-- **Traps:** the title is made from your words and may drop a word ("hello
-  from fmap" became "from fmap"). The model chip shows real Devin model names
-  even for the fake agent.
+  `$V click "Ask anything"; $V type "hello from me"; $V click send; $V wait "done."`
+- **Proof:** `text` shows "hello from me", a time, and "working on it done.";
+  the header title changes from "Quick chat".
+- **Traps:** the title is made from your words and may drop one ("hello from
+  fmap" became "from fmap"). The model chip shows real Devin model names even
+  for the fake agent.
 - **Tests:** `test/browser/chat-cycle`, `send-v2`, `send-entry-points`,
   `failed-send`, `composer-card`; `test/message-delivery`, `user-message`,
   `stream`, `session-driver`.
 
 ## Queue a message while the agent works
-- **Sees:** "1 waiting", your message, "After current response", with
-  **Edit** and **Send now**. It goes by itself when the reply ends.
-- **Reach:** type and send while a reply runs.
-- **Prove (driven):** use "fake-ask" so the turn stays open.
+- **Prove (driven):** fake-ask keeps the turn open.
   ```sh
   $V click "Ask anything"; $V type "first"; $V click send; $V wait "TOOL APPROVAL"
   $V click "Decide above"; $V type "second"; $V click send; $V wait "1 waiting"
   $V click Approve; $V wait "TOOL APPROVAL"   # "second" was delivered and asks again
   ```
-- **Proof:** "1 waiting" and "After current response", then "second" shows
-  as a normal bubble after the first reply ends.
 - **Traps:** each CLI reads a mid-reply message at a different moment
   (Codex after its next step, Claude after its current tools).
 - **Tests:** `test/dispatch-queue`, `input-delivery`, `peer-input`,
   `upgrade-input`; `test/browser/composer-card`.
 
 ## Stop a reply
-- **Sees:** a square stop button replaces send while the agent works. After
-  stopping: "You stopped after Xs" on the reply, and no card asking to
-  continue. With a message of yours waiting (queued, or handed to the CLI
-  mid-reply), Stop ends only the reply and that message goes out next; the
-  chat itself is not stopped. With nothing waiting it is a full stop.
-- **Proof of the waiting case (driven 2026-10-18, real Claude, `up --real`):**
-  ask for `python3 -c 'import time; time.sleep(45)'` in the foreground, send
-  "Reply with only the word LEMON." while it runs, click "stop the agent":
-  the log shows LEMON `turn.deliver`, the long turn `interrupted`, then LEMON
-  sent as its own turn and answered once. Codex reads a handed message
-  within seconds, so its handed case keeps the full stop (no
-  `dropsHandedOnInterrupt`) rather than risk sending it twice.
-- **Reach:** the stop button ("stop the agent"). While an approval waits there
-  is no stop button; **Decline** ends the turn instead.
-- **Prove (half driven):** the plain fake reply takes 0.8 s, too fast for two
+- **Rule:** with a message of yours waiting (queued, or handed to the CLI
+  mid-reply), Stop ends only the reply and that message goes next; with
+  nothing waiting it is a full stop. Codex reads a handed message within
+  seconds, so its handed case keeps the full stop (no
+  `dropsHandedOnInterrupt`) rather than risk sending it twice. While an
+  approval waits there is no stop button; Decline ends the turn.
+- **Prove the waiting case (driven 2026-10-18, real Claude):** ask for
+  `python3 -c 'import time; time.sleep(45)'` in the foreground, send "Reply
+  with only the word LEMON." while it runs, click "stop the agent". The log
+  shows LEMON `turn.deliver`, the long turn `interrupted`, then LEMON as its
+  own turn, answered once.
+- **Prove the button (half driven):** the fake reply is too fast for two
   commands, so click inside one `eval`:
   ```sh
   $V click "Ask anything"; $V type "stop me"
   $V eval "(async()=>{document.querySelector('button.send').click();for(let i=0;i<80;i++){const s=document.querySelector('button.stop');if(s){s.click();return 'clicked'}await new Promise(r=>setTimeout(r,25))}return 'none'})()"
   ```
-- **Proof:** "stopped" under the reply. Decline on "fake-ask" shows "Task
-  stopped" and "You stopped this task." (driven).
-- **Traps:** the fake agent ignores the stop signal and carries on to its
-  approval, so a stop on "fake-ask" is not proof. Prove Stop with Decline, or
-  with a real account in a chat you made.
+  Proof: "stopped" under the reply. Decline on fake-ask shows "You stopped
+  this task." (driven).
+- **Traps:** the fake agent ignores the stop signal, so a stop on fake-ask
+  proves nothing.
 - **Tests:** `test/browser/turn-pulse`, `chat-cycle`; `test/kick`,
   `restart-delivery`.
 
 ## Permission mode, model and thinking
-- **Saving:** model, thinking and speed chips show the selected value at
-  once with “saving…” until the machine answers. A failed save restores the
-  accepted value and shows the error. Permission chips keep the accepted
-  policy while saving. The model list stays available during refresh.
-- **Prove a slow save:** `test/browser/settings-latency.test.mjs` holds the
-  machine's reply, checks the new chip and saving indicator, pushes an
-  unrelated session update, then accepts or rejects the choice. It also
-  holds the next catalog refresh open while choosing another model.
-- **Sees:** chips under the box: model ("model: …") and permissions
-  (ask · edit · auto · yolo for Claude; ask · edit · yolo · read for Codex).
-  A riskier mode takes two taps and colours the box.
-- **Reach:** tap a chip. Keys: Shift+Tab next mode (every mode, bypass
-  included, then round again), Ctrl/⌘+Shift+M next
-  model (favourites first), Ctrl/⌘+Shift+Y next thinking level. Ctrl/⌘+/
+- **Reach:** the chips under the box; Shift+Tab next mode (bypass included),
+  Ctrl/⌘+Shift+M next model, Ctrl/⌘+Shift+Y next thinking level, Ctrl/⌘+/
   lists every key.
-- **Cache warning:** a running Claude (2.1.300 or newer) prices a model
-  switch itself in its PreModelSwitch hook (`prompt_cache_warm`,
-  `context_tokens`, `estimated_cache_write_usd`); Helm asks only when Claude
-  says the cache is warm and big, with Claude's price, and never when it is
-  cold. Terminal Claude chats get the same through Helm's hooks, and Helm
-  answers Claude's own "Switch model?" question so it never sits hidden
-  behind the chat. Codex, ACP agents and a Claude that is not running keep
-  Helm's estimate, priced at the size the CLI reports now. Changing
-  thinking level asks only when the CLI itself says it rewrites the cache:
-  Claude sends `per_turn_effort_active` at start-up and
-  `per_turn_effort_changed` if that stops (Opus 5.5 on 2.1.301 says true,
-  checked 2026-10-16). A CLI that says nothing gets no warning.
-- **Prove (Shift+Tab driven 2026-10-17):** in a fake chat at 1280 wide,
-  `$V key Shift+Tab` three times; the chip reads edit, read, then yolo
-  again (`$V eval` the `.slab` buttons' aria-labels).
-- **Prove the model warning:** add a profile to the private copy with
-  engine `claude`, the real `claude` command, and `ANTHROPIC_BASE_URL`
-  pointing at a small local stand-in API whose replies report a big
-  `cache_creation_input_tokens`; say hello, then pick another model: the
-  dialog reads "Claude says this conversation's prompt cache is still
-  warm" with Claude's price (driven 2026-10-17).
-- **Tests:** `test/browser/chat-shortcuts`, `global-keys`, `effort-default`,
-  `slash-model-context`; `test/chat-keys`, `modes`, `session-settings`,
-  `recache`, `driver-claude`, `native-claude-chat`.
+- **Rules:** a chip shows the new value at once with "saving…"; a failed
+  save restores the accepted value. A model switch warns about cache cost
+  only when the CLI says the cache is warm (Claude 2.1.300+ prices it in its
+  PreModelSwitch hook; others get Helm's estimate). Helm answers Claude's
+  own "Switch model?" question so it never hides behind the chat. A
+  thinking change warns only when the CLI says it rewrites the cache.
+- **Prove (Shift+Tab driven 2026-10-17):** fake chat at 1280 wide,
+  `$V key Shift+Tab` three times: the chip reads edit, read, then yolo
+  (`$V eval` the `.slab` buttons' aria-labels).
+- **Prove the warning (driven 2026-10-17):** a private profile with engine
+  `claude`, the real `claude` command and `ANTHROPIC_BASE_URL` at a local
+  stand-in API that reports a big `cache_creation_input_tokens`. Say hello,
+  pick another model: "Claude says this conversation's prompt cache is still
+  warm" with Claude's price.
+- **Tests:** `test/browser/settings-latency` (held save), `chat-shortcuts`,
+  `global-keys`, `effort-default`, `slash-model-context`; `test/chat-keys`,
+  `modes`, `session-settings`, `recache`, `driver-claude`,
+  `native-claude-chat`.
 
 ## @ chats and / commands
-- **Sees:** typing `@` lists up to three other chats to add as context;
-  `/` lists what Helm can run plus your own command files.
-- **Prove:** steps not yet driven. `$V type "@"`, then `text` should list chat
-  titles; `$V type "/"` should list commands.
-- **Traps:** the CLIs' own built-in slash commands are not listed.
+- **Not yet driven:** `$V type "@"` should list up to three chats; `/` lists
+  commands. The CLIs' own built-in slash commands are not listed.
 - **Tests:** `test/commands`, `commands-devin`, `slash-title`,
   `hidden-context`.
 
-## Reading a long chat
-- **Sees:** work between two agent messages folds into one line ("Read 1
-  file · Ran 2 commands"); "working 12s · 97 tok/s" while it runs (an
-  estimate); a copy button under each answer; up/down arrows that jump
-  between your own messages. Selecting text copies it: with the mouse on
-  letting go, on a phone once the selection stops moving, with "Copied"
-  shown low on the screen only after the browser accepts the copy. Touch
-  release retries a blocked write while the selection is still present.
-  Plain HTTP pages try the browser's selection-based copy fallback.
-- **Reach:** "Copy answer", "previous message of yours", "next message of
-  yours" buttons.
-- **Prove (driven 2026-10-17):** a private fake chat at 390×844, with
-  Chromium clipboard permission granted: blur the composer, select `.chat
-  .md p` with a Range, without sending pointer events. After 450 ms,
-  `navigator.clipboard.readText()` contains "working on it done.", the
-  selection remains, and "Copied" shows. At 1280×800, a real double-click
-  on "working" copies that word. Both screenshots checked; no page errors.
-  A fake reply with JavaScript and a numbered list also kept its layout,
-  colors and exact code-copy text at phone size.
-  Native iPhone handles/Safari permission rules still need a device check.
-- **Speed:** selecting a short passage only visits lists inside its range;
-  ordered-list numbering visits each sibling once. Repeated code blocks
-  reuse syntax colors, with a bounded cache. Regression checks show one
-  coloring pass for 101 identical calls, and no unrelated list scans when
-  selecting prose beside 3,000 older items. These are work counts, not a
-  claim about network or model response time.
+## Long chats: folds, copy, selection
+- **Prove selection copy (driven 2026-10-17):** fake chat at 390×844 with
+  clipboard permission granted; blur the composer, select `.chat .md p`
+  with a Range (no pointer events). After 450 ms
+  `navigator.clipboard.readText()` holds "working on it done.", the
+  selection stays, and "Copied" shows. At 1280×800 a real double-click on a
+  word copies it.
+- **Traps:** iPhone handles and Safari permissions still need a device.
 - **Tests:** `test/browser/activity-fold`, `chat-fold`,
   `history-pagination`, `transcript-performance`, `copy-selection`,
   `highlight-performance`, `markdown-loading`.

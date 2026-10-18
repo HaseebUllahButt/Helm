@@ -1,37 +1,34 @@
 # Running settings in the chat tray
 
-Startup values come from each driver's provider handshake, explicit native launch
-flags, and provider reports. Missing fields in a later partial handshake do not
-clear a previously reported setting. Account defaults stay separate from native
-terminal state. A provider refusal leaves the previous selection in place.
+Start-up values come from each driver's provider handshake, explicit native
+launch flags and provider reports. A later partial handshake never clears a
+setting it leaves out. Account defaults stay separate from a native
+terminal's state. A provider refusal keeps the previous choice. The tray
+shows reported settings even when Helm has no proven control for them.
 
-Claude terminal chats, including takeover, receive Helm's hooks and status-line
-wrapper. Hooks report the permission mode and model changes; the status line
-reports the current model and effort while preserving the account's own output.
-The terminal footer also tracks keyboard permission changes. The launch adds
-`--allow-dangerously-skip-permissions` to make bypass selectable; this does not
-select bypass. Only `--dangerously-skip-permissions` or a confirmed native mode
-change activates it. Helm waits for the footer before accepting a mode change.
-Claude's hook blocks and direct questions can still apply in bypass mode.
+## Claude terminals
 
-New shared Pi terminals, Pi takeovers, and managed Pi RPC sessions load
-`packages/connect/extensions/helm-settings.ts` for that process. The extension
-reports the running model and thinking level, including changes at the keyboard.
-It polls the live runtime rather than mistaking the account's saved settings for
-the current session. Native snapshots repeat after a daemon reconnect. Existing
-processes that predate this adapter keep running; takeover or the next launch
-loads the adapter without requiring a change to the account's extensions.
+Claude terminal chats, takeovers included, get Helm's hooks and status-line
+wrapper (keeping the account's own status output). The terminal footer also
+tracks permission changes made at the keyboard.
 
-Pi has no built-in permission modes. If the installed `bash-guard` extension
-advertises its command, Helm observes its status badge and exposes Guard on/off
-for that session. Changing it invokes `/bash-guard` and waits for its reported
-state; concurrent native writes remain serialized. The installed extension owns
-all enforcement. Guard off still retains that extension's catastrophic-command
-blocks and applies only to bash, not Pi's other tools. No guard command means no
-guard picker; the tray says approvals belong to extensions. This session toggle
-is not offered as an account default.
+- The launch adds `--allow-dangerously-skip-permissions` so bypass can be
+  chosen; this does **not** turn bypass on. Only
+  `--dangerously-skip-permissions` or a confirmed native mode change does.
+- Helm waits for the footer before accepting a mode change.
+- Claude's hook blocks and direct questions can still apply in bypass mode.
 
-The tray displays reported settings even when a CLI keeps its native picker or
-has no verified control for that value. Phone layouts retain the labels and
-scroll the controls row when needed. Model, effort and guard capability metadata
-are retained in the workspace header cache across refresh.
+## Pi
+
+Pi terminals, takeovers and managed RPC sessions load
+`packages/connect/extensions/helm-settings.ts` for that process only; the
+account's extensions are never changed. It polls the live runtime, because
+the account's saved settings are not the running session's. Pi processes
+started before the adapter run without it until takeover or the next launch.
+
+Pi has no permission modes. If the `bash-guard` extension offers its
+command, Helm reads its status badge and shows Guard on/off for that session,
+switching with `/bash-guard` and waiting for the reported state. The
+extension does all enforcement: Guard off still keeps its
+catastrophic-command blocks, and it covers only bash. No guard command means
+no guard picker. The toggle is never an account default.
