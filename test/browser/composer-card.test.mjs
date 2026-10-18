@@ -37,7 +37,7 @@ before(async () => {
     const cmd={requestId:'cmd',kind:'command',tool:'Bash',title:'Run the tests',detail:'npm exec --workspace @helm/web -- tsc --noEmit && node --test --test-concurrency=2 test/browser/composer-card.test.mjs',
       reason:'Not in your allowed commands',defaultTo:'deny',allowEdit:true,input:{command:'npm test'},
       options:[{id:'allow',role:'allow',label:'Allow'},{id:'always',role:'allow-always',label:'Always allow npm'},{id:'deny',role:'deny',label:'Deny'}]};
-    const toolAsk={requestId:'tool',kind:'tool',tool:'devin',title:'Run a command',detail:{command:'echo hi',cwd:'/work'},
+    const toolAsk={requestId:'tool',kind:'tool',tool:'devin',title:'Run a command',detail:JSON.stringify({command:'echo hi',cwd:'/work'},null,2),
       options:[{id:'allow',role:'allow',label:'Allow'},{id:'deny',role:'deny',label:'Deny'}]};
     const scenes={
       idle:{events:done(base())},

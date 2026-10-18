@@ -29,7 +29,12 @@ const plainLabel = (label: string, banner: boolean) => banner ? (label === 'Allo
  * nested value keeps its JSON. `{"command": "echo hi"}` reads "command: echo hi".
  */
 export function plainDetail(detail: unknown): string {
-  if (typeof detail === 'string') return detail;
+  if (typeof detail === 'string') {
+    // Every driver sends a tool's input already as JSON text (clipped when
+    // long, which no longer parses and is shown as it came).
+    if (!/^\s*\{/.test(detail)) return detail;
+    try { return plainDetail(JSON.parse(detail)); } catch { return detail; }
+  }
   if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return JSON.stringify(detail, null, 2) ?? '';
   return Object.entries(detail as Record<string, unknown>)
     .map(([name, value]) => `${name}: ${typeof value === 'string' ? value : JSON.stringify(value, null, 2)}`)
