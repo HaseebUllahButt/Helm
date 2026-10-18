@@ -109,6 +109,8 @@ Devin). Before committing, read `git status` and leave files you did not touch.
   code does not show. No feature lists, flag lists, step-by-step code tours,
   change logs, plans or reports. `git log` is the record.
 - When something changes, rewrite or delete the old text. Never append.
+- `npm run check` runs `scripts/check-docs.mjs`: word budgets, no stray .md files,
+  no dead links or code paths. Over budget means cut, never raise the budget.
 
 ## Pausing and handing over
 

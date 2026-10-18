@@ -11,8 +11,9 @@
   ],
   "scripts": {
     "test": "node --test --test-concurrency=2 test/*.test.mjs && bash test/network.sh",
-    "check": "npm exec --workspace @helm/web -- tsc --noEmit && npm --workspace @helm/web run build && npm run test:smart",
-    "check:full": "npm exec --workspace @helm/web -- tsc --noEmit && npm --workspace @helm/web run build && npm test && npm run test:browser",
+    "check": "node scripts/check-docs.mjs && npm exec --workspace @helm/web -- tsc --noEmit && npm --workspace @helm/web run build && npm run test:smart",
+    "check:full": "node scripts/check-docs.mjs && npm exec --workspace @helm/web -- tsc --noEmit && npm --workspace @helm/web run build && npm test && npm run test:browser",
+    "check:docs": "node scripts/check-docs.mjs",
     "test:smart": "node scripts/test-smart.mjs",
     "web": "npm --workspace @helm/web run dev",
     "test:browser": "node --test --test-concurrency=2 test/browser/*.test.mjs",
