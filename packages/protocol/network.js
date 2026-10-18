@@ -38,7 +38,7 @@ const canonicalDirectory = (directory) => {
 const productionDirectory = () => canonicalDirectory(join(homedir(), '.helm'));
 const isProductionDirectory = () => canonicalDirectory(HELM_DIR) === productionDirectory();
 
-const assertWritableDirectory = () => {
+export const assertWritableDirectory = () => {
   if (!isProductionDirectory()) return;
   if (process.env.NODE_TEST_CONTEXT) {
     throw new Error('Tests cannot write the production Helm registration. Set HELM_DIR to a temporary directory before importing Helm modules.');

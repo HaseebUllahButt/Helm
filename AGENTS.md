@@ -2,12 +2,8 @@
 
 Rules every agent follows here, whichever CLI or account it runs on. They
 come from the owner's own corrections; each one cost something once.
-
-## Talking to the owner
-
-Plain English. Short replies, simple words, short sentences. No jargon; if a
-term cannot be avoided, explain it in a few words. Say what the owner will
-see, not how the code does it.
+How to talk to the owner is not here: Helm gives every chat the owner's
+preferences (Settings, Your preferences). This file is about the project.
 
 ## Development and rollout
 

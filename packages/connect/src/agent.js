@@ -56,6 +56,9 @@ import * as gitq from './git.js';
 import { createGithubMonitor } from './github.js';
 import { createGithubRepos } from './github-repos.js';
 import { agentCatalog, markShown, helmBrief } from './delegation.js';
+import { loadOwner, mergeOwner, ownerHash, editOwner } from '../../protocol/owner.js';
+import { OwnerKeeper, ownerWords, askHidden } from './owner-keeper.js';
+import { EVENTS_DIR } from './events.js';
 import { SendEngine } from './send-engine.js';
 import { CopyReceiver } from './copy-transport.js';
 import { Schedules } from './schedules.js';
@@ -72,6 +75,10 @@ const RECONNECT_MAX = 5000;
 const FRESH_MS = 90_000;
 
 const RECONCILE_MS = 15_000;
+// The keeper looks once an hour whether its day is up (owner-keeper.js); the
+// first look waits until the machine has settled after a start.
+const KEEPER_CHECK_MS = 60 * 60_000;
+const KEEPER_FIRST_MS = 10 * 60_000;
 /** How often the brain's picture of the network is refreshed, while one exists. */
 const BRAIN_REFRESH_MS = 45_000;
 const HEARTBEAT_MS = 20_000;
@@ -355,6 +362,8 @@ export class Daemon {
   #offlineSince = null;
   #tunnels = new Map();
   #brainTimer = null;
+  #keeperFirst = null;
+  #keeperTimer = null;
   #brainOpening = null;
   #stopped = false;
   #reconcile = null;
@@ -451,6 +460,15 @@ export class Daemon {
       publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
     this.sessions.delegationBrief = () => helmBrief(loadNetwork() ?? this.net);
+    this.keeper = new OwnerKeeper({
+      self: () => this.id, name: () => this.name, network: () => loadNetwork() ?? this.net,
+      words: async (p) => ownerWords(await this.sessions.list(), { dir: EVENTS_DIR, since: Number(p.since) || 0, read: p.read }),
+      rpc: (env, method, params) => hubRpc(loadNetwork() ?? this.net, env, method, params, { timeout: 30_000 }),
+      agents: async () => { const profiles = await getProfiles(); return agentCatalog(profiles, await authStatuses(profiles)); },
+      ask: (p) => askHidden(this.sessions, p),
+      changed: (record) => this.broadcastFrame(T.OWNER, { record }),
+      log: (line) => console.log(`[helm] ${line}`),
+    });
     this.handoffs = new Handoffs({
       sessions: this.sessions,
       network: () => loadNetwork() ?? this.net,
@@ -561,6 +579,13 @@ export class Daemon {
       if (this.sessions?.brainSession()) this.refreshSnapshot().catch(() => {});
     }, BRAIN_REFRESH_MS);
     this.#brainTimer.unref?.();
+    // The daemon's own timer is the keeper's whole trigger: no schedule, and
+    // on every machine but the keeper's this is a roster read once an hour.
+    const keep = () => { if (!this.#stopped) this.keeper.maybeRun().catch((err) => console.error('[helm] keeper:', err?.message || err)); };
+    this.#keeperFirst = setTimeout(keep, KEEPER_FIRST_MS);
+    this.#keeperFirst.unref?.();
+    this.#keeperTimer = setInterval(keep, KEEPER_CHECK_MS);
+    this.#keeperTimer.unref?.();
 
     await this.#tick();
     // Listen for machines on the same network, and say we are here. Started
@@ -690,6 +715,8 @@ export class Daemon {
     await this.executions.stop();
     await this.browsers?.stop();
     clearInterval(this.#brainTimer);
+    clearTimeout(this.#keeperFirst);
+    clearInterval(this.#keeperTimer);
     clearInterval(this.#reconcile);
     clearInterval(this.#wake);
     this.#stopWatchCheckout?.();
@@ -810,6 +837,8 @@ export class Daemon {
       // A new tick, a new chance to push our roster to a hub that disagrees.
       for (const link of this.#links.values()) link.offered = false;
       this.broadcastFrame(T.ROSTER, { hash: rosterHash(net) });
+      for (const link of this.#links.values()) link.ownerOffered = false;
+      this.broadcastFrame(T.OWNER, { hash: ownerHash(loadOwner()) });
       // A direct WebRTC channel is authenticated once, when the hub makes the
       // introduction. Revocation has to reach it too, or a removed phone
       // keeps a working side door to this machine.
@@ -1062,6 +1091,7 @@ export class Daemon {
     // revocation made while it was offline reaches it.
     const net = loadNetwork();
     if (net) link.send(T.ROSTER, { roster: rosterOf(net) });
+    link.send(T.OWNER, { hash: ownerHash(loadOwner()) });
     if (!local) this.mesh?.up(link);
     // One way into each machine's hub: whichever of a heard address and the
     // roster's came up first, the other is dropped now rather than at the
@@ -1365,6 +1395,26 @@ export class Daemon {
         return;
       }
 
+      // The owner's preferences: the roster's exchange above, for one record
+      // any machine may write (protocol/owner.js).
+      case T.OWNER: {
+        const ours = loadOwner();
+        if (msg.hash && !msg.record) {
+          if (msg.hash !== ownerHash(ours)) link.send(T.OWNER, { record: ours });
+          return;
+        }
+        if (!msg.record) return;
+        if (mergeOwner(msg.record)) {
+          // New to us, so maybe to the other hubs we reach too.
+          for (const other of this.live) if (other !== link) other.send(T.OWNER, { record: msg.record });
+        } else if (!link.ownerOffered && ownerHash(msg.record) !== ownerHash(ours)) {
+          // Theirs is older. Once per tick, so two sides can never ping-pong.
+          link.ownerOffered = true;
+          link.send(T.OWNER, { record: ours });
+        }
+        return;
+      }
+
       case T.PEERS: {
         // Someone joined or left; take on whatever this hub knows that we do
         // not, then rewrite our SSH files to match.
@@ -1660,6 +1710,28 @@ export class Daemon {
        * write it. pc and nas are a record change; becoming the vm claims an
        * https address first, and failing that fails the whole change.
        */
+      // The owner's preferences: the same list on every machine, so any one
+      // answers; the keeper's run state lives on the keeper's machine.
+      case M.OWNER_GET:
+        return { record: loadOwner(), keeper: this.keeper.status() };
+      case M.OWNER_SET: {
+        const { record, changed } = editOwner({
+          lines: p.lines === undefined ? undefined : Array.isArray(p.lines) ? p.lines.map(String) : String(p.lines),
+          keeper: typeof p.keeper === 'boolean' ? p.keeper : undefined,
+        }, {
+          by: 'owner', where: this.name,
+          why: p.lines === undefined ? `Keeper turned ${p.keeper ? 'on' : 'off'}` : 'Edited in the app',
+        });
+        if (changed) this.broadcastFrame(T.OWNER, { record });
+        return { record, keeper: this.keeper.status() };
+      }
+      case M.OWNER_KEEP:
+        return { record: loadOwner(), keeper: this.keeper.runNow() };
+      case M.OWNER_WORDS:
+        return ownerWords(await this.sessions.list(), {
+          dir: EVENTS_DIR, since: Number(p.since) || 0, read: p.read && typeof p.read === 'object' ? p.read : {},
+        });
+
       case M.MACHINE_SET_KIND:
         return this.setMachineKind(String(p.kind ?? '').toLowerCase(), { address: p.address });
 
@@ -1912,7 +1984,9 @@ export class Daemon {
         await this.sessionRecovery;
         if (!(loadNetwork() ?? this.net).machines?.[caller]) throw new Error('Agent messages must come from a paired machine.');
         return this.agentMessages.receive(p.message, caller);
-      case M.SESSION_DELEGATE: return this.sessions.delegate(p);
+      // Only the keeper starts a hidden helper; one asked for from outside is
+      // always a card in its chat, where the owner can see it.
+      case M.SESSION_DELEGATE: return this.sessions.delegate({ ...p, hidden: false });
       case M.SESSION_DELEGATION_RESULT: {
         await this.sessionRecovery;
         const result = this.sessions.delegationResult(p.id, p);

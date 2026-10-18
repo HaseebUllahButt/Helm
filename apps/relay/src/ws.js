@@ -8,6 +8,7 @@ import { q, now, newId } from './db.js';
 import {
   loadNetwork, saveNetwork, roster, mergeRoster, rosterHash, watchNetwork,
 } from '@helm/protocol/network';
+import { loadOwner, mergeOwner, ownerHash } from '../../../packages/protocol/owner.js';
 import { fanOut, isNew } from './notify.js';
 import { desktop } from './desktop-notify.js';
 
@@ -454,6 +455,30 @@ export function createWsLayer() {
           // Nothing to learn from theirs, yet we still disagree - so we know
           // something they do not. Send it, once.
           send(sock, T.ROSTER, { roster: roster(net) });
+        }
+        return;
+      }
+
+      case T.OWNER: {
+        // The owner's preferences (owner.js): the roster's fingerprint
+        // exchange, for one owner-wide record that any machine may edit.
+        const ours = loadOwner();
+        if (msg.hash && !msg.record) {
+          if (msg.hash !== ownerHash(ours)) send(sock, T.OWNER, { record: ours });
+          return;
+        }
+        if (!msg.record) return;
+        let changed = false;
+        try { changed = mergeOwner(msg.record); } catch { /* a bad record never kills the connection */ }
+        // Pass a change on at once rather than at each machine's next tick:
+        // one this hub just learned, or one its own daemon just made (it
+        // wrote the shared file itself, so the merge found nothing new).
+        const fresh = changed ? msg.record : envId === loadNetwork()?.self && ownerHash(msg.record) === ownerHash(ours) ? ours : null;
+        if (fresh) {
+          for (const [id, other] of online) if (other !== sock && id !== envId) send(other, T.OWNER, { record: fresh });
+        } else if (ownerHash(msg.record) !== ownerHash(ours)) {
+          // Theirs lost: they hold an older list. Send ours, once.
+          send(sock, T.OWNER, { record: ours });
         }
         return;
       }

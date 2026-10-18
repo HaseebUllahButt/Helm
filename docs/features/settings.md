@@ -10,6 +10,19 @@
   icon and style until closed and reopened.
 - **Tests:** `test/browser/global-keys`, `ui`, `appearance`.
 
+## Your preferences and the keeper
+- **Reach:** Settings → Your preferences.
+- **Prove (driven 2026-10-18):** edit the box, Save; the line under it says
+  "Changed just now by you". A new chat's brief ends with `[Helm owner: …]`
+  (`grep "Helm owner" <copy>/helm/events/*.jsonl`). Keeper: write a rule in a
+  fake chat ("Never delete my files without asking, I keep telling you"),
+  then `up --real`, `rpc profile.list '{"refresh":true}'` and Run now: the
+  list gains a line and "What the keeper last changed" shows it. With only
+  fake accounts Run now says no account has a small model.
+- **Traps:** the copy reads the web build only at `up`; rebuild, then
+  `down`/`up`. The keeper runs on one machine (the vm, else the oldest).
+- **Tests:** `test/owner-preferences`, `owner-sync`.
+
 ## Usage & cost
 - **Prove (driven):** `$V key Control+Shift+4; $V text | head -20` shows "At
   API prices · last 7 days" and "WHERE IT WENT"; `$V rpc usage.report '{}'`

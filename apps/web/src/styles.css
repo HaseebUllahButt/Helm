@@ -2840,6 +2840,15 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .link-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .link-actions button { width: auto; margin: 0; }
 
+/* Your preferences (screens/Owner.tsx): one line each, so lines stay readable on a phone. */
+.owner-list { display: grid; gap: 8px; }
+.owner-lines { resize: vertical; line-height: 1.6; min-height: 120px; }
+.owner-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.owner-foot .note { flex: 1 1 12em; }
+.owner-learned { display: grid; gap: 4px; padding: 10px 12px; margin-top: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); font-size: var(--t-meta); }
+.owner-added { color: var(--emerald); }
+.owner-removed { color: var(--text-dim); text-decoration: line-through; }
+
 /* Sidebar chats, arranged as T3 Code's inbox does: title and what the chat is
    doing on the first line, where it runs and which agent on the second. What
    needs you is full strength; work in the background steps back. Helm's own
