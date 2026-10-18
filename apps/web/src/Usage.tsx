@@ -246,15 +246,14 @@ function ModelDetail({ client, targets, model, since, window, onClose }: {
       {pending && <p role="status" className="usage-limits-note">Reading model history…</p>}
       {answered > 0 && <>
         <Headline totals={t} window={window} tiles={false} />
-        {t.unpriced && <p className="usage-limits-note">Cost is incomplete: some usage has no published rate.</p>}
+        {t.unpriced && <p className="usage-limits-note">Some usage has no price, so the cost is low.</p>}
         <dl className="usage-token-detail">
           {([['Turns', t.turns], ['Fresh input', t.input], ['Output', t.output], ['Cache read', t.cacheRead], ['Cache write', t.cacheWrite], ['Reasoning', t.reasoning]] as const)
-            .map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count.toLocaleString()}</dd></div>)}
+            .map(([label, count]) => <div key={label}><dt title={label === 'Reasoning' ? 'Included in output where the provider reports it' : undefined}>{label}</dt><dd>{count.toLocaleString()}</dd></div>)}
         </dl>
-        <p className="usage-limits-note">Reasoning is included in output where the provider reports it.</p>
       </>}
       {!pending && answered === 0 && <p className="usage-limits-note">Model history unavailable. The machines may be offline or need an update.</p>}
-      <p className="usage-limits-note">{answered} of {targets.length} machines reporting{Object.values(reports).some(r => r.stale) ? ' · includes remembered usage' : ''}.</p>
+      <p className="usage-limits-note">{answered} of {targets.length} machines</p>
     </div>
   </Sheet>;
 }
@@ -403,17 +402,21 @@ function Breakdown({ groups, facet, onModel }: { groups: ChartGroup[]; facet: Fa
   );
 }
 
-/** How many machines the number covers, and the way to count it again. */
+/** How many machines the number covers, and the way to count it again.
+    One short line; the finer print (remembered usage, unpriced models)
+    sits in its tooltip, and unpriced costs already carry a "+". */
 function Provenance({ answered, total, stale, failed, unpriced, rescanning, onRescan }: {
   answered: number; total: number; stale: number; failed: string[]; unpriced: boolean;
   rescanning: boolean; onRescan: () => void;
 }) {
+  const detail = [
+    stale > 0 ? `${stale} from memory` : '',
+    unpriced ? 'some models have no published rate and count in tokens only' : '',
+  ].filter(Boolean).join(' · ');
   return (
-    <p className="usage-note">
-      {`${answered} of ${total} machines reporting`}
-      {stale > 0 ? `, ${stale} from memory` : ''}
-      {failed.length > 0 ? ` · no answer from ${failed.join(', ')}` : ''}
-      {unpriced ? ' · some models have no published rate and count in tokens only' : ''}
+    <p className="usage-note" title={detail || undefined}>
+      {`${answered} of ${total} machines`}
+      {failed.length > 0 ? ` · ${failed.join(', ')} not answering` : ''}
       {' · '}
       {/* The daemon aggregates what it already read; a rescan re-reads the
           transcripts, so it is the answer to "that cannot be right" rather

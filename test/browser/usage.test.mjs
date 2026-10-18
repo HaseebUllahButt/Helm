@@ -78,13 +78,13 @@ test('Usage shows reported allowance, expired and missing reports, and model-spe
   await accounts.getByText('Plan $200/month',{exact:true}).waitFor();
   assert.equal(await page.getByText('Awaiting report',{exact:true}).count(),1);
   assert.equal(await page.getByText('No limit report yet',{exact:true}).count(),1);
-  await page.getByText('VM · Limits unavailable',{exact:true}).waitFor();
+  await page.getByText('No limits from VM',{exact:true}).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({path:'/tmp/helm-usage-mobile.png',fullPage:true});
   await page.getByRole('button',{name:/^claude-opus-5,/}).click();
   const detail = page.getByRole('dialog');
   await detail.getByText('$1.20',{exact:true}).waitFor();
-  assert.equal(await detail.getByText('1 of 2 machines reporting.',{exact:true}).count(),1);
+  assert.equal(await detail.getByText('1 of 2 machines',{exact:true}).count(),1);
   assert.equal(await detail.locator('.usage-bar').count(), 0, 'the per-day chart is gone');
   assert.equal(await page.evaluate(() => window.requests.filter(r=>r.model==='claude-opus-5').length),2);
   assert.ok((await detail.locator('.modal-title').boundingBox()).height < 80, 'the model title must fit beside Close');

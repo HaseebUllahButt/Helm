@@ -72,6 +72,10 @@
      context ring, a finished tick. White here; the other themes use their
      accent. */
   --hi:        #e6e6e6;
+  /* "All good" for statuses: online, done, new. A bright white with a soft
+     halo, so it reads lit rather than grey. Light and navy keep green. */
+  --ok:        #f7f7f7;
+  --ok-glow:   0 0 6px rgb(255 255 255 / 45%);
   --line:      rgb(235 235 235 / 9%);
   --line-2:    rgb(235 235 235 / 15%);
   --input:     rgb(235 235 235 / 14%);
@@ -172,6 +176,8 @@
 /* Optional navy palette; the default dark theme stays graphite. */
 :root[data-theme="navy"] {
   --hi: var(--primary-q);
+  --ok: var(--emerald);
+  --ok-glow: none;
   --bg: #081b26;
   --card: #102c38;
   --sidebar: #102c38;
@@ -362,7 +368,7 @@ code, pre, kbd { font-family: var(--mono); }
   color: var(--mutedfg); white-space: nowrap;
 }
 .conn i { width: 7px; height: 7px; border-radius: 50%; background: var(--icon); }
-.conn.live i { background: var(--emerald); }
+.conn.live i { background: var(--ok); box-shadow: var(--ok-glow); }
 .conn.reconnecting i, .conn.connecting i { background: var(--sky); animation: pulse 2s steps(6) infinite; }
 .conn.offline { color: var(--red); }
 .conn.offline i { background: var(--red); }
@@ -566,7 +572,7 @@ code, pre, kbd { font-family: var(--mono); }
 .mark.shell    { background: color-mix(in srgb, var(--emerald) 12%, transparent);  color: var(--emerald); }
 
 .mdot { width: 7px; height: 7px; border-radius: 50%; flex: none; margin: 0 4px; }
-.mdot.on { background: var(--emerald); }
+.mdot.on { background: var(--ok); box-shadow: var(--ok-glow); }
 /* Offline is a hollow ring, so it differs from online by shape as well as
    colour. */
 .mdot.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--dot-off); }
@@ -587,7 +593,7 @@ code, pre, kbd { font-family: var(--mono); }
 .chip.blocked { color: var(--amber-text); }
 .chip.working { color: var(--sky); }
 .chip.working i { animation: pulse 2s steps(6) infinite; }
-.chip.done { color: var(--emerald); }
+.chip.done { color: var(--ok); }
 .chip.exited { color: var(--mutedfg); }
 
 @keyframes pulse { 0%, 40% { opacity: 1 } 50%, 90% { opacity: 0.5 } 100% { opacity: 1 } }
@@ -1881,11 +1887,11 @@ button.sheet-editlink:hover { color: var(--text); }
 }
 .transfer-done {
   display: flex; align-items: center; gap: 12px; padding: 14px; margin-bottom: 12px;
-  border-radius: var(--radius-xl); background: var(--card); border: 1px solid color-mix(in srgb, var(--emerald) 24%, transparent);
+  border-radius: var(--radius-xl); background: var(--card); border: 1px solid color-mix(in srgb, var(--ok) 24%, transparent);
 }
 .done-mark {
   flex: none; width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--emerald) 14%, transparent); color: var(--emerald); font-size: 18px; font-weight: 650;
+  background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); font-size: 18px; font-weight: 650;
 }
 .done-title { display: block; font-size: var(--t-title); font-weight: 600; color: var(--text); }
 .done-sub { display: block; margin-top: 2px; font-size: var(--t-meta); color: var(--mutedfg); }
@@ -1900,7 +1906,7 @@ button.sheet-editlink:hover { color: var(--text); }
   border-radius: var(--radius); background: var(--card); border: 1px solid var(--line);
 }
 .readiness-mark { flex: none; width: 20px; text-align: center; font-weight: 700; }
-.readiness-row.pass .readiness-mark { color: var(--emerald); }
+.readiness-row.pass .readiness-mark { color: var(--ok); }
 .readiness-row.warn .readiness-mark { color: var(--amber-text); }
 .readiness-row.fail .readiness-mark { color: var(--red); }
 .transfer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
@@ -1943,7 +1949,7 @@ button.sheet-editlink:hover { color: var(--text); }
 
 /* An outcome is a sentence, not a caption: it wraps instead of trailing off. */
 .row .rm.wrap { white-space: normal; overflow: visible; }
-.rm.up-done { color: var(--emerald); }
+.rm.up-done { color: var(--ok); }
 .rm.up-refused { color: var(--amber-text); }
 .rm.up-failed { color: var(--red); }
 /* The per-machine button sits under its list, not against it. */
@@ -1960,6 +1966,8 @@ button.sheet-editlink:hover { color: var(--text); }
 
 :root[data-theme="light"] {
   --hi: var(--primary-q);
+  --ok: var(--emerald);
+  --ok-glow: none;
   /* The same slate, by day: a cool paper page, white panels, a sidebar one
      step down. Every text step is at least 4.5:1 on every one of them. */
   --bg:        #f3f4f7;
@@ -2130,7 +2138,7 @@ button.sheet-editlink:hover { color: var(--text); }
   font: var(--t-micro) var(--mono); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .git-empty-icon { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; margin-bottom: 8px; border-radius: 50%; background: var(--accent); color: var(--icon); }
-.git-empty-icon.ok { color: var(--emerald); background: color-mix(in srgb, var(--emerald) 12%, transparent); }
+.git-empty-icon.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .git-empty.bad .git-empty-icon { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 .git-empty button.ghost { width: auto; margin-top: 14px; }
 .git-state { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 10px 12px; color: var(--mutedfg); font-size: var(--t-meta); }
@@ -2559,7 +2567,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .delegation-status.state-working i, .delegation-status.state-starting i { animation: pulse 2s steps(6) infinite; }
 .delegation-status.state-blocked { color: var(--amber-text); }
 .delegation-status.state-error { color: var(--red); }
-.delegation-status.state-done i { background: var(--emerald); }
+.delegation-status.state-done i { background: var(--ok); box-shadow: var(--ok-glow); }
 .delegation-detail { display: grid; gap: 10px; padding: 2px 10px 12px 34px; font-size: var(--t-body); }
 .delegation-detail .note, .delegation-detail .error { margin: 0; }
 .delegation-request { margin: 0; color: var(--mutedfg); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-meta); }
@@ -2656,10 +2664,10 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .cmd-out { cursor: text; max-height: 50vh; overflow: auto; }
 .notice.floating {
   display: flex; align-items: center; gap: 8px; margin: 0 14px 10px; padding: 9px 12px;
-  border: 1px solid color-mix(in srgb, var(--emerald) 35%, transparent); border-radius: var(--radius);
-  background: color-mix(in srgb, var(--emerald) 10%, var(--card)); color: var(--text); font-size: var(--t-meta);
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent); border-radius: var(--radius);
+  background: color-mix(in srgb, var(--ok) 10%, var(--card)); color: var(--text); font-size: var(--t-meta);
 }
-.notice.floating svg { color: var(--emerald); flex: none; }
+.notice.floating svg { color: var(--ok); flex: none; }
 .makedefault {
   align-self: flex-start; margin: 10px 4px 0; padding: 6px 2px; border: 0; background: none;
   color: var(--primary-q); font-size: var(--t-meta); font-weight: 550; cursor: pointer;
@@ -2869,8 +2877,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tstat.working { color: var(--sky); }
 .tstat.needs { color: var(--amber-text); font-weight: 650; }
 .tstat.failed { color: var(--red); }
-.tstat.unread { color: var(--hi); }
-:root:is([data-theme="light"], [data-theme="navy"]) .tstat.unread { color: var(--emerald); }
+.tstat.unread { color: var(--ok); }
 .tstat.quiet { color: var(--mutedfg); font-weight: 450; }
 .tspin { animation: tspin 1.6s linear infinite; }
 @keyframes tspin { to { transform: rotate(360deg); } }
@@ -2908,7 +2915,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .section.shelf .fold-toggle { gap: 6px; align-items: center; min-height: 26px; }
 .section.shelf .count { font-size: var(--t-micro); color: var(--mutedfg); }
 .section.shelf .note-inline { font-size: var(--t-micro); }
-.section.shelf .note-inline.fresh { color: var(--emerald); font-weight: 550; }
+.section.shelf .note-inline.fresh { color: var(--ok); font-weight: 550; text-shadow: var(--ok-glow); }
 .shelf-rule { flex: 1; min-width: 12px; height: 1px; margin-left: 4px; background: var(--line); }
 .section.fold.shelf.attention { color: var(--amber-text); }
 .section.shelf.attention::before { display: none; }
@@ -3000,7 +3007,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .pipeline a:focus-visible, .pipeline button:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 3px; }
 .pipeline-row p, .pipeline-deployment p { margin: 4px 0; color: var(--mutedfg); font-size: var(--t-meta); overflow-wrap: anywhere; }
 .pipeline-state { font-size: var(--t-micro); font-weight: 600; padding: 3px 8px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); color: var(--text-dim); flex: none; }
-.pipeline-state.success { color: var(--emerald); background: color-mix(in srgb, var(--emerald) 9%, transparent); }
+.pipeline-state.success { color: var(--ok); background: color-mix(in srgb, var(--ok) 9%, transparent); }
 .pipeline-state.failure { color: var(--red); background: color-mix(in srgb, var(--red) 9%, transparent); }
 .pipeline-state.pending { color: var(--amber-text); background: color-mix(in srgb, var(--amber) 9%, transparent); }
 .pipeline-notice { margin: 12px 0; border-left: 2px solid var(--amber); background: var(--muted); padding: 10px 12px; font-size: var(--t-meta); overflow-wrap: anywhere; }
@@ -3038,7 +3045,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
    read's, and a command that worked gets a tiny check. Never a background. */
 .cmd .aicon { color: var(--text-dim); }
 .cmd .aicon.bad { color: var(--red); }
-.ameta.ok { display: inline-flex; align-items: center; color: var(--emerald); opacity: 0.8; margin-left: 2px; }
+.ameta.ok { display: inline-flex; align-items: center; color: var(--ok); opacity: 0.8; margin-left: 2px; }
 .ameta.ok svg { display: block; }
 
 /* Motion: a new step eases in a few pixels, and a step that finishes settles
@@ -3082,7 +3089,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .todos-title { color: var(--text-dim); font-weight: 600; }
 .todos-count { color: var(--mutedfg); font-variant-numeric: tabular-nums; }
 .todos-bar { height: 3px; margin: 7px 0 6px; border-radius: 2px; background: var(--accent); overflow: hidden; }
-.todos-bar i { display: block; height: 100%; border-radius: 2px; background: var(--emerald); transition: width 0.4s var(--ease); }
+.todos-bar i { display: block; height: 100%; border-radius: 2px; background: var(--ok); transition: width 0.4s var(--ease); }
 .todos-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .todo { display: flex; align-items: flex-start; gap: 9px; padding: 4px 6px; margin: 0 -6px; border-radius: 6px; font-size: var(--t-body); line-height: 1.45; color: var(--text-80); }
 .todo-box {
@@ -3094,7 +3101,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .todo-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .todo.completed { color: var(--mutedfg); }
 .todo.completed .todo-text { text-decoration: line-through; text-decoration-color: var(--icon); opacity: .8; }
-.todo.completed .todo-box { border-color: var(--emerald); background: var(--emerald); color: var(--bg); }
+.todo.completed .todo-box { border-color: var(--ok); background: var(--ok); color: var(--bg); }
 .todo.in_progress { color: var(--text); background: var(--accent); }
 .todo.in_progress .todo-box { border-color: var(--text-dim); border-top-color: transparent; animation: todo-spin 1.4s linear infinite; }
 .todo.in_progress .todo-text {
@@ -3267,7 +3274,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .todo-strip.open .todo-strip-chev { transform: rotate(180deg); }
 .todo-segs { display: flex; gap: 3px; height: 3px; margin-top: 6px; }
 .todo-segs i { flex: 1 1 0; min-width: 3px; border-radius: 2px; background: var(--line-2); }
-.todo-segs i.completed { background: var(--emerald); }
+.todo-segs i.completed { background: var(--ok); }
 .todo-segs i.in_progress { background: var(--primary-q); }
 .todo-strip-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; max-height: min(34dvh, 280px); overflow-y: auto; }
 .todo-strip .todo { font-size: var(--t-meta); padding: 3px 6px; }

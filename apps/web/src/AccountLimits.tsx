@@ -147,7 +147,8 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
   }
   const all = [...rows, ...loose];
   const shown = expanded ? all : all.slice(0, 5);
-  const unsupported = targets.reduce((n, e) => n + (reports[e.id]?.unsupported ?? 0), 0);
+  const reading = targets.some(e => !reports[e.id] && !failed[e.id]);
+  const silent = targets.filter(e => !reports[e.id] && failed[e.id]).map(e => e.name);
   // What this period says about a week, so allowance and spend speak the
   // same unit. "All" has no length, so it shows only the raw figure.
   const perWeek = win === '7d' ? 1 : win === '1d' ? 7 : win === '30d' ? 7 / 30 : null;
@@ -215,9 +216,11 @@ export function AccountLimits({ targets, limits, spend = [], win }: {
       </div>;
     })}</div>}
     {all.length > 5 && <button className="linkish" onClick={() => setExpanded(!expanded)}>{expanded ? 'Show fewer accounts' : `Show all ${all.length} accounts`}</button>}
-    {targets.filter(e => !reports[e.id]).map(e => <p className="usage-limits-note" key={e.id}>{e.name} · {failed[e.id] ? 'Limits unavailable' : 'Reading limit reports…'}</p>)}
+    {/* One line for the machines that did not answer, not a line each.
+        Accounts whose CLI never reports limits are simply not listed. */}
+    {reading && <p className="usage-limits-note">Reading limits…</p>}
+    {silent.length > 0 && <p className="usage-limits-note">No limits from {silent.join(', ')}</p>}
     {!all.length && targets.every(e => reports[e.id]) && <p className="usage-limits-note">No Claude or Codex accounts configured.</p>}
-    {unsupported > 0 && <p className="usage-limits-note">{unsupported} other {unsupported === 1 ? 'account does' : 'accounts do'} not report limits.</p>}
   </section>;
 }
 
