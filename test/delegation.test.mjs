@@ -1047,6 +1047,14 @@ test('agents are told which machine they are on and how to reach the others', as
   assert.match(alone, /helm render/, 'visual replies work even with one machine');
 });
 
+test('the browser note rides along only where a browser can start', async () => {
+  const { helmBrief } = await import('../packages/connect/src/delegation.js');
+  const { browserReady, browserNote } = await import('../packages/connect/src/browser.js');
+  assert.equal(helmBrief({}).includes('[Helm browser:'), browserReady());
+  assert.doesNotMatch(browserNote({ bowser: false }), /bowser/i, 'no pointer to a tool this machine lacks');
+  assert.match(browserNote({ bowser: true }), /--engine bowser/);
+});
+
 test('a helper with no thread to sit under lists on its own, and its team nests under it', async (t) => {
   const { sessions, drivers } = setup(t);
   // `helm delegate` from a plain shell: no parent. Its own children have it as parent.
