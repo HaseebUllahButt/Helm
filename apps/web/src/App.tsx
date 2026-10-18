@@ -533,6 +533,13 @@ function Shell({ client, conn, onSignOut }: {
     const timer = setTimeout(() => setSnoozeUndo(null), 7000);
     return () => clearTimeout(timer);
   }, [snoozeUndo]);
+  /** The chat just archived from Home, for as long as taking it back is one tap. */
+  const [archiveUndo, setArchiveUndo] = useState<{ envId: string; s: Session } | null>(null);
+  useEffect(() => {
+    if (!archiveUndo) return;
+    const timer = setTimeout(() => setArchiveUndo(null), 7000);
+    return () => clearTimeout(timer);
+  }, [archiveUndo]);
   const [help, setHelp] = useState(false);
   /** Every machine's last-said session list, for the ones that are asleep. */
   const [snap, setSnap] = useState<{ machines: Record<string, { name: string; at: number; sessions: Session[] }> } | null>(null);
@@ -983,13 +990,15 @@ function Shell({ client, conn, onSignOut }: {
   // list is reloaded either way, so a row that would not go stays and says so.
   const threadActions = (e: Environment, s: Session) => {
     const act = async (method: string, params: object) => {
-      try { await client.rpc(e.id, method, params, 20_000); }
-      catch (err: any) { console.error(`${method} failed on ${e.name}: ${err.message}`); }
-      loadSessions(e.id);
+      try { await client.rpc(e.id, method, params, 20_000); return true; }
+      catch (err: any) { console.error(`${method} failed on ${e.name}: ${err.message}`); return false; }
+      finally { loadSessions(e.id); }
     };
     return {
       onRename: (title: string) => act('session.title', { id: s.id, title }),
-      onArchive: () => act('session.archive', { id: s.id, archived: !s.archived }),
+      // Archiving is a tap on a small ⋯ menu item and the row just goes:
+      // say what happened and leave the way back in reach.
+      onArchive: async () => { if (await act('session.archive', { id: s.id, archived: !s.archived }) && !s.archived) setArchiveUndo({ envId: e.id, s }); },
       onDelete: () => act('session.kill', { id: s.id }),
     };
   };
@@ -1996,6 +2005,15 @@ function Shell({ client, conn, onSignOut }: {
         <div className="undo" role="status">
           <span className="undo-text">Snoozed <b>{snoozeUndo.title}</b> {snoozeUndo.until === NEVER_SNOOZE ? 'indefinitely' : `until ${when(snoozeUndo.until)}`}</span>
           <button onClick={() => { setSnooze(snoozeUndo.key, null); setSnoozeUndo(null); }}>Undo</button>
+        </div>
+      )}
+      {archiveUndo && !snoozeUndo && (
+        <div className="undo" role="status">
+          <span className="undo-text">Archived <b>{archiveUndo.s.title}</b></span>
+          <button onClick={() => {
+            const { envId, s } = archiveUndo; setArchiveUndo(null);
+            client.rpc(envId, 'session.archive', { id: s.id, archived: false }, 20_000).catch((err: any) => console.error(`unarchive failed: ${err.message}`)).finally(() => loadSessions(envId));
+          }}>Undo</button>
         </div>
       )}
       {palette && <Palette items={paletteItems()} onClose={() => setPalette(false)} engineOf={engineOf} />}
