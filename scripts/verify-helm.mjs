@@ -2,7 +2,7 @@
 // See Helm working for real, without touching the owner's Helm.
 //
 //   node scripts/verify-helm.mjs up [--real]   private Helm + free fake agents (--real: your real logins too)
-//   node scripts/verify-helm.mjs open [#hash] [--desktop]   hidden browser (390×844 phone), signed in
+//   node scripts/verify-helm.mjs open [#hash] [--desktop|--phone]   hidden browser (390×844 phone), signed in
 //   node scripts/verify-helm.mjs click <text> | type <text> | key <key> | wait <text> [ms]
 //   node scripts/verify-helm.mjs text | shot [file.png] [--full] | errors [--clear] | logs [n] | size <w> <h>
 //   node scripts/verify-helm.mjs eval <js> | rpc <method> [json] | upload <file>...
@@ -155,8 +155,18 @@ async function hold() {
 
 async function open(hash = '') {
   const s = state() ?? die('not up; run: node scripts/verify-helm.mjs up');
+  const wantDesktop = has('desktop'), wantPhone = has('phone');
+  // Touch, scale and the phone frame are fixed when the browser starts, so
+  // `size` alone cannot turn a phone into a laptop (hover rules never apply).
+  // Asking for the other kind starts a fresh browser of that kind.
+  if (s.browser && alive(s.browser.pid) && ((wantDesktop && !s.browser.desktop) || (wantPhone && s.browser.desktop))) {
+    try { process.kill(s.browser.pid, 'SIGTERM'); } catch { /* already gone */ }
+    for (let i = 0; i < 50 && alive(s.browser.pid); i++) await sleep(100);
+    s.browser = null;
+    save(s);
+  }
   if (!s.browser || !alive(s.browser.pid)) {
-    s.browser = { cdp: await freePort(), desktop: has('desktop') };
+    s.browser = { cdp: await freePort(), desktop: wantDesktop };
     save(s);
     const log = openSync(join(s.root, 'browser.log'), 'a');
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '_hold', '--name', name],

@@ -28,7 +28,8 @@ $V down                     # stops only what this copy started, deletes it
 
 Also: `text`, `key <key>`, `upload <file>...`, `eval <js>`, `size <w> <h>`,
 `open '#open=<machine>/<chat>'` or `open '#devices'`, `open --desktop`
-(1280x800), `logs [n]`, `status`, and `rpc <method> [json]` to set up state
+(1280x800, mouse and hover; `open --phone` goes back - each starts a fresh
+browser of that kind, `size` alone keeps the phone's touch rules), `logs [n]`, `status`, and `rpc <method> [json]` to set up state
 without clicks (methods are in `packages/protocol/index.js`). Each chat gets
 its own copy, named after its Helm session; `--name <name>` picks another.
 
