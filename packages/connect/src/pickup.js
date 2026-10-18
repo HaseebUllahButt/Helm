@@ -129,7 +129,7 @@ const lines = (s, n) => {
 
 /**
  * Git's part: commits on this checkout since the oldest chat began, and per
- * folder (this one and each chat's other checkout) what is uncommitted and
+ * folder (this one and each listed chat's checkout) what is uncommitted and
  * what that checkout's branch has that this one does not - work a chat left
  * on a worktree branch and never merged.
  */
@@ -209,6 +209,8 @@ export async function pickup({ id = null, cwd = process.cwd(), self, selfName = 
     return { machine, session: { ...session, ...(tail.session ?? {}) }, summary };
   }));
   const starts = chats.map((c) => c.session.createdAt ?? c.summary.startedAt).filter(Boolean);
-  const state = gitState(cwd, chats.map((c) => c.session), { git, since: starts.length ? Math.min(...starts) : null });
+  // Running chats' checkouts too: their unmerged and uncommitted work is
+  // exactly what the next agent must not trip over.
+  const state = gitState(cwd, [...chats.map((c) => c.session), ...running], { git, since: starts.length ? Math.min(...starts) : null });
   return renderPickup({ chats, running, git: state, now });
 }
