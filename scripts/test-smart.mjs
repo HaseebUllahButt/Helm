@@ -32,7 +32,7 @@ const rel = (f) => path.relative(root, f).split(path.sep).join('/');
 // Shared setup: a change here can break any test, so run them all.
 const EVERYTHING = [/^package(-lock)?\.json$/, /^(packages|apps)\/[^/]+\/package\.json$/, /^test\/helpers(\.mjs|\/)/, /^test\/(hub|fake-agent|fake-cli)\.mjs$/, /^tsconfig/];
 // Never affects a test result.
-const IGNORED = [/^scripts\/test-smart\.mjs$/, /\.md$/, /^docs\//, /^\.claude\//, /^HANDOFF/, /\.(png|jpe?g|svg|gif)$/];
+const IGNORED = [/^scripts\/test-smart\.mjs$/, /\.md$/, /^docs\//, /^\.claude\//, /\.(png|jpe?g|svg|gif)$/];
 
 function changedFiles() {
   if (named.length) return named.map((f) => rel(path.resolve(f)));

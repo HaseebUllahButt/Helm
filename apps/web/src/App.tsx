@@ -225,7 +225,7 @@ function Shell({ client, conn, onSignOut }: {
   const [toast, setToast] = useState<Toast | null>(null);
   const [palette, setPalette] = useState(false);
   /** The keyboard new-chat box; a folder skips straight to the agent picker. */
-  const [newChat, setNewChat] = useState<{ envId?: string; folder?: string; quick?: boolean } | null>(null);
+  const [newChat, setNewChat] = useState<{ envId?: string; folder?: string; quick?: boolean; draft?: string } | null>(null);
   const [lastFolder, setLastFolder] = useState<{ envId: string; folder: string } | null>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(`helm.last-folder:${scope}`) || 'null');
@@ -711,15 +711,20 @@ function Shell({ client, conn, onSignOut }: {
     return items;
   };
 
-  // The sidebar's ⋯: the same three things the machine screen offers. The
-  // list is reloaded either way, so a row that would not go stays and says so.
+  // The sidebar's ⋯: the machine screen's three, plus carrying on. The list
+  // is reloaded either way, so a row that would not go stays and says so.
   const threadActions = (e: Environment, s: Session) => {
     const act = async (method: string, params: object) => {
       try { await client.rpc(e.id, method, params, 20_000); }
       catch (err: any) { console.error(`${method} failed on ${e.name}: ${err.message}`); }
       loadSessions(e.id);
     };
+    // A finished chat carries on in a fresh one: no handoff file, the new
+    // agent reads where this one stopped with `helm pickup` (pickup.js).
+    const done = !s.adopted && !s.quick && !!s.cwd && !s.id.startsWith('found:') && !['working', 'blocked'].includes(s.status);
     return {
+      onContinue: done ? () => setNewChat({ envId: e.id, folder: s.cwd,
+        draft: `Continue the work of the chat "${s.title}". Run \`helm pickup ${s.id}\` first.` }) : undefined,
       onRename: (title: string) => act('session.title', { id: s.id, title }),
       onArchive: () => act('session.archive', { id: s.id, archived: !s.archived }),
       onDelete: () => act('session.kill', { id: s.id }),
@@ -1701,7 +1706,7 @@ function Shell({ client, conn, onSignOut }: {
           client={client} envs={envs} envId={newChat.envId} initialFolder={newChat.folder} quick={newChat.quick} near={selected} engineOf={engineOf}
           onFolder={rememberChatFolder}
           onClose={() => setNewChat(null)}
-          onStarting={(info, run) => { const chat = beginChat(client, info, run); navigate([{ kind: 'env' }, { kind: 'starting', startId: chat.id }], info.envId); }}
+          onStarting={(info, run) => { const chat = beginChat(client, info, run, newChat.draft); navigate([{ kind: 'env' }, { kind: 'starting', startId: chat.id }], info.envId); }}
         />
       )}
       {help && <ShortcutsHelp onClose={() => setHelp(false)} />}
