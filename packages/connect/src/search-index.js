@@ -152,32 +152,39 @@ export class SearchIndex {
 
   /**
    * Bring the index up to date with the logs of these chats. The first call
-   * after install reads every log once; later calls read only logs that grew.
-   * Chats no longer listed are dropped.
+   * after install reads every log once (about a second for hundreds of
+   * chats); later calls read only logs that grew. Chats no longer listed are
+   * dropped. Between logs it lets the daemon breathe, so a chat streaming a
+   * reply does not stall behind the read; live events noted meanwhile keep
+   * their place by `seq`.
    */
-  update(sessions) {
+  async update(sessions) {
     const keep = new Set();
     let read = 0;
     for (const s of sessions) {
       if (!searchable(s)) continue;
       keep.add(s.id);
-      if (this.#readLog(s.id)) read++;
+      if (!this.#readLog(s.id)) continue;
+      read++;
+      await new Promise((resolve) => setImmediate(resolve));
+      const chat = this.#chats.get(s.id);
+      if (chat) chat.entries.sort((a, b) => a.seq - b.seq);
     }
     for (const id of this.#chats.keys()) if (!keep.has(id)) { this.#chats.delete(id); this.#dirty = true; }
     if (this.#dirty) this.#scheduleSave();
     return read;
   }
 
-  /** The first update reads every log, which can take a second or two: done once, shared by all callers. */
+  /** The first update reads every log: done once, shared by every search that arrives meanwhile. */
   ready(sessions) {
     if (!this.#built) {
       const started = Date.now();
-      this.#built = Promise.resolve().then(() => {
-        const read = this.update(sessions);
+      this.#built = this.update(sessions).then((read) => {
         if (read) this.log(`search index: read ${read} chat logs in ${Date.now() - started} ms`);
       });
-    } else this.update(sessions);
-    return this.#built;
+      return this.#built;
+    }
+    return this.#built.then(() => this.update(sessions));
   }
 
   /**

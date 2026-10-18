@@ -34,12 +34,12 @@ function writeLog(dir, id, { you = 'Please make the lemon pie recipe shorter', r
   return s;
 }
 
-test('builds from the logs: the owner\'s words once, the agent\'s reply joined from its pieces', () => {
+test('builds from the logs: the owner\'s words once, the agent\'s reply joined from its pieces', async () => {
   const { dir, file } = freshDir();
   writeLog(dir, 'aaa111');
   const index = new SearchIndex({ dir, file });
   const sessions = [chat('aaa111', 'Lemon pie')];
-  index.update(sessions);
+  await index.update(sessions);
 
   const you = index.search('lemon pie', sessions);
   assert.equal(you.length, 1);
@@ -64,12 +64,12 @@ test('builds from the logs: the owner\'s words once, the agent\'s reply joined f
   assert.equal(titleOnly[0].snippet, '');
 });
 
-test('every word must appear in one thing said; nothing typed finds nothing', () => {
+test('every word must appear in one thing said; nothing typed finds nothing', async () => {
   const { dir, file } = freshDir();
   writeLog(dir, 'aaa111');
   const index = new SearchIndex({ dir, file });
   const sessions = [chat('aaa111', 'Lemon pie')];
-  index.update(sessions);
+  await index.update(sessions);
   assert.equal(index.search('lemon four', sessions).length, 0, 'words from two different messages do not match');
   assert.equal(index.search('LEMON   Recipe', sessions).length, 1, 'case and spacing do not matter');
   assert.deepEqual(index.search('', sessions), []);
@@ -77,12 +77,12 @@ test('every word must appear in one thing said; nothing typed finds nothing', ()
   assert.deepEqual(queryWords(' Two  words '), ['two', 'words']);
 });
 
-test('live events keep the index current without reading the log again; a rewind forgets what followed', () => {
+test('live events keep the index current without reading the log again; a rewind forgets what followed', async () => {
   const { dir, file } = freshDir();
   const seq = writeLog(dir, 'aaa111');
   const index = new SearchIndex({ dir, file });
   const sessions = [chat('aaa111', 'Lemon pie')];
-  index.update(sessions);
+  await index.update(sessions);
   assert.equal(index.search('mango', sessions).length, 0);
 
   index.note('aaa111', { seq, at: 5, type: 'turn.start', turnId: 't2', text: 'Now add a mango version' });
@@ -95,13 +95,29 @@ test('live events keep the index current without reading the log again; a rewind
   assert.equal(index.search('version added', sessions)[0].who, 'agent');
 
   // The log on disk has not changed: nothing to read, and the live entries stay.
-  assert.equal(index.update(sessions), 0);
+  assert.equal(await index.update(sessions), 0);
   assert.equal(index.search('mango', sessions).length, 1);
 
   index.note('aaa111', { seq: seq + 5, at: 8, type: 'history.reset' });
   assert.equal(index.search('mango', sessions).length, 1, 'a reset keeps what came before its seq');
   index.note('aaa111', { seq: seq - 1, at: 8, type: 'history.reset' });
   assert.equal(index.search('mango', sessions).length, 0, 'what came after the reset point is gone');
+  assert.equal(index.search('lemon', sessions).length, 1);
+});
+
+test('a message said while the logs are being read keeps its place, and the first build is shared', async () => {
+  const { dir, file } = freshDir();
+  writeLog(dir, 'aaa111');
+  writeLog(dir, 'ccc333', { you: 'Tell me about the ocean tide', reply: ['Twice a day.'] });
+  const index = new SearchIndex({ dir, file });
+  const sessions = [chat('aaa111', 'Lemon pie'), chat('ccc333', 'Tides')];
+  const first = index.ready(sessions);
+  const second = index.ready(sessions);
+  index.note('ccc333', { seq: 50, at: 1_700_000_000_999, type: 'turn.start', text: 'And the moon' });
+  await Promise.all([first, second]);
+  const hits = index.search('the', sessions);
+  assert.equal(hits[0].id, 'ccc333');
+  assert.equal(hits[0].snippet, 'And the moon', 'the newest thing said comes first even though it was noted mid-read');
   assert.equal(index.search('lemon', sessions).length, 1);
 });
 
@@ -118,13 +134,13 @@ test('messages Helm wrote, wake-ups and local copies are not the owner\'s words'
   assert.equal(index.search('zebra', sessions).length, 1);
 });
 
-test('saved to disk and read back; a log that grew is read from where it stopped; gone chats are dropped', () => {
+test('saved to disk and read back; a log that grew is read from where it stopped; gone chats are dropped', async () => {
   const { dir, file } = freshDir();
   const seq = writeLog(dir, 'aaa111');
   writeLog(dir, 'ccc333', { you: 'Tell me about the ocean tide', reply: ['Twice a day.'] });
   let index = new SearchIndex({ dir, file });
   const sessions = [chat('aaa111', 'Lemon pie'), chat('ccc333', 'Tides')];
-  assert.equal(index.update(sessions), 2);
+  assert.equal(await index.update(sessions), 2);
   assert.equal(index.save(), true);
   assert.ok(existsSync(file));
   assert.equal(index.save(), false, 'nothing new: nothing written');
@@ -132,16 +148,16 @@ test('saved to disk and read back; a log that grew is read from where it stopped
   // A restart: the file is the index, no log is read until one grows.
   index = new SearchIndex({ dir, file });
   assert.equal(index.size, 2);
-  assert.equal(index.update(sessions), 0);
+  assert.equal(await index.update(sessions), 0);
   assert.equal(index.search('ocean', sessions)[0].id, 'ccc333');
 
   appendFileSync(join(dir, 'aaa111.jsonl'), line({ seq, at: 99, type: 'turn.start', turnId: 't3', text: 'Also a kiwi tart' }));
-  assert.equal(index.update(sessions), 1);
+  assert.equal(await index.update(sessions), 1);
   assert.equal(index.search('kiwi', sessions)[0].who, 'you');
   assert.equal(index.search('lemon', sessions).length, 1, 'earlier entries were not read twice');
 
   // The owner deleted the tides chat: its words go with it.
-  index.update([chat('aaa111', 'Lemon pie')]);
+  await index.update([chat('aaa111', 'Lemon pie')]);
   assert.equal(index.search('ocean', [chat('aaa111', 'Lemon pie'), chat('ccc333', 'Tides')]).length, 0);
   index.save();
   const saved = JSON.parse(readFileSync(file, 'utf8'));
