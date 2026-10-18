@@ -1461,6 +1461,10 @@ pre.snippet {
 /* Setup rows that have opened into a form or a note keep the group's left
    edge, so the section does not jump sideways when one expands. */
 .setup-open { margin: 6px 2px 10px; }
+/* A note that sits inside a card of rows (notifications blocked, an error)
+   takes the rows' side padding, so it reads as one more row, not a stray
+   paragraph pressed against the row above. */
+.rows > .note.setup-open:not(.install-note) { margin: 0; padding: 10px 12px 12px; }
 /* Quiet until you reach for it. Unpairing is rare and reversible only by
    fetching a fresh link, but painting it red at rest made the loudest thing
    on the screen the one action you almost never want. */
@@ -3242,6 +3246,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   .turn.user { padding-bottom: 22px; }
   .turn.user .bubble { position: relative; }
   .turn.user:not(.queued) .bubble-meta { position: absolute; top: 100%; right: 4px; margin: 3px 0 0; white-space: nowrap; }
+}
+/* A touch screen has no hover to reveal the time, so it stays in the bubble:
+   at the end of the last line when it fits, the way messaging apps do, so a
+   one-word message is one line, and a long one grows no taller. */
+@media (hover: none) {
+  .turn.user .bubble { display: flow-root; }
+  .turn.user:not(.queued) .bubble-meta { float: right; margin: 0 0 0 12px; line-height: calc(1.6 * var(--t-read)); }
 }
 
 /* "Latest": a small pill whenever you have scrolled away from the end. */
