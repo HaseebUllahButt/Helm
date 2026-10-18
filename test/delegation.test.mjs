@@ -308,6 +308,8 @@ test('stopping a parent cascades and late child results cannot restart it', asyn
   await sessions.interrupt(parent.id);
   assert.equal(sessions.get(child.id).delegation.status, 'interrupted');
   assert.equal(sessions.get(grandchild.id).delegation.status, 'interrupted');
+  assert.equal(parent.recovery.message, 'Stopped by you. Its helper was stopped too.');
+  assert.equal(sessions.get(grandchild.id).recovery.message, 'Stopped by you.', 'no helpers of its own: none are mentioned');
   assert.deepEqual(parent.team, { working: 0, blocked: 0, failed: 0 });
   await sessions.input(parent.id, 'A new user request');
   drivers.get(child.id).finish();
