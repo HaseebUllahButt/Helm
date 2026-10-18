@@ -11,7 +11,9 @@
   ],
   "scripts": {
     "test": "node --test --test-concurrency=2 test/*.test.mjs && bash test/network.sh",
-    "check": "npm exec --workspace @helm/web -- tsc --noEmit && npm --workspace @helm/web run build && npm test",
+    "check": "npm exec --workspace @helm/web -- tsc --noEmit && npm --workspace @helm/web run build && npm run test:smart",
+    "check:full": "npm exec --workspace @helm/web -- tsc --noEmit && npm --workspace @helm/web run build && npm test && npm run test:browser",
+    "test:smart": "node scripts/test-smart.mjs",
     "web": "npm --workspace @helm/web run dev",
     "test:browser": "node --test --test-concurrency=2 test/browser/*.test.mjs",
     "test:automation": "node --import ./test/automation-env.mjs --test --test-timeout=15000 --test-concurrency=2 test/github.test.mjs test/schedules.test.mjs test/usage-recovery.test.mjs test/session-driver.test.mjs test/git.test.mjs"

@@ -50,6 +50,21 @@ hidden phone-size browser. `docs/features/` says where each feature lives and
 what counts as proof. Run `npm run check` before and after a change. Report
 what you drove, what you saw, and what you could not check.
 
+## Testing without flooding the machine
+
+The full suite is about 250 test files and pegs every core for minutes. Run
+only what your change can reach:
+
+- While you work: `node scripts/test-smart.mjs --near` (tests that use your
+  changed files directly). Add file names to test other files.
+- Before you commit: `npm run check`. It type-checks, builds, then runs
+  `test:smart`: every test that can reach your change, browser ones included.
+- `--list` shows what would run and why, without running it.
+- `npm run check:full` runs everything. Use it only when the owner asks, or
+  for a change to shared setup (the script then runs everything by itself).
+- Never start the normal and browser suites side by side, and never run the
+  same suite twice to "be sure". Rerun only failed files.
+
 ## Sharing the checkout
 
 Other agents often edit this checkout at the same time (another Claude, Codex,

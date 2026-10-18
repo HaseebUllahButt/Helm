@@ -918,8 +918,9 @@ npm install
 npm run check
 ```
 
-`npm run check` type-checks and builds the web app, then runs the CLI and
-network regression tests.
+`npm run check` type-checks and builds the web app, then runs only the
+tests that can reach your changes (`scripts/test-smart.mjs`; add `--list`
+to see which and why). `npm run check:full` runs every test.
 
 Browser regressions cover Markdown safety, dialog focus, the command palette,
 CLI subagents, thread details, queue controls, references, and schedules:
