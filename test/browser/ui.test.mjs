@@ -21,6 +21,8 @@ before(async () => {
         id: 'thread-' + i, group: 'thread', title: 'Thread ' + i, sub: 'laptop · ~/helm',
         run: () => { window.chosen = i; },
       }))} onClose={() => root.render(null)} engineOf={() => ({cls: 'codex'})} />);
+      window.showActions = () => root.render(<Palette items={[{ id: 'a:settings', group: 'action', title: 'Settings', run: () => {} }]}
+        onClose={() => root.render(null)} engineOf={() => ({cls: 'codex'})} />);
       window.showConfirm = () => root.render(<Confirm title="Delete thread" onCancel={() => root.render(null)} onConfirm={() => { window.confirmed = true; }} />);
       window.showMarkdown = (text) => root.render(<Markdown text={text} />);
     `, resolveDir: process.cwd(), loader: 'tsx' },
@@ -144,6 +146,16 @@ test('shrinking live results retain a valid Enter target', async () => {
   await input.press('Enter');
   await page.getByRole('dialog').waitFor({ state: 'detached' });
   assert.equal(await page.evaluate(() => window.chosen), 0);
+});
+
+test('an action row in the palette shows its icon, not an empty box', async () => {
+  await page.evaluate(() => window.showActions());
+  const glyph = page.getByRole('option', { name: 'Settings' }).locator('.pglyph svg');
+  await glyph.waitFor();
+  const box = await glyph.boundingBox();
+  assert.ok(box.width >= 12 && box.height >= 12, `icon is ${box.width}x${box.height}`);
+  await page.keyboard.press('Escape');
+  await page.getByRole('dialog').waitFor({ state: 'detached' });
 });
 
 test('confirmation traps Tab and Escape returns to launcher', async () => {

@@ -111,7 +111,7 @@ export function Palette({ items, onClose, engineOf, heading = 'Go anywhere', pla
                   role="option" id={`${listId}-${i}`} tabIndex={-1} aria-selected={i === selected} className={`palette-row${i === selected ? ' on' : ''}`}
                   onMouseMove={() => setAt(i)} onClick={() => go(item)}
                 >
-                  {item.engine ? <EngineMark engine={engineOf(item.engine).cls} /> : <span className={`pglyph ${item.group}`}><Icon name={item.group === 'machine' ? 'machine' : 'forward'} size={15} /></span>}
+                  {item.engine ? <EngineMark engine={engineOf(item.engine).cls} /> : <span className="pglyph"><Icon name={item.group === 'machine' ? 'machine' : 'forward'} size={15} /></span>}
                   <span className="grow">
                     <span className="palette-title">{item.title}</span>
                     {item.sub && <span className="palette-sub">{item.sub}</span>}
