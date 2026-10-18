@@ -20,6 +20,8 @@ import { useDraftImages } from './useDraftImages';
 import { loadDraft, saveDraft } from '../draftStore';
 import { userMessage } from './userMessage';
 import { Subagents } from './Subagents';
+import { useGitStatus } from './Changes';
+import { ThreadDetails } from './ThreadDetails';
 import { ExternalSessionNotice } from './ExternalSessionNotice';
 import { useSessionLog } from './useSessionLog';
 import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
@@ -64,6 +66,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat && !nativeConversation(session.engine));
   const [agentsOpen, setAgentsOpen] = useState(false);
+  const [gitOpen, setGitOpen] = useState(false);
   const browser = useBrowserDock(client, env, session, !isShell);
   const [status, setStatus] = useState(session.status);
   const [compacting, setCompacting] = useState(session.compacting || false);
@@ -75,6 +78,10 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const [menu, setMenu] = useState(false);
   useDismiss(menu, useCallback(() => setMenu(false), []));
   const eng = engineOf(session.engine);
+  // Git is read again whenever the chat starts or stops working, which is
+  // when something has usually just changed. A quick chat has no folder.
+  const git = useGitStatus(client, env, session.quick ? '' : session.cwd, status === 'working' ? 'working' : `rest:${statusAt ?? 0}`);
+  const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
 
   const [nativeOptions, setNativeOptions] = useState<ModelList | null>(null);
   const [nativeCommands, setNativeCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
@@ -411,6 +418,10 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           </span>
         </div>
         <StatusChip status={compacting && status === 'working' ? 'compacting' : status} at={statusAt} />
+        {/* Git is in every chat's header, as in a Helm chat, terminal or not.
+            Hiding it here made it look gone. The sheet says when there is no Git. */}
+        <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
+          onClick={() => setGitOpen(true)}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
@@ -452,6 +463,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
 
       {agentsOpen && <Subagents nativeOnly client={client} env={env} parent={session} onClose={() => setAgentsOpen(false)}
         onOpenNative={onOpenNative ? (agent) => { setAgentsOpen(false); onOpenNative(agent); } : undefined} />}
+      {gitOpen && <ThreadDetails client={client} env={env} session={session} tab="changes" git={git.status} gitCwd={session.quick ? '' : session.cwd} reloadGit={git.reload} onClose={() => setGitOpen(false)} />}
       {!isShell && browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
 
       {/* Every open terminal on this machine, one tap apart. */}
