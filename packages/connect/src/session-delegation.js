@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto';
 import { getProfiles } from './profiles.js';
 import { nativeWorking } from './native-subagents.js';
 import { ENGINES } from './engines.js';
-import { activeTurnFromEvents } from './events.js';
 import { startPrefs, subagentPrefs } from './settings.js';
 import { delegationMode, delegationOutput, isWakeTurn, turnOf, turnText } from './delegation.js';
 import { addWorktree } from './git.js';
@@ -211,7 +210,9 @@ export class SessionDelegation {
     const all = this.#sessions.events.tail(id, 2000);
     const cards = new Set(all.filter((e) => e.type === 'turn.start' && e.local === true).map((e) => e.turnId));
     const events = cards.size ? all.filter((e) => !cards.has(e.turnId)) : all;
-    const result = delegationOutput(wire(session), events);
+    // The open turn is read from the whole log, not the tail above.
+    const active = this.#sessions.events.activeTurn(id);
+    const result = delegationOutput(wire(session), events, active);
     const reply = session.delegationReply;
     const start = events.findLast((e) => e.type === 'turn.start');
     if (reply && (!start || start.turnId === reply.turnId)) {
@@ -220,7 +221,7 @@ export class SessionDelegation {
       const status = session.delegation.status;
       // A saved outcome is the task's end only once the CLI's own turn is.
       // A restart can leave "done" on a helper that is still working.
-      const running = ['starting', 'working'].includes(session.status) && !!activeTurnFromEvents(events);
+      const running = ['starting', 'working'].includes(session.status) && !!active;
       if (['done', 'error', 'interrupted'].includes(status) && !running) {
         result.status = status; result.complete = true;
       }

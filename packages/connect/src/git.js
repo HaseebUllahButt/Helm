@@ -313,7 +313,7 @@ export async function addWorktree(cwd, name) {
 
   const base = (await git(root, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
   await git(root, ['worktree', 'add', '-b', branch, path]);
-  return { path: collapse(path), branch, base };
+  return { path: collapse(path), branch, base, repo: collapse(root) };
 }
 
 /**

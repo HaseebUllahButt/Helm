@@ -11,7 +11,8 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, resolve } from 'node:path';
 import { M } from '@helm/protocol';
 import { stripBrief } from '@helm/protocol/brief';
 import { fold, shortId, ago } from './brain.js';
@@ -40,6 +41,18 @@ export function repoRoots(cwd, git = run) {
 }
 
 /**
+ * A helper's own checkout came from this repo, even after it was removed.
+ * New ones record the repo; older ones sit beside it as `<repo>-<task>`.
+ */
+export function fromRepo(worktree, roots) {
+  if (!worktree?.path) return false;
+  const home = (p) => resolve(String(p).replace(/^~(?=\/|$)/, homedir()));
+  if (worktree.repo) return roots.includes(home(worktree.repo));
+  const path = home(worktree.path);
+  return roots.some((r) => dirname(path) === dirname(r) && basename(path).startsWith(`${basename(r)}-`));
+}
+
+/**
  * Which chats to read, and which are busy here now.
  *
  * Earlier work is the newest finished top-level chats. A helper's result
@@ -50,12 +63,16 @@ export function repoRoots(cwd, git = run) {
  */
 export function chooseChats(sessions, { roots, self = null, limit = 3 }) {
   const ours = (s) => s.id !== self && s.delegation?.parentId !== self;
-  const here = sessions.filter((s) => ours(s) && within(s.cwd, roots));
+  const workedHere = (s) => within(s.cwd, roots) || fromRepo(s.delegation?.worktree, roots);
+  // A chat in another folder that sent helpers here holds their results and
+  // its own "what is left", so it counts as earlier work in this repo.
+  const sentHelpers = new Set(sessions.filter((s) => s.delegation?.parentId && workedHere(s)).map((s) => s.delegation.parentId));
+  const here = sessions.filter((s) => ours(s) && (workedHere(s) || sentHelpers.has(s.id)));
   const readable = (s) => !String(s.id).startsWith('pane:') && !String(s.id).startsWith('found:');
   const newest = (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
   return {
     earlier: here.filter((s) => readable(s) && !s.delegation?.parentId && !isRunning(s)).sort(newest).slice(0, limit),
-    running: here.filter(isRunning).sort(newest),
+    running: here.filter((s) => isRunning(s) && workedHere(s)).sort(newest),
   };
 }
 

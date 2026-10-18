@@ -208,6 +208,24 @@ test('Codex delegates to Claude with the selected model, folder, lineage and dur
   assert.equal(restarted.delegationResult(child.id).complete, true);
 });
 
+test('a long helper is still working after its turn start leaves the newest events', async () => {
+  const { delegationOutput } = await import('../packages/connect/src/delegation.js');
+  // The tail a 2,000-event window kept of a real helper at event 2,010: its
+  // turn.start had scrolled out, Helm's own ticket for the task had closed.
+  const tail = [
+    { seq: 160, type: 'item.start', id: 'tool1', kind: 'tool', turnId: 'real', name: 'Bash' },
+    { seq: 165, type: 'item.done', id: 'tool1', status: 'ok' },
+    { seq: 166, type: 'turn.done', turnId: 'local-ticket', status: 'ok' },
+    { seq: 169, type: 'item.start', id: 'text1', kind: 'text', turnId: 'real' },
+    { seq: 170, type: 'item.delta', id: 'text1', text: 'Now I write the command.' },
+  ];
+  const session = { status: 'working', delegation: { status: 'working' } };
+  const active = { seq: 4, type: 'turn.start', turnId: 'real' };
+  const result = delegationOutput(session, tail, active);
+  assert.equal(result.complete, false);
+  assert.equal(result.status, 'working');
+});
+
 test('native CLI callers can delegate without a Helm parent session', async (t) => {
   const { sessions } = setup(t);
   const { session } = await sessions.delegate({ cwd: process.env.HELM_DIR, profileId: 'claude-main', task: 'Check this folder' });

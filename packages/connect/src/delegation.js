@@ -171,7 +171,10 @@ export const turnOf = (events, turnId) => fold(events).turns.find((t) => t.turnI
 /** What the agent wrote in one turn, for a short follow-up after the result went out. */
 export const turnText = (turn) => turnTexts(turn).join('\n\n');
 
-export function delegationOutput(session, events) {
+// `active` comes from the whole log when the caller has it: a long task
+// pushes its own turn.start out of a tail window, and without it the task
+// looked finished while it was still working.
+export function delegationOutput(session, events, active = activeTurnFromEvents(events)) {
   const { turns, pending } = fold(events);
   const turn = turns.at(-1);
   // The task's answer is its last real turn plus anything it added on waking
@@ -188,7 +191,7 @@ export function delegationOutput(session, events) {
   // The other way round: a restart closes the tickets of messages already
   // handed to a CLI that is still working. Its own turn is still open, so the
   // task is not finished just because the newest card is.
-  const running = ['starting', 'working'].includes(session.status) && !!activeTurnFromEvents(events);
+  const running = ['starting', 'working'].includes(session.status) && !!active;
   const complete = !!settled || (!!turn?.status && !running);
   const status = !complete && (pending || session.status === 'blocked') ? 'blocked'
     : settled || (complete ? (turn.status === 'ok' ? 'done' : turn.status) : 'working');

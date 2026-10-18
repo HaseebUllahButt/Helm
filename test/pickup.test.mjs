@@ -71,6 +71,20 @@ test('chats are chosen from this repo: finished leads to read, anything running 
   assert.deepEqual(chooseChats(sessions, { roots, self: 'me', limit: 1 }).earlier.map((s) => s.id), ['new']);
 });
 
+test('a chat elsewhere whose helpers worked in this repo is earlier work here, even after their checkout is gone', () => {
+  const roots = ['/r/main'];
+  const sessions = [
+    { id: 'quick', cwd: '/home/quick', status: 'idle', updatedAt: 9 },
+    { id: 'helper', cwd: '/r/main-build-it', status: 'done', updatedAt: 8, delegation: { parentId: 'quick', worktree: { path: '/r/main-build-it', branch: 'helm/build-it' } } },
+    { id: 'quick2', cwd: '/home/quick2', status: 'idle', updatedAt: 7 },
+    { id: 'helper2', cwd: '/x/wt', status: 'done', updatedAt: 6, delegation: { parentId: 'quick2', worktree: { path: '/x/wt', repo: '/r/main' } } },
+    { id: 'unrelated', cwd: '/home/other', status: 'idle', updatedAt: 9 },
+  ];
+  const { earlier, running } = chooseChats(sessions, { roots, limit: 3 });
+  assert.deepEqual(earlier.map((s) => s.id), ['quick', 'quick2']);
+  assert.deepEqual(running, []);
+});
+
 test('pickup reads the chats and git: commits since, unmerged worktree work, uncommitted files', async () => {
   const repo = join(scratch, 'repo');
   const wt = join(scratch, 'repo-wt');
