@@ -221,7 +221,7 @@ export class SessionDelivery {
       // message - added as it goes out (#promptOf), never saved as what the
       // owner typed, so their bubble shows only their own words.
       const introduce = !raw && !clean.trimStart().startsWith('/') && !!this.#sessions.delegationBrief
-        && !DRIVERS[s.driver]?.takesInstructions;
+        && !DRIVERS[s.driver]?.takesInstructions && !s.delegation?.hidden;
       if (brainLine) clean = `${brainLine}\n\n${clean}`;
 
       const turnId = requestedTurnId

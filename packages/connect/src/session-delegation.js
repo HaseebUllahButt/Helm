@@ -36,6 +36,9 @@ export class SessionDelegation {
    * reaches them.
    */
   unhomedDelegation(s) {
+    // A hidden helper (the preferences keeper's) belongs to no chat and is
+    // never listed; its starter reads the answer and deletes it.
+    if (s.delegation?.hidden) return false;
     const parentId = s.delegation?.parentId;
     const parent = parentId ? this.#core.index.get(parentId) : null;
     if (parent && !parent.archived) return false;
@@ -127,7 +130,7 @@ export class SessionDelegation {
   }
 
   /** A task owned by its orchestrator, with durable output and configurable permissions. */
-  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId, worktree = false }) {
+  async delegate({ id, cwd, profileId, model, mode, effort, task, callerThreadId, worktree = false, hidden = false }) {
     if (typeof task !== 'string' || !task.trim() || task.length > 32_000) {
       throw new Error('a subagent task must contain 1–32000 characters');
     }
@@ -175,7 +178,7 @@ export class SessionDelegation {
       folder = checkout.path;
     }
     const delegation = { parentId: parent?.id ?? null, parentGeneration, notifyParent: !!parent, task: task.trim(), requestedModel: model ?? null, depth, status: 'starting',
-      ...(checkout ? { worktree: checkout } : {}) };
+      ...(checkout ? { worktree: checkout } : {}), ...(hidden && !parent ? { hidden: true } : {}) };
     const child = await this.#sessions.start({ cwd: folder, profileId, model, effort, mode: selectedMode,
       title: clip(task.trim().split('\n')[0], 80), delegation });
     if (parent && (parent.stopGeneration ?? 0) !== parentGeneration) {

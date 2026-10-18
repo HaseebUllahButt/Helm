@@ -36,6 +36,7 @@ import { EnvView } from './screens/EnvView';
 import { BrainView } from './screens/Brain';
 import { EnvSettings } from './screens/MachineSettings';
 import { SettingsView, LinksView, NetworkSettings } from './screens/Settings';
+import { OwnerView } from './screens/Owner';
 import { ModelPrefsView } from './screens/ModelPrefs';
 import { Browse } from './screens/Browse';
 import { MediaView } from './screens/Media';
@@ -150,6 +151,8 @@ export type MainView =
   | { kind: 'links' }
   // Which helm each machine runs, and updating them from here.
   | { kind: 'updates' }
+  // The owner's preferences every agent gets, and the keeper that updates them.
+  | { kind: 'owner' }
   | { kind: 'models'; account: Account }
   // Which phones and browsers hold a key to this network: pair another, or
   // stop trusting one.
@@ -169,7 +172,7 @@ const VIEW_KINDS: Record<MainView['kind'], true> = {
   env: true, integrations: true, usage: true, brain: true, new: true,
   browse: true, 'transfer-browse': true, transfer: true, verify: true,
   start: true, settings: true, 'network-settings': true, links: true,
-  updates: true, models: true, devices: true, 'app-settings': true,
+  updates: true, owner: true, models: true, devices: true, 'app-settings': true,
   media: true, session: true, 'native-agent': true, starting: true,
 };
 /** History can outlive the screen that wrote it across an app update. */
@@ -696,6 +699,7 @@ function Shell({ client, conn, onSignOut }: {
     const go = (id: string, title: string, keywords: string, stack: MainView[]) =>
       items.push({ id, group: 'action', title, keywords, run: () => navigate(stack) });
     go('a:settings', 'Settings', 'preferences', [{ kind: 'app-settings' }]);
+    go('a:owner', 'Your preferences', 'owner plain english keeper agents', [{ kind: 'app-settings' }, { kind: 'owner' }]);
     go('a:updates', 'Updates', 'version upgrade machines', [{ kind: 'app-settings' }, { kind: 'updates' }]);
     go('a:devices', 'Devices & pairing', 'phone key link', [{ kind: 'app-settings' }, { kind: 'devices' }]);
     go('a:cost', 'What it has cost', 'usage tokens spend', [{ kind: 'usage' }]);
@@ -1110,7 +1114,7 @@ function Shell({ client, conn, onSignOut }: {
   instantTerminal.current = () => {
     const online = envs.filter((e) => e.online);
     const current = nav.current.stack.at(-1);
-    const global = !current || ['usage', 'brain', 'links', 'updates', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
+    const global = !current || ['usage', 'brain', 'links', 'updates', 'owner', 'models', 'devices', 'app-settings', 'network-settings'].includes(current.kind)
       && !(current.kind === 'usage' && current.envId);
     const chosen = !global && nav.current.selected !== autoPicked.current ? nav.current.selected : null;
     const lastUsed = (e: Environment) => Math.max(0, ...(sessions[e.id] ?? []).filter(ownTerminal).map((s) => s.updatedAt ?? 0));
@@ -1224,7 +1228,7 @@ function Shell({ client, conn, onSignOut }: {
   // no machine either.
   const showMain = wide || !!selected || view.kind === 'usage' || view.kind === 'devices'
     || view.kind === 'network-settings' || view.kind === 'app-settings' || view.kind === 'updates'
-    || view.kind === 'links';
+    || view.kind === 'links' || view.kind === 'owner';
 
   // Honest connection words. A dropped socket with a hub that still answers
   // HTTP is "reconnecting", quietly; only a long silence from everything
@@ -1469,6 +1473,8 @@ function Shell({ client, conn, onSignOut }: {
           </Suspense>
         ) : view.kind === 'links' ? (
           <LinksView client={client} envs={envs} onBack={back} />
+        ) : view.kind === 'owner' ? (
+          <OwnerView client={client} envs={envs} onBack={back} />
         ) : view.kind === 'network-settings' ? (
           <NetworkSettings
             client={client} envs={envs} onBack={back}

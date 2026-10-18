@@ -769,7 +769,7 @@ export class Sessions extends EventEmitter {
     // Anything waiting on a human floats to the top; that is the whole point
     // of watching from a phone.
     const rank = (x) => (x.status === 'blocked' ? 0 : x.status === 'working' ? 1 : 2);
-    return dedupeNativeConversations(out.filter((s) => parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation || this.#delegation.unhomedDelegation(s)))
+    return dedupeNativeConversations(out.filter((s) => !s.delegation?.hidden && (parentId ? !s.archived && s.delegation?.parentId === parentId : includeDelegations || !s.delegation || this.#delegation.unhomedDelegation(s))))
       .map((s) => s.delegations ? { ...s, delegations: this.#delegation.visibleDelegations(s) } : s)
       .map((s) => (s.delegation && this.#delegation.unhomedDelegation(s) ? { ...s, unhomed: true } : s))
       // The branch each thread's folder is on, for the sidebar's third line.
@@ -1241,7 +1241,9 @@ export class Sessions extends EventEmitter {
       // helm's brief to the agent - which CLI accounts it can delegate to -
       // as standing instructions rather than glued onto the owner's first
       // message, where it read as something they had typed.
-      instructions: DRIVERS[s.driver]?.takesInstructions ? (this.delegationBrief?.() || null) : null,
+      // A hidden helper is asked one question with all it needs; the brief
+      // would only cost it tokens.
+      instructions: DRIVERS[s.driver]?.takesInstructions && !s.delegation?.hidden ? (this.delegationBrief?.() || null) : null,
       forkFrom: s.forkFrom,
       transcript: s.transcript,
       monitorOnly: !!s.external,

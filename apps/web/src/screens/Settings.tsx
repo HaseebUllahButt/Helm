@@ -33,6 +33,10 @@ export function SettingsView({ client, envs, onBack, onVoice, onOpen, onUnpair }
       </div>
       <div className="scroll"><div className="pad column">
         <div className="rows">
+          <button className="row" onClick={() => onOpen({ kind: 'owner' })}>
+            <span className="grow"><span className="rt">Your preferences</span></span>
+            <span className="chev"><Icon name="forward" size={15} /></span>
+          </button>
           <button className="row" onClick={() => onOpen({ kind: 'devices' })}>
             <span className="grow"><span className="rt">Devices & pairing</span></span>
             <span className="chev"><Icon name="forward" size={15} /></span>

@@ -8,6 +8,7 @@ import { fold } from './brain.js';
 import { activeTurnFromEvents } from './events.js';
 import { createHash } from 'node:crypto';
 import { browserNote, browserReady } from './browser.js';
+import { loadOwner } from '../../protocol/owner.js';
 
 /** Public capabilities and optional credential metadata, never secret values. */
 export async function agentCatalog(profiles, statuses, { models = true, credentials = false } = {}) {
@@ -68,7 +69,8 @@ const CHEAP_TIER = {
   codex: /nano|mini/i,
 };
 export function cheapModel(engine, models = []) {
-  const want = CHEAP_TIER[engine] ?? /haiku|flash|mini|nano|lite|spark/i;
+  // A tier word starts a part of the name: "gpt-5-mini", never the "mini" in "gemini".
+  const want = CHEAP_TIER[engine] ?? /(?:^|[^a-z])(?:haiku|flash|mini|nano|lite|spark)/i;
   return models.find((m) => want.test(m)) ?? null;
 }
 
@@ -104,8 +106,19 @@ export function pickupNote() {
   return '[Helm pickup: What you did goes in commit messages, what is left in your final reply; Helm keeps both, so write no handoff files. To continue earlier work, run helm pickup.]';
 }
 
+/**
+ * The owner's preferences, the same list on every machine (protocol/owner.js),
+ * kept fresh from chats by the keeper (owner-keeper.js). Knowledge about the
+ * owner lives here; knowledge about a project stays in that repo's AGENTS.md.
+ * An empty list is no note at all.
+ */
+export function ownerNote(record = loadOwner()) {
+  const lines = record?.lines ?? [];
+  return lines.length ? `[Helm owner: What the owner wants from every agent:\n${lines.map((l) => `- ${l}`).join('\n')}]` : '';
+}
+
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = () => [delegationNote(), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote()].filter(Boolean).join('\n');
+const toolNotes = () => [delegationNote(), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net) {
   const machines = Object.values(net?.machines ?? {});

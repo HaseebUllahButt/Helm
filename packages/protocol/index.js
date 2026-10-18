@@ -73,6 +73,9 @@ export const T = {
   // revocation has to propagate even when nothing else about the network has
   // changed.
   ROSTER: 'roster',               // daemon <-> hub { roster }
+  // The owner's preferences (owner.js): one owner-wide record, reconciled the
+  // same way - a fingerprint, and the record itself only when they differ.
+  OWNER: 'owner',                 // daemon <-> hub { hash } | { record }
 
   // daemon -> every connected hub, like NOTIFY: the machine's whole usage
   // rollup, so a hub can keep answering for it after it goes to sleep. Small
@@ -229,6 +232,12 @@ export const M = {
   EXEC_READ: 'exec.read',         // { id, since?, wait? } -> { status, chunks[], last, more, exitCode }
   EXEC_CANCEL: 'exec.cancel',     // { id } -> { id, status }
   // The brain: one agent for the whole network rather than one per folder.
+  // The owner's preferences, the same list on every machine (owner.js), and
+  // the keeper that updates it from chats on one machine (owner-keeper.js).
+  OWNER_GET: 'owner.get',          // {} -> { record, keeper }
+  OWNER_SET: 'owner.set',          // { lines?, keeper? } -> { record, keeper }
+  OWNER_KEEP: 'owner.keep',        // {} -> { record, keeper }  run the keeper now, on its machine
+  OWNER_WORDS: 'owner.words',      // { since, read } -> { chats[] }  what the owner wrote here since
   BRAIN_DIGEST: 'brain.digest',    // {} -> { name, sessions[] }  this machine's line in the digest
   BRAIN_OPEN: 'brain.open',        // { profileId?, model?, mode? } -> { session }  start or resume it
   BRAIN_SNAPSHOT: 'brain.snapshot',// {} -> { text, snapshot }  the whole network as the brain reads it
