@@ -251,7 +251,7 @@ test('a clean folder and an unreachable history each say what is going on', asyn
   await openAgents(page);
   await page.getByText('2 agents share this folder', {exact:false}).waitFor();
   await page.getByRole('tab',{name:'Changes',exact:true}).click();
-  await page.getByText('Working tree clean').waitFor();
+  await page.getByText('No changes', { exact: true }).waitFor();
   await page.getByText('merge · Merge the graph improvements').waitFor();
   await shot('git-desktop-clean.png');
 });

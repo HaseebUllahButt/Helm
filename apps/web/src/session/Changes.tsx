@@ -183,8 +183,7 @@ export function ChangesPanel({ client, env, cwd, status, reload, onClose, onOpen
         {files.length === 0 ? (
           <div className="git-empty">
             <span className="git-empty-icon ok"><Icon name="check" size={18} /></span>
-            <b>Working tree clean</b>
-            <span>Nothing changed since the last commit.</span>
+            <b>No changes</b>
             {status.head && <code title={status.head.subject}>{status.head.commit} · {status.head.subject}</code>}
           </div>
         ) : (

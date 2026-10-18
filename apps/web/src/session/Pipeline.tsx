@@ -158,7 +158,7 @@ export function Pipeline({ client, env, cwd, sessionId, data, error, loading, re
         <div className="pipeline-pr-meta">{pr.review === 'APPROVED' ? <span>Approved</span> : pr.review === 'CHANGES_REQUESTED' ? <span>Changes requested</span> : pr.review === 'REVIEW_REQUIRED' ? <span>Needs review</span> : null}
           {pr.state === 'OPEN' && !data.stale && !pr.draft && (pr.mergeable === 'CONFLICTING' ? <span>Conflicts</span> : pr.mergeState === 'CLEAN' ? <span>Ready to merge</span> : pr.mergeState === 'BLOCKED' ? <span>Merge blocked</span> : pr.mergeState === 'BEHIND' ? <span>Behind base</span> : null)}</div>
       </section>}
-      {quiet && <p className="note">No checks, workflows or deployments for this commit.</p>}
+      {quiet && <p className="note">No checks or deployments for this commit.</p>}
       {(!!data.checks?.length || failed('Checks')) && <section className="pipeline-section"><div className="pipeline-section-head"><h3>Checks</h3><Status state={data.checksState || 'unknown'} /></div>
         {data.checks?.map(c => <div className="pipeline-row" key={c.id}><div><External url={c.url}>{c.name}</External>{c.summary && <p>{c.summary}</p>}</div><Status state={c.state} /></div>)}
       </section>}

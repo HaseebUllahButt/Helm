@@ -604,7 +604,7 @@ test('a CLI\'s own subagents show beside delegated tasks, looking the same', asy
       // The chat says one waits on an approval: one card, first, saying so.
       assert.deepEqual(await active.locator('.delegation-status').allInnerTexts(), ['Needs approval', 'Working']);
       await active.getByRole('button', {name:'Needs approval, details'}).click();
-      await view.locator('#task-detail-native-a3').getByText('It is waiting for your approval in the chat.', {exact:true}).waitFor();
+      await view.locator('#task-detail-native-a3').getByText('Waiting for your approval in the chat.', {exact:true}).waitFor();
       await active.getByRole('button', {name:'Needs approval, details'}).click();
       assert.match(await active.locator('.delegation-task small').nth(1).innerText(), /general-purpose · claude-opus-test · worktree-agent-a1/i);
       assert.equal(await finished.locator('.delegation-branch').count(), 2);
@@ -849,7 +849,7 @@ test('the Git button is always in the header, and follows the project a chat edi
         await git.waitFor();
         await git.click();
         const dialog = view.getByRole('dialog', {name:'Git',exact:true});
-        await dialog.getByText('This folder is not a Git project, and the chat has not changed files in one yet.').waitFor();
+        await dialog.getByText('This folder is not a Git project.').waitFor();
       }
       assert.equal(await bar.getByRole('button', {name:'Agents',exact:true}).count(), 1);
     } finally { await view.close(); }

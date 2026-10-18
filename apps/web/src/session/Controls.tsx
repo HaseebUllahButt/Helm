@@ -323,7 +323,6 @@ function groupsFor(options: ModelList | null, session: Session): Group[] {
       kind: 'speed',
       title: 'speed',
       glyph: 'bolt',
-      note: 'The fast tier answers sooner and uses more of your plan.',
       choices: [
         { id: '', label: 'Normal', hint: 'the usual tier' },
         ...speeds.map((s) => ({ id: s, label: cap(s), hint: 'sooner, more plan usage' })),

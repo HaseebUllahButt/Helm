@@ -111,7 +111,7 @@ for (const width of [390, 1280]) test(`Edit from here confirms a refused file re
   assert.equal(await dialog.getByText('Edit from here?', { exact: true }).isVisible(), true);
   assert.match(await dialog.innerText(), /message and the replies after it will be removed/);
   assert.match(await dialog.innerText(), /Your current draft will be replaced/);
-  const restore = dialog.getByRole('checkbox', { name: 'Restore worktree files to before this message', exact: true });
+  const restore = dialog.getByRole('checkbox', { name: 'Put files back as they were before this message', exact: true });
   assert.equal(await restore.isDisabled(), true); assert.equal(await restore.isChecked(), false);
   assert.equal(await dialog.getByText(await page.evaluate(() => window.restoreReason), { exact: true }).isVisible(), true);
   assert.equal(await composer.inputValue(), 'Keep this draft until confirmation');

@@ -864,10 +864,10 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       {rewinding && <Sheet label="Edit from here" onClose={() => { if (!busy) setRewinding(null); }}>
         <div className="modal-title">Edit from here?</div>
         <div className="modal-body">
-          <p>This message and the replies after it will be removed from this conversation. The message and its attachments return to your draft for editing. Discarded history is saved privately on the host.</p>
+          <p>This message and the replies after it will be removed. The message returns to your draft. The old history stays saved on the machine.</p>
           {(draft.trim() || attachments.length > 0) && <p>Your current draft will be replaced.</p>}
-          <label className="rewind-files"><input type="checkbox" checked={rewinding.restore} disabled={!rewinding.allowed || busy} onChange={event => setRewinding({ ...rewinding, restore: event.target.checked })} />Restore worktree files to before this message</label>
-          <p>{rewinding.allowed ? 'File restore includes staged changes and untracked files. Ignored files are preserved.' : rewinding.reason}</p>
+          <label className="rewind-files"><input type="checkbox" checked={rewinding.restore} disabled={!rewinding.allowed || busy} onChange={event => setRewinding({ ...rewinding, restore: event.target.checked })} />Put files back as they were before this message</label>
+          <p>{rewinding.allowed ? 'This includes staged and new files. Ignored files stay.' : rewinding.reason}</p>
           {error && <p role="alert" className="error">{error}</p>}
         </div>
         <div className="modal-actions">
@@ -908,7 +908,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
       {ask === 'kill' && (
         <Confirm
           title={session.nativeCodex ? `Remove "${session.title}" from Helm?` : `Delete "${session.title}"?`}
-          body={session.nativeCodex ? 'The conversation remains in Codex and its terminal keeps running.' : 'The agent is closed and this conversation is removed from helm.'}
+          body={session.nativeCodex ? 'It stays in Codex and its terminal keeps running.' : 'The agent stops and this chat leaves Helm.'}
           confirmLabel={session.nativeCodex ? 'Remove' : 'Delete'} danger busy={busy}
           onCancel={() => setAsk(null)}
           onConfirm={async () => {
