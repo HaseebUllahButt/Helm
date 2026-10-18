@@ -81,7 +81,7 @@ test('Connect opens returned terminal; account changes expose supported actions 
   assert.equal(await page.evaluate(() => window.calls.find(c=>c.method==='integrations.skills.add').params.source), '/skills');
   await page.getByRole('button', { name: 'Choose account', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: /Gemini/ }).click();
-  await page.getByText('Connector management is not supported for this CLI yet.').waitFor();
+  await page.getByText('Not supported for this CLI yet.').first().waitFor();
   assert.equal(await page.getByRole('button', { name: 'Add connector', exact: true }).count(), 0);
 });
 test('each row wears the logo of what is behind it', async () => {

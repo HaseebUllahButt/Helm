@@ -85,15 +85,13 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
         {picking ? (
           <>
             <p className="note">
-              One conversation for your whole network, living on {env.name}.
-              It knows where your projects and sessions are. Tell it
-              “go to why, open this folder, do this” and it works on that machine.
-              Your laptop can sleep; the brain stays here.
+              One chat for your whole network, on {env.name}. It knows your
+              projects and works on any machine you name. It keeps going when
+              your laptop sleeps.
             </p>
             {replacing && (
               <div className="banner warn">
-                Starting a different brain on {env.name} ends this conversation.
-                Its saved network map and knowledge notes stay on the VM.
+                A new brain ends the current brain chat. Its saved notes stay.
               </div>
             )}
             <div className="section">Choose its account</div>
@@ -113,7 +111,7 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
             {accounts && !accounts.length && (
               <div className="empty quiet">
                 no agent accounts on that machine
-                <div className="note" style={{ marginTop: 6 }}>the brain needs a CLI helm can drive headless</div>
+                <div className="note" style={{ marginTop: 6 }}>the brain needs a CLI Helm can run in the background</div>
               </div>
             )}
             {!env.online && <div className="empty quiet">{env.name} is offline</div>}
@@ -129,7 +127,6 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
                   <button key={m} className={`row${current ? ' active' : ''}`} disabled={!!busy} onClick={() => setModel(m)}>
                     <span className="grow">
                       <span className="rt"><span className="rt-text">{models?.labels?.[m] ?? m}</span></span>
-                      {current && <span className="rm">what it thinks with now</span>}
                     </span>
                     {busy === m ? <span className="chip working"><i />changing</span> : current ? <span className="tag key">current</span> : <span className="chev"><Icon name="forward" size={15} /></span>}
                   </button>
@@ -137,10 +134,6 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
               })}
               {!models && <div className="empty quiet">{env.online ? 'asking the machine…' : `${env.name} is offline`}</div>}
             </div>
-            <p className="note">
-              The same picker is in the composer inside the conversation; this
-              is here so the gear leads somewhere when you are looking for it.
-            </p>
 
             <div className="section">where it lives</div>
             <div className="rows">
@@ -158,7 +151,7 @@ export function BrainView({ client, env, brain, onBack, onStarted, onReplaced }:
               <button className="row destructive" onClick={() => setReplacing(true)}>
                 <span className="grow">
                   <span className="rt">Start a different brain</span>
-                  <span className="rm">starts a new conversation; keeps saved knowledge</span>
+                  <span className="rm">new chat; saved notes stay</span>
                 </span>
                 <span className="chev"><Icon name="forward" size={15} /></span>
               </button>

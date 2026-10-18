@@ -1294,7 +1294,7 @@ function Shell({ client, conn, onSignOut }: {
               }} />)}
             {status === 'offline' && (
               <div className="banner error">
-                No machine answered for a while. Check the VM, or that this phone has internet.
+                No machine answers. Check the VM and this device's internet.
               </div>
             )}
 
@@ -1476,12 +1476,13 @@ function Shell({ client, conn, onSignOut }: {
           // as large rows, rather than a whisper in an empty pane.
           <div className="scroll"><div className="pad column chooser">
             <h2 className="screen-title">Machines</h2>
-            <p className="readout">
-              {envs.length === 1 ? '1 machine' : `${envs.length} machines`}
-              {' · '}{envs.filter((e) => e.online).length} online
-              {runningCount > 0 && ` · ${runningCount} running`}
-              {blocked.length > 0 && <span className="attention"> · {blocked.length} {blocked.length === 1 ? 'needs' : 'need'} you</span>}
-            </p>
+            {/* The rows below show each machine and its dot; the readout
+                only says what is running and what waits for the owner. */}
+            {(runningCount > 0 || blocked.length > 0) && <p className="readout">
+              {runningCount > 0 && `${runningCount} running`}
+              {runningCount > 0 && blocked.length > 0 && ' · '}
+              {blocked.length > 0 && <span className="attention">{blocked.length} {blocked.length === 1 ? 'needs' : 'need'} you</span>}
+            </p>}
             {envs.length > 0 ? (
               <div className="rows plain">
                 {envs.map((e) => {

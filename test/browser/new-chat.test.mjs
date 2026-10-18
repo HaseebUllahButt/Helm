@@ -380,7 +380,7 @@ test('with the machine\'s folder list, typing searches on the device and shows h
       ...(params.since==='s1' && !params.refresh ? {unchanged:true} : {names:['dev','helm','intercept','notes'],parents:[-1,0,0,2],repos:[1]})});
   });
   const box=await folderStep(page);
-  await page.locator('.newchat-index').filter({hasText:'4 folders · checked 30s ago'}).waitFor();
+  await page.locator('.newchat-index').filter({hasText:'checked 30s ago'}).waitFor();
   await box.fill('inter');
   await page.getByRole('option').filter({hasText:'~/dev/intercept'}).first().waitFor();
   await box.fill('inter notes');

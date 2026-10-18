@@ -462,7 +462,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
       }
       else for (const e of home ?? []) add(e.path, e.name, e.isRepo, 0);
       if (step === 'into') return out;
-      const quickRow: Row = { id: QUICK_ROW, title: 'No folder · quick chat', sub: 'a small question, in no folder', icon: 'bolt', pick: pickQuick };
+      const quickRow: Row = { id: QUICK_ROW, title: 'No folder · quick chat', sub: 'for a small question', icon: 'bolt', pick: pickQuick };
       const githubRow: Row = { id: GITHUB_ROW, title: 'Clone from GitHub', icon: 'github', pick: () => go('github') };
       if (!query || matches(githubRow, query)) out.unshift(githubRow);
       if (!query || matches(quickRow, query)) out.unshift(quickRow);
@@ -621,7 +621,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
             : quick ? <>Which agent for a <b>quick chat</b>?</>
             : <>Which agent in <b>{leaf(folder)}</b>?</>}
         </h2>
-        {step === 'cli' && cloneFrom && <p className="newchat-note">Clones {cloneFrom} into {folder}. The chat opens right away.</p>}
+        {step === 'cli' && cloneFrom && <p className="newchat-note">Clones {cloneFrom} into {folder}.</p>}
         <input
           ref={input} className="palette-input" value={q} placeholder={placeholder} disabled={busy || (step === 'github' && !!gh && !gh.login)}
           autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
@@ -748,8 +748,8 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
             <button type="button" className="newchat-new" onClick={() => createIn(createTarget)} title={`New folder in ${createTarget}`}>
               <Icon name="plus" size={15} />New folder in <b>{where(createTarget)}</b>
             </button>
-            <span className="newchat-index" role="status">
-              {index && index !== 'remote' ? <>{index.count.toLocaleString()} folders · {indexing ? 'checking…' : `checked ${checked(index.at, now)}`}</>
+            <span className="newchat-index" role="status" title={index && index !== 'remote' ? `${index.count.toLocaleString()} folders` : undefined}>
+              {index && index !== 'remote' ? <>{indexing ? 'checking…' : `checked ${checked(index.at, now)}`}</>
                 : remote ? 'searching on the machine' : 'reading folders…'}
             </span>
             {!remote && <button type="button" className="iconbtn newchat-refresh" onClick={refreshFolders} disabled={indexing}
@@ -764,7 +764,7 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
                 <Icon name="github" size={15} /><b>{gh.login}</b><span className="quiet">· switch</span>
               </button>
             ) : <span className="newchat-account" title={`GitHub account ${gh.login}`}><Icon name="github" size={14} />{gh.login}</span>}
-            <span className="newchat-index" role="status">{gh.repos.length.toLocaleString()} repos · {ghBusy ? 'checking…' : gh.at ? `checked ${checked(gh.at, now)}` : ''}</span>
+            <span className="newchat-index" role="status" title={`${gh.repos.length.toLocaleString()} repos`}>{ghBusy ? 'checking…' : gh.at ? `checked ${checked(gh.at, now)}` : ''}</span>
             <button type="button" className="iconbtn newchat-refresh" onClick={reloadGh} disabled={ghBusy}
               title="Look for new repos now" aria-label="Look for new repos now"><Icon name="refresh" size={15} /></button>
           </div>
