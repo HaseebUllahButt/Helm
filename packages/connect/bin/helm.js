@@ -101,6 +101,8 @@ const usage = () => {
   helm brain                       open the network's brain on the VM
   helm digest [--json]              every machine, folder and running session
   helm thread <id> [-n 40]          the recent conversation of one session
+  helm pickup [chat-id] [-n 3]      where earlier chats in this repo stopped: their ask,
+                                    what their final reply left, commits, uncommitted files
   helm say <id> <text...>           send a named message from this agent (a prompt outside a chat)
   helm reply <message-id> <text...> reply to an agent message
   helm messages [chat-id] [--json]  read exchanges in this chat and its Agents
@@ -2287,6 +2289,19 @@ try {
     case 'thread':
       await printThread();
       break;
+
+    case 'pickup': {
+      const { pickup } = await import('../src/pickup.js');
+      const n = rest.findIndex((x) => x === '-n' || x === '--limit');
+      const id = rest.find((x, i) => !x.startsWith('-') && (n < 0 || i !== n + 1));
+      const net = requireNetwork();
+      console.log(await pickup({
+        id, self: net.self, selfName: net.machines?.[net.self]?.name, sessionId: process.env.HELM_SESSION_ID ?? null,
+        limit: n < 0 ? 3 : Math.max(1, Number(rest[n + 1]) || 3),
+        rpc: brainRpc, find: findSession,
+      }));
+      break;
+    }
 
     case 'messages':
     case 'reply': {
