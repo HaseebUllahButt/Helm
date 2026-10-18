@@ -35,6 +35,12 @@ until `text` starts with "helm / Search anything".
 - **Tests:** `test/browser/ui`; `test/delete-stays-deleted`, `titles`,
   `slash-title`.
 
+## Continue in a new chat
+- **Prove (driven):** on a finished chat in a folder,
+  `$V click "actions for <title>"; $V click "Continue in a new chat"; $V click "fake"`.
+- **Proof:** a new chat in the same folder, its box holding
+  "Run `helm pickup <id>` first."; a working chat's ⋯ does not offer it.
+
 ## Search, palette, machine screen
 - **Prove (driven):** `$V key Control+k; $V text | tail -15; $V key Escape`
   lists actions; `$V key Control+Slash` shows "IN THE NEW-CHAT BOX", "IN A

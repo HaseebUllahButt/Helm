@@ -61,8 +61,8 @@ export function onStartingChat(listener: (chat: StartingChat) => void) {
 }
 
 /** Start a chat in the background and return its placeholder at once. */
-export function beginChat(client: Client, info: StartInfo, run: () => Promise<Session>): StartingChat {
-  const chat: StartingChat = { ...info, id: `start-${Date.now().toString(36)}-${++seq}`, state: 'starting', message: '', draft: '', since: Date.now() };
+export function beginChat(client: Client, info: StartInfo, run: () => Promise<Session>, draft = ''): StartingChat {
+  const chat: StartingChat = { ...info, id: `start-${Date.now().toString(36)}-${++seq}`, state: 'starting', message: '', draft, since: Date.now() };
   chats.set(chat.id, chat);
   runs.set(chat.id, run);
   attempt(client, chat);

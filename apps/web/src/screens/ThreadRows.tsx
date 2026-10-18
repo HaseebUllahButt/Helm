@@ -106,11 +106,11 @@ export function PagedRows<T extends { s: { id: string } }>({ items, isSelected, 
 }
 
 /**
- * The ⋯ on a thread row: rename, archive, delete. One component, so the
- * sidebar's rows and the machine screen's rows offer the same things.
+ * The ⋯ on a thread row: continue, rename, archive, delete. One component, so
+ * the sidebar's rows and the machine screen's rows offer the same things.
  */
-export function ThreadActions({ s, onRename, onArchive, onDelete }: {
-  s: Session; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void;
+export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: {
+  s: Session; onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void;
 }) {
   const eng = engineOf(s.engine);
   const adopted = s.adopted;
@@ -127,6 +127,9 @@ export function ThreadActions({ s, onRename, onArchive, onDelete }: {
       ><Icon name="more" size={16} /></button>
       {menu && (
         <div className="menu row-menu" onClick={(e) => e.stopPropagation()}>
+          {onContinue && (
+            <button onClick={() => { setMenu(false); onContinue(); }}>Continue in a new chat</button>
+          )}
           {onRename && !adopted && (
             <button onClick={() => { setMenu(false); setNaming(true); }}>Rename thread</button>
           )}
@@ -269,7 +272,7 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
   /** One line: the title and when it wrapped up. */
   slim?: boolean;
   /** Rename, archive, delete - the same ⋯ the machine screen's rows have. */
-  actions?: { onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void };
+  actions?: { onContinue?: () => void; onRename?: (title: string) => void; onArchive?: () => void; onDelete?: () => void };
 }) {
   const now = useNow();
   useSeenVersion();
