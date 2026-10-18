@@ -856,7 +856,7 @@ test('the Git button is always in the header, and follows the project a chat edi
   }
 });
 
-test('a terminal chat has the Git button too', async () => {
+test('a terminal chat has the Git button and the full Agents panel', async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react';
     import { createRoot } from 'react-dom/client';
@@ -868,6 +868,8 @@ test('a terminal chat has the Git button too', async () => {
         if (method === 'model.list') return { models:[], modes:[] };
         if (method === 'session.commands') return { commands:[] };
         if (method === 'session.messages') return { messages:[] };
+        if (method === 'agent.list') return { agents:[{ id:'claudes', engine:'claude', account:'a1', label:'Claude', available:true, auth:'authenticated', modes:[], shown:true }] };
+        if (method === 'session.list') return { sessions:[session] };
         if (method === 'git.status') return { repo:true, root:'/home/me/code/tool', branch:'main', head:{commit:'abc'},
           files:[{path:'a.py',status:'M',add:1,del:0},{path:'b.py',status:'A',add:2,del:0}] };
         if (method === 'git.graph') return { repo:true, commits:[], worktrees:[] };
@@ -886,6 +888,12 @@ test('a terminal chat has the Git button too', async () => {
     const git = view.locator('.bar').getByRole('button', {name:'Git: 2 changed files',exact:true});
     await git.waitFor();
     await git.click();
-    await view.getByRole('dialog', {name:'Git',exact:true}).getByRole('tab', {name:/^Changes/}).waitFor();
+    const gitSheet = view.getByRole('dialog', {name:'Git',exact:true});
+    await gitSheet.getByRole('tab', {name:/^Changes/}).waitFor();
+    await view.keyboard.press('Escape');
+    await gitSheet.waitFor({ state:'detached' });
+    // The same Agents panel as a Helm chat, with a task form, not a short list.
+    await view.locator('.bar').getByRole('button', {name:'Agents',exact:true}).click();
+    await view.getByRole('dialog', {name:'Agents'}).getByRole('button', {name:/New task/}).waitFor();
   } finally { await view.close(); }
 });

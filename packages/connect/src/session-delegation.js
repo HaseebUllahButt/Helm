@@ -136,7 +136,9 @@ export class SessionDelegation {
     }
     const parent = id ? this.#sessions.get(id) : null;
     const parentGeneration = parent?.stopGeneration ?? 0;
-    if (parent && !parent.driver) throw new Error('the parent must be an agent session');
+    // A Claude chat in a terminal is a parent too: its helpers' results are
+    // typed into it like any message. Only a plain shell has no agent to tell.
+    if (parent && !parent.driver && !parent.nativeChat) throw new Error('the parent must be an agent session');
     if (parent && callerThreadId && (parent.engine !== 'codex' || parent.engineSessionId !== callerThreadId)) {
       throw new Error('the calling Codex thread does not match the inherited Helm parent; use --parent with the intended orchestrator ID');
     }

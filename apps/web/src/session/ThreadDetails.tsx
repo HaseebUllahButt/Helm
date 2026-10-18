@@ -7,11 +7,13 @@ import { ChangesPanel, type GitStatus } from './Changes';
 /** Git and the browser have their own buttons in the chat header; this panel is the agents. */
 export type DetailsTab = 'agents' | 'changes';
 
-export function ThreadDetails({ client, env, session, tab, git, gitCwd = session.cwd, reloadGit, onClose, onOpen, onOpenNative, reviewAttention = false, onNativeAttention }: {
+export function ThreadDetails({ client, env, session, tab, git, gitCwd = session.cwd, reloadGit, onClose, onOpen, onOpenNative, reviewAttention = false, onNativeAttention, nativeOnly = false }: {
   client: Client; env: Environment; session: Session; tab: DetailsTab;
   git: GitStatus | null; reloadGit: () => void; onClose: () => void;
   /** Where Git is read: the chat's folder, or the project it edited when its folder is not one. */
   gitCwd?: string;
+  /** A terminal CLI Helm cannot start helpers for: only the helpers it ran itself. */
+  nativeOnly?: boolean;
   onOpen?: (session: Session) => void; onOpenNative?: (agent: NativeAgent) => void; reviewAttention?: boolean; onNativeAttention?: () => void;
 }) {
   const ref = useDialog(onClose);
@@ -47,7 +49,7 @@ export function ThreadDetails({ client, env, session, tab, git, gitCwd = session
       }}>
       <div className="details-heading"><div><h2>Agents</h2><p>{env.name} · {session.title}</p></div><button className="iconbtn" aria-label="Close agents" onClick={onClose}><Icon name="close" size={18} /></button></div>
       <div className="details-content">
-        <Subagents embedded onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} onOpenNative={onOpenNative} />
+        <Subagents embedded nativeOnly={nativeOnly} onNativeAttention={onNativeAttention} reviewAttention={reviewAttention} client={client} env={env} parent={session} onClose={onClose} onOpen={onOpen} onOpenNative={onOpenNative} />
       </div>
     </div>
   </div>;
