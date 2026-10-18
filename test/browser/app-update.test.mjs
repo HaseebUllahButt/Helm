@@ -25,7 +25,7 @@ test('blocked machine updates show a notice and open the update review', async (
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
     await page.evaluate(() => window.mount(true));
     await page.getByRole('status').waitFor();
-    assert.match(await page.getByRole('status').innerText(), /why.*Local changes are blocking/);
+    assert.match(await page.getByRole('status').innerText(), /cannot update on why\. It has local changes/);
     assert.doesNotMatch(await page.getByRole('status').innerText(), /HomePC/);
     await page.getByRole('button', { name: 'Review updates' }).click();
     assert.equal(await page.evaluate(() => window.opened), 1);

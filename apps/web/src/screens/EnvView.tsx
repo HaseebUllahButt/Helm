@@ -433,7 +433,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         )}
         {!env.online && (
           <div className="banner warn">
-            {env.lastSeen ? `Last seen ${ago(env.lastSeen)}. ` : ''}Threads open again when it is back.
+            Offline{env.lastSeen ? ` · last seen ${ago(env.lastSeen)}` : ''}. Threads open again when it is back.
           </div>
         )}
 

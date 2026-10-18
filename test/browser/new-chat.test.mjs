@@ -366,7 +366,8 @@ for (const width of [1280,390]) test(`a quick chat says "quick chat" where the f
   await bar.waitFor();
   assert.match(await bar.locator('.sub').innerText(),/laptop\s*· quick chat/);
   assert.doesNotMatch(await bar.innerText(),/quickone|\.helm/);
-  assert.equal(await bar.getByRole('button',{name:/^Git/}).count(),0);
+  // Git is always in the header; a quick chat's Git sheet says why it is empty.
+  assert.equal(await bar.getByRole('button',{name:/^Git/}).count(),1);
   assert.equal(await page.evaluate(()=>window.calls.some(c=>c.method==='git.status')),false);
   await bar.getByRole('button',{name:'more'}).click();
   assert.equal(await page.getByRole('button',{name:'Send to another machine'}).count(),0);
