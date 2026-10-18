@@ -10,7 +10,7 @@ import { TodoStrip, stripTodos } from './Todos';
 import { RecoveryCard } from './RecoveryCard';
 import { Controls, trayPrefs, type Kind } from './Controls';
 import { Transcript, splitNote, isCompaction } from './Transcript';
-import { useGitStatus } from './Changes';
+import { useGitStatus } from './gitStatus';
 import { changesOf } from './stepWords';
 import { expandPastes } from './pasteStore';
 import { Confirm, TextPrompt, Sheet } from '../Modal';

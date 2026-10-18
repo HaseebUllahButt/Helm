@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Confirm } from '../Modal';
 import { useNow, waitingSince } from '../useNow';
 import { BackIcon, Icon } from '../Icon';
-import { QrCode } from '../QrCode';
+// The QR drawing code is only needed here: it loads with the first invite, not with the app.
+const QrCode = lazy(() => import('../QrCode').then((m) => ({ default: m.QrCode })));
 import { Client, isCleartext, CLEARTEXT_NOTE, type Device } from '../client';
 import { AddMachine } from './Login';
 
@@ -150,7 +151,9 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
             {expired ? (
               <p className="note">This link has expired.</p>
             ) : (<>
-              <QrCode value={invite.link} label="Pairing code: scan with the phone you are adding" />
+              <Suspense fallback={<div className="qr-wait" aria-hidden="true" />}>
+                <QrCode value={invite.link} label="Pairing code: scan with the phone you are adding" />
+              </Suspense>
               <p className="note">
                 Scan it with the phone camera, or open the link on the new
                 device. Keep it secret: it ends in about {minutesLeft} min or

@@ -1,8 +1,13 @@
+import { lazy, Suspense } from 'react';
 import { Client, type Environment, type Session, type NativeAgent } from '../client';
 import { useDialog } from '../useDialog';
 import { BackIcon, Icon } from '../Icon';
 import { Subagents } from './Subagents';
-import { ChangesPanel, type GitStatus } from './Changes';
+import type { GitStatus } from './gitStatus';
+
+// The Git panel (graph, diffs, pull requests, pipeline) is its own chunk: it
+// loads the first time the Git button is tapped, not with every chat.
+const ChangesPanel = lazy(() => import('./Changes').then((m) => ({ default: m.ChangesPanel })));
 
 /** Git and the browser have their own buttons in the chat header; this panel is the agents. */
 export type DetailsTab = 'agents' | 'changes';
@@ -17,7 +22,9 @@ export function ThreadDetails({ client, env, session, tab, git, gitCwd = session
   const ref = useDialog(onClose);
   if (tab === 'changes' && git?.repo) return <div className="thread-details-back" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="thread-details git-details" ref={ref} role="dialog" aria-modal="true" aria-label="Git" tabIndex={-1}>
-      <ChangesPanel client={client} env={env} cwd={gitCwd} sessionId={session.id} status={git} reload={reloadGit} onClose={onClose} onOpen={onOpen} />
+      <Suspense fallback={<div className="details-content"><p className="note">Opening Git…</p></div>}>
+        <ChangesPanel client={client} env={env} cwd={gitCwd} sessionId={session.id} status={git} reload={reloadGit} onClose={onClose} onOpen={onOpen} />
+      </Suspense>
     </div>
   </div>;
   if (tab === 'changes') return <div className="thread-details-back" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>

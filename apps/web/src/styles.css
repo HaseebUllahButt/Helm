@@ -2818,6 +2818,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 
 /* Pairing by camera: centred, with the white quiet zone the code needs. */
 .qr { display: block; margin: 4px auto 12px; border-radius: 10px; max-width: 100%; height: auto; }
+/* Holds the code's place while its drawing code arrives, so the sheet does not jump. */
+.qr-wait { width: 196px; height: 196px; margin: 4px auto 12px; border-radius: 10px; background: #fff; }
 
 
 .modal-actions .spacer { flex: 1; }
