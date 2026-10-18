@@ -12,6 +12,13 @@ test('title fallback finds the request after a greeting and injected context', (
   assert.equal(promptTitle(['hi', 'thanks!']), null);
 });
 
+test('a short message keeps its words when the opener was most of it', () => {
+  assert.equal(informative('hello there'), 'hello there');
+  assert.equal(informative('Please help'), 'Please help');
+  assert.equal(informative('please ask me'), 'ask me');
+  assert.equal(informative('Hi there!\nfix the login bug'), 'fix the login bug');
+});
+
 test('long fallback titles end at a word boundary and preserve substantive text', () => {
   const title = promptTitle(['Please investigate why the authentication refresh endpoint intermittently returns an error']);
   assert.equal(title, 'investigate why the authentication refresh endpoint…');

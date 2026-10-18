@@ -1526,10 +1526,16 @@ export class Sessions extends EventEmitter {
     }
     visited.add(id);
     const session = this.#index.get(id);
+    const children = [...this.#index.values()].filter((child) => child.delegation?.parentId === id);
     if (session) {
       session.stoppedAt = Date.now();
       session.stopGeneration = (session.stopGeneration ?? 0) + 1;
-      session.recovery = { kind: 'interrupted', message: 'Stopped by you. Child tasks were also stopped.', at: Date.now() };
+      // Helpers are mentioned only when there were some to stop.
+      const running = children.filter((child) => !['done', 'error', 'interrupted'].includes(child.delegation?.status));
+      session.recovery = {
+        kind: 'interrupted', at: Date.now(),
+        message: running.length ? `Stopped by you. ${running.length === 1 ? 'Its helper was' : 'Its helpers were'} stopped too.` : 'Stopped by you.',
+      };
       if (session.delegation) {
         session.delegation.status = 'interrupted';
         session.delegation.finishedAt = Date.now();
@@ -1538,7 +1544,6 @@ export class Sessions extends EventEmitter {
       this.#save();
       this.emit('session', session);
     }
-    const children = [...this.#index.values()].filter((child) => child.delegation?.parentId === id);
     const stopping = children.map((child) => this.interrupt(child.id, visited));
     // "Stop" stops the queue too, and before the driver is asked: a settled
     // turn is what wakes the pump, so a stop that left the queue intact

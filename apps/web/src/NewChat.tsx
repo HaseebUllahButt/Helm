@@ -119,7 +119,9 @@ export function NewChat({ client, envs, envId, initialFolder, quick: startQuick 
   const listId = useId();
   const list = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const startEnv = envId ? envs.find((e) => e.id === envId && e.online) : undefined;
+  // One machine online: there is nothing to choose, so it starts on its folders.
+  const online = envs.filter((e) => e.online);
+  const startEnv = envId ? envs.find((e) => e.id === envId && e.online) : online.length === 1 ? online[0] : undefined;
   const [step, setStep] = useState<Step>(startEnv ? initialFolder || startQuick ? 'cli' : 'folder' : 'machine');
   const [machine, setMachine] = useState<Environment | null>(startEnv ?? null);
   const [folder, setFolder] = useState(startEnv && !startQuick ? initialFolder ?? '' : '');

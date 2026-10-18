@@ -23,12 +23,18 @@ until `text` starts with "helm / Search anything".
   `offline-cache`; `test/seen-sync`, `inventory`, `inventory-active`.
 
 ## Rename, archive, delete
+- **Sees:** each row has a ⋯ button ("actions for <title>") with **Rename
+  thread**, **Archive thread**, **Delete thread**. Delete asks: "Delete
+  "<title>"? This ends the agent and permanently removes the thread from
+  helm." with **Cancel** / **Delete**. Archived chats fold under
+  "ARCHIVED" on the machine screen. The chat's own ⋯ menu ("more") has the
+  same items plus "Unarchive thread".
 - **Prove (driven):**
   ```sh
   $V click "actions for <title>"; $V click "Rename thread"
   $V key Control+a; $V type "my new name"; $V key Enter
   $V click "actions for my new name"; $V click "Archive thread"
-  $V click "actions for <other>"; $V click "Delete thread"; $V click "delete"
+  $V click "actions for <other>"; $V click "Delete thread"; $V click "Delete"
   ```
 - **Proof:** the new name; the machine screen shows "ARCHIVED 1"; the
   deleted chat is gone. Only do this to chats you made.

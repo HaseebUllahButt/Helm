@@ -248,7 +248,10 @@ export class DriverEvents {
       // A wake-up that was cut short is not the task being stopped.
       if (e.status === 'error' || (e.status === 'interrupted' && !wake)) {
         const limited = e.status === 'error' && isUsageLimit(e);
-        s.recovery = { kind: limited ? 'limited' : e.status, message: e.error || 'The task was stopped.', at: Date.now() };
+        // A stop the owner asked for already says so (and whether helpers
+        // were stopped too); the driver's own end-of-turn keeps those words.
+        const stopped = e.status === 'interrupted' && s.recovery?.kind === 'interrupted' ? s.recovery.message : 'The task was stopped.';
+        s.recovery = { kind: limited ? 'limited' : e.status, message: e.error || stopped, at: Date.now() };
         for (const key of ['errorCode', 'errorKind', 'retryable']) {
           if (Object.hasOwn(e, key)) s.recovery[key] = e[key];
         }

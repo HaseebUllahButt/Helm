@@ -234,3 +234,27 @@ test('reduced motion stills the spinner; the light theme keeps every status read
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
   await shot(page, 'sidebar-shelves-light-390.png');
 });
+
+test('archiving from Home says so, and Undo brings the chat back', async t => {
+  const { page, boot } = await pageFor(t, { width: 390, height: 844 });
+  await boot();
+  await page.evaluate(() => {
+    const now = Date.now();
+    window.archived = [];
+    const notes = { id: 'notes', title: 'Write the release notes', cwd: '/home/me/helm', engine: 'claude', profileId: 'claude', driver: 'claude',
+      turns: 3, status: 'idle', alive: true, updatedAt: now - 300000 };
+    const client = window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [notes] });
+    const rpc = client.rpc;
+    client.rpc = (env, method, params) => method === 'session.archive'
+      ? (window.archived.push(params), Promise.resolve({ ok: true })) : rpc(env, method, params);
+    window.mount(client);
+  });
+  await page.getByRole('button', { name: 'actions for Write the release notes' }).click();
+  await page.getByRole('button', { name: 'Archive thread' }).click();
+  const notice = page.getByRole('status').filter({ hasText: 'Archived Write the release notes' });
+  await notice.waitFor();
+  await notice.getByRole('button', { name: 'Undo' }).click();
+  await page.waitForFunction(() => window.archived.length === 2);
+  assert.deepEqual(await page.evaluate(() => window.archived), [{ id: 'notes', archived: true }, { id: 'notes', archived: false }]);
+  await notice.waitFor({ state: 'detached' });
+});

@@ -132,6 +132,6 @@ test('the sidebar rows have the same ⋯ menu as the machine screen: rename, arc
   await page.getByRole('button',{name:'Archive thread'}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Rename thread'}).count(),1);
   await page.getByRole('button',{name:'Delete thread'}).click();
-  await page.getByRole('button',{name:'delete'}).click();
+  await page.getByRole('button',{name:'Delete',exact:true}).click();
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.kill'&&c.params.id==='done1'));
 });

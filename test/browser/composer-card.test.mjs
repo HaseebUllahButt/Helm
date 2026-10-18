@@ -37,8 +37,11 @@ before(async () => {
     const cmd={requestId:'cmd',kind:'command',tool:'Bash',title:'Run the tests',detail:'npm exec --workspace @helm/web -- tsc --noEmit && node --test --test-concurrency=2 test/browser/composer-card.test.mjs',
       reason:'Not in your allowed commands',defaultTo:'deny',allowEdit:true,input:{command:'npm test'},
       options:[{id:'allow',role:'allow',label:'Allow'},{id:'always',role:'allow-always',label:'Always allow npm'},{id:'deny',role:'deny',label:'Deny'}]};
+    const toolAsk={requestId:'tool',kind:'tool',tool:'devin',title:'Run a command',detail:JSON.stringify({command:'echo hi',cwd:'/work'},null,2),
+      options:[{id:'allow',role:'allow',label:'Allow'},{id:'deny',role:'deny',label:'Deny'}]};
     const scenes={
       idle:{events:done(base())},
+      tool:{events:base(),status:'blocked',pending:[toolAsk]},
       edits:{events:done(base()),session:{mode:'acceptEdits'}},
       yolo:{events:done(base()),session:{mode:'bypassPermissions'}},
       tasks:{events:withTodos(list),status:'working'},
@@ -223,6 +226,14 @@ test('on the card the title has its own line and the note box opens only when as
   const decision = await decisionOf(page);
   assert.equal(decision.option, 'deny');
   assert.equal(decision.message, 'use the fast suite');
+});
+
+test('a tool approval shows what the tool was given as plain lines, not JSON', async (t) => {
+  const page = await open(t, 'tool');
+  const banner = page.locator('.slab .sheet.banner.tool');
+  await banner.waitFor();
+  assert.equal(await banner.locator('.ask-kind').textContent(), 'Tool approval');
+  assert.equal(await banner.locator('.sheet-json').innerText(), 'command: echo hi\ncwd: /work');
 });
 
 test('edit before allowing still works from the card', async (t) => {

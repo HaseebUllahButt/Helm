@@ -11,8 +11,8 @@ before(async () => {
     import { createRoot } from 'react-dom/client';
     import { Shell } from './apps/web/src/App';
     const token = 'helm1.' + btoa(JSON.stringify({net:'network',sub:'device'})) + '.test';
-    window.mount = () => {
-      const envs = ['laptop','vm'].map(id => ({id,name:id,online:true,info:{}}));
+    window.mount = (ids = ['laptop','vm']) => {
+      const envs = ids.map(id => ({id,name:id,online:true,info:{}}));
       const session = {id:'native',title:'Current chat',cwd:'/work/current',engine:'gemini',profileId:'claude',
         nativeCli:true,pty:true,shared:true,alive:true,status:'idle',turns:1,updatedAt:Date.now()};
       const quick = {id:'quickone',title:'Quick question',cwd:'/home/test/.helm/quick/quickone',quick:true,engine:'claude',
@@ -64,7 +64,7 @@ before(async () => {
 });
 after(async()=>browser?.close());
 
-async function pageFor(t, saved, options = {}) {
+async function pageFor(t, saved, { machines, ...options } = {}) {
   const page = await browser.newPage({viewport:{width:1280,height:900}, ...options});
   t.after(()=>page.close());
   const errors=[];
@@ -74,10 +74,19 @@ async function pageFor(t, saved, options = {}) {
   await page.goto('http://helm-test/');
   if(saved) await page.evaluate(saved=>localStorage.setItem('helm.last-folder:network:device',JSON.stringify(saved)),saved);
   await page.addScriptTag({content:script});
-  await page.evaluate(()=>window.mount());
+  await page.evaluate((machines)=>window.mount(machines),machines);
   await page.locator('.sidebar').waitFor();
   return page;
 }
+
+test('one machine online skips the machine step and asks for a folder straight away',async t=>{
+  const page=await pageFor(t,null,{machines:['laptop']});
+  await page.keyboard.press('Control+Shift+o');
+  await page.getByRole('combobox',{name:'Which folder on laptop?'}).waitFor();
+  assert.equal(await page.getByRole('combobox',{name:'Which machine?'}).count(),0);
+  await page.getByRole('option').filter({hasText:'No folder'}).click();
+  await startPickedChat(page,{envId:'laptop',folder:undefined});
+});
 
 async function startPickedChat(page, expected) {
   await page.getByRole('combobox',{name:'Which CLI?'}).waitFor();
