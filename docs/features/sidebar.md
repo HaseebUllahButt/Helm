@@ -24,7 +24,7 @@ until `text` starts with "helm / Search anything".
 - **Sees:** each row has a ⋯ button ("actions for <title>") with **Rename
   thread**, **Archive thread**, **Delete thread**. Delete asks: "Delete
   "<title>"? This ends the agent and permanently removes the thread from
-  helm." with **Cancel** / **delete**. Archived chats fold under
+  helm." with **Cancel** / **Delete**. Archived chats fold under
   "ARCHIVED" on the machine screen. The chat's own ⋯ menu ("more") has the
   same items plus "Unarchive thread".
 - **Prove (driven):**
@@ -32,7 +32,7 @@ until `text` starts with "helm / Search anything".
   $V click "actions for <title>"; $V click "Rename thread"
   $V key Control+a; $V type "my new name"; $V key Enter
   $V click "actions for my new name"; $V click "Archive thread"
-  $V click "actions for <other>"; $V click "Delete thread"; $V click "delete"
+  $V click "actions for <other>"; $V click "Delete thread"; $V click "Delete"
   ```
 - **Proof:** the new name in the list; the archived chat leaves Settled and
   the machine screen shows "ARCHIVED 1"; the deleted chat is gone.
