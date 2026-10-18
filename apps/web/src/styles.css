@@ -1391,6 +1391,10 @@ pre.snippet {
 /* Setup rows that have opened into a form or a note keep the group's left
    edge, so the section does not jump sideways when one expands. */
 .setup-open { margin: 6px 2px 10px; }
+/* A note that sits inside a card of rows (notifications blocked, an error)
+   takes the rows' side padding, so it reads as one more row, not a stray
+   paragraph pressed against the row above. */
+.rows > .note.setup-open:not(.install-note) { margin: 0; padding: 10px 12px 12px; }
 /* Quiet until you reach for it. Unpairing is rare and reversible only by
    fetching a fresh link, but painting it red at rest made the loudest thing
    on the screen the one action you almost never want. */
@@ -3107,6 +3111,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   .turn.user .bubble { position: relative; }
   .turn.user:not(.queued) .bubble-meta { position: absolute; top: 100%; right: 4px; margin: 3px 0 0; white-space: nowrap; }
 }
+/* A touch screen has no hover to reveal the time, so it stays in the bubble:
+   at the end of the last line when it fits, the way messaging apps do, so a
+   one-word message is one line, and a long one grows no taller. */
+@media (hover: none) {
+  .turn.user .bubble { display: flow-root; }
+  .turn.user:not(.queued) .bubble-meta { float: right; margin: 0 0 0 12px; line-height: calc(1.6 * var(--t-read)); }
+}
 
 /* "Latest": a small pill whenever you have scrolled away from the end. */
 .jump {
@@ -3180,6 +3191,10 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .sheet.banner .q-actions button { min-height: 36px; }
 @media (max-width: 599px) {
   .sheet.banner { max-height: 46dvh; padding: 12px 12px 10px; }
+  /* The title ("Run a command") kept losing its end to the tags beside it.
+     The tool's name repeats the amber label above, so on a phone it steps
+     aside; what it asked is still shown in full below. */
+  .sheet.banner .sheet-head .tag.tool { display: none; }
   .todo-strip { margin: 0 20px -19px; }
   .sheet.banner .sheet-actions button { flex: 1 1 auto; min-height: 44px; }
 }

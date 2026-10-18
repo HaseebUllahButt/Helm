@@ -74,7 +74,7 @@ export function PermissionSheet({ permission: p, onAnswer, busy, variant = 'shee
         <i className="sdot blocked" />
         {banner && <span className="ask-kind">{ASK_LABEL[p.kind]}</span>}
         <b>{p.title}</b>
-        {p.tool && p.kind !== 'plan' && <span className="tag">{p.tool}</span>}
+        {p.tool && p.kind !== 'plan' && <span className="tag tool">{p.tool}</span>}
         {p.parentId && <span className="tag">subagent</span>}
         {p.at && <span className="tag waiting">waiting {waitingSince(p.at, now)}</span>}
       </div>
