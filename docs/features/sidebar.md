@@ -45,9 +45,20 @@ until `text` starts with "helm / Search anything".
 - **Prove (driven):** `$V key Control+k; $V text | tail -15; $V key Escape`
   lists actions; `$V key Control+Slash` shows "IN THE NEW-CHAT BOX", "IN A
   CHAT". `$V click "verify-<you> idle"` opens the machine screen.
+- **Said in chats (driven 2026-10-18):** words typed in the box (two or more
+  letters) are looked for inside every online machine's chats once typing
+  pauses. Prove: send "the pelican flies at dawn" in a fake chat, wait
+  "done.", `$V click "Search anything"; $V type pelican; $V wait "SAID IN CHATS"` (the group label is drawn in capitals):
+  the chat's row shows "You: the pelican flies at dawn"; Enter opens it.
+  A chat whose title already matched is not repeated. From a terminal,
+  `$H search pelican` prints the same chat with the sentence. Each machine
+  answers from `~/.helm/search-index.json` (`search-index.js`); the first
+  search after an install reads every chat log once.
+- **Traps:** the agent's reply is indexed when it finishes, not while it
+  streams. Helpers, the brain and terminals are never found.
 - **Traps:** a sleeping machine's screen is empty, not its last list.
-- **Tests:** `test/browser/ui`, `global-keys`, `sidebar`; `test/palette`,
-  `machine-kind`.
+- **Tests:** `test/browser/ui`, `global-keys`, `sidebar`, `palette-search`;
+  `test/palette`, `machine-kind`, `search-index`.
 
 ## Helm brain
 - **Not yet driven;** starting it with a real account costs money. In the
