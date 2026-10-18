@@ -2011,8 +2011,7 @@ export function isCleartext(url: string): boolean {
 }
 
 export const CLEARTEXT_NOTE =
-  'This connection is not encrypted. Fine on your own wifi; on a network you do not trust, '
-  + 'anyone on it could read what this device sends, including its key.';
+  'This connection is not encrypted. Use it only on a network you trust.';
 
 /**
  * Sign in.

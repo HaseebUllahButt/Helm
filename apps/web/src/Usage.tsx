@@ -184,7 +184,7 @@ export function UsageView({ client, envs, initialEnvId, onBack }: {
         {loading && <div className="empty quiet">reading what the CLIs recorded…</div>}
 
         {!loading && answered.length === 0 && <div className="empty quiet">
-          <p>{targets.length ? 'Usage unavailable. No machine has returned a report.' : 'No machines to report usage.'}</p>
+          <p>{targets.length ? 'No machine sent usage yet.' : 'No machines to report usage.'}</p>
           {!!targets.length && <button className="linkish" onClick={() => targets.forEach(e => fetchReport(e, false))}>Retry usage</button>}
         </div>}
         {!loading && answered.length > 0 && <Headline totals={scoped} window={WINDOWS.find((w) => w.id === win)!.label} />}
@@ -242,7 +242,6 @@ function ModelDetail({ client, targets, model, since, window, onClose }: {
   return <Sheet label={`${model || 'Unknown model'} usage`} onClose={onClose}>
     <div className="usage-model-detail">
       <div className="modal-head"><div className="modal-title">{model || 'Unknown model'}</div><button className="ghost" onClick={onClose}>Close</button></div>
-      <p className="usage-limits-note">{targets.map(e => e.name).join(', ')}</p>
       {pending && <p role="status" className="usage-limits-note">Reading model history…</p>}
       {answered > 0 && <>
         <Headline totals={t} window={window} tiles={false} />
@@ -253,7 +252,7 @@ function ModelDetail({ client, targets, model, since, window, onClose }: {
         </dl>
       </>}
       {!pending && answered === 0 && <p className="usage-limits-note">Model history unavailable. The machines may be offline or need an update.</p>}
-      <p className="usage-limits-note">{answered} of {targets.length} machines</p>
+      <p className="usage-limits-note" title={targets.map(e => e.name).join(', ')}>{answered} of {targets.length} machines</p>
     </div>
   </Sheet>;
 }

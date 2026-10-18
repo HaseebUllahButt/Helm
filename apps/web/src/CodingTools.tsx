@@ -107,7 +107,7 @@ export function CodingTools({ client, env }: { client: Client; env: Environment 
           <div className="row toggle">
             <span className="grow">
               <span className="rt">Update automatically</span>
-              <span className="rm wrap">Every few hours. Chats that are running are never interrupted.</span>
+              <span className="rm wrap">Every few hours. Running chats are not stopped.</span>
             </span>
             <button className={`switch${info.auto ? ' on' : ''}`} role="switch" aria-checked={info.auto}
               aria-label={`Update coding tools automatically on ${env.name}`} onClick={() => setAuto(!info.auto)}><i /></button>

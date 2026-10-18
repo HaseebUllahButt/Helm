@@ -64,8 +64,7 @@ function MachineName({ client, env, onRenamed }: {
       </button>
       {!env.online && (
         <div className="banner warn">
-          This machine is offline. A machine writes its own name, so the
-          rename has to wait until it is back.
+          This machine is offline. Rename it when it is back.
         </div>
       )}
       <p className="note">
@@ -74,14 +73,13 @@ function MachineName({ client, env, onRenamed }: {
           // "Renamed" under "this machine is offline" is two answers to the
           // same question; the banner is the one that matters now.
           : done && env.online
-            ? `Renamed. Every machine and device in this network calls it ${env.name} now.`
+            ? `Renamed to ${env.name}.`
             // A machine that joined under a hostname with a space or an
             // apostrophe in it keeps that name - nothing rewrites a record
             // behind its owner's back - but ssh cannot reach it under one.
             : !validMachineName(env.name)
-              ? <>The name every screen shows. ssh cannot use this one: rename it to
-                  {' '}{MACHINE_NAME_RULE} and <code>ssh {env.name.replace(/[^A-Za-z0-9._-]/g, '')}</code> works.</>
-              : <>The name every screen shows, and the one ssh answers to: <code>ssh {env.name}</code></>}
+              ? `ssh cannot use this name. Use ${MACHINE_NAME_RULE}.`
+              : <>For ssh: <code>ssh {env.name}</code></>}
       </p>
       {error && <div className="error">{error}</div>}
     </form>
@@ -104,8 +102,8 @@ function MachineKind({ client, env, onChanged }: {
 }) {
   const KINDS = [
     { id: 'pc' as const, label: 'Computer', hint: 'runs agents, and controls others' },
-    { id: 'vm' as const, label: 'Always-on server', hint: 'a home the others dial - takes an https address and serves it' },
-    { id: 'nas' as const, label: 'Storage', hint: 'storage for the network - stays reachable' },
+    { id: 'vm' as const, label: 'Always-on server', hint: 'others connect to it; it gets an https address' },
+    { id: 'nas' as const, label: 'Storage', hint: 'keeps files for the network' },
   ];
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -138,15 +136,9 @@ function MachineKind({ client, env, onChanged }: {
           </button>
         ))}
       </div>
-      <p className="note">
-        An always-on server takes an https address and serves it; switching
-        away stops advertising that address. This only changes what the other
-        machines expect - the name shown everywhere stays the same.
-      </p>
       {!env.online && (
         <div className="banner warn">
-          This machine is offline. A machine writes its own record, so the
-          change has to wait until it is back.
+          This machine is offline. Change it when it is back.
         </div>
       )}
       {error && <div className="error">{error}</div>}
@@ -213,11 +205,6 @@ export function EnvSettings({ client, env, onBack, onEdit, onRenamed }: {
             );
           })}
         </div>
-        <p className="note">
-          The checked models are what the model picker offers; everything else
-          stays one tap away under “more”. Start defaults apply from every
-          paired device.
-        </p>
         {error && <div className="error">{error}</div>}
       </div></div>
     </>

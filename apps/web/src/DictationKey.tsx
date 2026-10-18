@@ -21,7 +21,7 @@ export function DictationKey({ client, envs, onSaved }: {
   const withKey = envs.filter((e) => e.info.voice);
   const status = withKey.length
     ? `Works through ${withKey.map((e) => e.name).join(', ')}`
-    : 'No machine has a key yet, so the microphone is hidden';
+    : 'No key yet, so the microphone is hidden';
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
@@ -83,7 +83,7 @@ export function DictationKey({ client, envs, onSaved }: {
                    onChange={(e) => setKey(e.target.value)} />
           </label>
           <p className="note" style={{ margin: 0 }}>
-            Get one at console.groq.com/keys. It is checked with Groq, then kept on each of your machines - never on this device.
+            Get one at console.groq.com/keys. It is kept on your machines, not on this device.
           </p>
           <div className="link-actions">
             <button type="button" className="ghost" onClick={() => { setAdding(false); setKey(''); setError(''); }}>Cancel</button>

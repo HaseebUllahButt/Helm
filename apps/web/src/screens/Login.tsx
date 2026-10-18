@@ -208,8 +208,7 @@ export function Login({ notice, onDone }: { notice?: string; onDone: (a: Auth) =
           </button>
           {error && <div className="error">{error}</div>}
           <p className="note" style={{ marginTop: 14, textAlign: 'center' }}>
-            Make a fresh link from Devices on any paired device, or run <code>helm link</code> on a joined computer.
-            Pair once; this device stays paired until you remove it.
+            Get a link from Devices on a paired device, or run <code>helm link</code> on a joined computer.
           </p>
           {!isLocal && !/Android|iPhone|iPad|iPod/.test(navigator.userAgent) && (
             <p className="note" style={{ textAlign: 'center' }}>
@@ -247,7 +246,7 @@ export function AddMachine({ client }: { client: Client }) {
       <div className="row">
         <span className="grow">
           <span className="rt">Add a computer</span>
-          <span className="rm">install Helm there, then run this network's join command</span>
+          <span className="rm">install Helm there, then run the join command</span>
         </span>
       </div>
       <select aria-label="Computer kind" value={role} onChange={(e) => { setRole(e.target.value as typeof role); setInvite(null); }}>
@@ -264,7 +263,7 @@ export function AddMachine({ client }: { client: Client }) {
           try { await navigator.clipboard.writeText(command); setCopied(true); }
           catch { setError('could not copy - select the command instead'); }
         }}><span className="grow"><span className="rt">{copied ? 'copied' : 'Copy join command'}</span></span></button>
-        <p className="note">Private, single-use, expires in 10 minutes. The computer and its web app join together.</p>
+        <p className="note">Single use. It ends in 10 minutes.</p>
       </>)}
       {error && <div className="error">{error}</div>}
     </>

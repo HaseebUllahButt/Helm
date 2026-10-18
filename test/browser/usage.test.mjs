@@ -101,7 +101,7 @@ test('Usage shows reported allowance, expired and missing reports, and model-spe
 test('Usage ignores a late response from the previous date range', async t => {
   const page = await setup(t,1280,true);
   await page.getByLabel('Environment').selectOption('vm');
-  await page.getByText('Usage unavailable. No machine has returned a report.',{exact:true}).waitFor();
+  await page.getByText('No machine sent usage yet.',{exact:true}).waitFor();
   assert.equal(await page.locator('.usage-hero').count(),0, 'missing reports must not appear as zero cost');
   await page.getByRole('button',{name:'All',exact:true}).click();
   await page.getByLabel('Environment').selectOption('laptop');
