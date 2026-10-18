@@ -94,8 +94,18 @@ export function agentMessageNote() {
   return '[Helm agent messages: Send a short question or useful detail to another agent with helm say <chat-id> -- "text". It names you as the sender. Reply to a received message with helm reply <message-id> -- "text"; read exchanges with helm messages --json. Each agent keeps its own conversation. Messages wait for the next turn, without interrupting work. Reply only when useful; do not trade acknowledgements.]';
 }
 
+/**
+ * Where an agent's account of its work goes. A handoff file every agent may
+ * add to only grows (HANDOFF.md reached 30,000 words), so there is none:
+ * commits hold what was done, the final reply what is left, and
+ * `helm pickup` (pickup.js) reads both back for the next agent.
+ */
+export function pickupNote() {
+  return '[Helm pickup: What you did goes in commit messages, what is left in your final reply; Helm keeps both, so write no handoff files. To continue earlier work, run helm pickup.]';
+}
+
 // Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = () => [delegationNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote()].filter(Boolean).join('\n');
+const toolNotes = () => [delegationNote(), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote()].filter(Boolean).join('\n');
 
 export function helmBrief(net) {
   const machines = Object.values(net?.machines ?? {});
