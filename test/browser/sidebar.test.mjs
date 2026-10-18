@@ -87,6 +87,20 @@ async function pageFor(testContext, viewport, options = {}) {
   return { page, boot };
 }
 
+for (const width of [1280, 390]) test(`an empty Home says there are no chats yet, and only then, at ${width}px`, async t => {
+  const { page, boot } = await pageFor(t, { width, height: 900 });
+  await boot();
+  await page.evaluate(() => window.mount(window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [] })));
+  const hint = page.getByRole('status').filter({ hasText: 'No chats yet' });
+  await hint.waitFor();
+  assert.match(await hint.innerText(), /Tap New chat to start one/);
+  await page.evaluate(() => window.mount(window.makeClient([{ id: 'laptop', name: 'Laptop', online: true, info: {} }], { laptop: [
+    { id: 'one', title: 'A finished chat', cwd: '/home/me/helm', engine: 'claude', profileId: 'claude', driver: 'claude', turns: 1, status: 'idle', alive: true, updatedAt: Date.now() - 60000 },
+  ] })));
+  await page.getByText('A finished chat').first().waitFor();
+  await hint.waitFor({ state: 'detached' });
+});
+
 test('attention cards distinguish failures, limits, and actual questions on mobile', async t => {
   const { page, boot } = await pageFor(t, { width: 390, height: 1000 });
   await boot();

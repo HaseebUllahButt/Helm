@@ -1707,6 +1707,18 @@ function Shell({ client, conn, onSignOut }: {
               </Fold>
             )}
 
+            {/* A first open, or every chat gone: say so, and where to start,
+                instead of a Home that is only the machine list. Only once a
+                machine has answered, so loading never looks like nothing. */}
+            {everyone.length === 0 && envs.some((e) => e.online && (liveListsSeen.current.has(e.id) || e.id in sessions)) && (
+              <div className="rows plain">
+                <div className="empty quiet" role="status">
+                  No chats yet
+                  <div className="note">Tap New chat to start one.</div>
+                </div>
+              </div>
+            )}
+
             <SendActivity jobs={sends.jobs} onOpen={(job) => navigate([
               { kind: 'env' }, { kind: 'transfer', cwd: job.source.path, jobId: job.id },
             ], job.source.machineId)} />
