@@ -107,8 +107,8 @@ export function NativeAgentView({ client, env, parent, agent, onBack }: {
       ) : (
         <p className="native-foot" role="note">
           {card.fromLog || !parent.driver && !parent.nativeChat
-            ? <>Started inside <b>{parent.title || 'its chat'}</b>. You can read it here; message it from that chat.</>
-            : <>This CLI can't pass messages to its helpers. You can read it here.</>}
+            ? <>Started inside <b>{parent.title || 'its chat'}</b>. Message it from that chat.</>
+            : <>This CLI can't send messages to its helpers.</>}
         </p>
       )}
     </>

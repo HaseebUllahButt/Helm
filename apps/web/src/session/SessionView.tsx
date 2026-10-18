@@ -478,7 +478,7 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           title={isShell ? `Close "${session.title}"?` : session.nativeCli ? `End "${session.title}"?` : `Delete "${session.title}"?`}
           body={isShell
             ? 'Anything still running in it stops.'
-            : session.nativeCli ? 'This stops the same CLI running on your laptop. Closing this view leaves it running.' : 'The agent process is closed and the thread is removed from helm.'}
+            : session.nativeCli ? 'This stops the same CLI running on your laptop. Closing this view leaves it running.' : 'The agent stops and this chat leaves Helm.'}
           confirmLabel={isShell ? 'Close' : session.nativeCli ? 'End session' : 'Delete'} danger
           onCancel={() => setKilling(false)}
           onConfirm={() => { setKilling(false); kill(); }}
@@ -577,7 +577,7 @@ function Chat({ messages, status, compacting = false, readVisual }: { messages: 
           {messages?.length === 0 && (
             <p className="placeholder">
               {status === 'blocked' || status === 'working'
-                ? 'No transcript found for this session yet. The terminal view shows what it is doing.'
+                ? 'No messages yet. The terminal view shows what it is doing.'
                 : 'Send a message to start the conversation.'}
             </p>
           )}

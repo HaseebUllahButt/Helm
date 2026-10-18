@@ -99,8 +99,7 @@ export function LinksView({ client, envs, onBack }: { client: Client; envs: Envi
       </div>
       <div className="scroll"><div className="pad column">
         <p className="note">
-          A link shows something running on one of your machines. It ends by itself after 3 hours unless it was kept.
-          A private one opens only on devices signed in to your Helm.
+          Links end after 3 hours unless kept. Private links open only on your devices.
         </p>
         {envs.map((env) => (
           <div key={env.id}>
@@ -137,10 +136,6 @@ export function NetworkSettings({ client, envs, onBack, onOpen }: {
         <div className="titles"><h1>CLI defaults</h1><span className="sub">all machines</span></div>
       </div>
       <div className="scroll"><div className="pad column">
-        <p className="note">
-          These defaults live on each machine, so a session started from any paired device uses the same model,
-          thinking, permissions and speed.
-        </p>
         {envs.map((env) => {
           const list = accounts[env.id];
           return (
@@ -148,7 +143,7 @@ export function NetworkSettings({ client, envs, onBack, onOpen }: {
               <div className="section">{env.name}</div>
               <div className="rows">
                 {!env.online ? (
-                  <div className="empty quiet">offline — its saved defaults will appear when it reconnects</div>
+                  <div className="empty quiet">offline</div>
                 ) : errors[env.id] ? (
                   <div className="empty quiet">{errors[env.id]}</div>
                 ) : !list ? (

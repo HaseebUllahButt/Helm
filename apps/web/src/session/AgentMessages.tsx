@@ -41,7 +41,7 @@ export function AgentMessages({ client, envId, parent, children }: { client: Cli
       {!listing.messages.length && !error && <p className="note">No messages yet.</p>}
       <ol className="agent-exchange-list">{listing.messages.map(message => <li key={message.id}>
         <b>{message.asUser ? 'You' : `${message.from.title} (${message.from.engine})`} → {message.to.title} ({message.to.engine})</b>
-        <small>{new Date(message.at).toLocaleString()} · {message.status === 'delivered' ? 'Delivered to chat' : message.status === 'sending' ? 'Awaiting delivery confirmation' : 'Delivery unconfirmed'}{message.replyTo ? ' · Reply' : ''}</small>
+        <small>{new Date(message.at).toLocaleString()} · {message.status === 'delivered' ? 'Delivered' : message.status === 'sending' ? 'Sending' : 'Not confirmed'}{message.replyTo ? ' · Reply' : ''}</small>
         {message.replyTo && <details><summary>In reply to</summary><p>{listing.messages.find(m => m.id === message.replyTo)?.text ?? `Message ${message.replyTo} · load earlier messages to see it.`}</p></details>}
         <Markdown text={message.text} />
         {message.error && <p className="error">{message.error}</p>}

@@ -109,7 +109,6 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
             <button type="button" className="row toggle link-private" role="switch" aria-checked={members} onClick={() => setMembers(!members)}>
               <span className="grow">
                 <span className="rt">Only my Helm devices</span>
-                <span className="rm wrap">Opens only on phones and computers signed in to your Helm.</span>
               </span>
               <span className={`switch${members ? ' on' : ''}`}><i /></span>
             </button>
@@ -123,7 +122,7 @@ export function PublicLinks({ client, env }: { client: Client; env: Environment 
       ) : (
         <button className="ghost link-add" onClick={() => setAdding(true)}><Icon name="plus" size={14} /> Share a port</button>
       )}
-      {shares?.some((s) => !s.url) && <p className="note">No machine in your network has a public address yet, so these links cannot be opened from outside.</p>}
+      {shares?.some((s) => !s.url) && <p className="note">No machine has a public address yet, so these links do not open from outside.</p>}
       {error && <div className="error">{error}</div>}
     </div>
   );

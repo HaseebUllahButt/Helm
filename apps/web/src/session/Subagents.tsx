@@ -400,7 +400,7 @@ export function Subagents({ client, env, parent, onClose, onOpen, onOpenNative, 
         {!detail ? (agent.last ? <p className="note">{agent.last}</p> : <p className="note" role="status">Reading result…</p>)
           : detail.result ? <div className="delegation-output"><Markdown text={detail.result} live={ACTIVE.includes(agent.status)} /></div>
           : <p className="note">{ACTIVE.includes(agent.status) ? 'No reply yet.' : 'Finished without a written reply.'}</p>}
-        {agent.status === 'blocked' && <p className="note">It is waiting for your approval in the chat.</p>}
+        {agent.status === 'blocked' && <p className="note">Waiting for your approval in the chat.</p>}
         {!!detail?.activity.length && <details className="native-activity">
           <summary>Recent activity</summary>
           <ol>{detail.activity.map((line, index) => <li key={index}>{line}</li>)}</ol>

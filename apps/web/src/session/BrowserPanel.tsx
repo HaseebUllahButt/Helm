@@ -95,7 +95,7 @@ export default function BrowserPanel({ client, env, session, onClose }: { client
           </button>
           <button className="bp-icon" aria-label={`Close ${t.title || host(t.url) || 'tab'}`} title="Close tab" onClick={() => void closeTab(t.id)}><Icon name="close" size={12} /></button>
         </li>)}
-      </ul> : <p className="note bp-empty">{canWindow === false ? `No tabs yet. Agents on ${env.name} browse here, out of sight; localhost reaches servers there.` : `No tabs yet. The window opens on ${env.name}'s screen and never takes your keyboard; click it to use it.`}</p>}
+      </ul> : <p className="note bp-empty">{canWindow === false ? `No tabs yet. Agents on ${env.name} browse here, out of sight.` : `No tabs yet. The window opens on ${env.name}'s screen.`}</p>}
       {tab?.problem && !tab.loading && <div className="bp-problem" role="alert"><p>{tab.problem.message}</p><button onClick={() => void act({ kind: 'navigate', url: tab.problem!.url })}>Try again</button></div>}
       {tab?.dialog && <div className="bp-dialog" role="alertdialog" aria-label="Page message"><p>{tab.dialog.message}</p><span><button onClick={() => void act({ kind: 'dialog', accept: false })}>Dismiss</button><button className="primary" onClick={() => void act({ kind: 'dialog', accept: true })}>OK</button></span></div>}
       {!!tab?.downloads.length && <div className="bp-row">{tab.downloads.map(d => <button key={d.id} disabled={d.status !== 'ready'} onClick={() => void download(d.id)}>{d.name} · {d.status === 'ready' ? 'Save' : d.status}</button>)}</div>}

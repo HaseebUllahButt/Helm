@@ -250,12 +250,12 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
               <span className="grow">
                 <span className="done-title">{taskResult.status === 'running' ? 'Running' : 'Queued'} on {taskResult.targetName}</span>
                 <span className="done-sub">{taskResult.status === 'running'
-                  ? 'The destination has accepted the task. You can close this laptop.'
-                  : 'Another machine’s hub has stored the task for delivery when the destination reconnects.'}</span>
+                  ? 'The destination took the task. You can close this laptop.'
+                  : 'It goes out when the destination reconnects.'}</span>
               </span>
             </div>
-            {taskResult.receipt && <p className="note">{bulk ? `${bulk.files ?? ''} files and history · ${bytes(bulk.bytes)}` : `${taskResult.receipt.files} files · ${bytes(taskResult.receipt.bytes)}`} · {taskResult.route === 'direct' ? 'Direct WebRTC' : 'Via hub'}<br />{taskResult.receipt.folder}</p>}
-            <p className="note">The destination agent checks project setup and recreates dependencies before continuing. Its progress and any questions appear in the destination thread.</p>
+            {taskResult.receipt && <p className="note" title={taskResult.route === 'direct' ? 'Sent direct' : 'Sent through home'}>{bulk ? `${bulk.files ?? ''} files and history · ${bytes(bulk.bytes)}` : `${taskResult.receipt.files} files · ${bytes(taskResult.receipt.bytes)}`}<br />{taskResult.receipt.folder}</p>}
+            <p className="note">Its progress and questions show in the new chat there.</p>
             {!bulk && <TaskReturn client={client} envId={source.id} transfer={{ ...returnState, handoffId, role: 'source',
               machineId: taskResult.targetMachineId!, machineName: taskResult.targetName! }} />}
             {taskResult.warning && <div className="banner">{taskResult.warning}</div>}
@@ -293,7 +293,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
                 <input className="custom" value={receipt.repository.remote} readOnly onFocus={(e) => e.target.select()} />
               </label>
               <p className="note">{receipt.repository.configured
-                ? 'Origin is configured. Fetch or pull here using this machine’s GitHub login.'
+                ? 'Origin is set. Pull here with this machine’s GitHub login.'
                 : receipt.repository.error}</p>
             </div>}
 
@@ -310,8 +310,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             )}
 
             <p className="note">
-              Files arrived{receipt.repository?.configured ? ' and Git origin was configured' : ''}. Install dependencies,
-              start services and verify environment values only when you choose to.
+              Files arrived. Nothing was installed or started.
             </p>
             {error && <div className="error">{error}</div>}
             <div className="transfer-actions">
@@ -352,14 +351,14 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
                   placeholder={session ? 'Continue where this conversation left off' : 'What should the agent do?'}
                   onChange={(event) => setPrompt(event.target.value)} />
               </label></div>
-              {session && <p className="note">Sending pauses this thread, copies its current files and recent conversation, and starts a continuation on the destination.</p>}
+              {session && <p className="note">This pauses this chat, copies its files and recent messages, and continues on the destination.</p>}
               {session && <button className="linkish" disabled={busy || locked} onClick={() => setTask(false)}>Send files only</button>}
             </>}
             {!task && preview?.git?.remote && <div className="field">
               <label className="field-label">Git origin
                 <input className="custom" value={preview.git.remote} readOnly onFocus={(e) => e.target.select()} />
               </label>
-              <p className="note">The origin URL travels with the files. Pull on the target using its GitHub login.</p>
+              <p className="note">Pull on the target with its GitHub login.</p>
             </div>}
             <div className="section">send to</div>
             <div className="rows">
@@ -429,9 +428,9 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             </div>
 
             </details>
-            {task && !bulk && <p className="note">Project files and .env are included automatically, encrypted end to end. Finished changes return here when this machine is online; conflicting local edits are kept for review.</p>}
-            {task && bulk && <p className="note">This project is big, so it is copied with its git history, encrypted, and the copy picks up where it left off if the connection drops. The work stays on the destination, in git; pull it back when you want it.</p>}
-            {!task && bulk && <div className="banner">This project is too big to send on its own. Turn on “Send a task with this project” to copy it with its history and start an agent there.</div>}
+            {task && !bulk && <p className="note">Project files and .env go encrypted. Finished changes come back here; your local edits are kept.</p>}
+            {task && bulk && <p className="note">This project is big, so it goes with its git history and resumes if the connection drops. The work stays on the destination in git.</p>}
+            {!task && bulk && <div className="banner">This project is too big to send alone. Turn on “Send a task with this project” to send it with its history.</div>}
 
             {warnings.length > 0 && (
               <>
@@ -455,7 +454,7 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
                     <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
                     <span>
                       I understand what stays behind
-                      <small>Secrets, symlinks and sensitive files are not included unless the .env option above covers them.</small>
+                      <small>Secrets, symlinks and sensitive files stay behind unless the .env option covers them.</small>
                     </span>
                   </label>
                 )}
@@ -463,14 +462,13 @@ export function TaskTransferView({ client, source, envs, folder, session, onBack
             )}
 
             <p className="note">
-              What is left behind is decided by filename policy, not file contents.
               {task
-                ? ' Project .env files travel encrypted. Agent logins and machine-wide credentials stay on each machine. No GitHub access is required. Wait for the destination to confirm the task is running before closing this laptop.'
-                : ` Nothing on ${target?.name ?? 'the target'} is overwritten. Git origin is configured when available; project commands are not run.`}
+                ? 'Logins stay on each machine. Wait until the task is running before you close this laptop.'
+                : `Nothing on ${target?.name ?? 'the target'} is overwritten. Project commands do not run.`}
             </p>
             {busy && <div className="banner">{step || 'working…'}</div>}
             {error && <div className="error">{error}</div>}
-            {task && locked && error && <p className="note">Retry resumes this same handoff: {handoffId}. The original thread may already be paused.</p>}
+            {task && locked && error && <p className="note" title={handoffId}>Retry continues the same send. The chat may already be paused.</p>}
           </>
         )}
       </div></div>
@@ -546,7 +544,7 @@ export function VerifyView({ client, env, folder, onBack, onOpenSession }: {
           </>
         )}
         <p className="note">
-          This only reads project metadata. Nothing was installed, launched or verified end-to-end.
+          This only reads project files. Nothing was installed or started.
         </p>
         {error && <div className="error">{error}</div>}
         <div className="transfer-actions">

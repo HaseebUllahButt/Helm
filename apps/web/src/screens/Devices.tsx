@@ -133,7 +133,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
     <>
       <div className="bar">
         <button className="iconbtn back" aria-label="Back" onClick={onBack}><BackIcon /></button>
-        <div className="titles"><h1>Devices</h1><span className="sub">what holds a key to this network</span></div>
+        <div className="titles"><h1>Devices</h1></div>
       </div>
       <div className="scroll"><div className="pad column">
         {isCleartext(client.relay) && <div className="banner warn">{CLEARTEXT_NOTE}</div>}
@@ -141,20 +141,20 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
           <div className={`banner${arrived.closed ? '' : ' warn'}`}>
             <b>{arrived.label}</b> paired with your link.{' '}
             {arrived.closed
-              ? 'The link is closed now - make another to add more.'
-              : 'This machine could not close the link, so it works until it expires. Was this you?'}
+              ? 'The link is closed.'
+              : 'The link still works until it expires. Was this you?'}
           </div>
         )}
         {invite ? (
           <div className="setup-open">
             {expired ? (
-              <p className="note">This link has expired and no longer works.</p>
+              <p className="note">This link has expired.</p>
             ) : (<>
               <QrCode value={invite.link} label="Pairing code: scan with the phone you are adding" />
               <p className="note">
-                Scan this with the phone's camera, or open the link below on
-                the device you are pairing. Treat it like a password: it stops
-                working in about {minutesLeft} min, or as soon as someone uses it.
+                Scan it with the phone camera, or open the link on the new
+                device. Keep it secret: it ends in about {minutesLeft} min or
+                after one use.
               </p>
             </>)}
             {!expired && <pre className="snippet">{invite.link}</pre>}
@@ -191,11 +191,10 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
                   <span className="rt">
                     {d.label}{d.self && <span className="tag">this device</span>}
                     {!d.online && !d.self && d.lastSeen != null && now - d.lastSeen > STALE_MS
-                      && <span className="tag">not seen here 30d+</span>}
+                      && <span className="tag">not seen 30d+</span>}
                   </span>
-                  <span className="rm">
-                    {d.online || d.self ? 'online now' : d.lastSeen != null ? `last seen ${ago(d.lastSeen)}` : 'not seen lately'}
-                    {' · '}paired {ago(d.addedAt)}
+                  <span className="rm" title={`paired ${ago(d.addedAt)}`}>
+                    {d.online || d.self ? 'online' : d.lastSeen != null ? `last seen ${ago(d.lastSeen)}` : 'not seen lately'}
                   </span>
                 </span>
               </div>
@@ -210,12 +209,6 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
             Sign out {others.length === 1 ? 'the other device' : `all ${others.length} other devices`}
           </button>
         )}
-        <p className="note">
-          Removing a device revokes its key everywhere - it asks for a fresh
-          pairing link the next time it opens helm. Online and last seen are
-          what this machine can see; a device talking only to another machine
-          shows as idle here.
-        </p>
         {error && <div className="error">{error}</div>}
       </div></div>
 
@@ -224,7 +217,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
           title={removing.self ? 'Remove this device?' : `Remove ${removing.label}?`}
           body={removing.self
             ? 'This is the device you are holding. You will need a fresh link from `helm link` to sign back in.'
-            : 'Its key stops working at once, on every machine in the network.'}
+            : 'Its key stops working at once, on every machine.'}
           confirmLabel="Remove" danger busy={busy}
           onCancel={() => setRemoving(null)}
           onConfirm={remove}
@@ -233,7 +226,7 @@ export function DevicesView({ client, onBack }: { client: Client; onBack: () => 
       {signingOut && (
         <Confirm
           title={others.length === 1 ? 'Sign out the other device?' : `Sign out ${others.length} other devices?`}
-          body={`Their keys stop working at once, on every machine in the network. This device stays signed in. Use this if a phone was lost or a link went somewhere it should not have.`}
+          body="Their keys stop working at once, on every machine. This device stays signed in."
           confirmLabel="Sign out" danger busy={busy}
           onCancel={() => setSigningOut(false)}
           onConfirm={signOutOthers}

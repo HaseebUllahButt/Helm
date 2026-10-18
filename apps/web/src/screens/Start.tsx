@@ -147,7 +147,7 @@ export function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
         <div className="section">agent</div>
         {accounts === null && <div className="empty quiet">{env.online ? 'looking for agents…' : `${env.name} cannot be reached right now`}</div>}
         {shown?.length === 0 && (accounts?.length ?? 0) > 0 && (
-          <div className="empty quiet">every agent is hidden — the sliders above turn them back on</div>
+          <div className="empty quiet">all agents are hidden — tap the sliders above</div>
         )}
         <div className="rows">
           {shown?.map((a) => {
@@ -176,7 +176,7 @@ export function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
         {accounts?.length === 0 && (
           <div className="empty quiet">
             no agents on {env.name}
-            <div className="note" style={{ marginTop: 6 }}>install an agent CLI there - claude, codex, opencode, devin, grok, cursor, pi, omp and more - and run <code>helm profiles --refresh</code></div>
+            <div className="note" style={{ marginTop: 6 }}>install an agent CLI there, then run <code>helm profiles --refresh</code></div>
           </div>
         )}
 
@@ -200,7 +200,7 @@ export function Start({ client, env, cwd, quick = false, onBack, onStarted }: {
         <Sheet onClose={() => setChoosing(false)} label="Choose which agents show">
           <div className="modal-title">Agents on this screen</div>
           <div className="modal-body">
-            Checked agents show in the list on every device. Unchecking only hides one — it stays installed on {env.name}.
+            Checked agents show on every device. Hidden ones stay installed.
           </div>
           <div className="sheetlist"><div className="rows">
             {(accounts ?? []).map((a) => {

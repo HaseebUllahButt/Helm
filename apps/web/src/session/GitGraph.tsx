@@ -279,18 +279,18 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
     </span>
   );
 
-  const empty = (icon: IconName, title: string, text: string, retry = false) => (
+  const empty = (icon: IconName, title: string, text = '', retry = false) => (
     <div className={`git-empty${retry ? ' bad' : ''}`} role={retry ? 'alert' : undefined}>
       <span className="git-empty-icon"><Icon name={icon} size={18} /></span>
       <b>{title}</b>
-      <span>{text}</span>
+      {text && <span>{text}</span>}
       {retry && <button className="ghost" onClick={() => { setError(''); setAttempt((count) => count + 1); }}>Try again</button>}
     </div>
   );
 
   return (
     <div className="git-graph">
-      {!env.online && empty('machine', 'This machine is offline', 'Connect this machine to see its Git history.')}
+      {!env.online && empty('machine', 'This machine is offline')}
       {error && !data && empty('alert', 'Could not load Git history', error, true)}
       {error && data && <div className="error" role="status">{error}</div>}
       {!data && !error && env.online && (
@@ -298,7 +298,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
           {[0, 1, 2, 3, 4, 5].map((placeholder) => <span key={placeholder}><i /><b /></span>)}
         </div>
       )}
-      {data && !data.repo && empty('folder', 'Not a Git repository', 'This folder is not a Git repository.')}
+      {data && !data.repo && empty('folder', 'Not a Git project')}
       {data?.repo && <>
         {/* Where things are checked out, and who is working in each: folded
             to one bar so the history comes first. */}
@@ -322,7 +322,7 @@ export function GitGraph({ client, env, cwd, refreshKey, onOpen, wrap = false }:
           </details>
         )}
 
-        {!rows.length && empty('git', 'No commits yet', 'Your first commit will appear here.')}
+        {!rows.length && empty('git', 'No commits yet')}
         {!!rows.length && <div className="git-history" ref={list} aria-label="Commit history, newest first">
           {rows.map((row) => {
             const { commit } = row;

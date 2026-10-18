@@ -36,9 +36,9 @@ export function TaskReturn({ client, envId, transfer, original, onOpenSession }:
     <p className="note">{source
       ? returned ? 'Your project is updated. Continue in this conversation.'
         : conflict ? `Your local edits are preserved. The complete returned project is at ${transfer.folder}.`
-          : 'When the remote task finishes and this machine is online, its changes return automatically.'
+          : 'Changes come back here when the task finishes.'
       : returned || conflict || transfer.status === 'returning' ? 'Continue from the original machine.'
-        : 'You can close the original device. This task keeps running here.'}</p>
+        : 'This task keeps running here.'}</p>
     {source && conflict && <>
       <p className="note">{transfer.conflicts?.slice(0, 8).join(', ')}</p>
       <div className="transfer-actions">

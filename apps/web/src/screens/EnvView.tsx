@@ -433,7 +433,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         )}
         {!env.online && (
           <div className="banner warn">
-            {env.name} is offline{env.lastSeen ? ` · last seen ${ago(env.lastSeen)}` : ''}. Threads open again when it reconnects.
+            {env.lastSeen ? `Last seen ${ago(env.lastSeen)}. ` : ''}Threads open again when it is back.
           </div>
         )}
 
@@ -603,7 +603,6 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
                 </button>
               ))}
             </div>
-            <p className="note">as it was when this machine last answered - it may be different now.</p>
           </>
         )}
         {/* Nothing to say when a fold above is holding the answer: a search
@@ -651,7 +650,7 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
       {removing && (
         <Confirm
           title={`Remove "${removing.title}"?`}
-          body="Projects with threads must be emptied first. Removing it never deletes files."
+          body="Empty it of threads first. Files are not deleted."
           confirmLabel="Remove" danger busy={projectBusy}
           onCancel={() => setRemoving(null)}
           onConfirm={removeProject}

@@ -86,16 +86,11 @@ export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: 
           <h1>Updates</h1>
           <span className="sub">{online.some((e) => e.info.version?.dirty || e.info.sync?.reason || e.info.sync?.diverged)
             ? 'updates need attention' : versions.size > 1 ? 'catching up'
-              : sorted.some((e) => !e.online) ? 'offline machines catch up when they reconnect'
-                : 'every machine on your newest version'}</span>
+              : sorted.some((e) => !e.online) ? 'offline machines catch up later'
+                : 'all up to date'}</span>
         </div>
       </div>
       <div className="scroll"><div className="pad column">
-        <p className="note">
-          Your machines check GitHub and each other for new versions automatically, including after
-          restarting or reconnecting. Local edits are preserved and shown here when they block an update.
-        </p>
-
         <div className="section">machines</div>
         <div className="rows plain">
           {sorted.map((env) => {
@@ -103,7 +98,7 @@ export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: 
             const o = out[env.id];
             const note = !env.online ? 'offline'
               : !v ? 'version unknown - an older Helm'
-              : env.info.sync?.diverged ? `has its own changes, and so does ${env.info.sync.with} - ask your agent to combine them`
+              : env.info.sync?.diverged ? `it and ${env.info.sync.with} both have changes - let your agent combine them`
               : env.info.sync?.reason ? env.info.sync.reason
               : v.dirty ? 'unsaved changes here - shared once saved'
               : newest && v.commit !== newest.info.version?.commit ? `catching up with ${newest.name}`
@@ -122,22 +117,16 @@ export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: 
           {!sorted.length && <div className="empty quiet">No machines are paired yet</div>}
         </div>
 
-        {online.length > 0 && (
-          <p className="note">
-            Claude Code, Codex and the other coding tools update themselves too. A chat that is already
-            running keeps going; new chats use the new version.
-          </p>
-        )}
         {online.map((env) => <CodingTools key={env.id} client={client} env={env} />)}
 
         <div className="section">GitHub</div>
         <button className="action" disabled={busy || !newest} onClick={() => setAsking(true)}>
           <span className="plus"><Icon name="arrow-up" size={15} /></span>Let my agent update it
         </button>
-        <p className="note">Your agent brings in GitHub’s new version and keeps your changes. Recommended.</p>
+        <p className="note">Keeps your changes. Recommended.</p>
         <button className="row" disabled={busy || !online.length} onClick={() => setReplacing(true)}>
           <span className="grow"><span className="rt destructive">Replace with GitHub’s version</span>
-            <span className="rm">Overrides your changes to Helm on every machine. A backup is kept.</span></span>
+            <span className="rm">Overrides your changes on every machine. A backup is kept.</span></span>
         </button>
         {error && <div className="error">{error}</div>}
       </div></div>
@@ -148,7 +137,7 @@ export function UpdatesView({ client, envs, onBack, onRefresh, onOpenSession }: 
       )}
       {replacing && (
         <Confirm title="Replace with GitHub’s version?" confirmLabel="Replace" danger
-          body="This overrides every change made to Helm on your machines, including your agent's. They are kept on a backup branch and can be brought back. To keep them instead, let your agent update it."
+          body="This overrides every change to Helm on your machines. A backup keeps them. To keep them in use, let your agent update instead."
           onCancel={() => setReplacing(false)} onConfirm={replaceAll} />
       )}
     </>

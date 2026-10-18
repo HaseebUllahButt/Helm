@@ -28,8 +28,8 @@ export function RecoveryCard({ recovery, busy, offline, onRetry, autoResume, onA
         <span className="recovery-icon"><Icon name={recovery.kind === 'interrupted' ? 'stop' : recovery.kind === 'restart' ? 'refresh' : 'alert'} size={16} /></span>
         <div className="recovery-copy">
           <b>{p.title}</b>
-          <p>{recovery.kind === 'limited' && recovery.resetAt ? `Limit resets ${new Date(recovery.resetAt).toLocaleString()}. ${autoResume && !recovery.autoResumeCancelled ? 'Helm will continue when the reset is due and this thread is available.' : 'Resume manually or enable automatic continuation.'}` : p.text}</p>
-          {recovery.autoResumeError && <p className="error">Automatic continuation failed: {recovery.autoResumeError}</p>}
+          <p>{recovery.kind === 'limited' && recovery.resetAt ? `Limit resets ${new Date(recovery.resetAt).toLocaleString()}.${autoResume && !recovery.autoResumeCancelled ? ' Helm continues then.' : ''}` : p.text}</p>
+          {recovery.autoResumeError && <p className="error">Could not continue: {recovery.autoResumeError}</p>}
         </div>
         <button className="recovery-x" aria-label="Hide" onClick={() => setHiddenAt(recovery.at)}><Icon name="close" size={14} /></button>
       </div>

@@ -190,15 +190,15 @@ export function ModelPrefsView({ client, env, account, onBack }: {
               <button className="row tall toggle" role="switch" aria-checked={auto} onClick={() => setAuto(!auto)}>
                 <span className="grow">
                   <span className="rt">Add new models automatically</span>
-                  <span className="rm wrap">A new release joins the short list. If your default was the newest of its kind, it moves up too.</span>
+                  <span className="rm wrap">New releases join the checked list. A newest default moves up too.</span>
                 </span>
                 <span className={`switch${auto ? ' on' : ''}`}><i /></span>
               </button>
             </div>
 
             <p className="note">
-              Checked models are the picker's short list; the rest stay reachable
-              under “more”. Check nothing to offer the whole list.
+              Checked models show first in the picker; the rest are under “more”.
+              Check none to show all.
             </p>
             <button className="primary big" disabled={busy} onClick={save}>
               {busy ? 'saving…' : 'Save'}
