@@ -127,6 +127,19 @@ export class SessionViewers {
   #watchers = new Map();
   /** id -> { expires, path, poll } for transcripts being watched */
   #transcripts = new Map();
+  #stopped = false;
+
+  /**
+   * End every screen and transcript poll. A poll left running after the
+   * daemon stopped kept saving the chat list over the next one's.
+   */
+  stop() {
+    this.#stopped = true;
+    for (const w of this.#watchers.values()) clearTimeout(w.timer);
+    this.#watchers.clear();
+    for (const t of this.#transcripts.values()) clearInterval(t.poll);
+    this.#transcripts.clear();
+  }
 
   /**
    * Start pushing a session's screen to whoever is looking at it.
@@ -186,6 +199,7 @@ export class SessionViewers {
         } catch { /* pane may have gone away; the next tick or expiry handles it */ }
         w.busy = false;
       }
+      if (this.#watchers.get(id) !== w) return;
       w.timer = setTimeout(tick, WATCH_POLL_MS);
       w.timer.unref?.();
     };
@@ -210,7 +224,7 @@ export class SessionViewers {
    * on every filesystem, which fs.watch does not.
    */
   watchTranscript(id, path) {
-    if (!path) return;
+    if (!path || this.#stopped) return;
     const existing = this.#transcripts.get(id);
     if (existing) {
       existing.expires = Date.now() + WATCH_TTL_MS;
@@ -238,6 +252,7 @@ export class SessionViewers {
         // until their process checkpoints or exits.
         const wal = await stat(`${path}-wal`).catch(() => null);
         const stamp = `${size}:${mtimeMs}:${wal?.size ?? 0}:${wal?.mtimeMs ?? 0}`;
+        if (this.#transcripts.get(id) !== t) return;
         if (t.size !== -1 && stamp !== t.size) {
           this.#sessions.emit('transcript', { id });
           // A Task call lands here first; pick its subagent up at once.
@@ -254,7 +269,7 @@ export class SessionViewers {
           }
         }
         const monitored = this.#core.index.get(id);
-        if (monitored?.external) await this.#core.external.refreshExternalActivity(monitored);
+        if (monitored?.external && this.#transcripts.get(id) === t) await this.#core.external.refreshExternalActivity(monitored);
         t.size = stamp;
       } catch { /* transcript not written yet */ } finally { t.busy = false; }
     }, TRANSCRIPT_POLL_MS);

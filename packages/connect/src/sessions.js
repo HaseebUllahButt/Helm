@@ -2073,6 +2073,7 @@ export class Sessions extends EventEmitter {
     for (const timer of this.#natives.modeReads) clearTimeout(timer);
     this.#natives.modeReads.clear();
     clearInterval(this.nativePoll);
+    this.#viewers.stop();
     for (const timer of this.#reapers.values()) clearTimeout(timer);
     this.#reapers.clear();
     await Promise.allSettled(this.#retiring.values());
