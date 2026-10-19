@@ -142,7 +142,7 @@ export class SessionRewind {
       for (const key of ['context', 'lastUsage', 'recovery', 'nativeAgents', 'nativeCards', 'team', 'stoppedAt', 'externalSource', 'costTotalUsd']) delete s[key];
       const next = this.#sessions.events.rewind(id, checkpoint.history);
       s.lastSeq = next.at(-1).seq;
-      this.#core.save();
+      this.#core.save(); this.#core.flush();
       this.#sessions.checkpoints.write(recoveryId, 'recovery.json', { ...recovery, phase: 'committed', newEngineSessionId: s.engineSessionId });
       committed = true;
       this.#core.bindDriver(s, candidate, profile);
@@ -158,7 +158,7 @@ export class SessionRewind {
           this.#sessions.events.replace(id, recovery.events);
           for (const key of Object.keys(s)) delete s[key];
           Object.assign(s, recovery.session);
-          this.#core.save();
+          this.#core.save(); this.#core.flush();
           this.#sessions.checkpoints.write(recoveryId, 'recovery.json', { ...recovery, phase: 'rolled-back', error: error.message });
         } catch (rollbackError) {
           // Keep the applying journal for startup recovery and block sends.

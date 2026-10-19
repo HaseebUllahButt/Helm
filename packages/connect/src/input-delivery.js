@@ -69,6 +69,8 @@ export class InputDelivery {
       if (!session.driver || session.external || session.nativeChat || session.nativeCli) {
         throw failure('this session uses terminal input', 'delivery_unsupported');
       }
+      // The record outlives a crash, so the chat it names must as well.
+      this.sessions.flush?.();
       for (const folder of ['pending', 'receipts']) mkdirSync(join(this.dir, folder), { recursive: true, mode: 0o700 });
       this.#write(paths.pending, { key, digest, request, generation: session.stopGeneration ?? 0 });
     }
@@ -106,6 +108,7 @@ export class InputDelivery {
         error = { message: String(err.message ?? err), code: err.code ?? 'delivery_failed' };
       }
       const saved = { digest: record.digest, ...(error ? { error } : { result }) };
+      this.sessions.flush?.();
       this.#write(paths.receipt, saved);
       rmSync(paths.pending, { force: true });
       return this.#result(saved);

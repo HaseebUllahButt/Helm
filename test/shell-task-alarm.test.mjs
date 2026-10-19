@@ -66,6 +66,7 @@ test('saved quick-chat artifact subscriptions are repaired without ending actual
   assert.deepEqual(s.team, { working: 1, blocked: 1, failed: 0 });
   assert.deepEqual(sessions.get('quick2').team, { working: 0, blocked: 0, failed: 0 });
   assert.equal(sessions.hasActiveDelegations('quick2'), false);
+  sessions.flush();
   const saved = JSON.parse(readFileSync(join(dir, 'sessions.json'), 'utf8')).sessions[0];
   assert.deepEqual(saved.nativeAgents, s.nativeAgents, 'the repair survives another restart');
 });
@@ -115,6 +116,7 @@ test('a shell failure whose start was trimmed is repaired from the account trans
   await once(sessions, 'session', { signal: AbortSignal.timeout(3000) });
   assert.deepEqual(sessions.get('trimmed-parent').nativeAgents, { 'real-agent': 'error' });
   assert.equal(sessions.get('trimmed-parent').team.failed, 1, 'a real failed agent keeps its alert');
+  sessions.flush();
   const saved = JSON.parse(readFileSync(join(dir, 'sessions.json'), 'utf8')).sessions[0];
   assert.deepEqual(saved.nativeAgents, { 'real-agent': 'error' });
 });

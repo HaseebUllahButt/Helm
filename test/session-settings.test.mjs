@@ -54,6 +54,7 @@ test('new native chats learn model, effort and actual permissions; refresh retai
     assert.equal(sessions.get('native-pi').mode,'guard-off');
     assert.equal(sessions.get('native-pi').engineEffort,'low');
     await sendHook('native-pi',{hook_event_name:'HelmSettings',model:'anthropic/model',effort:'low',mode:'guard-off',permissionControl:'bash-guard',session_id:'pi-new-chat'});
+    sessions.flush();
     const saved=JSON.parse(readFileSync(join(process.env.HELM_DIR,'sessions.json'))).sessions;
     assert.equal(saved.find(s=>s.id==='native-pi').permissionControl,'bash-guard');
     assert.equal(saved.find(s=>s.id==='native-pi').engineSessionId,'pi-new-chat');

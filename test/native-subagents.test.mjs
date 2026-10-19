@@ -269,6 +269,7 @@ test('the team counts native subagents beside delegated children, once each', as
   assert.deepEqual(parent.nativeCards.map((a) => [a.id, a.toolUseId, a.canMessage]), [['live', 'toolu_live', true], ['over', 'toolu_over', true]]);
 
   // What Claude's files say is never written into Helm's own index.
+  sessions.flush();
   const saved = JSON.parse(readFileSync(join(process.env.HELM_DIR, 'sessions.json'), 'utf8'));
   assert.ok(saved.sessions.every((s) => !('nativeCards' in s)));
 });
@@ -332,6 +333,7 @@ test('what the driver reported and what the files say about one subagent make on
   const sent = wire(sessions.get(parent.id));
   assert.equal(sent.nativeCards.length, 3);
   assert.equal('nativeAgents' in sent, false);
+  sessions.flush();
   const saved = JSON.parse(readFileSync(join(process.env.HELM_DIR, 'sessions.json'), 'utf8')).sessions.find((s) => s.id === parent.id);
   assert.deepEqual(saved.nativeAgents, { toolu_hooked: 'working' });
   assert.equal('nativeCards' in saved, false);

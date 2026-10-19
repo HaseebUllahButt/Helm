@@ -165,6 +165,7 @@ test('the session manager puts secrets only in a fresh terminal environment', as
     assert.equal(terminals.opened.at(-1).options.env.API_TOKEN, 'private-token');
     assert.deepEqual(terminals.written.at(-1), { id: second.id, text: 'codex mcp login remote --no-browser\r' });
     assert.doesNotMatch(JSON.stringify(sessions.get(second.id)), /private-token/);
+    sessions.flush();
     assert.doesNotMatch(await readFile(join(process.env.HELM_DIR, 'sessions.json'), 'utf8'), /private-token/);
   } finally { await sessions.stop(); }
 });
