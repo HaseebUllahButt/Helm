@@ -23,6 +23,7 @@ import { defaultMode, modeFromAuto } from './modes.js';
 import { ModeFooter, MODE_FROM_LABEL } from './native-mode.js';
 import { TerminalHost, NativeHosts, PROC_SOCKET_PATH } from './terminals.js';
 import { inventory, scratchFolder } from './inventory.js';
+import { opencodeServiceSessions } from './opencode-service.js';
 import { claudeLiveSessions, claudeLiveStatus, descendsFrom, dedupeNativeConversations } from './external-process.js';
 import { readProcess } from './takeover.js';
 import { startHookServer } from './claude-hooks.js';
@@ -663,8 +664,11 @@ export class Sessions extends EventEmitter {
     if (!this.#natives.nativeDiscovered) await discovery;
     else await Promise.race([discovery, new Promise((r) => setTimeout(r, 1000).unref?.())]);
     await this.nativeTerminals.ensure({ spawn: false }).catch(() => false);
+    const liveO2 = !parentId && profiles.some((p) => p.engine === 'opencode2')
+      ? await opencodeServiceSessions() : null;
     const detected = (includeDetected && !parentId) || [...this.#index.values()].some((s) => s.external || s.nativeCli)
-      ? await this.#inventory(profiles) : [];
+      ? await this.#inventory(profiles)
+      : liveO2?.size ? await this.#inventory(profiles.filter((p) => p.engine === 'opencode2')) : [];
     const detectedById = new Map(detected.map((s) => [`${s.engine}:${s.id}`, s]));
     if (detected.length) this.#lastDetected = { at: Date.now(), byId: detectedById };
 
@@ -704,6 +708,7 @@ export class Sessions extends EventEmitter {
         const current = detectedById.get(`${s.engine}:${s.engineSessionId}`);
         if (current) {
           s.externalPid = current.writerPid || null;
+          s.externalService = !!current.serviceActive;
           s.transcript = current.transcript || s.transcript;
           s.updatedAt = current.updatedAt;
           if (current.model) s.engineModel = current.model;
@@ -774,9 +779,11 @@ export class Sessions extends EventEmitter {
         : (pane.status ?? s.status ?? 'unknown');
       out.push({ ...wire(s), archived: !!s.archived, alive: !!pane, status, cwd: pane?.cwd ?? s.cwd, adopted: false });
     }
-    if (includeDetected && !parentId) {
+    if (!parentId) {
       const known = new Set(out.filter((s) => s.engineSessionId).map((s) => `${s.engine}:${s.engineSessionId}`));
       for (const x of detected) {
+        // V2 service chats have no terminal for the native discovery path.
+        if (!includeDetected && !x.serviceActive) continue;
         const id = `found:${x.engine}:${x.id}`;
         const mark = this.#marks.get(id);
         // Removed stays removed - unless it was used again in a terminal since.
@@ -784,8 +791,9 @@ export class Sessions extends EventEmitter {
         if ((mark === 'removed' && !reused) || known.has(`${x.engine}:${x.id}`) || this.isDelegatedConversation(x.engine, x.id)) continue;
         // A test's chat under /tmp is not one the owner had.
         if (scratchFolder(x.cwd)) continue;
-        // A runtime pane without a native ID can still represent this CLI.
-        if (x.active && out.some((s) => s.paneId && s.alive && s.engine === x.engine && expand(s.cwd) === expand(x.cwd))) continue;
+        // A shared V2 service can own several exact IDs in the same folder.
+        // Only terminal-owned chats can use the folder fallback.
+        if (x.active && !x.serviceActive && out.some((s) => s.paneId && s.alive && s.engine === x.engine && expand(s.cwd) === expand(x.cwd))) continue;
         out.push({ id, engine: x.engine, engineSessionId: x.id, account: x.account,
           title: x.title, cwd: x.cwd, quick: isQuickDir(x.cwd) || undefined, profileId: x.account, model: x.model, engineModel: x.model, engineEffort: x.effort, mode: x.mode,
           status: x.status, turns: x.turns, alive: !!x.active, externalActive: !!x.active,

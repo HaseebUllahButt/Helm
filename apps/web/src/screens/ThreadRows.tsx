@@ -310,7 +310,7 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
           {/* Stopped by the owner part-way: finished with, but not finished. */}
           {s.recovery?.kind === 'interrupted' && mood !== 'working' ? <span className="chip exited">stopped</span>
             : unknownThread(s) ? <StatusChip status="unknown" />
-            : s.externalActive || (s.shared && s.alive) ? <span className="chip">idle</span> : null}
+            : mood !== 'working' && (s.externalActive || (s.shared && s.alive)) ? <span className="chip">idle</span> : null}
           <EngineMark engine={eng.cls} className="tri-mark" />
         </span>
       </span>

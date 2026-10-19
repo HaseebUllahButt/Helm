@@ -39,11 +39,14 @@ machines with care.
 - **Rules:** a saved Claude, Codex, OpenCode or Pi conversation opens with
   its messages; opening alone starts no agent, and the next message resumes
   it. Take over waits for the current step. A terminal in the same folder
-  must not hide the saved conversation.
+  must not hide the saved conversation. OpenCode 2's shared service reports
+  live chat IDs directly; its process must never be stopped to take over one
+  chat. Those chats can continue here after their current step finishes.
 - **Prove:** `test/helpers/external-fixtures.mjs` puts outside histories in
   the copy's home and adds their profiles. Open each from the machine
-  screen, check the answer and tray, reload and check again. Taking over a
-  live CLI still needs a real one.
+  screen, check the answer and tray, reload and check again. Check that
+  Load older chats reaches past the first page and search finds older rows.
+  Taking over a live CLI still needs a real one.
 - **Traps:** keep the fixture's working folder outside `/tmp` (histories
   there are hidden).
 - **Tests:** `test/takeover`, `native-cli`, `native-launchers`,

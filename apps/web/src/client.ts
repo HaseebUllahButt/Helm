@@ -161,6 +161,7 @@ export interface Session {
   account?: string;
   /** A CLI outside Helm currently owns this monitored thread. */
   externalActive?: boolean;
+  externalService?: boolean;
   /** This is a transcript monitor which can become driven after handoff. */
   external?: boolean;
   delegation?: { parentId: string | null; task: string; requestedModel: string | null; depth: number; status?: string; summary?: string; finishedAt?: number };

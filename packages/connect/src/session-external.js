@@ -10,6 +10,7 @@ import { EVENT_KEEP } from './events.js';
 import { accountKey } from './settings.js';
 import { defaultMode } from './modes.js';
 import { inventory } from './inventory.js';
+import { opencodeServiceActive, opencodeServiceSessions } from './opencode-service.js';
 import { claudeLiveSessions, claudeLiveStatus } from './external-process.js';
 import { readProcess, resumeCommand, safePoint, stopProcess, tellTerminal } from './takeover.js';
 import { openFiles, processArgv, processCwd } from './procinfo.js';
@@ -101,7 +102,7 @@ export class ExternalSessions {
     // rechecked when a message is sent, so a stale "active" costs nothing.
     const recent = this.#core.lastDetected && Date.now() - this.#core.lastDetected.at < 30_000
       ? this.#core.lastDetected.byId.get(`${engine}:${id}`) : null;
-    const found = recent ?? (await this.#core.inventory(profiles)).find((x) => x.engine === engine && x.id === id);
+    const found = recent ?? (await inventory(profiles.filter((p) => p.engine === engine), { limit: Infinity })).find((x) => x.engine === engine && x.id === id);
     if (!found) throw new Error(`that ${engine} conversation is no longer available on this machine; refresh the list`);
 
     // Opening history must not create a provider process. Besides being
@@ -166,6 +167,7 @@ export class ExternalSessions {
         transcript: found.transcript,
         externalLock,
         externalPid: found.writerPid || null,
+        externalService: !!found.serviceActive,
         driver: engine,
         external: true,
         externalHome: homeOf(profile),
@@ -204,9 +206,13 @@ export class ExternalSessions {
   }
 
   async refreshExternalActivity(s, active = this.externalActive(s)) {
+    if (s.engine === 'opencode2') {
+      await opencodeServiceSessions();
+      active = this.externalActive(s);
+    }
     const activity = await sessionActivity({ engine: s.engine, path: s.transcript,
       sessionId: s.engineSessionId, active, updatedAt: s.updatedAt,
-      liveStatus: s.engine === 'claude' && s.externalHome
+      liveStatus: s.engine === 'opencode2' && opencodeServiceActive(s.engineSessionId) ? 'working' : s.engine === 'claude' && s.externalHome
         ? claudeLiveStatus(claudeLiveSessions(s.externalHome).get(s.engineSessionId) ?? []) : null });
     if (!s.external || this.#core.index.get(s.id) !== s) return { status: s.status, turns: s.turns ?? 0 };
     if (s.status !== activity.status || s.externalActive !== active || s.turns !== activity.turns) {
@@ -221,6 +227,7 @@ export class ExternalSessions {
 
   externalActive(s) {
     if (!s.external) return false;
+    if (s.engine === 'opencode2' && opencodeServiceActive(s.engineSessionId)) return true;
     if (s.engine === 'claude' && s.externalHome
       && claudeLiveSessions(s.externalHome).has(s.engineSessionId)) return true;
     if (s.engine === 'codex' && s.externalLock && existsSync(s.externalLock)) return true;
@@ -253,13 +260,19 @@ export class ExternalSessions {
     // Re-discover at send time: a monitor may have been opened before the
     // CLI started or before its process changed. Never start a second writer
     // from a cached 'done' row, or terminate a turn that is still doing work.
+    if (s.engine === 'opencode2') {
+      const live = await opencodeServiceSessions({ fresh: true });
+      // A shared service may own this exact chat even when its status read fails.
+      if (live.running && !live.available) throw new Error('OpenCode 2 is not responding. Try again before continuing this chat.');
+    }
     const profiles = await getProfiles();
     const profile = profiles.find((p) => p.id === s.profileId);
     s.externalHome = profile?.env?.[ENGINES[s.engine]?.homeEnv] ?? ENGINES[s.engine]?.defaultHome;
-    const found = (await inventory(profiles)).find((x) => x.engine === s.engine && x.id === s.engineSessionId);
-    if (found) { s.externalPid = found.writerPid; s.transcript = found.transcript; }
+    const found = (await inventory(profiles.filter((p) => p.engine === s.engine), { limit: Infinity })).find((x) => x.engine === s.engine && x.id === s.engineSessionId);
+    if (found) { s.externalPid = found.writerPid; s.transcript = found.transcript; s.externalService = !!found.serviceActive; }
     if (!this.externalActive(s)) return;
     await this.refreshExternalActivity(s, true);
+    if (opencodeServiceActive(s.engineSessionId) && s.engine === 'opencode2') throw new Error('This OpenCode 2 chat is still running. Wait for its current step to finish, then send here.');
     throw new Error(`This ${s.engine} chat was started outside Helm's shared terminal. Use Take over above to continue here without manually closing it. New terminal chats share automatically when Helm's CLI integration is on.`);
   }
 
@@ -272,6 +285,10 @@ export class ExternalSessions {
    */
   async takeOver(id) {
     const s = this.#sessions.get(id);
+    if (s.engine === 'opencode2') {
+      await opencodeServiceSessions({ fresh: true });
+      if (opencodeServiceActive(s.engineSessionId)) throw new Error('Wait for this OpenCode 2 step to finish, then send here.');
+    }
     if (!s.external || !this.externalActive(s)) throw new Error('this conversation is not open in a terminal');
     if (!ENGINES[s.engine]?.resumeArgs) throw new Error(`${ENGINES[s.engine]?.label ?? s.engine} cannot be moved yet; close it in the terminal to continue here`);
     if (this.#takeovers.has(id)) return { waiting: true };

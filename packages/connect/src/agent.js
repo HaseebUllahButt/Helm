@@ -29,7 +29,7 @@ import { accountKey, modelPrefs, modelWatch, dismissModelNews, saveModelPrefs, s
 import { ENGINES } from './engines.js';
 import * as fsApi from './fs.js';
 import { join } from 'node:path';
-import { inventory, scratchFolder } from './inventory.js';
+import { inventory, inventoryPage, scratchFolder } from './inventory.js';
 import { UsageReader, foldBuckets } from '@helm/usage';
 import { HELM_DIR, collapse, expand } from './paths.js';
 import { sshInfo, applyPeers } from './ssh.js';
@@ -2102,7 +2102,7 @@ export class Daemon {
         // remember every session ever run on it.
         const marks = this.sessions.marks();
         const recent = [];
-        for (const x of await inventory(await currentProfiles())) {
+        for (const x of await inventory(await currentProfiles(), { limit: Infinity })) {
           if (this.sessions.isDelegatedConversation(x.engine, x.id) || scratchFolder(x.cwd)) continue;
           const mark = marks[`found:${x.engine}:${x.id}`];
           if (mark === 'removed') continue;
@@ -2112,7 +2112,7 @@ export class Daemon {
           const { transcript, writerPid, ...publicRow } = x;
           recent.push(mark === 'archived' ? { ...publicRow, archived: true } : publicRow);
         }
-        return { recent };
+        return inventoryPage(recent, { limit: p.limit, query: p.query });
       }
 
       // What `/` offers in this session: helm's own actions plus whatever

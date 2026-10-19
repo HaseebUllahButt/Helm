@@ -9,11 +9,14 @@ before(async () => {
   const bundle = await build({ stdin: { contents: `
     import React from 'react'; import {createRoot} from 'react-dom/client';
     import {Shell} from './apps/web/src/App';
-    const engine=new URL(location.href).searchParams.get('engine');
+    const params=new URL(location.href).searchParams;
+    const engine=params.get('engine');
+    const paged=params.has('history'), live=params.has('live');
     const token='helm1.'+btoa(JSON.stringify({net:'network',sub:'device'}))+'.test';
     const now=Date.now(), cwd='/work/shared';
     const pane={id:'pane:w1:p1',paneId:'w1:p1',engine,cwd,title:'Outside terminal',alive:true,status:'idle',adopted:true,updatedAt:now};
-    const found={engine,id:'outside-'+engine,account:engine,cwd,title:'Saved outside '+engine,updatedAt:now,active:false};
+    const found={engine,id:'outside-'+engine,account:engine,cwd,title:'Saved outside '+engine,updatedAt:now,active:live,serviceActive:live};
+    const histories=paged?Array.from({length:65},(_,i)=>({...found,id:'history-'+i,title:'Outside history '+i,updatedAt:now-i})): [found];
     let opened=null;
     window.calls=[];
     const client={token,relay:'http://helm.test',on:()=>()=>{},subscribe:()=>{},watchLatency:()=>()=>{},
@@ -21,8 +24,8 @@ before(async () => {
       rpc:async(env,method,params)=>{
         window.calls.push({method,params});
         if(method==='session.list')return {sessions:[pane,...(opened?[opened]:[])]};
-        if(method==='session.inventory')return {recent:[found]};
-        if(method==='session.resume')return {session:opened={...found,id:'managed-'+engine,driver:engine,engineSessionId:found.id,profileId:engine,external:true,externalActive:false,status:'idle',turns:1}};
+        if(method==='session.inventory'){const rows=histories.filter(s=>!params.query||s.title.toLowerCase().includes(params.query.toLowerCase()));return {recent:rows.slice(0,params.limit??40),hasMore:rows.length>(params.limit??40)};}
+        if(method==='session.resume'){const saved=histories.find(s=>s.id===params.id)??found;return {session:opened={...saved,id:'managed-'+engine,driver:engine,engineSessionId:saved.id,profileId:engine,external:true,externalActive:live,externalService:live,status:live?'working':'idle',turns:1}};}
         if(method==='session.events')return {session:opened,events:[
           {seq:1,type:'turn.start',turnId:'t',text:'Previous question'},
           {seq:2,type:'item.start',turnId:'t',id:'a',kind:'text'},
@@ -67,4 +70,30 @@ for(const engine of ['claude','codex','opencode','opencode2','pi']) for(const wi
   assert.equal(calls.find(c=>c.method==='session.resume').params.id,'outside-'+engine);
   assert.equal(calls.find(c=>c.method==='session.model').params.id,'managed-'+engine);
   assert.deepEqual(errors,[]);
+});
+
+for(const width of [390,1280]) test(`older outside chats load on request and search reaches beyond the first page at ${width}px`,async t=>{
+  const page=await browser.newPage({viewport:{width,height:844}});t.after(()=>page.close());page.setDefaultTimeout(6000);
+  await page.route('http://helm.test/**',r=>r.fulfill({contentType:'text/html',body:'<div id="root"></div>'}));
+  await page.goto('http://helm.test/?engine=opencode2&history=1');await page.addStyleTag({content:css});await page.addScriptTag({content:script});
+  await page.locator('.sidebar').waitFor();await page.evaluate(()=>window.machine());
+  await page.getByRole('button',{name:'Load older chats',exact:true}).click();
+  await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.inventory'&&c.params.limit===80));
+  await page.getByRole('button',{name:'Load older chats',exact:true}).waitFor({state:'detached'});
+  await page.getByPlaceholder('search Laptop').fill('Outside history 64');
+  await page.getByText('Outside history 64',{exact:true}).first().click();
+  await page.getByText('Saved outside answer',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>window.calls.find(c=>c.method==='session.resume').params.id),'history-64');
+});
+
+test('a V2 service chat opens as a live monitor without a shared-service takeover button',async t=>{
+  const page=await browser.newPage({viewport:{width:390,height:844}});t.after(()=>page.close());page.setDefaultTimeout(6000);
+  await page.route('http://helm.test/**',r=>r.fulfill({contentType:'text/html',body:'<div id="root"></div>'}));
+  await page.goto('http://helm.test/?engine=opencode2&live=1');await page.addStyleTag({content:css});await page.addScriptTag({content:script});
+  await page.locator('.sidebar').waitFor();await page.evaluate(()=>window.machine());
+  assert.equal(await page.locator('.sidebar .chip').getByText('idle',{exact:true}).count(),0, 'a live service chat must not also say idle');
+  await page.getByText('Saved outside opencode2',{exact:true}).first().click();
+  await page.getByText('Running in OpenCode 2',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Take over',exact:true}).count(),0);
+  assert.ok(await page.getByText('Wait for the current step to finish, then send here.',{exact:true}).isVisible());
 });

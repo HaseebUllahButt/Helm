@@ -143,15 +143,29 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
   // by hand in a terminal show up here, marked external, instead of the
   // machine looking like nothing ever happened on it.
   const [earlier, setEarlier] = useState<InventorySession[]>([]);
+  const [historyLimit, setHistoryLimit] = useState(40);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const historySequence = useRef(0);
+  useEffect(() => { setHistoryLimit(40); }, [query, env.id]);
   // Named, because archiving one of these has to refresh the list it came
   // from - the machine is the only place that remembers what was filed away.
   const reloadEarlier = useCallback(() => {
-    if (!env.online) { setEarlier([]); return; }
-    client.rpc(env.id, 'session.inventory', {}, 20_000)
-      .then((r: any) => setEarlier(r.recent ?? []))
-      .catch(() => {});
-  }, [client, env.id, env.online]);
-  useEffect(() => { reloadEarlier(); }, [reloadEarlier]);
+    const sequence = ++historySequence.current;
+    if (!env.online) { setEarlier([]); setHasMoreHistory(false); setHistoryBusy(false); return; }
+    setHistoryBusy(true);
+    client.rpc(env.id, 'session.inventory', { limit: historyLimit, query }, 20_000)
+      .then((r: any) => {
+        if (sequence !== historySequence.current) return;
+        setEarlier(r.recent ?? []); setHasMoreHistory(!!r.hasMore);
+      })
+      .catch(() => {})
+      .finally(() => { if (sequence === historySequence.current) setHistoryBusy(false); });
+  }, [client, env.id, env.online, historyLimit, query]);
+  useEffect(() => {
+    const timer = setTimeout(reloadEarlier, query ? 150 : 0);
+    return () => { clearTimeout(timer); historySequence.current++; };
+  }, [reloadEarlier]);
   useLiveInterval(env.online ? 60_000 : null, reloadEarlier, [reloadEarlier, env.online]);
 
   const [projects, setProjects] = useState<Project[]>([]);
@@ -575,6 +589,11 @@ export function EnvView({ client, env, wide, sessions, remembered, rememberedAt,
         <Fold title="archived" count={filed.length} openWhen={!!q} remember={`${env.id}:~archived`}>
           <div className="rows plain">{filed.map(row)}</div>
         </Fold>
+
+        {hasMoreHistory && <button className="linkish more" disabled={historyBusy}
+          onClick={() => setHistoryLimit((n) => n + 40)}>
+          {historyBusy ? 'Loading chats…' : 'Load older chats'}
+        </button>}
 
         {/* An offline machine keeps its last word, not a blank page: the
             threads it said were running, dimmed and dated, with the actions

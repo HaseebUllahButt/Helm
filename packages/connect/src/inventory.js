@@ -9,6 +9,7 @@ import { sessionActivity } from './transcript.js';
 import { claudeLiveSessions, claudeLiveStatus } from './external-process.js';
 import { processList, processCwd, openFiles } from './procinfo.js';
 import { bareTitle } from './titles.js';
+import { opencodeServiceSessions } from './opencode-service.js';
 
 /**
  * Sessions that already exist on this machine, whether or not helm started
@@ -166,7 +167,7 @@ async function newest(dir, filter, limit, required = () => false) {
 
 // -------------------------------------------------------------------- codex
 
-async function codex(home, account) {
+async function codex(home, account, limit) {
   const codexHome = expand(home);
   const root = join(codexHome, 'sessions');
   if (!existsSync(root)) return [];
@@ -191,7 +192,7 @@ async function codex(home, account) {
 
   let locked = [];
   try { locked = readdirSync(join(codexHome, 'thread-writer-locks')).filter(x => x.endsWith('.lock')).map(x => x.slice(0, -5)); } catch {}
-  const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE,
+  const files = await newest(root, (n) => n.endsWith('.jsonl'), limit,
     path => procs().files.has(path) || locked.some(id => path.endsWith(`${id}.jsonl`)));
   const out = [];
   for (const f of files) {
@@ -227,18 +228,18 @@ async function codex(home, account) {
 
 // ------------------------------------------------------------------- claude
 
-async function claude(home, account) {
+async function claude(home, account, limit) {
   const root = join(expand(home), 'projects');
   if (!existsSync(root)) return [];
 
   const live = claudeLiveSessions(home);
-  const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE * 2,
+  const files = await newest(root, (n) => n.endsWith('.jsonl'), limit * 2,
     path => live.has(basename(path, '.jsonl')));
   const out = [];
   for (const f of files) {
     if (f.path.includes('/subagents/')) continue;
     const id = basename(f.path, '.jsonl');
-    if (out.length >= PER_ENGINE && !live.has(id)) continue;
+    if (out.length >= limit && !live.has(id)) continue;
     let cwd = null;
     let title = '';
     let sidechain = false;
@@ -285,7 +286,7 @@ async function claude(home, account) {
 
 // ------------------------------------------------------------------- devin
 
-function devin(home, account) {
+function devin(home, account, limit) {
   // Devin's CLI keeps a real database like opencode's, one directory deeper:
   // <XDG_DATA_HOME>/<account dir>/cli/sessions.db. Its clock is seconds, not
   // the milliseconds everything else here reports.
@@ -311,12 +312,12 @@ function devin(home, account) {
         rows = conn.prepare(
           `SELECT id, title, working_directory, model, last_activity_at, hidden
              FROM sessions ORDER BY last_activity_at DESC LIMIT ?`
-        ).all(PER_ENGINE);
+        ).all(Number.isFinite(limit) ? limit : -1);
       } catch {
         rows = conn.prepare(
           `SELECT id, title, working_directory, model, last_activity_at, 0 AS hidden
              FROM sessions ORDER BY last_activity_at DESC LIMIT ?`
-        ).all(PER_ENGINE);
+        ).all(Number.isFinite(limit) ? limit : -1);
       }
       const acct = `${account}:${basename(join(db, '..', '..'))}`;
       for (const r of rows) {
@@ -358,7 +359,7 @@ const opencodeModel = (v) => {
   try { return JSON.parse(v).id ?? null; } catch { return null; }
 };
 
-function opencode(home, account, engine = 'opencode') {
+async function opencode(home, account, engine = 'opencode', limit, separateV1 = true) {
   // opencode keeps a real database, so this is the one engine where we get
   // titles, cost and model without parsing anything.
   const base = process.env.XDG_DATA_HOME || join(HOME, '.local', 'share');
@@ -370,7 +371,8 @@ function opencode(home, account, engine = 'opencode') {
   } catch { /* no XDG data dir here */ }
 
   const out = [];
-  const active = interactiveProcesses(engine);
+  const service = engine === 'opencode2' ? await opencodeServiceSessions() : new Map();
+  const active = service.available ? new Map() : interactiveProcesses(engine);
   const claimed = new Set();
   for (const db of candidates) {
     if (!existsSync(db)) continue;
@@ -379,22 +381,23 @@ function opencode(home, account, engine = 'opencode') {
       let rows;
       try {
         if (engine === 'opencode2') {
-          // V2 backfills V1 rows into session_v2. Rows absent from the V1
-          // table are the conversations created by the separate V2 client.
+          // Keep migrated history reachable when V1 is no longer installed.
+          // With both engines present, V1 lists its history; a live V2 owner
+          // still wins for a migrated conversation currently resumed there.
           const hasV1 = !!conn.prepare(
             `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session'`
           ).get();
           rows = conn.prepare(
             `SELECT id, title, directory, time_updated, agent, model
                FROM session_v2
-              ${hasV1 ? 'WHERE id NOT IN (SELECT id FROM session)' : ''}
-              ORDER BY time_updated DESC LIMIT ?`
-          ).all(PER_ENGINE);
+              ${hasV1 && separateV1 ? `WHERE id NOT IN (SELECT id FROM session)${service.size ? ` OR id IN (${[...service].map(() => '?').join(',')})` : ''}` : ''}
+              ORDER BY time_updated DESC`
+          ).all(...(hasV1 && separateV1 ? service.keys() : []));
         } else {
           rows = conn.prepare(
             `SELECT id, title, directory, time_updated, agent, model
-               FROM session ORDER BY time_updated DESC LIMIT ?`
-          ).all(PER_ENGINE);
+               FROM session ORDER BY time_updated DESC`
+          ).all();
         }
       } catch {
         if (engine === 'opencode2') {
@@ -405,13 +408,15 @@ function opencode(home, account, engine = 'opencode') {
         // token columns on session. Inventory only needs the stable fields.
         rows = conn.prepare(
           `SELECT id, title, directory, time_updated, NULL AS agent, NULL AS model
-             FROM session ORDER BY time_updated DESC LIMIT ?`
-        ).all(PER_ENGINE);
+             FROM session ORDER BY time_updated DESC`
+        ).all();
       }
-      for (const r of rows) {
+      for (const [index, r] of rows.entries()) {
+        if (index >= limit && !service.has(r.id) && (!active.has(r.directory) || claimed.has(r.directory))) continue;
         const cwd = r.directory ?? HOME;
         const pid = active.get(cwd);
-        const isActive = !!pid && !claimed.has(cwd);
+        const shared = service.has(r.id);
+        const isActive = shared || (!!pid && !claimed.has(cwd));
         if (isActive) claimed.add(cwd);
         out.push({
           engine,
@@ -423,7 +428,8 @@ function opencode(home, account, engine = 'opencode') {
           model: opencodeModel(r.model),
           transcript: db,
           active: isActive,
-          writerPid: isActive ? pid : null,
+          writerPid: shared ? null : isActive ? pid : null,
+          ...(shared ? { serviceActive: true, liveStatus: service.get(r.id) } : {}),
         });
       }
       conn.close();
@@ -480,11 +486,11 @@ async function readPiSettings(path) {
  * record first. A live writer either holds the file open or shows up as an
  * interactive process in the session's directory.
  */
-async function piFamily(engine, home, account) {
+async function piFamily(engine, home, account, limit) {
   const root = join(expand(home), ENGINES[engine]?.sessionsDir ?? 'sessions');
   if (!existsSync(root)) return [];
 
-  const files = await newest(root, (n) => n.endsWith('.jsonl'), PER_ENGINE * 2);
+  const files = await newest(root, (n) => n.endsWith('.jsonl'), limit * 2);
   const active = interactiveProcesses(engine);
   const claimed = new Set();
   const out = [];
@@ -529,7 +535,7 @@ async function piFamily(engine, home, account) {
         active: !!pid,
         writerPid: pid,
       });
-      if (out.length >= PER_ENGINE) break;
+      if (out.length >= limit) break;
     } catch { /* not a session log we understand */ }
   }
   return out;
@@ -542,7 +548,7 @@ async function piFamily(engine, home, account) {
  * summary.json holds id, cwd, model and message counts, chat_history.jsonl
  * the conversation. active_sessions.json names the ids with a live process.
  */
-async function grok(home, account) {
+async function grok(home, account, limit) {
   const root = join(expand(home), 'sessions');
   if (!existsSync(root)) return [];
 
@@ -555,7 +561,7 @@ async function grok(home, account) {
     }
   } catch { /* absent between runs */ }
 
-  const summaries = await newest(root, (n) => n === 'summary.json', PER_ENGINE * 2);
+  const summaries = await newest(root, (n) => n === 'summary.json', limit * 2);
   const active = interactiveProcesses('grok');
   const claimed = new Set();
   const out = [];
@@ -585,7 +591,7 @@ async function grok(home, account) {
         active: !!pid,
         writerPid: pid,
       });
-      if (out.length >= PER_ENGINE) break;
+      if (out.length >= limit) break;
     } catch { /* a summary we do not understand */ }
   }
   return out;
@@ -599,7 +605,7 @@ async function grok(home, account) {
  * store helm does not decode. acp-sessions/<id> is the same record kept by
  * `cursor-agent acp` runs.
  */
-async function cursor(home, account) {
+async function cursor(home, account, limit) {
   const out = [];
   const active = interactiveProcesses('cursor');
   const claimed = new Set();
@@ -645,7 +651,7 @@ async function cursor(home, account) {
       } catch { /* a meta we do not understand */ }
     }
   }
-  return out.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, PER_ENGINE);
+  return out.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
 }
 
 // --------------------------------------------------------------------- agy
@@ -657,7 +663,7 @@ async function cursor(home, account) {
  * last-write time and an idle flag. The step payloads are protobuf, so the
  * conversation db is only useful as a writer-lock handle - not a transcript.
  */
-async function agy(home, account) {
+async function agy(home, account, limit) {
   // `home` is the gemini root (GEMINI_CLI_HOME); agy's own store sits under
   // it, but tolerate being handed the store directory itself.
   const root = basename(expand(home)) === 'antigravity-cli' ? expand(home) : join(expand(home), 'antigravity-cli');
@@ -673,7 +679,7 @@ async function agy(home, account) {
       `SELECT conversation_id, title, preview, workspace_uris,
               last_modified_time, not_fully_idle, killed
          FROM conversation_summaries ORDER BY last_modified_time DESC LIMIT ?`
-    ).all(PER_ENGINE);
+    ).all(Number.isFinite(limit) ? limit : -1);
     conn.close();
     for (const r of rows) {
       const id = r.conversation_id;
@@ -723,7 +729,7 @@ async function agy(home, account) {
  * the row names the folder it worked in, and the .db is the writer-lock
  * handle for liveness, same deal as agy's protobuf store.
  */
-async function antigravity(home, account) {
+async function antigravity(home, account, limit) {
   const root = join(expand(home), 'antigravity-acp', 'conversations');
   if (!existsSync(root)) return [];
 
@@ -733,7 +739,7 @@ async function antigravity(home, account) {
   // The .db's mtime is the recency signal, so it is what gets sorted and
   // capped - an unsorted readdir page could keep the newest conversation
   // out of the list entirely.
-  for (const f of await newest(root, (n) => n.endsWith('.db'), PER_ENGINE * 2)) {
+  for (const f of await newest(root, (n) => n.endsWith('.db'), limit * 2)) {
     const id = basename(f.path, '.db');
     const conv = f.path;
     let cwd = HOME;
@@ -758,7 +764,7 @@ async function antigravity(home, account) {
       active: !!pid,
       writerPid: pid,
     });
-    if (out.length >= PER_ENGINE) break;
+    if (out.length >= limit) break;
   }
   return out;
 }
@@ -771,12 +777,12 @@ async function antigravity(home, account) {
  * title - ride ordinary record fields; anything absent stays absent rather
  * than guessed.
  */
-async function muse(home, account) {
+async function muse(home, account, limit) {
   const base = process.env.XDG_DATA_HOME || join(HOME, '.local', 'share');
   const root = join(base, 'muse', 'sessions');
   if (!existsSync(root)) return [];
 
-  const files = await newest(root, (n) => n === 'session.jsonl', PER_ENGINE);
+  const files = await newest(root, (n) => n === 'session.jsonl', limit);
   const active = interactiveProcesses('muse');
   const claimed = new Set();
   const out = [];
@@ -842,7 +848,7 @@ export function scratchFolder(cwd) {
   return false;
 }
 
-export async function inventory(profiles = []) {
+export async function inventory(profiles = [], { limit = PER_ENGINE } = {}) {
   procSnap = null;
   const seen = new Set();
   const jobs = [];
@@ -856,18 +862,18 @@ export async function inventory(profiles = []) {
     if (seen.has(key)) continue; // two aliases onto the same account
     seen.add(key);
 
-    if (p.engine === 'codex') jobs.push(codex(home, p.id));
-    else if (p.engine === 'claude') jobs.push(claude(home, p.id));
+    if (p.engine === 'codex') jobs.push(codex(home, p.id, limit));
+    else if (p.engine === 'claude') jobs.push(claude(home, p.id, limit));
     else if (p.engine === 'opencode' || p.engine === 'opencode2') {
-      jobs.push(Promise.resolve(opencode(home, p.id, p.engine)));
+      jobs.push(Promise.resolve(opencode(home, p.id, p.engine, limit, profiles.some((p) => p.engine === 'opencode'))));
     }
-    else if (p.engine === 'devin') jobs.push(Promise.resolve(devin(home, p.id)));
-    else if (p.engine === 'pi' || p.engine === 'omp') jobs.push(piFamily(p.engine, home, p.id));
-    else if (p.engine === 'grok') jobs.push(grok(home, p.id));
-    else if (p.engine === 'cursor') jobs.push(Promise.resolve(cursor(home, p.id)));
-    else if (p.engine === 'agy') jobs.push(Promise.resolve(agy(home, p.id)));
-    else if (p.engine === 'antigravity') jobs.push(Promise.resolve(antigravity(home, p.id)));
-    else if (p.engine === 'muse') jobs.push(muse(home, p.id));
+    else if (p.engine === 'devin') jobs.push(Promise.resolve(devin(home, p.id, limit)));
+    else if (p.engine === 'pi' || p.engine === 'omp') jobs.push(piFamily(p.engine, home, p.id, limit));
+    else if (p.engine === 'grok') jobs.push(grok(home, p.id, limit));
+    else if (p.engine === 'cursor') jobs.push(Promise.resolve(cursor(home, p.id, limit)));
+    else if (p.engine === 'agy') jobs.push(Promise.resolve(agy(home, p.id, limit)));
+    else if (p.engine === 'antigravity') jobs.push(Promise.resolve(antigravity(home, p.id, limit)));
+    else if (p.engine === 'muse') jobs.push(muse(home, p.id, limit));
   }
 
   const all = (await Promise.allSettled(jobs)).flatMap((r) => r.status === 'fulfilled' ? r.value : []);
@@ -888,4 +894,17 @@ export async function inventory(profiles = []) {
       return true;
     })
     .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** Page only after owner-visible filters, so hidden test chats do not consume a page. */
+export function inventoryPage(rows, { limit = 40, query = '', visible = () => true } = {}) {
+  const size = Number.isSafeInteger(limit) && limit > 0 ? limit : 40;
+  const search = String(query).trim().toLowerCase();
+  const matches = rows.filter(visible).filter((s) => {
+    const text = `${s.title} ${s.cwd} ${ENGINES[s.engine]?.label ?? s.engine}`.toLowerCase();
+    return text.includes(search);
+  });
+  const recent = matches.slice(0, size);
+  const included = new Set(recent);
+  return { recent: [...recent, ...matches.filter((s) => s.active && !included.has(s))], hasMore: matches.length > size };
 }

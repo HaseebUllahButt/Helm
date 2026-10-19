@@ -12,6 +12,8 @@ import { once } from 'node:events';
 process.env.HELM_DIR = mkdtempSync(join(tmpdir(), 'helm-inv-'));
 const XDG = mkdtempSync(join(tmpdir(), 'helm-xdg-'));
 process.env.XDG_DATA_HOME = XDG;
+process.env.XDG_STATE_HOME = join(XDG, 'state');
+for (const [key, file] of Object.entries({ HELM_DB: 'db.sqlite', HELM_SSH_DIR: 'ssh', HELM_NATIVE_SOCKET: 'native.sock', HELM_TERMINALS_SOCKET: 'terminals.sock', HELM_PROCS_SOCKET: 'procs.sock' })) process.env[key] = join(process.env.HELM_DIR, file);
 
 const SECONDS = Math.floor(Date.now() / 1000);
 
@@ -132,7 +134,7 @@ test('opencode inventory: the model is a JSON object, not a name', async () => {
   assert.equal(by('oc-3').model, null, 'nonsense becomes nothing, not JSON on screen');
 });
 
-test('OpenCode 2 inventory reads only native v2 sessions', async () => {
+test('OpenCode 2 keeps migrated history reachable after V1 is removed', async () => {
   const { inventory } = await import('../packages/connect/src/inventory.js');
   const dir = join(XDG, 'opencode-v2-test');
   mkdirSync(dir, { recursive: true });
@@ -155,10 +157,13 @@ test('OpenCode 2 inventory reads only native v2 sessions', async () => {
 
   const found = await inventory([
     { id: 'oc2', engine: 'opencode2', env: { XDG_CONFIG_HOME: '~/.config' } },
+    { id: 'oc1', engine: 'opencode', env: { XDG_CONFIG_HOME: '~/.config' } },
   ]);
   const rows = found.filter((r) => r.engine === 'opencode2');
   assert.ok(rows.some((r) => r.id === 'v2-only' && r.model === 'new-model'));
   assert.ok(!rows.some((r) => r.id === 'v1-shared'), 'the V1 backfill is not listed twice');
+  const onlyV2 = await inventory([{ id: 'oc2', engine: 'opencode2', env: {} }]);
+  assert.ok(onlyV2.some((r) => r.id === 'v1-shared' && r.engine === 'opencode2'), 'removing V1 must not hide migrated conversations');
 });
 
 test('pi inventory trusts each log\'s own session header, not its folder name', async () => {

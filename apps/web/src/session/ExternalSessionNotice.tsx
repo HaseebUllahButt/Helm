@@ -21,12 +21,12 @@ export function ExternalSessionNotice({ session, onTakeOver }: {
   };
   const problem = error || session.takeoverError;
   return <div className="thread-recovery" role="status"><div>
-    <strong>{!session.externalActive ? 'Saved CLI conversation' : waiting ? 'Taking over' : 'Open in a terminal'}</strong>
+    <strong>{!session.externalActive ? 'Saved CLI conversation' : waiting ? 'Taking over' : session.externalService ? 'Running in OpenCode 2' : 'Open in a terminal'}</strong>
     <p>{!session.externalActive ? 'Your next message continues it here.'
       : waiting ? (session.status === 'working' ? 'Moving after the current step finishes.' : 'Moving now.')
-      : problem || 'Take over to use it here and in the terminal.'}</p>
+      : problem || (session.externalService ? 'Wait for the current step to finish, then send here.' : 'Take over to use it here and in the terminal.')}</p>
   </div>
-    {session.externalActive && onTakeOver && (waiting
+    {session.externalActive && !session.externalService && onTakeOver && (waiting
       ? <button disabled={busy} onClick={() => void run(true)}>Cancel</button>
       : <button disabled={busy} onClick={() => void run()}>Take over</button>)}
   </div>;
