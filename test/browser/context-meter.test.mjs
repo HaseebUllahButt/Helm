@@ -66,9 +66,8 @@ test('a chat shows a calm context meter that grows amber and red, and is absent 
       assert.equal(await meter.getAttribute('title'), '148.5k of 383k used');
       assert.equal((await meter.locator('.ctx-pct').textContent()), '39%');
       assert.ok(!/warn|bad/.test(await meter.getAttribute('class')));
-      // The phone keeps the ring and the percent; the numbers are for the hover.
-      assert.equal(await meter.locator('.ctx-detail').isVisible(), width > 600);
-      if (width > 600) assert.equal(await meter.locator('.ctx-detail').textContent(), '148.5k of 383k');
+      // The ring and the percent; the numbers are for the hover.
+      assert.equal(await meter.locator('.ctx-detail').count(), 0);
       assert.ok((await meter.boundingBox()).height < 24, 'a small mark, not a bar');
       await capture(line, `context-meter-${label}-calm.png`);
 

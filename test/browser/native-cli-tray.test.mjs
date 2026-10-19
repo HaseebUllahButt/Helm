@@ -60,8 +60,8 @@ for(const engine of Object.values(ENGINES).filter(e=>e.bin&&!e.plain).map(e=>e.i
     await page.getByRole('button',{name:'show the terminal',exact:true}).click();
   }
   await page.getByTestId('terminal').waitFor();
-  await page.locator('.limits-line').getByText('5h 12% used',{exact:true}).waitFor();
-  assert.equal(await page.locator('.limits-line').getByText('5h 99% used',{exact:true}).count(),0);
+  await page.locator('.limits-line').getByText('5h 12%',{exact:true}).waitFor();
+  assert.equal(await page.locator('.limits-line').getByText('5h 99%',{exact:true}).count(),0);
   assert.equal(await page.getByRole('button',{name:'settings: open CLI picker',exact:true}).count(),0);
   assert.equal(await page.getByRole('button',{name:'keys',exact:true}).count(),0,'the phone key row belongs to plain terminals');
   for(const kind of nativeControls(engine).filter(k=>k!=='settings')){

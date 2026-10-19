@@ -210,7 +210,7 @@ test('a new chat stays on one steady empty page from starting to ready',async t=
   });
   await page.evaluate(()=>window.release());
   await page.locator('.chip.working').filter({hasText:'starting'}).waitFor({state:'detached'});
-  await page.getByRole('button',{name:'Thread options'}).waitFor();
+  await page.getByRole('button',{name:'more',exact:true}).waitFor();
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.events' && c.params.id==='fresh'));
   await page.waitForTimeout(400);
   await page.evaluate(()=>{ window.watching=false; });

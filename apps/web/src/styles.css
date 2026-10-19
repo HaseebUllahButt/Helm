@@ -1409,11 +1409,8 @@ pre.snippet {
 .limits-windows { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; min-width: 0; }
 .limits-line .lw { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .limits-line .lw b { color: var(--text-dim); font-weight: 550; }
-.limits-meter { width: 28px; height: 3px; background: var(--line-2); border-radius: 3px; overflow: hidden; }
-.limits-meter i { display: block; height: 100%; background: var(--hi); }
 .limits-line .lw.warn, .limits-line .lw.warn b { color: var(--amber-text); }
 .limits-line .lw.bad, .limits-line .lw.bad b { color: var(--red); }
-.lw.warn .limits-meter i { background: var(--amber); } .lw.bad .limits-meter i { background: var(--red); }
 @media (max-width: 359px) { .limits-caption { width: 100%; } }
 .slab.danger::after { border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .modesheet-note { padding: 0 8px 8px; font-size: var(--t-meta); color: var(--mutedfg); }
@@ -3172,11 +3169,8 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .ctx-ring-bg { stroke: var(--line-2); }
 .ctx-ring { stroke: var(--hi); stroke-linecap: round; }
 .ctx-pct { color: var(--text-dim); font-weight: 550; font-variant-numeric: tabular-nums; }
-.ctx-detail { display: none; }
 .ctx-meter.warn .ctx-ring { stroke: var(--amber); } .ctx-meter.warn .ctx-pct { color: var(--amber-text); }
 .ctx-meter.bad .ctx-ring { stroke: var(--red); } .ctx-meter.bad .ctx-pct { color: var(--red); }
-/* Room on a wide screen for the numbers; a phone keeps the ring and the percent. */
-@media (min-width: 601px) { .ctx-detail { display: inline; } }
 
 /* "Compact at": the meter is a button, and its menu opens upward from the row under the composer. */
 .ctx-slot { position: relative; display: inline-flex; margin-left: auto; flex: none; }
@@ -3384,26 +3378,20 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
   background: var(--accent); border: 1px solid var(--line-2); border-radius: var(--radius-md); outline: none;
 }
 .crumb-edit:focus { border-color: var(--primary-q); }
-.crumb-more {
-  flex: none; display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; border-radius: var(--radius-sm); color: var(--icon);
-}
-.crumb-more:hover { background: var(--accent); color: var(--text); }
-.crumb-more:focus-visible { outline: 2px solid var(--primary-q); outline-offset: 1px; }
 .session-bar .titles { gap: 2px; }
 /* On a wide screen the machine and cost follow the title on its line: a second
    line made the bar a row taller than anything in it needed. */
 @media (min-width: 900px) {
   .session-bar .titles { flex-direction: row; align-items: center; gap: 12px; }
   .session-bar .crumb { flex: 0 1 auto; min-width: 0; }
-  .session-bar .titles > .sub { flex: 0 1000 auto; padding-left: 0; }
+  .session-bar .titles > .sub { flex: none; max-width: 45%; padding-left: 0; }
 }
 .session-bar .sub { padding-left: 26px; }
 .session-bar .sub .route-machine { font-family: var(--sans); font-weight: 500; font-size: var(--t-meta); color: var(--mutedfg); max-width: none; }
 .sub-folder { display: none; }
 @media (max-width: 599px) {
   .crumb { gap: 5px; }
-  .crumb-folder, .crumb-sep, .crumb-more { display: none; }
+  .crumb-folder, .crumb-sep { display: none; }
   .sub-folder { display: inline; }
 }
 

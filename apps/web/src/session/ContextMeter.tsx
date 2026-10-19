@@ -25,7 +25,6 @@ export function ContextMeter({ used, window, onPress, open, compacted = false }:
       <circle className="ctx-ring" cx="8" cy="8" r={R} strokeDasharray={`${(CIRCLE * pct) / 100} ${CIRCLE}`} transform="rotate(-90 8 8)" />
     </svg>
     <span className="ctx-pct">{compacted ? 'compacted' : `${pct}%`}</span>
-    <span className="ctx-detail">{compacted ? `of ${size(window)}` : `${size(used)} of ${size(window)}`}</span>
   </>;
   return onPress
     ? <button type="button" className={`${cls} press`} title={`${title} · change when it compacts`} aria-label={`Context ${title}${compacted ? '' : `, ${pct}%`}. Change when it compacts`}

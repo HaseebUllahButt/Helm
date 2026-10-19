@@ -712,8 +712,6 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
               <h1 className="crumb-title" title={session.title}
                 onDoubleClick={() => { setNameDraft(session.title); setRenaming(true); }}>{session.title}</h1>
             )}
-            <button className="crumb-more" aria-label="Thread options" title="Thread options" aria-haspopup="menu" aria-expanded={menu === 'more'}
-              onClick={() => setMenu(menu === 'more' ? null : 'more')}><Icon name="down" size={14} /></button>
           </div>
           <span className="sub">
             <Route machine={env.name} quick={session.quick} />

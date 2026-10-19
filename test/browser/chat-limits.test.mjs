@@ -62,6 +62,6 @@ test('a chat on a fresh browser shows its account limits and reset times from th
     assert.match(seven, /^7d: 59% used · resets [A-Z][a-z]{2} \d/);
     await capture(line, 'chat-limits-line.png');
     await view.evaluate(() => {window.quota=23;window.emit('session.event',{event:{type:'limits'}})});
-    await line.getByText('5h 23% used',{exact:true}).waitFor();
+    await line.getByText('5h 23%',{exact:true}).waitFor();
   } finally { await view.close(); }
 });

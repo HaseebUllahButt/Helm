@@ -143,8 +143,7 @@ for (const width of [1280,390]) test(`the header is a path with the title last t
   const room=await bar.evaluate(el=>({folder:el.querySelector('.crumb-folder').getBoundingClientRect().width,title:el.querySelector('h1').getBoundingClientRect().width}));
   assert.ok(room.title>room.folder*2,`the title gets the room (${JSON.stringify(room)})`);
   assert.ok(await noSideways(page),'no sideways scroll');
-  // The chevron is for a mouse; a phone has the dots.
-  for (const name of width>=600?['Agents','Thread options','more','Back']:['Agents','more','Back']) assert.ok(await bar.getByRole('button',{name,exact:true}).isVisible(),`${name} is still there`);
+  for (const name of ['Agents','more','Back']) assert.ok(await bar.getByRole('button',{name,exact:true}).isVisible(),`${name} is still there`);
   await shot(page,`header-long-title-${width}.png`);
 });
 
@@ -162,8 +161,7 @@ test('double-clicking the title renames the thread; Escape leaves it alone',asyn
   await box.fill('Calmer title');
   await box.press('Enter');
   await page.waitForFunction(()=>window.calls.some(c=>c.method==='session.title'&&c.params.title==='Calmer title'&&c.params.id==='long'));
-  // The chevron beside the title opens the same menu as the dots.
-  await bar.getByRole('button',{name:'Thread options'}).click();
+  await bar.getByRole('button',{name:'more',exact:true}).click();
   await page.getByRole('button',{name:'Rename thread'}).waitFor();
 });
 
