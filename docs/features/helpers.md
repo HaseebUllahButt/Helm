@@ -27,6 +27,10 @@ shows as a card inside its parent, never as its own row in Working.
   as separate chats). Helpers sharing a folder can clash; use `--worktree`.
   A finished helper frees its process after 30 s idle and resumes on a
   follow-up. The "no nested CLI" rule is a request, not a lock.
+- **One result per task:** once the parent has the result, a helper that
+  wakes by itself later (a background watcher timing out) never gives the
+  parent another turn. Those relays were nearly all "stale watcher, nothing
+  changed". Real news goes by `helm say`; the helper's brief says so.
 - **Tests:** `test/delegation`, `spawn-cli`, `cli-subagents`.
 
 ## The CLIs' own subagents

@@ -461,7 +461,7 @@ export class Daemon {
     try { this.schedules = new Schedules({ sessions: this.sessions, shareName: `helm-hooks-${createHash('sha256').update(this.id).digest('hex').slice(0, 16)}`,
       publicOrigin: () => { const host = publicHosts(loadNetwork() ?? this.net)[0]; return host ? `https://${this.schedules.shareName}.${host}` : null; } }); }
     catch (error) { console.error(`[helm] schedules unavailable: ${error.message}`); }
-    this.sessions.delegationBrief = () => helmBrief(loadNetwork() ?? this.net);
+    this.sessions.delegationBrief = (s) => helmBrief(loadNetwork() ?? this.net, { parentId: s?.delegation?.parentId ?? null });
     // What was said in every chat here, for the search box (search-index.js).
     this.search = new SearchIndex({ log: (line) => console.log(`[helm] ${line}`) });
     this.keeper = new OwnerKeeper({

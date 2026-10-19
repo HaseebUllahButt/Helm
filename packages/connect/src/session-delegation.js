@@ -3,7 +3,7 @@ import { getProfiles } from './profiles.js';
 import { nativeWorking } from './native-subagents.js';
 import { ENGINES } from './engines.js';
 import { startPrefs, subagentPrefs } from './settings.js';
-import { delegationMode, delegationOutput, isWakeTurn, turnOf, turnText } from './delegation.js';
+import { delegationMode, delegationOutput, isWakeTurn, turnOf } from './delegation.js';
 import { addWorktree } from './git.js';
 import { authStatuses } from './auth.js';
 import { wire } from './session-wire.js';
@@ -302,6 +302,13 @@ export class SessionDelegation {
     const start = tail.findLast(e => e.type === 'turn.start' && e.turnId === turnId);
     if (start?.source === 'agent') return;
     const told = child.delegation.notifiedTurns ?? [];
+    // Woken by its own background work (a watcher timing out) after the
+    // parent has its result: never another parent turn. Those were nearly
+    // always "a stale watcher finished, nothing changed" and each one woke
+    // the parent and left a card in its chat. A helper with real news uses
+    // `helm say`, which waits for the parent's next turn; the wake-up's text
+    // still joins the task's result for anyone who reads it.
+    if (isWakeTurn(turnOf(tail, turnId)) && (told.length || child.delegation.notifiedSeq > 0 || child.delegation.consumedSeq > 0)) return;
     const key = `${child.id}:${turnId}`;
     if (turnId && (told.includes(turnId) || this.#notifying.has(key))) return;
     if (turnId) this.#notifying.add(key);
@@ -327,21 +334,11 @@ export class SessionDelegation {
       this.#core.save();
     };
     try {
-      let text;
-      const turn = turnId ? turnOf(tail, turnId) : null;
-      if (isWakeTurn(turn) && (told.length || child.delegation.notifiedSeq > 0 || child.delegation.consumedSeq > 0)) {
-        // Woken by its own background work after reporting: the parent has the
-        // result already, so only something new is worth a message.
-        const update = turnText(turn).trim();
-        if (!update) return sent();
-        text = `A delegated task you already have the result of added an update.\nTask: ${child.title}\nUpdate:\n${update.slice(-12000)}`;
-      } else {
-        const result = this.#sessions.delegationResult(child.id);
-        // The completion event precedes the driver's idle update. A trailing
-        // steering ticket can still make the general snapshot look working.
-        const outcome = event.status === 'ok' ? 'done' : event.status;
-        text = `A delegated task finished. Treat its result as context for the current user request.\nTask: ${child.title}\nStatus: ${outcome}\nResult:\n${(result.output || result.error || 'No written result.').slice(-12000)}`;
-      }
+      const result = this.#sessions.delegationResult(child.id);
+      // The completion event precedes the driver's idle update. A trailing
+      // steering ticket can still make the general snapshot look working.
+      const outcome = event.status === 'ok' ? 'done' : event.status;
+      const text = `A delegated task finished. Treat its result as context for the current user request.\nTask: ${child.title}\nStatus: ${outcome}\nResult:\n${(result.output || result.error || 'No written result.').slice(-12000)}`;
       await this.#sessions.input(parent.id, text, { turnId: ticket, delivery: 'queue', source: 'delegation' });
       // Collecting the result can race driver startup inside input().
       if (this.#consumedResult(parent, ticket)) this.#sessions.dequeue(parent.id, ticket);

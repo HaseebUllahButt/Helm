@@ -117,24 +117,33 @@ export function ownerNote(record = loadOwner()) {
   return lines.length ? `[Helm owner: What the owner wants from every agent:\n${lines.map((l) => `- ${l}`).join('\n')}]` : '';
 }
 
-// Only notes for tools this machine can use: each one rides along in every session.
-const toolNotes = () => [delegationNote(), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+/**
+ * Only for a helper: its final reply goes back to the parent once. A wake-up
+ * after that (a background watcher timing out) is never relayed, so news
+ * worth a parent's attention goes by agent message instead.
+ */
+export function helperNote(parentId) {
+  return `[Helm helper: You are a helper for chat ${parentId}. Your final reply goes back to it once, as the result. Report once. Anything you write after that, such as a note that a stale background watcher timed out, does not reach it; do not write such notes. If you learn something new it truly needs after you have reported, send it with helm say ${parentId} -- "text".]`;
+}
 
-export function helmBrief(net) {
+// Only notes for tools this machine can use: each one rides along in every session.
+const toolNotes = (parentId) => [parentId && helperNote(parentId), delegationNote(), pickupNote(), agentMessageNote(), visualNote(), browserReady() && browserNote(), writingNote(), ownerNote()].filter(Boolean).join('\n');
+
+export function helmBrief(net, { parentId = null } = {}) {
   const machines = Object.values(net?.machines ?? {});
   const self = net?.machines?.[net?.self];
   const seen = new Set();
   const others = machines
     .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
-  if (!self?.name || !others.length) return toolNotes();
+  if (!self?.name || !others.length) return toolNotes(parentId);
   return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}.
 - Run something on another machine: helm exec <machine> --cwd <absolute-path> -- <command> [args]. This uses Helm's managed connection; prefer it to SSH. For pipelines use -- sh -lc '<script>'. Pass environment explicitly with --env NAME=value. If it says the command may have started, never rerun it: read it with helm exec-status <machine> <command-id> --wait, or stop it with helm exec-cancel <machine> <command-id>.
 - Copy files there: helm copy <machine> <file-or-folder> [--target-folder <path>] (default: the same place; ~ is that machine's home).
 - Which machines are on and what is running where: helm digest. Read a session: helm thread <id>. Message it: helm say <id> <text>.
 - Start an agent on another machine: helm spawn <machine> <folder> <account> <task>.
 - Show the owner something running on a port (a dev server, a page, a preview, a UI change) from anywhere, phone included: helm share <port> [--name <name>] [--password] prints a public https link. Call these spins. A spin is short-lived: it ends by itself after 3 hours, so do not plan on it lasting longer. Add --keep only when the owner asks for a link that stays. Add --private when only the owner's own signed-in devices should open it. helm forward <machine> <port> opens a port another machine shared on this one's localhost. helm share list shows the links; helm share stop <name> ends one when it is no longer needed.]
-${toolNotes()}`;
+${toolNotes(parentId)}`;
 }
 
 /**
@@ -180,9 +189,6 @@ const turnTexts = (turn) => (turn?.items ?? []).filter((i) => i.kind === 'text')
 
 /** One turn as the log folds it, or undefined when the log no longer holds it. */
 export const turnOf = (events, turnId) => fold(events).turns.find((t) => t.turnId === turnId);
-
-/** What the agent wrote in one turn, for a short follow-up after the result went out. */
-export const turnText = (turn) => turnTexts(turn).join('\n\n');
 
 // `active` comes from the whole log when the caller has it: a long task
 // pushes its own turn.start out of a tail window, and without it the task

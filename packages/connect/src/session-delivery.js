@@ -512,7 +512,7 @@ export class SessionDelivery {
     // Chats told before this was tracked per conversation.
     if (s.delegationIntroduced && s.introducedTo === undefined) s.introducedTo = s.engineSessionId ?? null;
     if (s.introducedTo !== undefined && s.introducedTo === conversation) return request;
-    const note = this.#sessions.delegationBrief?.();
+    const note = this.#sessions.delegationBrief?.(s);
     if (!note) return request;
     s.introducedTo = conversation;
     s.delegationIntroduced = true;

@@ -1306,7 +1306,7 @@ export class Sessions extends EventEmitter {
       // message, where it read as something they had typed.
       // A hidden helper is asked one question with all it needs; the brief
       // would only cost it tokens.
-      instructions: DRIVERS[s.driver]?.takesInstructions && !s.delegation?.hidden ? (this.delegationBrief?.() || null) : null,
+      instructions: DRIVERS[s.driver]?.takesInstructions && !s.delegation?.hidden ? (this.delegationBrief?.(s) || null) : null,
       forkFrom: s.forkFrom,
       transcript: s.transcript,
       monitorOnly: !!s.external,

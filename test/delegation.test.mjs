@@ -504,7 +504,7 @@ test('collecting a result while its notification is in flight cannot enqueue it 
   assert.equal(drivers.get(parent.id).sent, 'Work');
 });
 
-test('a wake-up after a collected result sends only its new update', async t => {
+test('a wake-up after a collected result never wakes the parent again', async t => {
   const { sessions, drivers } = setup(t);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
   await sessions.input(parent.id, 'Work');
@@ -523,12 +523,14 @@ test('a wake-up after a collected result sends only its new update', async t => 
   kid.push('turn.done', { turnId: 'wake-update', status: 'ok' });
   kid.push('status', { status: 'idle' });
   await new Promise(resolve => setImmediate(resolve));
-  const ticket = sessions.history(parent.id).events.findLast(e => e.type === 'turn.start' && String(e.turnId).startsWith(`local-result-${child.id}-`));
-  assert.match(ticket.text, /added an update[\s\S]*New verification/);
-  assert.doesNotMatch(ticket.text, /Opus reviewed the task/);
+  const tickets = sessions.history(parent.id).events.filter(e => e.type === 'turn.start' && String(e.turnId).startsWith(`local-result-${child.id}-`));
+  assert.ok(tickets.every(e => !/New verification/.test(e.text)), 'the parent already has the result');
+  assert.equal(drivers.get(parent.id).sent, 'Work');
+  // Whoever reads the task still finds what it added.
+  assert.match(sessions.delegationResult(child.id).output, /New verification/);
 });
 
-test('a child that wakes itself after reporting sends only what is new, never the report again', async (context) => {
+test('a child that wakes itself after reporting sends nothing more to its parent', async (context) => {
   const { sessions, drivers } = setup(context);
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
   const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
@@ -552,18 +554,16 @@ test('a child that wakes itself after reporting sends only what is new, never th
   await tick();
   assert.equal(tickets().length, 1);
 
-  // One that does is sent alone, without the report it already sent.
+  // Nor is one that says something: stale watchers timing out were the
+  // usual text. Real news goes by `helm say`, which waits for the parent.
   kid.push('turn.start', { turnId: 'wake-news', text: '', wake: true });
   kid.push('item.start', { id: 'news', kind: 'text', turnId: 'wake-news' });
   kid.push('item.delta', { id: 'news', text: 'Type check is clean; committed.' });
   kid.push('item.done', { id: 'news', status: 'ok' });
   kid.push('turn.done', { turnId: 'wake-news', status: 'ok' });
   await tick();
-  assert.equal(tickets().length, 2);
-  const update = drivers.get(parent.id).sent;
-  assert.match(update, /added an update/);
-  assert.match(update, /Type check is clean; committed\./);
-  assert.doesNotMatch(update, /Opus reviewed the task/);
+  assert.equal(tickets().length, 1, 'no turn for the parent after its result');
+  assert.doesNotMatch(drivers.get(parent.id).sent, /Type check is clean/);
 
   // Whoever reads the task's result still gets the report and the update.
   const result = sessions.delegationResult(child.id);
@@ -838,7 +838,7 @@ test('the CLI sends its own folder only when no parent chat decides it', async (
 
 test('agents get the tool instructions as standing instructions, not in the owner\'s message', async (t) => {
   const { sessions, drivers } = setup(t);
-  sessions.delegationBrief = () => '[helm delegation: use helm agents and helm delegate]';
+  sessions.delegationBrief = (s) => `[helm delegation: use helm agents and helm delegate]${s?.delegation ? ` helper of ${s.delegation.parentId}` : ''}`;
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
   // The brief once rode on the first message and showed in the owner's
   // bubble as if they had typed it. Codex and Claude take it out of band.
@@ -852,7 +852,7 @@ test('agents get the tool instructions as standing instructions, not in the owne
   await sessions.input(parent.id, 'Continue');
   assert.equal(drivers.get(parent.id).sent, 'Continue');
   const child = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Review' });
-  assert.equal(drivers.get(child.session.id).instructions, drivers.get(parent.id).instructions);
+  assert.equal(drivers.get(child.session.id).instructions, `${drivers.get(parent.id).instructions} helper of ${parent.id}`);
 });
 
 test('output distinguishes approval, interruption and provider failure', () => {
@@ -1096,6 +1096,16 @@ test('agents are told which machine they are on and how to reach the others', as
   assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');
   assert.match(alone, /\[Helm pickup: .*run helm pickup\.\]/, 'every agent learns where its handover goes');
   assert.match(alone, /helm render/, 'visual replies work even with one machine');
+});
+
+test('only a helper is told to report once and to use helm say afterwards', async () => {
+  const { helmBrief, helperNote } = await import('../packages/connect/src/delegation.js');
+  assert.doesNotMatch(helmBrief({}), /\[Helm helper:/);
+  const brief = helmBrief({}, { parentId: 'abc123def456' });
+  assert.ok(brief.startsWith(helperNote('abc123def456')));
+  assert.match(brief, /Report once\./);
+  assert.match(brief, /stale background watcher/);
+  assert.match(brief, /helm say abc123def456 -- "text"/);
 });
 
 test('the browser note rides along only where a browser can start', async () => {
