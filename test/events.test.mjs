@@ -93,7 +93,7 @@ test('the open turn is the last turn.start without a turn.done', () => {
   assert.equal(log.openTurn('s'), null);
 });
 
-test('only the tail is kept', () => {
+test('memory keeps the tail, the file keeps everything and pages back to the start', () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-events-'));
   const lines = [];
   for (let i = 1; i <= 2500; i++) lines.push(JSON.stringify({ seq: i, at: 0, type: 'item.delta', id: 'x', text: String(i) }));
@@ -103,7 +103,18 @@ test('only the tail is kept', () => {
   assert.equal(all.length, 2000);
   assert.equal(all[0].seq, 501);
   assert.equal(log.append('big', { type: 'turn.done' }).seq, 2501);
-  assert.equal(readFileSync(join(dir, 'big.jsonl'), 'utf8').split('\n').filter(Boolean).length, 2001);
+  assert.equal(readFileSync(join(dir, 'big.jsonl'), 'utf8').split('\n').filter(Boolean).length, 2501);
+  let page = log.window('big', { tail: 200 });
+  assert.equal(page.logFirst, 1, 'the app is told there is history behind the tail');
+  const seen = new Set(page.events.map(e => e.seq));
+  for (let pages = 0; page.firstSeq > 1 && pages < 100; pages++) {
+    page = log.window('big', { before: page.firstSeq });
+    for (const e of page.events) seen.add(e.seq);
+  }
+  assert.equal(seen.size, 2501, 'every event, read back from the file');
+  // A device that last saw seq 10 catches up from the file, with no hole.
+  const forward = log.window('big', { since: 10 });
+  assert.equal(forward.events[0].seq, 11);
 });
 
 // The bug these cover, with its numbers: a devin thread on the owner's VM
@@ -312,11 +323,8 @@ test('retention preserves the real owner and item of a turn longer than 2000 eve
     assert.equal(host?.text, 'long original task');
     assert.ok(host?.items.find(i => i.id === 'reply')?.text.endsWith(' latest answer'));
     assert.equal(state.turns.find(t => t.id === 'local-next')?.queued, false);
-    // The newest 2000, and in a live log up to 200 more until its next trim.
-    const tail = instance.last('s') - window.logFirst + 1;
-    assert.ok(tail >= 2000 && tail <= 2200, `tail of ${tail}`);
-    assert.ok(window.firstSeq >= window.logFirst);
-    assert.ok(window.events[0].seq < window.logFirst, 'sparse anchors remain separate from retained history');
+    assert.equal(window.logFirst, 1, 'the whole history is still there to page back to');
+    assert.ok(window.firstSeq > window.events[0].seq, 'sparse anchors remain separate from the unbroken window');
     assert.deepEqual(instance.window('s', { before: window.logFirst }).events, []);
   }
 });
@@ -332,11 +340,12 @@ test('disk compaction retains compact item anchors without carrying old tool pay
   const log = new EventLog(dir), kept = log.since('s');
   assert.equal(kept.length, 2002);
   assert.equal(kept.find(e => e.type === 'item.start')?.changes, undefined);
-  assert.ok(readFileSync(join(dir, 's.jsonl'), 'utf8').length < 200_000);
+  assert.ok(readFileSync(join(dir, 's.jsonl'), 'utf8').length > 500_000, 'the file is left whole');
   const reopened = new EventLog(dir), window = reopened.window('s', { tail: 10 }), state = emptyLog();
   for (const event of window.events) apply(state, event);
   assert.equal(state.turns[0].items[0].id, 'edit');
-  assert.equal(window.logFirst, 103);
+  assert.equal(window.logFirst, 1);
+  assert.ok(JSON.stringify(window).length < 200_000, 'the old payload is not sent with the tail');
 });
 
 test('a visual and its page survive a long chat being trimmed, including restart', () => {
@@ -419,7 +428,7 @@ test('cold active-turn checks agree with the full log through ticket and local-c
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('a trimmed log is not written again each time it is opened', () => {
+test('opening a long log never rewrites it', () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-trimmed-'));
   try {
     const log = new EventLog(dir);
@@ -429,10 +438,10 @@ test('a trimmed log is not written again each time it is opened', () => {
     new EventLog(dir).since('s');
     const file = join(dir, 's.jsonl');
     const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean).length;
-    assert.ok(lines > 2000, 'the tail keeps the turn and item it belongs to');
+    assert.equal(lines, 2102, 'the file keeps everything');
     const old = new Date('2020-01-01T00:00:00Z');
     utimesSync(file, old, old);
-    assert.equal(new EventLog(dir).since('s').length, lines);
+    assert.equal(new EventLog(dir).since('s').length, 2002, 'memory keeps the tail and the turn and item it belongs to');
     assert.equal(statSync(file).mtimeMs, old.getTime(), 'nothing was dropped, so nothing was written');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -480,4 +489,43 @@ test('a live log trimmed in batches shows what a fresh read of it shows, plus at
     assert.ok(cold.every(e => seen.has(e.seq)), 'nothing a fresh read keeps is missing');
     assert.ok(live.length > cold.length && live.length <= cold.length + 200, `${live.length} against ${cold.length}`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a log trimmed by an older Helm pages back only to where its history is unbroken', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'helm-events-gap-'));
+  try {
+    const rows = [
+      { seq: 3, type: 'turn.start', turnId: 'old', text: 'kept as an anchor' },
+      { seq: 7, type: 'item.start', id: 'r', turnId: 'old', kind: 'text' },
+      ...Array.from({ length: 100 }, (_, i) => ({ seq: 500 + i, type: 'item.delta', id: 'r', text: String(i) })),
+    ];
+    writeFileSync(join(dir, 's.jsonl'), rows.map(e => JSON.stringify(e)).join('\n') + '\n');
+    const log = new EventLog(dir);
+    assert.equal(log.window('s', { tail: 10 }).logFirst, 500);
+    assert.deepEqual(log.window('s', { before: 500 }).events, []);
+    log.append('s', { type: 'item.delta', id: 'r', text: 'more' });
+    assert.equal(new EventLog(dir).window('s', { tail: 10 }).logFirst, 500);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a changed step moves its own revision and every card it sits in, so drawn steps can skip', () => {
+  const log = emptyLog();
+  let seq = 0;
+  const ev = (e) => apply(log, { seq: ++seq, at: seq, ...e });
+  ev({ type: 'turn.start', turnId: 't', text: 'go' });
+  ev({ type: 'item.start', turnId: 't', id: 'helper', kind: 'subagent' });
+  ev({ type: 'item.start', turnId: 't', id: 'step', kind: 'tool', parentId: 'helper' });
+  ev({ type: 'item.start', turnId: 't', id: 'said', kind: 'text' });
+  const [helper, step, said] = log.turns[0].items;
+  assert.equal(helper.revision, 3, 'a new step inside a card moves the card');
+  const before = { said: said.revision };
+  ev({ type: 'item.done', id: 'step', status: 'ok' });
+  assert.equal(step.revision, 5);
+  assert.equal(helper.revision, 5, 'a finished step inside a card moves the card');
+  assert.equal(said.revision, before.said, 'a step that did not change keeps its revision');
+  ev({ type: 'item.delta', id: 'said', text: 'hi' });
+  assert.equal(said.revision, 6);
+  assert.equal(helper.revision, 5, 'text growing elsewhere leaves the card alone');
+  ev({ type: 'turn.done', turnId: 't', status: 'ok' });
+  assert.equal(said.revision, 7, 'ending the turn closes the streaming text and moves it');
 });

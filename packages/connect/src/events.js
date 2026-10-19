@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { HELM_DIR } from './paths.js';
@@ -12,9 +12,13 @@ import { HELM_DIR } from './paths.js';
  * was asleep can ask "everything after 412" instead of re-reading a
  * transcript, and so that a daemon restart does not lose the conversation.
  *
- * One file per session under ~/.helm/events. Only the tail is kept: a
- * session that ran for a week is not something anyone scrolls through on a
- * phone, and the agent's own transcript still has all of it.
+ * One file per session under ~/.helm/events, never trimmed. Memory holds
+ * only the newest KEEP events; older pages are read back from the file when
+ * someone scrolls up. Until 2026-10-19 the file itself was cut to KEEP, on
+ * the idea that the agent's own transcript still had the rest. It did, but
+ * the owner could not read it: a busy chat lost everything older than two
+ * hours, and Helm-only rows (approvals, helper cards, pictures) were gone
+ * for good.
  *
  * Image bytes do **not** live in that file. A megabyte of base64 on one
  * line would be re-read and re-serialised on every open, and the log is
@@ -30,7 +34,7 @@ export const EVENTS_DIR = join(HELM_DIR, 'events');
 const KEEP = 2000;
 export const EVENT_KEEP = KEEP;
 /**
- * A live log is trimmed back to KEEP only once its tail is this far past it.
+ * A live log in memory is trimmed back to KEEP only once its tail is this far past it.
  * Trimming walks and sorts the whole kept history; doing it on every event
  * made each event of a long chat cost ~0.3 ms instead of ~0.02. Readers see
  * the same newest KEEP events, plus at most this many older ones in between.
@@ -166,6 +170,29 @@ function anchor(event) {
   return result;
 }
 
+/** A line's seq without parsing the rest: every event is written seq first. */
+function seqOf(line) {
+  const m = /^\{"seq":(\d+)/.exec(line);
+  if (m) return Number(m[1]);
+  try { return JSON.parse(line).seq ?? 0; } catch { return 0; }
+}
+
+/**
+ * Where a file's unbroken history starts. Seqs go up by one per event, so a
+ * gap marks the front: logs trimmed before 2026-10-19 keep a sparse prefix of
+ * anchors ahead of what is left, and those are not history to page through.
+ */
+function contiguousFirst(lines) {
+  let first = 0, next = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const seq = seqOf(lines[i]);
+    if (!seq) continue;
+    if (first && seq !== next) break;
+    first = seq; next = seq - 1;
+  }
+  return first;
+}
+
 /**
  * Retain the newest KEEP events plus just the identities those events need.
  * `older` walks backwards and is repeatable: disk opens need not parse every
@@ -250,10 +277,13 @@ export class EventLog {
       this.#logs.set(id, log);
       return log;
     }
-    log = { seq: 0, events: [], first: 0 };
+    // `first` is where the unbroken part in memory starts; `diskFirst` is
+    // where it starts in the file, which is what a reader can page back to.
+    log = { seq: 0, events: [], first: 0, diskFirst: 0 };
     const file = this.#file(id);
     if (existsSync(file)) {
       const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
+      log.diskFirst = contiguousFirst(lines);
       const from = Math.max(0, lines.length - KEEP), tail = [];
       for (const line of lines.slice(from)) {
         try { tail.push(JSON.parse(line)); } catch { /* a torn last line after a crash */ }
@@ -266,15 +296,6 @@ export class EventLog {
       Object.assign(log, retain(tail, older));
       log.context = log.events.length - tail.length;
       if (log.events.length) log.seq = log.events[log.events.length - 1].seq;
-      // Compact to the tail and its identities, preserving ownership across
-      // eviction/restart as well as while this instance remains in memory.
-      // A trimmed log is its tail plus the older lines that tail still refers
-      // to, so it stays over KEEP; rewriting it unchanged on every open
-      // rewrote a hundred busy logs on each start.
-      if (lines.length > KEEP && log.events.length < lines.length) {
-        writeFileSync(file, log.events.map((e) => JSON.stringify(e)).join('\n') + '\n');
-        this.#sweep(id, log.events);
-      }
     }
     this.#logs.set(id, log);
     const open = new Map();
@@ -327,24 +348,6 @@ export class EventLog {
     return { ...event, attachments };
   }
 
-  /**
-   * Drop blobs no surviving event refers to. The log keeps only its tail,
-   * so without this an image would outlive the message that carried it and
-   * the directory would only ever grow.
-   */
-  #sweep(id, events) {
-    const live = new Set();
-    for (const e of events) {
-      for (const a of e.attachments ?? []) if (a?.ref) live.add(`${a.ref}.bin`);
-      if (e.visual?.ref) live.add(`${e.visual.ref}.bin`);
-    }
-    let names = [];
-    try { names = readdirSync(this.#attDir(id)); } catch { return; }
-    for (const name of names) {
-      if (!live.has(name)) rmSync(join(this.#attDir(id), name), { force: true });
-    }
-  }
-
   /** Append one event; returns it with `seq` and `at` filled in. */
   append(id, event) {
     const log = this.#open(id);
@@ -358,10 +361,8 @@ export class EventLog {
         for (let i = from - 1; i >= 0; i--) yield old[i];
       }));
       log.context = log.events.length - KEEP;
-      const kept = new Set(log.events.map(e => e.seq));
-      const dropped = old.filter(e => !kept.has(e.seq));
-      if (dropped.some((e) => e.attachments?.length || e.visual?.ref)) this.#sweep(id, log.events);
     } else if (!log.context) log.first = log.events[0]?.seq ?? 0;
+    log.diskFirst ||= full.seq;
     mkdirSync(this.dir, { recursive: true });
     appendFileSync(this.#file(id), JSON.stringify(full) + '\n', { mode: 0o600 });
     return full;
@@ -398,9 +399,12 @@ export class EventLog {
    * it are different things.
    */
   window(id, { since = 0, tail = 0, before = 0, maxBytes = MAX_PAGE } = {}) {
-    const log = this.#open(id), all = log.events;
-    let list = all;
-    if (before > 0) list = before <= log.first ? [] : list.filter((e) => e.seq < before);
+    const log = this.#open(id);
+    // Memory holds the newest part. Paging back, or catching up from further
+    // back than that, reads the file, which holds all of it.
+    const fromDisk = before > 0 || (since > 0 && since + 1 < log.first);
+    let list = fromDisk ? this.#disk(id) : log.events;
+    if (before > 0) list = before <= log.diskFirst ? [] : list.filter((e) => e.seq < before);
     if (since > 0) list = list.filter((e) => e.seq > since);
 
     const shaped = (e) => forWire(this.#hydrate(id, e));
@@ -488,16 +492,31 @@ export class EventLog {
     return {
       events,
       hasMore,
-      firstSeq: events.length ? Math.max(log.first, contiguous || events[0]?.seq || 0) : 0,
-      // The oldest event in the retained contiguous tail. Older identity
+      firstSeq: events.length ? Math.max(fromDisk ? log.diskFirst : log.first, contiguous || events[0]?.seq || 0) : 0,
+      // The oldest event of the unbroken history in the file. Older identity
       // anchors do not mean that their intervening history remains available.
       // A client compares it with
       // the front of its own window to know whether there is anything behind
       // what it is showing - one number, true for every shape of request,
       // instead of a count that only the first reply could have been right
       // about.
-      logFirst: log.first,
+      logFirst: log.diskFirst,
     };
+  }
+
+  /**
+   * The whole file, parsed. Only for paging back past what memory holds,
+   * which someone asked for by scrolling up, so it is not kept.
+   */
+  #disk(id) {
+    let text = '';
+    try { text = readFileSync(this.#file(id), 'utf8'); } catch { return []; }
+    const events = [];
+    for (const line of text.split('\n')) {
+      if (!line) continue;
+      try { events.push(JSON.parse(line)); } catch { /* a torn line after a crash */ }
+    }
+    return events;
   }
 
   /**
@@ -557,10 +576,9 @@ export class EventLog {
    * session list waited behind it.
    *
    * Questions count only in the newest KEEP lines, as `#open` keeps them.
-   * Turn events come from the whole file: `#open` keeps the older ones that
-   * the tail still refers to, and a trimmed log holds nothing else, so the
-   * two differ only for a log grown past KEEP since it was last trimmed -
-   * where an older turn left open is one the restart closes anyway.
+   * Turn events come from the whole file, while `#open` keeps only the older
+   * ones the tail still refers to. They differ only in older turns, and an
+   * older turn left open is one the restart closes anyway.
    */
   glance(id, { cache = true } = {}) {
     const pick = (turns, seq) => ({ seq, turns, pending: this.pending(id) });
@@ -708,7 +726,7 @@ export class EventLog {
     this.remove(id);
     const log = this.#open(id);
     log.seq = seq;
-    log.first = seq + 1;
+    log.first = log.diskFirst = seq + 1;
   }
 
   remove(id) {
