@@ -757,6 +757,9 @@ test('a slash command Claude echoes in its own markup reads as the command', asy
     { kind: 'command', text: '/model claude-opus-5-5' });
   assert.deepEqual(localCommandRecord('<command-name>/cost</command-name><command-message>cost</command-message><command-args></command-args>'),
     { kind: 'command', text: '/cost' });
+  // A skill run as a command opens with its message, then its name.
+  assert.deepEqual(localCommandRecord('<command-message>rpc-action-items</command-message>\n<command-name>/rpc-action-items</command-name>\n<command-args>for today</command-args>'),
+    { kind: 'command', text: '/rpc-action-items for today' });
   assert.equal(localCommandRecord('Explain <local-command-stdout> tags'), null);
 });
 

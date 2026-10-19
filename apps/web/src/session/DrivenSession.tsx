@@ -412,7 +412,12 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
     if (queueBusy) return false;
     setQueueBusy(turn.id); setError('');
     // Send now may first have to wait for the CLI to stop its reply.
-    try { await client.rpc(env.id, method, { id: session.id, turnId: turn.id, ...params }, method === 'session.send-now' ? 70_000 : undefined); return true; }
+    try {
+      const result: any = await client.rpc(env.id, method, { id: session.id, turnId: turn.id, ...params }, method === 'session.send-now' ? 70_000 : undefined);
+      // Too late to take back: the agent has it. Say so rather than do nothing.
+      if (method === 'session.dequeue' && result?.found === false && !result.removed) setError('This message already went to the agent, so it cannot be taken back.');
+      return true;
+    }
     catch (failure: any) { setError(failure.message); return false; }
     finally { setQueueBusy(''); }
   };

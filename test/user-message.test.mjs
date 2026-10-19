@@ -37,6 +37,7 @@ test("Claude's record of a command it ran reads cleanly: the command as typed, i
   assert.equal(out.text, 'Set model to `claude-opus-5-5`');
   assert.equal(out.printed, true);
   assert.equal(userMessage('<command-name>/model</command-name>\n  <command-message>model</command-message>\n  <command-args>claude-opus-5-5</command-args>').text, '/model claude-opus-5-5');
+  assert.equal(userMessage('<command-message>rpc-action-items</command-message>\n<command-name>/rpc-action-items</command-name>\n<command-args>for today</command-args>').text, '/rpc-action-items for today', 'a skill run as a command');
   assert.equal(userMessage('<local-command-caveat>The command below was run directly.</local-command-caveat>').text, '');
   assert.equal(userMessage('hello there').printed, false);
 });

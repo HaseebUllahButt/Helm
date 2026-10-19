@@ -365,6 +365,36 @@ test('the app adopts the named message for an echo and shows a refused one as fa
   assert.equal(refused.done.error, 'Provider refused input');
 });
 
+test("the app adopts a waiting command for Claude's echo of it as a skill", async () => {
+  const { apply, emptyLog } = await import('../apps/web/src/session/types.ts');
+  const state = emptyLog();
+  let seq = 0;
+  const ev = (event) => apply(state, { seq: ++seq, at: seq, ...event });
+  ev({ type: 'turn.start', turnId: 'host', text: 'Original' });
+  ev({ type: 'turn.start', turnId: 'local-a', text: '/rpc-action-items for today', queued: true });
+  // A skill run as a command opens with <command-message>, a built-in one with <command-name>.
+  ev({ type: 'turn.start', turnId: 'native-a', text: '<command-message>rpc-action-items</command-message>\n<command-name>/rpc-action-items</command-name>\n<command-args>for today</command-args>' });
+  assert.deepEqual(state.turns.map((turn) => [turn.id, !!turn.queued]), [['host', false], ['native-a', false]]);
+});
+
+test('a waiting row whose message went out unmatched can still be removed once the agent is idle', async (t) => {
+  const { sessions, session, driver, events, ticket } = await setup(t, 'devin');
+  await sessions.input(session.id, '/rpc-action-items for today');
+  const turnId = ticket('/rpc-action-items for today');
+  // The CLI echoes it in words Helm does not match to the message.
+  const send = driver.send.bind(driver);
+  driver.send = async () => send('<command-message>something else</command-message>');
+  driver.finish();
+  await tick();
+  assert.equal(events().some((event) => event.type === 'turn.remove'), false);
+  assert.deepEqual(sessions.dequeue(session.id, turnId), { ok: true, found: false }, 'while it runs, the echo may still come');
+  driver.finish();
+  await tick();
+  assert.deepEqual(sessions.dequeue(session.id, turnId), { ok: true, found: false, removed: true });
+  assert.equal(events().at(-1).type, 'turn.remove');
+  assert.equal(events().at(-1).turnId, turnId);
+});
+
 async function acpFixture(t) {
   const writes = [];
   let receive, exit;

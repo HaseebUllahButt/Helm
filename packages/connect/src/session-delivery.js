@@ -552,7 +552,20 @@ export class SessionDelivery {
     const q = this.#core.outbox.get(id) ?? [];
     const i = q.findIndex((x) => x.turnId === turnId);
     // Send now has reserved it: it is on its way, not waiting.
-    if (i < 0 || this.#core.delivering.get(id) === turnId) return { ok: true, found: false };
+    if (i < 0 || this.#core.delivering.get(id) === turnId) {
+      if (i < 0 && this.#orphaned(id, turnId)) {
+        // Nothing holds it and nothing will close it: it went out under a
+        // reply Helm could not match to it, or the record of it was lost in
+        // a restart. Its row would sit in the queue for good, so it goes.
+        const awaiting = this.#core.awaitingEcho.get(id)?.filter((x) => x.turnId !== turnId);
+        if (awaiting?.length) this.#core.awaitingEcho.set(id, awaiting); else this.#core.awaitingEcho.delete(id);
+        const event = this.#sessions.events.append(id, { type: 'turn.remove', turnId });
+        s.lastSeq = event.seq;
+        this.#sessions.emit('event', { id, event });
+        return { ok: true, found: false, removed: true };
+      }
+      return { ok: true, found: false };
+    }
     const [item] = q.splice(i, 1);
     const event = this.#sessions.events.append(id, { type: 'turn.remove', turnId });
     s.lastSeq = event.seq;
@@ -560,6 +573,19 @@ export class SessionDelivery {
     // What waited behind it may be free to go mid-turn now.
     void this.handOver(s);
     return { ok: true, found: true, text: item.text };
+  }
+
+  /** A queued row no part of delivery holds any more, and no event has closed. */
+  #orphaned(id, turnId) {
+    if (this.#core.sending.has(id) || this.#core.delivering.get(id) === turnId) return false;
+    const held = (list) => (list ?? []).some((x) => x.turnId === turnId);
+    if (held(this.#core.steered.get(id))) return false;
+    // A message sent as a new turn is echoed when that turn starts. Once the
+    // agent is idle again, an echo still awaited is one that never matched.
+    if (held(this.#core.awaitingEcho.get(id)) && this.#sessions.get(id)?.status === 'working') return false;
+    const tail = this.#sessions.events.tail(id, 0);
+    return tail.some((e) => e.type === 'turn.start' && e.turnId === turnId && e.queued)
+      && !tail.some((e) => e.turnId === turnId && ['turn.done', 'turn.remove', 'turn.accept', 'turn.deliver'].includes(e.type));
   }
 
   /** `attachments`, when given, replaces the message's images: added, kept or removed. */

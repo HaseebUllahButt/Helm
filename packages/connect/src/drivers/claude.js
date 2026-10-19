@@ -81,10 +81,14 @@ function resultText(content) {
  * replayed as a user message in Claude's own markup. None of them is
  * something the owner wrote.
  */
+const COMMAND_NAME = /^(?:<command-message>[\s\S]*?<\/command-message>\s*)?<command-name>\s*([^<]*?)\s*<\/command-name>/;
+
 export function localCommandRecord(text) {
   const s = String(text ?? '').trim();
   if (s.startsWith('<local-command-caveat>')) return { kind: 'note' };
-  const name = s.match(/^<command-name>\s*([^<]*?)\s*<\/command-name>/);
+  // A skill run as a command ("/rpc-action-items for today") opens with
+  // <command-message>, a built-in one with <command-name>.
+  const name = s.match(COMMAND_NAME);
   if (name) {
     const args = s.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1].trim();
     return { kind: 'command', text: args ? `${name[1]} ${args}` : name[1] };

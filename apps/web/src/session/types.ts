@@ -268,7 +268,8 @@ export function apply(state: LogState, e: HelmEvent): void {
       // turn, so only looking at the end duplicated every queued send.
       // The oldest still-open match takes it, so two identical queued
       // messages stay in the order they were sent.
-      const echo = (e.text ?? '').trim();
+      // Claude echoes a command in its own markup; it is matched as typed.
+      const echo = commandText(e.text ?? '').trim();
       let open: Turn | undefined;
       // A turn the agent began by itself echoes nothing the owner sent, and
       // helm's own ticket is a message of its own: two identical waiting
@@ -468,4 +469,16 @@ export function apply(state: LogState, e: HelmEvent): void {
     default:
       return;
   }
+}
+
+/**
+ * A command as typed ("/rpc-action-items for today"), from Claude's record of
+ * it. A skill run as a command opens with <command-message>, a built-in one
+ * with <command-name>. Anything else comes back as it was.
+ */
+export function commandText(text: string): string {
+  const command = text.match(/^\s*(?:<command-message>[\s\S]*?<\/command-message>\s*)?<command-name>\s*([^<]*?)\s*<\/command-name>/);
+  if (!command) return text;
+  const args = text.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1].trim();
+  return args ? `${command[1]} ${args}` : command[1];
 }
