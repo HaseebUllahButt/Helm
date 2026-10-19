@@ -97,13 +97,17 @@ export function createLoginReader({ home = homedir(), platform = process.platfor
     if (!dbPath) throw new Error('This profile has no saved cookies yet.');
     // Check auxiliary files too: SQLite can otherwise follow a WAL or journal symlink.
     for (const suffix of ['-wal', '-shm', '-journal']) { try { await privatePath(root, dbPath + suffix); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
-    let sqlite; try { sqlite = await import('node:sqlite'); if (!sqlite.backup) throw new Error('SQLite backup unavailable'); } catch { throw new Error('Copying browser logins needs Node with node:sqlite (Node 22.16 or newer).'); }
+    let sqlite; try { sqlite = await import('node:sqlite'); } catch { throw new Error('Copying browser logins needs Node with node:sqlite (Node 22.16 or newer).'); }
     const folder = await mkdtemp(join(tmpdir(), 'helm-logins-')); await chmod(folder, 0o700);
     let original, copy;
     try {
       const file = join(folder, 'Cookies'); await writeFile(file, '', { mode: 0o600 });
-      // SQLite's online backup includes live WAL entries and gives a consistent private copy.
-      original = new sqlite.DatabaseSync(dbPath, { readOnly: true }); await sqlite.backup(original, file); original.close(); original = null;
+      // VACUUM INTO reads one consistent snapshot, live WAL entries included,
+      // into the empty private file. Not sqlite.backup(): Node resolves it only
+      // when something else wakes the event loop, so a 1 ms copy waited for the
+      // next unrelated timer - 30 s in a test, and as long in a quiet daemon.
+      original = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+      original.prepare('VACUUM INTO ?').run(file); original.close(); original = null;
       copy = new sqlite.DatabaseSync(file, { readOnly: true });
       const version = Number(copy.prepare("SELECT value FROM meta WHERE key = 'version'").get()?.value || 0);
       const partitioned = copy.prepare('PRAGMA table_info(cookies)').all().some(c => c.name === 'top_frame_site_key');
