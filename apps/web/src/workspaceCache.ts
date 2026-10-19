@@ -12,6 +12,9 @@ const hot = new Map<string, WorkspaceSnapshot>();
 const revisions = new Map<string, number>();
 const touched = new Map<string, Set<string>>();
 const key = (scope: string) => `helm.workspace:${scope}`;
+// Scopes changed in memory but not yet written to the device.
+const dirty = new Set<string>();
+let writer: ReturnType<typeof setTimeout> | null = null;
 
 /** Namespacing only; authentication is still performed by the hub. */
 export function workspaceScope(token?: string): string {
@@ -48,6 +51,12 @@ function header(s: Session): Session {
 }
 
 export function loadWorkspace(scope: string): WorkspaceSnapshot {
+  if (dirty.has(scope)) writeWorkspace(scope);
+  return current(scope);
+}
+
+/** The latest copy in memory, with lists not yet tidied for saving. */
+function current(scope: string): WorkspaceSnapshot {
   if (!scope) return empty();
   if (hot.has(scope)) return hot.get(scope)!;
   try {
@@ -86,7 +95,7 @@ export function saveWorkspace(scope: string, patch: Partial<WorkspaceSnapshot>):
   if ('environments' in patch) fields.add('environments');
   if ('view' in patch) fields.add('view');
   touched.set(scope, fields);
-  const previous = loadWorkspace(scope);
+  const previous = current(scope);
   const value = { ...previous, ...patch, sessions: { ...previous.sessions, ...patch.sessions } };
   // The open view is another copy of the same header. Keep it current when
   // a live list arrives, so reload never boots with its older settings.
@@ -99,19 +108,43 @@ export function saveWorkspace(scope: string, patch: Partial<WorkspaceSnapshot>):
     value.sessions = Object.fromEntries(Object.entries(value.sessions).filter(([id]) => ids.has(id)));
     if (value.view && !ids.has(value.view.envId)) value.view = undefined;
   }
-  for (const [id, sessions] of Object.entries(value.sessions)) {
-    value.sessions[id] = sessions.filter(s => listedThread(s) && s.engine !== 'shell')
-      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, 200).map(header);
-  }
+  hot.set(scope, value);
+  // Every chat update lands here, many a second while agents work, and
+  // sorting and writing the whole list each time held up the screen. Memory
+  // has the change now; the device gets it at most once a second, and when
+  // the page is hidden or closed.
+  dirty.add(scope);
+  writer ??= setTimeout(writeWorkspaces, 1000);
+}
+
+function writeWorkspace(scope: string): void {
+  dirty.delete(scope);
+  const latest = hot.get(scope);
+  if (!latest) return;
+  const value: WorkspaceSnapshot = { ...latest, sessions: Object.fromEntries(Object.entries(latest.sessions).map(([id, sessions]) =>
+    [id, sessions.filter(s => listedThread(s) && s.engine !== 'shell')
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, 200).map(header)])) };
   if (value.view) value.view = { ...value.view, session: header(value.view.session) };
   hot.set(scope, value);
   try { localStorage.setItem(key(scope), JSON.stringify(value)); } catch { /* quota or private mode */ }
   void txn('kv', 'readwrite', s => s.put(value, key(scope))).catch(() => {});
 }
 
-/** Save acknowledged changes immediately, including CLI-reported settings. */
+/** Write every pending change to the device now. */
+export function writeWorkspaces(): void {
+  if (writer) clearTimeout(writer);
+  writer = null;
+  for (const scope of [...dirty]) writeWorkspace(scope);
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', writeWorkspaces);
+  window.addEventListener('beforeunload', writeWorkspaces);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) writeWorkspaces(); });
+}
+
+/** Save acknowledged changes, including CLI-reported settings. */
 export function updateWorkspaceSession(scope: string, envId: string, session: Session): void {
-  const saved = loadWorkspace(scope);
+  const saved = current(scope);
   const list = saved.sessions[envId];
   const view = saved.view?.envId === envId && saved.view.session.id === session.id
     ? { ...saved.view, session: { ...saved.view.session, ...session } } : saved.view;
@@ -124,6 +157,8 @@ export function updateWorkspaceSession(scope: string, envId: string, session: Se
 export function forgetWorkspace(scope: string): void {
   if (!scope) return;
   revisions.set(scope, (revisions.get(scope) ?? 0) + 1);
+  // A change still waiting must not write the signed-out list back.
+  dirty.delete(scope);
   touched.delete(scope);
   hot.delete(scope);
   try { localStorage.removeItem(key(scope)); } catch { /* storage denied */ }

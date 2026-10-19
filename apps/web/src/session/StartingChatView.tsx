@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNow } from '../useNow';
 import type { Client, Environment } from '../client';
 import { EngineMark } from '../EngineMark';
 import { BackIcon, Icon } from '../Icon';
@@ -23,15 +24,10 @@ export function StartingChatView({ client, env, startId, onBack }: {
   const [, redraw] = useState(0);
   const chat = startingChat(startId);
   const [draft, setDraftRaw] = useState(() => chat?.draft ?? '');
-  const [now, setNow] = useState(Date.now());
 
   useEffect(() => onStartingChat((c) => { if (c.id === startId) { setDraftRaw(c.draft); redraw((n) => n + 1); } }), [startId]);
   // A second counter only once the wait is long enough to wonder about.
-  useEffect(() => {
-    if (chat?.state !== 'starting') return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [chat?.state]);
+  const now = useNow(1000, chat?.state === 'starting');
 
   const message = chat?.message ?? '';
   const turns = useMemo(() => {

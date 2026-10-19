@@ -123,3 +123,25 @@ test('streaming keeps shorter or different fences inside a code example', async 
     }
   }
 });
+
+test('a live reply leaves its finished paragraphs alone while the end grows', async t => {
+  const page = await pageFor(t, route => route.fulfill({ status: 404, body: 'unavailable' }));
+  const reply = 'First **finished** paragraph.\n\n```sh\necho one\n```\n\n- a\n- b\n\nThe last paragraph keeps growing word by word.';
+  await page.evaluate(text => window.showMarkdown(text, true), reply.slice(0, 40));
+  // A reader selects a word in the first paragraph while the reply streams.
+  await page.evaluate(() => {
+    const p = document.querySelector('.md p');
+    p.dataset.kept = 'yes';
+    const range = document.createRange();
+    range.selectNodeContents(p.querySelector('strong'));
+    getSelection().addRange(range);
+  });
+  for (let at = 41; at <= reply.length; at++) {
+    await page.evaluate(text => window.showMarkdown(text, true), reply.slice(0, at));
+  }
+  assert.equal(await page.locator('.md p[data-kept]').count(), 1);
+  assert.equal(await page.evaluate(() => String(getSelection())), 'finished');
+  const streaming = await page.locator('.md').innerHTML();
+  await page.evaluate(text => window.showMarkdown(text), reply);
+  assert.equal(await page.locator('.md').innerHTML(), streaming.replace(' data-kept="yes"', ''));
+});

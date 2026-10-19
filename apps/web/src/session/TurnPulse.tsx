@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext } from 'react';
+import { useNow } from '../useNow';
 import type { Item, Turn } from './types';
 import { seconds } from '../format';
 import { changeStats, changesOf, baseName, rawCommand } from './stepWords';
@@ -19,23 +20,9 @@ const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >
 export const verbAt = (turnId: string, elapsedSeconds: number) =>
   VERBS[(hash(turnId) + Math.floor(elapsedSeconds / VERB_SECONDS) * 7) % VERBS.length];
 
-/**
- * The shared useNow ticker runs at whatever pace its first user asked for
- * (often 15s), too slow for a seconds counter. This one lives only while a
- * working line is on screen.
- */
-function useEverySecond(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return now;
-}
-
 /** "Working for 42s · Pondering…": the one calm line that says the agent is busy. */
 export function WorkingLine({ turn, blocked = false }: { turn: Turn; blocked?: boolean }) {
-  const now = useEverySecond();
+  const now = useNow(1000);
   if (blocked) return <div className="working quiet">Waiting for you</div>;
   const start = Number.isFinite(turn.at) ? turn.at : turn.items[0]?.startedAt;
   const elapsed = start ? Math.max(0, Math.floor((now - start) / 1000)) : 0;

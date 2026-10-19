@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNow } from '../useNow';
 import { looksLikeImage, clipboardFiles, isImageAttachment } from './image';
 import { useDictation, type Transcribe } from './voice';
 import type { Turn } from './types';
@@ -46,8 +47,7 @@ function shortQueued(text: string) {
 
 /** Since when, as "0:42": the bar counts while you look at it. */
 function CompactingBar({ since }: { since?: number }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
+  const now = useNow(1000);
   const took = since ? Math.max(0, Math.round((now - since) / 1000)) : 0;
   return (
     <div className="docked compacting" role="status" aria-live="polite">
