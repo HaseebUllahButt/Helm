@@ -368,6 +368,33 @@ test('a background shell command is not a child task, even when it fails', async
   await driver.suspend();
 });
 
+test('Claude counts the work it left running after its turn, also across a reattach', async () => {
+  let receive;
+  const pipe = { onData: cb => { receive = cb; }, onExit: () => {}, detach: () => {} };
+  const { driver } = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },
+    openTurn: () => null, resumeEvents: () => [] });
+  await driver.start();
+  const frame = (m) => receive(JSON.stringify({ type: 'system', ...m }) + '\n');
+  frame({ subtype: 'task_started', task_id: 'bash-1', tool_use_id: 'toolu_bash', task_type: 'local_bash', description: 'checks' });
+  frame({ subtype: 'task_started', task_id: 'watch-1', tool_use_id: 'toolu_watch', task_type: 'monitor', description: 'log' });
+  assert.equal(driver.backgroundTasks, 2);
+  frame({ subtype: 'task_progress', task_id: 'bash-1' });
+  frame({ subtype: 'task_notification', task_id: 'bash-1', status: 'completed', summary: 'exit 0' });
+  assert.equal(driver.backgroundTasks, 1);
+  frame({ subtype: 'task_notification', task_id: 'watch-1', status: 'stopped' });
+  assert.equal(driver.backgroundTasks, 0);
+  await driver.suspend();
+  const again = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe }, openTurn: () => null,
+    resumeEvents: () => [
+      { type: 'item.update', id: 'toolu_a', agent: { id: 'bash-a', status: 'running', type: 'local_bash' } },
+      { type: 'item.update', id: 'toolu_b', agent: { id: 'bash-b', status: 'running', type: 'local_bash' } },
+      { type: 'item.update', id: 'toolu_b', agent: { id: 'bash-b', status: 'completed', type: 'local_bash' } },
+    ] }).driver;
+  await again.start();
+  assert.equal(again.backgroundTasks, 1, 'the one still running before the restart');
+  await again.suspend();
+});
+
 test('reattaching Claude does not revive a background shell command as a helper', async () => {
   const pipe = { onData: () => {}, onExit: () => {}, detach: () => {} };
   const { driver, log } = make('plain', { procId: 'alive', procHost: { hasProc: () => true, procPipe: () => pipe },

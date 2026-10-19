@@ -1310,7 +1310,9 @@ export class Sessions extends EventEmitter {
       const d = this.#drivers.get(s.id);
       if (!d || d.status !== 'idle' || s.status !== 'idle' || this.#retiring.has(s.id)) return;
       if (this.#sending.has(s.id) || this.#outbox.get(s.id)?.length || d.pending?.size
-        || this.events.pending(s.id).length || this.events.activeTurn(s.id) || this.hasActiveDelegations(s.id)) {
+        || this.events.pending(s.id).length || this.events.activeTurn(s.id) || this.hasActiveDelegations(s.id)
+        // A background command or watch it is waiting on dies with it.
+        || d.backgroundTasks > 0) {
         this.#reap(s, 'idle'); return;
       }
       const retiring = Promise.resolve().then(() => d.kill()).then(() => {

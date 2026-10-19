@@ -128,6 +128,15 @@ export class ClaudeDriver extends Driver {
   #scopes = new Map();
   /** task_id -> tool_use_id, from task_started system frames */
   #tasks = new Map();
+  /** task_ids started and not yet ended: helpers, background commands, watches. */
+  #running = new Set();
+
+  /**
+   * Work Claude left running after its turn - a background command, a watch,
+   * a helper. Claude wakes up for it when it ends, so a chat waiting on one is
+   * not finished, however idle it looks.
+   */
+  get backgroundTasks() { return this.#running.size; }
   /**
    * Background commands and passive watches use the same task frames as
    * helpers. They stay in the transcript without keeping the chat working
@@ -297,6 +306,9 @@ export class ClaudeDriver extends Driver {
         if ((e.type === 'item.start' && nonAgentClaudeTask(e))
           || (e.type === 'item.update' && nonAgentClaudeTask(e.agent))) this.#nonAgentTasks.add(e.id);
         if (e.type === 'item.update' && e.agent?.status) agents.set(e.id, e.agent.status);
+        if (e.type === 'item.update' && e.agent?.id && e.agent.status) {
+          if (e.agent.status === 'running') this.#running.add(e.agent.id); else this.#running.delete(e.agent.id);
+        }
         if (e.type !== 'item.start' || e.turnId !== this.#turnId || !['text', 'thinking'].includes(e.kind)) continue;
         const match = /^(.*)#(\d+)$/.exec(e.id);
         if (!match) continue;
@@ -682,6 +694,7 @@ export class ClaudeDriver extends Driver {
     // what progress and completion frames key off.
     if (m.subtype === 'task_started') {
       if (m.task_id && m.tool_use_id) this.#tasks.set(m.task_id, m.tool_use_id);
+      if (m.task_id) this.#running.add(m.task_id);
       if (m.tool_use_id) {
         const service = this.#nonAgentTasks.has(m.tool_use_id)
           || nonAgentClaudeTask({ type: m.task_type, ambient: m.ambient, skipTranscript: m.skip_transcript });
@@ -708,6 +721,7 @@ export class ClaudeDriver extends Driver {
       return;
     }
     if (m.subtype === 'task_notification') {
+      if (['completed', 'failed', 'stopped'].includes(m.status)) this.#running.delete(m.task_id);
       const id = this.#tasks.get(m.task_id) ?? m.tool_use_id;
       if (!id) return;
       if (nonAgentClaudeTask({ type: m.task_type, summary: m.summary })) this.#nonAgentTasks.add(id);

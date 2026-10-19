@@ -270,6 +270,20 @@ test('finished children release promptly, retain their reply and resume the same
   assert.equal(resumed.sent, 'Follow up');
 });
 
+test('an idle child waiting on its own background command is not released until it ends', async t => {
+  const { sessions, drivers } = setup(t, opts => new FakeDriver(opts), { delegationIdleMs: 10 });
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Run the checks' });
+  const original = drivers.get(child.id);
+  original.backgroundTasks = 1;
+  original.finish();
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(original.status, 'idle', 'releasing it would end the command it is waiting on');
+  original.backgroundTasks = 0;
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(original.status, 'exited');
+});
+
 test('a child sharing a Codex account releases its own driver without closing another thread', async t => {
   const { sessions, drivers } = setup(t, opts => new FakeDriver(opts), { delegationIdleMs: 10 });
   const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
