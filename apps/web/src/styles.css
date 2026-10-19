@@ -3372,6 +3372,10 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 }
 .crumb-sep { flex: none; color: var(--icon); font-size: var(--t-body); margin: 0 -1px; }
 .crumb .crumb-title { flex: 0 1 auto; min-width: 0; cursor: text; }
+/* A thread's title is the agent's sentence: a calmer weight than a screen's
+   name, and a long one fades out at the edge instead of ending in "…". */
+.session-bar .crumb .crumb-title { font-weight: 500; letter-spacing: -0.005em; text-overflow: clip; }
+.session-bar .crumb .crumb-title[data-more] { mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent); }
 .crumb-edit {
   flex: 1 1 auto; min-width: 0; height: 28px; padding: 0 8px; margin: -2px 0;
   font: 600 var(--t-title)/1.3 var(--sans); letter-spacing: -0.017em; color: var(--text);

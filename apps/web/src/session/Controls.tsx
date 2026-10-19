@@ -2,22 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import type { Client, Mode, ModelList, ModelNote, Session, NativeControl } from '../client';
 import { Icon, type IconName } from '../Icon';
 import { modelRing, nextInRing } from './chatKeys';
-
-/**
- * Mark a sideways-scrolling row while something is still out of sight past
- * its right edge, so the CSS can fade that edge instead of cutting a chip.
- */
-const watchedRows = new WeakSet<HTMLElement>();
-function fadeWhenCut(row: HTMLElement | null) {
-  if (!row || watchedRows.has(row)) return;
-  watchedRows.add(row);
-  const check = () => row.toggleAttribute('data-more', row.scrollLeft + row.clientWidth < row.scrollWidth - 1);
-  row.addEventListener('scroll', check, { passive: true });
-  const watch = new ResizeObserver(check);
-  watch.observe(row);
-  new MutationObserver(check).observe(row, { childList: true, subtree: true, characterData: true });
-  check();
-}
+import { fadeWhenCut } from '../fadeWhenCut';
 
 /** One thing you can change while the agent is running. */
 export interface Choice {

@@ -31,6 +31,7 @@ import { ThreadDetails, type DetailsTab } from './ThreadDetails';
 import { ExternalSessionNotice } from './ExternalSessionNotice';
 import { QueueEdit } from './QueueEdit';
 import { BackIcon, Icon } from '../Icon';
+import { fadeWhenCut } from '../fadeWhenCut';
 import { Route } from '../Route';
 import { EmptyChat, useDockLift } from './EmptyChat';
 import { CloneCard } from './CloneCard';
@@ -709,7 +710,7 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
                 }}
               />
             ) : (
-              <h1 className="crumb-title" title={session.title}
+              <h1 className="crumb-title" ref={fadeWhenCut} title={session.title}
                 onDoubleClick={() => { setNameDraft(session.title); setRenaming(true); }}>{session.title}</h1>
             )}
           </div>
