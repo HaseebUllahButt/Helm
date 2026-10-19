@@ -2,7 +2,7 @@
 // See Helm working for real, without touching the owner's Helm.
 //
 //   node scripts/verify-helm.mjs up [--real]   private Helm + free fake agents (--real: your real logins too)
-//   node scripts/verify-helm.mjs open [#hash] [--desktop|--phone]   hidden browser (390×844 phone), signed in
+//   node scripts/verify-helm.mjs open [#hash] [--desktop|--phone] [--init file.js]   hidden browser (390×844 phone), signed in
 //   node scripts/verify-helm.mjs click <text> | type <text> | key <key> | wait <text> [ms]
 //   node scripts/verify-helm.mjs text | shot [file.png] [--full] | errors [--clear] | logs [n] | size <w> <h>
 //   node scripts/verify-helm.mjs eval <js> | rpc <method> [json] | upload <file>...
@@ -137,6 +137,9 @@ async function hold() {
     if (!system || !/Executable doesn't exist/.test(e.message)) throw e;
     return chromium.launchPersistentContext(join(s.root, 'browser'), { ...options, executablePath: system });
   });
+  // `open --init <file>` saved a script to run in every page before the app does.
+  const init = join(s.root, 'init.js');
+  if (existsSync(init)) await context.addInitScript(readFileSync(init, 'utf8'));
   const page = context.pages()[0] ?? await context.newPage();
   const errors = join(s.root, 'errors.log');
   const note = (line) => writeFileSync(errors, `${new Date().toISOString().slice(11, 19)} ${line}\n`, { flag: 'a' });
@@ -154,7 +157,23 @@ async function hold() {
 }
 
 async function open(hash = '') {
+  if (hash.startsWith('--')) hash = '';
   const s = state() ?? die('not up; run: node scripts/verify-helm.mjs up');
+  // --init <file>: run this script in every page before the app starts (the
+  // browser restarts if it was already open, since it is read at start).
+  const initFile = flag('init');
+  if (initFile !== null) { const i = args.indexOf('--init'); args.splice(i, 2); if (hash === '--init') hash = args[0] ?? ''; }
+  if (initFile !== null) {
+    const keep = existsSync(join(ROOT, 'init.js')) ? readFileSync(join(ROOT, 'init.js'), 'utf8') : null;
+    const next = readFileSync(resolve(initFile), 'utf8');
+    writeFileSync(join(ROOT, 'init.js'), next);
+    if (keep !== next && s.browser && alive(s.browser.pid)) {
+      try { process.kill(s.browser.pid, 'SIGTERM'); } catch { /* already gone */ }
+      for (let i = 0; i < 50 && alive(s.browser.pid); i++) await sleep(100);
+      s.browser = null;
+      save(s);
+    }
+  }
   const wantDesktop = has('desktop'), wantPhone = has('phone');
   // Touch, scale and the phone frame are fixed when the browser starts, so
   // `size` alone cannot turn a phone into a laptop (hover rules never apply).
