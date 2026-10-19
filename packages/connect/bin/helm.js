@@ -107,8 +107,8 @@ const USAGE = `helm - control your coding agents from anywhere
   helm say <id> <text...>           send a named message from this agent (a prompt outside a chat)
   helm reply <message-id> <text...> reply to an agent message
   helm messages [chat-id] [--json]  read exchanges in this chat and its Agents
-  helm render <file.html> [--title <text>] [--height <px>] [--session <id>]
-                                    save an interactive visual inside this chat
+  helm render <file.html | picture.png> [--title <text>] [--height <px>] [--session <id>]
+                                    save a visual or a screenshot inside this chat
   helm preview <file.html> [--output <file.png>] [--width <px>] [--appearance dark|light]
                                     screenshot a visual and report JavaScript errors
   helm chat <account> [-- text]    share a live agent between this terminal and the app

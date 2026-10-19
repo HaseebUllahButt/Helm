@@ -20,6 +20,14 @@ const file = name => join(process.env.HELM_DIR, name);
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aBZkAAAAASUVORK5CYII=', 'base64');
 const params = (n, extra = {}) => ({ renderId: String(n).padStart(24, '0'), html: '<h1>Diagram</h1><button>Adjust</button>', title: 'Saved diagram', height: 420, ...extra });
 
+test('a screenshot renders on its own at chat width; text named .png is still refused', async () => {
+  writeFileSync(file('shot.png'), png);
+  const html = await prepareVisual(file('shot.png'));
+  assert.match(html, /<img src="data:image\/png;base64,[^"]+" alt="" style="display:block;max-width:100%;height:auto">/);
+  writeFileSync(file('fake.png'), 'PRIVATE_TOKEN=do-not-embed');
+  await assert.rejects(prepareVisual(file('fake.png')), /local visual assets must be/);
+});
+
 test('local images become portable snapshots; text disguised as an image is refused', async () => {
   writeFileSync(file('pixel.png'), png);
   writeFileSync(file('page.html'), '<img src="pixel.png"><style>.x{background:url(pixel.png)}</style><img srcset="pixel.png 1x, pixel.png 2x"><svg><image href="pixel.png"/></svg>');

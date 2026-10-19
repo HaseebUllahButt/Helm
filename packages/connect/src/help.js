@@ -43,7 +43,8 @@ const DETAILS = {
   shared port on this one's localhost.`,
 
   render: `
-  Write one self-contained HTML file: inline CSS/JS, inline SVG or canvas.
+  A picture file (png, jpg, gif, webp, avif, svg) is shown as it is.
+  Otherwise write one self-contained HTML file: inline CSS/JS, SVG or canvas.
   It runs in an isolated frame: no app state, network fetch, external
   scripts or forms. Local images (img/srcset, SVG, CSS url()) are embedded:
   each a real image up to 2 MiB, the whole page up to 4 MiB. For theme-aware

@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse, parseFragment, serialize } from 'parse5';
 import { visualDocument } from '@helm/protocol/visual';
@@ -37,10 +37,16 @@ export function imageMime(bytes) {
 }
 
 /** Snapshot local assets on the publishing machine, before any remote RPC. */
+const IMAGE_FILE = /\.(?:png|jpe?g|gif|webp|avif|svg)$/i;
+
 export async function prepareVisual(file) {
   const path = resolve(file), source = await stat(path);
-  if (!source.isFile() || source.size > MAX_HTML_BYTES) throw new Error('HTML source must be a file up to 512 KiB');
-  const html = await readFile(path, 'utf8');
+  // A screenshot on its own needs no page around it: show it at chat width.
+  const picture = IMAGE_FILE.test(path);
+  if (!source.isFile() || (!picture && source.size > MAX_HTML_BYTES)) throw new Error('HTML source must be a file up to 512 KiB');
+  const html = picture
+    ? `<!doctype html><img src="${encodeURIComponent(basename(path))}" alt="" style="display:block;max-width:100%;height:auto">`
+    : await readFile(path, 'utf8');
   if (Buffer.byteLength(html) > MAX_HTML_BYTES) throw new Error('HTML source exceeds 512 KiB');
   const doc = parse(html), cache = new Map();
   let embeddedBytes = Buffer.byteLength(html);

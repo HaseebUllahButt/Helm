@@ -13,7 +13,7 @@ export async function runVisualCommand(command, args, { rpc, self, findSession, 
       options[key] = args[++i];
     } else files.push(args[i]);
   }
-  if (files.length !== 1) throw new Error(`usage: helm ${command} <file.html>`);
+  if (files.length !== 1) throw new Error(`usage: helm ${command} <file.html | picture.png>`);
   const html = await prepareVisual(files[0]);
   if (command === 'preview') {
     const output = resolve(options.output || `${tmpdir()}/helm-visual-${randomBytes(6).toString('hex')}.png`);
