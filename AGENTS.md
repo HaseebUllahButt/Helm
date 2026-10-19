@@ -65,9 +65,6 @@ chat with `helm render`. Say what you could not check.
 - A latency number is only real after about 10 seconds of samples.
 - A worktree without a built node-pty hangs in `proc-host.test.mjs`. Fix:
   `npx node-gyp rebuild` in the pty package.
-- On the laptop, the four "native launch" tests in `native-cli.test.mjs` time
-  out whatever the change. On `why`, 5 tests in `browser-window.test.mjs` fail
-  the same way (not looked into yet).
 
 ## Docs
 
