@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { ModeFooter } from '../packages/connect/src/native-mode.js';
+import { ModeFooter, claudeBox } from '../packages/connect/src/native-mode.js';
 
 // Recorded from a real Claude Code 2.1.295 in a pty: its start screen, then
 // what it drew after each shift+tab.
@@ -37,4 +37,21 @@ test('only rows drawn since the mark count', () => {
   footer.mark();
   footer.feed('\x1b[5;1Hstill something');
   assert.equal(footer.label(), null, 'an old line elsewhere is not the answer');
+});
+
+// Recorded from a real Claude Code 2.1.303: its typing box empty, with a
+// draft, with the draft put aside by Ctrl+S, and both at once.
+const box = JSON.parse(readFileSync(new URL('./fixtures/claude/typing-box.json', import.meta.url), 'utf8'));
+
+test("Claude's typing box reads as empty, holding a draft, or with one stashed", () => {
+  assert.deepEqual(claudeBox(box.empty), { draft: false, stashed: false }, 'the dim Try "…" hint is not a draft');
+  assert.deepEqual(claudeBox(box.draft), { draft: true, stashed: false });
+  assert.deepEqual(claudeBox(box.stashed), { draft: false, stashed: true });
+  assert.deepEqual(claudeBox(box.draftAndStashed), { draft: true, stashed: true });
+  assert.deepEqual(claudeBox(box.twoLines), { draft: true, stashed: true });
+});
+
+test('a menu is not the typing box, and nothing drawn reads as no box', () => {
+  assert.equal(claudeBox(''), null);
+  assert.equal(claudeBox('\x1b[H Allow this command?\r\n❯ 1. Yes\r\n  2. No'), null);
 });

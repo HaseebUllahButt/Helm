@@ -15,7 +15,6 @@ const { M } = await import('@helm/protocol');
 const { primeModels } = await import('../packages/connect/src/models.js');
 const { ENGINES } = await import('../packages/connect/src/engines.js');
 const { nativeControls, nativeControlCommand } = await import('../packages/connect/src/native-controls.js');
-const { CLEAR_CLAUDE_BOX } = await import('../packages/connect/src/session-native.js');
 createNetwork({name:'Test'});
 const engines = Object.values(ENGINES).filter(e => e.bin && !e.plain).map(e => e.id);
 let nextHost = 0;
@@ -25,6 +24,8 @@ class Host extends EventEmitter {
   nativeSessions() { return [{id:this.id,engine:this.engine,configHome:this.home,cwd:root,createdAt:1}]; }
   has() { return this.alive; }
   async write(id, text) { this.writes.push(text); }
+  async view() { return ''; }
+  unview() {}
   detach() {}
 }
 test.after(() => rmSync(root,{recursive:true,force:true}));
@@ -43,7 +44,7 @@ for (const engine of engines) test(`${engine}: native tray targets the same term
       const result = await daemon.dispatch(M.SESSION_CONTROL, {id:s.id,kind});
       const command = nativeControlCommand(engine,kind);
       assert.equal(result.terminal,true);
-      assert.deepEqual(host.writes, command == null ? [] : [...engine === 'claude' ? [CLEAR_CLAUDE_BOX] : [], `\x1b[200~${command}\x1b[201~`,'\r']);
+      assert.deepEqual(host.writes, command == null ? [] : [`\x1b[200~${command}\x1b[201~`,'\r']);
       assert.equal(s.model,undefined); assert.equal(s.effort,undefined); assert.equal(s.mode,undefined);
     }
   } finally { await sessions.stop(); }

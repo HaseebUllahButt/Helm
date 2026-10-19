@@ -9,14 +9,13 @@ import { accountKey } from './settings.js';
 import { permissionCard } from './drivers/claude.js';
 import { codexTurnOutcome, nativeCodexThreads } from './drivers/codex.js';
 import { MODES } from './modes.js';
-import { ModeFooter, MODE_LABELS, MODE_FROM_LABEL } from './native-mode.js';
+import { ModeFooter, MODE_LABELS, MODE_FROM_LABEL, claudeBox } from './native-mode.js';
 import { claudeLiveSessions, claudeLiveStatus, descendsFrom } from './external-process.js';
 import { WORTH_SAYING } from '@helm/usage/recache';
 import { readProcess } from './takeover.js';
 import { pendingSummary, wire } from './session-wire.js';
 
-/** Ctrl+U and Backspace, enough pairs for any box a person types by hand. */
-export const CLEAR_CLAUDE_BOX = '\x15\x7f'.repeat(40);
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * CLIs the owner runs in a Helm terminal, and Codex threads open in Codex's
@@ -422,18 +421,39 @@ export class NativeSessions {
   }
 
   /**
-   * Text left in a terminal Claude's typing box joins whatever Helm types
-   * next. A leftover "/permissions" made every later message a slash command
-   * Enter could not run, so nothing the owner sent arrived. Each Ctrl+U
-   * empties a line and each Backspace joins the line above, so pairs empty
-   * the whole box; neither stops a busy Claude the way Esc would, and Ctrl+Y
-   * in the terminal brings the text back. The pause keeps Claude from reading
-   * these keys and the paste as one burst, which loses the paste.
+   * Text in a terminal Claude's typing box joins whatever Helm types next. A
+   * leftover "/permissions" made every later message a slash command Enter
+   * could not run, so nothing the owner sent arrived. But the text may be
+   * something the owner is typing right now, so it is put aside, not thrown
+   * away: Ctrl+S stashes it and Claude puts it back once Helm's message is
+   * sent. A second Ctrl+S would replace a draft already stashed, so then each
+   * line is cut instead, and Ctrl+Y in the terminal brings back the last one cut.
+   * Claude reads keys that arrive in one burst as typed text and drops the
+   * Ctrl+U, so each key is its own write. An empty box, or a screen Helm
+   * cannot read (a menu is open), gets no keys at all.
    */
   async clearClaudeBox(s) {
     if (s.engine !== 'claude') return;
-    await this.#sessions.nativeTerminals.write(s.id, CLEAR_CLAUDE_BOX);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    const host = this.#sessions.nativeTerminals;
+    const read = async () => {
+      try { return claudeBox(await host.view(s.id)); }
+      catch { return null; }
+      finally { if (!this.#sessions.watching(s.id)) host.unview(s.id); }
+    };
+    let box = await read();
+    if (!box?.draft) return;
+    if (!box.stashed) {
+      await host.write(s.id, '\x13');
+      for (let end = Date.now() + 1000; box?.draft && Date.now() < end;) { await pause(50); box = await read(); }
+    }
+    // Ctrl+U cuts left of the cursor and Ctrl+K the rest of the line (or the
+    // line break, once the line is empty); Backspace joins the line above.
+    for (let round = 0; box?.draft && round < 40; round++) {
+      for (const key of ['\x15', '\x0b', '\x7f']) { await host.write(s.id, key); await pause(15); }
+      box = await read();
+    }
+    // Claude reads these keys and the paste that follows as one burst otherwise, and loses the paste.
+    await pause(100);
   }
 
   async nativeWrite(s, text, { control = true, confirmedMode = null } = {}) {

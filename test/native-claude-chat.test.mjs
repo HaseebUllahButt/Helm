@@ -12,7 +12,6 @@ process.env.HELM_NO_SERVICE = '1';
 mkdirSync(process.env.HELM_DIR);
 const { Sessions } = await import('../packages/connect/src/sessions.js');
 const { sendHook } = await import('../packages/connect/src/claude-hooks.js');
-const { CLEAR_CLAUDE_BOX: CLEAR } = await import('../packages/connect/src/session-native.js');
 
 class Host extends EventEmitter {
   writes = [];
@@ -21,6 +20,8 @@ class Host extends EventEmitter {
   has() { return true; }
   async write(id, text) { this.writes.push(text); }
   async renew(id) { this.renewals.push(id); }
+  async view() { return ''; }
+  unview() {}
   detach() {}
 }
 const create = (host = new Host()) => new Sessions(new EventEmitter(), { nativeHost: host, nativeDiscovery: false });
@@ -36,8 +37,47 @@ test('two app messages keep their paste and submit paired', async () => {
   try {
     await sessions.hooks;
     await Promise.all([sessions.input('native-test', 'first'), sessions.input('native-test', 'second')]);
-    // Claude's typing box is emptied before each one, so leftovers cannot join it.
-    assert.deepEqual(host.writes, [CLEAR, '\x1b[200~first\x1b[201~', '\r', CLEAR, '\x1b[200~second\x1b[201~', '\r']);
+    assert.deepEqual(host.writes, ['\x1b[200~first\x1b[201~', '\r', '\x1b[200~second\x1b[201~', '\r']);
+  } finally { await sessions.stop(); }
+});
+
+// Recorded screens of a real Claude's typing box (see native-mode.test.mjs).
+const box = JSON.parse(readFileSync(new URL('./fixtures/claude/typing-box.json', import.meta.url), 'utf8'));
+
+/** A terminal whose screen changes as keys arrive, the way Claude redraws. */
+class Screen extends Host {
+  constructor(screen, react) { super(); this.screen = screen; this.react = react; }
+  async view() { return this.screen; }
+  async write(id, text) { this.writes.push(text); this.screen = this.react(text, this.screen) ?? this.screen; }
+}
+
+test('a draft in the box is stashed before the message, so Claude puts it back after', async () => {
+  const host = new Screen(box.draft, (key) => key === '\x13' ? box.stashed : null), sessions = create(host);
+  try {
+    await sessions.hooks;
+    await sessions.input('native-test', 'from the app');
+    assert.deepEqual(host.writes, ['\x13', '\x1b[200~from the app\x1b[201~', '\r']);
+  } finally { await sessions.stop(); }
+});
+
+test('with a draft already stashed, the box is cut line by line instead of replacing it', async () => {
+  let cuts = 0;
+  const host = new Screen(box.draftAndStashed, (key) => key === '\x7f' && ++cuts === 2 ? box.stashed : null), sessions = create(host);
+  try {
+    await sessions.hooks;
+    await sessions.input('native-test', 'from the app');
+    assert.ok(!host.writes.includes('\x13'), 'a second Ctrl+S would throw the stashed draft away');
+    assert.deepEqual(host.writes, ['\x15', '\x0b', '\x7f', '\x15', '\x0b', '\x7f', '\x1b[200~from the app\x1b[201~', '\r'],
+      'each key is its own write: Claude drops a Ctrl+U that arrives in a burst');
+  } finally { await sessions.stop(); }
+});
+
+test('an empty box gets no keys before the message', async () => {
+  const host = new Screen(box.empty, () => null), sessions = create(host);
+  try {
+    await sessions.hooks;
+    await sessions.input('native-test', 'from the app');
+    assert.deepEqual(host.writes, ['\x1b[200~from the app\x1b[201~', '\r']);
   } finally { await sessions.stop(); }
 });
 
@@ -97,9 +137,7 @@ test('native images are stored on the thread host and referenced in the same ser
       sessions.input('native-test', 'look at [Image #1]', { attachments: [{ filename: '../../remote.png', mime: 'image/png', data }] }),
       sessions.input('native-test', '' , { attachments: [{ filename: 'second.jpg', mime: 'image/jpeg', data }] }),
     ]);
-    assert.equal(host.writes.length, 6);
-    assert.equal(host.writes[0], CLEAR); assert.equal(host.writes[3], CLEAR);
-    host.writes = host.writes.filter((w) => w !== CLEAR);
+    assert.equal(host.writes.length, 4);
     for (const index of [0, 2]) {
       const path = JSON.parse(host.writes[index].match(/\[Image #1\]: ("[^\n]+")/)[1]);
       assert.ok(path.startsWith(join(process.env.HELM_DIR, 'native-images')));
@@ -142,9 +180,9 @@ test('native controls and slash commands share the live terminal without claimin
     ]);
     assert.ok(results.every(result => result.terminal === true));
     assert.deepEqual(host.writes, [
-      CLEAR, '\x1b[200~/model claude-opus-5-5[1m]\x1b[201~', '\r',
-      CLEAR, '\x1b[200~/effort high\x1b[201~', '\r',
-      CLEAR, '\x1b[200~/permissions\x1b[201~', '\r',
+      '\x1b[200~/model claude-opus-5-5[1m]\x1b[201~', '\r',
+      '\x1b[200~/effort high\x1b[201~', '\r',
+      '\x1b[200~/permissions\x1b[201~', '\r',
     ]);
     assert.deepEqual({ model: sessions.get('native-test').model, effort: sessions.get('native-test').effort }, original);
     assert.ok((await sessions.commands('native-test')).some(command => command.name === 'model'));

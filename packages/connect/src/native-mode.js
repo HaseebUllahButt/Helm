@@ -118,6 +118,12 @@ export class ModeFooter {
     }
   }
 
+  /** Every row drawn, top to bottom, as text. */
+  lines() {
+    const last = Math.max(-1, ...this.#rows.keys());
+    return Array.from({ length: last + 1 }, (_, r) => Array.from(this.#rows.get(r) ?? [], (x) => x ?? ' ').join('').trimEnd());
+  }
+
   /** Forget which rows were drawn, so the next `label` reads only what comes after. */
   mark() { this.#dirty.clear(); }
 
@@ -135,4 +141,31 @@ export class ModeFooter {
     }
     return null;
   }
+}
+
+const RULE = /^\s*[─━]{8,}\s*$/;
+
+/**
+ * What Claude's typing box holds, read off its screen: whether you have typed
+ * something there (`draft`), and whether a draft is already put aside with
+ * Ctrl+S (`stashed`, shown as "› stashed" near the box). The box is the
+ * lowest "❯" row right under a rule line, so a menu's "❯ 1. Yes" never
+ * counts. Null when no box is drawn (a menu or dialog is open, or Claude has
+ * not drawn yet). An empty box shows a dim hint, 'Try "…"', which is not a
+ * draft.
+ */
+export function claudeBox(screen) {
+  const footer = new ModeFooter();
+  footer.feed(screen);
+  const lines = footer.lines();
+  for (let i = lines.length - 1; i > 0; i--) {
+    const m = /^(?:│\s*)?[❯>](?:\s|$)(.*)$/.exec(lines[i].trimStart());
+    if (!m || !RULE.test(lines[i - 1])) continue;
+    const typed = [m[1].replace(/│\s*$/, '').trim()];
+    for (let j = i + 1; j < lines.length && !RULE.test(lines[j]) && !/^\s*╰/.test(lines[j]); j++) typed.push(lines[j].replace(/^\s*│|│\s*$/g, '').trim());
+    const text = typed.join('\n').trim();
+    const near = lines.slice(Math.max(0, i - 3), i + 12).join('\n');
+    return { draft: !!text && !/^Try "/.test(text), stashed: /› stashed/.test(near) };
+  }
+  return null;
 }
