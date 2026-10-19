@@ -19,7 +19,7 @@ import { prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
 import { loadDraft, saveDraft } from '../draftStore';
 import { userMessage } from './userMessage';
-import { useGitStatus } from './Changes';
+import { useGitStatus } from './gitStatus';
 import { ThreadDetails, type DetailsTab } from './ThreadDetails';
 import { useThreadTeam } from './TeamSummary';
 import { ExternalSessionNotice } from './ExternalSessionNotice';

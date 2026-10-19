@@ -163,7 +163,7 @@ export function ThreadActions({ s, onContinue, onRename, onArchive, onDelete }: 
             : adopted
               ? 'This ends the program running in that pane, which helm did not start.'
               : 'This ends the agent and permanently removes the thread from helm.'}
-          confirmLabel={found ? 'remove' : adopted ? 'close' : 'delete'} danger
+          confirmLabel={found ? 'Remove' : adopted ? 'Close' : 'Delete'} danger
           onCancel={() => setEnding(false)}
           onConfirm={() => { setEnding(false); onDelete(); }}
         />
