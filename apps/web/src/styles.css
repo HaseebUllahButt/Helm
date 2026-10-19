@@ -2891,7 +2891,9 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tri-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tri-note { flex: none; color: var(--text-dim); white-space: nowrap; }
 .tri-bot .tri-where + svg { margin-left: 6px; }
-.tri-title { flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 500; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
+.tri-title { flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 500; color: var(--text-dim); overflow: hidden; text-overflow: clip; white-space: nowrap; line-height: 1.35; }
+/* A long name fades out at the edge, like the chat bar's, instead of ending in "…". */
+.tri-title[data-more] { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
 .row.thread-row.tri:hover .tri-title, .row.thread-row.tri.active .tri-title, .tri-row:hover .tri-title, .thread-row.tri.active .tri-title { color: var(--text); }
 .tri-branch { font-family: var(--mono); font-size: 11px; min-width: 0; flex-shrink: 4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tri-end { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
