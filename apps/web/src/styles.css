@@ -145,7 +145,7 @@
 
   /* The left gutter every row's mark sits in, so text starts on one line all
      the way down a screen. */
-  --sidebar-w: 300px;
+  --sidebar-w: 264px;
   --measure:   46rem;
 
   --system: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -309,7 +309,7 @@ code, pre, kbd { font-family: var(--mono); }
    title is the agent's sentence, so it stays in the reading face. */
 .bar:not(.session-bar) h1 { font-family: var(--display); font-weight: 650; letter-spacing: -0.015em; }
 @media (min-width: 900px) {
-  .bar { min-height: 62px; padding-inline: 16px 14px; }
+  .bar { min-height: 50px; padding-block: 4px; padding-inline: 16px 14px; }
   .bar:not(.session-bar) h1 { font-size: 19px; }
 }
 /* The engine mark rides the subtitle line, so it is sized to that line. */
@@ -986,10 +986,10 @@ pre.snippet {
 .slab:focus-within::after { border-color: color-mix(in srgb, var(--primary-q) 55%, transparent); }
 .slab textarea {
   display: block; width: 100%; background: transparent; border: 0; box-shadow: none; resize: none;
-  padding: 12px 15px 5px; min-height: 42px; max-height: 180px; line-height: 1.5; font-size: 16px; color: var(--text);
+  padding: 9px 14px 2px; min-height: 36px; max-height: 180px; line-height: 1.5; font-size: 16px; color: var(--text);
 }
 .slab textarea:focus { box-shadow: none; outline: none; }
-.slab-foot { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; }
+.slab-foot { display: flex; align-items: center; gap: 6px; padding: 2px 6px 6px 8px; min-width: 0; }
 .slab-foot .spacer { flex: 1; }
 .attach-status { color: var(--mutedfg); font-size: var(--t-micro); white-space: nowrap; }
 .attach-previews { display: flex; gap: 8px; padding: 8px 10px 0; flex-wrap: wrap; }
@@ -1075,7 +1075,7 @@ pre.snippet {
    ghost of itself: there is nothing to send, but it is still clearly where
    sending happens. */
 .send {
-  width: 36px; height: 36px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center;
   background: var(--pill-bg); color: var(--pill-fg);
   transition: transform 0.15s var(--ease), background 0.15s var(--ease), color 0.15s var(--ease);
 }
@@ -1234,7 +1234,7 @@ pre.snippet {
 /* Stop: the same shape as send, only while the agent runs. Neutral: amber
    is "the agent needs you", and a running agent does not. */
 .stop {
-  width: 36px; height: 36px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center;
   color: var(--text); background: var(--accent); box-shadow: inset 0 0 0 1px var(--line-2);
 }
 .stop:hover { background: var(--hover); }
@@ -1371,7 +1371,7 @@ pre.snippet {
 .chips[data-more] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
 .chip-pick {
   display: inline-flex; align-items: center; gap: 5px; width: auto; margin: 0; flex: none;
-  padding: 4px 10px 4px 8px; font-size: var(--t-meta); line-height: 1.5; border-radius: 999px;
+  padding: 2px 9px 2px 7px; font-size: var(--t-meta); line-height: 1.5; border-radius: 999px;
   background: var(--muted); border: 1px solid var(--line); color: var(--text-dim);
   white-space: nowrap;
 }
@@ -2478,6 +2478,11 @@ kbd { font: 600 12px var(--mono); padding: 3px 8px; border-radius: 6px; backgrou
   transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
 }
 .home-search svg { flex: none; color: var(--icon); }
+/* Search and New chat share one line: the search box, then a square plus. */
+.side-actions { display: flex; gap: 6px; margin: 0 0 8px; }
+.side-actions .home-search { margin: 0; height: 38px; }
+.side-actions .home-search.new { flex: none; width: 38px; padding: 0; justify-content: center; }
+.side-actions .home-search.new svg { color: inherit; }
 .home-search .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-search:hover { border-color: var(--line-2); color: var(--text-dim); }
 @media (min-width: 900px) {
@@ -2709,7 +2714,6 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .subagent-request.subagent-open { color: var(--text-dim); }
 .subagent-request.subagent-open:hover { color: var(--text); }
 .thread-details-launch { position: relative; }
-.brain-entry { margin-block: 10px 16px; }
 .thread-details-back { position: fixed; inset: 0; z-index: 60; background: #0005; display: flex; justify-content: flex-end; }
 .thread-details { width: min(680px, 52vw); height: 100%; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); box-shadow: -12px 0 40px #0002; }
 .details-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 18px 20px 12px; }
@@ -3045,7 +3049,13 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .pipeline-account select { width: 100%; min-height: 42px; background: var(--card); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 8px 10px; }
 .pipeline-account p { font-size: var(--t-micro); color: var(--mutedfg); margin: 7px 0; }
 
-.brain-entry { margin-block: 10px 16px; }
+.brain-entry { margin-block: 4px 12px; }
+/* One line: the name, then where it runs, dimmer. */
+.brain-entry .row.tall { min-height: 40px; padding-block: 6px; }
+.brain-entry .row .grow { flex-direction: row; align-items: baseline; gap: 8px; }
+.brain-entry .row.tall .rt { flex: none; font-size: var(--t-body); }
+.brain-entry .row .rm { min-width: 0; }
+.brain-entry .mark { width: 22px; height: 22px; border-radius: 6px; }
 
 /* ---- live steps (ideas 1/6/8) ---- */
 /* While the agent works, each step is its own line, as it starts. The

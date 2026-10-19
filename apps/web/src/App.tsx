@@ -1350,6 +1350,7 @@ function Shell({ client, conn, onSignOut }: {
               </div>
             )}
 
+            <div className="side-actions">
             <button
               type="button" className="home-search" onClick={() => setPalette(true)}
               aria-label="Search threads, machines and folders" aria-keyshortcuts="/ Control+K Meta+K"
@@ -1359,13 +1360,13 @@ function Shell({ client, conn, onSignOut }: {
               <span className="grow">Search anything</span>
             </button>
             <button
-              type="button" className="home-search" onClick={() => setNewChat({})}
+              type="button" className="home-search new" onClick={() => setNewChat({})}
               disabled={!envs.some((e) => e.online)}
               aria-label="New chat" aria-keyshortcuts="Control+N Meta+N Control+Shift+N Meta+Shift+N Control+Shift+O Meta+Shift+O" title="New chat (Ctrl+N); in current folder (Ctrl+Shift+N)"
             >
-              <Icon name="plus" size={15} />
-              <span className="grow">New chat</span>
+              <Icon name="plus" size={17} />
             </button>
+            </div>
 
             <div className="rows plain brain-entry">
                 {brainEnv ? (() => {

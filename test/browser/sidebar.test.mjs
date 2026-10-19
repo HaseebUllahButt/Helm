@@ -414,9 +414,10 @@ test('One search control opens the palette, keys work, selection has no left bar
   const labelFits = await label.evaluate(element => element.scrollWidth <= element.clientWidth);
   assert.ok(labelFits, 'the visible search label is not truncated in the desktop sidebar');
   if (process.env.HELM_TEST_SCREENSHOT_DIR) await sidebar.screenshot({ path: join(process.env.HELM_TEST_SCREENSHOT_DIR, 'sidebar-simple-search.png') });
-  const searchBounds = await search.boundingBox();
+  // Search shares its line with the square New chat button; together they fill it.
+  const lineBounds = await sidebar.locator('.side-actions').boundingBox();
   const padBounds = await sidebar.locator('.side-pad').boundingBox();
-  assert.ok(searchBounds.width >= padBounds.width * 0.9, `search button ${searchBounds.width}px spans the ${padBounds.width}px sidebar pad`);
+  assert.ok(lineBounds.width >= padBounds.width * 0.9, `search line ${lineBounds.width}px spans the ${padBounds.width}px sidebar pad`);
   const palette = page.getByRole('dialog', { name: 'Command palette' });
   const paletteInput = palette.getByRole('combobox', { name: 'Search threads, machines, actions' });
   await search.click();
