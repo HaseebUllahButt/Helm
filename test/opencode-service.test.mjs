@@ -35,10 +35,14 @@ const server = createServer((req, res) => {
 });
 server.listen(0, '127.0.0.1'); await once(server, 'listening');
 // Looks like the service to process discovery, but runs no provider and costs nothing.
-const bin = join(root, 'opencode2');
-writeFileSync(bin, 'setInterval(() => {}, 1000)');
-const service = spawn(process.execPath, [bin, 'serve', '--service'], { cwd: root, stdio: 'ignore' });
-await once(service, 'spawn');
+// Waits for its first line: just after 'spawn' its command line can still read empty.
+async function fakeService(path) {
+  writeFileSync(path, 'console.log("ready"); setInterval(() => {}, 1000)');
+  const child = spawn(process.execPath, [path, 'serve', '--service'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
+  await once(child.stdout, 'data');
+  return child;
+}
+const service = await fakeService(join(root, 'opencode2'));
 const record = { pid: service.pid, url: `http://127.0.0.1:${server.address().port}`, password: 'test-password' };
 const statePath = join(root, 'state/opencode/service.json');
 writeFileSync(statePath, JSON.stringify(record));
@@ -232,10 +236,7 @@ test('an idle O2 terminal exposes its exact tabs without reviving closed folders
 test('V2 services installed as opencode and opencode2.exe report live chats', async () => {
   active = { ses_64: { type: 'running' } };
   for (const name of ['opencode', 'opencode2.exe']) {
-    const path = join(root, name);
-    writeFileSync(path, 'setInterval(() => {}, 1000)');
-    const child = spawn(process.execPath, [path, 'serve', '--service'], { stdio: 'ignore' });
-    await once(child, 'spawn');
+    const child = await fakeService(join(root, name));
     try {
       writeFileSync(statePath, JSON.stringify({ ...record, pid: child.pid }));
       assert.equal((await opencodeServiceSessions({ fresh: true })).get('ses_64'), 'working', name);
