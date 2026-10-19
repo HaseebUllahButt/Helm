@@ -17,6 +17,15 @@ export const seconds = (ms?: number) => {
   return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
 };
 
+/**
+ * A name Helm shortened itself ends in "…" (see promptTitle). On screen the
+ * dots go and the end fades instead, the same as a name the edge cuts.
+ */
+export const shownTitle = (title = '') => {
+  const end = /\s*(?:…|\.{3})$/.exec(title);
+  return end && end.index > 0 ? { text: title.slice(0, end.index), cut: true } : { text: title, cut: false };
+};
+
 /** Sub-cent work is real work; it just is not a number worth printing. */
 export const money = (usd?: number | null) =>
   (usd == null || usd <= 0 ? '' : usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`);

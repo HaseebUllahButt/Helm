@@ -2893,7 +2893,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 .tri-bot .tri-where + svg { margin-left: 6px; }
 .tri-title { flex: 1; min-width: 0; font-size: var(--t-body); font-weight: 500; color: var(--text-dim); overflow: hidden; text-overflow: clip; white-space: nowrap; line-height: 1.35; }
 /* A long name fades out at the edge, like the chat bar's, instead of ending in "…". */
-.tri-title[data-more] { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+.tri-title:is([data-more], .cut) { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
 .row.thread-row.tri:hover .tri-title, .row.thread-row.tri.active .tri-title, .tri-row:hover .tri-title, .thread-row.tri.active .tri-title { color: var(--text); }
 .tri-branch { font-family: var(--mono); font-size: 11px; min-width: 0; flex-shrink: 4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tri-end { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
@@ -3377,7 +3377,7 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 /* A thread's title is the agent's sentence: a calmer weight than a screen's
    name, and a long one fades out at the edge instead of ending in "…". */
 .session-bar .crumb .crumb-title { font-weight: 500; letter-spacing: -0.005em; text-overflow: clip; }
-.session-bar .crumb .crumb-title[data-more] { mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent); }
+.session-bar .crumb .crumb-title:is([data-more], .cut) { mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent); }
 .crumb-edit {
   flex: 1 1 auto; min-width: 0; height: 28px; padding: 0 8px; margin: -2px 0;
   font: 600 var(--t-title)/1.3 var(--sans); letter-spacing: -0.017em; color: var(--text);

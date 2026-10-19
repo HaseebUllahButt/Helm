@@ -21,7 +21,7 @@ import { recacheCost, recacheWarning } from '@helm/usage/recache';
 import type { Transcribe } from './voice';
 import { messageDelivery } from '@helm/protocol/message-delivery';
 import { newMessageId, retryableDelivery } from '@helm/protocol/reliable-input';
-import { money, busyStatus } from '../format';
+import { money, busyStatus, shownTitle } from '../format';
 import { loadModels, saveModels } from '../modelCache';
 import { followModelRefresh } from '../modelRefresh';
 import { useSessionLog } from './useSessionLog';
@@ -710,8 +710,8 @@ export function DrivenSession({ client, env, machines, session, conn, onBack, on
                 }}
               />
             ) : (
-              <h1 className="crumb-title" ref={fadeWhenCut} title={session.title}
-                onDoubleClick={() => { setNameDraft(session.title); setRenaming(true); }}>{session.title}</h1>
+              <h1 className={`crumb-title${shownTitle(session.title).cut ? ' cut' : ''}`} ref={fadeWhenCut} title={session.title}
+                onDoubleClick={() => { setNameDraft(session.title); setRenaming(true); }}>{shownTitle(session.title).text}</h1>
             )}
           </div>
           <span className="sub">

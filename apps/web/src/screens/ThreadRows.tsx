@@ -7,7 +7,7 @@ import { plainProblem } from '../session/problem';
 import { EngineMark } from '../EngineMark';
 import { Icon } from '../Icon';
 import type { Session } from '../client';
-import { unknownThread } from '../format';
+import { shownTitle, unknownThread } from '../format';
 import { engineOf } from '../engines';
 import { fadeWhenCut } from '../fadeWhenCut';
 
@@ -281,12 +281,14 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
   const mood = moodOf(s, isUnread(s));
   // Work going on in the background steps back; what wants you does not.
   const recede = mood === 'working' && !selected;
+  const name = shownTitle(s.title);
+  const title = <span className={`tri-title${name.cut ? ' cut' : ''}`} ref={fadeWhenCut}>{name.text}</span>;
   const className = `row tall rowx tri-row mood-${mood}${slim ? ' slim' : ''}${selected ? ' active' : ''}${recede ? ' recede' : ''}`;
   if (slim) {
     return (
       <div className={className}>
         <button className={`rowmain thread-row tri slim${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
-          <span className="tri-title" ref={fadeWhenCut}>{s.title}</span>
+          {title}
           <span className="slim-when">{(() => { const w = wrappedUp(s.updatedAt, now); return <><span className="slim-pre">{w.lead}</span>{w.rest}</>; })()}</span>
           {mood === 'unread' && <ThreadStatus s={s} mood={mood} now={now} />}
           <EngineMark engine={eng.cls} className="tri-mark" />
@@ -299,7 +301,7 @@ export function HomeRow({ s, machine, onOpen, note, selected = false, slim = fal
     <div className={className}>
     <button className={`rowmain thread-row tri${selected ? ' active' : ''}`} aria-current={selected ? 'page' : undefined} onClick={onOpen}>
       <span className="tri-top">
-        <span className="tri-title" ref={fadeWhenCut}>{s.title}</span>
+        {title}
         <ThreadStatus s={s} mood={mood} now={now} />
       </span>
       <span className="tri-bot">
