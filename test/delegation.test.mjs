@@ -763,27 +763,48 @@ test('helm delegate same runs the helper on the account this chat runs as', asyn
   await assert.rejects(() => runAgentCommand('delegate', ['same', '--', 'x'], { rpc, self: 'me', parentId: null, ownAccount: '', write: () => {} }), /works inside a Helm chat/);
 });
 
-test('delegation instructions stay compact and independent of the account roster', () => {
+test('delegation instructions keep only rules; the details live in helm delegate --help', async () => {
+  const { commandHelp } = await import('../packages/connect/src/help.js');
   const note = delegationNote();
-  assert.ok(note.length < 1600);
+  assert.ok(note.length < 700, 'it rides along in every session');
   assert.equal(delegationNote(profiles), note);
   assert.equal(delegationNote([]), note);
   assert.match(note, /Do the work yourself by default/);
-  assert.match(note, /start a Helm helper, not your CLI's own subagent tool/);
-  assert.match(note, /helm delegate same --wait --json/);
+  assert.match(note, /never your CLI's own subagent tool/);
   assert.match(note, /open, message and stop it/);
-  assert.match(note, /when the work needs another CLI or account/);
+  assert.match(note, /never unset HELM_SESSION_ID/);
   assert.match(note, /--model cheap/);
-  assert.match(note, /helm agents --json only when needed/);
-  assert.doesNotMatch(note, /--heavy|slot/);
-  assert.match(note, /Inspect package scripts/);
-  assert.match(note, /--cwd <folder>/);
-  assert.match(note, /--worktree gives it its own checkout/);
-  assert.match(note, /clean them up once everything is merged/);
-  assert.match(note, /Keep every helper attached to this chat/);
-  assert.match(note, /not as a separate chat in Running/);
-  assert.match(note, /Never leave chats you started only to test something/);
-  assert.match(note, /saved context for an hour/);
+  assert.match(note, /test chats \(helm delete\)/);
+  assert.doesNotMatch(note, /--heavy|slot|--worktree|--cwd/, 'flags are looked up, not carried');
+  const help = commandHelp('delegate', '  helm delegate <account> -- "<task>"\n');
+  for (const want of [/same = this chat's account/, /--cwd <folder>/, /--worktree/, /context for an hour/, /helm delete <id>/]) assert.match(help, want);
+});
+
+test('no account by that name lists the accounts that do exist', () => {
+  assert.throws(() => chooseAgent([{ id: 'claudes', engine: 'claude' }, { id: 'a1', engine: 'agy' }], 'pc'), /no CLI account "pc" here; accounts: claudes, a1/);
+});
+
+test('helm help <command> prints that command and its relatives, and --help before -- asks for it', async () => {
+  const { commandHelp, wantsHelp } = await import('../packages/connect/src/help.js');
+  const usage = [
+    'helm - title', '',
+    '  helm exec <machine> -- <command>', '                                    run there',
+    '    --env NAME=value               environment',
+    '  helm exec-status <machine> <id>   read it later',
+    '  helm execute-not <x>              unrelated',
+    '  helm say <id> <text...>           send a message', '',
+  ].join('\n');
+  const exec = commandHelp('exec', usage);
+  assert.match(exec, /helm exec <machine>/);
+  assert.match(exec, /--env NAME=value/);
+  assert.match(exec, /helm exec-status/);
+  assert.match(exec, /never rerun it/);
+  assert.doesNotMatch(exec, /execute-not|helm say/);
+  assert.equal(commandHelp('nosuch', usage), null);
+  assert.equal(commandHelp('', usage), null);
+  assert.ok(wantsHelp(['--help']));
+  assert.ok(wantsHelp(['same', '-h']));
+  assert.ok(!wantsHelp(['same', '--', 'explain --help to me']), 'task words after -- are literal');
 });
 
 test('a child works in the folder the caller names, else where its parent does', async (t) => {
@@ -1089,8 +1110,10 @@ test('agents are told which machine they are on and how to reach the others', as
   const brief = helmBrief(net);
   assert.match(brief, /running on Laptop/);
   assert.match(brief, /The others: VM \(vm\), twin\./, 'each name once; ssh can only reach one of them');
-  assert.match(brief, /helm exec <machine>/);
-  assert.match(brief, /managed connection; prefer it to SSH/);
+  assert.match(brief, /through helm \(helm exec, helm copy, helm spawn\), not SSH/);
+  assert.match(brief, /helm <command> --help explains one/);
+  assert.match(brief, /Never rerun a helm exec that may have started/);
+  assert.match(brief, /--keep only when the owner asks/);
   assert.ok(brief.includes(delegationNote()));
   const alone = helmBrief({ self: 'a', machines: { a: net.machines.a } });
   assert.ok(alone.startsWith(delegationNote()), 'alone: nothing to reach');

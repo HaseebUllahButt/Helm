@@ -81,7 +81,7 @@ export function cheapModel(engine, models = []) {
  * one thing they cannot do, which is run on another CLI or account.
  */
 export function delegationNote() {
-  return '[Helm: Do the work yourself by default. When a side task would flood your context or genuinely runs in parallel, start a Helm helper, not your CLI\'s own subagent tool: the owner can open, message and stop it. helm delegate same --wait --json -- "<task>" uses this chat\'s account; name another from helm agents when the work needs another CLI or account; --model cheap for mechanical work (searching, reading, summarising, running checks); keep judgment calls yourself. Discover accounts/models with helm agents --json only when needed. Inspect package scripts before assuming file arguments restrict a suite. Rerun checks only for changed code, failures or unresolved concerns; report what passed and what remains untested. Keep every helper attached to this chat: never unset HELM_SESSION_ID or start one detached, so it shows as a card inside this chat and not as a separate chat in Running. --cwd <folder> runs it in another folder; --worktree gives it its own checkout of this repo on a new helm/ branch, so several helpers never edit the same files (merge the branch back yourself). If you made worktrees, branches or scratch folders, clean them up once everything is merged: git worktree remove, delete the merged branch, remove the folder. Leave none behind. Never leave chats you started only to test something: delete them when done (helm thread lists them). Finished children release their runtime after 30 seconds idle and resume the same conversation on follow-up; Claude children keep their saved context for an hour, so follow-ups are cheap.]';
+  return '[Helm helpers: Do the work yourself by default. For a side task that would flood your context or truly runs in parallel, start a Helm helper with helm delegate, never your CLI\'s own subagent tool, so the owner can open, message and stop it. Keep it attached to this chat: never unset HELM_SESSION_ID or start one detached. Use --model cheap for mechanical work; keep judgment calls yourself. When done, remove the worktrees, branches, scratch folders and test chats (helm delete) you made.]';
 }
 
 /**
@@ -93,7 +93,7 @@ export function delegationNote() {
  * Kept to a few lines: it rides along in every session.
  */
 export function agentMessageNote() {
-  return '[Helm agent messages: Send a short question or useful detail to another agent with helm say <chat-id> -- "text". It names you as the sender. Reply to a received message with helm reply <message-id> -- "text"; read exchanges with helm messages --json. Each agent keeps its own conversation. Messages wait for the next turn, without interrupting work. Reply only when useful; do not trade acknowledgements.]';
+  return '[Helm agent messages: Talk to other agents with helm say and helm reply. Reply only when useful; never trade acknowledgements.]';
 }
 
 /**
@@ -123,7 +123,7 @@ export function ownerNote(record = loadOwner()) {
  * worth a parent's attention goes by agent message instead.
  */
 export function helperNote(parentId) {
-  return `[Helm helper: You are a helper for chat ${parentId}. Your final reply goes back to it once, as the result. Report once. Anything you write after that, such as a note that a stale background watcher timed out, does not reach it; do not write such notes. If you learn something new it truly needs after you have reported, send it with helm say ${parentId} -- "text".]`;
+  return `[Helm helper: You are a helper for chat ${parentId}. Your final reply goes back to it once, as the result. Report once. Later notes, such as a stale background watcher timing out, never reach it; do not write them. Send truly new, needed news with helm say ${parentId} -- "text".]`;
 }
 
 // Only notes for tools this machine can use: each one rides along in every session.
@@ -137,12 +137,7 @@ export function helmBrief(net, { parentId = null } = {}) {
     .filter((m) => m.id !== net?.self && m.name && !seen.has(m.name) && seen.add(m.name))
     .map((m) => (m.kind ? `${m.name} (${m.kind})` : m.name));
   if (!self?.name || !others.length) return toolNotes(parentId);
-  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}.
-- Run something on another machine: helm exec <machine> --cwd <absolute-path> -- <command> [args]. This uses Helm's managed connection; prefer it to SSH. For pipelines use -- sh -lc '<script>'. Pass environment explicitly with --env NAME=value. If it says the command may have started, never rerun it: read it with helm exec-status <machine> <command-id> --wait, or stop it with helm exec-cancel <machine> <command-id>.
-- Copy files there: helm copy <machine> <file-or-folder> [--target-folder <path>] (default: the same place; ~ is that machine's home).
-- Which machines are on and what is running where: helm digest. Read a session: helm thread <id>. Message it: helm say <id> <text>.
-- Start an agent on another machine: helm spawn <machine> <folder> <account> <task>.
-- Show the owner something running on a port (a dev server, a page, a preview, a UI change) from anywhere, phone included: helm share <port> [--name <name>] [--password] prints a public https link. Call these spins. A spin is short-lived: it ends by itself after 3 hours, so do not plan on it lasting longer. Add --keep only when the owner asks for a link that stays. Add --private when only the owner's own signed-in devices should open it. helm forward <machine> <port> opens a port another machine shared on this one's localhost. helm share list shows the links; helm share stop <name> ends one when it is no longer needed.]
+  return `[Helm: you are running on ${self.name}, one of the owner's machines joined by Helm. The others: ${others.join(', ')}. Reach them through helm (helm exec, helm copy, helm spawn), not SSH: helm help lists every command and helm <command> --help explains one. Never rerun a helm exec that may have started; read it with helm exec-status. Links from helm share (spins) end after 3 hours; add --keep only when the owner asks.]
 ${toolNotes(parentId)}`;
 }
 
@@ -152,11 +147,11 @@ ${toolNotes(parentId)}`;
  * words meant for people, never code, commands or quoted output.
  */
 export function writingNote() {
-  return '[Helm writing: Write to the owner in Simplified Technical English (ASD-STE100). Keep sentences short: at most 20 words for a step, 25 for an explanation. Put one instruction in each sentence and start it with the verb. Use the active voice and simple tenses. Use common words, and use one word for one meaning: call a thing by the same name each time. Do not use jargon; when a technical name is necessary, explain it in a few plain words. Tell the owner what they will see, not how the code does it. Use a list for steps that follow in sequence. These rules apply to replies, summaries and notes for people, not to code, commands, file contents or quoted output.]';
+  return '[Helm writing: Write to the owner in Simplified Technical English (ASD-STE100): at most 20 words for a step and 25 for an explanation, one instruction per sentence starting with the verb, active voice, simple tenses, common words, one word for one meaning, jargon explained in a few plain words, steps as a list. Tell the owner what they will see, not how the code works. This covers prose for people, not code, commands or quoted output.]';
 }
 
 export function visualNote() {
-  return '[Helm visuals: Use an inline visual when a diagram, chart, comparison, simulation, or interactive explanation would help the user. Write a self-contained HTML file with inline CSS/JS, then run helm preview <file.html> --output <preview.png> (optionally --width 390 for mobile). Inspect the screenshot and reported JavaScript errors; correct it before publishing with helm render <file.html> --title "<short title>". Render saves a snapshot in this chat, works across providers, and does not keep the agent working. Local image paths in img/srcset, SVG images, and CSS url() are embedded; each image must be a recognized image up to 2 MiB and the whole page up to 4 MiB. Use CSS variables --bg, --card, --text, --text-dim, --line, --primary-q for theme-aware visuals. Scripts run inside an isolated frame: no app state, network fetch, external scripts, or forms; use inline SVG/canvas and vanilla JS. A visual needs no dev server or background watcher. The owner sees it above your reply, so do not announce or repeat it; add only what it does not show. Prefer plain text for simple answers.]';
+  return '[Helm visuals: When a diagram, chart, comparison or simulation would help, make one self-contained HTML file, check it with helm preview, then publish it with helm render (helm render --help has the limits). The owner sees it above your reply, so do not repeat it. Prefer plain text for simple answers.]';
 }
 
 /** Read-only parents cannot acquire write access through a different CLI. */
@@ -268,6 +263,6 @@ export function chooseAgent(agents, account) {
   const hits = agents.filter((p) => p.engine === want || p.id.toLowerCase().startsWith(want));
   if (hits.length !== 1) throw new Error(hits.length
     ? `ambiguous account "${account}": ${hits.map((p) => p.id).join(', ')}`
-    : `no CLI account "${account}"; run helm agents`);
+    : `no CLI account "${account}" here; accounts: ${agents.map((p) => p.id).join(', ') || 'none'} (helm agents shows models)`);
   return hits[0];
 }

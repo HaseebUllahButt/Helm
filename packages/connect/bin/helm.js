@@ -38,8 +38,7 @@ const rest = leadingFlag ? [first, ...others] : others;
 
 const die = (msg) => { console.error(`helm: ${msg}`); exit(1); };
 
-const usage = () => {
-  console.log(`helm - control your coding agents from anywhere
+const USAGE = `helm - control your coding agents from anywhere
 
   helm setup [https-url]             make this always-on VM your Helm home
   helm open                          open the app here, signed in (no link needed)
@@ -102,6 +101,7 @@ const usage = () => {
   helm digest [--json]              every machine, folder and running session
   helm search <words...> [--json]   chats on every machine where those words were said, newest first
   helm thread <id> [-n 40]          the recent conversation of one session
+  helm delete <id>                  delete a chat, such as one you started only to test something
   helm pickup [chat-id] [-n 3]      where earlier chats in this project stopped, on every machine:
                                     their ask, what their final reply left, commits, uncommitted files
   helm say <id> <text...>           send a named message from this agent (a prompt outside a chat)
@@ -152,8 +152,9 @@ const usage = () => {
 Add from Settings on any paired device, or use 'helm add' on a joined machine.
 Computer invites contain a private link to paste into 'helm join'. A controller stays signed in
 until you remove it - passwords are only for adding one, and expire in minutes.
-`);
-};
+Details for one command: helm help <command>, or helm <command> --help.
+`;
+const usage = () => console.log(USAGE);
 
 const flagOf = (name, fallback) => {
   const i = rest.indexOf(`--${name}`);
@@ -985,6 +986,16 @@ async function say() {
   await reliableInput((method, params, timeout) => hubRpc(requireNetwork(), env, method, params,
     { timeout, budget: timeout }), { id: session.id, data: text }, { onRetry: () => waitingFor(machine) });
   console.log(`sent to ${machine} ${shortId(session.id)} (${session.title})`);
+}
+
+async function deleteChat() {
+  const id = rest.find((x) => !x.startsWith('-'));
+  if (!id) die('which chat? `helm delete <id>` (helm digest lists them)');
+  const { env, machine, session } = await findSession(id);
+  const own = process.env.HELM_SESSION_ID;
+  if (own && session.id.startsWith(own)) die('that is the chat you are running in');
+  await brainRpc(env, M.SESSION_KILL, { id: session.id }, 20_000);
+  console.log(`deleted ${machine} ${shortId(session.id)} (${session.title})`);
 }
 
 async function spawn_() {
@@ -1969,7 +1980,19 @@ async function leave() {
 
 // ---------------------------------------------------------------- dispatch
 
+// `helm help <command>` and `helm <command> --help` print that command's
+// usage and details. run and chat pass their arguments on to another program.
+const { commandHelp, wantsHelp } = await import('../src/help.js');
+const helpFor = cmd === 'help' || cmd === '--help' || cmd === '-h' ? rest[0]
+  : cmd && !['run', 'chat'].includes(cmd) && wantsHelp(rest) ? cmd : null;
+
 try {
+  if (helpFor) {
+    const text = commandHelp(helpFor, USAGE);
+    if (!text) die(`no command "${helpFor}" - helm help lists them all`);
+    console.log(text);
+    exit(0);
+  }
   switch (cmd) {
     case 'run':
       if (!rest.includes('--') && rest.some(arg => ['--help', '-h'].includes(arg))) {
@@ -2363,6 +2386,10 @@ try {
     }
     case 'say':
       await say();
+      break;
+
+    case 'delete':
+      await deleteChat();
       break;
 
     case 'browser': {

@@ -1,56 +1,44 @@
 # Working on Helm
 
-Rules every agent follows here, whichever CLI or account it runs on. They
-come from the owner's own corrections; each one cost something once.
-How to talk to the owner is not here: Helm gives every chat the owner's
-preferences (Settings, Your preferences). This file is about the project.
+Rules for every agent here. Each one came from an owner correction. Anything
+the code, `git log` or `helm help` shows is not repeated here.
 
 ## Development and rollout
 
-For requested Helm development, finish the work by validating it, committing and
-pushing to main, and updating every reachable installed machine. Check the source
-checkout, installed checkout, running daemon version and served web build separately.
-Preserve existing local changes; reconcile them or keep the old installed tree as a
-backup before installing a clean release. Do not leave finished fixes only as dirty
-edits in installed checkouts, because that blocks automatic updates.
-Develop in the source checkout or a separate worktree. Keep temporary scripts and
-machine-local helpers under ~/.helm, outside installed release checkouts.
+- Requested Helm work is done only when it is verified, committed, pushed to
+  main and installed on every reachable machine. Check the source checkout,
+  installed checkout, running daemon and served web build separately.
+- Develop in the source checkout or a worktree. Temporary scripts go under
+  ~/.helm, never inside an installed checkout.
+- Installed trees (`~/.helm-release` on the laptop, `~/.helm-src` elsewhere)
+  often hold other sessions' uncommitted drafts. Save `git diff`, then move with
+  `git checkout -m --detach <sha>`; never reset or stash them away. Never leave
+  a finished fix as a dirty edit there: it blocks automatic updates.
+- An offline machine is not deployed or verified: say so. Keep update failures
+  visible and verify the live release after rollout.
 
-Installed trees (`~/.helm-release` on the laptop, `~/.helm-src` on the VM) often
-carry other sessions' uncommitted drafts. Move them with
-`git checkout -m --detach <sha>` after saving `git diff`; never reset or stash
-them away.
+## Production state
 
-The owner's ~/.helm is production state. Tests must use a temporary HELM_DIR,
-HELM_DB, HELM_SSH_DIR and process sockets, set before importing any Helm module.
-Never create, join, leave, replace or restore the owner's network for a test, and
-never restart the production daemon to make a test pass. Keep running owner chats
-undisturbed; use isolated test hubs and the safe restart worker for deployments.
-
-Use `helm digest` to check reachability and active sessions. Prefer `helm exec` for
-remote commands. Run builds and tests directly (`--heavy` is a no-op now) and use
-Helm's safe restart worker so hosted sessions survive and outstanding approvals or
-active transfers can finish.
-
-Report unreachable machines explicitly. An offline machine has not been deployed
-or verified; a clean service-managed install catches up from GitHub or peers when
-it reconnects. Keep update failures visible and verify the live release after rollout.
+The owner's ~/.helm is production. Tests use a temporary HELM_DIR, HELM_DB,
+HELM_SSH_DIR and process sockets, set before importing any Helm module. Never
+create, join, leave, replace or restore the owner's network for a test, or
+restart the production daemon to make a test pass. Deploy with the safe restart
+worker so running chats survive.
 
 ## Proving it works
 
-The owner trusts a change only after it has been run. Passing tests are not
-"it works", and two confident review claims here were wrong until someone ran
-the code. For anything the owner can see or feel, use the `verify-helm` skill
-(`node scripts/verify-helm.mjs`): a private Helm with a free fake agent in a
-hidden phone-size browser. `docs/features/` says where each feature lives and
-what counts as proof. Run `npm run check` before and after a change. Report
-what you drove, what you saw, and what you could not check.
+Passing tests are not "it works": two confident review claims here were wrong
+until someone ran the code. For anything the owner can see or feel, drive it
+with the `verify-helm` skill (a private Helm in a hidden phone-size browser);
+`docs/features/` says what counts as proof. Report what you drove, what you saw
+and what you could not check.
 
 ## Testing
 
-- Run only the tests your change reaches: `node scripts/test-smart.mjs` (`--near` while working, `--list` to see why). `npm run check` uses it.
-- Do not run the full suite (`npm run check:full`, `npm test`, `test:browser`) unless the owner asks.
-- Never run two suites side by side. Rerun only failed files.
+- `npm run check` before and after a change. It runs only the tests your change
+  reaches.
+- Never run the full suite (`check:full`, `npm test`, `test:browser`) unless the
+  owner asks. Never run two suites side by side. Rerun only failed files.
 
 ## Sharing the checkout
 
@@ -71,10 +59,9 @@ Devin). Before committing, read `git status` and leave files you did not touch.
 - No hidden limits on agents: no queues, slots, memory waits or worker caps,
   not even "for safety". If a guard is truly needed, make it per chat, explain
   it in a comment, and tell the owner.
-- Helpers stay attached to the chat that started them, as cards. Never unset
-  HELM_SESSION_ID or CODEX_THREAD_ID to start one.
+- Never unset HELM_SESSION_ID or CODEX_THREAD_ID to start a helper.
 - No test chats on the owner's real machines or accounts. Test in a private
-  copy (`verify-helm`); if a live run was the only way, delete the chat after.
+  copy (`verify-helm`); if a live run was the only way, `helm delete` it after.
 - Never make Helm depend on Tailscale or any outside network service. Borrow
   the idea and build it inside Helm.
 - Helm never pulls from GitHub by itself. Machines take the newest committed
@@ -112,12 +99,6 @@ Devin). Before committing, read `git status` and leave files you did not touch.
   code does not show. No feature lists, flag lists, step-by-step code tours,
   change logs, plans or reports. `git log` is the record.
 - When something changes, rewrite or delete the old text. Never append.
-
-## Pausing and handing over
-
-No handoff file. To pause, stop at a clean point, commit verified work, and
-end with a short reply that says what is left. To continue earlier work, run
-`helm pickup`. The `pause-and-pickup` skill has the steps.
 
 ## Words the owner uses
 
