@@ -3379,12 +3379,14 @@ button.newchat-twisty:hover { background: var(--hover); color: var(--text); }
 }
 .crumb-edit:focus { border-color: var(--primary-q); }
 .session-bar .titles { gap: 2px; }
-/* On a wide screen the machine and cost follow the title on its line: a second
-   line made the bar a row taller than anything in it needed. */
+/* On a wide screen the machine and cost share the title's line, at its far end
+   beside the buttons: a second line made the bar a row taller than it needed,
+   and right after a cut-off title they read as part of it. */
 @media (min-width: 900px) {
-  .session-bar .titles { flex-direction: row; align-items: center; gap: 12px; }
+  .session-bar .titles { flex-direction: row; align-items: center; gap: 28px; }
   .session-bar .crumb { flex: 0 1 auto; min-width: 0; }
-  .session-bar .titles > .sub { flex: none; max-width: 45%; padding-left: 0; }
+  /* Smaller words, centred, ride high; the nudge puts them on the title's baseline. */
+  .session-bar .titles > .sub { flex: none; max-width: 45%; margin-left: auto; padding: 2px 0 0; }
 }
 .session-bar .sub { padding-left: 26px; }
 .session-bar .sub .route-machine { font-family: var(--sans); font-weight: 500; font-size: var(--t-meta); color: var(--mutedfg); max-width: none; }
