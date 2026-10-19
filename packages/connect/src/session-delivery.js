@@ -71,6 +71,7 @@ export class SessionDelivery {
           prompt = `${body}${body ? '\n\n' : ''}Read the attached image files before answering:\n${refs.join('\n')}`;
         }
         if (files.length) prompt = `${prompt}${prompt ? '\n\n' : ''}${saveUploads(id, files)}`;
+        await this.#core.natives.clearClaudeBox(s);
         await this.#sessions.nativeTerminals.write(id, `\x1b[200~${prompt}\x1b[201~`);
         await new Promise((r) => setTimeout(r, 60));
         await this.#sessions.nativeTerminals.write(id, '\r');

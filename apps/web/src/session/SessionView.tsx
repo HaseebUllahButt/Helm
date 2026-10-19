@@ -19,7 +19,9 @@ import { prepareAttachment } from './image';
 import { useDraftImages } from './useDraftImages';
 import { loadDraft, saveDraft } from '../draftStore';
 import { userMessage } from './userMessage';
-import { Subagents } from './Subagents';
+import { useGitStatus } from './Changes';
+import { ThreadDetails, type DetailsTab } from './ThreadDetails';
+import { useThreadTeam } from './TeamSummary';
 import { ExternalSessionNotice } from './ExternalSessionNotice';
 import { useSessionLog } from './useSessionLog';
 import { PermissionSheet, type QuestionHandle } from './PermissionSheet';
@@ -63,7 +65,10 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const reading = useRef(false), readAgain = useRef(false), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [raw, setRaw] = useState(isShell || !!session.nativeCli && !session.nativeChat && !nativeConversation(session.engine));
-  const [agentsOpen, setAgentsOpen] = useState(false);
+  // Git and Agents open the same panels a Helm chat has.
+  const [details, setDetails] = useState<DetailsTab | null>(null);
+  const team = useThreadTeam(client, env.id, session.id);
+  const agentCount = team.length + (session.nativeCards?.length ?? 0);
   const browser = useBrowserDock(client, env, session, !isShell);
   const [status, setStatus] = useState(session.status);
   const [compacting, setCompacting] = useState(session.compacting || false);
@@ -75,6 +80,10 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const [menu, setMenu] = useState(false);
   useDismiss(menu, useCallback(() => setMenu(false), []));
   const eng = engineOf(session.engine);
+  // Git is read again whenever the chat starts or stops working, which is
+  // when something has usually just changed. A quick chat has no folder.
+  const git = useGitStatus(client, env, session.quick ? '' : session.cwd, status === 'working' ? 'working' : `rest:${statusAt ?? 0}`);
+  const changed = git.status?.repo ? (git.status.files?.length ?? 0) + (git.status.more ?? 0) : 0;
 
   const [nativeOptions, setNativeOptions] = useState<ModelList | null>(null);
   const [nativeCommands, setNativeCommands] = useState<{ name: string; description?: string; source?: string }[]>([]);
@@ -338,11 +347,11 @@ export function SessionView({ client, env, machines, session, terminals = [], on
   const nativeControls = Controls({ options: nativeOptions, session,
     busy: settingBusy || sending || status === 'blocked' || (!session.nativeChat && status === 'working') || !env.online,
     onPick: pickNative, onNativeControl: openNativeControl, ...nativePrefs });
-  // The same keys as a Helm chat, wherever this tray is shown. There is no
-  // agents panel here, so that key is left to the browser.
+  // The same keys as a Helm chat, wherever this tray is shown.
   useChatKeys(session.nativeCli ? {
     effort: () => nativeControls.step('effort'),
     model: () => nativeControls.step('model'),
+    ...(session.nativeChat ? { agents: () => setDetails((open) => open === 'agents' ? null : 'agents') } : {}),
   } : {});
 
   useEffect(() => {
@@ -411,16 +420,21 @@ export function SessionView({ client, env, machines, session, terminals = [], on
           </span>
         </div>
         <StatusChip status={compacting && status === 'working' ? 'compacting' : status} at={statusAt} />
+        {/* Git is in every chat's header, as in a Helm chat, terminal or not.
+            Hiding it here made it look gone. The sheet says when there is no Git. */}
+        <button className="iconbtn thread-details-launch" aria-label={changed > 0 ? `Git: ${changed} changed files` : 'Git'} title="Git graph and changes"
+          onClick={() => setDetails('changes')}><Icon name="git" size={17} />{changed > 0 && <b className="cbadge">{changed > 99 ? '99+' : changed}</b>}</button>
         {!isShell && <button className="iconbtn browser-launch" title="Browser (Ctrl/⌘ Shift B)" aria-label={browser.dot ? 'Browser: the agent opened a tab' : 'Browser'} aria-pressed={browser.open} onClick={browser.toggle}><Icon name="web" size={17} />{browser.dot && <b className="browser-new" aria-hidden="true" />}</button>}
         {!isShell && !isExternal && (
           <button className="iconbtn" title={raw ? 'conversation' : 'terminal'} aria-label={raw ? 'show the conversation' : 'show the terminal'} onClick={() => setRaw((v) => !v)}>
             <Icon name={raw ? 'raw' : 'terminal'} size={18} />
           </button>
         )}
-        {/* Claude Code's own subagents, read-only: Helm cannot delegate from a terminal thread. */}
-        {!!session.nativeCards?.length && (
-          <button className="iconbtn thread-details-launch" aria-label="Agents" title="Claude Code subagents" onClick={() => setAgentsOpen(true)}>
-            <Icon name="subagents" size={17} /><b className="cbadge quiet">{session.nativeCards.length}</b>
+        {/* A Claude terminal chat starts Helm helpers like any chat. Another
+            CLI's terminal only lists the helpers that CLI ran itself. */}
+        {!isShell && (session.nativeChat || !!session.nativeCards?.length) && (
+          <button className="iconbtn thread-details-launch" aria-label="Agents" title="Agents" onClick={() => setDetails('agents')}>
+            <Icon name="subagents" size={17} />{agentCount > 0 && <b className="cbadge quiet">{agentCount}</b>}
           </button>
         )}
         {isShell && onNewTerminal && (
@@ -450,8 +464,9 @@ export function SessionView({ client, env, machines, session, terminals = [], on
         ))}
       </div>
 
-      {agentsOpen && <Subagents nativeOnly client={client} env={env} parent={session} onClose={() => setAgentsOpen(false)}
-        onOpenNative={onOpenNative ? (agent) => { setAgentsOpen(false); onOpenNative(agent); } : undefined} />}
+      {details && <ThreadDetails client={client} env={env} session={session} tab={details} nativeOnly={!session.nativeChat}
+        git={git.status} gitCwd={session.quick ? '' : session.cwd} reloadGit={git.reload} onClose={() => setDetails(null)}
+        onOpenNative={onOpenNative ? (agent) => { setDetails(null); onOpenNative(agent); } : undefined} />}
       {!isShell && browser.open && <BrowserDock client={client} env={env} session={session} onClose={() => browser.setOpen(false)} />}
 
       {/* Every open terminal on this machine, one tap apart. */}

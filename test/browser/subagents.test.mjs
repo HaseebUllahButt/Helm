@@ -855,3 +855,45 @@ test('the Git button is always in the header, and follows the project a chat edi
     } finally { await view.close(); }
   }
 });
+
+test('a terminal chat has the Git button and the full Agents panel', async () => {
+  const bundle = await build({ stdin: { contents: `
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { SessionView } from './apps/web/src/session/SessionView';
+    const env = { id:'git-term', name:'Laptop', online:true, info:{} };
+    const session = { id:'term', title:'Terminal Claude', cwd:'/home/me/code/tool', engine:'claude', status:'idle', nativeCli:true, nativeChat:true };
+    const client = { on: () => () => {}, subscribe: () => {}, input: async () => ({ ok:true }),
+      rpc: async (env, method, params) => {
+        if (method === 'model.list') return { models:[], modes:[] };
+        if (method === 'session.commands') return { commands:[] };
+        if (method === 'session.messages') return { messages:[] };
+        if (method === 'agent.list') return { agents:[{ id:'claudes', engine:'claude', account:'a1', label:'Claude', available:true, auth:'authenticated', modes:[], shown:true }] };
+        if (method === 'session.list') return { sessions:[session] };
+        if (method === 'git.status') return { repo:true, root:'/home/me/code/tool', branch:'main', head:{commit:'abc'},
+          files:[{path:'a.py',status:'M',add:1,del:0},{path:'b.py',status:'A',add:2,del:0}] };
+        if (method === 'git.graph') return { repo:true, commits:[], worktrees:[] };
+        if (method === 'git.pr') return { pr:null };
+        return { ok:true };
+      },
+    };
+    createRoot(document.getElementById('root')).render(<SessionView client={client} env={env} session={session} onBack={()=>{}} onClosed={()=>{}} onArchived={()=>{}} onSession={()=>{}} />);
+  `, resolveDir: process.cwd(), loader:'tsx' }, bundle:true, write:false, format:'iife', jsx:'automatic' });
+  const view = await browser.newPage({ viewport:{width:390,height:844} });
+  view.setDefaultTimeout(10_000);
+  try {
+    await view.setContent('<div class="session" id="root"></div>');
+    await view.addStyleTag({ content:(await readFile('apps/web/src/styles.css','utf8')).replace(/^@import[^;]+;/gm,'') });
+    await view.addScriptTag({ content:bundle.outputFiles[0].text });
+    const git = view.locator('.bar').getByRole('button', {name:'Git: 2 changed files',exact:true});
+    await git.waitFor();
+    await git.click();
+    const gitSheet = view.getByRole('dialog', {name:'Git',exact:true});
+    await gitSheet.getByRole('tab', {name:/^Changes/}).waitFor();
+    await view.keyboard.press('Escape');
+    await gitSheet.waitFor({ state:'detached' });
+    // The same Agents panel as a Helm chat, with a task form, not a short list.
+    await view.locator('.bar').getByRole('button', {name:'Agents',exact:true}).click();
+    await view.getByRole('dialog', {name:'Agents'}).getByRole('button', {name:/New task/}).waitFor();
+  } finally { await view.close(); }
+});

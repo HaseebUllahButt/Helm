@@ -15,6 +15,9 @@ import { WORTH_SAYING } from '@helm/usage/recache';
 import { readProcess } from './takeover.js';
 import { pendingSummary, wire } from './session-wire.js';
 
+/** Ctrl+U and Backspace, enough pairs for any box a person types by hand. */
+export const CLEAR_CLAUDE_BOX = '\x15\x7f'.repeat(40);
+
 /**
  * CLIs the owner runs in a Helm terminal, and Codex threads open in Codex's
  * own daemon. Helm does not drive these: it follows what their hooks,
@@ -418,6 +421,21 @@ export class NativeSessions {
     return this.nativeWrite(s, command);
   }
 
+  /**
+   * Text left in a terminal Claude's typing box joins whatever Helm types
+   * next. A leftover "/permissions" made every later message a slash command
+   * Enter could not run, so nothing the owner sent arrived. Each Ctrl+U
+   * empties a line and each Backspace joins the line above, so pairs empty
+   * the whole box; neither stops a busy Claude the way Esc would, and Ctrl+Y
+   * in the terminal brings the text back. The pause keeps Claude from reading
+   * these keys and the paste as one burst, which loses the paste.
+   */
+  async clearClaudeBox(s) {
+    if (s.engine !== 'claude') return;
+    await this.#sessions.nativeTerminals.write(s.id, CLEAR_CLAUDE_BOX);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
   async nativeWrite(s, text, { control = true, confirmedMode = null } = {}) {
     const id = s.id;
     const work = (this.nativeInputs.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
@@ -426,6 +444,7 @@ export class NativeSessions {
       if (control && s.status === 'working') throw new Error('Wait until the CLI finishes its turn before changing settings.');
       if (confirmedMode && s.mode === confirmedMode) return { ok: true, session: wire(s) };
       if (text != null) {
+        await this.clearClaudeBox(s);
         await this.#sessions.nativeTerminals.write(id, `\x1b[200~${text}\x1b[201~`);
         await new Promise(resolve => setTimeout(resolve, 60));
         await this.#sessions.nativeTerminals.write(id, '\r');

@@ -97,6 +97,22 @@ test('native child activity reaches a delegated ancestor and clears when its pro
   assert.equal(sessions.hasActiveDelegations(parent.id), false);
 });
 
+test('a Claude chat in a terminal can start helpers; a plain terminal cannot', async t => {
+  const { sessions } = setup(t);
+  const parent = await sessions.start({ cwd: process.env.HELM_DIR, profileId: 'codex-main' });
+  const driver = parent.driver;
+  // Shaped like a Claude terminal chat: no headless driver of its own. Put
+  // back before the saved index outlives this test and reads as a terminal.
+  delete parent.driver; parent.nativeCli = true; parent.nativeChat = true;
+  try {
+    const { session: child } = await sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Check the docs' });
+    assert.equal(child.delegation.parentId, parent.id);
+    assert.ok(parent.delegations.includes(child.id));
+    parent.nativeChat = false;
+    await assert.rejects(sessions.delegate({ id: parent.id, profileId: 'claude-main', task: 'Again' }), /parent must be an agent session/);
+  } finally { parent.driver = driver; delete parent.nativeCli; delete parent.nativeChat; }
+});
+
 test('agent capabilities show sign-in state without exposing launcher or credentials', async () => {
   const agents = await agentCatalog([...profiles, { ...profiles[1], id: 'wrapped', wraps: 'claude' }], new Map([['codex-main', 'authenticated'], ['claude-main', 'unauthenticated']]), { models: false });
   assert.equal(agents[0].available, true);
